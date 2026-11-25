@@ -25,6 +25,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
   },
+  cancelImageJob: {
+    method: 'POST',
+    path: '/api/v1/image-jobs/{id}/cancel',
+  },
   cancelMusicGeneration: {
     method: 'POST',
     path: '/api/v1/music-generations/{id}/cancel',
@@ -85,6 +89,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/decisions',
   },
+  createDelegation: {
+    method: 'POST',
+    path: '/api/v1/delegations',
+  },
   createEmbeddings: {
     method: 'POST',
     path: '/api/v1/embeddings',
@@ -92,6 +100,10 @@ export const operations = {
   createFileUpload: {
     method: 'POST',
     path: '/api/v1/files',
+  },
+  createImageJob: {
+    method: 'POST',
+    path: '/api/v1/image-jobs',
   },
   createMusicGeneration: {
     method: 'POST',
@@ -245,6 +257,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/briefs/{id}',
   },
+  getBriefSchedule: {
+    method: 'GET',
+    path: '/api/v1/briefs/schedule',
+  },
   getClaudeBundleZip: {
     method: 'GET',
     path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
@@ -260,6 +276,10 @@ export const operations = {
   getClientConfig: {
     method: 'GET',
     path: '/api/v1/client-config',
+  },
+  getCompletionRunEvaluation: {
+    method: 'GET',
+    path: '/api/v1/completion-runs/{runId}/evaluation',
   },
   getCompletionRunUsage: {
     method: 'GET',
@@ -293,6 +313,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/data-lakes/{id}/research/runs/{run_id}',
   },
+  getDelegation: {
+    method: 'GET',
+    path: '/api/v1/delegations/{id}',
+  },
   getFile: {
     method: 'GET',
     path: '/api/v1/files/{id}',
@@ -305,6 +329,18 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files/by-ids',
   },
+  getFunction: {
+    method: 'GET',
+    path: '/api/v1/functions/{id}',
+  },
+  getFunctionCall: {
+    method: 'GET',
+    path: '/api/v1/functions/calls/{call_id}',
+  },
+  getImageJob: {
+    method: 'GET',
+    path: '/api/v1/image-jobs/{id}',
+  },
   getMe: {
     method: 'GET',
     path: '/api/v1/me',
@@ -312,6 +348,14 @@ export const operations = {
   getMusicGeneration: {
     method: 'GET',
     path: '/api/v1/music-generations/{id}',
+  },
+  getObligation: {
+    method: 'GET',
+    path: '/api/v1/obligations/{id}',
+  },
+  getPendingDecisionCount: {
+    method: 'GET',
+    path: '/api/v1/pending-decisions',
   },
   getProject: {
     method: 'GET',
@@ -357,9 +401,17 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/whats-new/media/{id}/{asset}',
   },
+  handOffObligation: {
+    method: 'POST',
+    path: '/api/v1/obligations',
+  },
   importSkillMarketListing: {
     method: 'POST',
     path: '/api/v1/skills/market/listings/{id}/import',
+  },
+  invokeFunction: {
+    method: 'POST',
+    path: '/api/v1/functions/{id}/invoke',
   },
   listAgents: {
     method: 'GET',
@@ -417,9 +469,17 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files',
   },
+  listFunctions: {
+    method: 'GET',
+    path: '/api/v1/functions',
+  },
   listHandoffDevices: {
     method: 'GET',
     path: '/api/v1/handoff-devices',
+  },
+  listImageJobs: {
+    method: 'GET',
+    path: '/api/v1/image-jobs',
   },
   listImageModels: {
     method: 'GET',
@@ -444,6 +504,10 @@ export const operations = {
   listMySkills: {
     method: 'GET',
     path: '/api/v1/skills/mine',
+  },
+  listObligations: {
+    method: 'GET',
+    path: '/api/v1/obligations',
   },
   listProjectFiles: {
     method: 'GET',
@@ -520,6 +584,10 @@ export const operations = {
   publishSkillMarketListing: {
     method: 'POST',
     path: '/api/v1/skills/market/listings',
+  },
+  putBriefSchedule: {
+    method: 'PUT',
+    path: '/api/v1/briefs/schedule',
   },
   raiseCompletionRunBudget: {
     method: 'POST',
@@ -613,6 +681,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/agents/{id}/transfer-credits',
   },
+  undoDataLakeConfigChange: {
+    method: 'POST',
+    path: '/api/v1/data-lakes/{id}/config-history/{event_id}/undo',
+  },
   unpublishArtifact: {
     method: 'DELETE',
     path: '/api/v1/artifacts/{id}/publish',
@@ -636,6 +708,10 @@ export const operations = {
   updateFile: {
     method: 'PATCH',
     path: '/api/v1/files/{id}',
+  },
+  updateObligation: {
+    method: 'PATCH',
+    path: '/api/v1/obligations/{id}',
   },
   updateProject: {
     method: 'PATCH',

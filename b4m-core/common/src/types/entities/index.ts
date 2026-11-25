@@ -66,6 +66,9 @@ export * from './EmbeddingCacheTypes';
 export * from './CurationTypes';
 export * from './McpServerTypes';
 export * from './McpConnectionTypes';
+export * from './CallableFunctionTypes';
+export * from './CallableFunctionCallTypes';
+export * from './CallableFunctionReviewTypes';
 export * from './McpConnectionRules';
 export * from './SecretRotationTypes';
 export * from './ResearchAgentTypes';
@@ -114,6 +117,7 @@ export * from './DataLakeOwnershipOfferTypes';
 export * from './LakeAccessEventTypes';
 export * from './LakeConfigChangeEventTypes';
 export * from './LakeConfigSnapshotTypes';
+export * from './LakeConfigUndoClaimTypes';
 export * from './LakeMembershipChangeEventTypes';
 export * from './LakeMembershipDiffTypes';
 export * from './LakeConfigHistoryTypes';
@@ -153,3 +157,5 @@ export * from './adminUserTimeline';
 export * from './adminSubscriptionTimeline';
 
 export * from './SignupProtectionTypes';
+
+export * from './PlatformAccountingTypes';

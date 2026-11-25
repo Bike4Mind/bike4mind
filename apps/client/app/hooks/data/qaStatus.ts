@@ -1,5 +1,5 @@
 /**
- * Data hooks for the admin QA status page (`/status`). Read models are
+ * Data hooks for the admin QA status page (`/admin/qa`). Read models are
  * type-only imports from server/qa/reads.ts, as in hooks/data/deepAgents.ts.
  */
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
@@ -45,7 +45,7 @@ export type {
   QaTile,
 };
 
-/** `/status` search params. Server-side twin: parseQaFilters in server/qa/filters.ts. */
+/** `/admin/qa` search params. Server-side twin: parseQaFilters in server/qa/filters.ts. */
 export interface QaStatusSearch {
   product?: string;
   tenant?: string;
@@ -56,6 +56,13 @@ export interface QaStatusSearch {
   to?: string;
   /** Older links only; from/to win when present. */
   range?: '7d' | '30d';
+}
+
+export const QA_SEARCH_KEYS = ['product', 'tenant', 'env', 'branch', 'from', 'to', 'range'] as const;
+
+/** True when the search carries any QA filter key, whatever its value. */
+export function hasQaSearchKeys(search: Record<string, unknown>): boolean {
+  return QA_SEARCH_KEYS.some(key => key in search);
 }
 
 export function parseQaStatusSearch(search: Record<string, unknown>): QaStatusSearch {

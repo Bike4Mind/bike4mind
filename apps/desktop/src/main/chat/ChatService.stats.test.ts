@@ -14,6 +14,10 @@ import { PrefixWarmGate } from './prefixWarmGate';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -22,8 +26,10 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Not vi.waitUntil: under fake timers it advances the clock while it polls.
 async function until(done: () => boolean): Promise<void> {
-  for (let spins = 0; !done(); spins++) {
-    if (spins > 5_000) throw new Error('condition never held');
+  // Use elapsed real time: filesystem work can outlast thousands of immediate callbacks.
+  const deadline = performance.now() + 3_000;
+  while (!done()) {
+    if (performance.now() >= deadline) throw new Error('condition never held');
     await new Promise(resolve => setImmediate(resolve));
   }
 }

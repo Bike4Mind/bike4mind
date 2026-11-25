@@ -138,8 +138,6 @@ describe('DataLakeResearchPanel', () => {
     expect(screen.getByTestId('datalake-research-error')).toBeTruthy();
   });
 
-  // Unlike the Proposals tab, this one is where a configuration is CREATED - hiding it while there
-  // are none would hide the only way to make one.
   it('offers a way in when the lake has no configurations yet', () => {
     renderPanel();
     expect(screen.getByTestId('datalake-research-empty')).toBeTruthy();
@@ -203,8 +201,6 @@ describe('DataLakeResearchPanel', () => {
     expect(spies.onStartRun).toHaveBeenCalledWith('config-b');
   });
 
-  // A lake runs one at a time; the server refuses a second. Saying so beats earning a refusal toast.
-  // `startedAt` has to be recent: in-flight is age-bounded, so a fixture's fixed date would age out.
   it('disables Run while a run is still in flight', () => {
     renderPanel({ configs: [config()], runs: [run({ status: 'running', startedAt: new Date() })] });
 
@@ -227,9 +223,6 @@ describe('DataLakeResearchPanel', () => {
     expect((screen.getByTestId('datalake-research-run-btn-config-1') as HTMLButtonElement).disabled).toBe(false);
   });
 
-  // The lockout this closes: a hard-killed run keeps `running` forever because its catch never ran.
-  // The server already ignores such a row when it counts active runs, so a status-only button would
-  // refuse a run the server would accept - for every config in the lake, not just that one.
   it('re-enables Run once a running row has aged past the stale bound', () => {
     const abandoned = run({
       status: 'running',
@@ -269,7 +262,7 @@ describe('DataLakeResearchPanel', () => {
         target: { value: 'it is a press release' },
       });
       fireEvent.click(screen.getByTestId('datalake-research-rule-action-1'));
-      fireEvent.click(screen.getByRole('option', { name: 'Block' }));
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'Block' }));
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
 
       expect(spies.onCreate).toHaveBeenCalledWith(
@@ -303,15 +296,24 @@ describe('DataLakeResearchPanel', () => {
       });
     };
 
+    // Seeded through Edit rather than N add-clicks: each click re-renders the whole panel.
+    const editWithRules = (conditions: string[]) => {
+      renderPanel({ configs: [config({ itemRules: conditions.map(condition => ({ condition, action: 'review' })) })] });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
+    };
+
     it('disables adding at the maximum', () => {
-      openNewForm();
-      addRules(Array.from({ length: RESEARCH_ITEM_RULES_MAX }, (_, i) => `rule ${i}`));
+      editWithRules(Array.from({ length: RESEARCH_ITEM_RULES_MAX - 1 }, (_, i) => `rule ${i}`));
+      expect(screen.getByTestId('datalake-research-rule-add')).not.toBeDisabled();
+      fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
+      fireEvent.change(screen.getByTestId(`datalake-research-rule-condition-${RESEARCH_ITEM_RULES_MAX - 1}`), {
+        target: { value: 'last rule' },
+      });
       expect(screen.getByTestId('datalake-research-rule-add')).toBeDisabled();
     });
 
     it('does not count an invisible-only row toward the maximum', () => {
-      openNewForm();
-      addRules(['\u200B\u200B', ...Array.from({ length: RESEARCH_ITEM_RULES_MAX - 1 }, (_, i) => `rule ${i}`)]);
+      editWithRules(['\u200B\u200B', ...Array.from({ length: RESEARCH_ITEM_RULES_MAX - 1 }, (_, i) => `rule ${i}`)]);
       expect(screen.getByTestId('datalake-research-rule-add')).not.toBeDisabled();
     });
 
@@ -392,7 +394,7 @@ describe('DataLakeResearchPanel', () => {
         target: { value: 'example.com\ndocs.example.com' },
       });
       fireEvent.click(screen.getByTestId('datalake-research-unlisted-select'));
-      fireEvent.click(screen.getByRole('option', { name: 'Ignore' }));
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'Ignore' }));
       fireEvent.change(screen.getByTestId('datalake-research-tags-input'), { target: { value: 'research, weekly' } });
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
 
@@ -432,7 +434,7 @@ describe('DataLakeResearchPanel', () => {
       fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
       fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
       fireEvent.click(screen.getByTestId('datalake-research-unlisted-select'));
-      fireEvent.click(screen.getByRole('option', { name: 'Ignore' }));
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'Ignore' }));
 
       expect(screen.getByTestId('datalake-research-unlisted-error')).toBeInTheDocument();
       expect(screen.getByTestId('datalake-research-save-btn')).toBeDisabled();
@@ -606,8 +608,6 @@ describe('DataLakeResearchPanel', () => {
       });
     });
 
-    // The default state of a new configuration, and the one the wire schema used to reject: the
-    // Default option's value is '', which `draftToInput` sends as null.
     it('sends a null judge model when the Default option is left alone', () => {
       const spies = renderPanel();
 
@@ -619,8 +619,6 @@ describe('DataLakeResearchPanel', () => {
       expect(spies.onCreate).toHaveBeenCalledWith(expect.objectContaining({ model: null }));
     });
 
-    // Blank is "use the default", not 0: the server clamps rather than rejects, so a 0 here would
-    // silently mean "propose everything" on the relevance floor and 1 micro-USD on the ceiling.
     it('falls back to the shared defaults when a numeric lever is cleared', () => {
       const spies = renderPanel();
 
@@ -710,8 +708,6 @@ describe('DataLakeResearchPanel', () => {
       expect(spies.onCreate).not.toHaveBeenCalled();
     });
 
-    // toFixed(2) would seed this field with "0.00", which fails the "above $0" check and blocks
-    // Save, or rounds up and saves a ceiling other than the one that was loaded.
     it('round-trips a sub-cent cost ceiling through Edit and Save unchanged', () => {
       const spies = renderPanel({ configs: [config({ costCeilingMicroUsd: 4_000 })] });
 
@@ -723,7 +719,6 @@ describe('DataLakeResearchPanel', () => {
       expect(spies.onUpdate).toHaveBeenCalledWith('config-1', expect.objectContaining({ costCeilingMicroUsd: 4_000 }));
     });
 
-    // undefined would mean "unchanged" and the stored value would come straight back.
     it('sends null for a cleared recency, so clearing it actually clears it', () => {
       const spies = renderPanel({ configs: [config()] });
 
@@ -781,7 +776,6 @@ describe('DataLakeResearchPanel', () => {
       expect((screen.getByTestId('datalake-research-recency-input') as HTMLInputElement).value).toBe('7');
     });
 
-    // The save's own settle must not close a form that was opened after it was sent.
     it('leaves a newer form open when an earlier save settles', async () => {
       let resolveCreate: () => void = () => {};
       const onCreate = vi.fn(() => new Promise<void>(resolve => (resolveCreate = resolve)));
@@ -800,7 +794,6 @@ describe('DataLakeResearchPanel', () => {
       expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('Weekly sweep');
     });
 
-    // Every create session shares editingId '', so the guard has to tell sessions apart, not ids.
     it('leaves a second new-configuration draft open when the first create settles', async () => {
       let resolveCreate: () => void = () => {};
       const onCreate = vi.fn(() => new Promise<void>(resolve => (resolveCreate = resolve)));
@@ -871,15 +864,11 @@ describe('DataLakeResearchPanel', () => {
       expect(summary).not.toMatch(/already in the lake/);
     });
 
-    // Twenty configurations per lake are allowed, so a history that only says "completed" is
-    // unreadable.
     it('names the configuration a run came from', () => {
       renderPanel({ configs: [config({ id: 'config-1', name: 'Weekly sweep' })], runs: [run()] });
       expect(screen.getByTestId('datalake-research-run-config').textContent).toBe('Weekly sweep');
     });
 
-    // A run outlives the config it came from: the history is the record of what actually ran, so
-    // deleting the config must not blank the row.
     it('falls back to the query the run actually executed when its config is gone', () => {
       renderPanel({ configs: [], runs: [run({ configId: 'deleted-config' })] });
       expect(screen.getByTestId('datalake-research-run-config').textContent).toBe('coastal erosion in Cornwall');
@@ -924,8 +913,6 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.queryByTestId('datalake-research-run-totals')).toBeNull();
     });
 
-    // A judge that failed on some candidates still completes, but the card must say why the totals
-    // are thin rather than leaving "N could not be judged" as the only hint.
     it('shows the judge error on a completed run alongside its totals', () => {
       renderPanel({
         runs: [
@@ -1021,8 +1008,6 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
     });
 
-    // The server stamps judgeModel on the first progress write, so the label must not wait for a
-    // terminal status.
     it('names the judge on a run still in flight when judgments are happening', () => {
       renderPanel({
         runs: [
@@ -1061,8 +1046,6 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.queryByText(/judged by/)).toBeNull();
     });
 
-    // A weekly re-run whose relevant hits are all already pending or in the lake still paid the
-    // judge for every one of them.
     it('names the judge on a run whose judged hits were all deduplicated', () => {
       renderPanel({
         runs: [
@@ -1102,8 +1085,6 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('Running');
     });
 
-    // Nothing will ever settle this row, so reporting it as `running` promises work that is not
-    // happening - and it is the same row the server has already stopped counting as active.
     it('calls a non-terminal run past the stale bound abandoned, not running', () => {
       renderPanel({
         runs: [
@@ -1129,6 +1110,7 @@ describe('DataLakeResearchPanel', () => {
 
     // The server clamps instead of refusing, so each of these used to save a config other than the
     // one on screen: 999 results stored as 50, a $99 ceiling as $5.00, -7 days as "no limit".
+
     it.each([
       ['max-results', '999'],
       ['max-results', '2.5'],
@@ -1153,8 +1135,6 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByText('Enter a whole number from 1 to 25.')).toBeTruthy();
     });
 
-    // Joy colours FormHelperText from the FormControl's error class, so `error` set on the Input
-    // instead still shows the message but leaves it grey. Assert on the class Joy keys off.
     it.each([
       ['max-results', String(RESEARCH_MAX_RESULTS_LIMIT + 1), 'max-proposals'],
       ['max-proposals', '-3', 'max-results'],
@@ -1204,7 +1184,6 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-config-model').textContent).toBe('Model: Default (GPT-4.1 Mini)');
     });
 
-    // `lastRunAt` is stamped at queue time; the history row shows the start time. One page, one clock.
     it('reports the last run at the time its history row shows', () => {
       const startedAt = new Date('2026-03-01T12:00:00.000Z');
       renderPanel({
@@ -1217,8 +1196,6 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-config-last-run').textContent).toBe(`Last run ${expected}`);
     });
 
-    // A retired or filtered model must still read as the selection, or the picker shows blank while
-    // a save quietly keeps a model the manager cannot see.
     it('keeps a saved model the picker no longer lists visible as the selection', () => {
       renderPanel({ configs: [config({ model: 'o3-deep-research' })] });
       expect(screen.getByTestId('datalake-research-config-model').textContent).toBe('Model: o3-deep-research');
@@ -1250,7 +1227,7 @@ describe('DataLakeResearchPanel', () => {
       fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
       fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
       fireEvent.click(screen.getByTestId('datalake-research-cadence-select'));
-      fireEvent.click(screen.getByRole('option', { name: 'Daily' }));
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'Daily' }));
       fireEvent.change(screen.getByTestId('datalake-research-review-backlog-input'), { target: { value: '10' } });
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
 
@@ -1259,8 +1236,6 @@ describe('DataLakeResearchPanel', () => {
       );
     });
 
-    // The field only means something once a schedule is chosen - showing it against "Off" would
-    // suggest it governs Run now, which it never does.
     it('hides the review backlog field while the schedule is off', () => {
       renderPanel();
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
@@ -1312,7 +1287,6 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-schedule-outcome').textContent).toBe('Could not start.');
     });
 
-    // The held line already carries a backlog skip; a second line would say it twice.
     it('adds no outcome line for a backlog skip or a started run', () => {
       const at = new Date('2026-03-02T00:00:00Z');
       renderPanel({
@@ -1341,8 +1315,6 @@ describe('DataLakeResearchPanel', () => {
       );
     });
 
-    // Run now is never blocked by the backlog limit - a person pressing it has decided to spend -
-    // so the warning must appear without touching the button's disabled state.
     it('warns near Run now when the backlog is already at the limit, without disabling it', () => {
       renderPanel({ configs: [config()], pendingProposals: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT });
 
@@ -1506,8 +1478,6 @@ describe('DataLakeResearchPanel', () => {
       );
     });
 
-    // A model the picker does not list would render as a disabled orphan and fail the run at its
-    // first judgment, so Deep keeps the default judge rather than save one nobody can choose.
     it('keeps the default judge for Deep when this deployment does not offer its model', () => {
       const spies = renderPanel({ modelOptions: [offered[0]] });
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
@@ -1573,7 +1543,6 @@ describe('DataLakeResearchPanel', () => {
       expect(advanced()).toBeVisible();
     });
 
-    // A saved block list or recency window folded out of sight would be a setting nobody can see.
     it('expands Advanced for a preset-matching configuration that sets another lever', () => {
       renderPanel({
         modelOptions: offered,
@@ -1638,7 +1607,7 @@ describe('DataLakeResearchPanel', () => {
       renderPanel({ modelOptions: offered });
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
       fireEvent.click(screen.getByTestId('datalake-research-cadence-select'));
-      fireEvent.click(screen.getByRole('option', { name: 'Weekly' }));
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'Weekly' }));
 
       expect(screen.getByTestId('datalake-research-cadence-select').textContent).toBe('Weekly');
       expect(advanced()).not.toBeVisible();
@@ -1712,7 +1681,7 @@ describe('DataLakeResearchPanel', () => {
     };
     const pickSource = (name: string) => {
       fireEvent.click(screen.getByTestId('datalake-research-source-select'));
-      fireEvent.click(screen.getByRole('option', { name }));
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name }));
     };
 
     it('shows the feed address and the topic wording only once Feed is chosen', () => {
@@ -2217,7 +2186,7 @@ describe('DataLakeResearchPanel usability copy', () => {
       openNew();
       fireEvent.change(screen.getByTestId('datalake-research-cost-ceiling-input'), { target: { value: '0.25' } });
       fireEvent.click(screen.getByTestId('datalake-research-cadence-select'));
-      fireEvent.click(screen.getByRole('option', { name: label }));
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: label }));
       expect(screen.getByTestId('datalake-research-monthly-cost').textContent).toBe(
         `Roughly up to ${amount} a month at this schedule.`
       );

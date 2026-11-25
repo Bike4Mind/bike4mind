@@ -18,7 +18,7 @@ describe('useSendMessage - agentMode reaches both dispatch paths', () => {
     return source.slice(start, source.indexOf('});', start));
   };
 
-  it.each(['return await handleCommand(commandHandlers,', 'return await handleLLMCommand({'])(
+  it.each(['return await dispatchSend(commandHandlers, imageSendMode,', 'return await handleLLMCommand({'])(
     'forwards the routed effectiveAgentMode on %s',
     opener => {
       expect(callSite(opener)).toMatch(/^\s*agentMode: effectiveAgentMode,\s*$/m);

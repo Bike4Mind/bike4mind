@@ -19,7 +19,6 @@ import {
   type CdnInvalidationBatch,
   appFileCdnPath,
   createCdnInvalidationBatch,
-  generatedCdnPath,
 } from '../services/cdn/invalidateRouterCdn';
 import { NOTEBOOK_DOWNLOAD_KEY_PREFIX } from '../notebooks/downloadCopyKeys';
 import { TEXT_EDIT_BACKUP_PREFIX } from '../utils/textEditBackupPrefix';
@@ -41,7 +40,7 @@ const BATCH_SIZE = 50;
 
 /**
  * Preserve legacy org uploads which predate the organizationId ownership stamp. Also decides what
- * the data subject walks treat as a personal file (`apps/client/server/dataSubject/subjectMatcher.ts`).
+ * the data subject walks treat as a personal file (`dataSubject/subjectMatcher.ts`).
  */
 export async function isOrganizationFile(file: IFabFileDocument, userId: string): Promise<boolean> {
   return (await findOrganizationFileIds([file], userId)).has(file.id);
@@ -171,7 +170,6 @@ async function purgeFile(
               .select('_id');
             if (!other) {
               await getGeneratedImageStorage().deletePermanently(key);
-              cdn.add(generatedCdnPath(key));
             }
           },
         },

@@ -85,6 +85,9 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFr
 
 import '@pages/api/admin/user-api-keys/[id]/rate-limit';
 
+// Loading the real services barrel costs about half a second, so it is paid once at import time.
+const { adminAuditService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+
 const storedKey = { id: 'key-1', userId: 'owner-1', name: 'wedged key' };
 const admin = { id: 'admin-1', username: 'admin', isAdmin: true };
 const delegate = {
@@ -195,7 +198,6 @@ describe('PATCH /api/admin/user-api-keys/[id]/rate-limit', () => {
   });
 
   it('still succeeds when the best-effort audit write itself fails', async () => {
-    const { adminAuditService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
     const { req, res } = patch({ id: 'key-1' }, { requestsPerMinute: 600 }, admin);
     recordAdminActionFromRequest.mockImplementationOnce((_req: unknown, input: any) =>
       adminAuditService.recordAdminAction(

@@ -513,3 +513,80 @@ describe('releaseCreditHold', () => {
     expect(state.user).toBe(100);
   });
 });
+
+describe('holdCredits intervention holds', () => {
+  const hold = (tier: string, extra: Record<string, unknown> = {}) => ({
+    decisionId: `decision-${tier}`,
+    detectionId: 'detection-1',
+    tier,
+    policyVersion: 1,
+    reason: 'evidence',
+    appliedAt: new Date(),
+    expiresAt: new Date(Date.now() + 3_600_000),
+    releasedAt: null,
+    releasedBy: null,
+    ...extra,
+  });
+  const params = { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger };
+
+  it('refuses an active review hold before moving any balance', async () => {
+    const { adapters, state } = makeAdapters({ user: 100 }, { interventionHolds: [hold('review')] });
+    await expect(holdCredits(params, adapters)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(state.user).toBe(100);
+    expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('refuses and restores the balance when a verify hold lands between the user load and the debit', async () => {
+    const { adapters, state } = makeAdapters({ user: 100 });
+    vi.mocked(adapters.users.findById)
+      .mockResolvedValueOnce({ id: 'u1', currentCredits: 100 } as IUserDocument)
+      .mockResolvedValueOnce({ id: 'u1', currentCredits: 70, interventionHolds: [hold('verify')] } as never);
+    await expect(holdCredits(params, adapters)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(state.user).toBe(100);
+  });
+
+  it('ignores released and expired holds', async () => {
+    const { adapters, state } = makeAdapters(
+      { user: 100 },
+      {
+        interventionHolds: [
+          hold('review', { releasedAt: new Date(), releasedBy: 'admin' }),
+          hold('verify', { expiresAt: new Date(Date.now() - 1000) }),
+        ],
+      }
+    );
+    await holdCredits(params, adapters);
+    expect(state.user).toBe(70);
+  });
+
+  it('admits spend within a limit hold and refuses past it with the balance restored', async () => {
+    const { adapters, state } = makeAdapters(
+      { user: 100 },
+      { interventionHolds: [hold('limit', { creditsPerHour: 50 })] }
+    );
+    let used = 0;
+    const window = {
+      tryAddWithinLimitFixedWindow: vi.fn(async (_key: string, amount: number, limit: number) => {
+        if (used + amount > limit) return { success: false, count: used, expiresAt: new Date() };
+        used += amount;
+        return { success: true, count: used, expiresAt: new Date() };
+      }),
+    };
+    adapters.newAccountSpendCap = { ...adapters.newAccountSpendCap, interventionSpendWindow: window as never };
+    await holdCredits(params, adapters);
+    expect(window.tryAddWithinLimitFixedWindow).toHaveBeenCalledWith('intervention:spend:u1', 30, 50, 3_600_000, {
+      outsideTransaction: true,
+    });
+    await expect(holdCredits(params, adapters)).rejects.toThrow(/limited to [0-9]+ credits per hour/);
+    expect(state.user).toBe(70);
+  });
+
+  it('refuses spend under a limit hold when no window is wired, rather than admitting it unmetered', async () => {
+    const { adapters, state } = makeAdapters(
+      { user: 100 },
+      { interventionHolds: [hold('limit', { creditsPerHour: 500 })] }
+    );
+    await expect(holdCredits(params, adapters)).rejects.toThrow(/limited to [0-9]+ credits per hour/);
+    expect(state.user).toBe(100);
+  });
+});

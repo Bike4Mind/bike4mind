@@ -21,6 +21,10 @@ vi.mock('./storage/index', () => {
 });
 
 vi.mock('../files/fileLinkToken', () => ({ buildFileLinkUrl: vi.fn() }));
+vi.mock('./pushNotifications', () => ({
+  isPushDeliveryConfigured: () => false,
+  publishApprovalResolvedPush: vi.fn(),
+}));
 vi.mock('./invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('./downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('../middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));

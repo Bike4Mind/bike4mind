@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AuthStrategy, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { ACCOUNT_LINK_VERIFICATION_REQUIRED, ACCOUNT_LINK_EMAIL_MISMATCH } from './oauthAccountLink';
@@ -789,7 +790,7 @@ describe('verifyCallback - new user creation username field', () => {
 
 describe('verifyCallback - catch block surfaces the error', () => {
   it("logs the exception and attaches a canonical duplicate_account code - raw E11000 text (which can embed another user's identifier) stays in info.message for CloudWatch only, never as the reason itself", async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     mockCreate.mockRejectedValueOnce(
       Object.assign(new Error('E11000 duplicate key error: dup key: { username: "victim@example.com" }'), {
@@ -808,12 +809,12 @@ describe('verifyCallback - catch block surfaces the error', () => {
     expect(user).toBeUndefined();
     expect((info as { code: string }).code).toBe('duplicate_account');
     expect((info as { message: string }).message).toContain('E11000');
-    expect(errorSpy).toHaveBeenCalledWith('[verifyCallback] authenticateUser threw:', expect.any(Error));
+    expect(errorSpy).toHaveBeenCalledWith('[verifyCallback] authenticateUser threw', { error: expect.any(Error) });
     // Spy restored failure-safely by the file-level afterEach.
   });
 
   it('attaches forbidden_system_user for a ForbiddenError thrown mid-authentication', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     mockCreate.mockRejectedValueOnce(new ForbiddenError('Cannot authenticate as a system account'));
 
@@ -828,7 +829,7 @@ describe('verifyCallback - catch block surfaces the error', () => {
   });
 
   it('default-denies any other thrown error to internal', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     mockCreate.mockRejectedValueOnce(new Error('connection reset'));
 
@@ -899,7 +900,7 @@ describe('verifyCallback - OAuth create: username dedupe on collision', () => {
   });
 
   it('fails clean after exhausting all retries instead of looping forever', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     for (let i = 0; i < 6; i++) mockCreate.mockRejectedValueOnce(usernameDupErr());
 
@@ -917,7 +918,7 @@ describe('verifyCallback - OAuth create: username dedupe on collision', () => {
   });
 
   it('does NOT retry on an email-index collision - fails clean rather than risking a duplicate-email account', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     const emailDupErr = Object.assign(new Error('E11000 duplicate key error collection: dev.users index: email_1'), {
       code: 11000,
@@ -1093,7 +1094,7 @@ describe('verifyCallback - OAuth create: blocked email domains', () => {
   );
 
   it('fails closed when the domain lists cannot be read', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     mockShouldBlockDisposableEmail.mockRejectedValue(new Error('settings down'));
 
@@ -1829,7 +1830,7 @@ describe('OAuth signup with an invite code carried through state', () => {
   it('signs up uninvited when a concurrent signup claimed the code first', async () => {
     mockFindInviteByCode.mockResolvedValue(referral());
     mockClaimInvite.mockResolvedValue(false);
-    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 
     const { err, user } = await runSelfServe();
 
@@ -1858,7 +1859,7 @@ describe('OAuth signup with an invite code carried through state', () => {
   it('reopens the claimed code when the account create fails', async () => {
     mockFindInviteByCode.mockResolvedValue(referral());
     mockCreate.mockRejectedValue(new Error('db down'));
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
     const { user } = await runSelfServe();
 
@@ -1875,22 +1876,22 @@ describe('OAuth signup with an invite code carried through state', () => {
     mockFindInviteByCode.mockResolvedValue(referral());
     mockCreate.mockRejectedValue(createError);
     mockReleaseInviteClaim.mockRejectedValue(new Error('claim release failed'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
     const { user, info } = await runSelfServe();
 
     expect(user).toBeUndefined();
     expect(info).toMatchObject({ code: 'internal', message: 'account create failed' });
     expect(warn).toHaveBeenCalledWith('[oauth signup] invite claim release failed; the code may remain claimed');
-    expect(error).toHaveBeenCalledWith('[verifyCallback] authenticateUser threw:', createError);
+    expect(error).toHaveBeenCalledWith('[verifyCallback] authenticateUser threw', { error: createError });
     expect(mockUpdateInvite).not.toHaveBeenCalled();
   });
 
   it('completes the login when closing the code fails after the account exists', async () => {
     mockFindInviteByCode.mockResolvedValue(referral());
     mockUpdateInvite.mockRejectedValue(new Error('db down'));
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
     const { err, user } = await runSelfServe();
 

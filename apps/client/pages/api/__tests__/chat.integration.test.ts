@@ -95,6 +95,14 @@ const {
 }));
 
 vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
+vi.mock('@bike4mind/server-utils/callableFunctions/functionToolHost', () => ({
+  functionAndConnectorToolHost: vi.fn(() => fakeCustomMcpHost),
+}));
+
+const mockResolveCallableFunctions = vi.hoisted(() => vi.fn(async (_user: unknown) => true));
+vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
+  resolveCallableFunctionsEnabled: mockResolveCallableFunctions,
+}));
 
 vi.mock('@server/utils/waitTurnDeadline', async orig => ({
   ...(await orig<Record<string, unknown>>()),
@@ -526,6 +534,19 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(expected);
     }
   );
+
+  it('hands a wait=true process() a resolver that asks whether callable functions are on for the caller', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    const { callableFunctionsResolver } = mockProcess.mock.calls[0][0] as {
+      callableFunctionsResolver: () => Promise<boolean>;
+    };
+
+    await expect(callableFunctionsResolver()).resolves.toBe(true);
+    expect(processCtorOptions.value?.user).toMatchObject({ id: 'user-1' });
+    expect(mockResolveCallableFunctions).toHaveBeenCalledWith(processCtorOptions.value?.user);
+  });
 
   describe.each([
     {
@@ -1652,8 +1673,11 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
 
   it('registers the custom connector host on the inline process options, matching the queued path', async () => {
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    const before = Date.now();
     await handler(req, res);
     expect(processCtorOptions.value?.customMcp).toBe(fakeCustomMcpHost);
+    expect(processCtorOptions.value?.customMcpDeadline).toBeGreaterThanOrEqual(before + waitTurnLimits.budgetMs);
+    expect(processCtorOptions.value?.customMcpDeadline).toBeLessThanOrEqual(Date.now() + waitTurnLimits.budgetMs);
   });
 
   it('hands process() an apiKey origin and the key id, matching what the async path stores', async () => {

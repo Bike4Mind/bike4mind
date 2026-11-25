@@ -49,4 +49,20 @@ describe('BriefItemSchema source', () => {
       false
     );
   });
+
+  it('accepts a delegation source and rejects one missing its id', () => {
+    const source = { kind: 'delegation', delegationId: 'g1' };
+    expect(BriefItemSchema.parse({ id: 'x1', text: 't', source }).source).toEqual(source);
+    expect(
+      BriefItemSchema.safeParse({ id: 'x1', text: 't', source: { kind: 'delegation', emailId: 'e1' } }).success
+    ).toBe(false);
+  });
+
+  it('accepts an obligation source and rejects one missing its id', () => {
+    const source = { kind: 'obligation', obligationId: 'o1' };
+    expect(BriefItemSchema.parse({ id: 'x1', text: 't', source }).source).toEqual(source);
+    expect(
+      BriefItemSchema.safeParse({ id: 'x1', text: 't', source: { kind: 'obligation', delegationId: 'g1' } }).success
+    ).toBe(false);
+  });
 });

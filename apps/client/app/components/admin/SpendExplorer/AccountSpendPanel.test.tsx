@@ -5,7 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { CreditHolderType, type SpendAccountRow, type SpendTimelineResponse } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const h = vi.hoisted(() => ({ useSpendTimeline: vi.fn() }));
+const h = vi.hoisted(() => ({ useSpendTimeline: vi.fn(), userFeatures: vi.fn() }));
 
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
@@ -13,6 +13,12 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('./useSpendExplorer', () => ({ useSpendTimeline: (...args: unknown[]) => h.useSpendTimeline(...args) }));
 vi.mock('./SpendChart', () => ({ SpendChart: () => null }));
 vi.mock('./SpendBucketTable', () => ({ SpendBucketTable: () => null }));
+vi.mock('./FeatureCostSection', () => ({
+  UserFeaturesPanel: (props: unknown) => {
+    h.userFeatures(props);
+    return null;
+  },
+}));
 
 import { AccountSpendPanel } from './AccountSpendPanel';
 
@@ -68,6 +74,17 @@ beforeEach(() => {
 });
 
 describe('AccountSpendPanel', () => {
+  it("shows the acting user's feature mix over the same range", () => {
+    renderPanel();
+    expect(h.userFeatures).toHaveBeenCalledWith({
+      range: RANGE,
+      userId: 'user-1',
+      userName: 'User One',
+      showProfileLink: false,
+      testId: 'account-spend-features',
+    });
+  });
+
   it("requests the user's spend split by model over the drill range", () => {
     renderPanel();
 

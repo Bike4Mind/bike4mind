@@ -12,6 +12,7 @@ import { getCreateSoundEffectJobDeps, readAudioJobOutput } from '@bike4mind/serv
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   awaitInlineAudioJob,
@@ -19,6 +20,7 @@ import {
   dailyLimitError,
   GENERATION_JOB_ID_HEADER,
   failureLogLevelOf,
+  isQuotaExhaustedFailure,
   isRateLimitedFailure,
   prefersRespondAsync,
   retryAfterSecondsOf,
@@ -33,6 +35,7 @@ import { mapperDeps } from '@server/generations/routeDeps';
 import { SOUND_EFFECT_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 
 const GENERATION_FAILED = { error: 'Sound generation failed' };
+const TEMPORARILY_UNAVAILABLE = { error: 'Sound effects are temporarily unavailable. Please try again later.' };
 
 // Provider-agnostic sound-effects generation, run as a sound-effect job (createSoundEffectJob) stepped in this
 // request: the job holds the duration-driven cost, settles it on success and returns it otherwise, records usage and
@@ -49,12 +52,16 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   assertAiAccessAllowed(req.user);
   const user = req.user;
   if (!user) throw new UnauthorizedError('User not found');
-  const { provider, text, durationSeconds, promptInfluence, format, encoding, preview, organization_id } =
+  const { provider, text, durationSeconds, promptInfluence, format, encoding, preview, organization_id, run } =
     req.validated;
 
   // Omitted keeps the home-org default. A key bills its own account (resolveAudioBillingOrgId 403s any other
   // target), so only the JWT caller's value changes the payer. Undefined is a user-billed key, which bills the user.
-  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'home-org');
+  // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
+  const paidRun = await resolvePaidCallRun(req, run, organization_id);
+  const billingOrganizationId = paidRun
+    ? paidRun.billingOrganizationId
+    : await resolveAudioBillingOrgId(req, organization_id, 'home-org');
   // As the v1 media routes: 'studio' is any first-party session.
   const source: GenerationJobSource = req.apiKeyInfo ? 'api' : 'studio';
   const created = await createAudioJobKeepingAudioOnFullQuota(
@@ -71,6 +78,7 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
           apiKeyId: req.apiKeyInfo?.keyId,
           saveToFiles,
           usageSource: resolveRequestUsageSource(req),
+          ...(paidRun && { run: paidRun.attribution }),
         },
         getCreateSoundEffectJobDeps()
       ),
@@ -140,6 +148,14 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   const { job } = waited;
 
   if (job.state !== 'succeeded') {
+    if (isQuotaExhaustedFailure(job)) {
+      req.logger.warn('Sound-effects generation unavailable: provider quota exhausted', {
+        jobId: job.id,
+        provider,
+        error: job.error,
+      });
+      return res.status(503).json(TEMPORARILY_UNAVAILABLE);
+    }
     if (isRateLimitedFailure(job)) {
       req.logger.warn('Sound-effects generation deferred: provider at capacity', { jobId: job.id, provider });
       throw providerBusyHttpError(new ProviderBusyError(provider, 'upstream_rate_limited', retryAfterSecondsOf(job)));

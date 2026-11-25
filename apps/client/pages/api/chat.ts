@@ -17,6 +17,7 @@ import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { adminRoleWithheldFor, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
 import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
@@ -67,7 +68,7 @@ import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLa
 import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
 import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
-import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
+import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
@@ -255,7 +256,8 @@ async function handleChat(
     ...getDefaultChatCompletionOptions(),
     // Not on the shared defaults (surfaces without a confirm card must not offer custom tools);
     // the queued path registers it in questProcessor, so the inline wait=true path must too.
-    customMcp: customMcpToolHost,
+    customMcp: functionAndConnectorToolHost('chat'),
+    ...(simplifiedRequest.wait ? { customMcpDeadline: requestStartedAt + WAIT_TURN_BUDGET_MS } : {}),
     // As questProcessor: the inline wait=true path runs audio_generation itself.
     audioToolJobs: buildAudioToolJobs(),
     queue: new SQSService(), // Create per-request to ensure fresh credentials
@@ -376,6 +378,7 @@ async function handleChat(
               imageConfig: undefined,
             },
             logger: req.logger,
+            callableFunctionsResolver: () => resolveCallableFunctionsEnabled(req.user),
             // Pass quest from invoke to skip redundant DB read
             prefetchedQuest: quest,
             // Pass session from invoke to skip redundant DB read

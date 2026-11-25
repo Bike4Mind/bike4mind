@@ -62,19 +62,39 @@ const setWindowSize = (width: number, height: number) => {
   Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
 };
 
+const needsYou = (): WatchSnapshot => ({
+  ...EMPTY_WATCH_SNAPSHOT,
+  overall: 'needs-you',
+  needsYouCount: 1,
+  orchestrations: [room('a', { lastActiveAt: 10 }), room('b', { needsYouSince: 5 })],
+  pending: [pending()],
+});
+
 describe('MiniTavern', () => {
   beforeEach(() => setWindowSize(360, 220));
   afterEach(() => themed.unmount());
 
+  it('closes on Escape', async () => {
+    const { api } = fakeApi(EMPTY_WATCH_SNAPSHOT);
+    await themed.render(<MiniTavern api={api} />);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(api.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('collapses to a strip of state dots when tiny', async () => {
+    setWindowSize(240, 56);
+    const { api } = fakeApi({ ...EMPTY_WATCH_SNAPSHOT, orchestrations: [room('a'), room('b')] });
+    await themed.render(<MiniTavern api={api} />);
+
+    expect(query('mini-tavern-room')).toBeNull();
+    await click('mini-strip-cluster-b');
+    expect(api.focusAgent).toHaveBeenCalledWith('b', 'b');
+  });
+
   it('shows the room that needs you and its oldest request, answerable in place', async () => {
-    const snapshot: WatchSnapshot = {
-      ...EMPTY_WATCH_SNAPSHOT,
-      overall: 'needs-you',
-      needsYouCount: 1,
-      orchestrations: [room('a', { lastActiveAt: 10 }), room('b', { needsYouSince: 5 })],
-      pending: [pending()],
-    };
-    const { api } = fakeApi(snapshot);
+    const { api } = fakeApi(needsYou());
     await themed.render(<MiniTavern api={api} />);
 
     expect(el('mini-tavern-title').textContent).toBe('Room b');
@@ -149,24 +169,5 @@ describe('MiniTavern', () => {
     expect(el('mini-tavern-title').textContent).toBe('Room b');
     await push({ ...snapshot });
     expect(el('mini-tavern-title').textContent).toBe('Room b');
-  });
-
-  it('collapses to a strip of state dots when tiny', async () => {
-    setWindowSize(240, 56);
-    const { api } = fakeApi({ ...EMPTY_WATCH_SNAPSHOT, orchestrations: [room('a'), room('b')] });
-    await themed.render(<MiniTavern api={api} />);
-
-    expect(query('mini-tavern-room')).toBeNull();
-    await click('mini-strip-cluster-b');
-    expect(api.focusAgent).toHaveBeenCalledWith('b', 'b');
-  });
-
-  it('closes on Escape', async () => {
-    const { api } = fakeApi(EMPTY_WATCH_SNAPSHOT);
-    await themed.render(<MiniTavern api={api} />);
-    await act(async () => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    });
-    expect(api.close).toHaveBeenCalledTimes(1);
   });
 });

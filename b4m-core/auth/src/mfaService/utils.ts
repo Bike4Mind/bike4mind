@@ -1,6 +1,6 @@
-import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
-import { timingSafeEqual, createHash } from 'crypto';
+import { timingSafeEqual, createHash, randomBytes } from 'crypto';
+import { TOTP_STEP_SECONDS, encodeBase32, generateTOTPSecret, totpAuthUrl, totpCode } from './totp';
 import {
   IUserDocument,
   IMFAConfig,
@@ -32,10 +32,8 @@ export async function generateTOTPSetup(
   // No brand fallback: when APP_NAME is unconfigured, label the TOTP entry with just
   // the user's email rather than emitting a stray "(email)" with a leading space.
   const label = appName ? `${appName} (${userEmail})` : userEmail;
-  const secret = existingSecret || speakeasy.generateSecret({ name: label }).base32;
-  const qrCodeUrl = await QRCode.toDataURL(
-    speakeasy.otpauthURL({ secret, label: encodeURIComponent(label), encoding: 'base32' })
-  );
+  const secret = existingSecret || generateTOTPSecret();
+  const qrCodeUrl = await QRCode.toDataURL(totpAuthUrl(secret, label));
   return {
     secret,
     qrCodeUrl,
@@ -43,32 +41,27 @@ export async function generateTOTPSetup(
   };
 }
 
-const TOTP_STEP_SECONDS = 30;
-
 /**
- * Match a TOTP token against a secret and return the time step it belongs to, or null.
- * The window of 1 step either side absorbs minor clock drift (industry standard). Callers that
- * accept a code must also claim the step (see claimTOTPCode) so the code cannot be replayed.
+ * Match a TOTP token against a secret and return the time step it belongs to, or null. The window
+ * of 1 step either side absorbs minor clock drift (industry standard); the earliest matching step
+ * wins. Callers that accept a code must also claim the step (see claimTOTPCode) so the code cannot
+ * be replayed.
  */
 export function matchTOTPStep(secret: string, token: string, window = 1, nowMs = Date.now()): number | null {
   // An empty key is public, so anyone could compute its codes. decryptAtRest returns '' when a
   // stored secret cannot be decrypted, which must fail closed rather than verify.
-  if (!secret) return null;
-  const time = Math.floor(nowMs / 1000);
-  const match = speakeasy.totp.verifyDelta({
-    secret,
-    encoding: 'base32',
-    token,
-    window,
-    time,
-    step: TOTP_STEP_SECONDS,
-  });
-  return match ? Math.floor(time / TOTP_STEP_SECONDS) + match.delta : null;
+  if (!secret || !/^\d{6}$/.test(token)) return null;
+  const current = Math.floor(nowMs / 1000 / TOTP_STEP_SECONDS);
+  const provided = Buffer.from(token);
+  for (let step = current - window; step <= current + window; step++) {
+    if (timingSafeEqual(Buffer.from(totpCode(secret, step)), provided)) return step;
+  }
+  return null;
 }
 
 /**
  * Hash a backup code for at-rest storage.
- * Codes are high-entropy random strings (speakeasy base32, ~50 bits), so a
+ * Codes are high-entropy random strings (10 base32 characters, 50 bits), so a
  * fast SHA-256 is appropriate - no dictionary attack risk, and the migration
  * backfill over thousands of users stays instantaneous.
  */
@@ -82,11 +75,7 @@ export function hashBackupCode(code: string): string {
  * hashing them (via hashBackupCode) before storing in the database.
  */
 export function generateBackupCodes(count: number = 10): string[] {
-  return Array.from({ length: count }, () => {
-    // crypto.randomBytes-backed CSPRNG via speakeasy
-    const secret = speakeasy.generateSecret({ length: 20 });
-    return secret.base32.substring(0, 10).toUpperCase();
-  });
+  return Array.from({ length: count }, () => encodeBase32(randomBytes(7)).slice(0, 10));
 }
 
 /**

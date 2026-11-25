@@ -14,6 +14,7 @@ import {
   LLMModelConfig,
   ModelInfo,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  formatZodError,
   getQuestErrorCode,
   PromptMeta,
   PromptMetaZodSchema,
@@ -30,7 +31,6 @@ import {
 import { getAvailableModels, resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
-import { fromZodError } from 'zod-validation-error';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
 import {
@@ -207,12 +207,12 @@ export class ChatCompletionInvoke {
     this.prefetchedSession = session;
     this.prefetchedOrganization = organization;
 
-    // Check session early to fail fast if not found
+    // sessionId is caller-supplied, so a deleted notebook or stale id is a client condition: warn,
+    // and throw so every caller answers 404 rather than guessing what an undefined return means.
+    // Nothing has been created or admitted yet, so there is no quest or credit state to unwind.
     if (!session) {
-      this.logger.error(
-        `Session for sessionId: ${sessionId} not found. The session may have been deleted before the quest was started.`
-      );
-      return;
+      this.logger.warn('Chat completion refused: session not found (it may have been deleted before the turn started)');
+      throw new NotFoundError('Session not found');
     }
 
     // sessionId is caller-supplied (the public POST /api/chat contract accepts any string), and
@@ -452,6 +452,9 @@ export class ChatCompletionInvoke {
               throw new NotFoundError('Quest not found');
             }
             // Retry path: clear prior replies and images.
+            // An edited prompt is a new request, so it gets a fresh data lake save budget. A plain retry
+            // keeps the count: the files its earlier attempt saved still exist.
+            const promptEdited = q.prompt !== message;
             q.type = 'message';
             q.reply = null;
             q.replies = [];
@@ -488,8 +491,9 @@ export class ChatCompletionInvoke {
                 promptMeta: q.promptMeta,
                 agentIds: q.agentIds,
               },
-              { unset: ['errorCode', 'turnTiming'] }
+              { unset: promptEdited ? ['errorCode', 'turnTiming', 'lakeSaveCount'] : ['errorCode', 'turnTiming'] }
             );
+            if (promptEdited) q.lakeSaveCount = undefined;
             return q;
           })
         : this.db.quests.create({
@@ -666,7 +670,7 @@ export class ChatCompletionInvoke {
       if (!dispatchAttempted) await releaseFreeStart();
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
-        errorMessage = fromZodError(error).message;
+        errorMessage = formatZodError(error);
       } else if (error instanceof Error) {
         errorMessage = error.message;
       }

@@ -5,7 +5,7 @@ import { QaTestWrapper } from '@client/app/components/QaStatus/testTheme';
 const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: (...a: unknown[]) => mockGet(...a) } }));
 
-import { parseQaStatusSearch, useQaOverview, useQaRuns, useQaTestHistory } from './qaStatus';
+import { hasQaSearchKeys, parseQaStatusSearch, useQaOverview, useQaRuns, useQaTestHistory } from './qaStatus';
 
 beforeEach(() => mockGet.mockReset().mockResolvedValue({ data: { runs: [], tiles: [], series: [], flaky: [] } }));
 
@@ -68,5 +68,22 @@ describe('parseQaStatusSearch', () => {
       branch: 'main',
       from: '2026-11-01',
     });
+  });
+});
+
+describe('hasQaSearchKeys', () => {
+  it.each([
+    [{}, false],
+    [{ unrelated: 'x' }, false],
+    [{ product: 'x' }, true],
+    [{ tenant: 'x' }, true],
+    [{ env: 'x' }, true],
+    [{ branch: 'x' }, true],
+    [{ from: '2026-11-01' }, true],
+    [{ to: '2026-11-02' }, true],
+    [{ range: '7d' }, true],
+    [{ product: 'x', range: '7d', unrelated: 'y' }, true],
+  ])('%j -> %s', (search, expected) => {
+    expect(hasQaSearchKeys(search)).toBe(expected);
   });
 });

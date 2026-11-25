@@ -1,6 +1,6 @@
 /**
  * Admin UI for managing an organization's GitHub webhook integration:
- * URL/secret display, secret reveal and rotation, event selection, enable toggle.
+ * URL/secret display, one-time secret on create/rotate, event selection, enable toggle.
  */
 
 import { FC, useState, useCallback } from 'react';
@@ -22,8 +22,6 @@ import {
   Divider,
 } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ReplayIcon from '@mui/icons-material/Replay';
@@ -60,7 +58,8 @@ interface OrgWebhookConfigProps {
 
 const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
   const setConfirmationModal = useConfirmationModal.setState;
-  const [showSecret, setShowSecret] = useState(false);
+  // Plain secret from the create/rotate response; never refetched, gone on unmount.
+  const [oneTimeSecret, setOneTimeSecret] = useState<{ configId: string; value: string } | null>(null);
   const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
   // Staged edit of the subscribed events; null while it still matches what is stored.
   const [editedEvents, setEditedEvents] = useState<string[] | null>(null);
@@ -69,9 +68,6 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
 
   // Data hooks
   const { data: config, isLoading, isError, error } = useGetOrgWebhookConfig(organization.id);
-  const { data: revealedConfig, refetch: refetchSecret } = useGetOrgWebhookConfig(organization.id, {
-    revealSecret: showSecret,
-  });
 
   const createConfig = useCreateOrgWebhookConfig();
   const updateConfig = useUpdateOrgWebhookConfig();
@@ -89,26 +85,6 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
     }
   }, []);
 
-  const handleToggleSecret = useCallback(() => {
-    if (!showSecret) {
-      setConfirmationModal({
-        open: true,
-        type: 'warning',
-        title: 'Reveal Webhook Secret',
-        description:
-          'The webhook secret will be visible on screen. Make sure no one else can see your screen. ' +
-          'You should only need to see this when copying it to GitHub.',
-        okLabel: 'Reveal Secret',
-        onOk: async () => {
-          setShowSecret(true);
-          await refetchSecret();
-        },
-      });
-    } else {
-      setShowSecret(false);
-    }
-  }, [showSecret, setConfirmationModal, refetchSecret]);
-
   const handleRotateSecret = useCallback(() => {
     setConfirmationModal({
       open: true,
@@ -116,23 +92,24 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
       title: 'Rotate Webhook Secret',
       description:
         'This will generate a new webhook secret. You will need to update the secret in your GitHub webhook settings. ' +
-        'The old secret will no longer work.',
+        'The new secret is shown once, right after rotating. The old secret will no longer work.',
       okLabel: 'Rotate Secret',
       onOk: async () => {
-        await rotateSecret.mutateAsync(organization.id);
-        setShowSecret(false);
+        const rotated = await rotateSecret.mutateAsync(organization.id);
+        if (rotated.secret) setOneTimeSecret({ configId: rotated.id, value: rotated.secret });
       },
     });
   }, [organization.id, rotateSecret, setConfirmationModal]);
 
   const handleCreateConfig = useCallback(async () => {
-    await createConfig.mutateAsync({
+    const created = await createConfig.mutateAsync({
       orgId: organization.id,
       data: {
         repos: [],
         subscribedEvents: selectedEvents.length > 0 ? selectedEvents : GITHUB_EVENTS.map(e => e.value),
       },
     });
+    if (created.secret) setOneTimeSecret({ configId: created.id, value: created.secret });
     setSelectedEvents([]);
   }, [organization.id, createConfig, selectedEvents]);
 
@@ -270,7 +247,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
         <Stack spacing={2} sx={{ p: 2 }}>
           <Alert color="neutral">
             Set up a GitHub webhook to receive repository events and share them with your team members. Team members can
-            subscribe to receive events in their MCP servers.
+            subscribe to receive events in their MCP servers. The webhook secret is shown once, right after creation.
           </Alert>
 
           <Typography level="title-sm">Select Events to Subscribe</Typography>
@@ -316,7 +293,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
   }
 
   // Config exists - show management UI
-  const secretToShow = showSecret && revealedConfig?.secret ? revealedConfig.secret : config.secretMasked;
+  const newSecret = oneTimeSecret?.configId === config.id ? oneTimeSecret.value : null;
 
   return (
     <Card variant="outlined">
@@ -368,32 +345,40 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
         </FormControl>
 
         {/* Secret */}
+        {newSecret && (
+          <Alert
+            color="warning"
+            variant="soft"
+            sx={{ alignItems: 'flex-start' }}
+            data-testid="org-webhook-one-time-secret-alert"
+          >
+            <Stack spacing={1} sx={{ width: '100%' }}>
+              <Typography level="title-sm">Copy this secret now. It will not be shown again.</Typography>
+              <Input
+                readOnly
+                value={newSecret}
+                slotProps={{ input: { 'data-testid': 'org-webhook-one-time-secret' } }}
+                endDecorator={
+                  <IconButton
+                    variant="plain"
+                    onClick={() => handleCopy(newSecret, 'Secret')}
+                    aria-label="Copy webhook secret"
+                    data-testid="copy-one-time-secret"
+                  >
+                    <ContentCopyIcon />
+                  </IconButton>
+                }
+              />
+            </Stack>
+          </Alert>
+        )}
         <FormControl>
           <FormLabel>Webhook Secret</FormLabel>
           <Input
             readOnly
-            type={showSecret ? 'text' : 'password'}
-            value={secretToShow || ''}
+            value={config.secretMasked || ''}
             endDecorator={
               <Box sx={{ display: 'flex', gap: 0.5 }}>
-                <IconButton
-                  variant="plain"
-                  onClick={handleToggleSecret}
-                  aria-label={showSecret ? 'Hide webhook secret' : 'Show webhook secret'}
-                  data-testid="toggle-secret-visibility"
-                >
-                  {showSecret ? <VisibilityOffIcon /> : <VisibilityIcon />}
-                </IconButton>
-                {showSecret && (
-                  <IconButton
-                    variant="plain"
-                    onClick={() => handleCopy(secretToShow || '', 'Secret')}
-                    aria-label="Copy webhook secret"
-                    data-testid="copy-secret"
-                  >
-                    <ContentCopyIcon />
-                  </IconButton>
-                )}
                 <IconButton
                   variant="plain"
                   onClick={handleRotateSecret}
@@ -406,7 +391,9 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
               </Box>
             }
           />
-          <FormHelperText>Use this secret in GitHub to sign webhook payloads for verification.</FormHelperText>
+          <FormHelperText>
+            Shown in full only when created or rotated. Lost it? Rotate the secret and update it in GitHub.
+          </FormHelperText>
         </FormControl>
 
         <Divider />

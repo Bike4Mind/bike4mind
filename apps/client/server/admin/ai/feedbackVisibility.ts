@@ -1,6 +1,6 @@
 import { FEEDBACK_AI_POLICY } from '@bike4mind/common';
 import { loadFeedbackAiConfig } from './embedAdminAi';
-import { getAdminAiClassReadiness } from './readiness';
+import { getAdminAiClassReadiness } from '@bike4mind/server-utils/admin/ai/readiness';
 
 export async function feedbackAiVisible(): Promise<boolean> {
   try {

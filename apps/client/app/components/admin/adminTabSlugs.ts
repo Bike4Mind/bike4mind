@@ -3,6 +3,7 @@ import {
   ADMIN_DLQ_REPLAY_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
   ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
+  ADMIN_TEXT_MODERATION_REVIEW_TAB_SLUG,
   ADMIN_USERS_TAB_SLUG,
 } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
@@ -75,7 +76,6 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.WhatsNewModals]: 'whats-new-modals',
   [AdminTab.SlackMetrics]: 'slack-metrics',
   [AdminTab.SystemSecrets]: 'system-secrets',
-  [AdminTab.LiveOpsTriage]: 'live-ops-triage',
   [AdminTab.EmailMarketing]: 'email-marketing',
   [AdminTab.WebhookAuditLogs]: ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
   [AdminTab.GitHubConnection]: 'github-connection',
@@ -97,6 +97,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.SignupRiskReview]: ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
   [AdminTab.ShadowDetections]: ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
   [AdminTab.ModerationIncidents]: ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
+  [AdminTab.TextModerationReview]: ADMIN_TEXT_MODERATION_REVIEW_TAB_SLUG,
   [AdminTab.StripeDisputes]: ADMIN_STRIPE_DISPUTES_TAB_SLUG,
   [AdminTab.EmbedKeys]: 'embed-keys',
   [AdminTab.ModelLifecycle]: 'model-lifecycle',
@@ -138,7 +139,10 @@ export const ADMIN_TAB_SLUG_REDIRECTS: ReadonlyMap<string, AdminTabRedirect> = n
   ['subscribers', { tab: AdminTab.Waitlist }],
   [RETIRED_TAB_SLUGS[AdminTab.RegistrationInvites], { tab: AdminTab.Waitlist, search: { inviteSection: 'invites' } }],
   [RETIRED_TAB_SLUGS[AdminTab.PartnerSignupRules], { tab: AdminTab.Waitlist, search: { inviteSection: 'partners' } }],
-  [RETIRED_TAB_SLUGS[AdminTab.HeldSignupGrants], { tab: AdminTab.Waitlist, search: { inviteSection: 'pending', heldGrants: 'open' } }],
+  [
+    RETIRED_TAB_SLUGS[AdminTab.HeldSignupGrants],
+    { tab: AdminTab.Waitlist, search: { inviteSection: 'pending', heldGrants: 'open' } },
+  ],
   [
     RETIRED_TAB_SLUGS[AdminTab.SecOpsTriage],
     { tab: AdminTab.SecurityDashboard, search: { [SECURITY_VIEW_PARAM]: 'scans' } },

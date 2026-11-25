@@ -8,9 +8,12 @@ const {
   mockDownload,
   mockUpdateOne,
   mockUserFindById,
+  mockUserExists,
+  mockUserFind,
   mockStarterCredits,
   mockGetSignedUrl,
   mockBrowserSigningOrigin,
+  mockQualifies,
   signing,
 } = vi.hoisted(() => ({
   mockArtifactFindOne: vi.fn(),
@@ -19,9 +22,12 @@ const {
   mockUpdateOne: vi.fn(() => Promise.resolve()),
   // Domain access gates look the viewer's verified email up through User (checkVisibility).
   mockUserFindById: vi.fn(),
+  mockUserExists: vi.fn().mockResolvedValue(null),
+  mockUserFind: vi.fn(),
   mockStarterCredits: vi.fn(() => Promise.resolve(0)),
   mockGetSignedUrl: vi.fn(),
   mockBrowserSigningOrigin: vi.fn(),
+  mockQualifies: vi.fn(() => Promise.resolve(true)),
   // Signing is off unless a suite turns it on, so the buffered path stays the default here.
   signing: { enabled: false },
 }));
@@ -57,6 +63,10 @@ vi.mock('@server/utils/starterCredits', () => ({
   getOpenSignupStarterCredits: () => mockStarterCredits(),
 }));
 
+vi.mock('@server/services/gears/socialParty', () => ({
+  hasQualifyingSocialParty: (...a: unknown[]) => mockQualifies(...a),
+}));
+
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getPublishedArtifactsStorage: () => ({
     download: mockDownload,
@@ -89,6 +99,8 @@ vi.mock('@bike4mind/database', () => ({
     findOne: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockProjectFindOne(...a)) }) }),
   },
   User: {
+    exists: (...a: unknown[]) => mockUserExists(...a),
+    find: (...a: unknown[]) => ({ lean: () => mockUserFind(...a) }),
     findById: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockUserFindById(...a)) }) }),
   },
 }));
@@ -157,6 +169,7 @@ const run = (
   if (accept) headers.accept = accept;
   const { req, res } = createMocks({ method: 'GET', query, headers });
   if (user) (req as Record<string, unknown>).user = user;
+  (req as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
@@ -181,6 +194,9 @@ beforeEach(() => {
   mockUpdateOne.mockReset().mockResolvedValue(undefined);
   // Every artifact's owner exists by default; the owner-check tests override this per id.
   mockUserFindById.mockReset().mockResolvedValue({});
+  mockQualifies.mockReset().mockResolvedValue(true);
+  mockUserExists.mockReset().mockResolvedValue(null);
+  mockUserFind.mockReset();
 });
 
 describe('GET /api/publish/serve - owner check', () => {
@@ -2233,7 +2249,86 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
     mockArtifactFindOne.mockReturnValue(renderedReply());
     const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
     await promise;
-    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1, externalViewCount: 1 } });
+    await vi.waitFor(() =>
+      expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1, externalViewCount: 1 } })
+    );
+    expect(mockQualifies).toHaveBeenCalledWith('owner1', ['someone-else']);
+  });
+
+  it('a signed-in viewer that is not a qualifying distinct account counts only as a view', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    mockQualifies.mockResolvedValue(false);
+    const { promise } = run(['r', 'pub1'], { user: { id: 'alt' } });
+    await promise;
+    await vi.waitFor(() =>
+      expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } })
+    );
+  });
+
+  it('records reward evidence for a qualifying non-owner without a second account lookup', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
+    await promise;
+    await vi.waitFor(() =>
+      expect(mockUpdateOne).toHaveBeenCalledWith(
+        { publicId: 'pub1', ownerId: 'owner1', deletedAt: null },
+        { $inc: { verifiedExternalViewCount: 1 } },
+        { runValidators: true }
+      )
+    );
+    expect(mockQualifies).toHaveBeenCalledTimes(1);
+    expect(mockUserExists).not.toHaveBeenCalled();
+  });
+
+  describe('against the real qualifying-party rule', () => {
+    const OWNER = 'a'.repeat(24);
+    const VIEWER = 'b'.repeat(24);
+    const owner = { _id: OWNER, emailVerified: true, signupMeta: { ip: '203.0.113.1' } };
+    const viewer = { _id: VIEWER, emailVerified: true, signupMeta: { ip: '198.51.100.7' } };
+
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import('@server/services/gears/socialParty')>(
+        '@server/services/gears/socialParty'
+      );
+      mockQualifies.mockImplementation(actual.hasQualifyingSocialParty);
+      mockArtifactFindOne.mockReturnValue({ ...renderedReply(), ownerId: OWNER });
+    });
+
+    it('records reward evidence for a verified viewer from another signup IP', async () => {
+      mockUserFind.mockResolvedValue([owner, viewer]);
+      const { promise } = run(['r', 'pub1'], { user: { id: VIEWER } });
+      await promise;
+      await vi.waitFor(() =>
+        expect(mockUpdateOne).toHaveBeenCalledWith(
+          { publicId: 'pub1', ownerId: OWNER, deletedAt: null },
+          { $inc: { verifiedExternalViewCount: 1 } },
+          { runValidators: true }
+        )
+      );
+    });
+
+    it.each([
+      ['shares the owner signup IP', { signupMeta: { ip: '203.0.113.1' } }],
+      ['is blocked from rewards', { isBanned: true }],
+    ])('keeps the plain view but records no reward evidence for a verified viewer that %s', async (_label, over) => {
+      mockUserFind.mockResolvedValue([owner, { ...viewer, ...over }]);
+      const { promise } = run(['r', 'pub1'], { user: { id: VIEWER } });
+      await promise;
+      await vi.waitFor(() =>
+        expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } })
+      );
+      expect(mockUpdateOne).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('a failed qualifying check still records the plain view', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    mockQualifies.mockRejectedValue(new Error('db down'));
+    const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
+    await promise;
+    await vi.waitFor(() =>
+      expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } })
+    );
   });
 
   it('an ANONYMOUS view does NOT count as external - the serve route cannot tell the owner from a stranger without a credential (self-grant bypass)', async () => {
@@ -2282,8 +2377,16 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
       expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
     });
 
-    it('drops the marker once an external view has landed, so readers stop exchanging tokens', async () => {
-      mockArtifactFindOne.mockReturnValue(bundle({ externalViewCount: 1 }));
+    it('continues requesting verified evidence on a page with historical external views', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ externalViewCount: 5 }));
+      mockDownload.mockResolvedValue(bundleHtml);
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
+    });
+
+    it('drops the marker once a verified view has landed, so readers stop exchanging tokens', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ verifiedExternalViewCount: 1 }));
       mockDownload.mockResolvedValue(bundleHtml);
       const { res, promise } = run(['u', 'scope123', 'my-slug']);
       await promise;
@@ -2404,6 +2507,49 @@ describe('GET /api/publish/serve - embed allowlist', () => {
     expect(data).toContain('Built with <strong>');
     expect(data).not.toContain('<span class="b4m-bar-logo">');
     expect(data).not.toContain('<span class="b4m-reg">');
+  });
+
+  describe("the author's share link", () => {
+    const withOwner = (owner: Record<string, unknown>) =>
+      mockUserFindById.mockImplementation((id: string) => (id === 'owner1' ? owner : {}));
+
+    beforeEach(() => {
+      vi.stubEnv('APP_URL', 'https://app.bike4mind.com');
+      mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('points the own-tab bar CTA at it, so a signup from the page credits the author', async () => {
+      withOwner({ referralCode: 'abcd2345' });
+      mockArtifactFindOne.mockReturnValue(bundle());
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect(res._getData()).toMatch(
+        /<a class="b4m-bar-cta" href="https:\/\/app\.bike4mind\.com\/r\/abcd2345\?via=share-bar"/
+      );
+    });
+
+    it('points the embed pill at it', async () => {
+      withOwner({ referralCode: 'abcd2345' });
+      mockArtifactFindOne.mockReturnValue(bundle({ embedOrigins: ['https://erikbethke.com'] }));
+      const { res, promise } = run(['u', 'scope123', 'my-slug'], { embed: true });
+      await promise;
+      expect(res._getData()).toContain(
+        '<a class="b4m-brand" href="https://app.bike4mind.com/r/abcd2345?via=embed-badge"'
+      );
+    });
+
+    it('leaves the links as they were for an author with no code who may not have one', async () => {
+      withOwner({ emailVerified: false });
+      mockArtifactFindOne.mockReturnValue(bundle());
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      const data = res._getData() as string;
+      expect(data).toContain('class="b4m-bar-cta"');
+      expect(data).not.toContain('/r/');
+    });
   });
 
   it('own-tab bar ships the built-in spoke logo + registered mark when opted in', async () => {

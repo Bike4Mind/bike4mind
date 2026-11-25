@@ -13,6 +13,7 @@ export { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } fr
 export { createCompletionContract } from './contracts/completions.contract';
 export {
   createCompletionRunContract,
+  getCompletionRunEvaluationContract,
   getCompletionRunUsageContract,
   raiseCompletionRunBudgetContract,
 } from './contracts/completionRuns.contract';
@@ -26,8 +27,18 @@ export {
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
   replyToBriefDecisionContract,
+  getPendingDecisionCountContract,
 } from './contracts/briefs.contract';
+export { createDelegationContract, getDelegationContract } from './contracts/delegations.contract';
+export {
+  getObligationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  updateObligationContract,
+} from './contracts/obligations.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { listHandoffDevicesContract, sendSessionHandoffContract } from './contracts/sessionHandoff.contract';
 export {
@@ -40,6 +51,12 @@ export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';
 export { editImageContract } from './contracts/imageEdit.contract';
+export {
+  cancelImageJobContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+} from './contracts/imageJob.contract';
 export {
   createFileUploadContract,
   getFileContract,
@@ -106,6 +123,7 @@ export {
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 } from './contracts/dataLakeResearch.contract';
 export { listImageModelsContract } from './contracts/imageModels.contract';
 export {
@@ -190,4 +208,10 @@ export {
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
 } from './contracts/skillMarketReview.contract';
+export {
+  listFunctionsContract,
+  getFunctionContract,
+  invokeFunctionContract,
+  getFunctionCallContract,
+} from './contracts/functions.contract';
 export { CONTRACTS } from './contracts';

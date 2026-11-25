@@ -20,6 +20,7 @@ import {
   safeUsersResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
@@ -47,6 +48,7 @@ const handler = baseApi()
       { id: organizationId as string },
       { db: { organizations: organizationRepository, users: userRepository } }
     );
+    await recordOrganizationRead(req, [organization], { view: 'roster' });
 
     return respond(res, safeUsersResponseSchema, toSafeUsers(users, organizationRosterScope(req.user, organization)));
   })

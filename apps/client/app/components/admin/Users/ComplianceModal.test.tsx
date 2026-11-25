@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -40,6 +40,14 @@ beforeEach(() => {
 });
 
 describe('ComplianceModal', () => {
+  it('renders in the admin dialog frame and closes on Escape', () => {
+    mockData.mockReturnValue({ data: NEVER_ACCEPTED, isLoading: false, isError: false, error: null, refetch: vi.fn() });
+    render(<ComplianceModal />, { wrapper: TestWrapper });
+    expect(screen.getByRole('dialog', { name: 'User compliance' })).toBeTruthy();
+    fireEvent.keyDown(screen.getByTestId('compliance-modal'), { key: 'Escape' });
+    expect(useComplianceModal.getState().userId).toBeNull();
+  });
+
   it('renders the "never accepted" empty state when there are no acceptances', () => {
     mockData.mockReturnValue({ data: NEVER_ACCEPTED, isLoading: false });
     render(<ComplianceModal />, { wrapper: TestWrapper });

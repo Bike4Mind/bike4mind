@@ -3,14 +3,26 @@ import { Alert, Button, Stack, Typography } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/Key';
 import { toast } from 'sonner';
-import { ApiKeyScope, claudeMarketplaceNameFor, claudeSkillNameFor, toAbsoluteUrl } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  claudeMarketplaceNameFor,
+  claudeMarketplaceNameForSpace,
+  claudeSkillNameFor,
+  toAbsoluteUrl,
+} from '@bike4mind/common';
 import { usePublicConfig } from '@client/app/hooks/data/settings';
 import { useCreateUserApiKey } from '@client/app/hooks/data/userApiKeys';
 import type { MarketMe, MyListing } from '@client/app/hooks/data/skillMarket';
 import ClaudeCodeBundles from './ClaudeCodeBundles';
 
+export interface MarketplaceOwner {
+  kind: 'organization' | 'space';
+  id: string;
+  name: string;
+}
+
 export interface ClaudeCodeMarketplaceTabProps {
-  org: { id: string; name: string };
+  owner: MarketplaceOwner;
   /** The listing's stored `claudePluginName`, exactly as the feed serves it. */
   pluginName?: string;
   /**
@@ -20,24 +32,31 @@ export interface ClaudeCodeMarketplaceTabProps {
   skillName?: string;
 }
 
-/** The author's approved Organization listing of `skillId` in an org they still belong to, as the tab's props. */
+/** The author's approved Organization or Space listing of `skillId` in an owner they still belong to, as the tab's props. */
 export const findMarketplaceListing = (
   listings: MyListing[] | undefined,
   skillId: string,
-  orgs: MarketMe['organizations'] | undefined
+  orgs: MarketMe['organizations'] | undefined,
+  spaces?: MarketMe['spaces']
 ): ClaudeCodeMarketplaceTabProps | undefined => {
   for (const listing of listings ?? []) {
     if (
       listing.sourceSkillId !== skillId ||
-      listing.visibility !== 'organization' ||
+      (listing.visibility !== 'organization' && listing.visibility !== 'space') ||
       listing.status !== 'approved' ||
       listing.hiddenByReports ||
       !listing.currentApprovedVersionId
     ) {
       continue;
     }
-    const org = orgs?.find(o => o.id === listing.organizationId);
-    if (org) return { org, pluginName: listing.claudePluginName, skillName: listing.name };
+    const space = listing.visibility === 'space' ? spaces?.find(s => s.id === listing.spaceId) : undefined;
+    const org = listing.visibility === 'organization' ? orgs?.find(o => o.id === listing.organizationId) : undefined;
+    const owner: MarketplaceOwner | undefined = space
+      ? { kind: 'space', ...space }
+      : org
+        ? { kind: 'organization', ...org }
+        : undefined;
+    if (owner) return { owner, pluginName: listing.claudePluginName, skillName: listing.name };
   }
   return undefined;
 };
@@ -49,7 +68,7 @@ const KEY_PLACEHOLDER = 'b4m_<your skills:read key>';
  * org's plugin feed (pages/api/v1/skills/market/claude-marketplace.json.ts). `skills:read` is a
  * confined scope, so the New-Key modals don't offer it and the key is minted here instead.
  */
-const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, pluginName, skillName }) => {
+const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ owner, pluginName, skillName }) => {
   const { data: config, isPending, refetch } = usePublicConfig();
   const [key, setKey] = useState<string | null>(null);
   const createKey = useCreateUserApiKey({ onSuccess: result => setKey(result.key) });
@@ -66,10 +85,11 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
     );
   }
 
-  const marketplace = claudeMarketplaceNameFor(org.id);
+  const isSpace = owner.kind === 'space';
+  const marketplace = isSpace ? claudeMarketplaceNameForSpace(owner.id) : claudeMarketplaceNameFor(owner.id);
   const feedUrl = toAbsoluteUrl(
     config.apiUrl,
-    `/api/v1/skills/market/claude-marketplace.json?orgId=${encodeURIComponent(org.id)}`
+    `/api/v1/skills/market/claude-marketplace.json?${isSpace ? 'spaceId' : 'orgId'}=${encodeURIComponent(owner.id)}`
   );
   const settings = JSON.stringify(
     {
@@ -93,8 +113,8 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
   return (
     <Stack spacing={2}>
       <Typography level="body-sm">
-        Add {org.name}&apos;s approved Skill Market skills to Claude Code as plugins. New approved versions and removals
-        from the market reach Claude Code when the marketplace refreshes (see updates below), not instantly.
+        Add {owner.name}&apos;s approved Skill Market skills to Claude Code as plugins. New approved versions and
+        removals from the market reach Claude Code when the marketplace refreshes (see updates below), not instantly.
       </Typography>
 
       <Stack spacing={1}>
@@ -114,7 +134,7 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
               startDecorator={<KeyIcon />}
               loading={createKey.isPending}
               onClick={() =>
-                createKey.mutate({ name: `Claude Code marketplace (${org.name})`, scopes: [ApiKeyScope.SKILLS_READ] })
+                createKey.mutate({ name: `Claude Code marketplace (${owner.name})`, scopes: [ApiKeyScope.SKILLS_READ] })
               }
               data-testid="skill-claude-code-create-key"
             >
@@ -130,9 +150,9 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
           </Button>
         </Stack>
         <Typography level="body-xs" textColor="text.tertiary">
-          The key can read Skill Market marketplace feeds and plugin archives for every organization you belong to. It
-          is stored in plain text in your settings file, and Claude Code also copies it into{' '}
-          <code>~/.claude/plugins/known_marketplaces.json</code>.
+          The key can read Skill Market marketplace feeds and plugin archives for every{' '}
+          {isSpace ? 'organization and Space' : 'organization'} you belong to. It is stored in plain text in your
+          settings file, and Claude Code also copies it into <code>~/.claude/plugins/known_marketplaces.json</code>.
           {key
             ? ' It is shown only once; revoke it any time under API Keys.'
             : ' Each Create key mints a new key, so revoke any old marketplace keys under API Keys.'}
@@ -205,7 +225,7 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
           </Typography>
         </Stack>
       ) : null}
-      <ClaudeCodeBundles orgId={org.id} marketplace={marketplace} />
+      <ClaudeCodeBundles {...(isSpace ? { spaceId: owner.id } : { orgId: owner.id })} marketplace={marketplace} />
     </Stack>
   );
 };

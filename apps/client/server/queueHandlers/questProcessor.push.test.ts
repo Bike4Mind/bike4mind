@@ -66,8 +66,18 @@ describe('publishChatCompletedPush connection gating', () => {
   it('does not push a user whose client is connected and already streamed the reply', async () => {
     const deps = makeDeps({ connections: [liveWebRow] });
     await publishChatCompletedPush(turn, deps, logger);
-    expect(deps.findQuest).not.toHaveBeenCalled();
     expect(deps.publish).not.toHaveBeenCalled();
+  });
+
+  it('still sends approval_needed to a user with a live connection', async () => {
+    const deps = makeDeps({
+      connections: [liveWebRow],
+      quest: { status: 'done', type: 'chat', pendingAction: { tool: 'create_issue', ts: 1234 } },
+    });
+    await publishChatCompletedPush(turn, deps, logger);
+    expect(deps.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'approval_needed', pendingActionTs: 1234, collapseId: 'approval:quest-1' })
+    );
   });
 
   it('treats an unreadable connection table as offline and still pushes', async () => {

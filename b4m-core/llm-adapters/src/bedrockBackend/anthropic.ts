@@ -50,6 +50,7 @@ import { ensureToolPairingIntegrity } from '../toolPairingUtils';
 import { TOOL_CHANGES_BETA } from '../toolChanges';
 import { SafetyRefusalError } from '../llmRefusalErrors';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
+import { replayableText } from '../replayPreToolText';
 
 /**
  * The completion loop logs a safety refusal only at debug and leaves the warning to the backend
@@ -322,6 +323,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   private replayContent: AssistantBlock[] = [];
   /** The assistant content array pushToolMessages last pushed, which a parallel sibling's result joins. */
   private replayedTurn: unknown[] | undefined;
+  /** The text `replayContent` wrote before its tool calls, until the first rebuilt turn takes it. */
+  private replayText: string | undefined;
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
@@ -349,6 +352,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     if (taken.length > 0) {
       this.replayContent = taken;
       this.replayedTurn = undefined;
+      this.replayText = taken.map(b => (b.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('');
     }
     return taken.filter(isReasoningBlock) as ClaudeReasoningBlock[];
   }
@@ -1199,23 +1203,17 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     );
 
     // Log the complete payload for debugging
-    console.log(
-      `[AnthropicBedrockBackend] Request payload: ${JSON.stringify(
-        {
-          modelId,
-          options: {
-            maxTokens,
-            messageCount: filteredMessages.length,
-            hasSystemMessage: !!systemMessage,
-            hasTools: !!options.tools,
-            temperature: options.temperature,
-            topP: options.topP,
-          },
-        },
-        null,
-        2
-      )}`
-    );
+    Logger.debug('[AnthropicBedrockBackend] Request payload', {
+      modelId,
+      options: {
+        maxTokens,
+        messageCount: filteredMessages.length,
+        hasSystemMessage: !!systemMessage,
+        hasTools: !!options.tools,
+        temperature: options.temperature,
+        topP: options.topP,
+      },
+    });
 
     // Apply prompt caching if enabled (Bedrock uses Anthropic caching format).
     // Skip models known to reject `cache_control` (e.g. the OG Claude 3 Haiku / Claude 3.5
@@ -1226,22 +1224,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       const cachedBody = adapter.applyCaching(body as Record<string, unknown>, cacheStrategy);
       Object.assign(body, cachedBody);
 
-      // TODO: Add logger to BaseBedrockBackend for consistent logging
-      console.debug(
-        '[PromptCache] Bedrock caching enabled',
-        JSON.stringify({
-          model: modelId,
-          cacheSystemPrompt: cacheStrategy.cacheSystemPrompt,
-          cacheTools: cacheStrategy.cacheTools,
-          cacheConversationHistory: cacheStrategy.cacheConversationHistory,
-          cacheTTL: cacheStrategy.cacheTTL,
-        })
-      );
+      Logger.debug('[PromptCache] Bedrock caching enabled', {
+        model: modelId,
+        cacheSystemPrompt: cacheStrategy.cacheSystemPrompt,
+        cacheTools: cacheStrategy.cacheTools,
+        cacheConversationHistory: cacheStrategy.cacheConversationHistory,
+        cacheTTL: cacheStrategy.cacheTTL,
+      });
     } else if (cacheStrategy?.enableCaching && !modelSupportsCaching) {
-      console.debug(
-        '[PromptCache] Bedrock caching skipped — model does not support cache_control',
-        JSON.stringify({ model: modelId })
-      );
+      Logger.debug('[PromptCache] Bedrock caching skipped: model does not support cache_control', { model: modelId });
     }
 
     // A caller's own content-block markers ride in on `messages` untouched; Bedrock reports no 5m/1h
@@ -1370,7 +1361,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       this.assistantContent = response.content.map(c => ({ ...c }));
       const reasoningCount = response.content.filter(isReasoningBlock).length;
       if (reasoningCount > 0) {
-        console.log(`[AnthropicBedrockBackend] Captured ${reasoningCount} reasoning block(s) for tool continuation`);
+        Logger.debug('[AnthropicBedrockBackend] Captured reasoning block(s) for tool continuation', { reasoningCount });
       }
 
       const providerBlocks: NonNullable<ICompletionResponseChunk['providerBlocks']> = [];
@@ -1437,7 +1428,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         },
       };
     } catch (error) {
-      console.error('[AnthropicBedrockBackend] Error translating non-streaming chunk:', error);
+      Logger.error('[AnthropicBedrockBackend] Error translating non-streaming chunk', { error });
       throw error;
     }
   }
@@ -1579,9 +1570,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
             try {
               serverBlock.input = JSON.parse(inputJson);
             } catch (e) {
-              console.warn('[AnthropicBedrockBackend] Malformed server tool input JSON at content_block_stop', {
+              Logger.warn('[AnthropicBedrockBackend] Malformed server tool input JSON at content_block_stop', {
                 model,
-                error: e instanceof Error ? e.message : String(e),
+                error: e,
               });
             }
           }
@@ -1617,11 +1608,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           chunkText: '',
         } as IChoice;
       } else {
-        console.warn('[AnthropicBedrockBackend] Unknown chunk type:', isRecord(chunk) ? chunk.type : chunk);
+        Logger.warn('[AnthropicBedrockBackend] Unknown chunk type', {
+          chunkType: isRecord(chunk) ? chunk.type : typeof chunk,
+        });
         return { done: false };
       }
     } catch (error) {
-      console.error('[AnthropicBedrockBackend] Error processing stream chunk:', error);
+      Logger.error('[AnthropicBedrockBackend] Error processing stream chunk', { error });
       // Return a default choice with empty text
       return {
         done: false,
@@ -1687,10 +1680,18 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       return;
     }
 
-    const assistantContent: IMessage['content'] =
-      reasoningBlocks.length > 0
-        ? [...(reasoningBlocks as Array<{ type: 'thinking'; thinking: string; signature: string }>), toolUseBlock]
-        : [toolUseBlock];
+    // The model must see the text it wrote before the call, or it restates it next round and the
+    // reply shows it twice. Only the first turn of a parallel round carries it.
+    const preToolText = this.replayContent.some(b => b.type === 'tool_use' && b.id === tool.id)
+      ? replayableText(this.replayText)
+      : undefined;
+    this.replayText = undefined;
+
+    const assistantContent = [
+      ...(reasoningBlocks as Array<{ type: 'thinking'; thinking: string; signature: string }>),
+      ...(preToolText ? [{ type: 'text' as const, text: preToolText }] : []),
+      toolUseBlock,
+    ] as IMessage['content'];
 
     messages.push({
       role: 'assistant',

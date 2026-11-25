@@ -3,6 +3,7 @@ import { ImageGenerationBodySchema, ImageGenerationService } from './ImageGenera
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
 import {
+  BadRequestError,
   CREDITS_PER_USD_COST,
   CreditHolderType,
   ImageModels,
@@ -112,6 +113,10 @@ const makeService = (overrides: {
   } as any);
   return { service, findById, count };
 };
+
+// Test bodies omit fields the schema defaults, so the cast is confined to one place.
+const imageBody = (model: string, extra: Record<string, unknown> = {}) =>
+  ({ sessionId: 'session1', prompt: 'a cutout icon', model, fabFileIds: [], ...extra }) as never;
 
 describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
   it('does nothing when invokeSummarizeSession is not configured', async () => {
@@ -634,26 +639,51 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('output_format');
   });
 
-  it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
+  it.each([ImageModels.GPT_IMAGE_2, ImageModels.FLUX_PRO_ULTRA, ImageModels.GEMINI_2_5_FLASH_IMAGE])(
+    'rejects a transparent background on %s with a 400 instead of stepping down',
+    async model => {
+      const startImageGenerationProcess = vi.fn(async () => undefined);
+      const { service, create } = makeInvokeService(startImageGenerationProcess);
+
+      await expect(
+        service.invoke({
+          body: imageBody(model, { background: 'transparent' }),
+          userId: 'user1',
+        })
+      ).rejects.toThrow(BadRequestError);
+      expect(create).not.toHaveBeenCalled();
+      expect(startImageGenerationProcess).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([ImageModels.GPT_IMAGE_1_5, ImageModels.GPT_IMAGE_2_5_FLARE])(
+    'keeps %s and its transparent background',
+    async model => {
+      const startImageGenerationProcess = vi.fn(async () => undefined);
+      const { service, create } = makeInvokeService(startImageGenerationProcess);
+
+      await service.invoke({
+        body: imageBody(model, { background: 'transparent' }),
+        userId: 'user1',
+      });
+
+      expect(startImageGenerationProcess).toHaveBeenCalledWith(
+        expect.objectContaining({ model, background: 'transparent' })
+      );
+      expect(create.mock.calls[0][0].promptMeta.model.name).toBe(model);
+    }
+  );
+
+  it('leaves a gpt-image-2 request without a transparent background on gpt-image-2', async () => {
     const startImageGenerationProcess = vi.fn(async () => undefined);
     const { service, create } = makeInvokeService(startImageGenerationProcess);
 
     await service.invoke({
-      body: {
-        sessionId: 'session1',
-        prompt: 'a cutout icon',
-        model: ImageModels.GPT_IMAGE_2,
-        fabFileIds: [],
-        background: 'transparent',
-      } as any,
+      body: imageBody(ImageModels.GPT_IMAGE_2),
       userId: 'user1',
     });
 
-    expect(startImageGenerationProcess).toHaveBeenCalledWith(
-      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
-    );
-    const questInput = create.mock.calls[0][0];
-    expect(questInput.promptMeta.model.name).toBe(ImageModels.GPT_IMAGE_1_5);
+    expect(create.mock.calls[0][0].promptMeta.model.name).toBe(ImageModels.GPT_IMAGE_2);
   });
 });
 

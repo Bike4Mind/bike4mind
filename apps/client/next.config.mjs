@@ -166,8 +166,6 @@ const nextConfig = {
     // ESM-only packages that need transpilation for API routes. An entry here can be retired
     // once check-api-routes-cjs-require.mjs reports the built route still loads without it; that
     // probe runs on the built standalone tree and is what proves the bundler inlined it.
-    'p-limit',
-    'yocto-queue',
     // sanitize-html require()s ESM-only htmlparser2. This entry bundles the pair; the
     // dual-published-htmlparser2 override in root package.json is the backstop. Dropping this
     // entry alone still loads (the override covers it); dropping both makes the two importing
@@ -175,11 +173,6 @@ const nextConfig = {
     // module load, which check-api-routes-cjs-require.mjs reproduces against the built standalone
     // tree, naming both.
     'sanitize-html',
-    // Nivo packages
-    '@nivo/pie',
-    '@nivo/line',
-    '@nivo/bar',
-
     // All D3 packages
     'd3-shape',
     'd3-scale',
@@ -327,6 +320,11 @@ const nextConfig = {
       {
         source: '/embed/:path*',
         destination: '/api/embed/serve',
+      },
+      // Share links: sets the referral cookie and redirects to signup (apps/client/server/referrals/shareLink.ts).
+      {
+        source: '/r/:code',
+        destination: '/api/referrals/visit/:code',
       },
     ];
   },

@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
 import { Box, Button, Typography } from '@mui/joy';
+import { keyframes } from '@mui/system';
+import type { AgentView } from '../roster';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import { AgentPrIndicator } from '../AgentPrIndicator';
 import { OFFICE_CAST, OFFICE_PARENT, assignOfficeCast } from './officeCast';
@@ -15,13 +17,39 @@ const ROOM_BOUNDS: Record<OfficeRoom, { x: number; y: number; width: number; hei
   'break-room': { x: 59, y: 21, width: 32, height: 25, columns: 4 },
   'conference-room': { x: 75, y: 57, width: 21, height: 32, columns: 3 },
 };
+const alertBob = keyframes`0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); }`;
+const TRAVEL_MS = 1200;
+const ROW_STEP = 0.43;
+
+type Placement = { agent: AgentView; room: OfficeRoom; left: number; top: number };
+
+// Agents render in id order in one layer, never inside their room: moving a node between parents
+// (or reordering siblings) drops its previous computed style, so the walk would not animate.
+function placeAgents(rooms: ReadonlyMap<OfficeRoom, readonly AgentView[]>): Placement[] {
+  const placements: Placement[] = [];
+  for (const [room, members] of rooms) {
+    const bounds = ROOM_BOUNDS[room];
+    members.forEach((agent, index) =>
+      placements.push({
+        agent,
+        room,
+        left: bounds.x + (index % bounds.columns) * (bounds.width / bounds.columns),
+        top: bounds.y + Math.floor(index / bounds.columns) * ROW_STEP * bounds.height,
+      })
+    );
+  }
+  return placements.sort((a, b) => (a.agent.id < b.agent.id ? -1 : a.agent.id > b.agent.id ? 1 : 0));
+}
+
 const STATE_COLOR = {
   working: '#e7bc55',
+  waiting: '#6fa8dc',
   'needs-you': '#ffe778',
   done: '#96c780',
   failed: '#ee8c75',
   idle: '#c4c5b1',
   stopped: '#c4c5b1',
+  paused: '#c9b27a',
 };
 
 export function OfficeView({
@@ -38,6 +66,8 @@ export function OfficeView({
 }: OrchestratorViewProps) {
   const cast = useMemo(() => assignOfficeCast(agents), [agents]);
   const rooms = useMemo(() => groupOfficeAgents(agents), [agents]);
+  const placements = useMemo(() => placeAgents(rooms), [rooms]);
+  const parentNeedsAction = parent?.status === 'needs-action';
 
   return (
     <Box
@@ -72,7 +102,7 @@ export function OfficeView({
         <Button
           data-testid="office-parent"
           data-conversation-toggle
-          aria-label={`${OFFICE_PARENT}, parent session`}
+          aria-label={`${OFFICE_PARENT}, parent session${parentNeedsAction ? ', needs you' : ''}`}
           onClick={() => onInnkeeperSelect?.()}
           disabled={!onInnkeeperSelect}
           variant="plain"
@@ -89,11 +119,37 @@ export function OfficeView({
             zIndex: 3,
           }}
         >
+          {parentNeedsAction && (
+            <Box
+              component="span"
+              data-testid="office-parent-alert"
+              aria-hidden="true"
+              sx={{
+                position: 'absolute',
+                top: '-18px',
+                right: '-10px',
+                minWidth: 16,
+                padding: '1px 4px',
+                fontFamily: 'monospace',
+                fontWeight: 700,
+                fontSize: 12,
+                lineHeight: '14px',
+                textAlign: 'center',
+                color: '#344438',
+                background: '#ffe778',
+                border: '2px solid #344438',
+                animation: `${alertBob} 900ms steps(2, end) infinite`,
+                '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+              }}
+            >
+              !
+            </Box>
+          )}
           <OfficeSprite
             name={OFFICE_PARENT}
             resting={celebrating}
             working={parent?.status === 'processing'}
-            attention={parent?.status === 'needs-action'}
+            attention={parentNeedsAction}
           />
           <span
             style={{
@@ -122,7 +178,10 @@ export function OfficeView({
               overflow: 'hidden',
               background: '#f0e7cb',
               color: '#344438',
+              border: '2px solid #344438',
+              boxShadow: '2px 2px 0 #27382d99',
               borderRadius: 0,
+              '&:hover': { background: '#f7efd6' },
             }}
           >
             {desk.reply.snippet}
@@ -130,13 +189,13 @@ export function OfficeView({
         )}
         {OFFICE_ROOMS.map(room => {
           const bounds = ROOM_BOUNDS[room.id];
-          const members = rooms.get(room.id) ?? [];
           return (
             <Box
               key={room.id}
               component="section"
               aria-label={room.label}
               data-testid={`office-room-${room.id}`}
+              data-occupants={rooms.get(room.id)?.length ?? 0}
               sx={{
                 position: 'absolute',
                 left: `${bounds.x}%`,
@@ -145,71 +204,75 @@ export function OfficeView({
                 height: `${bounds.height}%`,
                 pointerEvents: 'none',
               }}
-            >
-              {members.map((agent, index) => (
-                <Button
-                  key={agent.id}
-                  component="div"
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(event: React.KeyboardEvent<HTMLDivElement>) => {
-                    if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
-                    event.preventDefault();
-                    onSelect(agent.id);
-                  }}
-                  data-testid={`office-agent-${agent.id}`}
-                  data-agent-avatar={agent.id}
-                  aria-label={`${cast.get(agent.id)}: ${agent.title}, ${agent.state}`}
-                  aria-pressed={selectedId === agent.id}
-                  onClick={() => onSelect(agent.id)}
-                  variant="plain"
-                  title={`${cast.get(agent.id)}: ${agent.title} (${agent.state})`}
-                  sx={{
-                    position: 'absolute',
-                    left: `${(index % bounds.columns) * (100 / bounds.columns)}%`,
-                    top: `${Math.floor(index / bounds.columns) * 43}%`,
-                    pointerEvents: 'auto',
-                    p: 0,
-                    minWidth: 0,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 0,
-                    borderRadius: 0,
-                    background: selectedId === agent.id ? '#f4de8b33' : 'transparent',
-                    outline: selectedId === agent.id ? '2px solid #f4de8b' : undefined,
-                    '&:hover': { background: '#f4de8b33' },
-                    '&:focus-visible': { outline: '2px solid #f4de8b' },
-                    zIndex: 4,
-                  }}
-                >
-                  <Box sx={{ display: 'flex' }}>
-                    <OfficeSprite
-                      name={cast.get(agent.id) ?? OFFICE_CAST[0]}
-                      resting={agent.state === 'done'}
-                      working={agent.state === 'working'}
-                      attention={agent.state === 'needs-you'}
-                    />
-                  </Box>
-                  <span
-                    style={{
-                      fontFamily: 'monospace',
-                      fontSize: 10,
-                      color: STATE_COLOR[agent.state],
-                      background: '#27382ded',
-                      padding: '2px 4px',
-                      whiteSpace: 'nowrap',
-                      borderBottom: `2px solid ${STATE_COLOR[agent.state]}`,
-                    }}
-                  >
-                    {cast.get(agent.id)?.split(' ')[0]}
-                    {agent.state === 'needs-you' ? ' !' : agent.state === 'done' ? ' *' : ''}
-                  </span>
-                  <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
-                </Button>
-              ))}
-            </Box>
+            />
           );
         })}
+        {placements.map(({ agent, room, left, top }) => (
+          <Button
+            key={agent.id}
+            data-office-room={room}
+            component="div"
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event: React.KeyboardEvent<HTMLDivElement>) => {
+              if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+              event.preventDefault();
+              onSelect(agent.id);
+            }}
+            data-testid={`office-agent-${agent.id}`}
+            data-agent-avatar={agent.id}
+            aria-label={`${cast.get(agent.id)}: ${agent.title}, ${agent.state}`}
+            aria-pressed={selectedId === agent.id}
+            onClick={() => onSelect(agent.id)}
+            variant="plain"
+            title={`${cast.get(agent.id)}: ${agent.title} (${agent.state})`}
+            sx={{
+              position: 'absolute',
+              left: `${left}%`,
+              top: `${top}%`,
+              // Same media key as the theme's Button transition, so this one merges over it instead of losing to it.
+              '@media (prefers-reduced-motion: no-preference)': {
+                transition: `left ${TRAVEL_MS}ms ease-in-out, top ${TRAVEL_MS}ms ease-in-out, background-color 120ms ease-out`,
+              },
+              pointerEvents: 'auto',
+              p: 0,
+              minWidth: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 0,
+              borderRadius: 0,
+              background: selectedId === agent.id ? '#f4de8b33' : 'transparent',
+              outline: selectedId === agent.id ? '2px solid #f4de8b' : undefined,
+              '&:hover': { background: '#f4de8b33' },
+              '&:focus-visible': { outline: '2px solid #f4de8b' },
+              zIndex: 4,
+            }}
+          >
+            <Box sx={{ display: 'flex' }}>
+              <OfficeSprite
+                name={cast.get(agent.id) ?? OFFICE_CAST[0]}
+                resting={agent.state === 'done'}
+                working={agent.state === 'working'}
+                attention={agent.state === 'needs-you'}
+              />
+            </Box>
+            <span
+              style={{
+                fontFamily: 'monospace',
+                fontSize: 10,
+                color: STATE_COLOR[agent.state],
+                background: '#27382ded',
+                padding: '2px 4px',
+                whiteSpace: 'nowrap',
+                borderBottom: `2px solid ${STATE_COLOR[agent.state]}`,
+              }}
+            >
+              {cast.get(agent.id)?.split(' ')[0]}
+              {agent.state === 'needs-you' ? ' !' : agent.state === 'done' ? ' *' : ''}
+            </span>
+            <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
+          </Button>
+        ))}
         <Typography
           sx={{
             position: 'absolute',

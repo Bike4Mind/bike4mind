@@ -16,6 +16,7 @@ final class AppServices {
     let api: APIClient
     let realtime: WSClient
     let cache: FileSessionListCache
+    let transcriptCache: SettledTranscriptCache
     let media: MediaClient
     let studio: StudioClient
     let capture: CaptureStack
@@ -47,8 +48,12 @@ final class AppServices {
   let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
+  /// Reads and saves when the server composes the user's brief.
+  let briefSchedule: any BriefScheduleAPI
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
+  /// How many decisions wait on the user, for the lock-screen widget.
+  let pendingDecisions: any PendingDecisionAPI
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
   /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
@@ -58,6 +63,9 @@ final class AppServices {
   let credits: CreditsViewModel
   /// The Studio model lists, kept for the session; cleared when the session ends (`RootView.endSession`).
   let studioModels: StudioModelCatalog
+  /// The deployment's premium voices and this device's pick; empty or unavailable means on-device speech.
+  let voiceCatalog: VoiceCatalogModel
+  let voiceAPI: any VoiceAPI
 
   init(auth: AuthController) {
     self.auth = auth
@@ -112,6 +120,15 @@ final class AppServices {
       return PendingActionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     pendingActions = pendingActionAPI
+    let voiceAPI = ForwardingVoiceAPI { VoiceClient(baseURL: auth.environment.baseURL, tokens: auth) }
+    self.voiceAPI = voiceAPI
+    voiceCatalog = VoiceCatalogModel(
+      wire: voiceAPI,
+      store: UserDefaultsVoiceSelectionStore()
+    ) {
+      guard let userID = await auth.userID() else { return nil }
+      return VoiceAccount(userID: userID, baseURL: auth.environment.baseURL)
+    }
     let briefAPI = ForwardingBriefAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.briefAPI }
@@ -126,6 +143,12 @@ final class AppServices {
       return InstructionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     approvalNotifications = ApprovalNotificationHandler(api: pendingActionAPI, feedback: SystemApprovalFeedback())
+    briefSchedule = ForwardingBriefScheduleAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.briefSchedule }
+      #endif
+      return BriefScheduleClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG
@@ -162,6 +185,9 @@ final class AppServices {
         #endif
         return try await StudioClient(baseURL: auth.environment.baseURL, tokens: auth).models(for: kind)
       })
+    pendingDecisions = ForwardingPendingDecisionAPI {
+      PendingDecisionClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
 
     #if DEBUG
       if FixtureServices.isEnabled, FixtureServices.accountScenario == .pending {
@@ -175,6 +201,11 @@ final class AppServices {
       isShellReady: { auth.state == .signedIn },
       isAppActive: { UIApplication.shared.applicationState == .active }
     )
+
+    LiveActivityApprovals.answer = { [weak self] target, decision in
+      await self?.approvalNotifications.answer(target, decision: decision)
+      self?.refreshWidgetPendingDecisions()
+    }
   }
 
   var api: any B4MAPI {
@@ -228,6 +259,7 @@ final class AppServices {
   }
 
   var sessionListCache: any SessionListCache { current.cache }
+  var transcriptCache: SettledTranscriptCache { current.transcriptCache }
   var sessionHandoff: SessionHandoffClient {
     SessionHandoffClient(baseURL: auth.environment.baseURL, tokens: auth)
   }
@@ -246,25 +278,34 @@ final class AppServices {
     return current.studio
   }
 
-  /// Uploads a frame grabbed from a video so it can be edited or animated. The PUT carries no `Authorization`
-  /// header: the presigned signature is the credential.
+  /// Uploads a frame grabbed from a video so it can be edited or animated.
   var frameUploader: FrameUploader {
     #if DEBUG
       if FixtureServices.isEnabled { return FixtureServices.frameUploader }
     #endif
     return FrameUploader(
       capture: CaptureClient(baseURL: auth.environment.baseURL, tokens: auth), media: media,
-      put: { url, data, contentType in
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        // Create-only: the URL names a freshly minted key, so the PUT must never overwrite one.
-        request.setValue("*", forHTTPHeaderField: "If-None-Match")
-        let (_, response) = try await URLSession.shared.upload(for: request, from: data)
-        guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
-          throw APIError.malformedResponse
-        }
-      })
+      put: Self.presignedPut)
+  }
+
+  /// Hands a scanned bill to the assistant. The scan is uploaded with the user's own token, like any capture.
+  func obligationHandoffModel(file: URL, text: String) -> ObligationHandoffModel {
+    ObligationHandoffModel(
+      file: file, text: text, api: CaptureClient(baseURL: auth.environment.baseURL, tokens: auth),
+      destinations: capture.destinations, put: Self.presignedPut)
+  }
+
+  /// The PUT carries no `Authorization` header: the presigned signature is the credential.
+  private static let presignedPut: FrameUploader.Put = { url, data, contentType in
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+    // Create-only: the URL names a freshly minted key, so the PUT must never overwrite one.
+    request.setValue("*", forHTTPHeaderField: "If-None-Match")
+    let (_, response) = try await URLSession.shared.upload(for: request, from: data)
+    guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
+      throw APIError.malformedResponse
+    }
   }
 
   @ObservationIgnored private var studioTrackerState: (environment: ServerEnvironment, tracker: GenerationTracker)?
@@ -318,6 +359,25 @@ final class AppServices {
     Task { await credits.load(force: true) }
   }
 
+  /// Re-reads the decisions-waiting count for the lock-screen widget: on foreground, when a turn settles, after
+  /// the brief loads and after an approval is answered. Fixture runs keep the canned snapshot.
+  func refreshWidgetPendingDecisions() {
+    #if DEBUG
+      if FixtureServices.isEnabled { return }
+    #endif
+    let api = pendingDecisions
+    let widgets = widgets
+    Task {
+      do {
+        await widgets.recordPendingDecisions(try await api.pendingDecisionCount())
+      } catch {
+        // The widget keeps its last count; approvals in it still lapse on the widget's own clock.
+        AppServices.logger.error(
+          "Decisions widget refresh failed: \(String(describing: error), privacy: .public)")
+      }
+    }
+  }
+
   nonisolated static let logger = Logger(subsystem: "com.bike4mind.app", category: "app")
 
   /// A fresh launch or sign-in knows of no running agent, and fixture runs seed the widgets with canned data.
@@ -361,6 +421,7 @@ final class AppServices {
     }
     let environment = auth.environment
     let auth = self.auth
+    let transcriptCache = SettledTranscriptCache()
     // The share extension reads the server from the App Group, so it always follows the app's choice.
     SharedServerEnvironment.store().save(environment)
     let fresh = Graph(
@@ -370,9 +431,12 @@ final class AppServices {
         handshake: RealtimeHandshake(baseURL: environment.baseURL, tokens: auth),
         tokenRotations: { await auth.accessTokenRotations() }),
       cache: FileSessionListCache(directory: FileSessionListCache.defaultDirectory(), environment: environment),
+      transcriptCache: transcriptCache,
       media: MediaClient(baseURL: environment.baseURL, tokens: auth),
       studio: StudioClient(baseURL: environment.baseURL, tokens: auth),
-      capture: .live(baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app),
+      capture: .live(
+        baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app,
+        didSendToSession: { id in await transcriptCache.remove(sessionID: id) }),
       account: AccountClient(baseURL: environment.baseURL, tokens: auth),
       stepUp: StepUpClient(baseURL: environment.baseURL, tokens: auth)
     )
@@ -402,12 +466,44 @@ struct ForwardingAgentRunAPI: AgentRunAPI {
   }
 }
 
+/// Routes voice calls to whichever server the app currently points at.
+struct ForwardingVoiceAPI: VoiceAPI {
+  let provider: @MainActor @Sendable () -> any VoiceAPI
+
+  func voiceSessionsEnabled() async throws -> Bool { try await provider().voiceSessionsEnabled() }
+  func listVoices() async throws -> [VoiceOption] { try await provider().listVoices() }
+  func synthesizeSpeech(text: String, voiceID: String) async throws -> Data {
+    try await provider().synthesizeSpeech(text: text, voiceID: voiceID)
+  }
+}
+
 /// Routes approval answers to whichever server the app currently points at (it can change in debug builds).
 struct ForwardingPendingActionAPI: PendingActionAPI {
   let provider: @MainActor @Sendable () -> any PendingActionAPI
 
   func respond(to target: PendingActionTarget, decision: PendingActionDecision) async throws -> PendingActionResult {
     try await provider().respond(to: target, decision: decision)
+  }
+}
+
+struct ForwardingBriefScheduleAPI: BriefScheduleAPI {
+  let provider: @MainActor @Sendable () -> any BriefScheduleAPI
+
+  func schedule() async throws -> BriefSchedule? {
+    try await provider().schedule()
+  }
+
+  func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+    try await provider().save(schedule)
+  }
+}
+
+/// Routes the decisions-waiting count to whichever server the app currently points at.
+struct ForwardingPendingDecisionAPI: PendingDecisionAPI {
+  let provider: @MainActor @Sendable () -> any PendingDecisionAPI
+
+  func pendingDecisionCount() async throws -> PendingDecisionCount {
+    try await provider().pendingDecisionCount()
   }
 }
 

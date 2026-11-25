@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/server-utils",
-  "version": "0.0.19",
+  "version": "0.0.21",
   "private": true,
   "type": "module",
   "exports": {
@@ -11,6 +11,7 @@
     "typecheck:native": "tsgo --noEmit",
     "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:integration": "SERVER_UTILS_TEST_LANE=integration vitest run"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "@aws-sdk/client-secrets-manager": "^3.1150.0",
     "@aws-sdk/client-sesv2": "^3.1150.0",
     "@aws-sdk/client-sqs": "^3.1150.0",
+    "@aws-sdk/client-wafv2": "^3.1150.0",
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
@@ -52,12 +54,9 @@
     "@octokit/rest": "^22.0.1",
     "@slack/web-api": "^7.19.0",
     "axios": "1.20.0",
-    "axios-retry": "^4.5.0",
     "cheerio": "1.2.0",
     "dayjs": "^1.11.23",
-    "escape-string-regexp": "^5.0.0",
     "file-type": "^22.1.0",
-    "handlebars": "^4.7.10",
     "jsonrepair": "^3.15.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.24.7",
@@ -65,9 +64,7 @@
     "openai": "^6.46.0",
     "sst": "4.17.1",
     "stripe": "^22.6.2",
-    "uuid": "^14.0.2",
-    "zod": "^4.6.6",
-    "zod-validation-error": "^5.0.0"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@bike4mind/typescript-config": "workspace:*",
@@ -75,7 +72,6 @@
     "@types/express": "^4.17.17",
     "@types/jsonwebtoken": "^9.0.4",
     "@types/node": "^24.0.0",
-    "@types/nodemailer": "^8.0.2",
     "aws-sdk-client-mock": "^4.1.0",
     "jsdom": "^29.1.1",
     "mongodb-memory-server": "^11.3.0",

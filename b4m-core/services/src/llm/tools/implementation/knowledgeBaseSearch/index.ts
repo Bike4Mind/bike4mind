@@ -534,7 +534,7 @@ async function emitSemanticCitables(
           },
         },
       },
-    } as any,
+    },
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
   return numberedCitables ? citationNumbersById(numberedCitables) : undefined;
@@ -871,7 +871,7 @@ async function trySemanticKbSearch(
       promptMeta: {
         retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
       },
-    } as any);
+    });
     return NO_SEMANTIC_RESULT;
   }
 }
@@ -1010,7 +1010,7 @@ async function tryScopedSemanticKbSearch(
       promptMeta: {
         retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
       },
-    } as any);
+    });
     return NO_SEMANTIC_RESULT;
   }
 }
@@ -1319,7 +1319,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             promptMeta: {
               retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
             },
-          } as any);
+          });
           return 'Knowledge base search is not available at this time.';
         }
 
@@ -1336,7 +1336,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             promptMeta: {
               retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
             },
-          } as any);
+          });
           return formatSearchResults([]);
         }
 
@@ -1453,7 +1453,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                     dataLakeTags: [],
                   },
                 },
-              } as any);
+              });
               return LIBRARY_OFF_NO_LAKE_MESSAGE;
             }
             warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:keyword-fallback');
@@ -1649,7 +1649,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                     dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
                   },
                 },
-              } as any,
+              },
               foundStatus
             );
             context.logger.log(`📚 Knowledge Base Search: Stored ${citables.length} citables`);
@@ -1672,7 +1672,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                     injected: keywordArmNoHitsInjected,
                   },
                 },
-              } as any,
+              },
               (scope
                 ? `📭 No matches in this agent's knowledge base for "${clippedQuery}"`
                 : `📭 No data-lake matches for "${clippedQuery}" - broadening...`) + skipSuffix
@@ -1729,7 +1729,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             promptMeta: {
               retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
             },
-          } as any);
+          });
           return 'An error occurred while searching your knowledge base. Please try again.';
         }
       },

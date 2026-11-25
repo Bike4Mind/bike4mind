@@ -67,6 +67,8 @@ public final class VoiceConversationModel {
 
   /// Called once when a new conversation's session is created.
   @ObservationIgnored public var onSessionStarted: (@MainActor (String) -> Void)?
+  /// Fires once the server has accepted a turn, with the session it joined.
+  @ObservationIgnored public var onTurnSent: (@MainActor (String) -> Void)?
 
   private let api: any B4MAPI
   private let realtime: any RealtimeClient
@@ -297,6 +299,8 @@ public final class VoiceConversationModel {
       guard !isEcho, !heard.isEmpty else { return }
       let isCommandWord = words.count == 1 && !localSpeech.isEmpty && bargeInWords.contains(words[0])
       guard isCommandWord || heard.split(separator: " ").count >= bargeInMinimumWords else { return }
+      // Set before abandonTurn flips to listening and awaits the speaker, so listening never shows an empty transcript.
+      liveTranscript = heard
       await abandonTurn()
     default:
       return
@@ -390,6 +394,7 @@ public final class VoiceConversationModel {
       target = .session(id)
       onSessionStarted?(id)
     }
+    if let id = sessionID { onTurnSent?(id) }
     guard token == turnToken else { return }
     if receipt.isRefused {
       return endTurn(saying: receipt.message ?? Self.refusalNotice(receipt.errorCode))
@@ -428,7 +433,10 @@ public final class VoiceConversationModel {
       exchanges[exchanges.count - 1].replyText = reply
       if phase == .sending { phase = .streaming }
     }
-    for chunk in chunker.ingest(cumulative: reply, isFinal: isFinal) { chunkSink?.yield(chunk) }
+    for chunk in chunker.ingest(cumulative: reply, isFinal: isFinal) where chunkSink != nil {
+      (speaker as? any SpeechPrefetching)?.prepare(chunk)
+      chunkSink?.yield(chunk)
+    }
     if isFinal {
       replyFinished = true
       chunkSink?.finish()
@@ -498,6 +506,7 @@ public final class VoiceConversationModel {
   /// Speaks a short notice and ends the turn: refusals and approvals are heard, not just seen.
   private func finishStream(saying notice: String) {
     self.notice = notice
+    if chunkSink != nil { (speaker as? any SpeechPrefetching)?.prepare(notice) }
     chunkSink?.yield(notice)
     chunkSink?.finish()
   }
@@ -509,7 +518,10 @@ public final class VoiceConversationModel {
     replyFinished = true
     phase = .speaking
     startSpeaking(token: token)
-    for section in sections { chunkSink?.yield(section) }
+    for section in sections {
+      (speaker as? any SpeechPrefetching)?.prepare(section)
+      chunkSink?.yield(section)
+    }
     chunkSink?.finish()
   }
 

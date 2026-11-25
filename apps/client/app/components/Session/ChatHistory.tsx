@@ -176,15 +176,16 @@ const ChatHistory: React.FC<ChatHistoryProps> = memo(
       (messageId: string, behavior: 'smooth' | 'auto') => {
         const reversedIndex = reversedHistory.findIndex(item => item.id === messageId);
         if (reversedIndex === -1) return false;
+        // scrollToIndex counts from the first loaded item, unlike the indexes itemContent receives.
         virtuosoRef.current?.scrollToIndex({
-          index: firstItemIndex + reversedIndex,
+          index: reversedIndex,
           align: 'center',
           behavior,
         });
         flashMessageHighlight(messageId);
         return true;
       },
-      [reversedHistory, firstItemIndex, virtuosoRef]
+      [reversedHistory, virtuosoRef]
     );
 
     // Scroll-to-message service for other components (e.g. the QuestMaster

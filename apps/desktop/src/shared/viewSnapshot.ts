@@ -1,5 +1,7 @@
+import type { PlanProgress } from '@bike4mind/common';
 import { z } from 'zod';
 import { isStoppableState, type AgentState } from './agentState';
+import { PR_ATTENTIONS } from './prAttention';
 import { MAX_LABEL_CHARS, MAX_OPTIONS, MAX_OTHER_CHARS } from './questions';
 import { QUICK_SUMMARY_MAX } from './watch';
 
@@ -11,13 +13,16 @@ import { QUICK_SUMMARY_MAX } from './watch';
  * the snapshot. Bump `contract` on any breaking change.
  */
 
-export const VIEW_SNAPSHOT_CONTRACT = 1;
+export const VIEW_SNAPSHOT_CONTRACT = 2;
 
+// Additive: 'waiting' and 'paused' joined without a contract bump, since only built-in views consume it today.
 const AGENT_STATES = [
   'needs-you',
   'working',
+  'waiting',
   'done',
   'failed',
+  'paused',
   'stopped',
   'idle',
 ] as const satisfies readonly AgentState[];
@@ -38,6 +43,17 @@ const viewDecisionSchema = z.strictObject({
   oneClick: z.boolean().optional(),
 });
 
+/** Plan progress as display data: counts and two one-line labels, never the items' notes. */
+const viewPlanSchema = z
+  .strictObject({
+    done: z.number().int().min(0),
+    total: z.number().int().min(0),
+    // Same cap as a plan item's text (planLeafSchema).
+    current: z.string().max(200).optional(),
+    next: z.string().max(200).optional(),
+  })
+  .refine(plan => plan.done <= plan.total, { message: 'done exceeds total' }) satisfies z.ZodType<PlanProgress>;
+
 const viewAgentSchema = z.strictObject({
   id,
   title: z.string(),
@@ -51,9 +67,23 @@ const viewAgentSchema = z.strictObject({
   now: z.string().optional(),
   /** The question it waits on the user for; present only while its state is 'needs-you'. */
   decision: viewDecisionSchema.optional(),
-  pr: z.strictObject({ number: z.number().int().positive(), state: z.string() }).optional(),
+  /** The PR icon status the sidebar draws (shared/prAttention), so every view shows the same state. */
+  pr: z
+    .strictObject({
+      number: z.number().int().positive(),
+      state: z.string(),
+      /** `owner/repo`, so a view can link to the PR without asking the host. */
+      repo: z.string().optional(),
+      attention: z.enum(PR_ATTENTIONS).optional(),
+      behind: z.boolean().optional(),
+      autoMerge: z.boolean().optional(),
+      stale: z.boolean().optional(),
+    })
+    .optional(),
   usdCost: z.number().nonnegative().optional(),
   credits: z.number().nonnegative().optional(),
+  /** Progress of its latest plan; absent when it has none. */
+  plan: viewPlanSchema.optional(),
 });
 
 /**
@@ -78,6 +108,7 @@ export const viewSnapshotSchema = z.strictObject({
   approvals: z.array(viewApprovalSchema).optional(),
 });
 
+export type ViewPlan = z.infer<typeof viewPlanSchema>;
 export type ViewAgent = z.infer<typeof viewAgentSchema>;
 export type ViewDecision = z.infer<typeof viewDecisionSchema>;
 export type ViewApproval = z.infer<typeof viewApprovalSchema>;

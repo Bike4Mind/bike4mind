@@ -6,7 +6,21 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import type { IOrganizationDocument } from '@bike4mind/common';
 import OrgWebhookConfig from './OrgWebhookConfig';
 
-const { testMutateAsync, updateMutateAsync, idleMutation, updatePending, savedEvents } = vi.hoisted(() => ({
+const {
+  testMutateAsync,
+  updateMutateAsync,
+  createMutateAsync,
+  rotateMutateAsync,
+  setConfirmation,
+  hookState,
+  idleMutation,
+  updatePending,
+  savedEvents,
+} = vi.hoisted(() => ({
+  createMutateAsync: vi.fn(),
+  rotateMutateAsync: vi.fn(),
+  setConfirmation: vi.fn(),
+  hookState: { hasConfig: true },
   savedEvents: { current: [] as string[] },
   updatePending: { current: false },
   testMutateAsync: vi.fn(),
@@ -17,28 +31,31 @@ const { testMutateAsync, updateMutateAsync, idleMutation, updatePending, savedEv
 vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
 vi.mock('@client/app/hooks/data/useOrgWebhooks', () => ({
   useGetOrgWebhookConfig: () => ({
-    data: {
-      organizationId: 'org-1',
-      enabled: true,
-      webhookUrl: 'https://app.example.com/api/webhooks/github/org-1',
-      secretMasked: '****',
-      subscribedEvents: savedEvents.current,
-    },
+    data: !hookState.hasConfig
+      ? undefined
+      : {
+          id: 'cfg-1',
+          organizationId: 'org-1',
+          enabled: true,
+          webhookUrl: 'https://app.example.com/api/webhooks/github/org-1',
+          secretMasked: '****',
+          subscribedEvents: savedEvents.current,
+        },
     isLoading: false,
-    isError: false,
-    error: null,
+    isError: !hookState.hasConfig,
+    error: hookState.hasConfig ? null : { response: { status: 404 } },
     refetch: vi.fn(),
   }),
-  useCreateOrgWebhookConfig: idleMutation,
+  useCreateOrgWebhookConfig: () => ({ mutateAsync: createMutateAsync, isPending: false }),
   useUpdateOrgWebhookConfig: () => ({ mutateAsync: updateMutateAsync, isPending: updatePending.current }),
   useDeleteOrgWebhookConfig: idleMutation,
-  useRotateOrgWebhookSecret: idleMutation,
+  useRotateOrgWebhookSecret: () => ({ mutateAsync: rotateMutateAsync, isPending: false }),
   useTestOrgWebhook: () => ({ mutateAsync: testMutateAsync, isPending: false }),
   useReplayDLQ: idleMutation,
 }));
 
 vi.mock('@client/app/hooks/useConfirmation', () => ({
-  useConfirmationModal: { setState: vi.fn() },
+  useConfirmationModal: { setState: setConfirmation },
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -52,6 +69,7 @@ const renderConfig = () =>
 const testButton = () => screen.getByTestId('test-webhook') as HTMLButtonElement;
 
 beforeEach(() => {
+  hookState.hasConfig = true;
   savedEvents.current = [];
 });
 
@@ -204,8 +222,51 @@ describe('OrgWebhookConfig subscribed events', () => {
 describe('OrgWebhookConfig icon buttons', () => {
   it('gives every retained icon-only control an accessible name', () => {
     renderConfig();
-    for (const name of ['Copy webhook URL', 'Show webhook secret', 'Rotate webhook secret'])
+    for (const name of ['Copy webhook URL', 'Rotate webhook secret'])
       expect(screen.getByRole('button', { name })).toBeTruthy();
+    expect(screen.queryByTestId('toggle-secret-visibility')).toBeNull();
+  });
+});
+
+describe('OrgWebhookConfig one-time secret', () => {
+  const writeText = vi.fn();
+  beforeEach(() => {
+    writeText.mockReset().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    createMutateAsync.mockReset();
+    rotateMutateAsync.mockReset();
+    setConfirmation.mockReset();
+  });
+
+  it('shows only the mask on a plain load', () => {
+    renderConfig();
+    expect(screen.queryByTestId('org-webhook-one-time-secret')).toBeNull();
+    expect(screen.getByDisplayValue('****')).toBeInTheDocument();
+  });
+
+  it('shows the created secret once, with a copy button', async () => {
+    hookState.hasConfig = false;
+    createMutateAsync.mockImplementation(async () => {
+      hookState.hasConfig = true; // the real hook caches the new config, so the manage view renders
+      return { id: 'cfg-1', secret: 'fake-webhook-secret-1234' };
+    });
+    renderConfig();
+    fireEvent.click(screen.getByRole('button', { name: /Create Webhook Configuration/ }));
+
+    const box = await screen.findByTestId('org-webhook-one-time-secret');
+    expect((box as HTMLInputElement).value).toBe('fake-webhook-secret-1234');
+    fireEvent.click(screen.getByTestId('copy-one-time-secret'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('fake-webhook-secret-1234'));
+  });
+
+  it('shows the rotated secret once', async () => {
+    rotateMutateAsync.mockResolvedValue({ id: 'cfg-1', secret: 'fake-rotated-secret-5678' });
+    renderConfig();
+    fireEvent.click(screen.getByTestId('rotate-secret'));
+    await setConfirmation.mock.calls[0][0].onOk();
+
+    const box = await screen.findByTestId('org-webhook-one-time-secret');
+    expect((box as HTMLInputElement).value).toBe('fake-rotated-secret-5678');
   });
 });
 

@@ -1,22 +1,23 @@
 export const OFFICE_PARENT = 'Manager';
 
+// Index order matters: OfficeSprite picks each look (glasses, tie, hair) by position in this list.
 export const OFFICE_CAST = [
-  'Elliot Vale',
-  'Felix Rowan',
-  'Nora Finch',
-  'Amos Bell',
-  'Clara Wren',
-  'Iris Lane',
-  'Ravi Mehta',
-  'Hugo Moss',
-  'Hazel Pike',
-  'Otis Grey',
-  'Leo Mercer',
-  'Mina Park',
-  'Quinn Foster',
-  'Theo Birch',
-  'Dorian Wells',
-  'Willa Hart',
+  'Lim Dalpert',
+  'Bright Fute',
+  'Bam Teesly',
+  'Barryl Gilbin',
+  'Lillis Dance',
+  'Bangela Partin',
+  'Danley Mudson',
+  'Bevin Balone',
+  'Bredith Calmer',
+  'Freed Gratton',
+  'Fryan Soward',
+  'Nelly Tapoor',
+  'Candy Fernard',
+  'Moby Blenderson',
+  'Boscar Partinez',
+  'Karin Shannon',
 ] as const;
 
 export type OfficeCharacter = (typeof OFFICE_CAST)[number];

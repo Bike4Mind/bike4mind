@@ -1,6 +1,9 @@
 import { InviteType } from '@bike4mind/common';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'inviteNotificationEmail' } });
 
 /** Human-readable noun for an invite type, as used in invite email copy. */
 export const getInviteTypeName = (type: InviteType): string => {
@@ -155,7 +158,7 @@ export const sendInviteNotificationEmails = async (
       subject: `${sharerName.replace(/[\r\n]+/g, ' ')} ${subjectAction}${brand ? ` on ${brand}` : ''}`,
       body: emailBody,
     }).catch(error => {
-      console.error(`Failed to send invite notification to ${recipient}:`, error);
+      logger.error('Failed to send invite notification', { recipient, error });
     })
   );
 

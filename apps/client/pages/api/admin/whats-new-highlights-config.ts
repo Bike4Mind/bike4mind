@@ -67,7 +67,7 @@ const handler = adminApi({
 
       return res.json(config);
     } catch (error) {
-      console.error('Error getting highlights config:', error);
+      req.logger.error('Error getting highlights config', { error });
       return res.status(500).json({
         error: 'Failed to get highlights configuration',
       });
@@ -130,7 +130,7 @@ const handler = adminApi({
         config,
       });
     } catch (error) {
-      console.error('Error updating highlights config:', error);
+      req.logger.error('Error updating highlights config', { error });
 
       // Check if it's a Zod validation error
       if (error && typeof error === 'object' && 'issues' in error) {

@@ -121,7 +121,7 @@ export function formatAccountAge(ms: number | null): string {
   return `${Math.floor(ms / YEAR_MS)} y old`;
 }
 
-const FUNDING_LABELS: Record<AccountFunding, string> = {
+export const FUNDING_LABELS: Record<AccountFunding, string> = {
   subscription: 'paid (subscription)',
   purchase: 'paid (credit purchase)',
   stripe_customer: 'Stripe customer, no purchase',

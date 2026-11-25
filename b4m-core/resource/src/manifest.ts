@@ -112,7 +112,7 @@ export const DEFAULT_MANIFEST = {
   // unregistered key here left a folder reading "Connected" that could never sync, with the
   // claim released only by hand. Not optional: the self-host worker consumes it
   // (apps/workers/src/selfhost/main.ts), and the route has no degrade path - it throws AFTER
-  // taking a global, cross-org claim, unlike webhookDeliveryQueue's sites (see manifestCoverage.test.ts).
+  // taking a global, cross-org claim, unlike webhookDeliveryQueue's sites (see manifestCoverage.repo.test.ts).
   driveLakeIngestQueue: { kind: 'queue' },
   // Read by the Drive disconnect route (via sourceQueueUrls) and by its consumer's own slice
   // re-enqueue. Optional so an install that upgraded without the env var keeps the worker up; the
@@ -157,12 +157,13 @@ export const DEFAULT_MANIFEST = {
   // (`EnableLakeModelInconsistencyDetection`), so a basic install never sets it, and with no URL
   // configured the route refuses the run outright rather than accepting work nothing will consume.
   lakeInconsistencyModelQueue: { kind: 'queue', optional: true },
-  liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   questExportQueue: { kind: 'queue', optional: true },
   accountDataExportQueue: { kind: 'queue', optional: true },
   accountErasureQueue: { kind: 'queue', optional: true },
   dataLakeCleanupQueue: { kind: 'queue', optional: true },
+  // Asynchronous function calls; the invoke route refuses mode async on self-host before anything is queued.
+  callableFunctionCallQueue: { kind: 'queue', optional: true },
   // Leftovers of a notebook or message delete's media purge; with no URL they are logged and dropped.
   generatedMediaPurgeQueue: { kind: 'queue', optional: true },
   // Studio render jobs; drained by the optional render-worker compose profile (apps/workers/src/render/main.ts).

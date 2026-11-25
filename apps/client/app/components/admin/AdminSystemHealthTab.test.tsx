@@ -133,7 +133,10 @@ describe('AdminSystemHealthTab', () => {
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: sesEmail } }) });
     renderTab();
 
-    expect(await screen.findByTestId('system-health-email-secret-MAIL_FROM')).toBeInTheDocument();
+    const sender = await screen.findByTestId('system-health-email-secret-MAIL_FROM');
+    expect(sender).toHaveTextContent('Sender address');
+    expect(sender).toHaveTextContent('MAIL_FROM: the address system emails are sent from');
+    expect(screen.getByTestId('system-health-email-delivery')).toHaveTextContent('Sent through Amazon SES');
     expect(screen.queryByTestId('system-health-email-secret-MAIL_HOST')).not.toBeInTheDocument();
     expect(screen.getByTestId('system-health-email-secret-hint-MAIL_FROM')).toHaveTextContent(
       'sst secret set MAIL_FROM'
@@ -171,6 +174,22 @@ describe('AdminSystemHealthTab', () => {
     expect(screen.queryByTestId('system-health-email-secret-hint-MAIL_PASSWORD')).not.toBeInTheDocument();
   });
 
+  it('warns when the plaintext secrets opt-out is in effect', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, plaintextSecretsOptOut: true } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-health-plaintext-secrets-warning')).toHaveTextContent('unencrypted');
+  });
+
+  it('shows no plaintext secrets warning otherwise', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, plaintextSecretsOptOut: false } }) });
+    renderTab();
+
+    // Loaded-only element: the tab testid is also rendered while loading, before any data arrives.
+    await screen.findByTestId('system-health-database-status');
+    expect(screen.queryByTestId('system-health-plaintext-secrets-warning')).not.toBeInTheDocument();
+  });
+
   it('keeps the sst hint when not self-hosted', async () => {
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, selfHost: false } }) });
     renderTab();
@@ -192,6 +211,7 @@ describe('AdminSystemHealthTab', () => {
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: noAuthEmail } }) });
     renderTab();
 
+    expect(await screen.findByTestId('system-health-email-delivery')).toHaveTextContent('Sent through SMTP server');
     for (const name of noAuthEmail.optionalSecrets) {
       const row = await screen.findByTestId(`system-health-email-secret-${name}`);
       expect(row).toHaveTextContent('Optional');

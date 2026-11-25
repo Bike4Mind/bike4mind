@@ -30,6 +30,11 @@ vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({
 
 const mockChatOptions = vi.hoisted(() => vi.fn());
 const mockChatProcess = vi.hoisted(() => vi.fn());
+const mockResolveCallableFunctions = vi.hoisted(() => vi.fn(async (_user: unknown) => true));
+
+vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
+  resolveCallableFunctionsEnabled: mockResolveCallableFunctions,
+}));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({} as Record<string, unknown>, {
@@ -53,6 +58,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   publishTelemetryAlertCallback: vi.fn(),
+  publishModerationEscalation: vi.fn(),
 }));
 
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
@@ -133,6 +139,13 @@ describe('slackQuestProcessor getStaticOptions', () => {
     expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
     expect(getStaticOptions().workspaceSessionSettings).toBe(premiumWorkspaceSessionSettings);
   }, 120_000);
+
+  it('wires the moderation escalation notifier', async () => {
+    const { getStaticOptions } = await import('./slackQuestProcessor');
+    const { publishModerationEscalation } = await import('@bike4mind/server-utils/utils/chatCompletionDefaults');
+
+    expect(getStaticOptions().notifyModerationEscalation).toBe(publishModerationEscalation);
+  }, 120_000);
 });
 
 describe('slackQuestProcessor role-held admin permissions', () => {
@@ -164,6 +177,16 @@ describe('slackQuestProcessor role-held admin permissions', () => {
     await expect(runWithUser({ adminRoleIds: [ROLE_ID] })).rejects.toThrow(stop.message);
 
     expect(hasAdminPermission(handedUser(), 'settings:manage')).toBe(true);
+  }, 120_000);
+
+  it('hands process() a resolver that asks whether callable functions are on for the turn owner', async () => {
+    await expect(runWithUser({})).rejects.toThrow(stop.message);
+    const { callableFunctionsResolver } = mockChatProcess.mock.lastCall?.[0] as {
+      callableFunctionsResolver: () => Promise<boolean>;
+    };
+
+    await expect(callableFunctionsResolver()).resolves.toBe(true);
+    expect(mockResolveCallableFunctions).toHaveBeenCalledWith(handedUser());
   }, 120_000);
 
   it('refuses the permission on the next call once the role is removed', async () => {

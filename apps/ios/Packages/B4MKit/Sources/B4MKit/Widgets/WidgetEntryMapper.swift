@@ -21,6 +21,11 @@ public enum LatestGenerationDisplay: Equatable, Sendable {
   case image(mediaID: String, title: String, thumbnailFileName: String?, createdAt: Date)
 }
 
+public enum PendingDecisionsDisplay: Equatable, Sendable {
+  case placeholder
+  case count(Int)
+}
+
 /// Pure mapping from the shared snapshot to what each widget draws. The extension's timeline providers
 /// are one-liners over this, which is what makes the staleness rules testable without WidgetKit.
 public struct WidgetEntryMapper: Sendable {
@@ -64,12 +69,26 @@ public struct WidgetEntryMapper: Sendable {
       createdAt: latest.createdAt)
   }
 
-  /// When the widget should ask for a new timeline: right when running data would go stale, otherwise hourly.
+  /// Every approval counted was raised before `observedAt`, so one lifetime later none of them can still be
+  /// open; the brief's decisions stay until the app observes a new count.
+  public func pendingDecisions() -> PendingDecisionsDisplay {
+    guard let pending = snapshot?.pendingDecisions else { return .placeholder }
+    let approvalsLapsed = now.timeIntervalSince(pending.observedAt) > PendingAction.lifetime
+    return .count((approvalsLapsed ? 0 : pending.approvals) + pending.briefDecisions)
+  }
+
+  /// When the widget should ask for a new timeline: right when running data would go stale or counted approvals
+  /// would lapse, otherwise hourly.
   public func nextRefresh() -> Date {
     let hourly = now.addingTimeInterval(60 * 60)
-    guard let observed = snapshot?.runningAgents?.observedAt else { return hourly }
-    let staleAt = observed.addingTimeInterval(Self.runningAgentsFreshness + 1)
-    return staleAt > now ? min(staleAt, hourly) : hourly
+    var deadlines: [Date] = []
+    if let observed = snapshot?.runningAgents?.observedAt {
+      deadlines.append(observed.addingTimeInterval(Self.runningAgentsFreshness + 1))
+    }
+    if let pending = snapshot?.pendingDecisions, pending.approvals > 0 {
+      deadlines.append(pending.observedAt.addingTimeInterval(PendingAction.lifetime + 1))
+    }
+    return deadlines.filter { $0 > now }.min().map { min($0, hourly) } ?? hourly
   }
 
   static func statusLabel(_ raw: String) -> String {

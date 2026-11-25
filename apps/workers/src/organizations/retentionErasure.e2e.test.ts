@@ -41,7 +41,11 @@ vi.mock('@bike4mind/fab-pipeline', async importActual => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated, deletePermanently: effects.deleteGenerated }),
+  getGeneratedImageStorage: () => ({
+    delete: effects.deleteGenerated,
+    deletePermanently: effects.deleteGenerated,
+    deletePrefixPermanently: effects.deletePrefix,
+  }),
   getPublishedArtifactsStorage: () => ({
     deletePrefix: effects.deletePrefix,
     deletePrefixPermanently: effects.deletePrefix,
@@ -76,7 +80,7 @@ vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
 }));
 
 import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
-import { erasureRegistry } from '@server/dataSubject/erasureRegistry';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let database: MongoMemoryReplSet;

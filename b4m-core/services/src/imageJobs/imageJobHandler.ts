@@ -2,6 +2,7 @@ import {
   extensionFromMimeType,
   getImageModelCatalogEntry,
   imageJobInputs,
+  TERMINAL_GENERATION_JOB_STATES,
   usdToCreditsStochastic,
   validateImageRequest,
   type GeneratedAssetLineageEntry,
@@ -92,6 +93,26 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
       await deps.countNotebookImage?.(questId);
     } catch (error) {
       deps.logger.warn('[imageJobs] failed to count the image on its notebook', { questId, error });
+    }
+  };
+
+  // The last job of the batch to end deletes its throwaway inputs; an earlier one leaves them for its siblings. Two
+  // jobs ending together may both delete, which discardInputFiles tolerates. Never throws: the job is already settled.
+  const discardBatchInputs = async (job: ImageJob) => {
+    const fileIds = job.payload.discardInputFileIds;
+    if (!fileIds?.length || !deps.discardInputFiles) return;
+    try {
+      const groupId = job.payload.groupId;
+      if (groupId) {
+        const batch = await deps.repository.findByGroup(job.requestedBy, groupId);
+        const expected = job.payload.groupSize ?? batch.length;
+        if (batch.length < expected || batch.some(member => !TERMINAL_GENERATION_JOB_STATES.includes(member.state))) {
+          return;
+        }
+      }
+      await deps.discardInputFiles(job.requestedBy, fileIds);
+    } catch (error) {
+      deps.logger.warn('[imageJobs] failed to delete the batch inputs', { jobId: job.id, error });
     }
   };
 
@@ -369,6 +390,7 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
       else await releaseJobHold(job, deps);
       // After the settle, so a retried terminal (the settle threw) counts once; the engine claims terminal handling once.
       if (job.state === 'succeeded' && job.payload.output && job.questId) await countNotebookImage(job.questId);
+      await discardBatchInputs(job);
     },
   };
 }

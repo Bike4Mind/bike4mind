@@ -8,7 +8,20 @@ import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 window.matchMedia ??= ((media: string) => ({
   matches: false,
   media,
@@ -19,6 +32,14 @@ window.matchMedia ??= ((media: string) => ({
   removeEventListener() {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's autosizing textarea measures itself on every render, and jsdom resolves that against every
+// emotion sheet in the document and every ancestor, with no layout to measure in the end.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) =>
+  element instanceof HTMLTextAreaElement
+    ? element.style
+    : realGetComputedStyle(element, pseudo)) as typeof getComputedStyle;
 window.ResizeObserver ??= class {
   observe() {}
   unobserve() {}
@@ -131,21 +152,9 @@ describe('Add folder before the first send', () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
-  it('discards the draft folder when navigating to another conversation', async () => {
-    await mount([summary('existing')]);
-    await act(async () => el('chat-new-session-btn')?.click());
-    await addFolder();
-    expect(chips()).toEqual(['/notes']);
-    await act(async () => el('chat-session-item')?.click());
-    expect(chips()).toEqual([]);
-    await act(async () => el('chat-new-session-btn')?.click());
-    expect(chips()).toEqual([]);
-    expect(createSession).not.toHaveBeenCalled();
-  });
-
-  it('drops a picker result that arrives after navigation', async () => {
+  it('drops a picker result that arrives after navigation, and discards the draft folder on navigating away', async () => {
     let resolve!: (path: string) => void;
-    pickProjectDirectory.mockReturnValue(
+    pickProjectDirectory.mockReturnValueOnce(
       new Promise<string>(done => {
         resolve = done;
       })
@@ -157,24 +166,29 @@ describe('Add folder before the first send', () => {
     await act(async () => resolve('/notes'));
     expect(chips()).toEqual([]);
     expect(addContextDirectory).not.toHaveBeenCalled();
+
+    await act(async () => el('chat-new-session-btn')?.click());
+    await addFolder();
+    expect(chips()).toEqual(['/notes']);
+    await act(async () => el('chat-session-item')?.click());
+    expect(chips()).toEqual([]);
+    await act(async () => el('chat-new-session-btn')?.click());
+    expect(chips()).toEqual([]);
+    expect(createSession).not.toHaveBeenCalled();
   });
 
-  it('still shares into an existing conversation through main', async () => {
-    addContextDirectory.mockResolvedValue({
+  it('shares into an existing conversation through main, reporting a failure in that conversation', async () => {
+    addContextDirectory.mockRejectedValueOnce(new Error('share unavailable')).mockResolvedValueOnce({
       status: 'added',
       path: '/notes',
       session: { ...summary('existing'), grantedDirectories: ['/notes'] },
     });
     await mount([summary('existing')]);
     await addFolder();
-    expect(addContextDirectory).toHaveBeenCalledWith('existing', undefined);
-    expect(chips()).toEqual(['/notes']);
-  });
-
-  it('reports a persisted-chat sharing failure in that conversation', async () => {
-    addContextDirectory.mockRejectedValue(new Error('share unavailable'));
-    await mount([summary('existing')]);
-    await addFolder();
     expect(el('chat-add-folder-error')?.textContent).toContain('share unavailable');
+
+    await addFolder();
+    expect(addContextDirectory).toHaveBeenLastCalledWith('existing', undefined);
+    expect(chips()).toEqual(['/notes']);
   });
 });

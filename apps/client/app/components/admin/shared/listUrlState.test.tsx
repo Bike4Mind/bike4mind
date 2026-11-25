@@ -7,14 +7,14 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { adminSearchForTab, parseAdminSearch } from '../adminTabParams';
 import { FilterBar } from './FilterBar';
 import { SavedViews } from './SavedViews';
-import { readAdminListState, useAdminListUrlState } from './useAdminListUrlState';
+import { readAdminListState, SEARCH_TERM_URL_DEBOUNCE_MS, useAdminListUrlState } from './useAdminListUrlState';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const keys = INTEGRATION_DEMAND_SEARCH_KEYS;
@@ -68,7 +68,16 @@ async function renderList(url: string) {
   return router;
 }
 
+// Faked only after the router has loaded and still advancing in real time, so the debounce can be
+// skipped while the router's own timers and waitFor keep running.
+const fakeTheDebounce = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+const passTheDebounce = () => act(() => vi.advanceTimersByTimeAsync(SEARCH_TERM_URL_DEBOUNCE_MS));
+
 describe('URL-synced filters and saved views', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('restores filters and a selected view from a deep link', async () => {
     await renderList('/admin?tab=integration-demand&demandQuery=calendar&demandStage=ga&demandView=live');
     expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('calendar');
@@ -78,7 +87,9 @@ describe('URL-synced filters and saved views', () => {
 
   it('writes filter changes to the real router, keeps the active tab and clears view selection', async () => {
     const router = await renderList('/admin?tab=integration-demand&demandView=live&demandStage=ga');
+    fakeTheDebounce();
     fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'calendar' } });
+    await passTheDebounce();
     await waitFor(() =>
       expect(router.state.location.search).toMatchObject({
         tab: 'integration-demand',
@@ -97,8 +108,10 @@ describe('URL-synced filters and saved views', () => {
   it('keeps every keystroke while typing and writes the query to the URL once typing pauses', async () => {
     const router = await renderList('/admin?tab=integration-demand&demandView=live');
     const input = screen.getByTestId('admin-filter-search-input');
-    await userEvent.type(input, 'calendar sync');
+    fakeTheDebounce();
+    await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).type(input, 'calendar sync');
     expect(input).toHaveValue('calendar sync');
+    await passTheDebounce();
     await waitFor(() => expect(router.state.location.search.demandQuery).toBe('calendar sync'));
     expect(router.state.location.search.demandView).toBeUndefined();
     expect(input).toHaveValue('calendar sync');

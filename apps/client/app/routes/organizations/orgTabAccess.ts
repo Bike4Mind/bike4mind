@@ -1,12 +1,6 @@
 // Tab identity and visibility rules for the organization detail route.
 
-import {
-  canReadOrganizationAudit,
-  hasOrgPermission,
-  orgMemberHasPermission,
-  type OrgPermission,
-  type OrgRoleSubject,
-} from '@bike4mind/common';
+import { canReadOrganizationAudit, hasOrgPermission, type OrgPermission, type OrgRoleSubject } from '@bike4mind/common';
 
 export enum OrganizationTabs {
   Overview = 'overview',
@@ -104,16 +98,12 @@ export const canManageOrgApiKeys = permissionGate('manageKeys');
  * - Change seats     pages/api/organizations/subscriptions/update-seats.ts
  * - Billing portal   pages/api/stripe/portal.ts
  * - Pay invoice      pages/api/subscriptions/pay-invoice.ts
- * Must stay in sync with those four.
+ * Must stay in sync with those four, which all gate on `manageBilling` and so admit a platform admin.
  *
- * This decides who gets the real tab. A platform admin who holds no role is deliberately excluded,
- * though the first two routes would admit them: portal.ts has no admin bypass, so an admin would
- * still get a Billing Portal button that rejects them. Admins act on an org's billing through the
- * Admin -> Organizations panel. Everyone else who manages the team (`isOrgOwnerOrCurrentAdmin`:
- * managers, platform admins) gets a locked entry with a read-only summary, see `isOrgTabLocked`.
+ * Everyone else who manages the team (`isOrgOwnerOrCurrentAdmin`: managers) gets a locked entry
+ * with a read-only summary instead, see `isOrgTabLocked`.
  */
-export const canViewOrgBilling = (currentUser: TabViewer, organization: TabOrg): boolean =>
-  !!currentUser && !!organization && orgMemberHasPermission(organization, currentUser.id, 'manageBilling');
+export const canViewOrgBilling = permissionGate('manageBilling');
 
 /**
  * Who may see the Domains tab: the same `manageMembers` check `loadOrgForDomainAdmin` runs for the

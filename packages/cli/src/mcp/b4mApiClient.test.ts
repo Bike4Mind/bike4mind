@@ -221,32 +221,61 @@ describe('B4mApiClient', () => {
     });
   });
 
-  it('queues an image generation, mapping notebookId to sessionId and omitting unset fields', async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ quest: { id: 'q1' } }));
+  it('creates one image job with an idempotency key and returns it', async () => {
+    const job = {
+      id: 'j1',
+      object: 'image_generation',
+      state: 'pending',
+      model: 'gpt-image-1',
+      mode: 'generate',
+      prompt: 'a lighthouse',
+      group_id: 'g1',
+      source: 'api',
+      error: null,
+      output: null,
+      credits: { reserved: null, settled: null },
+      created_at: 'x',
+      updated_at: 'x',
+    };
+    mockFetch.mockResolvedValue(jsonResponse({ group_id: 'g1', data: [job] }, { status: 202 }));
 
-    await client.generateImage({ prompt: 'a lighthouse', model: 'gpt-image-1', notebookId: 'nb1' });
+    const created = await client.createImageJob({ prompt: 'a lighthouse', model: 'gpt-image-1' }, 'key-1');
 
+    expect(created.id).toBe('j1');
     expect(sent()).toMatchObject({
-      url: 'http://localhost:3000/api/v1/image-generations',
+      url: 'http://localhost:3000/api/v1/image-jobs',
       method: 'POST',
-      body: { prompt: 'a lighthouse', model: 'gpt-image-1', sessionId: 'nb1' },
+      body: { model: 'gpt-image-1', mode: 'generate', prompt: 'a lighthouse', count: 1 },
+    });
+    expect(new Headers(mockFetch.mock.calls[0][1]?.headers).get('idempotency-key')).toBe('key-1');
+  });
+
+  it('forwards size on an image job only when set', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ group_id: 'g1', data: [] }, { status: 202 }));
+
+    await client.createImageJob({ prompt: 'p', model: 'gpt-image-1', size: '1024x1024' }, 'k').catch(() => undefined);
+
+    expect(sent().body).toEqual({
+      model: 'gpt-image-1',
+      mode: 'generate',
+      prompt: 'p',
+      count: 1,
+      size: '1024x1024',
     });
   });
 
-  it('forwards size and projectId on an image generation', async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ quest: { id: 'q1' } }));
+  it('reads an image job by id', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'x' }));
 
-    await client.generateImage({ prompt: 'p', model: 'gpt-image-1', size: '1024x1024', projectId: 'p1' });
-
-    expect(sent().body).toEqual({ prompt: 'p', model: 'gpt-image-1', size: '1024x1024', projectId: 'p1' });
+    await expect(client.getImageJob('j1')).rejects.toThrow();
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/image-jobs/j1', method: 'GET' });
   });
 
-  it('sends prompt_resolution on an image generation when promptResolution is set', async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ quest: { id: 'q1' } }));
+  it('cancels an image job by POSTing to its cancel path', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'x' }));
 
-    await client.generateImage({ prompt: 'p', model: 'gpt-image-2', promptResolution: 'literal' });
-
-    expect(sent().body).toEqual({ prompt: 'p', model: 'gpt-image-2', prompt_resolution: 'literal' });
+    await expect(client.cancelImageJob('j1')).rejects.toThrow();
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/image-jobs/j1/cancel', method: 'POST' });
   });
 
   it('forwards dataLakeId on create only when set', async () => {
@@ -1347,5 +1376,11 @@ describe('B4mApiClient lake research routes', () => {
     expect(sent().url).toBe(`${BASE}/config-history`);
     await client.getConfigHistory('l1', 20, true);
     expect(sent().url).toBe(`${BASE}/config-history?limit=20&include=files`);
+  });
+
+  it('undoes a history row with a POST and returns the entry and notes', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: { event_id: 'e2' }, notes: ['n'] }));
+    await expect(client.undoConfigChange('l1', 'e1')).resolves.toEqual({ data: { event_id: 'e2' }, notes: ['n'] });
+    expect(sent()).toMatchObject({ url: `${BASE}/config-history/e1/undo`, method: 'POST' });
   });
 });

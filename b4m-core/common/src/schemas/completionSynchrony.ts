@@ -18,11 +18,13 @@ export const API_COMPLETION_OUTCOME_LABELS = {
   unknown: 'Unknown',
 } as const;
 export type ApiCompletionOutcome = (typeof API_COMPLETION_OUTCOMES)[number];
+export const SAFE_ERROR_CODE = /^[A-Za-z0-9_.-]{1,64}$/;
 export const apiCompletionObservationSchema = z.strictObject({
   requestId: z.string().min(1).max(128),
   requestedModel: z.string().min(1).max(256),
   startedAt: z.string().datetime(),
   outcome: z.enum(API_COMPLETION_OUTCOMES),
+  failureCode: z.string().regex(SAFE_ERROR_CODE).optional(),
 });
 export type ApiCompletionObservation = z.infer<typeof apiCompletionObservationSchema>;
 

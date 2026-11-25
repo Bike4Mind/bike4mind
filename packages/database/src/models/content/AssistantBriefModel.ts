@@ -1,5 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
-import type { BriefItem, BriefStatus, StoredBriefDecision } from '@bike4mind/common';
+import type { BriefItem, BriefSourceRef, BriefStatus, StoredBriefDecision } from '@bike4mind/common';
 
 /**
  * An assistant brief: what happened, what was handled and what needs a decision, composed for one user
@@ -23,9 +23,20 @@ export type IAssistantBrief = {
 
 export type AssistantBriefContent = Pick<IAssistantBrief, 'headline' | 'happened' | 'handled' | 'decisions'>;
 
+function requiredFor(kind: BriefSourceRef['kind']) {
+  return function (this: { kind?: string }) {
+    return this.kind === kind;
+  };
+}
+
 // Every field of the wire item must be declared here: strict mode drops undeclared keys on write.
 const sourceSchema = new Schema(
-  { kind: { type: String, enum: ['email'], required: true }, emailId: { type: String, required: true } },
+  {
+    kind: { type: String, enum: ['email', 'delegation', 'obligation'], required: true },
+    emailId: { type: String, required: requiredFor('email') },
+    delegationId: { type: String, required: requiredFor('delegation') },
+    obligationId: { type: String, required: requiredFor('obligation') },
+  },
   { _id: false }
 );
 const itemSchema = new Schema(
@@ -136,6 +147,17 @@ export const assistantBriefRepository = {
     return AssistantBriefModel.findOne({ userId, status: 'ready' }).sort({ createdAt: -1 }).lean();
   },
 
+  /** The latest ready brief's id and each decision's approval ref and reply stamp: what the pending-decisions count reads. */
+  async findLatestReadyDecisionRefs(userId: string): Promise<{
+    _id: mongoose.Types.ObjectId;
+    decisions: Array<Pick<StoredBriefDecision, 'approval' | 'repliedAt'>>;
+  } | null> {
+    return AssistantBriefModel.findOne({ userId, status: 'ready' })
+      .sort({ createdAt: -1 })
+      .select('_id decisions.approval decisions.repliedAt')
+      .lean();
+  },
+
   /** Only a `composing` brief can be settled, so a redelivered event never overwrites a finished one. */
   async markReady(id: string, content: AssistantBriefContent, composedAt: Date): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(
@@ -153,6 +175,12 @@ export const assistantBriefRepository = {
       { runValidators: true }
     );
     return result.modifiedCount === 1;
+  },
+
+  /** Drops a brief that is still composing; a settled one is left alone. */
+  async discardComposing(id: string): Promise<boolean> {
+    const result = await AssistantBriefModel.deleteOne({ _id: id, status: 'composing' });
+    return result.deletedCount === 1;
   },
 
   /**

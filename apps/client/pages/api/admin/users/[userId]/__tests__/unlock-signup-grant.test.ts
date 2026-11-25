@@ -49,6 +49,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.audit,
 }));
 await import('../unlock-signup-grant');
+const { adminAuditService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
 const invoke = async (req: unknown, res: unknown) => {
   for (const middleware of h.uses) middleware(req, res, () => undefined);
   return h.handler!(req, res);
@@ -184,7 +185,6 @@ describe('large-grant threshold on the audit entry', () => {
       dailyTotalCredits: 1_000_000,
       sumCreditsGranted: vi.fn().mockResolvedValue(0),
     });
-    const { adminAuditService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
     h.audit.mockImplementation(
       async (_req: unknown, input: Parameters<typeof adminAuditService.recordAdminAction>[0]) =>
         adminAuditService.recordAdminAction(

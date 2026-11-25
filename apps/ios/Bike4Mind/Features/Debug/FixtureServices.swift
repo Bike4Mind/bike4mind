@@ -24,6 +24,7 @@
     static let account: any AccountAPI = FixtureAccountAPI()
     static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
+    static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
     static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
@@ -264,10 +265,13 @@
         }
       }
 
-      func generate(_ request: GenerationRequest) async throws -> GenerationHandle {
-        GenerationHandle(
-          kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date(),
-          modelID: request.modelID, params: request.params)
+      func generate(_ request: GenerationRequest) async throws -> [GenerationHandle] {
+        let images = request.kind == .image ? Int(request.params[.count]?.number ?? 1) : 1
+        return (0..<images).map { _ in
+          GenerationHandle(
+            kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date(),
+            modelID: request.modelID, params: request.params)
+        }
       }
 
       func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
@@ -289,8 +293,6 @@
       }
 
       func cancel(_ handle: GenerationHandle) async throws {}
-
-      func createSession(name: String) async throws -> String { "fixture-session" }
     }
 
     private struct FixtureUploader: FileUploading {
@@ -327,6 +329,18 @@
       }
       func sendEmailCode() async throws -> String { "fixture-pending-token" }
       func verify(_ proof: StepUpProof) async throws -> Date { Date().addingTimeInterval(300) }
+    }
+
+    /// Keeps the last saved schedule for the run, so Settings shows what was just picked.
+    private actor FixtureBriefScheduleAPI: BriefScheduleAPI {
+      private var stored: BriefSchedule?
+
+      func schedule() async throws -> BriefSchedule? { stored }
+
+      func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+        stored = schedule
+        return schedule
+      }
     }
 
     private struct NoopPushTokenAPI: PushTokenAPI {

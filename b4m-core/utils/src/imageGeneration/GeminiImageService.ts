@@ -10,7 +10,6 @@ import {
 } from '@google/genai';
 import { Logger } from '@bike4mind/observability';
 import { ImageModels, reduceAspectRatio, type ImageOutputFormat } from '@bike4mind/common';
-import { v4 as uuidv4 } from 'uuid';
 import {
   ExpectedImageGenerationError,
   ImageInputRejectedError,
@@ -374,7 +373,7 @@ export class GeminiImageService extends AIImageService {
 
         if (textMessage) {
           // Return a clarification request instead of throwing an error
-          const clarificationId = uuidv4();
+          const clarificationId = crypto.randomUUID();
           this.logger.log('[DEBUG] Returning clarification request:', {
             clarificationId,
             questionPreview: textMessage.substring(0, 100) + '...',

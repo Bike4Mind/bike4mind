@@ -29,7 +29,11 @@ import {
   type SidebarSection,
 } from './adminSidebarConfig';
 import { adminTabToSlug } from './adminTabSlugs';
-import { ADMIN_ACTION_COUNT_LABELS, formatAdminActionCount, type AdminActionCounts } from './adminActionCounts';
+import {
+  ADMIN_ACTION_COUNT_LABELS,
+  formatAdminActionCount,
+  type AdminActionCounts,
+} from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 import { useAdminSidebarMore } from './useAdminSidebarState';
 
 /** The signed-in admin shown in the sidebar footer. */
@@ -43,7 +47,6 @@ export type SidebarNavProps = {
   /** The tab to highlight. The layout passes Users while a user profile is open. */
   activeTab: AdminTab | string | null;
   enableUserMigration?: boolean;
-  showLiveOpsTriageTab: boolean;
   /** The sidebar counts from `useAdminActionCounts`; a missing or zero count shows no badge. */
   actionCounts?: AdminActionCounts;
   /** A Stripe-billed subscription started since this browser last opened the Subscriptions tab. */
@@ -326,7 +329,6 @@ const CountPill = ({ count, label, testId }: { count: number; label: string; tes
 export const SidebarNav = ({
   activeTab,
   enableUserMigration,
-  showLiveOpsTriageTab,
   actionCounts,
   newSubscriptions = false,
   isFullAdmin: fullAdmin = true,
@@ -353,7 +355,6 @@ export const SidebarNav = ({
 
   const gates: Record<SidebarGate, boolean> = {
     userMigration: !!enableUserMigration,
-    liveOpsTriage: showLiveOpsTriageTab,
   };
   // The rail has no filter box to show or clear a query, so it always lists every section.
   const visibleSections = filterSidebarSections(sections, gates, collapsed ? '' : query, canOpenTab, canOpenPage);

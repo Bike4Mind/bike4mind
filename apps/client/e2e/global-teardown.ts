@@ -1,4 +1,3 @@
-import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { Resource } from 'sst';
@@ -32,7 +31,8 @@ async function restoreOpenRegistration(baseURL: string): Promise<void> {
 }
 
 export default async function globalTeardown() {
-  dotenv.config({ path: path.resolve(__dirname, '../.env.e2e') });
+  const envFile = path.resolve(__dirname, '../.env.e2e');
+  if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
 
   // Send credits report only when at least one model exceeds the credit threshold
   const credits = readCreditsData();

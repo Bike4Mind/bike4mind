@@ -28,12 +28,25 @@ public struct LakeSummary: Identifiable, Hashable, Sendable, Codable {
   public let fileCount: Int
   /// Built-in lakes are platform-owned and read-only, so they are never offered as a destination.
   public let isBuiltIn: Bool
+  /// False for a lake the user can only read: filing into it is refused.
+  public let canManage: Bool
 
-  public init(id: String, name: String, fileCount: Int, isBuiltIn: Bool) {
+  public init(id: String, name: String, fileCount: Int, isBuiltIn: Bool, canManage: Bool = true) {
     self.id = id
     self.name = name
     self.fileCount = fileCount
     self.isBuiltIn = isBuiltIn
+    self.canManage = canManage
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    fileCount = try container.decode(Int.self, forKey: .fileCount)
+    isBuiltIn = try container.decode(Bool.self, forKey: .isBuiltIn)
+    // Absent in summaries encoded before the field existed.
+    canManage = try container.decodeIfPresent(Bool.self, forKey: .canManage) ?? true
   }
 }
 
@@ -89,10 +102,13 @@ public protocol CaptureAPI: FileUploading {
 /// - `POST  /api/v1/data-lakes/{id}/files/{file_id}` addDataLakeFile
 /// - `POST  /api/chat`                               sendChatMessage with `fileIds` (chat.contract.ts)
 /// - `GET   /api/v1/sessions/{id}/quests`            listSessionQuests (oldest first)
+/// - `POST  /api/v1/delegations`                     createDelegation (`DelegationSubmitting`)
+/// - `POST  /api/v1/obligations`                     handOffObligation (obligations.contract.ts)
+/// - `PATCH /api/v1/obligations/{id}`                updateObligation (`ObligationHandingOff`)
 ///
 /// Keep in sync with those contracts. They move into `B4MClient` (and behind `B4MAPI`) when the generator's
 /// operation filter takes them.
-public struct CaptureClient: CaptureAPI {
+public struct CaptureClient: CaptureAPI, DelegationSubmitting, ObligationHandingOff {
   private let requester: AuthorizedRequester
 
   public init(baseURL: URL, tokens: any AccessTokenProviding, transport: any HTTPTransport = URLSessionTransport()) {
@@ -121,12 +137,25 @@ public struct CaptureClient: CaptureAPI {
     let notes: String
   }
 
+  private struct DelegationBody: Encodable {
+    let intent: String
+    let url: String?
+    let text: String?
+    let fileIds: [String]?
+  }
+
+  private struct HandOffBody: Encodable {
+    let fileId: String
+    let text: String?
+  }
+
   private struct LakeListReply: Decodable {
     struct Lake: Decodable {
       let id: String
       let name: String
       let fileCount: Int
       let builtIn: Bool
+      let canManage: Bool
     }
     let data: [Lake]
     let nextCursor: String?
@@ -192,7 +221,8 @@ public struct CaptureClient: CaptureAPI {
       throw APIError.malformedResponse
     }
     let lakes = reply.data.map {
-      LakeSummary(id: $0.id, name: $0.name, fileCount: $0.fileCount, isBuiltIn: $0.builtIn)
+      LakeSummary(
+        id: $0.id, name: $0.name, fileCount: $0.fileCount, isBuiltIn: $0.builtIn, canManage: $0.canManage)
     }
     return Page(items: lakes, nextCursor: reply.nextCursor)
   }
@@ -235,7 +265,47 @@ public struct CaptureClient: CaptureAPI {
     return .inconclusive
   }
 
+  public func delegate(_ request: DelegationRequest) async throws {
+    let body = try Self.encode(
+      DelegationBody(
+        intent: request.intent, url: request.url?.absoluteString, text: request.text,
+        fileIds: request.fileIDs.isEmpty ? nil : request.fileIDs))
+    let response = try await requester.send(method: "POST", path: "api/v1/delegations", jsonBody: body)
+    try Self.require(202, response)
+  }
+
+  public func handOff(fileID: String, text: String?) async throws -> Obligation {
+    let body = try Self.encode(HandOffBody(fileId: fileID, text: text))
+    let response = try await requester.send(method: "POST", path: "api/v1/obligations", jsonBody: body)
+    if response.status == 409 { throw ObligationError.stillChecking }
+    return try Self.obligation(from: response, accepting: [200, 201])
+  }
+
+  public func update(id: String, patch: ObligationPatch) async throws -> Obligation {
+    let response = try await requester.send(
+      method: "PATCH", path: "api/v1/obligations/\(id)", jsonBody: try Self.encode(patch))
+    if response.status == 409 { throw ObligationError.dismissed }
+    return try Self.obligation(from: response, accepting: [200])
+  }
+
   // MARK: - Helpers
+
+  private static func obligation(
+    from response: AuthorizedRequester.Response, accepting: Set<Int>
+  ) throws
+    -> Obligation
+  {
+    guard accepting.contains(response.status) else {
+      if [400, 422, 502].contains(response.status), case .rejected(let message) = rejection(response) {
+        throw ObligationError.rejected(message: message)
+      }
+      throw APIError(status: response.status)
+    }
+    guard let obligation = try? JSONDecoder().decode(Obligation.self, from: response.body) else {
+      throw APIError.malformedResponse
+    }
+    return obligation
+  }
 
   private static let logger = Logger(subsystem: "com.bike4mind.app", category: "capture")
 

@@ -125,7 +125,8 @@ the [generated API docs](/api/v1/docs) (raw spec: \`/api/v1/openapi.json\`, whic
 use to build a typed client). They are deliberately not repeated here, so the two cannot disagree.
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
-  \`/api/v1/agent-executions[/{id}]\`
+  \`/api/v1/agent-executions[/{id}]\`, \`/api/v1/delegations[/{id}]\`,
+  \`/api/v1/obligations\` (hand off, list), \`/api/v1/obligations/{id}\` (get, correct + confirm)
 - Sessions: \`/api/v1/sessions\`, \`/api/v1/sessions/{id}\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
   \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
   \`/api/v1/sessions/{id}/messages/{messageId}\`
@@ -143,9 +144,10 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
   delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`, \`/api/v1/files/{id}/lineage\`,
   \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
-- Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
+- Generation: \`/api/v1/image-jobs\`, \`/api/v1/image-models\`, \`/api/v1/video-*\`,
   \`/api/v1/music-*\`, \`/api/v1/scene-compositions\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
-  \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
+  \`/api/v1/image-generations\` and \`/api/v1/image-edits\` (deprecated, sunset 2027-02-17; use
+  \`/api/v1/image-jobs\`), \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
 - Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/completion-runs\`,
   \`/api/v1/completion-runs/{runId}/usage\`, \`/api/v1/completion-runs/{runId}/budget\`,
@@ -164,6 +166,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/skills/market/versions/{vid}/review\`
 - Release notes: \`/api/v1/whats-new\`, \`/api/v1/whats-new/media/*\` (public, no key needed)
 - Slack (post to channels an org owner enabled): \`/api/v1/slack/messages\`
+- Functions (your live functions; \`functions:invoke\`): \`/api/v1/functions\`, \`/api/v1/functions/{id}\`,
+  \`/api/v1/functions/{id}/invoke\`
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.

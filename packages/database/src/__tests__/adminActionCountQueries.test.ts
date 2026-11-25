@@ -17,7 +17,7 @@ import { AdminApprovalModel, adminApprovalRepository } from '../models/infra/adm
 import { SreErrorTrackingModel, sreErrorTrackingRepository } from '../models/infra/ops/SreErrorTrackingModel';
 import { FeedbackModel, countNewFeedback, oldestNewFeedbackAt } from '../models/social/FeedbackModel';
 
-// The admin sidebar's action counts (apps/client/server/admin/actionCounts.ts). Rows are inserted
+// The admin sidebar's action counts (packages/server-utils/src/admin/actionCounts.ts). Rows are inserted
 // raw: only the stored shape the filters read matters, not each model's full validation.
 
 const insertRaw = async (target: Model<never>, docs: Record<string, unknown>[]) => {

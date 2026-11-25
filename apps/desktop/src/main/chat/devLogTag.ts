@@ -6,6 +6,8 @@
  * Everything that varies within a source - the direction, the event kind, the conversation -
  * is a field on the line, not another tag.
  *
- * A second source brings its own constant and nothing else.
+ * A second source brings its own constant and nothing else. The one exception is the
+ * cross-cutting `errors` tag (../devlog/tags.ts), which is added alongside the source tag on
+ * failures so they can be filtered apart from ordinary traffic.
  */
 export const CHAT_STREAM_TAG = 'chat-stream';

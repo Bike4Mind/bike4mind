@@ -151,6 +151,9 @@ describe('admin release held signup grant', () => {
   });
 });
 
+// Loaded once at collection: the real services barrel is slow to import, and only this block needs it.
+const { adminAuditService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+
 describe('large-grant threshold on the audit entry', () => {
   const THRESHOLD = 100;
   beforeEach(() => {
@@ -165,7 +168,6 @@ describe('large-grant threshold on the audit entry', () => {
       dailyTotalCredits: 1_000_000,
       sumCreditsGranted: vi.fn().mockResolvedValue(0),
     });
-    const { adminAuditService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
     h.audit.mockImplementation(
       async (_req: unknown, input: Parameters<typeof adminAuditService.recordAdminAction>[0]) =>
         adminAuditService.recordAdminAction(

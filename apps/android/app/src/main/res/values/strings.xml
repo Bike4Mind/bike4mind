@@ -28,6 +28,7 @@
     <string name="sessions_title">Chats</string>
     <string name="sessions_brief">Brief</string>
     <string name="sessions_settings">Settings</string>
+    <string name="sessions_studio">Studio</string>
     <string name="sessions_new_chat">New chat</string>
     <string name="sessions_default_model">Default model: %1$s</string>
     <string name="sessions_load_failed">Could not load chats</string>
@@ -39,9 +40,14 @@
     <string name="chat_send">Send</string>
     <string name="chat_refused">The message was refused (%1$s)</string>
     <string name="chat_refused_unknown">unknown</string>
+    <string name="chat_send_failed">Not sent. Check your connection and try again.</string>
+    <string name="chat_send_failed_reason">Not sent. %1$s</string>
     <string name="chat_reply_failed">The reply failed.</string>
     <string name="chat_reply_failed_code">The reply failed (%1$s).</string>
     <string name="chat_reply_pending" translatable="false">...</string>
+    <string name="chat_agent_toggle">Agent</string>
+    <string name="chat_agent_placeholder">Describe a task for the agent</string>
+    <string name="chat_agent_no_attachments">An agent run cannot take attachments. Remove them, or turn off Agent.</string>
 
     <!-- Chat approval card -->
     <string name="approval_approve">Approve</string>
@@ -66,6 +72,34 @@
     <string name="approval_failed_upgrade">Update Bike4Mind to answer approvals.</string>
 
     <!-- Brief -->
+    <!-- Studio gallery (apps/ios Features/Media) -->
+    <string name="media_title">Studio</string>
+    <string name="media_filter_all">All</string>
+    <string name="media_filter_images">Images</string>
+    <string name="media_filter_video">Video</string>
+    <string name="media_filter_audio">Audio</string>
+    <string name="media_kind_image">Image</string>
+    <string name="media_kind_video">Video</string>
+    <string name="media_kind_audio">Audio</string>
+    <string name="media_tile_description">%1$s, %2$s</string>
+    <string name="media_open">Open full screen</string>
+    <string name="media_loading">Loading media</string>
+    <string name="media_load_failed">Couldn\'t load your media</string>
+    <string name="media_empty_title">Nothing created yet</string>
+    <string name="media_empty_all">Images, video and music you generate will appear here.</string>
+    <string name="media_empty_images">No images generated yet.</string>
+    <string name="media_empty_video">No video generated yet.</string>
+    <string name="media_empty_audio">No audio generated yet.</string>
+    <string name="media_open_failed">Couldn\'t open this file</string>
+    <string name="media_processing_title">Not available</string>
+    <string name="media_processing_body">This file is still being processed.</string>
+    <string name="media_error_offline">Couldn\'t reach Bike4Mind. Check your connection and try again.</string>
+    <string name="media_error_not_found">This file is no longer available.</string>
+    <string name="media_error_rate_limited">Too many requests. Try again in a moment.</string>
+    <string name="media_error_unreadable">This needs a newer version of Bike4Mind.</string>
+    <string name="media_error_unplayable">The link to this file expired.</string>
+    <string name="media_error_server">The server could not load your media (HTTP %1$d).</string>
+
     <string name="brief_title">Brief</string>
     <string name="brief_load_failed">Couldn\'t load the brief</string>
     <string name="brief_empty_title">No brief yet</string>
@@ -95,6 +129,7 @@
     <string name="settings_notifications_open_system">Open notification settings</string>
     <string name="settings_save_failed">Couldn\'t save that change. Try again.</string>
     <string name="settings_account">Account</string>
+    <string name="settings_credits">Credits</string>
     <string name="settings_server">Server: %1$s</string>
     <string name="settings_sign_out">Sign out</string>
     <string name="settings_delete_account">Delete account</string>
@@ -179,6 +214,28 @@
     <string name="capture_retry">Retry</string>
     <string name="capture_no_camera">No camera app is available.</string>
     <string name="capture_scanner_unavailable">Document scanning isn\'t available on this device.</string>
+    <string name="capture_handoff_title">Use this scan</string>
+    <string name="capture_handoff_message">Hand a bill or letter to the assistant to track what\'s owed and when.</string>
+    <string name="capture_handoff">Hand to assistant</string>
+    <string name="capture_handoff_attach">Attach to message</string>
+    <string name="obligation_title">Bill details</string>
+    <string name="obligation_uploading">Uploading the scan&#8230;</string>
+    <string name="obligation_reading">Reading the bill&#8230;</string>
+    <string name="obligation_amount">Amount (%1$s)</string>
+    <string name="obligation_amount_negative">The amount can\'t be negative.</string>
+    <string name="obligation_amount_invalid">Enter a number, or leave it empty.</string>
+    <string name="obligation_payee">Payee</string>
+    <string name="obligation_due_date">Due date (YYYY-MM-DD)</string>
+    <string name="obligation_destination">File in</string>
+    <string name="obligation_no_destination">Don\'t file</string>
+    <string name="obligation_confirm">Confirm</string>
+    <string name="obligation_close">Close</string>
+    <string name="obligation_saved">Saved. Your brief will remind you before it\'s due.</string>
+    <string name="obligation_problem_not_found">The scan couldn\'t be found. Please scan it again.</string>
+    <string name="obligation_problem_checking">The scan is still being checked. Please try again in a moment.</string>
+    <string name="obligation_problem_dismissed">This bill was dismissed and can\'t be changed.</string>
+    <string name="obligation_problem_offline">You\'re offline. Please try again when you\'re connected.</string>
+    <string name="obligation_problem_generic">Something went wrong. Please try again.</string>
     <string name="capture_read_failed">That file couldn\'t be read.</string>
     <string name="capture_failure_offline">No connection.</string>
     <string name="capture_failure_blocked">The file was blocked by the server\'s scan.</string>
@@ -234,4 +291,9 @@
 
     <!-- Notifications -->
     <string name="notification_channel_default">@string/app_name</string>
+    <string name="notification_channel_agent_runs">Running agents</string>
+    <string name="agent_run_working">Working</string>
+    <string name="agent_run_iteration">Step %1$d</string>
+    <string name="agent_run_chip">Agent</string>
+    <string name="agent_run_needs_you">Needs you</string>
 </resources>

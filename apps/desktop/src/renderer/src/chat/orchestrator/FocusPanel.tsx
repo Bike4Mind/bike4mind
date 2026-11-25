@@ -11,7 +11,7 @@ import { AgentPrIndicator } from './AgentPrIndicator';
 /** Shown as a card: the user has to act on it, or should know it went wrong. */
 const ATTENTION: ReadonlySet<AgentState> = new Set(['needs-you', 'failed']);
 /** The rest, collapsed to one line of counts, in this order. Working agents also get a row each, for Stop. */
-const QUIET_ORDER: readonly AgentState[] = ['done', 'stopped', 'idle'];
+const QUIET_ORDER: readonly AgentState[] = ['waiting', 'done', 'paused', 'stopped', 'idle'];
 
 interface AttentionItem {
   key: string;
@@ -187,7 +187,11 @@ export function FocusPanel({
                   <Typography level="title-sm" noWrap>
                     {item.title}
                   </Typography>
-                  <AgentPrIndicator pr={item.pr} onOpen={() => void onAction({ kind: 'open-pr', agentId: item.key })} />
+                  <AgentPrIndicator
+                    agentId={item.key}
+                    pr={item.pr}
+                    onOpen={() => void onAction({ kind: 'open-pr', agentId: item.key })}
+                  />
                   {item.detail && (
                     <Typography level="body-sm" textColor="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
                       {item.detail}
@@ -285,7 +289,11 @@ export function FocusPanel({
                 </Typography>
               )}
               <Box sx={{ flex: agent.now ? 0 : 1 }} />
-              <AgentPrIndicator pr={agent.pr} onOpen={() => void onAction({ kind: 'open-pr', agentId: agent.id })} />
+              <AgentPrIndicator
+                agentId={agent.id}
+                pr={agent.pr}
+                onOpen={() => void onAction({ kind: 'open-pr', agentId: agent.id })}
+              />
               {stopButton(agent)}
               {errorLine([stopKey(agent)])}
             </Box>
@@ -308,7 +316,11 @@ export function FocusPanel({
             <Typography level="body-sm" noWrap sx={{ minWidth: 0 }}>
               {agent.title}
             </Typography>
-            <AgentPrIndicator pr={agent.pr} onOpen={() => void onAction({ kind: 'open-pr', agentId: agent.id })} />
+            <AgentPrIndicator
+              agentId={agent.id}
+              pr={agent.pr}
+              onOpen={() => void onAction({ kind: 'open-pr', agentId: agent.id })}
+            />
           </Box>
         ))}
     </Box>

@@ -9,7 +9,6 @@ import RestrictedPage from '@client/app/components/common/RestrictedPage';
 import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
 import { adminActionCountsQueryKey, useAdminActionCounts } from '@client/app/hooks/data/adminActionCounts';
 import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
@@ -38,6 +37,8 @@ export const isAdminSubscriptionDetailPath = (pathname: string) => pathname.star
 
 /** Model detail and discovery run pages belong to the Models tab. */
 export const isAdminModelsDetailPath = (pathname: string) => pathname.startsWith('/admin/models/');
+
+const isAdminQaPath = (pathname: string) => pathname === '/admin/qa' || pathname.startsWith('/admin/qa/');
 
 /** The tab a detail page belongs to, or undefined off a detail page. */
 const detailPageTabFor = (pathname: string): AdminTab | undefined =>
@@ -80,7 +81,6 @@ export const AdminLayout = ({
   const hiddenNotifications = useAdminNotifications(state => state.hiddenNotifications);
   const { currentUser } = useUser();
   const isAdmin = !!currentUser?.isAdmin;
-  const { data: liveOpsEnv } = useLiveOpsTriageEnv(isAdmin);
   const impersonating = useAccessToken(s => s.impersonating);
   // The route needs support:read and gates each count by its own permission, so a delegate sees only the held grants count.
   const actionCounts = useAdminActionCounts({
@@ -92,9 +92,9 @@ export const AdminLayout = ({
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const detailPageTab = detailPageTabFor(pathname);
-  // A contributed page is no tab, so none is highlighted while one is open.
+  // A contributed page and the QA pages are no tab, so none is highlighted while one is open.
   const onContributedPage = isAdminExtPath(pathname);
-  const activeTab = onContributedPage ? null : (detailPageTab ?? storedActiveTab);
+  const activeTab = onContributedPage || isAdminQaPath(pathname) ? null : (detailPageTab ?? storedActiveTab);
   const sections = useMemo(() => withContributedPages(SIDEBAR_SECTIONS, adminPages), [adminPages]);
   const canOpenPage = useCallback(() => canOpenContributedAdminPage(currentUser), [currentUser]);
 
@@ -140,7 +140,6 @@ export const AdminLayout = ({
     activeTab,
     account,
     enableUserMigration,
-    showLiveOpsTriageTab: liveOpsEnv?.showTab ?? false,
     actionCounts: actionCounts.data,
     // No dot on the tab the admin is looking at; a row started meanwhile lights it once they leave.
     newSubscriptions: newSubscriptions && activeTab !== AdminTab.Subscriptions,

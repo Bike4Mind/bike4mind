@@ -35,6 +35,7 @@ const CREATED_VIA_LABELS: Readonly<Record<AuthSessionCreatedVia, string>> = {
   ios: 'Native app',
   'legacy-migration': 'Carried over',
   'persona-mint': 'Persona login code',
+  'desktop-handoff': 'Desktop web session',
 };
 
 /** "Browser on OS" from the stored fields, else parsed from the user agent (most sessions store only that); '-' when unknown. */

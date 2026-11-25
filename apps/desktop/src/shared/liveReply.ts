@@ -24,6 +24,13 @@ export function startReply(messages: readonly ChatMessage[], messageId: string):
 /** The events a reply is built from while it streams. */
 export type LiveReplyEvent = Extract<ChatStreamEvent, { type: 'delta' | 'tool-start' | 'tool-end' | 'tool-progress' }>;
 
+type DeltaEvent = Extract<LiveReplyEvent, { type: 'delta' }>;
+
+/** One delta standing for `last` followed by `event`: the text joined, the newer seq kept. */
+export function mergeDelta(last: DeltaEvent, event: DeltaEvent): DeltaEvent {
+  return { ...last, text: last.text + event.text, seq: event.seq ?? last.seq };
+}
+
 /**
  * Merge runs of consecutive deltas for one message into a single delta, so a burst of tokens
  * costs one string concat and one rounds rebuild rather than one per token. Order across other
@@ -34,7 +41,7 @@ export function coalesceLiveEvents(events: readonly LiveReplyEvent[]): LiveReply
   for (const event of events) {
     const last = merged[merged.length - 1];
     if (event.type === 'delta' && last?.type === 'delta' && last.messageId === event.messageId) {
-      merged[merged.length - 1] = { ...last, text: last.text + event.text };
+      merged[merged.length - 1] = mergeDelta(last, event);
     } else {
       merged.push(event);
     }

@@ -10,6 +10,7 @@ import { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } fr
 import { createCompletionContract } from './completions.contract';
 import {
   createCompletionRunContract,
+  getCompletionRunEvaluationContract,
   getCompletionRunUsageContract,
   raiseCompletionRunBudgetContract,
 } from './completionRuns.contract';
@@ -23,8 +24,18 @@ import {
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
   replyToBriefDecisionContract,
+  getPendingDecisionCountContract,
 } from './briefs.contract';
+import { createDelegationContract, getDelegationContract } from './delegations.contract';
+import {
+  getObligationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  updateObligationContract,
+} from './obligations.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
 import {
@@ -37,6 +48,12 @@ import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
+import {
+  cancelImageJobContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+} from './imageJob.contract';
 import {
   createFileUploadContract,
   getFileContract,
@@ -51,6 +68,12 @@ import {
 } from './files.contract';
 import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
 import { postSlackMessageContract } from './slackMessages.contract';
+import {
+  getFunctionCallContract,
+  getFunctionContract,
+  invokeFunctionContract,
+  listFunctionsContract,
+} from './functions.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract, listQuestFilesContract } from './quest.contract';
@@ -103,6 +126,7 @@ import {
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 } from './dataLakeResearch.contract';
 import { listImageModelsContract } from './imageModels.contract';
 import {
@@ -200,6 +224,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getCurrentWeatherContract,
   createCompletionContract,
   createCompletionRunContract,
+  getCompletionRunEvaluationContract,
   getCompletionRunUsageContract,
   raiseCompletionRunBudgetContract,
   synthesizeSpeechContract,
@@ -213,10 +238,19 @@ export const CONTRACTS: readonly EndpointContract[] = [
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
   replyToBriefDecisionContract,
+  getPendingDecisionCountContract,
+  createDelegationContract,
+  getDelegationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  getObligationContract,
+  updateObligationContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   listHandoffDevicesContract,
@@ -225,6 +259,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listModelsContract,
   generateImageContract,
   editImageContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+  cancelImageJobContract,
   createFileUploadContract,
   getFileContract,
   listFilesContract,
@@ -269,6 +307,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
   listImageModelsContract,
   cancelVideoGenerationContract,
   createVideoGenerationContract,
@@ -352,4 +391,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   postSlackMessageContract,
   mintPersonaContract,
   deletePersonaContract,
+  listFunctionsContract,
+  getFunctionContract,
+  invokeFunctionContract,
+  getFunctionCallContract,
 ];

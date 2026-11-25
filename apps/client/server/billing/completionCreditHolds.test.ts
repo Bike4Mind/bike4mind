@@ -28,6 +28,7 @@ const {
   transaction: vi.fn(async <T>(callback: () => Promise<T>): Promise<T> => callback()),
 }));
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {},
   pendingCreditHoldRepository: { record, claim, markSettledAndRead, findSettlement, addRunClaimCredits },
   completionRunRepository: { claimBudget, releaseClaim },
   withTransaction: transaction,
@@ -35,8 +36,13 @@ vi.mock('@bike4mind/database', () => ({
   newAccountSpendCapAdapters: { name: 'spend-cap-adapters' },
   warmExchangeAttribution: warm,
 }));
-vi.mock('@bike4mind/services', () => ({ creditService: { assertNewAccountSpendWithinCap: assertSpendCap } }));
-import { createCompletionCreditHolds } from './completionCreditHolds';
+vi.mock('@bike4mind/services', () => ({
+  creditService: {
+    assertNewAccountSpendWithinCap: assertSpendCap,
+    assertInterventionSpendAllowed: async () => undefined,
+  },
+}));
+import { COMPLETION_CLAIM_SHARE_OF_REMAINING, createCompletionCreditHolds } from './completionCreditHolds';
 import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 
 const hold = {
@@ -188,7 +194,7 @@ describe('run budget claims', () => {
     const claimed = await createCompletionCreditHolds(logger).reserve(hold, debit, runClaim);
 
     expect(claimed).toBe(90);
-    expect(claimBudget).toHaveBeenCalledWith('run-1', 120, 20);
+    expect(claimBudget).toHaveBeenCalledWith('run-1', 120, 20, COMPLETION_CLAIM_SHARE_OF_REMAINING);
     expect(claimBudget.mock.invocationCallOrder[0]).toBeLessThan(debit.mock.invocationCallOrder[0]);
     expect(record).toHaveBeenCalledWith(expect.anything(), 'platform-key completion', expect.any(Date), {
       runId: 'run-1',
@@ -206,10 +212,18 @@ describe('run budget claims', () => {
     await expect(refusal).rejects.toMatchObject({
       statusCode: 422,
       additionalInfo: { errorCode: 'run_budget_exhausted' },
-      message: expect.stringContaining('490 of its 500 credits'),
+      message: expect.stringContaining('This call needs 20 credits, but this run has 10 of its 500 credits left'),
     });
     expect(debit).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
+  });
+
+  it('calls the budget used up only when nothing is left', async () => {
+    claimBudget.mockResolvedValue({ kind: 'exhausted', budgetCredits: 500, committedCredits: 500 });
+
+    await expect(createCompletionCreditHolds(logger).reserve(hold, vi.fn(), runClaim)).rejects.toMatchObject({
+      message: expect.stringContaining('used up: 500 of its 500 credits'),
+    });
   });
 
   it('records no claim for a run without a budget', async () => {
@@ -283,7 +297,7 @@ describe('run budget claims', () => {
       addRunClaimCredits.mockResolvedValue(true);
 
       expect(await lifecycle.topUpRunClaim!({ wantedCredits: 60, minimumCredits: 10 })).toBe(40);
-      expect(claimBudget).toHaveBeenLastCalledWith('run-1', 60, 10);
+      expect(claimBudget).toHaveBeenLastCalledWith('run-1', 60, 10, COMPLETION_CLAIM_SHARE_OF_REMAINING);
       expect(addRunClaimCredits).toHaveBeenCalledExactlyOnceWith('pending', 40);
 
       await lifecycle.settle(

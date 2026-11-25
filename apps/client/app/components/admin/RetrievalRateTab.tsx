@@ -11,6 +11,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import type { OptionalPathRetrievalRate, RateArm } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import {
   AdminPageHeader,
   EmptyState,
@@ -176,24 +178,36 @@ export default function RetrievalRateTab() {
       />
 
       <FilterToolbar data-testid="retrieval-rate-filter-bar">
-        <Input
-          size="sm"
-          type="date"
-          startDecorator={<FilterInputLabel>From</FilterInputLabel>}
-          value={filters.startDate}
-          onChange={e => setFilters({ ...filters, startDate: e.target.value })}
-          slotProps={{ input: { 'aria-label': 'Start date' } }}
-          data-testid="retrieval-rate-start-input"
-        />
-        <Input
-          size="sm"
-          type="date"
-          startDecorator={<FilterInputLabel>To</FilterInputLabel>}
-          value={filters.endDate}
-          onChange={e => setFilters({ ...filters, endDate: e.target.value })}
-          slotProps={{ input: { 'aria-label': 'End date' } }}
-          data-testid="retrieval-rate-end-input"
-        />
+        <Stack direction="row" alignItems="center" gap={0.5}>
+          <FilterInputLabel>From</FilterInputLabel>
+          <OptionalDateInput
+            size="sm"
+            value={filters.startDate}
+            onChange={startDate => setFilters({ ...filters, startDate })}
+            emptyLabel="Any date"
+            setLabel="Set start date"
+            clearLabel="Remove start date"
+            initialDate={() => (filters.endDate && filters.endDate < todayUtc() ? filters.endDate : todayUtc())}
+            max={filters.endDate || undefined}
+            aria-label="Start date"
+            testId="retrieval-rate-start-input"
+          />
+        </Stack>
+        <Stack direction="row" alignItems="center" gap={0.5}>
+          <FilterInputLabel>To</FilterInputLabel>
+          <OptionalDateInput
+            size="sm"
+            value={filters.endDate}
+            onChange={endDate => setFilters({ ...filters, endDate })}
+            emptyLabel="Any date"
+            setLabel="Set end date"
+            clearLabel="Remove end date"
+            initialDate={() => (filters.startDate && filters.startDate > todayUtc() ? filters.startDate : todayUtc())}
+            min={filters.startDate || undefined}
+            aria-label="End date"
+            testId="retrieval-rate-end-input"
+          />
+        </Stack>
         <Input
           size="sm"
           type="number"

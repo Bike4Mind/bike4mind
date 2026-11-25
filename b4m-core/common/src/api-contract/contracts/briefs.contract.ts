@@ -5,7 +5,10 @@ import {
   BriefListResponseSchema,
   BriefReplyRequestSchema,
   BriefReplyResponseSchema,
+  BriefScheduleResponseSchema,
+  BriefScheduleSchema,
   BriefSchema,
+  PendingDecisionCountSchema,
 } from '../../schemas/brief';
 import { ApiErrorSchema } from '../../schemas/chat';
 
@@ -16,7 +19,8 @@ const JWT_ONLY_NOTE =
 
 /**
  * Assistant briefs for native clients. Served by apps/client/pages/api/v1/briefs/index.ts (compose, list),
- * apps/client/pages/api/v1/briefs/[id].ts (read) and .../[id]/decisions/[decisionId]/reply.ts (reply). Composition runs in apps/workers/src/events/briefCompose.ts.
+ * apps/client/pages/api/v1/briefs/[id].ts (read), .../[id]/decisions/[decisionId]/reply.ts (reply) and
+ * apps/client/pages/api/v1/briefs/schedule.ts (schedule). Composition runs in apps/workers/src/events/briefCompose.ts.
  */
 export const composeBriefContract = defineEndpoint({
   method: 'post',
@@ -77,6 +81,56 @@ export const getBriefContract = defineEndpoint({
   codeSample: { authToken: '<access_token>', streaming: false },
 });
 
+const SCHEDULE_NOTE =
+  "Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled " +
+  'briefs are composed only when there was activity since the last one.';
+
+const BRIEF_SCHEDULE_EXAMPLE = {
+  enabled: true,
+  timeOfDay: '08:00',
+  days: [1, 2, 3, 4, 5],
+  timeZone: 'America/New_York',
+};
+
+export const getBriefScheduleContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/briefs/schedule',
+  operationId: 'getBriefSchedule',
+  summary: 'Get your brief schedule',
+  description: 'Reads when scheduled briefs are composed for you and when the next one is due. ' + SCHEDULE_NOTE,
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  responses: {
+    200: { description: 'Your brief schedule.', schema: BriefScheduleResponseSchema },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: '<access_token>', streaming: false },
+});
+
+export const putBriefScheduleContract = defineEndpoint({
+  method: 'put',
+  path: '/api/v1/briefs/schedule',
+  operationId: 'putBriefSchedule',
+  summary: 'Set your brief schedule',
+  description:
+    'Replaces your brief schedule and returns it with the next due time. `timeOfDay` and `days` are read ' +
+    'in `timeZone`, so a time skipped by a daylight-saving change runs at the shifted time and a repeated ' +
+    'one runs once. ' +
+    SCHEDULE_NOTE,
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  request: BriefScheduleSchema,
+  requestExample: BRIEF_SCHEDULE_EXAMPLE,
+  responses: {
+    200: { description: 'The saved schedule.', schema: BriefScheduleResponseSchema },
+    400: { description: 'Malformed JSON request body.', schema: ApiErrorSchema },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: '<access_token>', body: BRIEF_SCHEDULE_EXAMPLE, streaming: false },
+});
+
 export const replyToBriefDecisionContract = defineEndpoint({
   method: 'post',
   path: '/api/v1/briefs/{id}/decisions/{decisionId}/reply',
@@ -120,4 +174,25 @@ export const replyToBriefDecisionContract = defineEndpoint({
     streaming: false,
     body: { text: 'Go with the second option.', choiceIndex: 1 },
   },
+});
+
+/** Served by apps/client/pages/api/v1/pending-decisions.ts; counted by apps/client/server/briefs/countPendingDecisions.ts. */
+export const getPendingDecisionCountContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/pending-decisions',
+  operationId: 'getPendingDecisionCount',
+  summary: 'Count decisions waiting on you',
+  description:
+    'The number of decisions waiting on you, for a badge or a lock-screen widget: the agent approvals still ' +
+    'open in your notebooks plus the other decisions in your latest ready brief. Read-only and cheap; it ' +
+    'composes nothing. Authenticate with a JWT access token of the signed-in user; only your own notebooks ' +
+    'and briefs are counted.',
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  responses: {
+    200: { description: 'The count.', schema: PendingDecisionCountSchema },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: '<access_token>', streaming: false },
 });

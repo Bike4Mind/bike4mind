@@ -50,7 +50,7 @@ initContainers:
           const value = process.env[key] || '';
           if (value.length < 32 || value.startsWith('change-me')) { console.error(key + ' must be generated before installation'); process.exit(1); }
         }
-        if (!/^[0-9a-fA-F]{64}$/.test(process.env.SECRET_ENCRYPTION_KEY || '')) { console.error('SECRET_ENCRYPTION_KEY must be 64 hexadecimal characters'); process.exit(1); }
+        {{- .Files.Get "files/validate-secrets.cjs" | nindent 8 }}
         if ((process.env.MINIO_ROOT_USER || '').length < 3 || (process.env.MINIO_ROOT_PASSWORD || '').length < 16 || process.env.MINIO_ROOT_PASSWORD === 'minioadmin') { console.error('Strong object-store credentials required'); process.exit(1); }
     {{ include "b4m.env" . | nindent 4 }}
     resources: {{ .Values.resources.ws | toJson }}

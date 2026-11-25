@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { Mutex } from 'async-mutex';
+import { createMutex } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { AgentStep, AgentResult, ConversationMessage, ReActAgent } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
@@ -130,7 +130,7 @@ export class AcpServer {
   private readonly sessionStore = new SessionStore();
   private readonly customCommandStore = new CustomCommandStore();
   private readonly sessions = new Map<string, AcpSessionState>();
-  private readonly turnMutex = new Mutex();
+  private readonly turnMutex = createMutex();
 
   private stackPromise: Promise<AgentStack> | null = null;
   private stack: AgentStack | null = null;

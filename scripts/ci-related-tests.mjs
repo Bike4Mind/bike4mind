@@ -102,6 +102,9 @@ export async function runRelated({ plan, script, shard = '', root = repoRoot, cr
   if (!['test', 'test:integration'].includes(script)) throw new Error('invalid client test lane');
   if (shard && !/^--shard=[1-3]\/3$/.test(shard)) throw new Error('invalid shard');
   if (script === 'test:integration' && shard) throw new Error('integration lane is not sharded');
+  // The vitest CLI defaults NODE_ENV to 'test'; createVitest() does not, and Vite then sets it to
+  // 'development', which the in-process run and the full-suite fallback below would both inherit.
+  process.env.NODE_ENV ??= 'test';
   if (script === 'test:integration') process.env.CLIENT_TEST_LANE = 'integration';
   else delete process.env.CLIENT_TEST_LANE;
   const cwd = join(root, 'apps/client');
@@ -149,13 +152,25 @@ export async function runRelated({ plan, script, shard = '', root = repoRoot, cr
     });
     return result.status ?? 1;
   }
+  // Client tests resolve fixtures from process.cwd() (e.g. app/globals.css), as they do
+  // under `pnpm --filter @bike4mind/client test`, so run them from the package dir.
+  const previousCwd = process.cwd();
   try {
     console.log(`Client ${script}: ${selected.length} related test specification(s), ${shard || 'unsharded'}; bypassing turbo cache.`);
     if (!selected.length) return 0;
+    process.chdir(cwd);
     await vitest.standalone();
+    // Selection transforms every module it walks, including externalized ones a normal run never
+    // transforms. With that copy on the server, vitest answers a reused worker's refetch of a module
+    // it last saw as a vi.mock stub with "cached", and the worker then runs the empty stub as the
+    // real module. Start the run from the module graph a normal run starts from.
+    for (const project of vitest.projects ?? []) {
+      for (const environment of Object.values(project.vite.environments)) environment.moduleGraph.invalidateAll();
+    }
     const result = await vitest.runTestSpecifications(selected, false);
     return result.unhandledErrors.length || result.testModules.some(test => !test.ok()) ? 1 : 0;
   } finally {
+    process.chdir(previousCwd);
     await vitest.close();
   }
 }

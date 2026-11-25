@@ -14,8 +14,10 @@ final class DeepLinkRouterTests: XCTestCase {
   func testMalformedBriefURLFallsBackToTheWeb() {
     let bad = "https://app.bike4mind.com/briefs/a%20b"
     XCTAssertEqual(route(bad), .web(URL(string: bad)!))
-    let bare = "https://app.bike4mind.com/briefs"
-    XCTAssertEqual(route(bare), .web(URL(string: bare)!))
+  }
+
+  func testBareBriefsURLOpensTheLatestBrief() {
+    XCTAssertEqual(route("https://app.bike4mind.com/briefs"), .brief(id: nil))
   }
 
   func testSessionURLRoutesToSessionDetail() {

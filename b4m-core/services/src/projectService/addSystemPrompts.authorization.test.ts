@@ -111,14 +111,14 @@ describe('addSystemPrompts authorization', () => {
     });
   });
 
-  it('lets a read-only adder pass on only read on the prompt file', async () => {
+  it('lets an adder holding read+share pass on only read on the prompt file', async () => {
     const MEMBER = 'user-member';
     const { adapters, project } = setup([Permission.read, Permission.update]);
     project.users.push({ userId: MEMBER, permissions: [Permission.read, Permission.update] });
     const file = {
       id: 'file-2',
       userId: 'someone-else',
-      users: [{ userId: SHAREE, permissions: [Permission.read] }] as {
+      users: [{ userId: SHAREE, permissions: [Permission.read, Permission.share] }] as {
         userId: string;
         permissions: Permission[];
         projectId?: string;

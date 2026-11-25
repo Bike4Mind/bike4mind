@@ -23,8 +23,6 @@ export const ADMIN_AUDIT_COVERAGE_EXEMPTIONS: Readonly<Record<string, string>> =
   'POST /api/admin/system-prompts/[promptId]/test': 'preview: runs a prompt against a model, saves nothing',
   'POST /api/admin/github/test': 'probe: checks the GitHub connection, saves nothing',
   'POST /api/admin/pr-report/generate': 'preview: drafts a PR report; sending it is audited by pr-report/send',
-  'POST /api/admin/liveops-triage-configs/[id]/trigger':
-    'queues a run of an existing triage config; the run is logged in the triage config audit log',
 
   // Machine ingests (auth: false, a shared ingest token, no admin actor)
   'POST /api/admin/rate-limits/ingest': 'machine ingest of rate-limit events, token-authenticated',

@@ -298,3 +298,110 @@ describe('CapabilityForm', () => {
     expect(props.onModelChange).toHaveBeenCalledWith('b');
   });
 });
+
+describe('CapabilityForm in Create v2', () => {
+  const card = {
+    provider: 'Acme',
+    strength: 'Good at things.',
+    creditsPerOutput: 12,
+    outputNoun: 'image',
+    pickedFor: null,
+    whyNotCode: null,
+    unavailableReason: null,
+    mismatchReason: null,
+  };
+  const renderStudioForm = (fields: CapabilityField[], overrides: Partial<Parameters<typeof CapabilityForm>[0]> = {}) =>
+    renderForm(fields, { models: undefined, modelCards: [{ ...card, id: 'a', name: 'Model A' }], ...overrides });
+
+  it('draws the prompt box, shape and choice tracks as Studio controls and keeps the field test ids', () => {
+    const onPrompt = vi.fn();
+    const onAspect = vi.fn();
+    renderStudioForm([
+      { kind: 'text', id: 'prompt', label: 'Prompt', value: 'a fox', maxLength: 100, onChange: onPrompt },
+      {
+        kind: 'aspect',
+        id: 'aspect',
+        label: 'Shape',
+        value: '1:1',
+        options: [
+          { value: '1:1', label: '1:1' },
+          { value: '16:9', label: '16:9' },
+        ],
+        onChange: onAspect,
+      },
+    ]);
+    expect(screen.getByTestId('demo-form-scope')).toBeInTheDocument();
+    expect(screen.getByLabelText('Prompt')).toBe(screen.getByTestId('demo-form-prompt-input'));
+    fireEvent.change(screen.getByTestId('demo-form-prompt-input'), { target: { value: 'a red fox' } });
+    expect(onPrompt).toHaveBeenCalledWith('a red fox');
+    expect(screen.getByRole('radiogroup', { name: 'Shape' })).toBeInTheDocument();
+    expect(screen.getByTestId('demo-form-aspect-1:1-btn')).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByTestId('demo-form-aspect-16:9-btn'));
+    expect(onAspect).toHaveBeenCalledWith('16:9');
+  });
+
+  it('toggles scene chips as a labelled group', () => {
+    const onChange = vi.fn();
+    renderStudioForm([
+      {
+        kind: 'chips',
+        id: 'look',
+        label: 'Scene',
+        value: 'a',
+        options: [
+          { value: 'a', label: 'A', swatch: { from: '#000', to: '#fff' } },
+          { value: 'b', label: 'B' },
+        ],
+        onChange,
+      },
+    ]);
+    expect(screen.getByRole('group', { name: 'Scene' })).toBeInTheDocument();
+    expect(screen.getByTestId('demo-form-look-a-chip')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('demo-form-look-a-chip-swatch')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('demo-form-look-a-chip'));
+    expect(onChange).toHaveBeenLastCalledWith(null);
+    fireEvent.click(screen.getByTestId('demo-form-look-b-chip'));
+    expect(onChange).toHaveBeenLastCalledWith('b');
+  });
+
+  it('puts the model, the changes, the cost and the primary action in the side panel', () => {
+    const props = renderStudioForm([], { changes: ['Shape changed from 4:3 to 1:1.'], submitLabel: 'Make 2 images' });
+    const side = screen.getByTestId('demo-form-side-panel');
+    expect(side).toContainElement(screen.getByTestId('demo-form-model-row-name'));
+    expect(side).toContainElement(screen.getByTestId('demo-form-changes'));
+    expect(screen.getByTestId('demo-form-estimate')).toHaveTextContent('120 credits');
+    const submit = screen.getByTestId('demo-form-submit-btn');
+    expect(side).toContainElement(submit);
+    expect(submit).toHaveTextContent('Make 2 images');
+    fireEvent.click(submit);
+    expect(props.onSubmit).toHaveBeenCalled();
+  });
+
+  it('says when no estimate is available, and holds the action on an invalid value until its fix', () => {
+    const apply = vi.fn();
+    renderStudioForm(
+      [
+        {
+          kind: 'segmented',
+          id: 'res',
+          label: 'Resolution',
+          value: '4k',
+          options: [
+            { value: '720p', label: '720p' },
+            { value: '4k', label: '4k', invalid: true },
+          ],
+          onChange: vi.fn(),
+          invalidReason: 'Model A supports 720p; you asked for 4k',
+          fix: { label: 'Use 720p', apply },
+        },
+      ],
+      { estimateCredits: null }
+    );
+    expect(screen.getByTestId('demo-form-estimate')).toHaveTextContent('Unavailable');
+    expect(screen.getByTestId('demo-form-res-4k-btn')).toHaveAttribute('data-invalid', 'true');
+    expect(screen.getByTestId('demo-form-res-invalid')).toHaveTextContent('you asked for 4k');
+    expect(screen.getByTestId('demo-form-submit-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('demo-form-res-fix-btn'));
+    expect(apply).toHaveBeenCalled();
+  });
+});

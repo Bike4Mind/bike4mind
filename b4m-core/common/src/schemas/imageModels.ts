@@ -51,7 +51,7 @@ export const ImageModelSchema = z.object({
     .describe('What the model honours in each mode; a mode is offered exactly when it has an entry.'),
   sizing: PublicImageSizingSchema,
   qualities: z.array(OpenAIImageQualitySchema).describe('Accepted `quality` tiers; empty when it takes none.'),
-  transparent_background: z.boolean().describe("Whether `background: 'transparent'` yields real alpha."),
+  transparent_background: z.boolean().describe('Whether `transparent_background: true` yields real alpha.'),
   seed: z.boolean(),
   credits_per_image: z
     .number()

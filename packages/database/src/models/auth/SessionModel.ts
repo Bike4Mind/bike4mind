@@ -130,6 +130,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     systemPromptId: { type: String, required: false },
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
+    productionCompositionId: { type: String, required: false },
     disabledTools: [{ type: String, required: false }],
     autoAddedTools: [{ type: String, required: false }],
     disableUserIntegrations: { type: Boolean, required: false },
@@ -875,7 +876,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
     };
 
-    const sessions = await this.sessionModel.find({ userId, ...deletedAtFilter }, { _id: 1 });
+    const sessions = await this.sessionModel.find({ userId, ...deletedAtFilter }, { _id: 1 }).lean();
     // Filter out any sessions with null/undefined _id to prevent toString() errors
     return sessions.filter(s => s._id != null).map(s => s._id.toString());
   }

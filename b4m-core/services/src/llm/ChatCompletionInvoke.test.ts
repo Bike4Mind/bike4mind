@@ -5,6 +5,7 @@ import {
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   ForbiddenError,
+  NotFoundError,
   ChatModels,
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';
@@ -87,6 +88,36 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
     expect(mockedGetAvailableModels).not.toHaveBeenCalled();
     expect(mockDb.quests.create).not.toHaveBeenCalled();
+    expect(mockDb.sessions.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing session with a 404 logged at warn, before any quest, credit or session write', async () => {
+    mockDb.sessions.findById.mockResolvedValue(null);
+    const logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const admitQuestStart = vi.fn();
+    const invoke = new ChatCompletionInvoke({
+      db: mockDb,
+      logger,
+      user: { id: OWNER_ID, tags: [] },
+      invokeLambda: vi.fn(),
+      admitQuestStart,
+    } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
+
+    const rejection = invoke.invoke({
+      body: { ...body, questId: 'quest-1', enableQuestMaster: true },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    await expect(rejection).rejects.toBeInstanceOf(NotFoundError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 404, message: 'Session not found' });
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('session not found'));
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(admitQuestStart).not.toHaveBeenCalled();
+    expect(mockedGetAvailableModels).not.toHaveBeenCalled();
+    expect(mockDb.quests.findById).not.toHaveBeenCalled();
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
+    expect(mockDb.quests.update).not.toHaveBeenCalled();
     expect(mockDb.sessions.update).not.toHaveBeenCalled();
   });
 
@@ -405,7 +436,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       mockedGetAvailableModels.mockResolvedValue([
         { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
       ] as never);
-      const priorQuest = { id: 'quest-1', sessionId: 'session-1', status: 'error' };
+      const priorQuest = { id: 'quest-1', sessionId: 'session-1', status: 'error', prompt: body.message };
       mockDb.quests.findById.mockResolvedValue(priorQuest);
       mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
       await makeInvoke({ id: OWNER_ID, signupGrant: enrolledGrant }).invoke({
@@ -420,6 +451,40 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       expect(options).toEqual({ unset: ['errorCode', 'turnTiming'] });
     }
   );
+
+  async function retryQuestWithLakeSaves(storedPrompt: string) {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.findById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'session-1',
+      status: 'error',
+      prompt: storedPrompt,
+      lakeSaveCount: 5,
+    });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    await makeInvoke({ id: OWNER_ID }).invoke({
+      body: { ...body, questId: 'quest-1' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    return mockDb.quests.update.mock.calls[0];
+  }
+
+  it('keeps the data lake save count when a turn is retried, so earlier saves still count', async () => {
+    const [updated, options] = await retryQuestWithLakeSaves(body.message);
+    expect(updated).not.toHaveProperty('lakeSaveCount');
+    expect(options.unset).not.toContain('lakeSaveCount');
+  });
+
+  it('resets the data lake save count when the retried prompt was edited', async () => {
+    const [updated, options] = await retryQuestWithLakeSaves(`${body.message} (before edit)`);
+    expect(updated).not.toHaveProperty('lakeSaveCount');
+    expect(options.unset).toContain('lakeSaveCount');
+  });
 
   // Same boundary: a workflow-style caller's integration isolation would silently lapse on the
   // async path, handing a prompt the user did not write their MCP servers, agents and skills.

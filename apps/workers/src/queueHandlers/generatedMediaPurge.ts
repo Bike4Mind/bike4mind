@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 import { z, ZodError } from 'zod';
 
-// Under the 5-minute Lambda timeout (infra/queues.ts), leaving room for the CDN flush.
+// Under the 5-minute Lambda timeout (infra/queues.ts), leaving room to finish the in-flight deletes.
 export const WORKER_PURGE_BUDGET_MS = 4 * 60 * 1000;
 
 const Payload = z.discriminatedUnion('kind', [

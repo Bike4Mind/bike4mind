@@ -8,8 +8,10 @@ import { rootNeedsYou, type WatchOrchestration } from '@shared/watch';
 const DOT_COLOR: Record<AgentState, ColorPaletteProp> = {
   'needs-you': 'warning',
   working: 'primary',
+  waiting: 'primary',
   done: 'success',
   failed: 'danger',
+  paused: 'neutral',
   stopped: 'neutral',
   idle: 'neutral',
 };

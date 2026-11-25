@@ -66,6 +66,12 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
+const mockReadScope = vi.fn(async (_provider: string): Promise<object | undefined> => undefined);
+vi.mock('./providerSpendScope', async importOriginal => ({
+  ...(await importOriginal<typeof import('./providerSpendScope')>()),
+  readProviderSpendScope: (provider: string) => mockReadScope(provider),
+}));
+
 // Use a fixed "now" so month selection is deterministic.
 const FIXED_NOW = new Date('2026-08-15T06:00:00Z');
 
@@ -73,6 +79,7 @@ describe('spendReconciliation cron', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ now: FIXED_NOW });
+    mockReadScope.mockImplementation(async () => undefined);
     mockMonthlyCogsByProvider.mockResolvedValue([
       { month: '2026-07', provider: 'anthropic', cogsUsd: 450, requests: 100 },
       { month: '2026-08', provider: 'anthropic', cogsUsd: 120, requests: 30 },
@@ -107,8 +114,8 @@ describe('spendReconciliation cron', () => {
   }
 
   it('reconciles previous and current month', async () => {
-    mockAnthropicFetch.mockResolvedValue({ providerUsd: 500, breakdown: { 'key-1': 500 } });
-    mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, breakdown: {} });
+    mockAnthropicFetch.mockResolvedValue({ providerUsd: 500, orgUsd: 500, breakdown: { 'key-1': 500 } });
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, orgUsd: 210, breakdown: {} });
 
     await runHandler();
 
@@ -121,9 +128,9 @@ describe('spendReconciliation cron', () => {
   it('shares one provider deadline across its months and carries unused time forward', async () => {
     mockAnthropicFetch.mockImplementation(async () => {
       vi.setSystemTime(Date.now() + 10_000);
-      return { providerUsd: 100, breakdown: {} };
+      return { providerUsd: 100, orgUsd: 100, breakdown: {} };
     });
-    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, breakdown: {} });
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, orgUsd: 100, breakdown: {} });
 
     await runHandler();
 
@@ -148,7 +155,7 @@ describe('spendReconciliation cron', () => {
         throw new Error('Provider request deadline exceeded');
       }
     );
-    mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, breakdown: {} });
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, orgUsd: 210, breakdown: {} });
 
     const result = await runHandler();
 
@@ -169,7 +176,7 @@ describe('spendReconciliation cron', () => {
     const config = Config as Record<string, unknown>;
     const originalKey = config.ANTHROPIC_ADMIN_API_KEY;
     config.ANTHROPIC_ADMIN_API_KEY = 'not-configured';
-    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, breakdown: {} });
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, orgUsd: 100, breakdown: {} });
     try {
       const result = await runHandler();
       expect(JSON.parse(result.body)).toMatchObject({ reconciled: 2, failed: 0, skipped: 1 });
@@ -226,7 +233,7 @@ describe('spendReconciliation cron', () => {
   });
 
   it('computes delta and deltaPct using max(provider, internal) as denominator', async () => {
-    mockAnthropicFetch.mockResolvedValue({ providerUsd: 500, breakdown: {} });
+    mockAnthropicFetch.mockResolvedValue({ providerUsd: 500, orgUsd: 500, breakdown: {} });
     mockOpenAIFetch.mockResolvedValue(null); // skip OpenAI
 
     await runHandler();
@@ -273,7 +280,7 @@ describe('spendReconciliation cron', () => {
   it('uses 0 for internalUsd when no matching COGS row exists', async () => {
     mockAnthropicFetch.mockResolvedValue(null);
     // OpenAI has no 2026-08 COGS row in our mock data.
-    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, breakdown: {} });
+    mockOpenAIFetch.mockResolvedValue({ providerUsd: 100, orgUsd: 100, breakdown: {} });
 
     await runHandler();
 
@@ -314,13 +321,15 @@ describe('spendReconciliation cron', () => {
         'stored-anthropic-key',
         expect.any(String),
         undefined,
-        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 120_000 })
+        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 120_000 }),
+        undefined
       );
       expect(mockOpenAIFetch).toHaveBeenCalledWith(
         'stored-openai-key',
         expect.any(String),
         undefined,
-        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 240_000 })
+        expect.objectContaining({ deadlineMs: FIXED_NOW.getTime() + 240_000 }),
+        undefined
       );
     });
 
@@ -340,7 +349,7 @@ describe('spendReconciliation cron', () => {
       storedKeys['anthropic-secret-arn'] = Object.assign(new Error('not authorized'), {
         name: 'AccessDeniedException',
       });
-      mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, breakdown: {} });
+      mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, orgUsd: 210, breakdown: {} });
       const { runSpendReconciliation } = await import('./spendReconciliation');
 
       const result = await runSpendReconciliation({ logger: errorLogger as never });
@@ -393,7 +402,7 @@ describe('spendReconciliation cron', () => {
 
     it('derives the reconciled months from the injected now', async () => {
       mockAnthropicFetch.mockResolvedValue(null);
-      mockOpenAIFetch.mockResolvedValue({ providerUsd: 1, breakdown: {} });
+      mockOpenAIFetch.mockResolvedValue({ providerUsd: 1, orgUsd: 1, breakdown: {} });
       const { runSpendReconciliation } = await import('./spendReconciliation');
 
       const result = await runSpendReconciliation({ logger, now: new Date('2027-01-02T06:00:00Z') });
@@ -403,6 +412,52 @@ describe('spendReconciliation cron', () => {
       expect(result).toEqual({ reconciled: 2, skipped: 2, failed: 0, drifted: 1 });
       expect(mockAppend).toHaveBeenCalledTimes(2);
       expect(mockConnectDB).not.toHaveBeenCalled();
+    });
+
+    it('fetches each provider with its own stage scope and logs the organization total beside it', async () => {
+      const logLines = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const anthropicScope = { workspaceIds: ['wrkspc_prod'], apiKeyIds: ['apikey_prod'] };
+      const openaiScope = { projectIds: ['proj_prod'] };
+      mockReadScope.mockImplementation(async provider => (provider === 'anthropic' ? anthropicScope : openaiScope));
+      mockAnthropicFetch.mockResolvedValue({
+        providerUsd: 460,
+        orgUsd: 1300,
+        breakdown: {},
+        unappliedScope: ['apiKeyIds'],
+      });
+      mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, orgUsd: 900, breakdown: {} });
+      const { runSpendReconciliation } = await import('./spendReconciliation');
+
+      const result = await runSpendReconciliation({ logger: logLines as never });
+
+      expect(mockAnthropicFetch.mock.calls[0][4]).toBe(anthropicScope);
+      expect(mockOpenAIFetch.mock.calls[0][4]).toBe(openaiScope);
+      // 2026-07 anthropic: $460 billed in scope vs $450 internal is 2.2%, inside the threshold.
+      expect(result).toEqual({ reconciled: 4, skipped: 0, failed: 0, drifted: 0 });
+      expect(mockAppend).toHaveBeenCalledWith(
+        expect.objectContaining({ month: '2026-07', provider: 'anthropic', providerUsd: 460, internalUsd: 450 })
+      );
+      expect(logLines.log).toHaveBeenCalledWith(
+        expect.stringContaining('anthropic 2026-07: provider=$460.00 internal=$450.00')
+      );
+      expect(logLines.log).toHaveBeenCalledWith(
+        expect.stringContaining('org=$1300.00 scope=workspaceIds:1,apiKeyIds:1')
+      );
+      expect(logLines.warn).toHaveBeenCalledWith(expect.stringContaining('cannot filter by apiKeyIds'));
+    });
+
+    it('fails a provider whose scope cannot be read rather than reconciling the whole organization', async () => {
+      mockReadScope.mockImplementation(async provider => {
+        if (provider === 'anthropic') throw new Error('anthropic spend scope is invalid');
+        return undefined;
+      });
+      mockOpenAIFetch.mockResolvedValue({ providerUsd: 210, orgUsd: 210, breakdown: {} });
+      const { runSpendReconciliation } = await import('./spendReconciliation');
+
+      const result = await runSpendReconciliation({ logger });
+
+      expect(mockAnthropicFetch).not.toHaveBeenCalled();
+      expect(result).toEqual({ reconciled: 2, skipped: 0, failed: 1, drifted: 0 });
     });
   });
 
@@ -420,7 +475,9 @@ describe('spendReconciliation cron', () => {
     it('counts a closed month whose drift exceeds the error band', async () => {
       // 2026-07: provider $600 vs internal $450 -> 25% drift.
       mockAnthropicFetch.mockImplementation(async (_key: string, month: string) =>
-        month === '2026-07' ? { providerUsd: 600, breakdown: {} } : { providerUsd: 120, breakdown: {} }
+        month === '2026-07'
+          ? { providerUsd: 600, orgUsd: 600, breakdown: {} }
+          : { providerUsd: 120, orgUsd: 120, breakdown: {} }
       );
       mockOpenAIFetch.mockResolvedValue(null);
 
@@ -433,7 +490,9 @@ describe('spendReconciliation cron', () => {
     it('does not count a drift at or under the error band', async () => {
       // 2026-07: provider $500 vs internal $450 -> exactly 10%, the top of the warning band.
       mockAnthropicFetch.mockImplementation(async (_key: string, month: string) =>
-        month === '2026-07' ? { providerUsd: 500, breakdown: {} } : { providerUsd: 120, breakdown: {} }
+        month === '2026-07'
+          ? { providerUsd: 500, orgUsd: 500, breakdown: {} }
+          : { providerUsd: 120, orgUsd: 120, breakdown: {} }
       );
       mockOpenAIFetch.mockResolvedValue(null);
 
@@ -446,7 +505,9 @@ describe('spendReconciliation cron', () => {
     it('leaves the accruing month out of the drift count', async () => {
       // 2026-08: provider $10 vs internal $120 -> 92% drift on a month still accruing.
       mockAnthropicFetch.mockImplementation(async (_key: string, month: string) =>
-        month === '2026-07' ? { providerUsd: 450, breakdown: {} } : { providerUsd: 10, breakdown: {} }
+        month === '2026-07'
+          ? { providerUsd: 450, orgUsd: 450, breakdown: {} }
+          : { providerUsd: 10, orgUsd: 10, breakdown: {} }
       );
       mockOpenAIFetch.mockResolvedValue(null);
 

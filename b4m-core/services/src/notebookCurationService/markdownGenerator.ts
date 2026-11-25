@@ -4,6 +4,8 @@ import {
   stripArtifactTags,
   stripSearchResultCardFences,
   type CitableSource,
+  type IChatHistoryItem,
+  type ISession,
 } from '@bike4mind/common';
 
 /**
@@ -11,6 +13,16 @@ import {
  * Chronological, unaltered conversation with organized artifacts, suited to legal/compliance.
  * The LLM "Executive Summary" (Option 2) lives in llmMarkdownGenerator.
  */
+
+export type CurationSession = Pick<
+  ISession,
+  'id' | 'name' | 'firstCreated' | 'lastUpdated' | 'language' | 'summary' | 'summaryAt'
+>;
+
+export type CurationMessage = Pick<
+  IChatHistoryItem,
+  'id' | 'timestamp' | 'prompt' | 'reply' | 'replies' | 'questMasterReply' | 'promptMeta'
+> & { _id?: { toString(): string } }; // _id: raw Mongo docs reach here without the mapped id
 
 export interface MarkdownGeneratorOptions {
   includeTimestamps: boolean;
@@ -33,8 +45,8 @@ const DEFAULT_OPTIONS: MarkdownGeneratorOptions = {
  * Perfect for HR, legal, compliance, or complete record-keeping.
  */
 export function generateTranscriptMarkdown(
-  session: any,
-  messages: any[],
+  session: CurationSession,
+  messages: CurationMessage[],
   artifacts: ExtractedArtifact[],
   options: Partial<MarkdownGeneratorOptions> = {}
 ): string {
@@ -46,7 +58,7 @@ export function generateTranscriptMarkdown(
 
   // Table of Contents
   if (opts.includeTableOfContents) {
-    sections.push(generateTableOfContents(artifacts));
+    sections.push(generateTableOfContents(artifacts, Boolean(session.summary)));
   }
 
   // Summary Section
@@ -77,7 +89,7 @@ export function generateTranscriptMarkdown(
 /**
  * Generate document header
  */
-function generateHeader(session: any, messages: any[], artifacts: ExtractedArtifact[]): string {
+function generateHeader(session: CurationSession, messages: CurationMessage[], artifacts: ExtractedArtifact[]): string {
   const created = session.firstCreated ? new Date(session.firstCreated).toLocaleDateString() : 'Unknown';
   const updated = session.lastUpdated ? new Date(session.lastUpdated).toLocaleDateString() : 'Unknown';
 
@@ -95,10 +107,10 @@ function generateHeader(session: any, messages: any[], artifacts: ExtractedArtif
 /**
  * Generate table of contents
  */
-function generateTableOfContents(artifacts: ExtractedArtifact[]): string {
+function generateTableOfContents(artifacts: ExtractedArtifact[], hasSummary: boolean): string {
   const sections = ['## Table of Contents\n'];
 
-  sections.push('- [Summary](#summary)');
+  if (hasSummary) sections.push('- [Summary](#summary)');
   sections.push('- [Conversation](#conversation)');
 
   if (artifacts.length > 0) {
@@ -119,7 +131,7 @@ function generateTableOfContents(artifacts: ExtractedArtifact[]): string {
 /**
  * Generate summary section
  */
-function generateSummarySection(session: any): string {
+function generateSummarySection(session: CurationSession): string {
   const summarizedDate = session.summaryAt ? new Date(session.summaryAt).toLocaleDateString() : 'Unknown';
 
   return `## Summary
@@ -132,7 +144,7 @@ ${session.summary}`;
 /**
  * Generate conversation section
  */
-function generateConversationSection(messages: any[], options: MarkdownGeneratorOptions): string {
+function generateConversationSection(messages: CurationMessage[], options: MarkdownGeneratorOptions): string {
   const lines = ['## Conversation\n'];
 
   messages.forEach((message, index) => {
@@ -285,7 +297,7 @@ ${artifact.content}`;
  */
 function formatDeepResearchArtifact(artifact: ExtractedArtifact, index: number, timestamp: string): string {
   const metadata = artifact.metadata || {};
-  const research = JSON.parse(artifact.content);
+  const research: NonNullable<IChatHistoryItem['deepResearchState']> = JSON.parse(artifact.content);
 
   const sections = [
     `#### ${index}. Deep Research: ${metadata.topic || 'Unknown Topic'}`,
@@ -297,7 +309,7 @@ function formatDeepResearchArtifact(artifact: ExtractedArtifact, index: number, 
   // Add findings
   if (research.findings && research.findings.length > 0) {
     sections.push('**Key Findings:**\n');
-    research.findings.forEach((finding: any, i: number) => {
+    research.findings.forEach((finding, i) => {
       sections.push(`${i + 1}. ${finding.text}`);
       if (finding.source) {
         sections.push(`   *Source:* ${finding.source}`);
@@ -309,7 +321,7 @@ function formatDeepResearchArtifact(artifact: ExtractedArtifact, index: number, 
   // Add sources
   if (research.sources && research.sources.length > 0) {
     sections.push('**Sources:**\n');
-    research.sources.forEach((source: any, i: number) => {
+    research.sources.forEach((source, i) => {
       sections.push(`${i + 1}. **${source.title}**`);
       sections.push(`   - URL: ${source.url}`);
       if (source.description) {
@@ -325,7 +337,11 @@ function formatDeepResearchArtifact(artifact: ExtractedArtifact, index: number, 
 /**
  * Generate metadata footer
  */
-function generateMetadataFooter(session: any, messages: any[], artifacts: ExtractedArtifact[]): string {
+function generateMetadataFooter(
+  session: CurationSession,
+  messages: CurationMessage[],
+  artifacts: ExtractedArtifact[]
+): string {
   const typeGroups = groupArtifactsByType(artifacts);
   const artifactCounts = Object.entries(typeGroups)
     .map(([type, arts]) => `${formatArtifactTypeLabel(type as ArtifactType)}: ${arts.length}`)

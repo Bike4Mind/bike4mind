@@ -133,7 +133,7 @@ export function reduceUpdate(state: UpdateState, event: UpdateEvent): UpdateStat
   }
 }
 
-/** One line for the Customize row, which is the only place any of this is described. */
+/** One line for the Settings row, which is the only place any of this is described. */
 export function updateSummary(state: UpdateState): string {
   switch (state.status) {
     case 'unsupported':
@@ -149,7 +149,7 @@ export function updateSummary(state: UpdateState): string {
     case 'up-to-date':
       return `Version ${state.currentVersion}, up to date`;
     // A check that could not reach the feed is not the user's problem to solve, so it reads as
-    // the plain version rather than as a failure. The dialog says when it last succeeded.
+    // the plain version rather than as a failure. The Settings page says it could not reach it.
     case 'unreachable':
     case 'idle':
     default:
@@ -158,7 +158,7 @@ export function updateSummary(state: UpdateState): string {
 }
 
 /**
- * The chip raised onto the shut Customize row, or nothing.
+ * The chip raised onto the Settings nav (About), or nothing.
  *
  * Nothing for a failed check, on purpose: the row must not nag about a feed the user cannot
  * reach and did not ask about.

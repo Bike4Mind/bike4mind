@@ -38,12 +38,10 @@ function context(action = 'synchronize', labels: string[] = [], draft = true, ev
       event_name: eventName,
       event: {
         action,
-        label: { name: labels[0] ?? '' },
         pull_request: { draft, number: 42, labels: labels.map(name => ({ name })) },
       },
       workflow: 'CI',
       ref: 'refs/heads/main',
-      run_id: 123,
     },
     steps: { filter: { outputs: { deployable: 'true', 'docs-changed': 'true', 'published-changed': 'true' } } },
   };
@@ -76,7 +74,6 @@ describe('draft CI execution', () => {
   it.each(['opened', 'synchronize', 'reopened'])('%s passes real change signals for draft and ready PRs', action => {
     for (const draft of [true, false]) {
       const ctx = context(action, [], draft);
-      expect(evaluate(ci.jobs.changes.if!, ctx)).toBe(true);
       for (const output of ['deployable', 'docs-changed', 'published-changed']) {
         expect(evaluate(ci.jobs.changes.outputs![output], ctx), output).toBe('true');
       }
@@ -100,31 +97,21 @@ describe('draft CI execution', () => {
   });
 });
 
-describe('full CI and label reruns', () => {
-  it.each(['labeled', 'unlabeled'])(
-    '%s only reruns selection for ci:full and cannot cancel tests for unrelated labels',
-    action => {
-      expect(ci.on.pull_request.types).toContain(action);
-      const unrelated = context(action, ['documentation']);
-      const full = context(action, ['ci:full']);
-      expect(evaluate(ci.jobs.changes.if!, unrelated)).toBe(false);
-      expect(evaluate(ci.jobs.changes.if!, full)).toBe(true);
-      expect(evaluate(String(ci.concurrency['cancel-in-progress']), unrelated)).toBe(false);
-      expect(evaluate(String(ci.concurrency['cancel-in-progress']), full)).toBe(true);
-      expect(group(unrelated)).not.toBe(group(context()));
-      expect(group(full)).toBe(group(context()));
-      unrelated.github.run_id++;
-      expect(group(unrelated)).not.toBe(group(context(action, ['documentation'])));
-    }
-  );
+describe('full CI without label reruns', () => {
+  it('has no label trigger, so a label change cannot replace the required checks', () => {
+    expect(ci.on.pull_request.types).not.toContain('labeled');
+    expect(ci.on.pull_request.types).not.toContain('unlabeled');
+    expect(ci.jobs.changes.if).toBeUndefined();
+    expect(group(context())).toBe('ci-CI-42');
+  });
 
-  it('forces a full deployable run on drafts too, and restores diff selection on label removal', () => {
+  it('forces a full deployable run on drafts too, and keeps diff selection without ci:full', () => {
     const diff = ci.jobs.changes.steps!.find(step => step.id === 'changed-files')!;
-    const full = context('labeled', ['ci:full']);
+    const full = context('synchronize', ['ci:full']);
     full.steps.filter.outputs.deployable = 'false';
     expect(evaluate(ci.jobs.changes.outputs!.deployable, full)).toBe('true');
     expect(evaluate(diff.if!, full)).toBe(false);
-    expect(evaluate(diff.if!, context('unlabeled'))).toBe(true);
+    expect(evaluate(diff.if!, context())).toBe(true);
     expect(ci.jobs.changes.outputs!['changed-files']).toBe('${{ steps.changed-files.outputs.files }}');
     expect(ci.jobs['core-build'].steps!.find(step => step.id === 'affected')!.env!.CHANGED_FILES).toBe(
       '${{ needs.changes.outputs.changed-files }}'
@@ -136,7 +123,7 @@ describe('full CI and label reruns', () => {
 });
 
 describe('required-check aggregation for skipped and unaffected work', () => {
-  it('does not report completion on unrelated label runs or cancelled runs', () => {
+  it('does not report completion when selection did not run or the run was cancelled', () => {
     const condition = ci.jobs['ci-complete'].if!;
     expect(evaluate(condition, { needs: { changes: { result: 'skipped' } } })).toBe(false);
     expect(evaluate(condition, { needs: { changes: { result: 'failure' } } })).toBe(true);

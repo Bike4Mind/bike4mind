@@ -7,9 +7,26 @@ import {
   type CompletionRunSpend,
 } from '@bike4mind/common';
 import { completionRunRepository, type CompletionRunOwnerType, type ICompletionRun } from '@bike4mind/database';
+import { resolveCompletionBillingOrgId } from '@server/billing/resolveCompletionBillingOrgId';
 
 /** Who is calling a completion-run route: the user, and the organization an org-billed API key draws on. */
 export type CompletionRunCaller = { userId: string; billingOrganizationId?: string };
+
+/**
+ * The caller a completion-run route acts as, with its billing org resolved from the request's
+ * `organization_id` exactly as the completions route resolves it (resolveCompletionBillingOrgId), so a
+ * run minted for a payer is found again by the completions that charge that payer.
+ */
+export async function resolveCompletionRunCaller(
+  {
+    userId,
+    apiKeyInfo,
+  }: { userId: string; apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'> },
+  requestedOrgId: string | null | undefined
+): Promise<CompletionRunCaller> {
+  const billingOrganizationId = await resolveCompletionBillingOrgId({ apiKeyInfo, requestedOrgId, userId });
+  return { userId, billingOrganizationId };
+}
 
 /**
  * The billing owner a caller's runs are bound to: an org-billed key's organization, otherwise the user.
@@ -49,6 +66,7 @@ export async function findCallerCompletionRun(runId: string, caller: CompletionR
 export function toCompletionRunBody(run: ICompletionRun): CompletionRun {
   return {
     runId: run.runId,
+    ...(run.evaluation && { evaluation: run.evaluation }),
     ...(run.rootSessionId !== undefined && { rootSessionId: run.rootSessionId }),
     ...(run.budgetCredits !== undefined && { budgetCredits: run.budgetCredits }),
     createdAt: run.createdAt.toISOString(),

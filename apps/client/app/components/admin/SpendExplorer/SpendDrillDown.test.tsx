@@ -107,6 +107,24 @@ describe('SpendDrillDown', () => {
     expect(screen.getByTestId('spend-drilldown-segment-internal')).toHaveTextContent('$5.00');
   });
 
+  it('shows platform operations without fabricating a user account', () => {
+    renderDrillDown({
+      accounts: {
+        totalCostUsd: 12,
+        byProvider: [{ provider: 'anthropic', costUsd: 12 }],
+        bySegment: [{ segment: 'platform', costUsd: 12 }],
+        accounts: [],
+      },
+      bucket: null,
+    });
+
+    expect(screen.getByTestId('spend-drilldown-segment-platform')).toHaveTextContent('Platform operations');
+    expect(screen.getByTestId('spend-drilldown-segment-platform')).toHaveTextContent('$12.00');
+    expect(screen.getByText('No user-attributed spend in this window.')).toBeInTheDocument();
+    expect(screen.queryByTestId('spend-drilldown-account-row-platform')).not.toBeInTheDocument();
+    expect(screen.queryByText('No recorded spend in this window.')).not.toBeInTheDocument();
+  });
+
   it('flags new top-10 accounts and tags non-customer accounts', () => {
     renderDrillDown();
 

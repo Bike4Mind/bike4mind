@@ -8,7 +8,6 @@ import type {
   ICcAgentSource,
 } from '@bike4mind/common';
 import WebSocket from 'ws';
-import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../utils/Logger.js';
 import { canResolveLoopbackOwner, resolveLoopbackListenerOwner } from './peerOwner.js';
 
@@ -274,7 +273,7 @@ export class BridgePresence {
     // generation after its await, so a stop()+start() cycle can't slip through.
     if (!(await this.gateEgress(gen, 'announce'))) return false;
 
-    const instanceId = uuidv4();
+    const instanceId = crypto.randomUUID();
     const workspaceName = this.pendingWorkspaceName!;
     const capabilities = this.pendingCapabilities!;
     const source = this.pendingSource!;

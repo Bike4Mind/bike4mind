@@ -9,9 +9,12 @@ import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { ownerSchema, repoSchema, confirmationParams } from '../helpers/schemas.js';
-import { getErrorMessage, hasStatus, isRateLimitError } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { getErrorMessage, errorLogFields, hasStatus, isRateLimitError } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import { TOOL_CREATE_OR_UPDATE_FILE } from '../constants.js';
+
+const log = createStderrLogger('github');
 
 export function registerContentsTools(server: McpServer) {
   // CREATE OR UPDATE FILE - Create a new file or update an existing file in a repository
@@ -88,15 +91,16 @@ export function registerContentsTools(server: McpServer) {
           if (!Array.isArray(existingFile.data) && existingFile.data.type === 'file') {
             existingSha = existingFile.data.sha;
             fileExists = true;
-            console.error(`[${TOOL_CREATE_OR_UPDATE_FILE}] File exists at ${path}, will update (sha: ${existingSha})`);
           }
         } catch (error) {
           // 404 means file doesn't exist - that's fine for creating new files
           if (!hasStatus(error, 404)) {
-            console.error(`[${TOOL_CREATE_OR_UPDATE_FILE}] Error checking file existence: ${getErrorMessage(error)}`);
+            log.error('file existence check failed', {
+              toolName: TOOL_CREATE_OR_UPDATE_FILE,
+              ...errorLogFields(error),
+            });
             return createErrorResponse(error);
           }
-          console.error(`[${TOOL_CREATE_OR_UPDATE_FILE}] File does not exist at ${path}, will create`);
         }
       } else {
         // If SHA was provided, assume file exists
@@ -141,7 +145,6 @@ export function registerContentsTools(server: McpServer) {
 
       // EXECUTE MODE
       const action = fileExists ? 'update' : 'create';
-      console.error(`[${TOOL_CREATE_OR_UPDATE_FILE}] Attempting to ${action} file: ${fullRepoName}/${path}`);
 
       try {
         // Base64 encode the content
@@ -159,8 +162,7 @@ export function registerContentsTools(server: McpServer) {
           ...(author && { author }),
         });
 
-        console.error(`[${TOOL_CREATE_OR_UPDATE_FILE}] SUCCESS: File ${action}d at ${path}`);
-        console.error(`[${TOOL_CREATE_OR_UPDATE_FILE}] Commit SHA: ${result.data.commit.sha}`);
+        log.info('succeeded', { toolName: TOOL_CREATE_OR_UPDATE_FILE });
 
         return createSuccessResponse({
           action,
@@ -177,7 +179,7 @@ export function registerContentsTools(server: McpServer) {
           },
         });
       } catch (error) {
-        console.error(`[${TOOL_CREATE_OR_UPDATE_FILE}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_CREATE_OR_UPDATE_FILE, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {
