@@ -62,6 +62,25 @@ describe('AgentStore project-agent containment', () => {
 });
 
 describe('AgentStore frontmatter is inert', () => {
+  it('preserves numeric settings when loading an existing global agent', async () => {
+    const globalAgents = path.join(fakeHome, '.claude', 'agents');
+    await fs.mkdir(globalAgents, { recursive: true });
+    await fs.writeFile(
+      path.join(globalAgents, 'budget.md'),
+      '---\ndescription: budget\nmax-iterations:\n  quick: 010\nretry:\n  maxRetries: 0b10\n  initialDelay: 1:20.5\n---\nBudget body.',
+      'utf-8'
+    );
+
+    const store = new AgentStore(builtinDir, projectRoot);
+    await store.loadAgents();
+
+    expect(store.getAgent('budget')).toMatchObject({
+      maxIterations: { quick: 8 },
+      retry: { maxRetries: 2, initialDelayMs: 80.5 },
+      systemPrompt: 'Budget body.',
+    });
+  });
+
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).__frontmatterPwned;
   });

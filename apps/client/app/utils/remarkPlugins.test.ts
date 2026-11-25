@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promoteInlineLatexDollars } from './remarkPlugins';
 
 describe('promoteInlineLatexDollars', () => {
@@ -193,6 +196,29 @@ describe('promoteInlineLatexDollars', () => {
       ['tilde fence', '~~~latex\n\\[ x^2 \\]\nso \\(a^2\\) here\n~~~'],
     ])('leaves %s alone', (_label, text) => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
+    });
+
+    it.each(['\\[ ', '\\( '])('keeps %s responsive without regexp compilation', opener => {
+      const script = `
+        import { performance } from 'node:perf_hooks';
+        import { promoteInlineLatexDollars } from ${JSON.stringify(pathToFileURL(resolve(__dirname, 'remarkPlugins.ts')).href)};
+        const text = ${JSON.stringify(opener)} + ${JSON.stringify('\\')}.repeat(32_000);
+        const start = performance.now();
+        if (promoteInlineLatexDollars(text) !== text) throw new Error('Unexpected normalization');
+        process.stdout.write(String(performance.now() - start));
+      `;
+      const output = execFileSync(
+        process.execPath,
+        ['--regexp-interpret-all', '--input-type=module', '--eval', script],
+        {
+          encoding: 'utf8',
+          timeout: 15_000,
+        }
+      );
+      expect(output.trim()).not.toBe('');
+      const elapsed = Number(output);
+      expect(Number.isFinite(elapsed)).toBe(true);
+      expect(elapsed).toBeLessThan(500);
     });
 
     it('stays linear on a long backslash run after an own-line opener', () => {

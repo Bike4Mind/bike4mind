@@ -4,7 +4,7 @@
  * with the eemeli `yaml` package, which has no eval-capable engines. Sits behind
  * `@bike4mind/common/utils/frontmatter` so the barrel does not pull in a YAML parser.
  */
-import YAML from 'yaml';
+import YAML, { type ScalarTag } from 'yaml';
 
 export interface ParsedFrontmatter {
   data: Record<string, unknown>;
@@ -24,6 +24,42 @@ export class FrontmatterLanguageError extends Error {
 
 const OPEN = '---';
 const CLOSE = '\n---';
+
+// Preserve the safe scalar schema used by existing skill, command and agent files.
+const INTEGER_PATTERN =
+  /^[-+]?(?:0|0b[01_]*[01]|0x[\da-fA-F_]*[\da-fA-F]|0[0-7_]*[0-7]|[1-9](?:[\d_]*\d)?|[1-9][\d_]*(?::[0-5]?\d)+)$/;
+const FLOAT_PATTERN =
+  /^(?!.*_$)(?:[-+]?(?:0|[1-9][\d_]*)(?:\.[\d_]*)?(?:[eE][-+]?\d+)?|\.[\d_]+(?:[eE][-+]?\d+)?|[-+]?\d[\d_]*(?::[0-5]?\d)+\.[\d_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$/;
+
+function parseSafeNumber(source: string, integer: boolean): number {
+  const normalized = source.replaceAll('_', '').toLowerCase();
+  const sign = normalized.startsWith('-') ? -1 : 1;
+  const value = normalized.replace(/^[-+]/, '');
+  if (integer && value === '0') return 0;
+  if (value === '.inf') return sign * Infinity;
+  if (value === '.nan') return NaN;
+  if (value.includes(':')) {
+    const parts = value.split(':');
+    return sign * parts.reduceRight((total, part, index) => total + Number(part) * 60 ** (parts.length - index - 1), 0);
+  }
+  if (!integer) return sign * Number.parseFloat(value);
+  if (value.startsWith('0b')) return sign * Number.parseInt(value.slice(2), 2);
+  if (value.startsWith('0x')) return sign * Number.parseInt(value.slice(2), 16);
+  return sign * Number.parseInt(value, value.startsWith('0') ? 8 : 10);
+}
+
+const safeIntegerTag: ScalarTag = {
+  tag: 'tag:yaml.org,2002:int',
+  default: true,
+  test: INTEGER_PATTERN,
+  resolve: source => parseSafeNumber(source, true),
+};
+const safeFloatTag: ScalarTag = {
+  tag: 'tag:yaml.org,2002:float',
+  default: true,
+  test: FLOAT_PATTERN,
+  resolve: source => parseSafeNumber(source, false),
+};
 
 /**
  * Splits a leading `---` fence off `text` and parses it as YAML. A file that does not open with
@@ -50,14 +86,23 @@ export function parseFrontmatter(text: string): ParsedFrontmatter {
 
   if (block.replace(/^\s*#[^\n]+/gm, '').trim() === '') return { data: {}, content };
 
-  // Matches js-yaml's safe schema, which gray-matter used: YAML 1.2 booleans (`yes` stays a
-  // string), plus YAML 1.1 timestamps as Dates and `<<` merge keys.
-  const data: unknown = YAML.parse(block, {
+  // Keep strict booleans, legacy numeric forms, timestamps and merge keys without engines.
+  const document = YAML.parseDocument(block, {
     schema: 'core',
-    customTags: ['timestamp'],
+    customTags: tags => [
+      ...tags.filter(
+        tag => typeof tag === 'string' || !['tag:yaml.org,2002:int', 'tag:yaml.org,2002:float'].includes(tag.tag)
+      ),
+      safeIntegerTag,
+      safeFloatTag,
+      'timestamp',
+    ],
     merge: true,
     logLevel: 'error',
   });
+  const parseError = document.errors[0] ?? document.warnings.find(warning => warning.code === 'TAG_RESOLVE_FAILED');
+  if (parseError) throw parseError;
+  const data: unknown = document.toJS();
   if (data === null) return { data: {}, content };
   if (Object.prototype.toString.call(data) !== '[object Object]') {
     throw new Error('The front matter must be a set of key: value pairs.');

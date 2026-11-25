@@ -44,8 +44,9 @@ const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g;
 // parser drops the backslash and prints "( a^2 )". The lookbehind requires an even run of
 // backslashes before the delimiter: `\\[2pt]` is a LaTeX line break, not an opening bracket.
 export const UNESCAPED = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)`;
-const INLINE_PAREN_SPAN = new RegExp(String.raw`${UNESCAPED}\\\(([^\n]*?)${UNESCAPED}\\\)`, 'g');
-const INLINE_BRACKET_SPAN = new RegExp(String.raw`${UNESCAPED}\\\[([^\n]*?)${UNESCAPED}\\\]`, 'g');
+// Check each delimiter literal before looking back over escape pairs.
+const INLINE_PAREN_SPAN = new RegExp(String.raw`(?=\\\()${UNESCAPED}\\\(([^\n]*?)(?=\\\))${UNESCAPED}\\\)`, 'g');
+const INLINE_BRACKET_SPAN = new RegExp(String.raw`(?=\\\[)${UNESCAPED}\\\[([^\n]*?)(?=\\\])${UNESCAPED}\\\]`, 'g');
 // `\[` opening its line (after indentation or blockquote markers) and `\]` closing a line. The body
 // may not cross a blank line, so an unclosed `\[` cannot swallow the paragraphs that follow, nor
 // hold another unescaped `\[`/`\]`, so `\[ a \] and \[ b \]` is left to the inline pass instead of

@@ -55,6 +55,57 @@ describe('parseFrontmatter', () => {
     });
   });
 
+  it.each([
+    ['010', 8],
+    ['-010', -8],
+    ['0_10', 8],
+    ['08', '08'],
+    ['09', '09'],
+    ['0o10', '0o10'],
+    ['0b10', 2],
+    ['0b_10', 2],
+    ['0b1_', '0b1_'],
+    ['0xF_', '0xF_'],
+    ['1_000', 1000],
+    ['1_', '1_'],
+    ['1:20', 80],
+    ['1:20.5', 80.5],
+    ['1._', '1._'],
+    ['.', '.'],
+    ['e4', 'e4'],
+    ['+.2', '+.2'],
+    ['.2', 0.2],
+    ['.inf', Infinity],
+    ['.nan', NaN],
+    ['yes', 'yes'],
+    ['NO', 'NO'],
+    ['True', true],
+    ['FALSE', false],
+    ['!!int "010"', 8],
+    ['!!float "1:20.5"', 80.5],
+    ['!!bool "True"', true],
+  ])('preserves the existing safe-schema scalar %s', (source, value) => {
+    expect(parseFrontmatter(`---\nvalue: ${source}\n---\n`).data.value).toEqual(value);
+  });
+
+  it.each([
+    '!!int nope',
+    '!!int 08',
+    '!!float nope',
+    '!!bool yes',
+    '!!unknown value',
+    '!!int "1\\n"',
+    '!!int "010\\n"',
+  ])('rejects the unresolved explicit scalar %s', source =>
+    expect(() => parseFrontmatter(`---\nvalue: ${source}\n---\n`)).toThrow()
+  );
+
+  it('preserves an existing agent iteration limit written with a leading zero', () => {
+    expect(parseFrontmatter('---\nmax-iterations:\n  quick: 010\n---\n').data).toEqual({
+      'max-iterations': { quick: 8 },
+    });
+  });
+
   it('accepts a yaml or yml language tag in any case', () => {
     expect(parseFrontmatter('---yaml\na: 1\n---\n').data).toEqual({ a: 1 });
     expect(parseFrontmatter('---yml \na: 1\n---\n').data).toEqual({ a: 1 });
