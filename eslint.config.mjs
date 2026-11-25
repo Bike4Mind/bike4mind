@@ -26,6 +26,12 @@ import requireUpdateValidators from './eslint-rules/require-update-validators.mj
 // Extracted as consts so they can be spread into blocks that also carry other rules.
 // flat-config last-rule-wins means only the last matching no-restricted-imports rule
 // takes effect per file — each block covering a given file scope must carry ALL restrictions.
+// Core server packages under the no-console rule (see the block that uses these). Append as packages convert.
+const CORE_NO_CONSOLE_SRC = ['b4m-core/db-core', 'b4m-core/agents', 'b4m-core/utils'].map(
+  pkg => `${pkg}/src/**/*.{ts,tsx,mts,cts}`
+);
+const CORE_NO_CONSOLE_EXEMPT_SCRIPTS = [];
+
 const b4mv3RestrictedPaths = [
   // @bike4mind/utils deprecated symbols
   {
@@ -831,6 +837,14 @@ export default defineConfig([
   {
     files: ['apps/workers/src/**/*.{ts,mts,cts}'],
     ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
+  // Core server packages log through the Logger too (same rationale as the server-utils block above).
+  // CORE_NO_CONSOLE_EXEMPT_SCRIPTS are CLI scripts run with tsx whose stdout is their output.
+  {
+    files: CORE_NO_CONSOLE_SRC,
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**', ...CORE_NO_CONSOLE_EXEMPT_SCRIPTS],
     rules: { 'no-console': 'error' },
   },
 
