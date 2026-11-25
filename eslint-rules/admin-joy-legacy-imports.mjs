@@ -8,7 +8,4 @@ export default {
   'MigrateUsersTab.tsx': [[4, '655b890fff77d8be']],
   'SreAgentTab.tsx': [[11, '5f9ffda28ac67420']],
   'Team/index.tsx': [[1, '78a3901c08799aeb']],
-  'email/EmailActivityHistory.tsx': [[2, '5d7be40ee2063946']],
-  'email/EmailJobsPanel.tsx': [[2, '101fad654099d594']],
-  'email/EmailTemplatesPanel.tsx': [[2, 'f9c81b2ddcc066d8']],
 };

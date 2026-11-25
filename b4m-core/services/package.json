@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services-core",
   "description": "This packages contains all the core business logic",
-  "version": "30.1.0",
+  "version": "31.0.0",
   "publishConfig": {
     "access": "restricted"
   },
