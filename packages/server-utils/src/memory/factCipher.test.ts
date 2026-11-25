@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Principal } from '@bike4mind/memory';
 import {
@@ -244,6 +244,14 @@ describe('master key rotation (previous slot)', () => {
     expect(await createKeyProvider(keyring, newKey, oldKey).getDek(user)).toEqual(dek);
   });
 
+  it('getOrCreateDek opens a row still under the previous key without re-minting it', async () => {
+    const wrapped = wrapDekUnder(oldKey, dek);
+    const { keyring, store } = await seed(wrapped);
+    const opened = await createKeyProvider(keyring, newKey, oldKey).getOrCreateDek(user, 'u1', WORK_STARTED);
+    expect(opened).toEqual(dek);
+    expect(store.get('user:u1')).toBe(wrapped);
+  });
+
   it('mints under the current key only', async () => {
     const { keyring, store } = makeKeyring();
     await createKeyProvider(keyring, newKey, oldKey).getOrCreateDek(user, 'u1', WORK_STARTED);
@@ -267,12 +275,20 @@ describe('master key rotation (previous slot)', () => {
     expect(openWrappedDek('raw:abc', [newKey])).toBeNull();
   });
 
-  it('resolvePreviousMasterKey: unset or not-configured is undefined, a value is its SHA-256', () => {
-    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'not-configured');
-    expect(resolvePreviousMasterKey()).toBeUndefined();
-    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'old-secret');
-    expect(resolvePreviousMasterKey()).toEqual(oldKey);
-    expect(resolvePreviousMasterKey('')).toBeUndefined();
-    vi.unstubAllEnvs();
+  describe('resolvePreviousMasterKey', () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    it('unset or not-configured is undefined, a value is its SHA-256', () => {
+      vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'not-configured');
+      expect(resolvePreviousMasterKey()).toBeUndefined();
+      vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'old-secret');
+      expect(resolvePreviousMasterKey()).toEqual(oldKey);
+      expect(resolvePreviousMasterKey('')).toBeUndefined();
+    });
+
+    it('is undefined with no argument and the variable unset', () => {
+      vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', undefined);
+      expect(resolvePreviousMasterKey()).toBeUndefined();
+    });
   });
 });

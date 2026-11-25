@@ -55,20 +55,27 @@ instances that cannot open each other's keys.
 3. Set `MEMORY_KEY_SECRET` to the new value and `MEMORY_KEY_SECRET_PREVIOUS` to the old value, and deploy.
 4. Run `migrate:rewrap-memory-keys --dry-run`, then `migrate:rewrap-memory-keys`, then
    `migrate:rewrap-memory-keys --verify` (`pnpm --filter @bike4mind/scripts`, under `sst shell` for cloud).
-   The command prints counts only and is safe to repeat; a second run rewraps 0. It stops with exit 2 if
-   any key is stored unwrapped (run `migrate:protect-credentials` first). `--verify` also decrypts one
-   stored fact per principal under the rewrapped key.
+   Self-host: from the repo checkout, export `MEMORY_KEY_SECRET`, `MEMORY_KEY_SECRET_PREVIOUS` and a
+   host-reachable `MONGODB_URI` (Compose: the localhost URI; Kubernetes: a port-forward), exactly as the
+   credential backfill in `SELF_HOST.md` does, then run the same three commands with the `tsx --import`
+   form shown there. The command prints counts only and is safe to repeat; a second run rewraps 0. It stops
+   with exit 2 if any key is stored unwrapped (run `migrate:protect-credentials --maintenance-window` first).
+   `--verify` also decrypts the newest stored fact per principal under the rewrapped key.
 5. Once `--verify` exits 0, clear `MEMORY_KEY_SECRET_PREVIOUS` (`not-configured`) and deploy, then run
    `--verify` again.
 
 Rollback: before step 5, put the old value back in `MEMORY_KEY_SECRET` and the new one in
-`MEMORY_KEY_SECRET_PREVIOUS`; both are still readable. After step 5 the old value is no longer needed
+`MEMORY_KEY_SECRET_PREVIOUS`; both are still readable. After step 4 every key is wrapped under the new
+value, so a rollback is the same procedure in reverse and ends with a rewrap and `--verify` before
+`MEMORY_KEY_SECRET_PREVIOUS` is cleared. After step 5 the old value is no longer needed
 by the live data, but a database backup taken before the rewrap still holds keys wrapped under it:
 keep the old value until those backups age out of retention.
 
-Preview and personal stages that read the account-wide fallback do not run the rewrap: set the new value
-as the fallback together with the old one as `MEMORY_KEY_SECRET_PREVIOUS --fallback`, and clear the
-previous fallback once no preview deployed before the swap remains.
+Preview and personal stages that read the account-wide fallback do not run the rewrap. Set the old value
+with `sst secret set MEMORY_KEY_SECRET_PREVIOUS <old> --fallback` and the new one with
+`sst secret set MEMORY_KEY_SECRET <new> --fallback`, then clear the previous fallback once no preview
+deployed before the swap remains. Previews accept the single-step swap, without the step 2 deploy. The
+fallback previous key applies to every stage in that account that has no value of its own.
 
 The cloud deploy check applies to every stage, including PR previews and personal stages. Before this
 change reaches `main`, set an account-wide default in each AWS account those stages deploy to

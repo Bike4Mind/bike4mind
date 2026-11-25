@@ -125,6 +125,55 @@ describe('sweepMemoryKeys', () => {
     expect(await snapshot()).toBe(before);
   });
 
+  it('stops on an unprefixed legacy row with exit 2 and writes nothing', async () => {
+    await seed(oldKey);
+    await keysColl.insertOne({
+      principalKind: 'user',
+      principalId: 'legacy1',
+      ownerUserId: 'x',
+      dek: randomBytes(32).toString('base64'),
+    });
+    const before = await snapshot();
+    expect(sweepExitCode(await sweepMemoryKeys(db, keys, 'rewrite'))).toBe(2);
+    expect(await snapshot()).toBe(before);
+  });
+
+  it('verify exits 2 on a raw row', async () => {
+    await seed(newKey);
+    await keysColl.insertOne({
+      principalKind: 'user',
+      principalId: 'raw2',
+      ownerUserId: 'x',
+      dek: 'raw:' + randomBytes(32).toString('base64'),
+    });
+    const counts = await sweepMemoryKeys(db, keys, 'verify');
+    expect(counts.raw).toBe(1);
+    expect(sweepExitCode(counts)).toBe(2);
+  });
+
+  it('treats an empty-string dek as a tombstone, not a raw row', async () => {
+    await keysColl.insertOne({ principalKind: 'user', principalId: 'empty1', ownerUserId: 'x', dek: '' });
+    await seed(oldKey);
+    const counts = await sweepMemoryKeys(db, keys, 'rewrite');
+    expect(counts).toMatchObject({ raw: 0, tombstones: 1, rewrapped: 1 });
+  });
+
+  it('verify samples the newest fact, not one sealed under a destroyed key', async () => {
+    const { dek } = await seed(newKey);
+    const principalId = `u${counter}`;
+    const stale = encryptFact(randomBytes(32), 'old fact');
+    const fresh = encryptFact(dek, 'new fact');
+    const events = db.collection('memoryledgerevents');
+    await events.deleteMany({});
+    await events.insertMany([
+      { principalKind: 'user', principalId, seq: 1, factCipher: stale.cipher, factIv: stale.iv, factTag: stale.tag },
+      { principalKind: 'user', principalId, seq: 2, factCipher: fresh.cipher, factIv: fresh.iv, factTag: fresh.tag },
+    ]);
+    const counts = await sweepMemoryKeys(db, keys, 'verify');
+    expect(counts).toMatchObject({ factsChecked: 1, factsUnreadable: 0 });
+    expect(sweepExitCode(counts)).toBe(0);
+  });
+
   it('counts a row under an unrelated key, exits 1, and leaves it untouched', async () => {
     await seed(sha('third'));
     const before = await snapshot();
@@ -170,6 +219,13 @@ describe('rewrapRow race', () => {
     await keysColl.updateOne({ _id }, { $set: { dek: minted } });
     expect(await rewrapRow(keysColl as never, stale as never, keys, 'rewrite')).toBe('changed');
     expect((await keysColl.findOne({ _id }))!.dek).toBe(minted);
+  });
+});
+
+describe('sweepExitCode', () => {
+  it('exits 1 while a row may still be moving', async () => {
+    const counts = await sweepMemoryKeys(db, keys, 'rewrite');
+    expect(sweepExitCode({ ...counts, changedDuringWrite: 1 })).toBe(1);
   });
 });
 

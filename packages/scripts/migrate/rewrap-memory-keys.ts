@@ -112,7 +112,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<numbe
     console.error(`Rewrap failed (${name}${typeof code === 'string' || typeof code === 'number' ? `, ${code}` : ''})`);
     return 2;
   } finally {
-    await mongoose.disconnect();
+    await mongoose.disconnect().catch(() => {});
   }
 }
 

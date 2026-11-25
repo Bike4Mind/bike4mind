@@ -18,7 +18,7 @@ export interface MemoryKeySweep {
   raw: number;
   /** Erased or re-minted between the read and the write, so left alone. */
   changedDuringWrite: number;
-  /** Verify only: principals whose first encrypted fact was decrypted with the stored key. */
+  /** Verify only: principals whose newest encrypted fact was decrypted with the stored key. */
   factsChecked: number;
   factsUnreadable: number;
   principalsWithoutFacts: number;
@@ -80,15 +80,14 @@ const emptySweep = (): MemoryKeySweep => ({
   principalsWithoutFacts: 0,
 });
 
-/** Decrypts one stored fact of the principal with its (current-key) data key. */
+/** Decrypts the newest stored fact of the principal with its (current-key) data key. */
 async function checkFact(db: mongo.Db, row: KeyRow, current: Buffer, counts: MemoryKeySweep): Promise<void> {
   const dek = openWrappedDek(row.dek!, [current])!.dek;
-  const event = await db
-    .collection('memoryledgerevents')
-    .findOne(
-      { principalKind: row.principalKind, principalId: row.principalId, factCipher: { $type: 'string' } },
-      { projection: { factCipher: 1, factIv: 1, factTag: 1 } }
-    );
+  const event = await db.collection('memoryledgerevents').findOne(
+    { principalKind: row.principalKind, principalId: row.principalId, factCipher: { $type: 'string' } },
+    // Newest first: an older fact can still be sealed under a key destroyed by a partial shred.
+    { sort: { seq: -1 }, projection: { factCipher: 1, factIv: 1, factTag: 1 } }
+  );
   if (!event) {
     counts.principalsWithoutFacts++;
     return;
@@ -106,7 +105,7 @@ export async function sweepMemoryKeys(db: mongo.Db, keys: MemoryKeys, mode: Swee
   const collection = db.collection<KeyRow>('memoryprincipalkeys');
   const counts = emptySweep();
 
-  counts.raw = await collection.countDocuments({ dek: { $type: 'string', $not: /^enc:/ } });
+  counts.raw = await collection.countDocuments({ dek: { $type: 'string', $ne: '', $not: /^enc:/ } });
   if (counts.raw > 0 && mode !== 'verify') return counts;
 
   for await (const row of collection.find({}, { projection: { dek: 1, principalKind: 1, principalId: 1 } })) {
