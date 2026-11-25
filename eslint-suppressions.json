@@ -888,11 +888,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/EmbedKeysTab.test.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/EventMetrics/hooks/useEventMetricsState.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -1074,11 +1069,6 @@
     }
   },
   "apps/client/app/components/organizations/Member.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/profile/UserApiKeysTab.test.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }

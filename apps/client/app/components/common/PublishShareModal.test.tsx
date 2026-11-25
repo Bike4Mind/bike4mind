@@ -40,7 +40,7 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 // One client for the file, emptied after each test so no cached query outlives the test that made it.
 afterEach(() => queryClient.clear());
 
-const noopPublish = vi.fn<[], Promise<PublishResult>>();
+const noopPublish = vi.fn<() => Promise<PublishResult>>();
 
 /** Read the checked radio input by its `value` attribute (visibility radios carry no label).
  *  Queries `document` because MUI `Modal` renders its content into a body portal, not `container`. */
@@ -73,7 +73,7 @@ describe('PublishShareModal organization policy', () => {
   });
 });
 
-describe('PublishShareModal — update seeds controls from the prior publication', () => {
+describe('PublishShareModal \u2014 update seeds controls from the prior publication', () => {
   it('carries a PRIVATE, comments-off publication into update mode (does not reset to public)', async () => {
     render(
       <Wrapper>
@@ -153,16 +153,11 @@ describe('PublishShareModal - update helper text for content already in history'
       </Wrapper>
     );
 
-  it('says an identical re-publish adds no version when there is a single version', async () => {
+  it('says an identical re-publish adds no version when there is a single version, and conditions the update label on content being new to the page', async () => {
     renderUpdate(1);
     const helper = await screen.findByTestId('publish-share-update-helper');
     expect(helper).toHaveTextContent('adds a 2nd version');
     expect(helper).toHaveTextContent('If it matches the current version, no new version is added');
-  });
-
-  it('conditions the update label on content being new to the page, not merely changed', async () => {
-    renderUpdate(1);
-    await screen.findByTestId('publish-share-update-helper');
     expect(screen.getByText(/^Update "My artifact" - /)).toHaveTextContent(
       'adds a new version if the content is new to this page'
     );
@@ -438,7 +433,7 @@ describe('PublishShareModal - immediate stored gate updates before readback', ()
   );
 });
 
-describe('PublishShareModal — update re-asserts the PRESERVED comment policy', () => {
+describe('PublishShareModal \u2014 update re-asserts the PRESERVED comment policy', () => {
   const publishResult: PublishResult = {
     publicId: 'pub-1',
     url: '/p/u/u1/s',
@@ -508,7 +503,7 @@ describe('PublishShareModal — update re-asserts the PRESERVED comment policy',
   });
 });
 
-describe('PublishShareModal — Team (organization) visibility option', () => {
+describe('PublishShareModal \u2014 Team (organization) visibility option', () => {
   const publishResult: PublishResult = {
     publicId: 'pub-org',
     url: '/p/o/org_42/s',
@@ -530,7 +525,7 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
     expect(radio('organization')).toBeNull();
   });
 
-  it('offers the Team option and publishes with organization visibility when picked', async () => {
+  it('offers the Team option, publishes with organization visibility when picked, and keeps all three options once shared', async () => {
     const publish = vi.fn().mockResolvedValue(publishResult);
     render(
       <Wrapper>
@@ -554,6 +549,13 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
     await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
     // The dialog hands 'organization' to the publish callback, which maps it to an org-tier page.
     expect(publish).toHaveBeenCalledWith('organization', expect.objectContaining({ mode: 'new' }));
+
+    // org-tier record: Private is valid at every tier (SCOPE_POLICY), so the owner can take a
+    // Team page back to owner-only from here.
+    await screen.findByTestId('publish-share-url');
+    expect(radio('public')).not.toBeNull();
+    expect(radio('organization')).not.toBeNull();
+    expect(radio('private')).not.toBeNull();
   });
 
   it('does NOT offer Team in the shared phase after a user-tier publish (would 403 org members)', async () => {
@@ -593,32 +595,6 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
     expect(radio('public')).not.toBeNull();
     expect(radio('private')).not.toBeNull();
     expect(radio('organization')).toBeNull();
-  });
-
-  it('offers Public, Team and Private in the shared phase after an org-tier publish', async () => {
-    // org-tier record: Private is valid at every tier (SCOPE_POLICY), so the owner can take a
-    // Team page back to owner-only from here.
-    const publish = vi.fn().mockResolvedValue(publishResult);
-    render(
-      <Wrapper>
-        <PublishShareModal
-          open
-          onClose={() => {}}
-          publish={publish}
-          title="My artifact"
-          defaultVisibility="public"
-          orgOption={{ label: 'Team', hint: 'Members of Acme' }}
-        />
-      </Wrapper>
-    );
-
-    fireEvent.click(radio('organization')!);
-    fireEvent.click(screen.getByTestId('publish-share-create'));
-
-    await screen.findByTestId('publish-share-url');
-    expect(radio('public')).not.toBeNull();
-    expect(radio('organization')).not.toBeNull();
-    expect(radio('private')).not.toBeNull();
   });
 });
 
@@ -749,15 +725,11 @@ describe('PublishShareModal - no-sign-in (/a) share link', () => {
     await waitFor(() => expect(screen.queryByTestId('publish-share-token-section')).toBeNull());
   });
 
-  it('says the main link of a private page only opens for the owner', async () => {
+  it('says the main link of a private page only opens for the owner, and mints the /a link on demand in a copyable field', async () => {
     await renderShared();
     await waitFor(() =>
       expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('only opens for you')
     );
-  });
-
-  it('mints the /a link on demand and shows it in a copyable field', async () => {
-    await renderShared();
 
     // Lazy: no token until the owner asks. The create button is shown first.
     expect(screen.queryByTestId('publish-share-token-url')).toBeNull();
@@ -912,7 +884,7 @@ describe('PublishShareModal - incomplete-artifact warning', () => {
   });
 });
 
-describe('PublishShareModal — search-engine listing is opt-in', () => {
+describe('PublishShareModal \u2014 search-engine listing is opt-in', () => {
   const renderModal = (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) =>
     render(
       <Wrapper>
@@ -927,22 +899,17 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
       </Wrapper>
     );
 
-  it('defaults the search-listing toggle to OFF for a fresh public publish', () => {
+  it('defaults the search-listing toggle to OFF for a fresh public publish, says so, and keeps the switch from shrinking', () => {
     renderModal();
     const toggle = screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement;
     expect(toggle.checked).toBe(false);
-  });
 
-  it('keeps the switch from shrinking beside the long helper text on a narrow viewport', () => {
-    renderModal();
+    // On a narrow viewport the switch must not shrink beside the long helper text.
     expect(getComputedStyle(screen.getByTestId('publish-share-discoverable-switch')).flexShrink).toBe('0');
     const textColumn = getComputedStyle(screen.getByTestId('publish-share-discoverable-text'));
     expect(textColumn.flexGrow).toBe('1');
     expect(textColumn.minWidth).toBe('0px');
-  });
 
-  it('tells the user a public link stays out of search engines by default', () => {
-    renderModal();
     // The public warning must say what "public" does NOT mean - this is the exact
     // expectation gap that made "anyone with the link" read as "unlisted".
     expect(screen.getByText(/stays out of search engines unless you turn on/i)).toBeTruthy();
@@ -1203,17 +1170,13 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     return publish;
   };
 
-  it('opens on the existing link and its current visibility, not a blank form', async () => {
-    renderReopened(() => Promise.resolve(live));
+  it('opens on the existing link and its current visibility, and choosing Private PATCHes that record instead of publishing again', async () => {
+    const publish = renderReopened(() => Promise.resolve(live));
     const url = (await screen.findByTestId('publish-share-url')) as HTMLInputElement;
     expect(url.value).toContain('/p/r/live-1');
     expect(radio('public')?.checked).toBe(true);
     expect(screen.getByTestId('publish-share-intro').textContent).not.toContain('Nothing is published');
-  });
 
-  it('choosing Private PATCHes the existing record instead of publishing again', async () => {
-    const publish = renderReopened(() => Promise.resolve(live));
-    await screen.findByTestId('publish-share-url');
     fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
     await waitFor(() =>
       expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/live-1', { visibility: 'private' })
@@ -1294,8 +1257,8 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     expect(screen.queryByText(/Checking/)).toBeNull();
   });
 
-  it('a reopened Team page shows Team as selected even outside a team context', async () => {
-    renderReopened(() =>
+  it('a reopened Team page shows Team as selected even outside a team context, and can be taken to Private on the same record', async () => {
+    const publish = renderReopened(() =>
       Promise.resolve({ ...live, tier: 'organization', scopeId: 'org1', visibility: 'organization' })
     );
     apiGet.mockImplementation((url: string) =>
@@ -1317,25 +1280,7 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     expect(screen.getByTestId('publish-share-visibility-organization').textContent).toContain(
       PUBLISH_ACCESS_META.organization.description
     );
-  });
 
-  it('a reopened Team page can be taken to Private on the same record', async () => {
-    const publish = renderReopened(() =>
-      Promise.resolve({ ...live, tier: 'organization', scopeId: 'org1', visibility: 'organization' })
-    );
-    apiGet.mockImplementation((url: string) =>
-      Promise.resolve(
-        url.endsWith('/share-token')
-          ? { data: { shareToken: null } }
-          : {
-              data: {
-                artifact: { visibility: 'organization', accessGate: null, commentPolicy: 'none', discoverable: false },
-              },
-            }
-      )
-    );
-    await screen.findByTestId('publish-share-url');
-    await waitFor(() => expect(radio('organization')?.checked).toBe(true));
     fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
     await waitFor(() =>
       expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/live-1', { visibility: 'private' })
@@ -1543,22 +1488,20 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     expect(style.getPropertyValue('--Icon-color')).toBe('currentColor');
   };
 
-  it.each([
-    ['public', 'public'],
-    ['organization', 'organization'],
-    ['private', 'private'],
-  ] as const)('draws the %s visibility option with the badge icon and color', (value, access) => {
+  it('draws every visibility and gate option with the badge icon and color', () => {
     renderModal();
-    expectAccessIcon(`publish-share-visibility-${value}-icon`, access);
-  });
-
-  it.each([
-    ['none', 'public'],
-    ['passphrase', 'passphrase'],
-    ['domain', 'domain'],
-  ] as const)('draws the %s gate option with the badge icon and color', (value, access) => {
-    renderModal();
-    expectAccessIcon(`publish-share-gate-${value}-icon`, access);
+    const visibilities = [
+      ['public', 'public'],
+      ['organization', 'organization'],
+      ['private', 'private'],
+    ] as const;
+    for (const [value, access] of visibilities) expectAccessIcon(`publish-share-visibility-${value}-icon`, access);
+    const gates = [
+      ['none', 'public'],
+      ['passphrase', 'passphrase'],
+      ['domain', 'domain'],
+    ] as const;
+    for (const [value, access] of gates) expectAccessIcon(`publish-share-gate-${value}-icon`, access);
   });
 
   it('uses the badge chip color for a gated option in dark mode, not the light-mode shade', () => {
@@ -1568,7 +1511,7 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     );
   });
 
-  it('keeps the plain-language titles and does not repeat the badge word beside them', () => {
+  it('keeps the plain-language titles and the public exposure copy, with no badge word beside them', () => {
     renderModal();
     expect(screen.getByTestId('publish-share-visibility-public').textContent).toContain('Anyone with the link');
     expect(screen.getByTestId('publish-share-visibility-public').textContent).not.toContain('Public');
@@ -1580,10 +1523,8 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     );
     expect(radio('public')?.checked).toBe(true);
     expect(radio('none')?.checked).toBe(true);
-  });
 
-  it('keeps the public exposure copy, in the Public treatment rather than amber', () => {
-    renderModal();
+    // The exposure copy keeps the Public treatment rather than amber.
     const note = screen.getByTestId('publish-share-public-note');
     expect(note.textContent).toContain('Anyone with the link can view this.');
     expect(within(note).getByTestId('PublicIcon')).toBeTruthy();
@@ -1715,17 +1656,14 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
       return screen.findByTestId('publish-share-token-create');
     };
 
-    it('defaults to no expiry and sends none', async () => {
-      fireEvent.click(await openPrivateLinkSection());
+    it('labels the select as the new link expiry before a link exists, defaults to no expiry and sends none', async () => {
+      const create = await openPrivateLinkSection();
+      expect(screen.getByTestId('publish-share-token-expiry-label').textContent).toBe('Link expiry');
+      fireEvent.click(create);
       await waitFor(() => expect(mintCalls()).toHaveLength(1));
       expect(mintCalls()[0][1]).not.toHaveProperty('expiresAt');
       expect((await screen.findByTestId('publish-share-token-expires')).textContent).toBe('This link does not expire.');
       expect(screen.getByTestId('publish-share-token-expiry-label').textContent).toBe('Expiry for a regenerated link');
-    });
-
-    it('labels the select as the new link expiry before a link exists', async () => {
-      await openPrivateLinkSection();
-      expect(screen.getByTestId('publish-share-token-expiry-label').textContent).toBe('Link expiry');
     });
 
     it('sends an expiry one day out when 1 day is chosen, and shows it', async () => {

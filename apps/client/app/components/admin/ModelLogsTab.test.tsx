@@ -55,11 +55,27 @@ const queryResult = (overrides: Record<string, unknown>) => ({
 // The search debounce times itself with Date.now(), which these tests freeze.
 const elapseSearchDebounce = () => vi.setSystemTime(Date.now() + 1000);
 
+// lodash debounce waits on a real setTimeout before it checks Date.now(), so fake both while
+// entering a search and run the clock past the debounce; `beforeDebounce` sees the state before it.
+const enterSearch = async (text: string, beforeDebounce?: () => void) => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'], now: Date.now() });
+  try {
+    fireEvent.change(screen.getByTestId('model-logs-search-input'), { target: { value: text } });
+    beforeDebounce?.();
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+  } finally {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() });
+  }
+};
+
 const SUPPORT_CASE = 'ZD-4821';
 
 // Searching and expanding a log are support reads: both stay disabled until a case is entered.
 const enterSupportCase = async (value = SUPPORT_CASE) => {
-  await userEvent.type(screen.getByTestId('model-logs-support-case-input'), `${value}{Enter}`);
+  const user = userEvent.setup({ delay: null });
+  await user.click(screen.getByTestId('model-logs-support-case-input'));
+  await user.paste(value);
+  await user.keyboard('{Enter}');
 };
 
 // A row opens its detail drawer, which holds the prompt-details toggle.
@@ -252,8 +268,7 @@ describe('ModelLogsTab', () => {
         expect.objectContaining({ search: undefined, supportCase: SUPPORT_CASE })
       )
     );
-    await userEvent.type(screen.getByTestId('model-logs-search-input'), 'x');
-    elapseSearchDebounce();
+    await enterSearch('x');
     await waitFor(() =>
       expect(mocks.useModelLogs).toHaveBeenLastCalledWith(
         expect.objectContaining({ search: 'x', supportCase: SUPPORT_CASE })
@@ -328,9 +343,7 @@ describe('ModelLogsTab', () => {
 
     await enterSupportCase();
     await waitFor(() => expect(screen.getByTestId('model-logs-search-input')).toBeEnabled());
-    await userEvent.type(screen.getByTestId('model-logs-search-input'), 'x');
-    expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs' });
-    elapseSearchDebounce();
+    await enterSearch('x', () => expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs' }));
     await waitFor(() =>
       expect(mocks.useModelLogs).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'x', page: 1 }))
     );
@@ -501,8 +514,18 @@ describe('ModelLogsTab', () => {
       await enterSupportCase();
       const search = screen.getByTestId('model-logs-search-input');
       await waitFor(() => expect(search).toBeEnabled());
-      await userEvent.type(search, 'sonnet');
-      elapseSearchDebounce();
+      // Same fake clock as enterSearch, so the debounce's real 300ms setTimeout is not waited out.
+      // Testing Library drains each userEvent action with a setTimeout(0) it only advances through
+      // a global `jest`, so lend it vitest's clock for the fake window.
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'], now: Date.now() });
+      vi.stubGlobal('jest', { advanceTimersByTime: vi.advanceTimersByTime });
+      try {
+        await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).type(search, 'sonnet');
+        await act(() => vi.advanceTimersByTimeAsync(1000));
+      } finally {
+        vi.unstubAllGlobals();
+        vi.useFakeTimers({ toFake: ['Date'], now: Date.now() });
+      }
       await waitFor(() =>
         expect(mocks.useModelLogs).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'sonnet' }))
       );

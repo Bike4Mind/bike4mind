@@ -253,10 +253,20 @@ describe('useVideoGeneration', () => {
   });
 
   it('retries a server error (500)', async () => {
-    h.get.mockRejectedValueOnce(httpError(500)).mockResolvedValue({ data: videoJob({ id: 'job-1' }) });
-    const { result } = renderHook(() => useVideoGeneration('job-1'), { wrapper });
-    await waitFor(() => expect(result.current.isSuccess).toBe(true), { timeout: 5000 });
-    expect(h.get).toHaveBeenCalledTimes(2);
+    // react-query's default retry delay is 1s.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      h.get.mockRejectedValueOnce(httpError(500)).mockResolvedValue({ data: videoJob({ id: 'job-1' }) });
+      const { result } = renderHook(() => useVideoGeneration('job-1'), { wrapper });
+      await waitFor(() => expect(h.get).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true), { timeout: 5000 });
+      expect(h.get).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps a finished job over a refetch that was read before it finished', async () => {

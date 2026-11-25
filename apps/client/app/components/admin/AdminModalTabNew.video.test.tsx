@@ -47,7 +47,9 @@ const renderEditor = (modalData: IModal, onSave = vi.fn()) => {
   return onSave;
 };
 
-const next = () => fireEvent.click(screen.getByRole('button', { name: /^Next/ }));
+// The wizard buttons have no test ids, and a role query over the whole editor is slow.
+const clickButton = (label: string) => fireEvent.click(screen.getByText(label, { selector: 'button' }));
+const next = () => clickButton('Next');
 
 describe('EditModalNew video', () => {
   it('blocks leaving the media step while a video url is invalid', () => {
@@ -67,7 +69,7 @@ describe('EditModalNew video', () => {
     const minioUrl = 'http://localhost:9000/fab-bucket/modals/u1/tall.mp4';
     const onSave = renderEditor({ ...existing, video: { portraitUrl: minioUrl } });
     for (let i = 0; i < 5; i++) next();
-    fireEvent.click(screen.getByRole('button', { name: /Update Modal/ }));
+    clickButton('Update Modal');
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ video: { portraitUrl: minioUrl } }));
   });
@@ -75,7 +77,7 @@ describe('EditModalNew video', () => {
   it('drops the video when the modal is saved as a banner', () => {
     const onSave = renderEditor({ ...existing, isBanner: true, textMessage: 'Banner text' });
     for (let i = 0; i < 5; i++) next();
-    fireEvent.click(screen.getByRole('button', { name: /Update Banner/ }));
+    clickButton('Update Banner');
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ isBanner: true, video: null }));
   });
@@ -91,7 +93,7 @@ describe('EditModalNew video', () => {
     next(); // behavior
     next(); // review
     expect(screen.getByTestId('modal-review-video-text').textContent).toBe('16:9 + 9:16');
-    fireEvent.click(screen.getByRole('button', { name: /Update Modal/ }));
+    clickButton('Update Modal');
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({

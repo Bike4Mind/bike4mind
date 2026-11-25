@@ -71,7 +71,7 @@ async function renameAndSave() {
   const onSave = vi.fn();
   mocks.apiGet.mockResolvedValue({ data: TYPES_RESPONSE });
   mocks.apiPut.mockResolvedValue({ data: { artifact: UPDATED, content: {}, version: {} } });
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   render(
     <TestWrapper>
       <ArtifactEditor artifact={EXISTING} onSave={onSave} />
@@ -81,7 +81,7 @@ async function renameAndSave() {
   // Save stays disabled until hasChanges flips, so the title must actually change.
   const title = await screen.findByTestId('artifact-editor-title-input');
   await user.clear(title);
-  await user.type(title, TYPED_TITLE);
+  await user.paste(TYPED_TITLE);
   await user.click(await screen.findByTestId('artifact-editor-save-btn'));
   return onSave;
 }
@@ -91,26 +91,18 @@ describe('ArtifactEditor - update success notification', () => {
     vi.clearAllMocks();
   });
 
-  it('raises exactly one success toast, naming the updated artifact', async () => {
-    await renameAndSave();
+  it('PUTs only the changed fields, raises exactly one success toast naming the artifact, and hands onSave the unwrapped artifact', async () => {
+    const onSave = await renameAndSave();
 
     await waitFor(() =>
       expect(mocks.toastSuccess).toHaveBeenCalledWith('Artifact "Server Renamed" updated successfully!')
     );
-    // Count asserted after the await: a bare count check would pass before the toast fires.
+    // Counts asserted after the await: a bare count check would pass before the toast fires.
     expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
     expect(mocks.toastError).not.toHaveBeenCalled();
-  });
 
-  it('PUTs only the changed fields, to the id of the artifact it was mounted with', async () => {
-    await renameAndSave();
-
-    await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledTimes(1));
+    expect(mocks.apiPut).toHaveBeenCalledTimes(1);
     expect(mocks.apiPut).toHaveBeenCalledWith(`/api/artifacts/${EXISTING.id}`, { title: TYPED_TITLE });
-  });
-
-  it('hands onSave the unwrapped artifact, not the response envelope', async () => {
-    const onSave = await renameAndSave();
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave).toHaveBeenCalledWith(UPDATED);
@@ -124,7 +116,7 @@ describe('ArtifactEditor - revert', () => {
 
   it('restores the original title and saves nothing', async () => {
     mocks.apiGet.mockResolvedValue({ data: TYPES_RESPONSE });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <TestWrapper>
         <ArtifactEditor artifact={EXISTING} onSave={vi.fn()} />
@@ -133,7 +125,7 @@ describe('ArtifactEditor - revert', () => {
 
     const title = await screen.findByTestId('artifact-editor-title-input');
     await user.clear(title);
-    await user.type(title, TYPED_TITLE);
+    await user.paste(TYPED_TITLE);
     expect(title).toHaveValue(TYPED_TITLE);
 
     // Revert is rendered only while hasChanges is true, so this find doubles as that assertion.

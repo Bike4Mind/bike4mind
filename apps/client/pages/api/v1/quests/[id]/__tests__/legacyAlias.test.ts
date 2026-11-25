@@ -5,10 +5,11 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({ questRepository: {}, sessionRepository: {} }));
 
+import legacyHandler from '@pages/api/quests/[id]/index';
+import v1Handler from '@pages/api/v1/quests/[id]/index';
+
 describe('GET /api/quests/[id] legacy alias', () => {
-  it('serves the same handler as GET /api/v1/quests/{id}', async () => {
-    const legacy = await import('@pages/api/quests/[id]/index');
-    const v1 = await import('@pages/api/v1/quests/[id]/index');
-    expect(legacy.default).toBe(v1.default);
+  it('serves the same handler as GET /api/v1/quests/{id}', () => {
+    expect(legacyHandler).toBe(v1Handler);
   });
 });
