@@ -49,6 +49,16 @@ beforeEach(() => {
 });
 
 describe('ChatPanelControls layout menu', () => {
+  it('names the menu for screen readers, with a layout picked or not', () => {
+    const { unmount } = renderControls({ activeLayout: 'dockRight' });
+    expect(screen.getByRole('combobox', { name: 'Chat layout' })).toBe(trigger());
+    unmount();
+
+    // The floating window passes no activeLayout, so only the placeholder shows.
+    renderControls();
+    expect(screen.getByRole('combobox', { name: 'Chat layout' })).toBe(trigger());
+  });
+
   it('writes the picked dock direction to the session layout', () => {
     renderControls({ activeLayout: 'dockRight' });
 

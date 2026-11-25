@@ -83,7 +83,9 @@ const ChatPanelControls: React.FC<ChatPanelControlsProps> = ({
             </Typography>
           )}
           slotProps={{
-            button: { 'data-testid': `${testIdPrefix}-layout-select-btn` },
+            // Named for screen readers: the button shows only the current layout (or the
+            // "Layout" placeholder), so it was announced as a combobox with no name.
+            button: { 'data-testid': `${testIdPrefix}-layout-select-btn`, 'aria-label': 'Chat layout' },
             listbox: {
               'data-testid': `${testIdPrefix}-layout-listbox`,
               sx: theme => ({
