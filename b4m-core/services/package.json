@@ -603,7 +603,6 @@
     "mongoose": "^8.24.7",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.12"
   },
   "optionalDependencies": {
