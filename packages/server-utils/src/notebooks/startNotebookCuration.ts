@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import type { Logger } from '@bike4mind/observability';
 import { sessionRepository } from '@bike4mind/database';
 import { NotebookCurationEvents } from '../utils/eventBus';
@@ -48,7 +47,7 @@ export async function startNotebookCuration(
   }
 
   try {
-    const batchJobId = uuidv4();
+    const batchJobId = crypto.randomUUID();
     const batchTotal = sessionIds.length;
 
     req.logger.info('Triggering batch notebook curation', {
@@ -97,7 +96,7 @@ export async function startNotebookCuration(
 
     const curationJobs = sessionIds.map((sessionId, index) => ({
       sessionId,
-      curationJobId: uuidv4(),
+      curationJobId: crypto.randomUUID(),
       batchIndex: index,
     }));
 

@@ -29,7 +29,7 @@ import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import type { ModelSettings } from '@shared/modelSettings';
-import { alertableSessions } from '@shared/needsYou';
+import { alertableSessions, needsYouBadgeCount } from '@shared/needsYou';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { MissionControl } from './missionControl/MissionControl';
@@ -49,9 +49,12 @@ import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { useLoop } from './LoopBar';
 import { CustomizeScreen, useCustomizeAttention } from './CustomizePanel';
+import { AgentsPlace } from './rail/AgentsPlace';
+import { agentsBoard } from './rail/agentsBoard';
 import { PlaceRail, type RailAccountContext } from './rail/PlaceRail';
 import {
   isSessionPlace,
+  placeHasSidebar,
   readPlaceMemory,
   writePlaceMemory,
   type Place,
@@ -155,6 +158,7 @@ import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import { ExampleQuestStrip } from './orchestrator/exampleQuests';
 import { markSessionViewed } from './markSessionViewed';
 import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
+import { inTavernDialogue } from './orchestrator/tavern/dialogue';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import {
@@ -172,6 +176,7 @@ import { agentStates, descendantIds } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
+import { useFillWindow } from './orchestrator/useFillWindow';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 import { SidebarSyncHints } from './SyncHints';
 import { useNewChatRequests } from '../appMenu/newChatRequests';
@@ -335,7 +340,8 @@ export function ChatShell({
   const onRestore = useCallback((session: ChatSessionSummary | null) => {
     const restoredMode = session && isSessionPlace(session.mode) ? session.mode : 'chat';
     setModeOnly(current => (session ? restoredMode : current));
-    setPlace(current => (current === 'studio' || !session ? current : restoredMode));
+    // Studio and Agents are not where a session opens, so a restore leaves the user there.
+    setPlace(current => (!isSessionPlace(current) || !session ? current : restoredMode));
     if (session) setActiveId(session.id);
   }, []);
   const restoring = useLastSession({ remembered, loading, sessions, activeId, onRestore });
@@ -406,6 +412,9 @@ export function ChatShell({
     loaded: statusesLoaded,
   } = useSessionStatusFeed();
   const prSummaries = usePrSummaries();
+  // Both derive from the pushed status feed and the session list, so they move with no polling.
+  const needsYou = useMemo(() => needsYouBadgeCount(statuses, sessions), [statuses, sessions]);
+  const board = useMemo(() => agentsBoard(sessions, statuses, unreadReplies), [sessions, statuses, unreadReplies]);
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
   useEffect(() => {
@@ -433,6 +442,9 @@ export function ChatShell({
   const [studioArea, setStudioArea] = useState<StudioArea>(placeMemory?.studio ?? 'create');
   const [studioKind, setStudioKind] = useState<StudioMediaKind | null>(null);
   const inStudio = place === 'studio';
+  const inAgents = place === 'agents';
+  // The conversation's side panels (tasks, browser, files, model, simulator) belong to Chat and Code.
+  const inSessionPlace = isSessionPlace(place);
   const [studioRegion, studioWidth] = useElementWidth();
   const studioContainer = useRef<HTMLDivElement | null>(null);
   const setStudioRegion = useCallback(
@@ -924,9 +936,21 @@ export function ChatShell({
   const orchestratorView = orchestratorLayout.panes[0].view;
   // The ambient settle and the in-scene conversation are a single scene's; a split stage has neither.
   const orchestratorSplit = orchestratorLayout.panes.length > 1;
+  // The Tavern asks its agents' questions in its own dialogue box (OrchestratorStage inSceneDecisions), so
+  // the tray above the composer keeps only this conversation's own decisions while that scene is up.
+  const agentDecisionsInScene =
+    orchestrating &&
+    !presentingStage &&
+    !orchestratorSplit &&
+    orchestratorView === 'tavern' &&
+    !orchestratorPrefs.focus;
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
   const [conversationRequest, setConversationRequest] = useState(0);
+  // Fill window: the stage takes the whole window, with the rail, sidebar, header, session panel, dock and
+  // composer out of the way until Exit or Escape. Never settles: its own header is already minimal.
+  const fillWindow = useFillWindow(orchestrating && activeId !== null && screen === 'conversation' && inSessionPlace);
+
   // Focus lands on the header toggle, the way back in, rather than on a dock that just hid.
   const closeDock = useCallback(() => {
     setDockOpen(false);
@@ -938,6 +962,8 @@ export function ChatShell({
   );
   const readParentReport = useCallback(
     (reportId: string) => {
+      // The conversation is hidden while the window is filled, so reading it leaves fill window.
+      fillWindow.setOn(false);
       setDockOpen(true);
       setConversationRequest(request => request + 1);
       // After the dock is shown again, or a hidden dock would scroll nothing into view.
@@ -949,13 +975,14 @@ export function ChatShell({
         window.setTimeout(() => reply.removeAttribute('data-report-highlight'), REPORT_HIGHLIGHT_MS);
       });
     },
-    [setDockOpen]
+    [setDockOpen, fillWindow.setOn]
   );
   const focusParentChat = useCallback(() => {
+    fillWindow.setOn(false);
     setDockOpen(true);
     setConversationRequest(request => request + 1);
     setComposerFocus(request => request + 1);
-  }, [setDockOpen]);
+  }, [setDockOpen, fillWindow.setOn]);
 
   // The ambient Tavern: after a quiet spell the dock and composer settle out and leave the scene.
   const ambient = useAmbientSettle({
@@ -966,11 +993,12 @@ export function ChatShell({
       ORCHESTRATOR_VIEW_INFO[orchestratorView].ambient &&
       !orchestratorSplit &&
       !orchestratorPrefs.focus &&
+      !fillWindow.on &&
       introPhase !== 'playing',
     // A reply streaming in is something to watch arrive, not to hide.
     held: () => conversation.streaming || ambientHeld(document),
     onSettledKey: event => {
-      if (!isPrintableKey(event) || isEditable(event.target)) return;
+      if (!isPrintableKey(event) || isEditable(event.target) || inTavernDialogue(event.target)) return;
       event.preventDefault();
       focusParentChat();
     },
@@ -1032,7 +1060,7 @@ export function ChatShell({
     },
     [sendToConversation, modelSessionId, conversationId, modelOption]
   );
-  const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled && !fillWindow.on;
   useEffect(() => {
     if (!persistedId || screen !== 'conversation' || (orchestrating && !dockVisible)) return;
     const acknowledge = () => markSessionViewed(persistedId);
@@ -1166,7 +1194,8 @@ export function ChatShell({
   const panelLayout = sessionPanelLayout(threadRegionWidth, { centeredColumn: !orchestratorShown });
   const panelDocked = panelLayout !== 'overlay';
   const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
-  const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
+  const panelDrawn = panelShown && !fillWindow.on;
+  const panelSpace = panelDrawn && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
   // Unmeasured reads as too narrow, the reverse of the panel: a rail drawn before the width is
   // known could overhang the sidebar for a frame, where the footer it falls back to cannot.
   // A pushing panel's reserved space narrows the scroller; the orchestrator's thread dock is narrower still.
@@ -1370,6 +1399,10 @@ export function ChatShell({
    * reopens it, and the active place's icon hides it again. The digit shortcuts only switch place.
    */
   const selectPlaceFromRail = (next: Place) => {
+    if (!placeHasSidebar(next)) {
+      selectPlace(next);
+      return;
+    }
     if (collapsed) {
       setCollapsed(false);
       selectPlace(next);
@@ -1611,6 +1644,7 @@ export function ChatShell({
                   key={`thread-${activeId ?? 'none'}`}
                   messages={conversation.messages}
                   findable
+                  childSessions={paneSessions}
                   sessionId={activeId}
                   // What stands in for the transcript when there is no session to have one. It is the
                   // only control on screen that starts one from here, so it is a button and not a
@@ -1750,6 +1784,8 @@ export function ChatShell({
         if (!event.currentTarget.contains(event.target)) return;
         if (threadHost.current?.contains(event.target)) return;
         if (event.target.closest('[data-conversation-toggle]')) return;
+        // Fill window hides the dock and Exit brings it back as it was, so neither click closes it.
+        if (event.target.closest('[data-fill-window-toggle]')) return;
         if (event.target.closest('[data-testid="chat-composer-input"]')) return;
         closeDock();
       }}
@@ -1784,86 +1820,90 @@ export function ChatShell({
         </Box>
       )}
 
-      <PlaceRail
-        place={place}
-        sidebarCollapsed={collapsed}
-        onSelect={selectPlaceFromRail}
-        account={account?.({
-          status: (
-            <TurnDot
-              state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
-            />
-          ),
-          spentAt: conversation.settledTurns,
-          customizeAttention,
-          onOpenCustomize: () => setScreen('customize'),
-          onOpenModels: () => setScreen('models'),
-        })}
-      />
-
-      {inStudio ? (
-        !collapsed && (
-          <StudioSidebar
-            width={readSidebarWidth()}
-            area={studioArea}
-            kind={studioKind}
-            controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
-            unavailableReason={studioPlaceReason}
-            onSelectKind={kind => {
-              setScreen('conversation');
-              setStudioArea('create');
-              setStudioKind(kind);
-            }}
-            onSelectArea={area => {
-              setScreen('conversation');
-              setStudioArea(area);
-            }}
-            onToggleCollapsed={() => setCollapsed(current => !current)}
-          />
-        )
-      ) : (
-        <SessionList
-          sessions={sessions}
-          mode={mode}
-          loading={loading}
-          activeId={selectedRosterId ?? activeId}
-          statuses={statuses}
-          prSummaries={prSummaries}
-          collapsed={collapsed}
-          onToggleCollapsed={() => setCollapsed(current => !current)}
-          onSelect={selectSidebarSession}
-          onCreate={() => void onCreate()}
-          onOpenArtifacts={() => setScreen('artifacts')}
-          onOpenMissionControl={() => setScreen('mission-control')}
-          onCreateInProject={directory => void onCreateInProject(directory)}
-          onCreateInSection={sectionId => void onCreateInSection(sectionId)}
-          onDelete={setDeleteSessionId}
-          onTogglePin={session => void togglePin(session)}
-          onToggleArchived={session => void toggleArchived(session)}
-          onRename={(session, title) => void rename(session, title)}
-          onDownload={session => void exportSession(session)}
-          downloadError={exportError}
-          onDismissDownloadError={clearExportError}
-          renameError={renameError}
-          onDismissRenameError={clearRenameError}
-          userSections={userSections}
-          sectionActions={sectionActions}
-          sectionError={sectionError}
-          onDismissSectionError={dismissSectionError}
-          syncHints={
-            onOpenImportSettings
-              ? (empty, fallback) => (
-                  <SidebarSyncHints
-                    empty={empty}
-                    fallback={fallback}
-                    showWebSync={mode === 'chat'}
-                    onOpenSettings={onOpenImportSettings}
-                  />
-                )
-              : undefined
-          }
+      {/* Hidden rather than unmounted in Fill window, so the sidebar keeps its scroll and search. */}
+      <Box data-testid="chat-shell-navigation" sx={{ display: fillWindow.on ? 'none' : 'contents' }}>
+        <PlaceRail
+          place={place}
+          sidebarCollapsed={collapsed}
+          onSelect={selectPlaceFromRail}
+          needsYou={needsYou}
+          account={account?.({
+            status: (
+              <TurnDot
+                state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
+              />
+            ),
+            spentAt: conversation.settledTurns,
+            customizeAttention,
+            onOpenCustomize: () => setScreen('customize'),
+            onOpenModels: () => setScreen('models'),
+          })}
         />
-      )}
+
+        {inStudio ? (
+          !collapsed && (
+            <StudioSidebar
+              width={readSidebarWidth()}
+              area={studioArea}
+              kind={studioKind}
+              controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
+              unavailableReason={studioPlaceReason}
+              onSelectKind={kind => {
+                setScreen('conversation');
+                setStudioArea('create');
+                setStudioKind(kind);
+              }}
+              onSelectArea={area => {
+                setScreen('conversation');
+                setStudioArea(area);
+              }}
+              onToggleCollapsed={() => setCollapsed(current => !current)}
+            />
+          )
+        ) : inAgents ? null : (
+          <SessionList
+            sessions={sessions}
+            mode={mode}
+            loading={loading}
+            activeId={selectedRosterId ?? activeId}
+            statuses={statuses}
+            prSummaries={prSummaries}
+            collapsed={collapsed}
+            onToggleCollapsed={() => setCollapsed(current => !current)}
+            onSelect={selectSidebarSession}
+            onCreate={() => void onCreate()}
+            onOpenArtifacts={() => setScreen('artifacts')}
+            onOpenMissionControl={() => setScreen('mission-control')}
+            onCreateInProject={directory => void onCreateInProject(directory)}
+            onCreateInSection={sectionId => void onCreateInSection(sectionId)}
+            onDelete={setDeleteSessionId}
+            onTogglePin={session => void togglePin(session)}
+            onToggleArchived={session => void toggleArchived(session)}
+            onRename={(session, title) => void rename(session, title)}
+            onDownload={session => void exportSession(session)}
+            downloadError={exportError}
+            onDismissDownloadError={clearExportError}
+            renameError={renameError}
+            onDismissRenameError={clearRenameError}
+            userSections={userSections}
+            sectionActions={sectionActions}
+            sectionError={sectionError}
+            onDismissSectionError={dismissSectionError}
+            syncHints={
+              onOpenImportSettings
+                ? (empty, fallback) => (
+                    <SidebarSyncHints
+                      empty={empty}
+                      fallback={fallback}
+                      showWebSync={mode === 'chat'}
+                      onOpenSettings={onOpenImportSettings}
+                    />
+                  )
+                : undefined
+            }
+          />
+        )}
+      </Box>
 
       {screen !== 'conversation' && updateNotice}
       {screen === 'artifacts' ? (
@@ -1909,6 +1949,8 @@ export function ChatShell({
           ready={!!studioSession.sessionId}
           unavailableReason={studioPlaceReason}
         />
+      ) : inAgents ? (
+        <AgentsPlace groups={board} onOpen={selectSession} onOpenMissionControl={() => setScreen('mission-control')} />
       ) : (
         <Box
           ref={setStudioRegion}
@@ -1926,7 +1968,10 @@ export function ChatShell({
             data-testid="chat-conversation-column"
             sx={{ flex: 1, minWidth: 0, minHeight: 0, ...columnStackSx, [SESSION_PANEL_SPACE_VAR]: `${panelSpace}px` }}
           >
-            <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+            <Box
+              data-testid="chat-conversation-header"
+              sx={{ borderBottom: '1px solid', borderColor: 'divider', display: fillWindow.on ? 'none' : undefined }}
+            >
               <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   {conversation.session ? (
@@ -2121,6 +2166,7 @@ export function ChatShell({
                     conversationRequest={conversationRequest}
                     presenter={stagePresenter}
                     paneSessions={paneSessions}
+                    fillWindow={fillWindow}
                     dockControl={
                       <Tooltip
                         size="sm"
@@ -2165,7 +2211,7 @@ export function ChatShell({
                 </ThreadDock>
               </Box>
 
-              {panelShown && conversation.session && (
+              {panelDrawn && conversation.session && (
                 <SessionPanel
                   // Keyed so an action error or an unfolded list does not follow the user to the next
                   // conversation.
@@ -2247,8 +2293,11 @@ export function ChatShell({
                 </Box>
               </Box>
             )}
-            {/* Hidden, never unmounted, while the Tavern is quiet: the composer keeps its draft and state. */}
-            <Box data-testid="chat-composer-region" sx={{ display: ambient.settled ? 'none' : 'contents' }}>
+            {/* Hidden, never unmounted, while the Tavern is quiet or fills the window: the composer keeps its draft. */}
+            <Box
+              data-testid="chat-composer-region"
+              sx={{ display: ambient.settled || fillWindow.on ? 'none' : 'contents' }}
+            >
               {!panelShown && <TodoPanel todos={plan} turnOpen={turnOpen} />}
 
               {/* A compaction is a round trip the user is waiting on, with nothing streaming into the
@@ -2355,7 +2404,15 @@ export function ChatShell({
                 <>
                   <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
 
-                  <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+                  <TaskDecisionCards
+                    sessionId={persistedId}
+                    decisions={
+                      agentDecisionsInScene
+                        ? taskDecisions.filter(entry => entry.sessionId === persistedId)
+                        : taskDecisions
+                    }
+                    onOpenSession={selectSession}
+                  />
 
                   <SpawnSuggestionTray
                     suggestions={spawnSuggestions.suggestions}
@@ -2591,7 +2648,7 @@ export function ChatShell({
 
         It is mounted only when there is something to show, so a panel left open never eats
         width on a conversation that has no background commands. */}
-      {tasksOpen && background.processes.length > 0 && !inStudio && (
+      {tasksOpen && background.processes.length > 0 && inSessionPlace && (
         <BackgroundTaskPanel
           processes={background.processes}
           wide={tasksWide}
@@ -2603,11 +2660,11 @@ export function ChatShell({
       )}
 
       {/* macOS only: `available` is false elsewhere, so the pane and its button never draw. */}
-      {simulatorOpen && simulatorView.available && screen === 'conversation' && !inStudio && (
+      {simulatorOpen && simulatorView.available && screen === 'conversation' && inSessionPlace && (
         <SimulatorPane state={simulatorView} onClose={toggleSimulator} />
       )}
 
-      {openFile && openFile.sessionId === activeId && screen === 'conversation' && !inStudio && (
+      {openFile && openFile.sessionId === activeId && screen === 'conversation' && inSessionPlace && (
         <FilePane
           key={openFile.sessionId}
           sessionId={openFile.sessionId}
@@ -2621,7 +2678,7 @@ export function ChatShell({
         />
       )}
 
-      {modelOpen && modelAvailable && !inStudio && (
+      {modelOpen && modelAvailable && inSessionPlace && (
         <ModelPane
           engine={modelEngine}
           dark={darkMode}
@@ -2640,7 +2697,7 @@ export function ChatShell({
         conversation screen - the artifacts and customize screens take the whole pane and a web
         page floating over them would be unreachable - and it is told to stand down while the
         drop overlay is up, which is drawn in the React tree and so would be behind it. */}
-      {browserOpen && browserAvailable && screen === 'conversation' && !inStudio && (
+      {browserOpen && browserAvailable && screen === 'conversation' && inSessionPlace && (
         <BrowserPane
           sessionId={activeId}
           suspended={drop.over || (panelShown && !panelDocked)}

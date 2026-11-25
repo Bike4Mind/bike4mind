@@ -1,7 +1,6 @@
 import { webhookAuditLogRepository } from '@bike4mind/database';
 import { IWebhookAuditLog, IWebhookAuditAction, IWebhookAuditMetadata, WebhookAuditStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { v4 as uuidv4 } from 'uuid';
 
 /**
  * Serialize an error for structured logging. Error properties (message, stack, name)
@@ -143,7 +142,7 @@ export class WebhookAuditLogger {
   constructor(context: WebhookAuditContext, logger?: Logger) {
     this.context = {
       ...context,
-      correlationId: context.correlationId || uuidv4(),
+      correlationId: context.correlationId || crypto.randomUUID(),
     };
     this.startTime = Date.now();
     this.logger = logger || new Logger({ metadata: { component: 'WebhookAuditLogger' } });
@@ -339,7 +338,7 @@ export class WebhookAuditLogger {
  * Generate a correlation ID for distributed tracing.
  */
 export function generateCorrelationId(): string {
-  return uuidv4();
+  return crypto.randomUUID();
 }
 
 /**

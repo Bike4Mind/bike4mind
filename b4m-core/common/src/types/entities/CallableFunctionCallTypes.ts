@@ -21,6 +21,16 @@ export const CALLABLE_FUNCTION_CALL_OUTCOMES = [
 ] as const;
 export type CallableFunctionCallOutcome = (typeof CALLABLE_FUNCTION_CALL_OUTCOMES)[number];
 
+/** An asynchronous call's row reads `queued`, then `running`, until it is overwritten with how the call ended. */
+export const CALLABLE_FUNCTION_CALL_PENDING_OUTCOMES = ['queued', 'running'] as const;
+export type CallableFunctionCallPendingOutcome = (typeof CALLABLE_FUNCTION_CALL_PENDING_OUTCOMES)[number];
+
+export const CALLABLE_FUNCTION_CALL_ROW_OUTCOMES = [
+  ...CALLABLE_FUNCTION_CALL_OUTCOMES,
+  ...CALLABLE_FUNCTION_CALL_PENDING_OUTCOMES,
+] as const;
+export type CallableFunctionCallRowOutcome = (typeof CALLABLE_FUNCTION_CALL_ROW_OUTCOMES)[number];
+
 export interface CallableFunctionCallRuntime {
   kind: string;
   version: string;
@@ -52,7 +62,7 @@ export interface ICallableFunctionCall {
   initMs?: number;
   inputBytes?: number;
   outputBytes?: number;
-  outcome: CallableFunctionCallOutcome;
+  outcome: CallableFunctionCallRowOutcome;
   /** A fixed code, never text from the guest. */
   reason?: string;
   /** The guest exception's class name, never its message. */
@@ -85,6 +95,42 @@ export interface CallableFunctionStamp {
 export interface CallableFunctionCallSummary {
   since: Date;
   total: number;
-  outcomes: Partial<Record<CallableFunctionCallOutcome, number>>;
-  recent: { id: string; startedAt: Date; outcome: CallableFunctionCallOutcome; surface: CallableFunctionCallSurface }[];
+  outcomes: Partial<Record<CallableFunctionCallRowOutcome, number>>;
+  recent: {
+    id: string;
+    startedAt: Date;
+    outcome: CallableFunctionCallRowOutcome;
+    surface: CallableFunctionCallSurface;
+  }[];
 }
+
+/** How long an asynchronous call's result is kept, and the most its outputs may take as JSON. */
+export const CALLABLE_FUNCTION_RESULT_TTL_SECONDS = 24 * 60 * 60;
+export const CALLABLE_FUNCTION_RESULT_MAX_BYTES = 5 * 1024 * 1024;
+
+export const CALLABLE_FUNCTION_RESULT_STATES = ['queued', 'running', 'finished'] as const;
+export type CallableFunctionResultState = (typeof CALLABLE_FUNCTION_RESULT_STATES)[number];
+
+/**
+ * One asynchronous call in `callablefunctionresults`, keyed by its call-log row's id and kept 24 hours. The inputs
+ * are held only until the run starts; the outputs and stamp are what the caller polls for.
+ */
+export interface ICallableFunctionResult {
+  callId: string;
+  callerUserId: string;
+  functionId: string;
+  apiKeyId?: string;
+  /** The organization the call was made in, so the queued run makes its checks as the caller did. */
+  organizationId?: string;
+  state: CallableFunctionResultState;
+  input?: Record<string, unknown>;
+  outcome?: CallableFunctionCallOutcome;
+  reason?: string;
+  errorClass?: string;
+  problems?: { path: string; message: string }[];
+  outputs?: Record<string, unknown>;
+  stamp?: CallableFunctionStamp;
+  createdAt: Date;
+}
+
+export interface ICallableFunctionResultDocument extends ICallableFunctionResult, IMongoDocument {}

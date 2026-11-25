@@ -9,9 +9,8 @@ import {
   whenCatalogSeeded,
   mongoose,
 } from '@bike4mind/database';
-import { DATA_LAKES, normalizeTagPrefix, isReservedTagPrefix } from '@bike4mind/common';
+import { DATA_LAKES, normalizeTagPrefix, isReservedTagPrefix, limitConcurrency } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import pLimit from 'p-limit';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
 import {
@@ -274,7 +273,7 @@ async function main() {
   const registryOnlyLakes = DATA_LAKES.filter(l => !dbDatalakeTags.has(l.datalakeTag));
   console.log(`Plus ${registryOnlyLakes.length} registry-only (static) lake(s), informational only.`);
 
-  const limit = pLimit(LAKE_CONCURRENCY);
+  const limit = limitConcurrency(LAKE_CONCURRENCY);
   const lakes = await Promise.all([
     ...dbLakes.map(row => limit(() => buildDynamicLakeReport(row))),
     ...registryOnlyLakes.map(lake => limit(() => buildRegistryLakeReport(lake))),

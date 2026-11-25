@@ -19,7 +19,6 @@ import {
   type CdnInvalidationBatch,
   appFileCdnPath,
   createCdnInvalidationBatch,
-  generatedCdnPath,
 } from '../services/cdn/invalidateRouterCdn';
 import { NOTEBOOK_DOWNLOAD_KEY_PREFIX } from '../notebooks/downloadCopyKeys';
 import { TEXT_EDIT_BACKUP_PREFIX } from '../utils/textEditBackupPrefix';
@@ -171,7 +170,6 @@ async function purgeFile(
               .select('_id');
             if (!other) {
               await getGeneratedImageStorage().deletePermanently(key);
-              cdn.add(generatedCdnPath(key));
             }
           },
         },

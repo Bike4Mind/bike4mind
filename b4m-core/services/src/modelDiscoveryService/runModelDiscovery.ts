@@ -14,6 +14,7 @@ import {
   type IModelCatalogRowInput,
   type IModelPrice,
   type IModelPriceInput,
+  limitConcurrency,
 } from '@bike4mind/common';
 import {
   adapterBuildPricedModelIds,
@@ -26,7 +27,6 @@ import {
   type ResolvedCatalogRecord,
 } from '@bike4mind/llm-adapters';
 import { applyAbsence, planAbsence, type AbsencePlan } from './absence';
-import { limitConcurrency } from './concurrency';
 import { modelListChanges } from './modelListImpact';
 import { planCatalogWrites, summarizeDiff, type CatalogWritePlan } from './catalogWrite';
 import {
@@ -305,7 +305,10 @@ async function executeRun(
   }
 
   const globalDeadline = deadlineSignal(ctx.globalDeadlineMs);
-  const limit = limitConcurrency(options.concurrency ?? DEFAULT_CONCURRENCY);
+  // The shared limiter rejects a non-positive or fractional cap; discovery has always clamped it
+  // to at least 1 and treated NaN as unbounded.
+  const requested = options.concurrency ?? DEFAULT_CONCURRENCY;
+  const limit = limitConcurrency(Number.isNaN(requested) ? Infinity : Math.max(1, Math.floor(requested)));
   const results = new Map<string, { report: IDiscoverySourceReport; result: SourceResult }>();
   const fetchAll = (batch: readonly DiscoverySource[]): Promise<unknown> =>
     Promise.all(

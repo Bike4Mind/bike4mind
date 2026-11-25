@@ -261,9 +261,26 @@ describe('OrchestratorStage', () => {
       />
     );
     const artwork = el('orchestrator-tavern');
-    await act(async () => el('orchestrator-needs-you-pill').click());
+    await act(async () => el('orchestrator-tavern-agent-w1').click());
     expect(el('orchestrator-peek-drawer-region').parentElement).toBe(artwork);
     expect(el('orchestrator-tavern')).toBe(artwork);
+  });
+
+  it('leaves requests to the Tavern dialogue box: no Needs-you strip, and the pill does not open details', async () => {
+    await themed.render(
+      <OrchestratorStage
+        agents={FIXTURE}
+        layout={singlePaneLayout('tavern')}
+        onLayoutChange={onLayoutChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={(_id, props) => <TavernView {...props} />}
+      />
+    );
+    await act(async () => undefined);
+    expect(query('orchestrator-needs-you-strip')).toBeNull();
+    await act(async () => el('orchestrator-needs-you-pill').click());
+    expect(query('orchestrator-peek-drawer')).toBeNull();
   });
 
   it('opens compact details inside the Aquarium through its snapshot host', async () => {

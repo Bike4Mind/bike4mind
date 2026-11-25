@@ -1,6 +1,6 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { DataSubscribeRequestAction, Permission, canViewOrgMemberCredits } from '@bike4mind/common';
+import { DataSubscribeRequestAction, Permission, canViewOrgMemberCredits, limitConcurrency } from '@bike4mind/common';
 import { z } from 'zod';
 import {
   AdminSettings,
@@ -35,7 +35,6 @@ import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnecti
 import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import crypto from 'crypto';
 import pickBy from 'lodash/pickBy';
-import pLimit from 'p-limit';
 import ability from '@bike4mind/server-utils/auth/ability';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
@@ -337,7 +336,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       await assertConnectionStillRegistered();
       await registerSubscriber();
     }
-    const limit = pLimit(50);
+    const limit = limitConcurrency(50);
     const sendingOutcomes = await Promise.allSettled(
       results.map(r =>
         limit(() => {

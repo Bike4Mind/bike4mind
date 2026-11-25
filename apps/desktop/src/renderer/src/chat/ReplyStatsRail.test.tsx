@@ -60,6 +60,13 @@ describe('railRows', () => {
     expect(railRows(thread, 7, thread.length)).toBe(1);
   });
 
+  it('claims no row for turns that draw nothing, such as notices folded into a card elsewhere', () => {
+    const thread = [message('a1'), system, message('a2'), system, user('u1')];
+    const drawn = (index: number) => index !== 1 && index !== 3;
+    expect(railRows(thread, 0, thread.length, drawn)).toBe(1);
+    expect(railRows(thread, 2, thread.length, drawn)).toBe(2);
+  });
+
   it('stops at the end of the list it is drawn in, and at a reply straight after', () => {
     const thread = [message('a1'), message('a2'), user('u1'), user('u2')];
     expect(railRows(thread, 0, thread.length)).toBe(1);

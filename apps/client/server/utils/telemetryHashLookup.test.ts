@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { createHmac, randomBytes } from 'crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { regenerateHashesForDeletion } from '@bike4mind/common';
@@ -116,7 +117,7 @@ describe('telemetry hash lookup', () => {
 
     it('uses the predictable placeholder salt and warns when no key is configured', () => {
       secrets.values = {};
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
       const salts = deriveTelemetrySalts();
       expect(salts).toHaveLength(91);
       for (const { salt, dateKey } of salts) expect(salt).toBe(`telemetry-salt-${dateKey}`);
