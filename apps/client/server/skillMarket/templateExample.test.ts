@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   findFile: vi.fn(),
   requireOwnListing: vi.fn(),
   writeExample: vi.fn(),
+  audience: vi.fn(),
+  freeRunSettings: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -37,8 +39,12 @@ vi.mock('./template', () => ({
 }));
 vi.mock('./templateFreeRun', async () => {
   const { marked } = await import('marked');
-  return { renderFreeRunResult: (md: string) => ({ html: marked.parse(md, { async: false }) as string }) };
+  return {
+    renderFreeRunResult: (md: string) => ({ html: marked.parse(md, { async: false }) as string }),
+    loadFreeRunSettings: h.freeRunSettings,
+  };
 });
+vi.mock('./author', () => ({ requireAudienceMembership: h.audience }));
 
 import {
   capExampleSteps,
@@ -67,6 +73,8 @@ const templateDoc = (extra: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   h.requireOwnListing.mockResolvedValue(listing);
+  h.audience.mockResolvedValue(undefined);
+  h.freeRunSettings.mockResolvedValue({ fileMaxMb: 2 });
   h.release.mockResolvedValue(undefined);
   h.fail.mockResolvedValue(true);
 });
@@ -174,6 +182,17 @@ describe('startOwnTemplateExample', () => {
     h.requireOwnListing.mockResolvedValue({ ...listing, status: 'withdrawn' });
     await expect(startOwnTemplateExample(AUTHOR, 'l1', {}, { dispatch })).rejects.toMatchObject({ statusCode: 409 });
   });
+
+  it("refuses an author no longer in the listing's audience without spending a run", async () => {
+    h.findTemplate.mockResolvedValue(templateDoc());
+    h.audience.mockRejectedValue(Object.assign(new Error('not a member'), { statusCode: 403 }));
+    await expect(startOwnTemplateExample(AUTHOR, 'l1', {}, { dispatch, now: () => NOW })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(h.audience).toHaveBeenCalledWith('author-1', listing);
+    expect(h.tryIncrement).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });
 
 describe('editOwnTemplateExample', () => {
@@ -236,6 +255,8 @@ describe('editOwnTemplateExample', () => {
       filePath: 'p',
       fileName: 'brief.pdf',
       mimeType: 'application/pdf; charset=binary',
+      fileSize: 1000,
+      moderationStatus: 'clean',
     });
     await editOwnTemplateExample(AUTHOR, 'l1', { sampleFabFileId: 'f1' }, scanDeps);
     expect(h.writeExample).toHaveBeenCalledWith(
@@ -254,6 +275,56 @@ describe('editOwnTemplateExample', () => {
     await expect(editOwnTemplateExample(AUTHOR, 'l1', { sampleFabFileId: 'f2' }, scanDeps)).rejects.toMatchObject({
       statusCode: 404,
     });
+  });
+
+  it.each([
+    ['a type the free run does not take', { fileName: 'tool.exe', mimeType: 'application/x-msdownload' }, 400],
+    ['a file over the free-run size cap', { fileSize: 3 * 1024 * 1024 }, 400],
+    ['a file moderation blocked', { moderationStatus: 'blocked' }, 400],
+    ['a file still being checked', { moderationStatus: 'pending' }, 409],
+  ])('refuses %s as the sample', async (_name, extra, statusCode) => {
+    h.findTemplate.mockResolvedValue(withExample);
+    h.findFile.mockResolvedValue({
+      userId: 'author-1',
+      filePath: 'p',
+      fileName: 'notes.md',
+      mimeType: 'text/markdown',
+      fileSize: 1000,
+      moderationStatus: 'clean',
+      ...extra,
+    });
+    await expect(editOwnTemplateExample(AUTHOR, 'l1', { sampleFabFileId: 'f1' }, scanDeps)).rejects.toMatchObject({
+      statusCode,
+    });
+    expect(h.writeExample).not.toHaveBeenCalled();
+  });
+
+  it('accepts a text sample by its extension', async () => {
+    h.findTemplate.mockResolvedValue(withExample);
+    h.writeExample.mockResolvedValue({});
+    h.findFile.mockResolvedValue({
+      userId: 'author-1',
+      filePath: 'p',
+      fileName: 'notes.md',
+      mimeType: 'text/markdown',
+      fileSize: 1000,
+      moderationStatus: 'clean',
+    });
+    await editOwnTemplateExample(AUTHOR, 'l1', { sampleFabFileId: 'f1' }, scanDeps);
+    expect(h.writeExample).toHaveBeenCalled();
+  });
+
+  it('refuses a shown change from an author no longer in the audience, but lets them switch it off', async () => {
+    h.findTemplate.mockResolvedValue(withExample);
+    h.audience.mockRejectedValue(Object.assign(new Error('not a member'), { statusCode: 403 }));
+    await expect(editOwnTemplateExample(AUTHOR, 'l1', { replyTrimmedTo: 40 }, scanDeps)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(h.writeExample).not.toHaveBeenCalled();
+
+    h.edit.mockResolvedValue({ updated: true });
+    await editOwnTemplateExample(AUTHOR, 'l1', { enabled: false }, scanDeps);
+    expect(h.edit).toHaveBeenCalled();
   });
 
   it('needs an example first', async () => {

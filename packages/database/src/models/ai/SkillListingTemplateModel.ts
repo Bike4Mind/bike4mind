@@ -327,14 +327,20 @@ export type SkillTemplateExampleEdit = Partial<
   Pick<ISkillTemplateExample, 'enabled' | 'replyTrimmedTo' | 'sampleFile'>
 >;
 
-/** The author's edits to a stored example (switch, trim, sample file). Null when there is no example. */
+/**
+ * The author's unscanned edits to a stored example (switch, trim, sample file), for a change no page
+ * shows. Switching the demo off always lands; any other edit lands only while the demo is still off
+ * and no scan is in flight, so it cannot slip past the scan a concurrent switch-on claims. Null when
+ * there is no example or that no longer holds.
+ */
 export async function editSkillTemplateExample(listingId: string, edit: SkillTemplateExampleEdit) {
   const set: Record<string, unknown> = {};
   if (edit.enabled !== undefined) set['example.enabled'] = edit.enabled;
   if (edit.replyTrimmedTo !== undefined) set['example.replyTrimmedTo'] = edit.replyTrimmedTo;
   if (edit.sampleFile !== undefined) set['example.sampleFile'] = edit.sampleFile;
+  const hidden = edit.enabled === false ? {} : { 'example.enabled': false, status: { $ne: 'in_review' } };
   return SkillListingTemplate.findOneAndUpdate(
-    { listingId, example: { $exists: true } },
+    { listingId, example: { $exists: true }, ...hidden },
     { $set: set },
     { new: true, runValidators: true }
   );

@@ -335,4 +335,25 @@ describe('example runs', () => {
     await create();
     expect(await editSkillTemplateExample('listing-1', { enabled: false })).toBeNull();
   });
+
+  it('lands an unscanned edit only while the demo is still off and no scan is in flight', async () => {
+    const sampleFile = { name: 'brief.pdf', mime: 'application/pdf', source: 'upload' as const, fabFileId: 'f1' };
+    await create({ status: 'published' });
+    await startSkillTemplateExampleRun('listing-1', t0, stale(t0));
+    await storeResult(t0);
+    await editSkillTemplateExample('listing-1', { enabled: false });
+    // A concurrent switch-on claimed a scan: the quiet sample swap must not ride along unscanned.
+    await SkillListingTemplate.updateOne(
+      { listingId: 'listing-1' },
+      { $set: { 'example.enabled': true, status: 'in_review' } }
+    );
+    expect(await editSkillTemplateExample('listing-1', { sampleFile })).toBeNull();
+    await SkillListingTemplate.updateOne({ listingId: 'listing-1' }, { $set: { status: 'published' } });
+    expect(await editSkillTemplateExample('listing-1', { sampleFile })).toBeNull();
+    // Switching off always lands, and the demo then takes quiet edits again.
+    expect(await editSkillTemplateExample('listing-1', { enabled: false })).not.toBeNull();
+    expect((await editSkillTemplateExample('listing-1', { sampleFile }))?.example?.sampleFile).toMatchObject(
+      sampleFile
+    );
+  });
 });

@@ -42,8 +42,10 @@ import {
   writeTemplateExample,
   type TemplateScanDeps,
 } from './template';
+import { requireAudienceMembership } from './author';
 import { releaseExampleRun, reserveExampleRun } from './templateExampleCap';
-import { FREE_RUN_HTML_OPTIONS, renderFreeRunResult } from './templateFreeRun';
+import { FREE_RUN_HTML_OPTIONS, loadFreeRunSettings, renderFreeRunResult } from './templateFreeRun';
+import { formatFileCap, freeRunFileMaxBytes, isFreeRunFileType } from './templateFreeRunFile';
 
 /**
  * A template's example run: the platform runs the skill once on the example prompt and the public
@@ -107,6 +109,7 @@ export async function startOwnTemplateExample(
 ): Promise<ISkillListingTemplate> {
   const listing = await requireOwnListing(user, listingId);
   requireLiveListing(listing);
+  await requireAudienceMembership(user.id, listing);
   const id = String(listing.id);
   const doc = await SkillListingTemplate.findOne({ listingId: id });
   if (!doc) throw new NotFoundError('Save the template first');
@@ -189,13 +192,15 @@ export async function editOwnTemplateExample(
   }
   if (Object.keys(edit).length === 0) return plainTemplate(doc);
 
-  // Switching the demo off, or editing it while it stays off, shows nothing new.
+  // Switching the demo off, or editing it while it stays off, shows nothing new. The write re-checks
+  // that it is still off (editSkillTemplateExample), so a concurrent switch-on cannot skip the scan.
   const showsNew = edit.enabled ?? example.enabled;
   if (!showsNew) {
     const updated = await editSkillTemplateExample(id, edit);
     if (!updated) throw new ConflictError('The template changed while saving. Reload and try again.');
     return plainTemplate(updated);
   }
+  await requireAudienceMembership(user.id, listing);
   if (doc.status === 'published') await deps.beforeScan?.();
   const set: Record<string, unknown> = {};
   if (edit.enabled !== undefined) set['example.enabled'] = edit.enabled;
@@ -206,17 +211,26 @@ export async function editOwnTemplateExample(
   return updated;
 }
 
-/** A sample file the author uploaded; used by the next run. */
+/**
+ * A sample file the author uploaded; used by the next run. It takes the free run's file types and
+ * size cap, and must have cleared moderation, which settles a moment after upload.
+ */
 async function ownSampleFile(userId: string, fabFileId: string): Promise<ISkillTemplateExampleSampleFile> {
   const file = await fabFileRepository.findById(fabFileId);
   if (!file || file.userId !== userId || file.deletedAt || !file.filePath) throw new NotFoundError('File not found');
-  if (file.moderationStatus === 'blocked') throw new BadRequestError('This file cannot be used. Choose another one.');
-  return {
-    name: file.fileName.slice(0, 255),
-    mime: (file.mimeType ?? 'application/octet-stream').split(';')[0].trim().slice(0, 128),
-    source: 'upload',
-    fabFileId,
-  };
+  const mime = (file.mimeType ?? 'application/octet-stream').split(';')[0].trim().slice(0, 128);
+  if (!isFreeRunFileType(mime, file.fileName)) {
+    throw new BadRequestError('Choose a PDF, an image (PNG, JPEG, GIF or WebP) or a text file.');
+  }
+  const maxBytes = freeRunFileMaxBytes((await loadFreeRunSettings()).fileMaxMb);
+  if (typeof file.fileSize !== 'number' || file.fileSize > maxBytes) {
+    throw new BadRequestError(`Choose a file under ${formatFileCap(maxBytes)}.`);
+  }
+  if (file.moderationStatus === 'pending' || file.moderationStatus === 'scanning') {
+    throw new ConflictError('The file is still being checked. Try again in a moment.');
+  }
+  if (file.moderationStatus !== 'clean') throw new BadRequestError('This file cannot be used. Choose another one.');
+  return { name: file.fileName.slice(0, 255), mime, source: 'upload', fabFileId };
 }
 
 // --- Harvest: pure helpers the run uses to turn a finished quest into a stored example ---
