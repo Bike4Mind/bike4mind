@@ -1,6 +1,9 @@
 import type { TutorialStep } from '@bike4mind/common';
 import { GROUNDED_ANSWERS_SHEET_NAME } from './sheet';
 
+export const GROUNDED_ANSWERS_PROMPT =
+  'Using sample-team-faq.csv, how many vacation days do new staff get, and who approves them? Quote the line you used.';
+
 export const GROUNDED_ANSWERS_STEPS: TutorialStep[] = [
   {
     id: 'grounded-answers-attach',
@@ -15,8 +18,7 @@ export const GROUNDED_ANSWERS_STEPS: TutorialStep[] = [
     id: 'grounded-answers-ask',
     type: 'prompt',
     turn: 0,
-    prompt:
-      'Using sample-team-faq.csv, how many vacation days do new staff get, and who approves them? Quote the line you used.',
+    prompt: GROUNDED_ANSWERS_PROMPT,
     // The whole composer, not Send: a phone shows Send only once the box has text.
     anchor: 'session-bottom-container',
     placement: 'above',
