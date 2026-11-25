@@ -123,7 +123,7 @@ async function setup() {
 const queuedImageJob = {
   id: 'remote',
   object: 'image_generation',
-  state: 'queued',
+  state: 'pending',
   model: 'gpt-image-2',
   mode: 'generate',
   prompt: 'Prepared garden',

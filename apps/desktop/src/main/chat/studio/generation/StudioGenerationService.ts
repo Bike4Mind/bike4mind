@@ -183,7 +183,7 @@ export class StudioGenerationService {
               ? await connection.client.createVideoGeneration(request.body, job.idempotencyKey)
               : await connection.client.createMusicGeneration(request.body, job.idempotencyKey);
           job = { ...job, state: 'queued', providerJobId: result.id };
-        } else {
+        } else if (request.kind === 'speech' || request.kind === 'sound-effect') {
           const response =
             request.kind === 'speech'
               ? await connection.client.synthesizeSpeech(request.body)
