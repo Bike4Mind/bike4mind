@@ -386,13 +386,20 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     // The new pin has not passed a server run, so the function is a draft again until it is promoted. Field by
     // field, so the data files stay pinned.
-    const pinFields = Object.fromEntries(
-      Object.entries(newPin(update.pin)).map(([key, value]) => [`pin.${key}`, value])
-    );
+    const pin = newPin(update.pin);
     const result = await this.model.findOneAndUpdate(
       { _id: id, ...ownerFilter(owner), 'pin.version': expectedVersion },
       {
-        $set: { ...pinFields, contract: update.contract, description: update.description, state: 'draft' },
+        $set: {
+          'pin.artifactId': pin.artifactId,
+          'pin.version': pin.version,
+          'pin.contentHash': pin.contentHash,
+          'pin.source': pin.source,
+          'pin.pinnedAt': pin.pinnedAt,
+          contract: update.contract,
+          description: update.description,
+          state: 'draft',
+        },
         $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, lastServerRun: 1, caseResults: 1 },
       },
       { new: true, runValidators: true }
