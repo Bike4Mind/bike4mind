@@ -109,6 +109,16 @@ describe('MigrateUsersTab', () => {
     expect(within(dialog).getByTestId('migrate-no-email-warning')).toHaveTextContent('No welcome email was sent');
   });
 
+  it('lists every created user in the dialog, without paging', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ name: `User ${i}`, email: `user${i}@example.com` }));
+    mocks.mutate.mockImplementation((_vars, { onSuccess }) => onSuccess({ createdUsers: many }));
+    parseAndMigrate({ sendEmail: false });
+
+    const dialog = screen.getByTestId('migrate-created-users-dialog');
+    expect(within(dialog).getAllByRole('row')).toHaveLength(31);
+    expect(within(dialog).getByText('user29@example.com')).toBeInTheDocument();
+  });
+
   it('leaves out the warning when the welcome email was sent', () => {
     parseAndMigrate({ sendEmail: true });
 

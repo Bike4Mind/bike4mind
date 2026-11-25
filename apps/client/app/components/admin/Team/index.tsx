@@ -22,6 +22,7 @@ import {
 import { IInternalTeamMemberDocument } from '@bike4mind/common';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import {
+  ActionDialog,
   AdminDialog,
   AdminDialogFooter,
   AdminPageHeader,
@@ -60,7 +61,14 @@ const columns: DataColumn<IInternalTeamMemberDocument>[] = [
     width: '9rem',
     render: member =>
       member.role ? (
-        <Chip size="sm" variant="soft" color="neutral" data-testid={`team-member-role-${member.id}`}>
+        <Chip
+          size="sm"
+          variant="soft"
+          color="neutral"
+          title={member.role}
+          sx={{ maxWidth: '100%' }}
+          data-testid={`team-member-role-${member.id}`}
+        >
           {member.role}
         </Chip>
       ) : (
@@ -198,36 +206,20 @@ const Team: React.FC = () => {
           onClose={() => setEditingMember(null)}
         />
       )}
-      {pendingDelete && (
-        <AdminDialog
-          role="alertdialog"
-          title="Remove team member"
-          onClose={closeDeleteDialog}
-          closeDisabled={deleteMember.isPending}
-          data-testid="team-member-delete-dialog"
-        >
-          <Typography level="body-md">Remove {pendingDelete.name} from the team list?</Typography>
-          <AdminDialogFooter>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={closeDeleteDialog}
-              disabled={deleteMember.isPending}
-              data-testid="team-member-delete-cancel-btn"
-            >
-              Cancel
-            </Button>
-            <Button
-              color="danger"
-              loading={deleteMember.isPending}
-              onClick={() => void confirmDelete()}
-              data-testid="team-member-delete-confirm-btn"
-            >
-              Remove
-            </Button>
-          </AdminDialogFooter>
-        </AdminDialog>
-      )}
+      <ActionDialog
+        open={!!pendingDelete}
+        onClose={closeDeleteDialog}
+        title="Remove team member"
+        description={pendingDelete ? `Remove ${pendingDelete.name} from the team list?` : undefined}
+        reasonPresets={[]}
+        reasonRequired={false}
+        confirmLabel="Remove"
+        tone="danger"
+        pending={deleteMember.isPending}
+        onConfirm={confirmDelete}
+        data-testid="team-member-delete-dialog"
+        testIds={{ confirm: 'team-member-delete-confirm-btn' }}
+      />
     </Stack>
   );
 };

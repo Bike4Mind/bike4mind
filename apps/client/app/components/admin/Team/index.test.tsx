@@ -110,6 +110,7 @@ describe('Team', () => {
     const rows = within(table).getAllByTestId(/^team-member-row-/);
     expect(rows.map(row => row.getAttribute('data-testid'))).toEqual(['team-member-row-m1', 'team-member-row-m2']);
     expect(screen.getByTestId('team-member-role-m1')).toHaveTextContent('Lead');
+    expect(screen.getByTestId('team-member-role-m1')).toHaveAttribute('title', 'Lead');
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
   });
 
@@ -139,17 +140,16 @@ describe('Team', () => {
     expect(screen.getByTestId('team-member-edit-name-input').querySelector('input')).toHaveValue('Zed Example');
   });
 
-  it('confirms removal in an alert dialog instead of window.confirm', async () => {
+  it('confirms removal in an action dialog instead of window.confirm', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm');
     mocks.mutation.mutateAsync.mockResolvedValue(undefined);
     renderTeam();
 
     openRowAction('m1', 'delete');
     const dialog = screen.getByTestId('team-member-delete-dialog');
-    expect(dialog).toHaveAttribute('role', 'alertdialog');
     expect(dialog).toHaveTextContent('Remove Ada Example from the team list?');
 
-    fireEvent.click(screen.getByTestId('team-member-delete-cancel-btn'));
+    fireEvent.click(screen.getByTestId('team-member-delete-dialog-cancel-btn'));
     await waitFor(() => expect(screen.queryByTestId('team-member-delete-dialog')).not.toBeInTheDocument());
     expect(mocks.mutation.mutateAsync).not.toHaveBeenCalled();
 

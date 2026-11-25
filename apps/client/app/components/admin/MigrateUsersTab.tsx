@@ -216,6 +216,7 @@ const MigrateUsersTab: React.FC = () => {
             onRetry={noop}
             minWidth="18rem"
             maxHeight="none"
+            pagination={false}
           />
         </Stack>
         <AdminDialogFooter>
