@@ -14,7 +14,6 @@ export default {
   'RateLimits/index.tsx': [[2, 'e1c3c0708902ccc5']],
   'SreAgentTab.tsx': [[11, '5f9ffda28ac67420']],
   'Team/index.tsx': [[1, '78a3901c08799aeb']],
-  'Users/ComplianceModal.tsx': [[1, '8a42634a236316b4']],
   'Users/Views/RecentActivityView.tsx': [[1, '4761ad3c8a441a88']],
   'email/EmailActivityHistory.tsx': [[2, '5d7be40ee2063946']],
   'email/EmailJobDetail.tsx': [[2, '81717d4fa42f09a7']],

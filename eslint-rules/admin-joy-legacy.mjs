@@ -13,7 +13,6 @@ const componentsByFile = {
   'RateLimits/index.tsx': ['Table'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
   'Team/index.tsx': ['Card', 'Modal'],
-  'Users/ComplianceModal.tsx': ['Table'],
   'Users/Views/RecentActivityView.tsx': ['Card'],
   'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
