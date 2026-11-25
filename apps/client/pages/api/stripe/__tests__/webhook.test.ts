@@ -348,6 +348,44 @@ describe('invoice.payment_action_required', () => {
     expect(mocks.notifyPaymentActionRequired).toHaveBeenCalledWith(orgRow, expect.anything(), logger);
   });
 
+  it("alerts the org's admins once the confirm-payment notice is sent", async () => {
+    mocks.findByStripeSubscriptionId.mockResolvedValue({
+      ...userRow,
+      ownerType: SubscriptionOwnerType.Organization,
+      ownerId: 'org_1',
+    });
+    mocks.notifyPaymentActionRequired.mockResolvedValue(true);
+
+    await deliver(actionInvoice());
+
+    expect(mocks.notifyOrgEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'payment_failed',
+      organizationId: 'org_1',
+      invoiceId: 'in_1',
+    });
+  });
+
+  it('does not alert org admins when the confirm-payment notice was not sent', async () => {
+    mocks.findByStripeSubscriptionId.mockResolvedValue({
+      ...userRow,
+      ownerType: SubscriptionOwnerType.Organization,
+      ownerId: 'org_1',
+    });
+    mocks.notifyPaymentActionRequired.mockResolvedValue(false);
+
+    await deliver(actionInvoice());
+
+    expect(mocks.notifyOrgEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not alert org admins for a personal subscription', async () => {
+    mocks.notifyPaymentActionRequired.mockResolvedValue(true);
+
+    await deliver(actionInvoice());
+
+    expect(mocks.notifyOrgEvent).not.toHaveBeenCalled();
+  });
+
   it('stays silent when this stage has no row for the subscription', async () => {
     mocks.findByStripeSubscriptionId.mockResolvedValue(null);
 

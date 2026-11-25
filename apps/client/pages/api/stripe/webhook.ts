@@ -980,7 +980,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
-      await notifyPaymentActionRequired(subscription, invoice, req.logger);
+      // notifyPaymentFailed stands down for an invoice that needs authentication, so the org alert
+      // it gates is raised here instead, under this notice's own once-per-invoice claim.
+      const noticeSent = await notifyPaymentActionRequired(subscription, invoice, req.logger);
+      if (noticeSent && subscription.ownerType === SubscriptionOwnerType.Organization && invoice.id) {
+        await notifyOrgEvent({ type: 'payment_failed', organizationId: subscription.ownerId, invoiceId: invoice.id });
+      }
       break;
     }
 
