@@ -101,7 +101,19 @@ describe('template page with an example', () => {
   it('carries the reduced-motion and narrow-screen rules', () => {
     const html = renderTemplatePage(view);
     expect(html).toContain('@media (prefers-reduced-motion: reduce){');
-    expect(html).toMatch(/@media \(max-width: 880px\)\{[^@]*\.ex-panel\{position:static/);
+    expect(html).toMatch(/@media \(max-width: 880px\)\{[^@]*\.ex-live \.ex-panel\{position:static/);
+  });
+
+  it('stacks the panel under the thread until the script runs; only then does it overlay', () => {
+    const html = renderTemplatePage(view);
+    // Base rules (no script) never position the panel over the thread.
+    expect(html).toMatch(/\n {2}\.ex-panel\{display:flex;[^}]*max-height:34rem\}/);
+    expect(html).not.toMatch(/\n {2}\.ex-panel\{[^}]*position:absolute/);
+    expect(html).not.toMatch(/\n {2}\.ex-panel:not\(\.open\)/);
+    expect(html).toMatch(/\.ex-live \.ex-panel\{position:absolute;[^}]*width:88%/);
+    expect(html).toContain('.ex-live .ex-panel:not(.open){transform:translateX(102%)');
+    expect(html).toContain('.ex-live .ex-stage{height:36rem}');
+    expect(html).not.toContain('class="ex ex-live"');
   });
 
   it('plays the chat only when the run made no artifact or media', () => {

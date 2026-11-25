@@ -14,6 +14,7 @@ import {
   renderTemplateLoaderShell,
   renderTemplatePage,
   templatePageCsp,
+  TEMPLATE_EXAMPLE_SCRIPT_HASH,
   TEMPLATE_LOADER_SCRIPT_HASH,
   TEMPLATE_PAGE_BASE_CSP,
 } from '@server/skillMarket/templatePage';
@@ -29,9 +30,13 @@ import { buildTemplatePageView } from '@server/skillMarket/templatePageView';
 const optionalJwtShim = optionalJwtAuth();
 
 const PAGE_CSP = TEMPLATE_PAGE_BASE_CSP.join('; ');
-const LOADER_CSP = [...TEMPLATE_PAGE_BASE_CSP, `script-src ${TEMPLATE_LOADER_SCRIPT_HASH}`, "connect-src 'self'"].join(
-  '; '
-);
+// A member render is document.written into the loader's document, so it runs under this policy: the
+// example script's hash must be here as well.
+const LOADER_CSP = [
+  ...TEMPLATE_PAGE_BASE_CSP,
+  `script-src ${TEMPLATE_LOADER_SCRIPT_HASH} ${TEMPLATE_EXAMPLE_SCRIPT_HASH}`,
+  "connect-src 'self'",
+].join('; ');
 
 function runShim(
   shim: (req: Request, res: Response, next: NextFunction) => unknown,

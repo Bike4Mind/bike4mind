@@ -238,6 +238,15 @@ describe('templatePageExampleOf', () => {
     }
   });
 
+  it('keeps a diagram out of the panel, since nothing on the page draws it', async () => {
+    const view = await templatePageExampleOf(
+      example({
+        artifact: { type: 'mermaid', title: 'Flow', html: '<pre><code class="language-mermaid">a-->b</code></pre>' },
+      })
+    );
+    expect(view?.artifact).toBeNull();
+  });
+
   it('keeps the artifact, steps and sample file metadata', async () => {
     const view = await templatePageExampleOf(
       example({

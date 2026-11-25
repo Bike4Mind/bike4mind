@@ -92,9 +92,11 @@ export async function templatePageExampleOf(
       ? example.reply.slice(0, example.replyTrimmedTo).trimEnd()
       : example.reply;
   // Sanitized at harvest too (renderExampleArtifact); re-applied so a stored payload never reaches the page.
-  const artifactHtml = example.artifact
-    ? sanitizeStoredExampleArtifactHtml(example.artifact.type, example.artifact.html)
-    : '';
+  // A diagram is stored as mermaid source and nothing on the page draws it, so it stays in the chat only.
+  const artifactHtml =
+    example.artifact && example.artifact.type !== 'mermaid'
+      ? sanitizeStoredExampleArtifactHtml(example.artifact.type, example.artifact.html)
+      : '';
   // Checked here as well as in signExampleMedia, so an injected signer cannot show an unmoderated image.
   const mediaItems = (example.media?.items ?? []).filter(
     item => item.mime.startsWith('video/') || item.moderation === 'clean'

@@ -269,7 +269,9 @@ describe('GET /t/[slug]', () => {
       expect(html).toContain('data-testid="template-page-loader"');
       expect(html).not.toContain('Turn any article');
       expect(html).not.toMatch(/og:|twitter:/);
-      expect(String(res.getHeader('Content-Security-Policy'))).toContain(`script-src ${TEMPLATE_LOADER_SCRIPT_HASH}`);
+      expect(String(res.getHeader('Content-Security-Policy'))).toContain(
+        `script-src ${TEMPLATE_LOADER_SCRIPT_HASH} ${TEMPLATE_EXAMPLE_SCRIPT_HASH}`
+      );
       expect(h.audience).not.toHaveBeenCalled();
       expect(h.record).not.toHaveBeenCalled();
     });
