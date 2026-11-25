@@ -819,8 +819,7 @@ const callableFunctionCallQueueSubscription = callableFunctionCallQueue.subscrib
 );
 
 // Quest Export Queue
-// Runs organization feedback summaries (orgFeedbackSummary.ts). The QuestMaster plan ZIP export it
-// was created for is retired; the handler discards a stray message of that shape.
+// Handles async export of QuestMaster plans to ZIP (markdown + images)
 const questExportQueueDLQ = new sst.aws.Queue('questExportQueueDLQ', {});
 const questExportQueue = new sst.aws.Queue('questExportQueue', {
   visibilityTimeout: '11 minutes',
