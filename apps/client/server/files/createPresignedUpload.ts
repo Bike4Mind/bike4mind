@@ -35,7 +35,6 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileS
 import type { Request } from 'express';
 import mime from 'mime-types';
 import { Resource } from 'sst';
-import { v4 as uuidv4 } from 'uuid';
 
 const s3Client = createS3Client();
 
@@ -158,7 +157,7 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     );
 
   const ext = mime.extension(mimeType);
-  const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+  const fileKey = `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`;
 
   // Bound to the declared size the size and storage checks above ran on: S3 refuses any other length.
   // Create-only: the PUT fails if the key exists, so the uploader must send `If-None-Match: *`.

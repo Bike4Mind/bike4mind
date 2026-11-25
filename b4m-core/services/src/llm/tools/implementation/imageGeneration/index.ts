@@ -41,7 +41,6 @@ import { ImageGenerateParams } from 'openai/resources/images';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
-import { v4 as uuidv4 } from 'uuid';
 import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
@@ -140,7 +139,7 @@ export async function processAndStoreImages(
 ): Promise<string[]> {
   await context.statusUpdate({}, 'Storing images...');
   // Unique file names for an n>1 batch, which would otherwise share the Date.now() suffix.
-  const batchId = uuidv4();
+  const batchId = crypto.randomUUID();
   return Promise.all(
     images.map(async (image, index) => {
       const buffer = await downloadImageAsBuffer(image);
@@ -150,7 +149,7 @@ export async function processAndStoreImages(
       // (rendering the image as a download chip instead of in the grid).
       const ext = fileType?.ext ?? 'png';
       const mimeType = fileType?.mime ?? 'image/png';
-      const filename = `${uuidv4()}.${ext}`;
+      const filename = `${crypto.randomUUID()}.${ext}`;
 
       // Block moderated content BEFORE upload - see moderateToolImage doc comment.
       await moderateToolImage(context, buffer, mimeType, model, provider);

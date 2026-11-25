@@ -38,7 +38,6 @@ import {
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { appendCacheInclusiveTurn, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import pick from 'lodash/pick.js';
-import { v4 as uuidv4 } from 'uuid';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
@@ -139,7 +138,7 @@ export class GeminiBackend implements ICompletionBackend {
       this.logger.warn('[Gemini] Missing thought_signature for tool call:', { toolName });
     }
 
-    const toolId = uuidv4();
+    const toolId = crypto.randomUUID();
     toolCalls.push({
       id: toolId,
       name: toolName,

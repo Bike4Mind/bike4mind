@@ -320,7 +320,6 @@
     "tiktoken": "^1.0.22",
     "tldts": "^7.4.13",
     "unpdf": "^1.6.2",
-    "uuid": "^14.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.6.6"
   },

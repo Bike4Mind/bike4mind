@@ -5,7 +5,6 @@
 import { promises as fs } from 'fs';
 import { hostname } from 'os';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 
 export interface LockDirOptions {
   waitMs: number;
@@ -97,7 +96,7 @@ async function isStale(lockPath: string, staleMs: number): Promise<boolean> {
  */
 async function breakIfStale(lockPath: string, staleMs: number): Promise<boolean> {
   if (!(await isStale(lockPath, staleMs))) return false;
-  const aside = `${lockPath}.${uuidv4()}.stale`;
+  const aside = `${lockPath}.${crypto.randomUUID()}.stale`;
   try {
     await fs.rename(lockPath, aside);
   } catch (error) {
@@ -200,7 +199,7 @@ export async function withLockDir<T>(
   work: (held: HeldLock) => Promise<T>,
   opts: LockDirOptions
 ): Promise<T> {
-  const nonce = uuidv4();
+  const nonce = crypto.randomUUID();
   let lastTouch = await acquire(lockPath, nonce, opts);
   liveNonces.add(nonce);
   const lost = new AbortController();
