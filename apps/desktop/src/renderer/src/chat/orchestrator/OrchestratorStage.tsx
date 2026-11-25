@@ -67,6 +67,13 @@ export interface OrchestratorViewProps {
    * roster (Presenter mode's placeholder option labels); absent when the props are not redacted.
    */
   restoreAction?(action: ViewAction): ViewAction;
+  /**
+   * The view answers every request in its own scene (the Tavern's dialogue box), so the stage leaves out its
+   * Needs-you strip. Set only for a single unredacted view.
+   */
+  inSceneDecisions?: boolean;
+  /** Bumped when the "N need you" pill asks the in-scene requests to come forward. */
+  needsYouFocusRequest?: number;
 }
 
 /** The parent conversation's front door in the scene: one thread, reached from the bar as well as the composer. */
@@ -192,6 +199,7 @@ export function OrchestratorStage({
   paneSessions,
 }: OrchestratorStageProps) {
   const [prAgentId, setPrAgentId] = useState<string | null>(null);
+  const [needsYouFocusRequest, setNeedsYouFocusRequest] = useState(0);
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
   const selectedId = selection ? selection.id : localSelectedId;
   const onSelectionChange = selection?.onChange;
@@ -332,6 +340,11 @@ export function OrchestratorStage({
     />
   );
 
+  // The Tavern asks its requests in a dialogue box of its own (tavern/TavernDialogue.tsx). Presenter mode keeps
+  // the strip off and the bubbles' Open-only answers, since the box would show the real requests.
+  const inSceneDecisions =
+    !split && view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused && !presenting;
+
   const detailsInScene =
     (parentScene || (!split && view === 'aquarium')) && renderView !== undefined && agents.length > 0 && !focused;
   const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
@@ -389,6 +402,8 @@ export function OrchestratorStage({
     desk,
     settled: ambient?.settled === true,
     restoreAction,
+    inSceneDecisions,
+    needsYouFocusRequest,
   };
 
   // A pane pinned to another session draws that session's roster; the stage's selection, drawer, finale and
@@ -536,7 +551,11 @@ export function OrchestratorStage({
               color="warning"
               variant="solid"
               data-testid="orchestrator-needs-you-pill"
-              onClick={() => (firstNeedsYou ? setSelectedId(firstNeedsYou.id) : onParentFocus?.())}
+              onClick={() => {
+                if (inSceneDecisions && firstNeedsYou) setNeedsYouFocusRequest(value => value + 1);
+                else if (firstNeedsYou) setSelectedId(firstNeedsYou.id);
+                else onParentFocus?.();
+              }}
               sx={{
                 flexShrink: 0,
                 animation: `${pulse} 1.6s ease-in-out infinite`,
@@ -550,7 +569,7 @@ export function OrchestratorStage({
           {dockControl}
         </Box>
       )}
-      {!settled && !presenting && (
+      {!settled && !presenting && !inSceneDecisions && (
         // Off in Presenter mode: its cards would show the real requests the redacted stage hides.
         <NeedsYouStrip agents={rosterAgents} personas={personas} rootTitle={rootTitle} onOpenDetails={setSelectedId} />
       )}
