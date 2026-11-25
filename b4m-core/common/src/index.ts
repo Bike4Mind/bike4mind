@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './concurrency';
 export * from './dlqPolicy';
 export * from './adminUserNotes';
 export * from './signupGrant';

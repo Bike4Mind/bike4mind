@@ -582,7 +582,6 @@
     "mathjs": "^15.2.0",
     "mime-types": "^3.0.2",
     "openai": "^6.46.0",
-    "p-limit": "^7.3.2",
     "sharp": "^0.35.4",
     "turndown": "^7.2.4",
     "write-excel-file": "^4.1.1",

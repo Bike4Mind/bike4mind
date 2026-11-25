@@ -162,7 +162,6 @@
     "nuqs": "^2.10.1",
     "openai": "^6.46.0",
     "openid-client": "^6.8.8",
-    "p-limit": "^7.3.2",
     "papaparse": "^5.7.0",
     "passport": "^0.6.0",
     "passport-facebook": "^3.0.0",

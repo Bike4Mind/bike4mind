@@ -166,8 +166,6 @@ const nextConfig = {
     // ESM-only packages that need transpilation for API routes. An entry here can be retired
     // once check-api-routes-cjs-require.mjs reports the built route still loads without it; that
     // probe runs on the built standalone tree and is what proves the bundler inlined it.
-    'p-limit',
-    'yocto-queue',
     // sanitize-html require()s ESM-only htmlparser2. This entry bundles the pair; the
     // dual-published-htmlparser2 override in root package.json is the backstop. Dropping this
     // entry alone still loads (the override covers it); dropping both makes the two importing

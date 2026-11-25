@@ -499,9 +499,6 @@ importers:
       openid-client:
         specifier: ^6.8.8
         version: 6.8.8
-      p-limit:
-        specifier: ^7.3.2
-        version: 7.3.2
       papaparse:
         specifier: ^5.7.0
         version: 5.7.0
@@ -1065,9 +1062,6 @@ importers:
       mongoose:
         specifier: ^8.24.7
         version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
-      p-limit:
-        specifier: ^7.3.2
-        version: 7.3.2
       playwright-core:
         specifier: 1.64.0
         version: 1.64.0
@@ -1662,9 +1656,6 @@ importers:
       openai:
         specifier: ^6.46.0
         version: 6.47.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.21.3)(zod@4.6.6)
-      p-limit:
-        specifier: ^7.3.2
-        version: 7.3.2
       sharp:
         specifier: ^0.35.5
         version: 0.35.5(@types/node@25.9.6)
@@ -2066,9 +2057,6 @@ importers:
       openai:
         specifier: ^6.46.0
         version: 6.47.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.21.3)(zod@4.6.6)
-      p-limit:
-        specifier: ^7.3.2
-        version: 7.3.2
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -2391,9 +2379,6 @@ importers:
       mongoose:
         specifier: ^8.24.7
         version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
-      p-limit:
-        specifier: ^7.3.2
-        version: 7.3.2
       sst:
         specifier: 4.17.1
         version: 4.17.1
@@ -11016,10 +11001,6 @@ packages:
     resolution: {integrity: sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==}
     engines: {node: '>=10'}
 
-  p-limit@7.3.2:
-    resolution: {integrity: sha512-Ll0w3fU24vYpXoZmjjZIee6bJQDgG0oAyo1PdmFYI8UDwJJddaHAypxIH9avUu+t+lSsAwKVsb1jDCMIIChliw==}
-    engines: {node: '>=20'}
-
   p-locate@4.1.0:
     resolution: {integrity: sha512-R79ZZ/0wAxKGu3oYMlz8jy/kbhsNrS7SKZ7PxEHBgJ5+F2mtFW2fK2cOtBh1cHYkQsbzFV7I+EoRKe6Yt0oK7A==}
     engines: {node: '>=8'}
@@ -13571,10 +13552,6 @@ packages:
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
-
-  yocto-queue@1.2.2:
-    resolution: {integrity: sha512-4LCcse/U2MHZ63HAJVE+v71o7yOdIe4cZ70Wpf8D/IyjDKYQLV5GD46B+hSTjJsvV5PztjvHoU580EftxjDZFQ==}
-    engines: {node: '>=12.20'}
 
   yoctocolors@2.2.0:
     resolution: {integrity: sha512-xYqdZFUK/VYazNl/oCDYN+3WloWQwMfZxBoiNt6qNyk+xfOdi598muWE42rNZFp1kNOiqW936q5RhUdnpqElSg==}
@@ -23690,10 +23667,6 @@ snapshots:
     dependencies:
       yocto-queue: 0.1.0
 
-  p-limit@7.3.2:
-    dependencies:
-      yocto-queue: 1.2.2
-
   p-locate@4.1.0:
     dependencies:
       p-limit: 2.3.0
@@ -26552,8 +26525,6 @@ snapshots:
   ylru@1.4.0: {}
 
   yocto-queue@0.1.0: {}
-
-  yocto-queue@1.2.2: {}
 
   yoctocolors@2.2.0: {}
 
