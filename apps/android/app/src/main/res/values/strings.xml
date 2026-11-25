@@ -119,6 +119,28 @@
     <string name="brief_handled">Handled</string>
     <string name="brief_happened">What happened</string>
     <string name="brief_open_approval">Open approval</string>
+    <string name="brief_followup_dictate">Dictate follow-up</string>
+    <string name="brief_followup_ok">OK</string>
+    <string name="brief_followup_no_mail_app">No mail app is set up on this device to send the draft.</string>
+    <string name="brief_followup_action_item">Action item</string>
+    <string name="brief_followup_email">Follow-up email</string>
+    <string name="brief_followup_reminder_at">Reminder, %1$s</string>
+    <string name="brief_followup_reminder_unset">Reminder, no time set yet</string>
+    <string name="brief_followup_to">To: %1$s</string>
+    <string name="brief_followup_subject">Subject: %1$s</string>
+    <string name="brief_followup_approve">Approve</string>
+    <string name="brief_followup_edit">Edit</string>
+    <string name="brief_followup_dismiss">Dismiss</string>
+    <string name="brief_followup_approved">Approved</string>
+    <string name="brief_followup_dismissed">Dismissed</string>
+    <string name="brief_followup_edit_title">Edit follow-up</string>
+    <string name="brief_followup_text">Text</string>
+    <string name="brief_followup_email_to">To</string>
+    <string name="brief_followup_email_subject">Subject</string>
+    <string name="brief_followup_email_body">Message</string>
+    <string name="brief_followup_pick_time">Time</string>
+    <string name="brief_followup_save">Save</string>
+    <string name="brief_followup_cancel">Cancel</string>
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>
