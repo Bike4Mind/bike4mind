@@ -8,6 +8,9 @@ import path from 'path';
 import { existsSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { assertMcpServerStartable, buildMcpChildEnv } from './childEnv';
+import { createConsoleLogger } from './shared/consoleLog.js';
+
+const log = createConsoleLogger('mcp-client');
 
 const createSdkClient = () => new Client({ name: 'mcp-client-cli', version: '1.0.0' });
 
@@ -117,9 +120,12 @@ export class MCPClient {
             d.isDirectory() ? `${d.name}/` : d.name
           );
 
-          console.error(`[MCP] Server script not found at: ${serverScriptPath}`);
-          console.error(`[MCP] Module directory: ${moduleDir}`);
-          console.error(`[MCP] Available in module dir:`, availableFiles);
+          log.error('server script not found', {
+            server: this.serverName,
+            serverScriptPath,
+            moduleDir,
+            availableFiles,
+          });
 
           throw new Error(
             `MCP Server script not found for ${this.serverName} at ${serverScriptPath}. Module dir: ${moduleDir}`
@@ -128,7 +134,6 @@ export class MCPClient {
 
         command = process.execPath;
         args = [serverScriptPath];
-        console.log(`[MCP] Using server: ${this.serverName} at ${serverScriptPath}`);
       }
 
       // Determine stderr mode:
@@ -146,9 +151,7 @@ export class MCPClient {
       });
       if (droppedKeys.length > 0) {
         // Key names only - the values are the user's provider credentials.
-        console.warn(
-          `[MCP] Withheld ${droppedKeys.length} undeclared env variable(s) from ${this.serverName}: ${droppedKeys.join(', ')}`
-        );
+        log.warn('withheld undeclared env variables from server', { server: this.serverName, droppedKeys });
       }
 
       const transportConfig = {
@@ -163,7 +166,7 @@ export class MCPClient {
 
       // Add error handler for transport issues to prevent unhandled rejections
       stdioTransport.onerror = error => {
-        console.error(`[MCP] Transport error for ${this.serverName}:`, error);
+        log.error('transport error', { server: this.serverName, error });
       };
 
       // Before connect, not after: the SDK returns the PassThrough immediately for exactly this
@@ -216,8 +219,8 @@ export class MCPClient {
         sessionExpired = true;
         return;
       }
-      // One line, no stack: this prints into an interactive terminal.
-      console.error(`[MCP] Transport error for ${this.serverName}: ${error.message}`);
+      // One line, no stack: this prints above the interactive prompt.
+      log.error('transport error', { server: this.serverName, detail: error.message });
     };
     this.transport = transport;
     await client.connect(transport);
@@ -372,7 +375,7 @@ export class MCPClient {
           error.message.includes('EPIPE'));
 
       if (isConnectionError) {
-        console.error(`[MCP] Connection lost while calling tool ${toolName} on ${this.serverName}`);
+        log.error('connection lost while calling tool', { server: this.serverName, toolName });
         throw new Error(`MCP connection lost for ${this.serverName}. Please retry the operation.`);
       }
 
@@ -400,7 +403,7 @@ export class MCPClient {
           error.message.includes('ECONNRESET'));
 
       if (!isConnectionClosedError) {
-        console.error('Error during MCP disconnect:', error);
+        log.error('error during disconnect', { server: this.serverName, error });
         throw error;
       }
       // Silently ignore connection-closed errors as they're expected

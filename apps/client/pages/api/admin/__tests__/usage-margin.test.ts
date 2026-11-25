@@ -77,7 +77,7 @@ describe('GET /api/admin/usage-margin', () => {
   });
 
   it('returns funding-cohort rows for the requested window', async () => {
-    const rows = [{ cohortWeek: null, accounts: 2, unattributedCostUsd: 0 }];
+    const rows = [{ cohortWeek: null, accounts: 0, unattributedCostUsd: 0, platformCostUsd: 8.25 }];
     mockCostByFundingCohort.mockResolvedValue(rows);
     const { res, run } = call({ query: { view: 'funding-cohort', days: '14' } });
     await run();

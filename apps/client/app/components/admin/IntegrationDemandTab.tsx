@@ -1,6 +1,6 @@
 import { INTEGRATION_DEMAND_SEARCH_KEYS } from './integrationDemandSearch';
 import React, { useState } from 'react';
-import { Alert, Button, CircularProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Alert, Button, CircularProgress, Sheet, Stack, Typography } from '@mui/joy';
 import {
   AdminPageHeader,
   DataTable,
@@ -16,7 +16,7 @@ import {
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { toast } from 'sonner';
-import type { IntegrationDemand, IntegrationStage } from '@bike4mind/common';
+import type { IntegrationDemand, IntegrationRequester, IntegrationStage } from '@bike4mind/common';
 import {
   REQUESTER_EMAILS_MAX_ROWS,
   fetchAllRequesterEmails,
@@ -109,6 +109,23 @@ const DEMAND_COLUMNS: readonly DataColumn<IntegrationDemand>[] = [
   },
 ];
 
+const requesterColumns: DataColumn<IntegrationRequester>[] = [
+  {
+    id: 'name',
+    label: 'Name',
+    width: '12rem',
+    render: row => (row.deleted ? 'Deleted account' : (row.name ?? '-')),
+  },
+  { id: 'email', label: 'Email', width: '16rem', render: row => row.email ?? '-' },
+  {
+    id: 'organization',
+    label: 'Organization',
+    width: '12rem',
+    render: row => row.organizationName ?? (row.organizationId ? 'Deleted organization' : '-'),
+  },
+  { id: 'requestedAt', label: 'Requested', width: '8rem', render: row => formatDate(row.requestedAt) },
+];
+
 const RequestersPanel: React.FC<{ integration: IntegrationDemand }> = ({ integration }) => {
   const { integrationId, name } = integration;
   const requesters = useIntegrationRequesters(integrationId);
@@ -168,26 +185,19 @@ const RequestersPanel: React.FC<{ integration: IntegrationDemand }> = ({ integra
         <CircularProgress size="sm" />
       ) : (
         <>
-          <Table size="sm" data-testid="admin-integration-demand-requesters-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Organization</th>
-                <th>Requested</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(row => (
-                <tr key={row.userId} data-testid={`admin-integration-demand-requester-${row.userId}`}>
-                  <td>{row.deleted ? 'Deleted account' : (row.name ?? '-')}</td>
-                  <td>{row.email ?? '-'}</td>
-                  <td>{row.organizationName ?? (row.organizationId ? 'Deleted organization' : '-')}</td>
-                  <td>{formatDate(row.requestedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
+          <DataTable
+            rows={rows}
+            columns={requesterColumns}
+            getRowId={row => row.userId}
+            label="Requesters"
+            onRetry={() => void requesters.refetch()}
+            empty={<EmptyState title="No requesters yet" action={null} />}
+            testId="admin-integration-demand-requesters-table"
+            rowTestId={row => `admin-integration-demand-requester-${row.userId}`}
+            pagination={false}
+            framed={false}
+            minWidth="48rem"
+          />
           {requesters.hasNextPage ? (
             <Button
               size="sm"

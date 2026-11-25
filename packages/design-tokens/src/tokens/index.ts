@@ -8,6 +8,7 @@ export * from './primitives';
 export { darkScheme, lightScheme } from './schemes';
 export { typography } from './typography';
 export { spacing, radii, shadows, motion } from './metrics';
+export * from './studio';
 
 /**
  * The canonical token set, validated at module load so a malformed token

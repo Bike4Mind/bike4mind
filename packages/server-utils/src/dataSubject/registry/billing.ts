@@ -167,6 +167,10 @@ export const billingHolders = {
       },
     ],
   },
+  PlatformAttempt: {
+    kind: 'noUserData',
+    note: 'Actorless platform-call accounting: opaque job and execution IDs, provider usage and prices; no person or credit-holder references.',
+  },
   ProviderInvoice: {
     kind: 'holder',
     references: [{ path: 'enteredBy', matchBy: 'userId', action: 'anonymize' }],
