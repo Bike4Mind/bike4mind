@@ -1,1 +1,17 @@
-{}
+{
+  "first-steps": {
+    "first-steps-send": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "first-steps-composer": [
+      "title",
+      "body"
+    ],
+    "first-steps-done": [
+      "title",
+      "body"
+    ]
+  }
+}
