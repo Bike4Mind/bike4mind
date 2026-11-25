@@ -7,6 +7,7 @@ vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration, {
   LEGACY_QUEST_PLAN_COLLECTIONS,
+  LEGACY_QUEST_PLAN_FIELDS,
   VERIFY_LEGACY_QUEST_PLAN_FILES_ID,
 } from './20261125121820_drop-legacy-quest-plan-collections';
 import { AvailableMigrations } from './index';
@@ -105,7 +106,13 @@ describe('drop legacy quest plan collections migration', () => {
     }
   });
 
-  it('drops the legacy collections, unsets the references, logs counts and keeps chat history', async () => {
+  it('unsets only the retired v5 flag, never the chat-history plan marker', () => {
+    expect(LEGACY_QUEST_PLAN_FIELDS).toEqual([
+      { collection: 'users', field: 'preferences.experimentalFeatures.enableQuestMasterV5' },
+    ]);
+  });
+
+  it('drops the legacy collections, unsets the v5 flag, logs counts and leaves chat history untouched', async () => {
     await seed();
     await markVerified();
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
@@ -117,8 +124,10 @@ describe('drop legacy quest plan collections migration', () => {
 
     const quests = db().collection('quests');
     expect(await quests.countDocuments({})).toBe(1006);
-    expect(await quests.countDocuments({ questMasterPlanId: { $exists: true } })).toBe(0);
-    expect(await quests.findOne({ prompt: 'p7' })).toMatchObject({ sessionId: 's' });
+    // The legacy-plan note and notebook curation key off this field, so every one of them survives.
+    expect(await quests.countDocuments({ questMasterPlanId: { $exists: true } })).toBe(1005);
+    expect(await quests.findOne({ prompt: 'p7' })).toMatchObject({ sessionId: 's', questMasterPlanId: 'plan7' });
+    expect(await quests.findOne({ prompt: 'no plan' })).not.toHaveProperty('questMasterPlanId');
 
     const users = db().collection('users');
     expect(await users.countDocuments({ [V5_FLAG]: { $exists: true } })).toBe(0);
@@ -132,15 +141,43 @@ describe('drop legacy quest plan collections migration', () => {
     const logs = info.mock.calls.map(call => String(call[0]));
     expect(logs).toContainEqual(
       expect.stringContaining(
-        `before: questmasterplans=2 questgraphs=1 questnodes=2 quests.questMasterPlanId=1005 users.${V5_FLAG}=2`
+        `Legacy quest plan data before: questmasterplans=2 questgraphs=1 questnodes=2 users.${V5_FLAG}=2`
       )
     );
     expect(logs).toContainEqual(
       expect.stringContaining(
-        `after: questmasterplans=0 questgraphs=0 questnodes=0 quests.questMasterPlanId=0 users.${V5_FLAG}=0`
+        `Legacy quest plan data after: questmasterplans=0 questgraphs=0 questnodes=0 users.${V5_FLAG}=0`
       )
     );
     info.mockRestore();
+  });
+
+  it('leaves the readers that still name the legacy models as no-ops that do not recreate a collection', async () => {
+    await seed();
+    await markVerified();
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    await expect(migration.up({ startedAt: new Date() })).resolves.toBeUndefined();
+
+    // The same operations the gear check, the account archive, the data-subject export and the
+    // erasure/purge registries run against these models while the model files still exist.
+    const owner = { userId: 'owner-1' };
+    expect(await QuestMasterPlan.exists(owner)).toBeNull();
+    expect(await QuestMasterPlan.findById(new mongoose.Types.ObjectId())).toBeNull();
+    for (const model of [QuestMasterPlan, QuestGraph, QuestNode]) {
+      const collection = db().collection(model.collection.name);
+      expect(await collection.find(owner, { projection: { _id: 1 } }).toArray()).toEqual([]);
+      expect(await collection.estimatedDocumentCount()).toBe(0);
+      expect(await collection.deleteMany(owner)).toMatchObject({ deletedCount: 0 });
+      // update-validators-off: native driver on the raw collection has no schema
+      expect(await collection.updateMany(owner, { $pull: { sharedWith: 'owner-1' } })).toMatchObject({
+        matchedCount: 0,
+        upsertedCount: 0,
+      });
+    }
+
+    const names = await collectionNames();
+    for (const name of LEGACY_QUEST_PLAN_COLLECTIONS) expect(names).not.toContain(name);
+    vi.restoreAllMocks();
   });
 
   it('is a no-op when the collections are already gone and re-runs cleanly', async () => {

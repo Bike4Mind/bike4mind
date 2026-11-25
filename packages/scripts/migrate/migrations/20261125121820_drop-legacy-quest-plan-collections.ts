@@ -8,9 +8,13 @@ export const VERIFY_LEGACY_QUEST_PLAN_FILES_ID = 20260921249990;
 // v4 plans, v5 graphs and v5 nodes. Named directly because their models are deleted after this runs.
 export const LEGACY_QUEST_PLAN_COLLECTIONS = ['questmasterplans', 'questgraphs', 'questnodes'] as const;
 
-// Retired references: the v4 plan id on chat history and the v5 opt-in flag on user preferences.
+// Retired references: the v5 opt-in flag on user preferences.
+//
+// `quests.questMasterPlanId` is deliberately NOT here. It no longer resolves to a plan row, but it is
+// still a live marker: the chat shows the "plan moved to your files" note for a message that carries
+// it (isLegacyQuestMasterMessage in apps/client), and notebook curation and notebook export read it.
+// Unsetting it would silently remove that note from old plan replies.
 export const LEGACY_QUEST_PLAN_FIELDS = [
-  { collection: 'quests', field: 'questMasterPlanId' },
   { collection: 'users', field: 'preferences.experimentalFeatures.enableQuestMasterV5' },
 ] as const;
 
@@ -85,8 +89,9 @@ const unsetField = async (collection: string, field: string, deadline: Date): Pr
  *
  * Runs only after VerifyLegacyQuestPlanFiles was applied in an earlier migrator run, so the drop
  * always ships in a later deploy than the coverage check. Idempotent and resumable: every step
- * filters on what is still present and a missing collection is skipped. The Quest model is chat
- * history; the only change to it is the `$unset`. Irreversible, so down is a no-op.
+ * filters on what is still present and a missing collection is skipped. Chat history (the Quest
+ * model) is not touched: `questMasterPlanId` stays as the marker for the legacy-plan note.
+ * Irreversible, so down is a no-op.
  */
 const migration: MigrationFile = {
   // A generated UTC timestamp (scripts/check-migration-ids.mjs). It sorts after the coverage check,
