@@ -11,7 +11,6 @@ const componentsByFile = {
   'Team/index.tsx': ['Card', 'Modal'],
   'Users/ComplianceModal.tsx': ['Table'],
   'Users/Views/RecentActivityView.tsx': ['Card'],
-  'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
 };
 
