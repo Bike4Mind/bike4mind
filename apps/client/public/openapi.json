@@ -9777,6 +9777,26 @@
                         "kind",
                         "delegationId"
                       ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "obligation"
+                          ]
+                        },
+                        "obligationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "obligationId"
+                      ]
                     }
                   ],
                   "description": "The record the item came from, when it was not agent activity."
@@ -9845,6 +9865,26 @@
                         "kind",
                         "delegationId"
                       ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "obligation"
+                          ]
+                        },
+                        "obligationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "obligationId"
+                      ]
                     }
                   ],
                   "description": "The record the item came from, when it was not agent activity."
@@ -9912,6 +9952,26 @@
                       "required": [
                         "kind",
                         "delegationId"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "obligation"
+                          ]
+                        },
+                        "obligationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "obligationId"
                       ]
                     }
                   ],
@@ -11382,6 +11442,26 @@
                   "kind",
                   "delegationId"
                 ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "obligation"
+                    ]
+                  },
+                  "obligationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "obligationId"
+                ]
               }
             ],
             "description": "The record the item came from, when it was not agent activity."
@@ -11621,6 +11701,26 @@
                 "required": [
                   "kind",
                   "delegationId"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "obligation"
+                    ]
+                  },
+                  "obligationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "obligationId"
                 ]
               }
             ],

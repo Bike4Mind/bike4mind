@@ -6608,6 +6608,12 @@ export interface components {
               kind: 'delegation';
               /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
               delegationId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'obligation';
+              /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+              obligationId: string;
             };
       }[];
       handled: {
@@ -6627,6 +6633,12 @@ export interface components {
               kind: 'delegation';
               /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
               delegationId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'obligation';
+              /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+              obligationId: string;
             };
       }[];
       decisions: {
@@ -6646,6 +6658,12 @@ export interface components {
               kind: 'delegation';
               /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
               delegationId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'obligation';
+              /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+              obligationId: string;
             };
         /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
         approval?: {
@@ -7098,6 +7116,12 @@ export interface components {
             kind: 'delegation';
             /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
             delegationId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'obligation';
+            /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+            obligationId: string;
           };
       /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
       approval?: {
@@ -7179,6 +7203,12 @@ export interface components {
             kind: 'delegation';
             /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
             delegationId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'obligation';
+            /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+            obligationId: string;
           };
       /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
       approval?: {
