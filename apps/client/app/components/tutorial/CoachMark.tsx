@@ -495,6 +495,8 @@ export interface CoachMarkProps {
   done?: boolean;
   onLeave: () => void;
   onShowSteps?: () => void;
+  /** Offered as "Skip step" beside Leave; absent, the card offers no skip. */
+  onSkip?: () => void;
   /** Where this step sits in its module, shown as "Step 2 of 15". */
   progress?: { index: number; count: number };
   /** Shown in place of the step count on a card that has none. */
@@ -523,6 +525,7 @@ export function CoachMark({
   done = false,
   onLeave,
   onShowSteps,
+  onSkip,
   progress,
   heading,
   children,
@@ -812,7 +815,19 @@ export function CoachMark({
         </Stack>
         {children && <Box sx={{ mt: 1.5, '&:empty': { display: 'none' } }}>{children}</Box>}
         {!panel && (
-          <Stack direction="row" justifyContent="flex-end" sx={{ mt: 1 }}>
+          <Stack direction="row" justifyContent="flex-end" gap={onSkip ? 1.5 : undefined} sx={{ mt: 1 }}>
+            {onSkip && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={onSkip}
+                data-testid="tutorial-coach-skip"
+                sx={{ minHeight: 0, px: 0.5, py: 0.25, fontSize: 'xs', fontWeight: 'md' }}
+              >
+                Skip step
+              </Button>
+            )}
             <Button
               size="sm"
               variant="plain"

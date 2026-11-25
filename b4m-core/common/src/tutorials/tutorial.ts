@@ -10,6 +10,13 @@ export const isTutorialSessionName = (name: string | undefined): boolean =>
 export const TUTORIAL_STATUSES = ['in_progress', 'finished', 'left'] as const;
 export type TutorialStatus = (typeof TUTORIAL_STATUSES)[number];
 
+/**
+ * The groups a host's picker lists its modules under: `basics` for people new to AI chat, `different` for what
+ * sets this product apart. A module without one is listed after both.
+ */
+export const TUTORIAL_TRACKS = ['basics', 'different'] as const;
+export type TutorialTrack = (typeof TUTORIAL_TRACKS)[number];
+
 export const TUTORIAL_CARD_SIDES = ['above', 'below', 'left', 'right'] as const;
 export type TutorialCardSide = (typeof TUTORIAL_CARD_SIDES)[number];
 

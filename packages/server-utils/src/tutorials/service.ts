@@ -447,7 +447,7 @@ export async function recordPosition(
 export function enabledModules(modules: readonly TutorialModule[]): TutorialRunModule[] {
   return modules
     .filter(m => m.enabled)
-    .map(({ id, title, pitch, version, revision, enabled, steps, canvasSolve, created }) => ({
+    .map(({ id, title, pitch, version, revision, enabled, steps, canvasSolve, created, track }) => ({
       id,
       title,
       pitch,
@@ -457,6 +457,7 @@ export function enabledModules(modules: readonly TutorialModule[]): TutorialRunM
       steps,
       ...(canvasSolve && { canvasSolve }),
       ...(created && { created }),
+      ...(track && { track }),
     }));
 }
 

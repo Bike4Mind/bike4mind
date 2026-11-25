@@ -1,6 +1,6 @@
 // Core's own tutorials wired to the shared library: its models, content, service and access rule.
 import type { TutorialRequest } from './routes/types';
-import { isFullAdmin } from '@bike4mind/common';
+import { isFullAdmin, type TutorialTrack } from '@bike4mind/common';
 import type { EntitlementUser } from '../entitlements/index';
 import { coreTutorialDepsFor } from './coreDeps';
 import { coreModels } from './coreModels';
@@ -40,13 +40,18 @@ export async function coreServiceFor(req: TutorialRequest) {
   const { modules } = await coreContent.resolve();
   return tutorialService({
     modules: [
-      ...modules.filter(m => visible.has(m.id) && resolveCoreTutorial(m.id)?.enabled),
+      ...modules
+        .filter(m => visible.has(m.id) && resolveCoreTutorial(m.id)?.enabled)
+        .map(m => withTrack(m, resolveCoreTutorial(m.id)?.track)),
       ...(await coreDraftModules(req.user!)),
     ],
     models: coreModels,
     deps: coreTutorialDepsFor(req),
   });
 }
+
+const withTrack = (module: TutorialModule, track: TutorialTrack | undefined): TutorialModule =>
+  track ? { ...module, track } : module;
 
 /** Core drafts a learner may run: servable, and visible to this user. */
 export async function coreDraftModules(user: EntitlementUser): Promise<TutorialModule[]> {

@@ -6,10 +6,7 @@ import { trackedTransport } from './progressCache';
 import { createTutorialTransport } from './transport';
 import type { TutorialStepRegistry } from './types';
 
-export { useTutorialHost, useTutorialHostBase } from './hostBase';
-
-/** Core's own tutorials live under this base; a premium host passes its own. */
-export const CORE_TUTORIALS_API_BASE = '/api/tutorials';
+export { CORE_TUTORIALS_API_BASE, useTutorialHost, useTutorialHostBase } from './hostBase';
 
 const registrations = new Map<string, TutorialStepRegistry>();
 
