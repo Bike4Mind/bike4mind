@@ -21,6 +21,7 @@ describe('formatSideAppAlertMessage', () => {
         phase: 'open',
         rule: 'failing',
         appName: 'Notes <app>',
+        clientId: 'client-1',
         verdict,
         appUrl: 'https://app.example.test/',
         stageLabel: 'Staging',
@@ -31,9 +32,37 @@ describe('formatSideAppAlertMessage', () => {
     expect(text).toContain('10 attempts, 1 succeeded, 9 failed (8 on our side)');
     expect(text).toContain('agent_failed (8)');
     expect(text).toContain(
-      'https://app.example.test/admin?tab=credit-analytics&creditTab=side-apps|Open the Side apps board>'
+      'https://app.example.test/admin?tab=credit-analytics&creditTab=side-apps&sideApp=client-1|Open Notes &lt;app&gt; on the Side apps board>'
     );
     expect(text).toContain('[Staging]');
+  });
+
+  it('encodes the client id in the per-app link', () => {
+    const text = bodyOf(
+      formatSideAppAlertMessage({
+        phase: 'open',
+        rule: 'failing',
+        appName: 'Notes',
+        clientId: 'a b&c',
+        verdict,
+        appUrl: 'https://app.example.test',
+      })
+    );
+    expect(text).toContain('&sideApp=a%20b%26c|');
+  });
+
+  it('links the platform alert to the plain board', () => {
+    const text = bodyOf(
+      formatSideAppAlertMessage({
+        phase: 'open',
+        rule: PLATFORM_RULE,
+        clientId: 'client-1',
+        armedAppNames: ['A'],
+        appUrl: 'https://app.example.test/',
+      })
+    );
+    expect(text).toContain('creditTab=side-apps|Open the Side apps board>');
+    expect(text).not.toContain('sideApp=');
   });
 
   it('reports the silence window for a silent app', () => {

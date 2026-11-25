@@ -534,3 +534,14 @@ describe('Rate Limits params', () => {
     });
   });
 });
+
+describe('sideApp param ownership', () => {
+  const search = parseAdminSearch({ tab: 'credit-analytics', creditTab: 'side-apps', sideApp: 'app-a' });
+
+  it('is kept on credit-analytics and stripped when leaving it', () => {
+    expect(adminSearchForTab(search, 'credit-analytics')).toMatchObject({ creditTab: 'side-apps', sideApp: 'app-a' });
+    const switched = adminSearchForTab(search, 'users');
+    expect(switched.sideApp).toBeUndefined();
+    expect(switched.creditTab).toBeUndefined();
+  });
+});

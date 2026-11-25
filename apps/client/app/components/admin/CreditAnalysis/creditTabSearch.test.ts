@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CREDIT_ANALYSIS_TABS, creditTabSearchValue, parseCreditTab } from './creditTabSearch';
+import { CREDIT_ANALYSIS_TABS, creditTabSearchValue, parseCreditTab, parseSideApp } from './creditTabSearch';
 import { parseAdminSearch } from '../adminTabParams';
 
 describe('creditTab search param', () => {
@@ -20,5 +20,17 @@ describe('creditTab search param', () => {
     expect(creditTabSearchValue('users')).toBeUndefined();
     expect(creditTabSearchValue('economy')).toBeUndefined();
     expect(CREDIT_ANALYSIS_TABS.filter(tab => creditTabSearchValue(tab))).toHaveLength(7);
+  });
+});
+
+describe('sideApp search param', () => {
+  it.each(['b4m_my_app_0011aabb', 'a.b-c_D', 'x', 'a'.repeat(128)])('accepts %s', value => {
+    expect(parseSideApp(value)).toBe(value);
+    expect(parseAdminSearch({ sideApp: value }).sideApp).toBe(value);
+  });
+
+  it.each(['', 'a'.repeat(129), 'has space', 'a/b', 'a?b', '../x', 42, null, undefined, ['a']])('drops %s', value => {
+    expect(parseSideApp(value)).toBeUndefined();
+    expect(parseAdminSearch({ sideApp: value }).sideApp).toBeUndefined();
   });
 });

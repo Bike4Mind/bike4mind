@@ -46,6 +46,7 @@ function messageFor(
     phase,
     rule: alert.rule as SideAppAlertRule | typeof PLATFORM_RULE,
     appName: names.byClient.get(alert.scope) ?? alert.scope,
+    clientId: alert.rule === PLATFORM_RULE ? undefined : alert.scope,
     verdict: alert.verdict,
     armedAppNames: names.armed,
     appUrl: ctx.appUrl,
