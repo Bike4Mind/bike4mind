@@ -5,7 +5,7 @@
  */
 
 import { z } from 'zod';
-import * as unzipper from 'unzipper';
+import JSZip from 'jszip';
 import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
@@ -449,19 +449,18 @@ export function registerWorkflowTools(server: McpServer) {
         const logsByJob: Record<string, string> = {};
         const relevantJobNames = new Set(relevantJobs.map(j => j.name));
 
-        // Use unzipper to parse the ZIP buffer
-        const directory = await unzipper.Open.buffer(Buffer.from(zipBuffer));
+        const archive = await JSZip.loadAsync(zipBuffer);
 
-        for (const file of directory.files) {
+        for (const file of Object.values(archive.files)) {
+          if (file.dir) continue;
           // GitHub ZIP structure: job_name/step_number_step_name.txt
-          const pathParts = file.path.split('/');
+          const pathParts = file.name.split('/');
           if (pathParts.length >= 1) {
             const jobName = pathParts[0];
 
             // Only process relevant jobs
             if (relevantJobNames.has(jobName) || !filterToFailed) {
-              const content = await file.buffer();
-              const logText = content.toString('utf-8');
+              const logText = await file.async('string');
 
               if (!logsByJob[jobName]) {
                 logsByJob[jobName] = '';

@@ -1457,16 +1457,13 @@ importers:
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
-      unzipper:
-        specifier: ^0.12.5
-        version: 0.12.5
+      jszip:
+        specifier: ^3.10.2
+        version: 3.10.2
       zod:
         specifier: ^4.6.6
         version: 4.6.6
     devDependencies:
-      '@types/unzipper':
-        specifier: ^0.10.11
-        version: 0.10.11
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
@@ -6233,9 +6230,6 @@ packages:
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
-
-  '@types/unzipper@0.10.11':
-    resolution: {integrity: sha512-D25im2zjyMCcgL9ag6N46+wbtJBnXIr7SI4zHf9eJD2Dw2tEB5e+p5MYkrxKIVRscs5QV0EhtU9rgXSPx90oJg==}
 
   '@types/use-sync-external-store@0.0.6':
     resolution: {integrity: sha512-zFDAD+tlpf2r4asuHEj0XH6pY6i0g5NeAHPn+15wk3BV6JA69eERFXC1gyGThDkVa1zCyKr5jox1+2LbV/AMLg==}
@@ -17748,10 +17742,6 @@ snapshots:
   '@types/unist@2.0.11': {}
 
   '@types/unist@3.0.3': {}
-
-  '@types/unzipper@0.10.11':
-    dependencies:
-      '@types/node': 24.12.3
 
   '@types/use-sync-external-store@0.0.6': {}
 
