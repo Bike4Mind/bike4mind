@@ -63,9 +63,7 @@ class HeadlessHostAuthService implements HeadlessHostAuth {
       logger: options.logger,
       // Rejecting is how AuthService records `browserOpened: false`, which tells the client to
       // show the URL and code itself. It logs this at warn level.
-      openExternal: async () => {
-        throw new Error('a headless host opens no browser; the client shows the code');
-      },
+      openExternal: () => Promise.reject(new Error('a headless host opens no browser; the client shows the code')),
       devFallback: false,
       userAgent: options.userAgent,
       onStateChanged: state => this.publish(state),

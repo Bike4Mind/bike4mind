@@ -63,12 +63,11 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function fakeDeviceFlow(overrides: Partial<DeviceFlowClient> = {}) {
+function fakeDeviceFlow() {
   const client = {
     initiateDeviceFlow: vi.fn().mockResolvedValue(deviceFlowResponse),
     waitForAuthorization: vi.fn().mockResolvedValue(grant),
     refreshToken: vi.fn(),
-    ...overrides,
   };
   return client as unknown as DeviceFlowClient & typeof client;
 }
