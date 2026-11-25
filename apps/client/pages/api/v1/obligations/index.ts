@@ -14,6 +14,7 @@ import { toMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAcces
 import { createHandOffDeps, handOffDocument } from '@server/obligations/handOffDocument';
 import { serializeObligation } from '@server/obligations/serializeObligation';
 import { assertNotConnectedApp } from '@server/obligations/assertNotConnectedApp';
+import { canReadObligationLakes } from '@server/obligations/obligationLakeScopes';
 
 const CURSOR_SCOPE = 'v1.obligations';
 
@@ -21,9 +22,10 @@ const handOffRoute = nextRouteForContract(handOffObligationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/obligations'),
 }).post(async (req, res) => {
   assertNotConnectedApp(req.apiKeyInfo);
-  const deps = createHandOffDeps(await toMemberAccessContext(req), req.logger);
+  const showDestination = canReadObligationLakes(req.apiKeyInfo);
+  const deps = createHandOffDeps(await toMemberAccessContext(req), req.logger, { offerLakes: showDestination });
   const { obligation, created } = await handOffDocument(req.user.id, req.validated, deps);
-  return res.status(created ? 201 : 200).json(serializeObligation(obligation));
+  return res.status(created ? 201 : 200).json(serializeObligation(obligation, { showDestination }));
 });
 
 const listRoute = nextRouteForContract(listObligationsContract, {
@@ -39,10 +41,11 @@ const listRoute = nextRouteForContract(listObligationsContract, {
   const rows = await obligationRepository.listForUser(req.user.id, { cursor: afterId, limit: limit + 1, status });
   const page = rows.slice(0, limit);
   const last = page.at(-1);
+  const showDestination = canReadObligationLakes(req.apiKeyInfo);
 
   res.setHeader('Cache-Control', 'private, no-store');
   return res.json({
-    data: page.map(serializeObligation),
+    data: page.map(item => serializeObligation(item, { showDestination })),
     next_cursor: rows.length > limit && last ? encodeCursor(CURSOR_SCOPE, last._id.toString()) : null,
   });
 });

@@ -122,10 +122,11 @@ export const obligationRepository = {
     return ObligationModel.findOne({ userId, fileId }).lean();
   },
 
+  /** A dismissed obligation is final: the update matches nothing and returns null. */
   async applyUpdate(id: string, userId: string, set: ObligationUpdate): Promise<IObligation | null> {
     if (!mongoose.isValidObjectId(id)) return null;
     return ObligationModel.findOneAndUpdate(
-      { _id: id, userId },
+      { _id: id, userId, status: { $ne: 'dismissed' } },
       { $set: set },
       { new: true, runValidators: true }
     ).lean();

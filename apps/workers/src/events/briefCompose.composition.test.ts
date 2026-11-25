@@ -6,6 +6,7 @@ import {
   briefedEmailIds,
   briefPushBody,
   buildBriefPrompt,
+  BRIEF_OBLIGATION_LIMIT,
   emptyBrief,
   hasActivity,
   type BriefActivity,
@@ -357,5 +358,20 @@ describe('confirmed obligations in the brief', () => {
       { kind: 'obligation', obligationId: 'ob1' },
       { kind: 'obligation', obligationId: 'ob2' },
     ]);
+  });
+
+  it('gives obligations at most half the section so emails still show', () => {
+    const activity = {
+      ...baseActivity(),
+      emails: Array.from({ length: BRIEF_LIMITS.itemsPerSection }, (_, i) => ({
+        emailId: `e${i}`,
+        kind: 'fyi' as const,
+        summary: `fyi ${i}`,
+      })),
+      obligations: Array.from({ length: BRIEF_LIMITS.itemsPerSection }, (_, i) => obligation(i + 1)),
+    };
+    const kinds = assembleBrief(reply, activity).happened.map(item => item.source?.kind);
+    expect(kinds.filter(kind => kind === 'obligation')).toHaveLength(BRIEF_OBLIGATION_LIMIT);
+    expect(kinds.filter(kind => kind === 'email')).toHaveLength(BRIEF_LIMITS.itemsPerSection - BRIEF_OBLIGATION_LIMIT);
   });
 });

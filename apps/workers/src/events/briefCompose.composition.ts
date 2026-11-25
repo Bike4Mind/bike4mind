@@ -56,6 +56,12 @@ export type BriefDelegation = {
   result: string | null;
 };
 
+/**
+ * Obligations repeat in every brief until due, so they get at most half of `happened` and cannot crowd
+ * triaged emails and delegations out of it for the whole lead window.
+ */
+export const BRIEF_OBLIGATION_LIMIT = Math.floor(BRIEF_LIMITS.itemsPerSection / 2);
+
 export type BriefObligation = {
   obligationId: string;
   payee: string | null;
@@ -182,8 +188,8 @@ export function buildBriefPrompt(activity: BriefActivity, instructions: readonly
     `Emails triaged for the user (counts only): ${JSON.stringify(emailCounts)}`,
     `Items the user delegated to you (counts only): ${JSON.stringify(delegationCounts)}`,
     `Confirmed bills and payments coming due soon (count only): ${activity.obligations.length}`,
-    'The triaged emails and delegated items are listed in the brief separately: mention them in the headline if',
-    'notable, never in happened, handled or decisions.',
+    'The triaged emails, delegated items and bills coming due are listed in the brief separately: mention',
+    'them in the headline if notable, never in happened, handled or decisions.',
     '',
     'Reply with ONLY a JSON object, no code fence, in exactly this shape:',
     '{"headline": string (one sentence), "happened": string[] (notable events, at most 6),',
@@ -311,7 +317,7 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
     happened: toItems(
       'h',
       [
-        ...activity.obligations.map(obligationItem),
+        ...activity.obligations.slice(0, BRIEF_OBLIGATION_LIMIT).map(obligationItem),
         ...emailsOfKind(activity, 'fyi').map(emailItem),
         ...delegationsOf(activity, ['pending', 'failed']).map(delegationItem),
       ],

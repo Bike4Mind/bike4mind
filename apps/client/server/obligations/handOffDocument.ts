@@ -22,7 +22,7 @@ import {
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { recordSessionOperationalUsage } from '@bike4mind/server-utils/billing/recordSessionOperationalUsage';
-import { payerCanFundSessionOperation } from '@bike4mind/server-utils/billing/sessionOperationalCreditGate';
+import { checkSessionOperationalCredits } from '@bike4mind/server-utils/utils/sessionOperationalCreditPreflight';
 import {
   buildExtractionPrompt,
   parseExtraction,
@@ -39,8 +39,9 @@ export type HandOffDeps = {
   obligations: Pick<typeof obligationRepository, 'findByFileForUser' | 'create'>;
   findFile(fileId: string, userId: string): Promise<{ moderationStatus?: ModerationStatus } | null>;
   fileText(fileId: string): Promise<string>;
-  /** Lakes the user can file into: manageable and not built in. */
+  /** Lakes the user can file into: manageable and not built in. Empty when the caller may not read lakes. */
   listLakes(): Promise<ObligationLake[]>;
+  /** False only when the payer cannot cover the call; a failed check throws. */
   canFund(userId: string): Promise<boolean>;
   complete(
     userId: string,
@@ -81,17 +82,19 @@ export async function handOffDocument(
   }
 
   const { reply, model, recordUsage } = await deps.complete(userId, buildExtractionPrompt(text, lakes));
+  // Pre-generated so a stored row's receipt carries its id. An unreadable reply and the loser of a
+  // concurrent hand-off race are charged under an id no row has: the model call ran either way.
+  const id = new mongoose.Types.ObjectId();
   let extraction;
   try {
     extraction = parseExtraction(reply, lakes);
   } catch (error) {
     if (!(error instanceof ObligationExtractionParseError)) throw error;
     deps.logger.warn('[obligations] model reply was not JSON; nothing stored', { fileId: body.file_id });
+    await recordUsage(id.toString());
     throw new BadGatewayError('The assistant could not read this document; try again');
   }
 
-  // Pre-generated so the receipt is keyed to the row it paid for.
-  const id = new mongoose.Types.ObjectId();
   const result = await deps.obligations.create({
     _id: id,
     userId,
@@ -106,13 +109,12 @@ export async function handOffDocument(
     summary: extraction.summary,
     model,
   });
-  // The model call ran either way, so the loser of a concurrent hand-off race is charged too.
   await recordUsage(id.toString());
   return result;
 }
 
 /** Production wiring for the route; `ctx` is the caller's member access context. */
-export function createHandOffDeps(ctx: AccessContext, logger: Logger): HandOffDeps {
+export function createHandOffDeps(ctx: AccessContext, logger: Logger, opts: { offerLakes: boolean }): HandOffDeps {
   return {
     obligations: obligationRepository,
     findFile: (fileId, userId) => fabFileRepository.findByIdAndUserId(fileId, userId),
@@ -121,7 +123,7 @@ export function createHandOffDeps(ctx: AccessContext, logger: Logger): HandOffDe
       return chunks.map(chunk => chunk.text).join('\n');
     },
     listLakes: async () => {
-      if (!(await isFeatureEnabled('EnableDataLakes'))) return [];
+      if (!opts.offerLakes || !(await isFeatureEnabled('EnableDataLakes'))) return [];
       const lakes = await dataLakeService.listDataLakes(ctx, {
         db: {
           dataLakes: dataLakeRepository,
@@ -133,7 +135,9 @@ export function createHandOffDeps(ctx: AccessContext, logger: Logger): HandOffDe
         .filter(lake => lake.canManage === true && !dataLakeService.isFallbackLake(lake))
         .map(lake => ({ id: lake.id, name: lake.name }));
     },
-    canFund: userId => payerCanFundSessionOperation({ payerId: userId, operation: 'scanned document', logger }),
+    canFund: async userId =>
+      (await checkSessionOperationalCredits({ userId, operationCount: 1, operation: 'scanned document', logger }))
+        .allowed,
     complete: async (userId, prompt) => {
       const startTime = Date.now();
       const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });

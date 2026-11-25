@@ -80,6 +80,20 @@ class ObligationHandoffControllerTest {
     }
 
     @Test
+    fun longOcrTextIsCutToTheServerLimit() = runTest {
+        val api = FakeObligations(mutableListOf(Result.success(extracted)), Result.success(extracted))
+        controller(api).start(scan, "a".repeat(ObligationHandoffController.HAND_OFF_TEXT_LIMIT + 5))
+        assertEquals(ObligationHandoffController.HAND_OFF_TEXT_LIMIT, api.handOffTexts.single()?.length)
+    }
+
+    @Test
+    fun theTextCapNeverSplitsASurrogatePair() {
+        assertEquals("abc", ObligationHandoffController.capHandOffText("abc", limit = 3))
+        assertEquals("ab", ObligationHandoffController.capHandOffText("ab\uD83D\uDE00", limit = 3))
+        assertEquals("ab\uD83D\uDE00", ObligationHandoffController.capHandOffText("ab\uD83D\uDE00x", limit = 4))
+    }
+
+    @Test
     fun blankOcrTextIsLeftForTheServer() = runTest {
         val api = FakeObligations(mutableListOf(Result.success(extracted)), Result.success(extracted))
         controller(api).start(scan, " \n ")
@@ -196,5 +210,17 @@ class ObligationHandoffControllerTest {
 
         status = HttpStatusCode.Conflict
         assertFailsWith<StillCheckingException> { wire.handOff("file-1", null) }
+    }
+
+    @Test
+    fun theWireListsOnlyLakesTheUserCanFileInto() = runTest {
+        val reply = """{"data":[{"id":"l1","name":"Bills","built_in":false,"can_manage":true},
+            {"id":"l2","name":"Shared","built_in":false,"can_manage":false},
+            {"id":"l3","name":"Docs","built_in":true,"can_manage":false}]}"""
+        val wire = ObligationsWire(
+            ServerEnvironment.Custom("https://app.example.test"),
+            HttpClient(MockEngine { respond(reply, HttpStatusCode.OK) }),
+        )
+        assertEquals(listOf(LakeOption("l1", "Bills")), wire.lakes())
     }
 }

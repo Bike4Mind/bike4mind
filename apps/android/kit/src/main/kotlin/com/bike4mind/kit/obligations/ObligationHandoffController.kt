@@ -71,7 +71,7 @@ class ObligationHandoffController(
             val ticket = capture.createUpload(file.name, "application/pdf", file.length())
             capture.upload(ticket, file, "application/pdf")
             mutableState.update { it.copy(phase = HandoffPhase.EXTRACTING) }
-            val extracted = handOffWhenChecked(ticket.fileId, text?.trim()?.takeIf { it.isNotEmpty() })
+            val extracted = handOffWhenChecked(ticket.fileId, text?.trim()?.takeIf { it.isNotEmpty() }?.let(::capHandOffText))
             val lakes = runCatching { obligations.lakes() }.getOrDefault(emptyList()).let { listed ->
                 val suggested = extracted.destination
                 if (suggested == null || listed.any { it.id == suggested.lakeId }) listed
@@ -164,6 +164,16 @@ class ObligationHandoffController(
     }
 
     companion object {
+        /** The hand-off route's `text` cap, `OBLIGATION_LIMITS.text` in b4m-core/common schemas/obligation.ts. */
+        const val HAND_OFF_TEXT_LIMIT = 20_000
+
+        /** Cuts a long scan to the route's cap instead of failing; never splits a surrogate pair. */
+        fun capHandOffText(text: String, limit: Int = HAND_OFF_TEXT_LIMIT): String {
+            if (text.length <= limit) return text
+            val end = if (Character.isHighSurrogate(text[limit - 1])) limit - 1 else limit
+            return text.substring(0, end)
+        }
+
         /** Empty means no amount. Exact: parsed to [BigDecimal], never through a double. */
         fun parseAmount(raw: String, locale: Locale): Result<BigDecimal?> {
             val trimmed = raw.trim()

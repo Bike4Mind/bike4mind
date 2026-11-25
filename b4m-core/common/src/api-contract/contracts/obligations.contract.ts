@@ -48,7 +48,8 @@ export const handOffObligationContract = defineEndpoint({
     'suggesting one of your data lakes to file it in. The result is `pending`: nothing is filed or briefed ' +
     'until you confirm it with `PATCH /api/v1/obligations/{id}`. Pass `text` when the device already ' +
     "recognized the page; otherwise the file's indexed text is read. Handing off the same file again returns " +
-    'the existing obligation with `200` and is not charged again.',
+    'the existing obligation with `200` and is not charged again. An API key without a data-lake read scope ' +
+    'gets no destination suggestion, and `destination` reads `null` on every obligation route.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: SCOPES,
@@ -70,7 +71,7 @@ export const handOffObligationContract = defineEndpoint({
     },
     429: RATE_LIMITED,
     502: {
-      description: 'The assistant could not read the document. Nothing was saved; a retry is safe.',
+      description: 'The assistant could not read the document. Nothing was saved, but the reading is charged.',
       schema: ApiErrorSchema,
     },
   },
@@ -138,8 +139,9 @@ export const updateObligationContract = defineEndpoint({
     200: { description: 'The updated obligation.', schema: ObligationSchema },
     403: {
       description:
-        'The destination is a data lake you can read but not manage or a built-in one, or the key was minted ' +
-        'for a connected app.',
+        'The destination is a data lake you can read but not manage or a built-in one, the request sets or ' +
+        'files into a destination with an API key lacking `datalake:write`, or the key was minted for a ' +
+        'connected app.',
       schema: ApiErrorSchema,
     },
     404: { description: 'No such obligation or destination data lake, or it is not yours.', schema: ApiErrorSchema },

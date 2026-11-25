@@ -38,6 +38,7 @@ private struct FakeLakes: DestinationSource {
       LakeSummary(id: "lake-bills", name: "Bills", fileCount: 3, isBuiltIn: false),
       LakeSummary(id: "lake-home", name: "Home", fileCount: 1, isBuiltIn: false),
       LakeSummary(id: "lake-docs", name: "Product docs", fileCount: 9, isBuiltIn: true),
+      LakeSummary(id: "lake-shared", name: "Shared", fileCount: 2, isBuiltIn: false, canManage: false),
     ]
   }
   func sessions() async throws -> [SessionSummary] { [] }
@@ -72,7 +73,7 @@ final class ObligationHandoffModelTests: XCTestCase {
       sleep: { _ in }, maximumPolls: 3, locale: Locale(identifier: locale), calendar: calendar)
   }
 
-  func testExtractedFieldsFillTheSheetAndBuiltInLakesAreHidden() async throws {
+  func testExtractedFieldsFillTheSheetAndUnwritableLakesAreHidden() async throws {
     let api = FakeObligationAPI(handOff: [.success(extracted)], update: .success(extracted))
     let model = try model(api)
     await model.start()
@@ -85,6 +86,20 @@ final class ObligationHandoffModelTests: XCTestCase {
     let call = await api.handOffCalls.first
     XCTAssertEqual(call?.fileID, "file-1")
     XCTAssertEqual(call?.text, "Invoice 42")
+  }
+
+  func testLongOcrTextIsCutToTheServerLimit() async throws {
+    let api = FakeObligationAPI(handOff: [.success(extracted)], update: .success(extracted))
+    let long = String(repeating: "a", count: ObligationHandoffModel.handOffTextLimit - 1) + "\u{1F600}tail"
+    try await model(api, text: long).start()
+    let text = await api.handOffCalls.first?.text
+    XCTAssertEqual(text?.utf16.count, ObligationHandoffModel.handOffTextLimit - 1)
+  }
+
+  func testTextCapKeepsShortTextAndCountsUtf16() {
+    XCTAssertEqual(ObligationHandoffModel.capHandOffText("abc", limit: 3), "abc")
+    XCTAssertEqual(ObligationHandoffModel.capHandOffText("ab\u{1F600}", limit: 3), "ab")
+    XCTAssertEqual(ObligationHandoffModel.capHandOffText("ab\u{1F600}", limit: 4), "ab\u{1F600}")
   }
 
   func testBlankOcrTextIsLeftForTheServerToRead() async throws {

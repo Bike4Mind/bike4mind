@@ -27,9 +27,12 @@ export class ObligationExtractionParseError extends Error {
 const DOCUMENT_OPEN = '<document>';
 const DOCUMENT_CLOSE = '</document>';
 
-/** The document is third-party text: it is fenced as data, and its own copies of the fence are removed. */
+/**
+ * The document is third-party text, fenced as data. Every `<` in it is escaped, so no spelling of the
+ * fence (nested, spaced, any case) can survive into the prompt to close it early.
+ */
 export function buildExtractionPrompt(text: string, lakes: ObligationLake[]): string {
-  const fenced = text.slice(0, OBLIGATION_LIMITS.text).replace(/<\/?document>/gi, '');
+  const fenced = text.slice(0, OBLIGATION_LIMITS.text).replace(/</g, '&lt;');
   const lakeLines =
     lakes.length > 0
       ? lakes.map((lake, i) => `${i + 1}. ${JSON.stringify(lake.name)}`).join('\n')

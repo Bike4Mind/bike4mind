@@ -28,12 +28,25 @@ public struct LakeSummary: Identifiable, Hashable, Sendable, Codable {
   public let fileCount: Int
   /// Built-in lakes are platform-owned and read-only, so they are never offered as a destination.
   public let isBuiltIn: Bool
+  /// False for a lake the user can only read: filing into it is refused.
+  public let canManage: Bool
 
-  public init(id: String, name: String, fileCount: Int, isBuiltIn: Bool) {
+  public init(id: String, name: String, fileCount: Int, isBuiltIn: Bool, canManage: Bool = true) {
     self.id = id
     self.name = name
     self.fileCount = fileCount
     self.isBuiltIn = isBuiltIn
+    self.canManage = canManage
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    fileCount = try container.decode(Int.self, forKey: .fileCount)
+    isBuiltIn = try container.decode(Bool.self, forKey: .isBuiltIn)
+    // Absent in summaries encoded before the field existed.
+    canManage = try container.decodeIfPresent(Bool.self, forKey: .canManage) ?? true
   }
 }
 
@@ -142,6 +155,7 @@ public struct CaptureClient: CaptureAPI, DelegationSubmitting, ObligationHanding
       let name: String
       let fileCount: Int
       let builtIn: Bool
+      let canManage: Bool
     }
     let data: [Lake]
     let nextCursor: String?
@@ -207,7 +221,8 @@ public struct CaptureClient: CaptureAPI, DelegationSubmitting, ObligationHanding
       throw APIError.malformedResponse
     }
     let lakes = reply.data.map {
-      LakeSummary(id: $0.id, name: $0.name, fileCount: $0.fileCount, isBuiltIn: $0.builtIn)
+      LakeSummary(
+        id: $0.id, name: $0.name, fileCount: $0.fileCount, isBuiltIn: $0.builtIn, canManage: $0.canManage)
     }
     return Page(items: lakes, nextCursor: reply.nextCursor)
   }

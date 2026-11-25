@@ -78,8 +78,9 @@ public final class ObligationHandoffModel {
       try await put(ticket.uploadURL, data, "application/pdf")
       phase = .extracting
       let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
-      let extracted = try await handOffWhenChecked(ticket.fileID, text: trimmed?.isEmpty == false ? trimmed : nil)
-      lakes = ((try? await destinations.lakes()) ?? []).filter { !$0.isBuiltIn }
+      let extracted = try await handOffWhenChecked(
+        ticket.fileID, text: trimmed?.isEmpty == false ? trimmed.map { Self.capHandOffText($0) } : nil)
+      lakes = ((try? await destinations.lakes()) ?? []).filter { !$0.isBuiltIn && $0.canManage }
       load(extracted)
       phase = .reviewing
     } catch {
@@ -138,6 +139,22 @@ public final class ObligationHandoffModel {
     if let destination = extracted.destination, !lakes.contains(where: { $0.id == destination.lakeID }) {
       lakes.insert(LakeSummary(id: destination.lakeID, name: destination.name, fileCount: 0, isBuiltIn: false), at: 0)
     }
+  }
+
+  /// The hand-off route refuses `text` over `OBLIGATION_LIMITS.text` (b4m-core/common schemas/obligation.ts),
+  /// counted in UTF-16 units, so a long scan is cut there on a character boundary instead of failing.
+  static let handOffTextLimit = 20_000
+
+  static func capHandOffText(_ text: String, limit: Int = handOffTextLimit) -> String {
+    guard text.utf16.count > limit else { return text }
+    var units = 0
+    var end = text.startIndex
+    for index in text.indices {
+      units += text[index].utf16.count
+      if units > limit { break }
+      end = text.index(after: index)
+    }
+    return String(text[..<end])
   }
 
   static func parseAmount(_ raw: String, locale: Locale) -> Result<Decimal?, AmountProblem> {

@@ -91,6 +91,14 @@ describe('obligationRepository.applyUpdate', () => {
     });
     await expect(obligationRepository.applyUpdate(id, 'user-me', { amountValue: -3 })).rejects.toThrow();
   });
+
+  it('leaves a dismissed row unchanged', async () => {
+    const { obligation } = await obligationRepository.create(invoice());
+    const id = obligation._id.toString();
+    await obligationRepository.applyUpdate(id, 'user-me', { status: 'dismissed' });
+    expect(await obligationRepository.applyUpdate(id, 'user-me', { status: 'confirmed' })).toBeNull();
+    expect(await obligationRepository.findByIdForUser(id, 'user-me')).toMatchObject({ status: 'dismissed' });
+  });
 });
 
 describe('obligationRepository.listForUser', () => {

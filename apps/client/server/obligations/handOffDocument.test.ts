@@ -109,13 +109,20 @@ describe('handOffDocument', () => {
     expect(deps.complete).not.toHaveBeenCalled();
   });
 
-  it('502s a non-JSON reply and stores nothing', async () => {
+  it('502s a non-JSON reply, stores nothing and still charges the reading', async () => {
     const recordUsage = vi.fn(async () => {});
     const { deps } = makeDeps({
       complete: vi.fn(async () => ({ reply: 'Sorry, I cannot help.', model: 'ops-model', recordUsage })),
     });
     await expect(handOffDocument('user-me', { file_id: FILE_ID }, deps)).rejects.toMatchObject({ statusCode: 502 });
     expect(deps.obligations.create).not.toHaveBeenCalled();
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a failed credit check instead of reporting the payer unfunded', async () => {
+    const { deps } = makeDeps({ canFund: vi.fn(async () => Promise.reject(new Error('billing down'))) });
+    await expect(handOffDocument('user-me', { file_id: FILE_ID }, deps)).rejects.toThrow('billing down');
+    expect(deps.complete).not.toHaveBeenCalled();
   });
 
   it('stores nothing when the model call itself fails', async () => {

@@ -38,7 +38,8 @@ import {
  * row and publishes the event, as does the schedule reconciler), stores it and pushes `brief_ready`.
  *
  * Composition is one pass of the platform's operations model over the user's recent agent runs, the
- * approvals and questions still waiting on them and counts of their triaged email and delegated items; there is no tool loop. Failures settle the row as `failed` so a
+ * approvals and questions still waiting on them, counts of their triaged email and delegated items and
+ * of their confirmed bills coming due; there is no tool loop. Failures settle the row as `failed` so a
  * polling client stops waiting, and are never rethrown: a retry cannot fix a refused balance or a
  * malformed reply, and the user can simply compose again.
  */

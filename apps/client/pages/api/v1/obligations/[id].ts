@@ -18,6 +18,9 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { addFileToWritableLake, assertLakeMembershipWritable } from '@server/dataLakes/lakeMembershipWrite';
 import { serializeObligation } from '@server/obligations/serializeObligation';
 import { assertNotConnectedApp } from '@server/obligations/assertNotConnectedApp';
+import { assertCanFileObligationIntoLakes, canReadObligationLakes } from '@server/obligations/obligationLakeScopes';
+
+const dismissedConflict = () => new ConflictError('This obligation was dismissed and can no longer change');
 
 const RATE_BUCKET = 'GET /api/v1/obligations/[id]';
 
@@ -29,7 +32,7 @@ const getRoute = nextRouteForContract(getObligationContract, {
   assertNotConnectedApp(req.apiKeyInfo);
   const item = await obligationRepository.findByIdForUser(req.validatedParams.id, req.user.id);
   if (!item) throw new NotFoundError('Obligation not found');
-  return res.json(serializeObligation(item));
+  return res.json(serializeObligation(item, { showDestination: canReadObligationLakes(req.apiKeyInfo) }));
 });
 
 const updateRoute = nextRouteForContract(updateObligationContract, {
@@ -43,9 +46,7 @@ const updateRoute = nextRouteForContract(updateObligationContract, {
   }
   const current = await obligationRepository.findByIdForUser(req.validatedParams.id, userId);
   if (!current) throw new NotFoundError('Obligation not found');
-  if (current.status === 'dismissed') {
-    throw new ConflictError('This obligation was dismissed and can no longer change');
-  }
+  if (current.status === 'dismissed') throw dismissedConflict();
   const id = current._id.toString();
 
   const set: ObligationUpdate = {};
@@ -71,6 +72,7 @@ const updateRoute = nextRouteForContract(updateObligationContract, {
   const fileInto = finalStatus === 'confirmed' && targetLake && (confirming || lakeChanged) ? targetLake : null;
 
   if (typeof requestedLake === 'string' || fileInto) {
+    assertCanFileObligationIntoLakes(req.apiKeyInfo);
     if (!(await isFeatureEnabled('EnableDataLakes'))) throw new NotFoundError('Data lake not found');
   }
   const ctx = typeof requestedLake === 'string' || fileInto ? await toMemberAccessContext(req) : null;
@@ -83,12 +85,16 @@ const updateRoute = nextRouteForContract(updateObligationContract, {
       actor: { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo) },
       resolveFileId: () => current.fileId,
       logger: req.logger,
-      alsoInTransaction: lake =>
-        obligationRepository.applyUpdate(id, userId, {
+      // Throwing rolls the membership back when a concurrent dismiss won.
+      alsoInTransaction: async lake => {
+        const row = await obligationRepository.applyUpdate(id, userId, {
           ...set,
           destinationLakeId: lake.id,
           destinationName: lake.name,
-        }),
+        });
+        if (!row) throw dismissedConflict();
+        return row;
+      },
     });
     updated = extra;
   } else {
@@ -99,8 +105,9 @@ const updateRoute = nextRouteForContract(updateObligationContract, {
     }
     updated = await obligationRepository.applyUpdate(id, userId, set);
   }
-  if (!updated) throw new NotFoundError('Obligation not found');
-  return res.json(serializeObligation(updated));
+  // applyUpdate skips a dismissed row, so a miss here is a dismiss that landed after the read above.
+  if (!updated) throw dismissedConflict();
+  return res.json(serializeObligation(updated, { showDestination: canReadObligationLakes(req.apiKeyInfo) }));
 });
 
 export const config = {

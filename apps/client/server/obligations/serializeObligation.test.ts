@@ -25,7 +25,7 @@ const base: IObligation = {
 
 describe('serializeObligation', () => {
   it('maps a confirmed row to the wire shape, keeping a zero amount', () => {
-    const wire = serializeObligation(base);
+    const wire = serializeObligation(base, { showDestination: true });
     expect(wire).toEqual({
       id: '6650c0ffee0000000000abcd',
       status: 'confirmed',
@@ -45,16 +45,23 @@ describe('serializeObligation', () => {
   });
 
   it('nulls an amount missing its currency, an absent due date and destination', () => {
-    const wire = serializeObligation({
-      ...base,
-      status: 'pending',
-      currency: null,
-      dueDate: null,
-      destinationLakeId: null,
-      destinationName: null,
-      confirmedAt: null,
-    });
+    const wire = serializeObligation(
+      {
+        ...base,
+        status: 'pending',
+        currency: null,
+        dueDate: null,
+        destinationLakeId: null,
+        destinationName: null,
+        confirmedAt: null,
+      },
+      { showDestination: true }
+    );
     expect(wire).toMatchObject({ amount: null, due_date: null, destination: null, confirmed_at: null });
     expect(ObligationSchema.safeParse(wire).success).toBe(true);
+  });
+
+  it('hides a stored destination from a caller that may not read lakes', () => {
+    expect(serializeObligation(base, { showDestination: false }).destination).toBeNull();
   });
 });

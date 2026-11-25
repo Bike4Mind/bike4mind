@@ -135,7 +135,7 @@ class ObligationsWire(private val environment: ServerEnvironment, private val ht
         if (response.status.value != 200) throw ApiException(response.status.value)
         val page = runCatching { B4MClientJson.decodeFromString(LakePage.serializer(), body) }.getOrNull()
             ?: throw ApiException(response.status.value)
-        return page.data.filterNot { it.builtIn }.map { LakeOption(it.id, it.name) }
+        return page.data.filter { it.canManage && !it.builtIn }.map { LakeOption(it.id, it.name) }
     }
 
     private suspend fun obligation(response: HttpResponse, accepted: Set<Int>): Obligation {
@@ -156,7 +156,12 @@ class ObligationsWire(private val environment: ServerEnvironment, private val ht
     private data class ErrorReply(val error: String? = null)
 
     @Serializable
-    private data class Lake(val id: String, val name: String, @SerialName("built_in") val builtIn: Boolean = false)
+    private data class Lake(
+        val id: String,
+        val name: String,
+        @SerialName("built_in") val builtIn: Boolean = false,
+        @SerialName("can_manage") val canManage: Boolean = false,
+    )
 
     @Serializable
     private data class LakePage(val data: List<Lake> = emptyList())

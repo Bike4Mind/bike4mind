@@ -246,4 +246,34 @@ describe('/api/v1/obligations', () => {
     const set = mocks.applyUpdate.mock.calls.at(-1)?.[2];
     expect(set).not.toHaveProperty('confirmedAt');
   });
+
+  it('needs datalake:write on an API key to choose or file into a lake, and hides lakes without read', async () => {
+    const aiOnly = { apiKeyInfo: { scopes: ['ai:chat'] } };
+    await expect(
+      call(idHandler, 'PATCH', { ...aiOnly, validated: { status: 'confirmed' }, validatedParams: { id: ID } })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    await expect(
+      call(idHandler, 'PATCH', { ...aiOnly, validated: { destination_lake_id: 'lake-2' }, validatedParams: { id: ID } })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mocks.addFileToWritableLake).not.toHaveBeenCalled();
+    expect(mocks.applyUpdate).not.toHaveBeenCalled();
+
+    const read = await call(idHandler, 'GET', { ...aiOnly, validatedParams: { id: ID } });
+    expect(read._getJSONData().destination).toBeNull();
+
+    const writer = { apiKeyInfo: { scopes: ['ai:chat', 'datalake:write'] } };
+    const res = await call(idHandler, 'PATCH', {
+      ...writer,
+      validated: { status: 'confirmed' },
+      validatedParams: { id: ID },
+    });
+    expect(mocks.addFileToWritableLake).toHaveBeenCalled();
+    expect(res._getJSONData().destination).toMatchObject({ lake_id: 'lake-2' });
+  });
+
+  it('answers 409 and rolls the filing back when a dismiss lands mid-confirm', async () => {
+    mocks.applyUpdate.mockResolvedValue(null);
+    await expect(patch({ status: 'confirmed' })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(patch({ payee: 'Example Power' })).rejects.toMatchObject({ statusCode: 409 });
+  });
 });
