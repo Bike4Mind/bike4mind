@@ -40,6 +40,7 @@ import {
   requireOwnListing,
   suggestTemplateSlug,
 } from './template';
+import { exampleRunsLeftToday } from './templateExampleCap';
 
 /**
  * The template preview image: one 1200x630 JPEG per template, stored as a file the author owns. A
@@ -281,9 +282,10 @@ export async function getOwnTemplateView(
   const listing = await requireOwnListing(user, listingId);
   const id = String(listing.id);
   const live = isLive(listing);
-  const [doc, approved] = await Promise.all([
+  const [doc, approved, exampleRunsLeft] = await Promise.all([
     SkillListingTemplate.findOne({ listingId: id }),
     live ? approvedSnapshotOf(listing).catch(() => null) : null,
+    exampleRunsLeftToday(user.id),
   ]);
   const template = doc ? plainTemplate(doc) : null;
 
@@ -303,6 +305,7 @@ export async function getOwnTemplateView(
     suggestedSlug: template ? null : await suggestTemplateSlug(listing.name),
     previewImageUrl,
     previewImageStatus,
+    exampleRunsLeftToday: exampleRunsLeft,
   };
 }
 

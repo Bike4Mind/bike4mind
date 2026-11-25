@@ -2,7 +2,6 @@ import sanitizeHtml from 'sanitize-html';
 import { z } from 'zod';
 import {
   SkillListingTemplate,
-  cacheRepository,
   editSkillTemplateExample,
   fabFileRepository,
   failSkillTemplateExampleRun,
@@ -37,6 +36,7 @@ import {
 import type { MarketActor } from '@bike4mind/server-utils/skillMarket/market';
 import type { QuestDispatchIdentity } from '@server/utils/questDispatchSignature';
 import { plainTemplate, requireLiveListing, requireOwnListing } from './template';
+import { releaseExampleRun, reserveExampleRun } from './templateExampleCap';
 import { renderFreeRunResult } from './templateFreeRun';
 
 /**
@@ -53,35 +53,13 @@ export const TEMPLATE_EXAMPLE_SESSION_SURFACE = 'skill-template-example';
 /** The ChatCompletion internal route (chatCompletion/internal/route.ts). */
 export const TEMPLATE_EXAMPLE_DISPATCH_PATH = '/template-example';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
-
-/** One counter per author per UTC day, across all their templates. */
-export const exampleRunCapKey = (userId: string, now: number = Date.now()) =>
-  `skill-template-example:author:${userId}:${utcDay(now)}`;
-
-export async function exampleRunsLeftToday(userId: string, now: number = Date.now()): Promise<number> {
-  const doc = await cacheRepository.findByKey(exampleRunCapKey(userId, now));
-  const used = (doc?.result as { count?: unknown } | undefined)?.count;
-  return Math.max(0, SKILL_TEMPLATE_EXAMPLE_DAILY_RUN_CAP - (typeof used === 'number' ? used : 0));
-}
-
-export type ExampleRunCap = { key: string; expiresAt: string };
-
-export async function reserveExampleRun(userId: string, now: number = Date.now()): Promise<ExampleRunCap | null> {
-  const key = exampleRunCapKey(userId, now);
-  const result = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-    key,
-    SKILL_TEMPLATE_EXAMPLE_DAILY_RUN_CAP,
-    DAY_MS - (now % DAY_MS)
-  );
-  return result.success ? { key, expiresAt: result.expiresAt.toISOString() } : null;
-}
-
-/** Gives back a run that failed before producing anything. */
-export async function releaseExampleRun(cap: ExampleRunCap): Promise<void> {
-  await cacheRepository.releaseFromFixedWindow(cap.key, 1, new Date(cap.expiresAt));
-}
+export {
+  exampleRunCapKey,
+  exampleRunsLeftToday,
+  releaseExampleRun,
+  reserveExampleRun,
+  type ExampleRunCap,
+} from './templateExampleCap';
 
 /** The signed payload the API sends the ChatCompletion service to run an example. */
 export const TemplateExampleDispatchSchema = z.strictObject({

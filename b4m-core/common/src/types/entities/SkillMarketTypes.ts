@@ -489,4 +489,6 @@ export interface SkillTemplateEditorView {
   /** A short-lived URL for the editor to show the image; null until it passes moderation. */
   previewImageUrl: string | null;
   previewImageStatus: SkillTemplatePreviewImageStatus | null;
+  /** Example runs the author can still start today, across all their templates. */
+  exampleRunsLeftToday: number;
 }
