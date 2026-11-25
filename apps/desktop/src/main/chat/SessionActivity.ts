@@ -1,11 +1,14 @@
 import type { ChatSessionStatus, ChatSessionStatusEvent, SessionBackgroundJobs, SessionSetupStep } from '@shared/chat';
 
+/** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue in ChatService. */
+export type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
+
 /**
  * Whether a turn that just ended leaves an unread reply: a finished answer with text, or a turn that
  * failed. Either stays on the Agents board and the dock badge until opened; a stop the user asked for,
  * or an empty answer, does not.
  */
-export function endsUnread(outcome: 'completed' | 'aborted' | 'failed' | 'expired', replyText: string): boolean {
+export function endsUnread(outcome: TurnOutcome, replyText: string): boolean {
   return outcome === 'failed' || (outcome === 'completed' && replyText.trim().length > 0);
 }
 

@@ -283,7 +283,7 @@ import {
   suggestionModelChoices,
   suggestionRequestMessages,
 } from './nextPrompt';
-import { endsUnread, type SessionActivity } from './SessionActivity';
+import { endsUnread, type SessionActivity, type TurnOutcome } from './SessionActivity';
 import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
 import { resolveInlineSkills } from './skills/inline';
@@ -431,8 +431,6 @@ type TaskDecisionIndexLoad = {
   ready: Promise<void>;
 };
 
-/** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
-type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 type AuxiliaryPurpose = Extract<CompletionRunAttribution['purpose'], 'title' | 'compaction' | 'suggestion'>;
 type AuxiliaryRun = { session: ChatSession; run: CompletionRunAttribution; budgeted: boolean; payer: BillingPayer };
 
