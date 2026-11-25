@@ -1853,7 +1853,12 @@ export function ChatShell({
           syncHints={
             onOpenImportSettings
               ? (empty, fallback) => (
-                  <SidebarSyncHints empty={empty} fallback={fallback} onOpenSettings={onOpenImportSettings} />
+                  <SidebarSyncHints
+                    empty={empty}
+                    fallback={fallback}
+                    showWebSync={mode === 'chat'}
+                    onOpenSettings={onOpenImportSettings}
+                  />
                 )
               : undefined
           }

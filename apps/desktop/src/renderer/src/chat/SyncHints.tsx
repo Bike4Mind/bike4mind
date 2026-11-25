@@ -13,6 +13,7 @@ import {
 } from '@shared/claudeImport';
 import { useClaudeImport } from './ClaudeImportSettings';
 import { ArrowRightIcon, CloseIcon } from './icons';
+import { WebSyncStatus } from './WebSyncStatus';
 import claudeIcon from '../assets/claude.svg';
 import bike4mindIcon from '../../favicon.png';
 
@@ -156,27 +157,51 @@ export function SyncHintsView({ choice, onDismiss, onOpenSettings, onOpenExportH
   );
 }
 
-/** The sidebar's sync hint, kept live from main; `fallback` shows when there is none. */
+/**
+ * The sidebar's sync hint, kept live from main; `fallback` shows when there is none. `showWebSync`
+ * adds the Bike4Mind web sync status line above it (chat lists only: web notebooks import as chats).
+ */
 export function SidebarSyncHints({
   empty,
   fallback = null,
+  showWebSync = false,
   onOpenSettings,
 }: {
   empty: boolean;
   fallback?: ReactNode;
+  showWebSync?: boolean;
   onOpenSettings: (focus: ClaudeImportKind) => void;
 }) {
   const [state, setState] = useClaudeImport();
   const api = typeof window === 'undefined' ? undefined : window.b4m?.claudeImport;
   const choice = pickSyncHint(state, empty);
-  if (!api || !choice) return <>{fallback}</>;
+  // The empty-sidebar card already offers web sync; a second "not synced" line would repeat it.
+  const webStatus =
+    api && showWebSync && !(choice?.options.web && state && !state.web.settings.enabled) ? (
+      <WebSyncStatus
+        state={state}
+        onSyncNow={() => void api.syncWeb().then(setState, () => {})}
+        onOpenSettings={onOpenSettings}
+      />
+    ) : null;
+  if (!api || !choice) {
+    return (
+      <>
+        {webStatus}
+        {fallback}
+      </>
+    );
+  }
 
   return (
-    <SyncHintsView
-      choice={choice}
-      onDismiss={id => void api.dismissHint(id).then(setState, () => {})}
-      onOpenSettings={onOpenSettings}
-      onOpenExportHelp={() => void window.b4m.shell.openExternal(CLAUDE_EXPORT_HELP_URL)}
-    />
+    <>
+      {webStatus}
+      <SyncHintsView
+        choice={choice}
+        onDismiss={id => void api.dismissHint(id).then(setState, () => {})}
+        onOpenSettings={onOpenSettings}
+        onOpenExportHelp={() => void window.b4m.shell.openExternal(CLAUDE_EXPORT_HELP_URL)}
+      />
+    </>
   );
 }
