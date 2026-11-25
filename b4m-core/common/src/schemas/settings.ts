@@ -330,6 +330,8 @@ export const SettingKeySchema = z.enum([
   'UseFormatPrompt',
   'EnableDeferredToolLoading',
   'DeferredToolStartSetMaxTokens',
+  'evaluationUserIds',
+  'evaluationModelIds',
   'EnableQuestMaster',
   'QuestMasterLegacyShutdownDate',
   'EnableQuestMasterDefault',
@@ -4169,6 +4171,24 @@ export const settingsMap = {
     order: 15,
     dependsOn: 'EnableDeferredToolLoading',
     userReadable: true,
+  }),
+  evaluationUserIds: makeStringSetting({
+    key: 'evaluationUserIds',
+    name: 'Controlled Evaluation: Allowed User IDs',
+    defaultValue: '',
+    description:
+      'Comma-separated user IDs allowed to create evaluation completion runs and send evaluation requests (the Desktop controlled cost evaluation). Evaluation mode disables provider retries and fallback, bounds output and returns per-request provider usage receipts. Empty (default) refuses every evaluation request. Changes apply to the next request.',
+    category: 'AI',
+    order: 16,
+  }),
+  evaluationModelIds: makeStringSetting({
+    key: 'evaluationModelIds',
+    name: 'Controlled Evaluation: Allowed Model IDs',
+    defaultValue: '',
+    description:
+      'Comma-separated exact catalog model IDs an evaluation request may dispatch to. Aliases are not matched, so confirm each ID resolves to the intended provider model before adding it. Empty (default) refuses every evaluation dispatch. Changes apply to the next request.',
+    category: 'AI',
+    order: 17,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',

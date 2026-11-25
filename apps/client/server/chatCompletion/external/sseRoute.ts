@@ -391,7 +391,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         ? await verifyRunOwnership(body.run, { userId, billingOrganizationId }, Boolean(body.evaluation))
         : undefined;
       if (body.evaluation && !run) throw new BadRequestError('Evaluation requires a verified completion run.');
-      if (body.evaluation) assertEvaluationAuthorized(userId);
+      if (body.evaluation) await assertEvaluationAuthorized(userId);
       if (body.evaluation && run) evaluation = evaluationTransport(run.runId, body.evaluation.requestId, onReady);
 
       // Stream the completion, tracking usage for analytics.
