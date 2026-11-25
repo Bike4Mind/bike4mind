@@ -13,7 +13,6 @@ const componentsByFile = {
   'Users/Views/RecentActivityView.tsx': ['Card'],
   'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
-  'email/EmailJobsPanel.tsx': ['Table'],
 };
 
 const migrationReasons = {

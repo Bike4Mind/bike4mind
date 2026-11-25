@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const mocks = vi.hoisted(() => ({
@@ -138,5 +139,43 @@ describe('EmailJobsPanel', () => {
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('edit-job-j1'));
     expect(screen.getByTestId('email-job-detail-stub')).toHaveAttribute('data-job-id', 'j1');
+  });
+
+  it('renders each campaign row inside the admin data table with the actions its status allows', () => {
+    mocks.jobs.data = {
+      data: [
+        {
+          ...job,
+          id: 'j2',
+          name: 'Weekly digest',
+          status: EmailJobStatus.SCHEDULED,
+          scheduledAt: '2026-12-01T09:00:00.000Z',
+        },
+        {
+          ...job,
+          id: 'j3',
+          name: 'Autumn recap',
+          status: EmailJobStatus.COMPLETED,
+          overallStatus: EmailJobOverallStatus.COMPLETE,
+          recipientCount: 4,
+          sentCount: 4,
+          openedCount: 1,
+        },
+      ],
+    };
+    renderPanel();
+
+    const table = screen.getByTestId('email-campaigns-table');
+    const scheduledRow = within(table).getByText('Weekly digest').closest('tr') as HTMLElement;
+    const completeRow = within(table).getByText('Autumn recap').closest('tr') as HTMLElement;
+
+    expect(within(scheduledRow).getByTestId('cancel-scheduled-job-j2')).toBeInTheDocument();
+    expect(within(completeRow).getByText('4 / 4')).toBeInTheDocument();
+    expect(within(completeRow).getByText('25.0%')).toBeInTheDocument();
+    expect(
+      within(within(completeRow).getByTestId('admin-table-row-actions'))
+        .getAllByRole('button')
+        .map(button => button.getAttribute('data-testid'))
+    ).toEqual(['edit-job-j3', 'clone-job-j3']);
   });
 });
