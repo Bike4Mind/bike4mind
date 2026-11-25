@@ -1,4 +1,4 @@
-/** Format a Nivo axis tick (Date or ISO string) into a human-readable UTC label. Shared by WAF charts. */
+/** Format a chart axis tick (Date or ISO string) into a human-readable UTC label. Shared by WAF charts. */
 export function formatChartAxisDate(value: unknown): string {
   const d = value instanceof Date ? value : new Date(String(value));
   if (Number.isNaN(d.getTime())) return String(value);
