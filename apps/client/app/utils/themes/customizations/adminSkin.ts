@@ -365,8 +365,10 @@ const field = (prefix: string) => ({
         backgroundColor: admin('surface'),
         borderColor: admin('borderStrong'),
         boxShadow: 'none',
-        // The neutral border above would otherwise hide Joy's own error border.
-        '&.Mui-error': { borderColor: admin('danger') },
+        // The neutral border above would otherwise hide Joy's own error border. An error set on a wrapping
+        // FormControl only turns the field's color to danger (no Mui-error on the root), and Select has no error prop.
+        '&.Mui-error, &.MuiInput-colorDanger, &.MuiTextarea-colorDanger, &.MuiSelect-colorDanger, &.MuiAutocomplete-colorDanger':
+          { borderColor: admin('danger') },
       },
   },
 });
