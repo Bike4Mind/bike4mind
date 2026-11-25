@@ -31,6 +31,17 @@ describe('AuditEntrySchema', () => {
   });
 });
 
+describe('Space audit entries', () => {
+  it('accepts a space target kind', () => {
+    const entry = { ...validEntry, target: { kind: 'space', id: 's1', displayName: 'Team' } };
+    expect(AuditEntrySchema.safeParse(entry).success).toBe(true);
+  });
+
+  it.each(['space.member.removed', 'space.deleted'] as const)('%s is a strict write', action => {
+    expect(ADMIN_AUDIT_CATALOGUE[action]).toMatchObject({ write: 'strict' });
+  });
+});
+
 describe('ADMIN_AUDIT_CATALOGUE', () => {
   const entries = Object.entries(ADMIN_AUDIT_CATALOGUE);
 

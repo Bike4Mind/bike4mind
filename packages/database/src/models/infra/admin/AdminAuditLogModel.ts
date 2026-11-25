@@ -40,7 +40,17 @@ const TargetSchema = new Schema(
   {
     kind: {
       type: String,
-      enum: ['user', 'organization', 'settings', 'oauthClient', 'apiKey', 'system', 'curatedCatalog', 'adminRole'],
+      enum: [
+        'user',
+        'organization',
+        'settings',
+        'oauthClient',
+        'apiKey',
+        'system',
+        'curatedCatalog',
+        'adminRole',
+        'space',
+      ],
       required: true,
     },
     id: { type: String, required: true },

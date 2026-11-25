@@ -6,7 +6,7 @@ vi.mock('@server/managers/createDocumentInvite', () => ({
   generateInviteLink: (invite: { id: string; token?: string }) => `https://app.test/share/${invite.token ?? invite.id}`,
 }));
 
-import { toSpaceInviteLinkView, toSpaceView } from './spaceAccess';
+import { toAdminSpaceView, toSpaceInviteLinkView, toSpaceView } from './spaceAccess';
 
 const space = {
   id: 'space1',
@@ -44,6 +44,16 @@ describe('toSpaceView email visibility', () => {
     expect(view('owner')).toMatchObject({ viewerRole: 'owner', memberCount: 3 });
     expect(view('admin').viewerRole).toBe('admin');
     expect(view('member').viewerRole).toBe('member');
+  });
+});
+
+describe('toAdminSpaceView', () => {
+  it('shows every email and carries no viewer role', () => {
+    const v = toAdminSpaceView({ ...space, createdAt: new Date('2026-01-01') } as never, users as never);
+    expect([v.owner, ...v.members].map(p => p.email)).toEqual(['owner@x.com', 'admin@x.com', 'member@x.com']);
+    expect(v).not.toHaveProperty('viewerRole');
+    expect(v.memberCount).toBe(3);
+    expect(v.createdAt).toEqual(new Date('2026-01-01'));
   });
 });
 

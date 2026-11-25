@@ -47,3 +47,37 @@ export async function notifySpaceDomainReleased(
     warn('[spaces] domain release notification failed', { ownerUserId: context.ownerUserId, error: String(err) });
   }
 }
+
+export function renderSpaceDeletedByAdminEmail(spaceName: string): { subject: string; html: string } {
+  const subjectSpace = spaceName.replace(/[\r\n]+/g, ' ');
+  return {
+    subject: `"${subjectSpace}" was deleted`,
+    html: wrapEmail(
+      `<p>A platform administrator deleted your Space <strong>${escapeHtml(spaceName)}</strong>. ` +
+        `Its members lost access, and its invites and links no longer work.</p>`,
+      'You are receiving this because you owned this Space.'
+    ),
+  };
+}
+
+/** Email a Space owner that a platform admin deleted the Space. Best-effort and never throws: call it after the delete commits. */
+export async function notifySpaceDeletedByAdmin(
+  context: { ownerUserId: string; spaceName: string },
+  deps: SpaceDomainReleasedNotifyDeps
+): Promise<void> {
+  const warn = (msg: string, meta: unknown) =>
+    deps.logger?.warn ? deps.logger.warn(msg, meta) : console.warn(msg, meta);
+  try {
+    const emailRows = await deps.db.users.findActiveEmailsByIds([context.ownerUserId]);
+    if (emailRows.length === 0) {
+      warn('[spaces] Space owner has no active email; skipping deletion notification', {
+        ownerUserId: context.ownerUserId,
+      });
+      return;
+    }
+    const result = await deps.mailer.sendEmail(emailRows[0].email, renderSpaceDeletedByAdminEmail(context.spaceName));
+    if (!result) warn('[spaces] deletion notification email failed to send', { ownerUserId: context.ownerUserId });
+  } catch (err) {
+    warn('[spaces] deletion notification failed', { ownerUserId: context.ownerUserId, error: String(err) });
+  }
+}

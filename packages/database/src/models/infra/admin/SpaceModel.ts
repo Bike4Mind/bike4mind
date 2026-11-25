@@ -6,6 +6,7 @@ import {
   ISpaceRepository,
   SPACE_DESCRIPTION_MAX,
   SPACE_NAME_MAX,
+  SearchAllSpacesOptions,
   SpaceMemberRole,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
@@ -182,6 +183,25 @@ export class SpaceRepository extends BaseRepository<ISpaceDocument> implements I
       { $set: { deletedAt: new Date() } }
     );
     return result.modifiedCount > 0;
+  }
+
+  async searchAll({ search, ownerUserIds = [], page, limit, sort }: SearchAllSpacesOptions) {
+    const filter: Record<string, unknown> = { deletedAt: null };
+    const term = search?.trim();
+    if (term) {
+      const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [{ name: { $regex: escaped, $options: 'i' } }, { ownerUserId: { $in: ownerUserIds } }];
+    }
+    const order: Record<string, 1 | -1> = sort === 'name' ? { name: 1, _id: 1 } : { createdAt: -1, _id: -1 };
+    const [docs, total] = await Promise.all([
+      this.model
+        .find(filter)
+        .sort(order)
+        .skip((page - 1) * limit)
+        .limit(limit),
+      this.model.countDocuments(filter),
+    ]);
+    return { data: docs.map(doc => doc.toJSON()), total };
   }
 }
 

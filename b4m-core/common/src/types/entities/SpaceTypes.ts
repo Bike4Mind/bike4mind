@@ -37,6 +37,17 @@ export interface AddSpaceMemberOptions {
   clearRemoved: boolean;
 }
 
+export type SpaceSearchSort = 'createdAt' | 'name';
+
+export interface SearchAllSpacesOptions {
+  /** Matches the Space name, or any owner in `ownerUserIds` (resolved by the caller). */
+  search?: string;
+  ownerUserIds?: string[];
+  page: number;
+  limit: number;
+  sort: SpaceSearchSort;
+}
+
 export interface ISpaceRepository extends IBaseRepository<ISpaceDocument> {
   findLiveById: (id: string) => Promise<ISpaceDocument | null>;
   listForUser: (userId: string) => Promise<ISpaceDocument[]>;
@@ -73,6 +84,8 @@ export interface ISpaceRepository extends IBaseRepository<ISpaceDocument> {
     details: { name?: string; description?: string | null; parentOrganizationId?: string | null }
   ) => Promise<ISpaceDocument | null>;
   softDelete: (spaceId: string, ownerUserId: string) => Promise<boolean>;
+  /** Live Spaces across every owner, for the platform admin list. `createdAt` sorts newest first, `name` A to Z. */
+  searchAll: (options: SearchAllSpacesOptions) => Promise<{ data: ISpaceDocument[]; total: number }>;
 }
 
 type SpaceAccessShape = Pick<ISpace, 'ownerUserId' | 'members'>;

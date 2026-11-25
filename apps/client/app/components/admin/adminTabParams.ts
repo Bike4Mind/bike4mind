@@ -14,6 +14,12 @@ import {
   ADMIN_INTEGRATION_HEALTH_TAB_SLUG,
   INTEGRATION_HEALTH_TAB_PARAMS,
 } from './IntegrationHealth/integrationHealthSearch';
+import {
+  ADMIN_SPACES_TAB_SLUG,
+  SPACES_SEARCH_PARSERS,
+  SPACES_TAB_PARAMS,
+  type SpacesSearch,
+} from './Spaces/spacesTabSearch';
 import { AUDIT_SUMMARY_WINDOW_PARAM } from './AuditLog/auditLogTabSearch';
 import { SIGNUP_DOMAIN_HOLDS_TAB_PARAMS } from './signupDomainHoldsSearch';
 import {
@@ -118,6 +124,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_MODEL_LOGS_TAB_SLUG]: MODEL_LOGS_TAB_PARAMS,
   [ADMIN_INTEGRATION_DEMAND_TAB_SLUG]: INTEGRATION_DEMAND_TAB_PARAMS,
   [ADMIN_ORGANIZATIONS_TAB_SLUG]: ORGS_TAB_PARAMS,
+  [ADMIN_SPACES_TAB_SLUG]: SPACES_TAB_PARAMS,
   [ADMIN_SUBSCRIPTIONS_TAB_SLUG]: SUBSCRIPTIONS_TAB_PARAMS,
   [ADMIN_REVENUE_TAB_SLUG]: [
     ...REVENUE_TAB_PARAMS,
@@ -159,6 +166,7 @@ type TypedAdminSearch = UsersSearch &
   WebhookAuditLogsSearch &
   ModelLogsSearch &
   OrganizationsSearch &
+  SpacesSearch &
   SubscriptionsSearch &
   RevenueSearch &
   SecurityDashboardSearch &
@@ -177,6 +185,7 @@ const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<s
     ...WEBHOOK_AUDIT_LOGS_SEARCH_PARSERS,
     ...MODEL_LOGS_SEARCH_PARSERS,
     ...ORGS_SEARCH_PARSERS,
+    ...SPACES_SEARCH_PARSERS,
     ...SUBSCRIPTIONS_SEARCH_PARSERS,
     ...REVENUE_SEARCH_PARSERS,
     ...SECURITY_DASHBOARD_SEARCH_PARSERS,
