@@ -11,6 +11,10 @@ export type IAssistantBrief = {
   status: BriefStatus;
   periodStart: Date;
   periodEnd: Date;
+  /** Set on a brief composed when a calendar busy block ended; null for scheduled and on-demand briefs. */
+  trigger?: 'busy_block' | null;
+  /** The block's exact bounds; emails and questions are windowed on its start, runs on `periodStart`. */
+  busyBlock?: { start: Date; end: Date } | null;
   headline: string | null;
   happened: BriefItem[];
   handled: BriefItem[];
@@ -96,6 +100,11 @@ const schema = new Schema<IAssistantBrief>(
     status: { type: String, enum: ['composing', 'ready', 'failed'], required: true, default: 'composing' },
     periodStart: { type: Date, required: true },
     periodEnd: { type: Date, required: true },
+    trigger: { type: String, enum: ['busy_block', null], default: null },
+    busyBlock: {
+      type: new Schema({ start: { type: Date, required: true }, end: { type: Date, required: true } }, { _id: false }),
+      default: null,
+    },
     headline: { type: String, default: null },
     happened: { type: [itemSchema], default: [] },
     handled: { type: [itemSchema], default: [] },
@@ -114,9 +123,17 @@ export const AssistantBriefModel =
 
 /** A brief still composing after this long is treated as abandoned, so a lost event cannot block composing for good. */
 export const BRIEF_COMPOSING_STALE_MS = 5 * 60 * 1000;
+// Busy-block briefs readied since the last regular brief that the pending-decisions count reads.
+const BLOCK_BRIEFS_COUNTED_MAX = 48;
 
 export const assistantBriefRepository = {
-  async createComposing(input: { userId: string; periodStart: Date; periodEnd: Date }): Promise<IAssistantBrief> {
+  async createComposing(input: {
+    userId: string;
+    periodStart: Date;
+    periodEnd: Date;
+    trigger?: 'busy_block';
+    busyBlock?: { start: Date; end: Date };
+  }): Promise<IAssistantBrief> {
     const created = await AssistantBriefModel.create({ ...input, status: 'composing' });
     return created.toObject();
   },
@@ -142,20 +159,49 @@ export const assistantBriefRepository = {
     return AssistantBriefModel.find({ userId }).sort({ createdAt: -1 }).limit(limit).lean();
   },
 
-  /** The end of the previous brief's window, which the next brief starts from. */
+  /**
+   * The end of the previous brief's window, which the next brief starts from. A busy-block brief never
+   * advances it, so runs from before the block still reach the next regular brief.
+   */
   async findLatestReady(userId: string): Promise<IAssistantBrief | null> {
-    return AssistantBriefModel.findOne({ userId, status: 'ready' }).sort({ createdAt: -1 }).lean();
+    return AssistantBriefModel.findOne({ userId, status: 'ready', trigger: { $ne: 'busy_block' } })
+      .sort({ createdAt: -1 })
+      .lean();
   },
 
-  /** The latest ready brief's id and each decision's approval ref and reply stamp: what the pending-decisions count reads. */
+  /**
+   * What the pending-decisions count reads: the latest ready brief's id, and the approval ref and reply stamp
+   * of each decision in the latest regular ready brief plus the busy-block briefs readied since it. A block
+   * brief does not replace the regular one, and the email it carried is not briefed again.
+   */
   async findLatestReadyDecisionRefs(userId: string): Promise<{
     _id: mongoose.Types.ObjectId;
     decisions: Array<Pick<StoredBriefDecision, 'approval' | 'repliedAt'>>;
   } | null> {
-    return AssistantBriefModel.findOne({ userId, status: 'ready' })
+    type Refs = {
+      _id: mongoose.Types.ObjectId;
+      createdAt: Date;
+      decisions?: Array<Pick<StoredBriefDecision, 'approval' | 'repliedAt'>>;
+    };
+    const fields = '_id createdAt decisions.approval decisions.repliedAt';
+    const regular = await AssistantBriefModel.findOne({ userId, status: 'ready', trigger: { $ne: 'busy_block' } })
       .sort({ createdAt: -1 })
-      .select('_id decisions.approval decisions.repliedAt')
-      .lean();
+      .select(fields)
+      .lean<Refs>();
+    const blockBriefs = await AssistantBriefModel.find({
+      userId,
+      status: 'ready',
+      trigger: 'busy_block',
+      ...(regular && { createdAt: { $gte: regular.createdAt } }),
+    })
+      .sort({ createdAt: -1 })
+      .limit(BLOCK_BRIEFS_COUNTED_MAX)
+      .select(fields)
+      .lean<Refs[]>();
+    const newest = blockBriefs[0] ?? regular;
+    if (!newest) return null;
+    const counted = regular ? [...blockBriefs, regular] : blockBriefs;
+    return { _id: newest._id, decisions: counted.flatMap(brief => brief.decisions ?? []) };
   },
 
   /** Only a `composing` brief can be settled, so a redelivered event never overwrites a finished one. */

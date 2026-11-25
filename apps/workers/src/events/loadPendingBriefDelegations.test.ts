@@ -15,7 +15,7 @@ describe('loadPendingBriefDelegations', () => {
 
     expect(await loadPendingBriefDelegations('u1', end, now)).toEqual([{ intent: 'x' }]);
     expect(mocks.failStale).toHaveBeenCalledWith('u1', new Date(now.getTime() - DELEGATION_STALE_MS), now);
-    expect(mocks.listUnbriefed).toHaveBeenCalledWith('u1', end, 36);
+    expect(mocks.listUnbriefed).toHaveBeenCalledWith('u1', end, 36, undefined);
     expect(mocks.failStale.mock.invocationCallOrder[0]).toBeLessThan(mocks.listUnbriefed.mock.invocationCallOrder[0]);
   });
 });

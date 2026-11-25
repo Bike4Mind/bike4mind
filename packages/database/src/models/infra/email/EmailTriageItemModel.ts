@@ -114,9 +114,16 @@ export const emailTriageItemRepository = {
     return (await EmailTriageItemModel.exists({ emailId })) !== null;
   },
 
-  /** Items no ready brief has carried yet, created before `end`, oldest first. */
-  async listPending(userId: string, end: Date, limit: number, kind?: EmailTriageKind): Promise<IEmailTriageItem[]> {
-    return EmailTriageItemModel.find({ userId, briefedAt: null, createdAt: { $lt: end }, ...(kind && { kind }) })
+  /** Items no ready brief has carried yet, created before `end` and at or after `since` when given, oldest first. */
+  async listPending(
+    userId: string,
+    end: Date,
+    limit: number,
+    kind?: EmailTriageKind,
+    since?: Date
+  ): Promise<IEmailTriageItem[]> {
+    const createdAt = since ? { $gte: since, $lt: end } : { $lt: end };
+    return EmailTriageItemModel.find({ userId, briefedAt: null, createdAt, ...(kind && { kind }) })
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean();
