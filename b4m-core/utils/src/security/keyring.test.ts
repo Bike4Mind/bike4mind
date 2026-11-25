@@ -7,6 +7,7 @@ import {
   getAtRestKeys,
   getStageDataKey,
   isKeyringLoaded,
+  loadStaticKeyring,
   resetKeyringForTests,
 } from './keyring';
 import { createAwsKmsKeyProvider } from './keyProviders/awsKms';
@@ -48,6 +49,7 @@ describe('aws-kms provider', () => {
     expect(decrypt).toHaveBeenCalledWith({
       ciphertext: Buffer.from('wrapped'),
       encryptionContext: { purpose: 'secrets-at-rest', stage: 'prod' },
+      signal: expect.any(AbortSignal),
     });
 
     await ensureKeyring({ provider: createStaticKeyProvider(LEGACY), legacyKey: LEGACY });
@@ -97,6 +99,18 @@ describe('aws-kms provider', () => {
   it('rejects a plaintext of the wrong length', async () => {
     const provider = createAwsKmsKeyProvider({ wrappedKey, stage: 's', decrypt: async () => new Uint8Array(5) });
     await expect(provider.load()).rejects.toThrow('wrong length');
+  });
+});
+
+describe('static load during a provider load', () => {
+  it('is not overwritten by the provider load that was already in flight', async () => {
+    let resolve!: (key: { id: string; key: string }) => void;
+    const slow = { name: 'aws-kms' as const, load: () => new Promise<{ id: string; key: string }>(r => (resolve = r)) };
+    const pending = ensureKeyring({ provider: slow, legacyKey: LEGACY });
+    loadStaticKeyring(LEGACY);
+    resolve({ id: 'late', key: 'b'.repeat(64) });
+    await pending;
+    expect(getStageDataKey()).toEqual({ id: 'static', key: LEGACY });
   });
 });
 

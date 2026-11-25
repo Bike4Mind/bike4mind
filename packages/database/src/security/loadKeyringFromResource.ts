@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import {
   createAwsKmsKeyProvider,
@@ -25,12 +26,14 @@ export function selectKeyProvider(
 ): KeyProvider {
   const wrapped = read('SECRET_DATA_KEY_WRAPPED');
   if (isSet(wrapped)) {
-    let stage = 'unknown';
+    let stage: string | undefined;
     try {
       stage = (Resource as unknown as { App: { stage: string } }).App.stage;
     } catch {
-      // Stage is part of the KMS encryption context; an unresolvable one makes the unwrap fail and retry.
+      // handled below
     }
+    // The stage is part of the KMS encryption context; without it no unwrap can succeed.
+    if (!stage) throw new Error('aws-kms key provider selected but the app stage is unavailable');
     return createAwsKmsKeyProvider({ wrappedKey: wrapped, stage });
   }
   return createStaticKeyProvider(legacyKey);
@@ -48,5 +51,17 @@ export async function ensureKeyringLoaded(): Promise<void> {
     provider: selectKeyProvider(legacyKey),
     legacyKey,
     legacyPrevious: readSecretFromResource('SECRET_ENCRYPTION_KEY_PREVIOUS'),
+  });
+}
+
+/**
+ * Starts the keyring load without waiting for it: the static keys are set synchronously, so callers
+ * need not wait on KMS. A failed load is logged and retried by the next call.
+ */
+export function loadKeyringInBackground(logger?: { error: (message: string, ...args: unknown[]) => void }): void {
+  ensureKeyringLoaded().catch((error: unknown) => {
+    const message = '[secrets-at-rest] keyring load failed; will retry on the next load';
+    if (logger) logger.error(message, error);
+    else Logger.error(message, { error });
   });
 }

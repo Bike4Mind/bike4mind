@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { KeyringNotLoadedError, resetKeyringForTests } from '@bike4mind/utils/security';
+import { KeyringNotLoadedError } from '@bike4mind/utils/security';
+import { resetKeyringForTests } from '@bike4mind/utils/security/testing';
 import { encryptSecret, generateEncryptionKey } from './secretEncryption';
 import { configureSecretsAtRest, decryptAtRest } from '@bike4mind/utils/security';
 

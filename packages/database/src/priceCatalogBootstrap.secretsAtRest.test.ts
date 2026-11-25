@@ -5,8 +5,8 @@ import {
   encryptSecret,
   generateEncryptionKey,
   getStageDataKey,
-  resetKeyringForTests,
 } from '@bike4mind/utils/security';
+import { resetKeyringForTests } from '@bike4mind/utils/security/testing';
 
 const KEY = generateEncryptionKey();
 const DATA_KEY = Buffer.from(generateEncryptionKey(), 'hex');
@@ -15,6 +15,7 @@ const WRAPPED = Buffer.from('blob').toString('base64');
 const resource = vi.hoisted(() => ({
   values: {} as Record<string, string | undefined>,
   reads: [] as string[],
+  stage: 'test' as string | undefined,
 }));
 const kms = vi.hoisted(() => ({ decrypt: vi.fn() }));
 
@@ -22,7 +23,11 @@ const kms = vi.hoisted(() => ({ decrypt: vi.fn() }));
 // from Resource - the path a scripts/cron process (which never imports apps/client Config) takes.
 vi.mock('sst', () => ({
   Resource: new Proxy(
-    { App: { stage: 'test' } },
+    {
+      get App() {
+        return { stage: resource.stage };
+      },
+    },
     {
       get: (target, name: string) => {
         if (name in target) return target[name as 'App'];
@@ -67,6 +72,7 @@ describe('keyring loading from SST resources', () => {
     resetKeyringForTests();
     kms.decrypt.mockReset();
     resource.reads = [];
+    resource.stage = 'test';
     resource.values = { SECRET_ENCRYPTION_KEY: KEY };
   });
 
@@ -82,6 +88,14 @@ describe('keyring loading from SST resources', () => {
   it('a placeholder wrapped blob keeps the stage on the static provider', async () => {
     const { selectKeyProvider } = await import('./security/loadKeyringFromResource');
     expect(selectKeyProvider(KEY, () => 'not-configured').name).toBe('static');
+  });
+
+  it('an aws-kms stage with no resolvable app stage throws instead of building an unusable provider', async () => {
+    const { selectKeyProvider } = await import('./security/loadKeyringFromResource');
+    resource.stage = undefined;
+    expect(() => selectKeyProvider(KEY, name => (name === 'SECRET_DATA_KEY_WRAPPED' ? WRAPPED : undefined))).toThrow(
+      'app stage is unavailable'
+    );
   });
 
   it('skips Resource reads once the keyring has settled', async () => {
@@ -112,11 +126,13 @@ describe('connectDB keyring wiring', () => {
     kms.decrypt.mockResolvedValue(new Uint8Array(DATA_KEY));
     const { connectDB } = await import('./priceCatalogBootstrap');
     await connectDB('mongodb://x', logger as never);
+    await vi.waitFor(() => expect(getStageDataKey()?.key).toBe(DATA_KEY.toString('hex')));
 
     expect(kms.decrypt).toHaveBeenCalledTimes(1);
     expect(kms.decrypt).toHaveBeenCalledWith({
       ciphertext: Buffer.from('blob'),
       encryptionContext: { purpose: 'secrets-at-rest', stage: 'test' },
+      signal: expect.any(AbortSignal),
     });
     expect(getStageDataKey()?.key).toBe(DATA_KEY.toString('hex'));
   });
@@ -126,6 +142,7 @@ describe('connectDB keyring wiring', () => {
     const { connectDB } = await import('./priceCatalogBootstrap');
 
     await expect(connectDB('mongodb://x', logger as never)).resolves.toBe('connection');
+    await vi.waitFor(() => expect(logger.error).toHaveBeenCalled());
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('keyring load failed'), expect.any(Error));
     expect(getStageDataKey()).toBeNull();
     // v1/v2 keeps working on the static keys meanwhile.
@@ -133,13 +150,14 @@ describe('connectDB keyring wiring', () => {
 
     // Inside the cooldown a connect does not touch KMS again.
     await connectDB('mongodb://x', logger as never);
+    await Promise.resolve();
     expect(kms.decrypt).toHaveBeenCalledTimes(1);
     expect(getStageDataKey()).toBeNull();
 
     vi.setSystemTime(Date.now() + PROVIDER_RETRY_COOLDOWN_MS + 1);
     await connectDB('mongodb://x', logger as never);
+    await vi.waitFor(() => expect(getStageDataKey()?.key).toBe(DATA_KEY.toString('hex')));
     expect(kms.decrypt).toHaveBeenCalledTimes(2);
-    expect(getStageDataKey()?.key).toBe(DATA_KEY.toString('hex'));
 
     // Settled: later connects are no-ops.
     await connectDB('mongodb://x', logger as never);

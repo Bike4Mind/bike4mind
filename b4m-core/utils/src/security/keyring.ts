@@ -41,6 +41,8 @@ interface KeyringState {
   /** Epoch ms of the last failed provider load; paces retries without caching the failure. */
   lastFailureAt: number | null;
   inflight: Promise<void> | null;
+  /** Bumped by loadStaticKeyring so a provider load already in flight cannot overwrite it. */
+  generation: number;
 }
 
 const SLOT = Symbol.for('bike4mind.secretsAtRest.keyring');
@@ -54,6 +56,7 @@ function state(): KeyringState {
     providerSettled: false,
     lastFailureAt: null,
     inflight: null,
+    generation: 0,
   });
 }
 
@@ -84,16 +87,20 @@ export function ensureKeyring(opts: EnsureKeyringOptions): Promise<void> {
     return Promise.resolve();
   }
   s.legacy = { current: usable(opts.legacyKey), previous: usable(opts.legacyPrevious) };
+  const generation = s.generation;
   const run = opts.provider.load().then(
     key => {
+      if (s.generation !== generation) return;
       s.stageDataKey = key;
       s.providerSettled = true;
       s.lastFailureAt = null;
       s.inflight = null;
     },
     (error: unknown) => {
-      s.lastFailureAt = Date.now();
-      s.inflight = null;
+      if (s.generation === generation) {
+        s.lastFailureAt = Date.now();
+        s.inflight = null;
+      }
       throw error;
     }
   );
@@ -101,7 +108,11 @@ export function ensureKeyring(opts: EnsureKeyringOptions): Promise<void> {
   return run;
 }
 
-/** Synchronously loads a static keyring (self-host, scripts, tests). */
+/**
+ * Synchronously loads a static keyring (self-host, scripts, tests). It is an explicit override: it
+ * settles the keyring, so a provider load is neither started nor applied afterwards, including one
+ * already in flight.
+ */
 export function loadStaticKeyring(key: string | undefined, previous?: string): void {
   const s = state();
   const current = usable(key);
@@ -110,6 +121,7 @@ export function loadStaticKeyring(key: string | undefined, previous?: string): v
   s.providerSettled = true;
   s.lastFailureAt = null;
   s.inflight = null;
+  s.generation++;
 }
 
 /** True once the provider load has succeeded (or a static keyring was loaded). */

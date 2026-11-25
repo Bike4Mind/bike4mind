@@ -279,6 +279,16 @@
         "types": "./dist/security/index.d.cts",
         "default": "./dist/security/index.cjs"
       }
+    },
+    "./security/testing": {
+      "import": {
+        "types": "./dist/security/testing.d.mts",
+        "default": "./dist/security/testing.mjs"
+      },
+      "require": {
+        "types": "./dist/security/testing.d.cts",
+        "default": "./dist/security/testing.cjs"
+      }
     }
   },
   "files": [
@@ -298,7 +308,7 @@
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1150.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1150.0",
-    "@aws-sdk/client-kms": "3.1151.0",
+    "@aws-sdk/client-kms": "^3.1150.0",
     "@aws-sdk/client-lambda": "^3.1150.0",
     "@aws-sdk/client-rekognition": "^3.1150.0",
     "@aws-sdk/client-sqs": "^3.1150.0",

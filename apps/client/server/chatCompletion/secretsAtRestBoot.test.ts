@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { configureSecretsAtRest, resetKeyringForTests } from '@bike4mind/utils/security';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+import { resetKeyringForTests } from '@bike4mind/utils/security/testing';
 import { ensureSecretsAtRest } from './secretsAtRestBoot';
 
 const KEY = 'a'.repeat(64);

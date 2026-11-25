@@ -1729,7 +1729,7 @@ importers:
         specifier: ^3.1150.0
         version: 3.1151.0
       '@aws-sdk/client-kms':
-        specifier: 3.1151.0
+        specifier: ^3.1150.0
         version: 3.1151.0
       '@aws-sdk/client-lambda':
         specifier: ^3.1150.0
