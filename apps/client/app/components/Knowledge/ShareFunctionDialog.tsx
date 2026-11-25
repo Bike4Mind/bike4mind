@@ -24,6 +24,7 @@ import {
   CALLABLE_FUNCTION_GRANT_LIMITS,
   type CallableFunctionGrantVisibility,
   type ICallableFunctionPublic,
+  type IProjectDocument,
 } from '@bike4mind/common';
 import type { CallableFunctionShareView } from '@pages/api/callable-functions/[id]/grants';
 import {
@@ -63,6 +64,13 @@ export function shareDataSentence(dataPins: string[], sources: string[]): string
   ];
   return `Recipients can run this function's live version, which reads ${parts.join(' and ')}. They cannot see its code or open the artifact.`;
 }
+
+// The server accepts a project the owner owns or is named on with read or write, not one reached only through a group.
+const isNamedOnProject = (project: IProjectDocument, userId: string) =>
+  project.userId === userId ||
+  (project.users ?? []).some(
+    user => user.userId === userId && (user.permissions.includes('read') || user.permissions.includes('write'))
+  );
 
 function ShareForm({
   tool,
@@ -156,11 +164,13 @@ function ShareForm({
             onChange={(_event, value) => setProjectId(value)}
             data-testid="python-function-share-project"
           >
-            {(projects ?? []).map(project => (
-              <Option key={project.id} value={project.id}>
-                {project.name}
-              </Option>
-            ))}
+            {(projects ?? [])
+              .filter(project => isNamedOnProject(project, userId))
+              .map(project => (
+                <Option key={project.id} value={project.id}>
+                  {project.name}
+                </Option>
+              ))}
           </Select>
           <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-share-project-note">
             Reaches the people named on the project, not the groups it is shared with.

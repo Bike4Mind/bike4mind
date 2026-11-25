@@ -19,7 +19,13 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
 }));
 vi.mock('@client/app/hooks/data/skills', () => ({ lookupUserByEmail: h.lookup }));
 vi.mock('@client/app/hooks/data/projects', () => ({
-  useGetJoinedProjects: () => ({ data: [{ id: 'project-1', name: 'Bridges' }] }),
+  useGetJoinedProjects: () => ({
+    data: [
+      { id: 'project-1', name: 'Bridges', userId: 'owner-1', users: [] },
+      { id: 'project-2', name: 'Named', userId: 'someone', users: [{ userId: 'owner-1', permissions: ['read'] }] },
+      { id: 'project-3', name: 'Group only', userId: 'someone', users: [] },
+    ],
+  }),
 }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetUserOrganizations: () => ({ data: [{ id: 'org-1', name: 'Structures' }] }),
@@ -196,5 +202,12 @@ describe('ShareFunctionDialog', () => {
     renderDialog();
     expect(screen.getByTestId('python-function-share-load-error').textContent).toBe('The share could not be loaded.');
     expect(screen.queryByTestId('python-function-share-submit-btn')).toBeNull();
+  });
+
+  it('offers only the projects the owner owns or is named on', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('python-function-share-visibility-project'));
+    fireEvent.click(screen.getByRole('combobox'));
+    expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['Bridges', 'Named']);
   });
 });
