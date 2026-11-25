@@ -278,7 +278,9 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
         // A failed background refetch keeps the last rows on screen instead of swapping in the error.
         error={isError && !historyData ? 'Could not load activity.' : undefined}
         onRetry={() => void refetch()}
-        empty={<EmptyState title="No email history found" description="Send emails to see activity here" />}
+        empty={
+          <EmptyState title="No email history found" description="Send emails to see activity here" action={null} />
+        }
         pagination={{
           page,
           pageSize: limit,
