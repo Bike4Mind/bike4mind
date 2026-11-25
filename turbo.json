@@ -126,7 +126,7 @@
     // mcpRegistryEntry.test.ts checks the published registry entry at the repo root.
     "@bike4mind/cli#test": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/mcp-registry/**"]
+      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/mcp-registry/**", "$TURBO_ROOT$/b4m-core/*/src/**"]
     },
     // The hook tests run the CLI's bin/hearth-hook.mjs, which is outside cli's build inputs.
     "@bike4mind/hearth#test": {
