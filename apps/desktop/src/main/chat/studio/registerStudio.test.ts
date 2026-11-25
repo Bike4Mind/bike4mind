@@ -60,9 +60,6 @@ async function setup() {
       case '/api/ai/elevenlabs-voices':
         data = { voices: [] };
         break;
-      case '/api/studio/image-jobs?limit=1':
-        data = { data: [] };
-        break;
       case '/api/v1/image-jobs': {
         paid(config);
         data = { group_id: 'group', data: [queuedImageJob] };

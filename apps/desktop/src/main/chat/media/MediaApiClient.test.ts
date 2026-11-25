@@ -1,7 +1,7 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
-import { MediaApiClient, type MediaToolError } from './MediaApiClient';
+import { MediaApiClient, MediaToolError } from './MediaApiClient';
 
 describe('image', () => {
   const jobBody = {
@@ -67,7 +67,8 @@ describe('image', () => {
       const post = vi.fn().mockRejectedValue(new AxiosError('422', 'ERR_BAD_REQUEST', undefined, undefined, response));
       const error = await clientWith({ post })
         .createImageJobGroup({ model: 'gpt-image-2', mode: 'generate', prompt: 'p' }, 'key-4')
-        .catch((caught: MediaToolError) => caught);
+        .catch((caught: unknown) => caught);
+      if (!(error instanceof MediaToolError)) throw new Error('expected a MediaToolError');
       expect(error).toMatchObject({ status: 422, code: 'insufficient_credits' });
       expect(error.message).toContain('Not enough credits');
       expect(error.notice).toMatchObject({ kind: 'insufficient-credits' });
