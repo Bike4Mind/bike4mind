@@ -17,7 +17,7 @@ import {
   paginationParams,
 } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorMessage } from '../helpers/errors.js';
+import { errorLogFields } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import {
   TOOL_CREATE_ISSUE,
@@ -98,8 +98,8 @@ export function registerIssueTools(server: McpServer) {
           }
         } catch (labelError) {
           log.warn('could not fetch repo labels, skipping labels', {
-            tool: TOOL_CREATE_ISSUE,
-            detail: getErrorMessage(labelError),
+            toolName: TOOL_CREATE_ISSUE,
+            ...errorLogFields(labelError),
           });
           validatedLabels = undefined;
         }
@@ -126,7 +126,7 @@ export function registerIssueTools(server: McpServer) {
           ...(skippedLabels.length > 0 && { labels_skipped: skippedLabels }),
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_CREATE_ISSUE, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_CREATE_ISSUE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -234,7 +234,7 @@ export function registerIssueTools(server: McpServer) {
           updated_at: result.data.updated_at,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_UPDATE_ISSUE, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_UPDATE_ISSUE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -348,7 +348,7 @@ export function registerIssueTools(server: McpServer) {
         } catch (projectError) {
           log.warn('could not fetch project associations', {
             toolName: TOOL_GET_ISSUE,
-            detail: getErrorMessage(projectError),
+            ...errorLogFields(projectError),
           });
           // Continue without project data - not a fatal error
         }
@@ -435,7 +435,7 @@ export function registerIssueTools(server: McpServer) {
           body_preview: body.substring(0, 100) + (body.length > 100 ? '...' : ''),
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_CREATE_ISSUE_COMMENT, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_CREATE_ISSUE_COMMENT, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }

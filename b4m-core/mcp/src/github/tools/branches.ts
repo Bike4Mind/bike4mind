@@ -10,7 +10,7 @@ import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { ownerSchema, repoSchema, paginationParams, confirmationParams } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorMessage, hasStatus, isRateLimitError } from '../helpers/errors.js';
+import { getErrorMessage, errorLogFields, hasStatus, isRateLimitError } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import { TOOL_LIST_BRANCHES, TOOL_CREATE_BRANCH } from '../constants.js';
 
@@ -102,7 +102,7 @@ export function registerBranchTools(server: McpServer) {
           if (!hasStatus(error, 404)) {
             log.warn('could not check if branch exists', {
               toolName: TOOL_CREATE_BRANCH,
-              detail: getErrorMessage(error),
+              ...errorLogFields(error),
             });
           }
         }
@@ -163,7 +163,7 @@ export function registerBranchTools(server: McpServer) {
           },
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_CREATE_BRANCH, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_CREATE_BRANCH, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {

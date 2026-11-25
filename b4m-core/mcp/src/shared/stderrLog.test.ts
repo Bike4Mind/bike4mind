@@ -68,4 +68,20 @@ describe('stderrLog', () => {
     expect(line.token).toBe('[REDACTED]');
     expect(JSON.stringify(line.error)).toContain('boom');
   });
+
+  it('does not throw on unserializable fields and still writes one parseable line', () => {
+    const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() => stderrLog('error', 'x', 'bigint', { n: 1n })).not.toThrow();
+    expect(() => stderrLog('error', 'x', 'circular', { c: circular })).not.toThrow();
+
+    expect(write).toHaveBeenCalledTimes(2);
+    for (const [chunk] of write.mock.calls) {
+      const text = chunk as string;
+      expect(text.trimEnd().includes('\n')).toBe(false);
+      expect(JSON.parse(text)).toMatchObject({ scope: 'x' });
+    }
+  });
 });

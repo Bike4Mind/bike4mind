@@ -18,7 +18,7 @@ import {
   githubUsernameSchema,
 } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorMessage, hasStatus, isRateLimitError } from '../helpers/errors.js';
+import { getErrorMessage, errorLogFields, hasStatus, isRateLimitError } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import {
   TOOL_LIST_PULL_REQUESTS,
@@ -388,8 +388,8 @@ export function registerPullTools(server: McpServer) {
         } catch (error) {
           // Silently continue to preview if check fails
           log.warn('could not check for existing PRs', {
-            tool: TOOL_CREATE_PULL_REQUEST,
-            detail: getErrorMessage(error),
+            toolName: TOOL_CREATE_PULL_REQUEST,
+            ...errorLogFields(error),
           });
         }
 
@@ -442,7 +442,7 @@ export function registerPullTools(server: McpServer) {
           },
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_CREATE_PULL_REQUEST, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_CREATE_PULL_REQUEST, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {
@@ -541,7 +541,7 @@ export function registerPullTools(server: McpServer) {
           pull_number,
         });
       } catch (error) {
-        log.error('pr lookup failed', { toolName: TOOL_UPDATE_PULL_REQUEST, detail: getErrorMessage(error) });
+        log.error('pr lookup failed', { toolName: TOOL_UPDATE_PULL_REQUEST, ...errorLogFields(error) });
         if (hasStatus(error, 404)) {
           return createErrorResponse(error, {
             suggestion: `Pull request #${pull_number} was not found in ${fullRepoName}.`,
@@ -701,7 +701,7 @@ export function registerPullTools(server: McpServer) {
           changes_applied: changes,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_UPDATE_PULL_REQUEST, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_UPDATE_PULL_REQUEST, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {
@@ -790,7 +790,7 @@ export function registerPullTools(server: McpServer) {
           pull_number,
         });
       } catch (error) {
-        log.error('pr lookup failed', { toolName: TOOL_MERGE_PULL_REQUEST, detail: getErrorMessage(error) });
+        log.error('pr lookup failed', { toolName: TOOL_MERGE_PULL_REQUEST, ...errorLogFields(error) });
         if (hasStatus(error, 404)) {
           return createErrorResponse(error, {
             suggestion: `Pull request #${pull_number} was not found in ${fullRepoName}.`,
@@ -890,7 +890,7 @@ export function registerPullTools(server: McpServer) {
           },
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_MERGE_PULL_REQUEST, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_MERGE_PULL_REQUEST, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {

@@ -15,8 +15,16 @@ export function stderrLog(
   message: string,
   fields?: Record<string, unknown>
 ): void {
-  const line = redactLogValue({ severity: level, scope, msg: message, ...fields });
-  process.stderr.write(`${JSON.stringify(line)}\n`);
+  let text: string;
+  try {
+    text = JSON.stringify(redactLogValue({ severity: level, scope, msg: message, ...fields }), (_key, value) =>
+      typeof value === 'bigint' ? value.toString() : value
+    );
+  } catch {
+    // Never throw: callers include the crash handlers, where a throw would skip shutdown.
+    text = JSON.stringify({ severity: level, scope, msg: message, logError: 'unserializable fields' });
+  }
+  process.stderr.write(`${text}\n`);
 }
 
 export interface StderrLogger {

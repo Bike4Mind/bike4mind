@@ -8,7 +8,7 @@ import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorMessage } from '../helpers/errors.js';
+import { errorLogFields } from '../helpers/errors.js';
 import { TOOL_CURRENT_USER } from '../constants.js';
 
 const log = createStderrLogger('github');
@@ -40,7 +40,7 @@ export function registerUserTools(server: McpServer) {
         },
       });
     } catch (error) {
-      log.error('failed', { toolName: TOOL_CURRENT_USER, detail: getErrorMessage(error) });
+      log.error('failed', { toolName: TOOL_CURRENT_USER, ...errorLogFields(error) });
       return createErrorResponse(error);
     }
   });

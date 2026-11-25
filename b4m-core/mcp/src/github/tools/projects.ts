@@ -10,7 +10,7 @@ import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse, createCustomErrorResponse } from '../helpers/responses.js';
 import { orgSchema, projectIdSchema, issueNodeIdSchema, confirmationParams } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorMessage } from '../helpers/errors.js';
+import { getErrorMessage, errorLogFields } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import {
   LIST_ORG_PROJECTS_QUERY,
@@ -76,7 +76,7 @@ export function registerProjectTools(server: McpServer) {
           pageInfo: result.organization.projectsV2.pageInfo,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_LIST_ORG_PROJECTS, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_LIST_ORG_PROJECTS, ...errorLogFields(error) });
         return createErrorResponse(error, {
           organization: org,
           hint: 'Ensure you have the "project" OAuth scope enabled and the organization exists.',
@@ -125,7 +125,7 @@ export function registerProjectTools(server: McpServer) {
           fields: result.node.fields.nodes,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_LIST_PROJECT_FIELDS, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_LIST_PROJECT_FIELDS, ...errorLogFields(error) });
         return createErrorResponse(error, { project_id });
       }
     }
@@ -198,7 +198,7 @@ export function registerProjectTools(server: McpServer) {
             : 'The issue may not be added to this project yet. Use add_issue_to_project to add it.',
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_GET_PROJECT_ITEM, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_GET_PROJECT_ITEM, ...errorLogFields(error) });
         return createErrorResponse(error, { project_id, issue_node_id });
       }
     }
@@ -225,7 +225,7 @@ export function registerProjectTools(server: McpServer) {
             contentId: issue_node_id,
           });
         } catch (error) {
-          log.error('preview lookup failed', { toolName: TOOL_ADD_ISSUE_TO_PROJECT, detail: getErrorMessage(error) });
+          log.error('preview lookup failed', { toolName: TOOL_ADD_ISSUE_TO_PROJECT, ...errorLogFields(error) });
           return createErrorResponse(error, {
             project_id,
             issue_node_id,
@@ -287,7 +287,7 @@ export function registerProjectTools(server: McpServer) {
           item_id: result.addProjectV2ItemById.item.id,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_ADD_ISSUE_TO_PROJECT, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_ADD_ISSUE_TO_PROJECT, ...errorLogFields(error) });
         return createErrorResponse(error, { project_id, issue_node_id });
       }
     }
@@ -368,7 +368,7 @@ export function registerProjectTools(server: McpServer) {
         } catch (error) {
           log.error('preview lookup failed', {
             toolName: TOOL_UPDATE_PROJECT_ITEM_FIELDS,
-            detail: getErrorMessage(error),
+            ...errorLogFields(error),
           });
           return createErrorResponse(error, {
             project_id,
@@ -495,7 +495,7 @@ export function registerProjectTools(server: McpServer) {
           isError: !allSucceeded,
         };
       } catch (error) {
-        log.error('failed', { toolName: TOOL_UPDATE_PROJECT_ITEM_FIELDS, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_UPDATE_PROJECT_ITEM_FIELDS, ...errorLogFields(error) });
         return createErrorResponse(error, { project_id, item_id });
       }
     }

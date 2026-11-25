@@ -9,7 +9,7 @@ import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { orgSchema } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorInfo } from '../helpers/errors.js';
+import { errorLogFields, getErrorInfo } from '../helpers/errors.js';
 import { TOOL_LIST_ORG_ISSUE_TYPES } from '../constants.js';
 
 const log = createStderrLogger('github');
@@ -33,7 +33,7 @@ export function registerIssueTypeTools(server: McpServer) {
         });
       } catch (error) {
         const errorInfo = getErrorInfo(error);
-        log.error('failed', { toolName: TOOL_LIST_ORG_ISSUE_TYPES, detail: errorInfo.message });
+        log.error('failed', { toolName: TOOL_LIST_ORG_ISSUE_TYPES, ...errorLogFields(error) });
 
         return createErrorResponse(error, {
           organization: org,

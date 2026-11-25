@@ -16,7 +16,7 @@ import {
   paginationParams,
 } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorMessage } from '../helpers/errors.js';
+import { errorLogFields } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import {
   TOOL_CREATE_MILESTONE,
@@ -139,7 +139,7 @@ export function registerMilestoneTools(server: McpServer) {
           progress_percent: calculateProgressPercent(result.data.open_issues, result.data.closed_issues),
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_CREATE_MILESTONE, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_CREATE_MILESTONE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -226,7 +226,7 @@ export function registerMilestoneTools(server: McpServer) {
           updated_at: result.data.updated_at,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_UPDATE_MILESTONE, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_UPDATE_MILESTONE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -278,7 +278,7 @@ export function registerMilestoneTools(server: McpServer) {
           })),
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_LIST_MILESTONES, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_LIST_MILESTONES, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -353,7 +353,7 @@ export function registerMilestoneTools(server: McpServer) {
           closed_at: result.data.closed_at,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_CLOSE_MILESTONE, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_CLOSE_MILESTONE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }

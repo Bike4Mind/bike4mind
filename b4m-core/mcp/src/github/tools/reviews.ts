@@ -18,7 +18,7 @@ import {
   confirmationParams,
 } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorMessage, hasStatus, isRateLimitError } from '../helpers/errors.js';
+import { getErrorMessage, errorLogFields, hasStatus, isRateLimitError } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import { TOOL_CREATE_REVIEW, TOOL_APPROVE_PR, TOOL_REQUEST_CHANGES } from '../constants.js';
 
@@ -53,7 +53,7 @@ async function executeReview(params: {
         pull_number,
       });
     } catch (error) {
-      log.error('pr lookup failed', { toolName: toolName, detail: getErrorMessage(error) });
+      log.error('pr lookup failed', { toolName: toolName, ...errorLogFields(error) });
       if (hasStatus(error, 404)) {
         return createErrorResponse(error, {
           suggestion: `Pull request #${pull_number} was not found in ${fullRepoName}. Verify the PR number is correct.`,
@@ -145,7 +145,7 @@ async function executeReview(params: {
       },
     });
   } catch (error) {
-    log.error('failed', { toolName: toolName, detail: getErrorMessage(error) });
+    log.error('failed', { toolName: toolName, ...errorLogFields(error) });
 
     // Handle rate limiting
     if (isRateLimitError(error)) {

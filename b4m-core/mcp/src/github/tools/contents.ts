@@ -10,7 +10,7 @@ import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { ownerSchema, repoSchema, confirmationParams } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorMessage, hasStatus, isRateLimitError } from '../helpers/errors.js';
+import { getErrorMessage, errorLogFields, hasStatus, isRateLimitError } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import { TOOL_CREATE_OR_UPDATE_FILE } from '../constants.js';
 
@@ -96,8 +96,8 @@ export function registerContentsTools(server: McpServer) {
           // 404 means file doesn't exist - that's fine for creating new files
           if (!hasStatus(error, 404)) {
             log.error('file existence check failed', {
-              tool: TOOL_CREATE_OR_UPDATE_FILE,
-              detail: getErrorMessage(error),
+              toolName: TOOL_CREATE_OR_UPDATE_FILE,
+              ...errorLogFields(error),
             });
             return createErrorResponse(error);
           }
@@ -179,7 +179,7 @@ export function registerContentsTools(server: McpServer) {
           },
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_CREATE_OR_UPDATE_FILE, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_CREATE_OR_UPDATE_FILE, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {

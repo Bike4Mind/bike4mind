@@ -11,7 +11,7 @@ import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { ownerSchema, repoSchema, paginationParams } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { isRateLimitError, getErrorMessage } from '../helpers/errors.js';
+import { isRateLimitError, getErrorMessage, errorLogFields } from '../helpers/errors.js';
 import {
   TOOL_LIST_WORKFLOW_RUNS,
   TOOL_GET_WORKFLOW_RUN_DETAILS,
@@ -197,7 +197,7 @@ export function registerWorkflowTools(server: McpServer) {
             suggestion: 'GitHub API rate limit exceeded. Please wait before retrying.',
           });
         }
-        log.error('failed', { toolName: TOOL_LIST_WORKFLOW_RUNS, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_LIST_WORKFLOW_RUNS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -306,7 +306,7 @@ export function registerWorkflowTools(server: McpServer) {
             suggestion: 'GitHub API rate limit exceeded. Please wait before retrying.',
           });
         }
-        log.error('failed', { toolName: TOOL_GET_WORKFLOW_RUN_DETAILS, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_GET_WORKFLOW_RUN_DETAILS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -375,7 +375,7 @@ export function registerWorkflowTools(server: McpServer) {
             suggestion: 'GitHub API rate limit exceeded. Please wait before retrying.',
           });
         }
-        log.error('failed', { toolName: TOOL_GET_JOB_LOGS, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_GET_JOB_LOGS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -508,7 +508,7 @@ export function registerWorkflowTools(server: McpServer) {
             suggestion: 'GitHub API rate limit exceeded. Please wait before retrying.',
           });
         }
-        log.error('failed', { toolName: TOOL_GET_WORKFLOW_RUN_LOGS, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_GET_WORKFLOW_RUN_LOGS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }

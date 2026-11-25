@@ -8,9 +8,9 @@ import path from 'path';
 import { existsSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { assertMcpServerStartable, buildMcpChildEnv } from './childEnv';
-import { createStderrLogger } from './shared/stderrLog.js';
+import { createConsoleLogger } from './shared/consoleLog.js';
 
-const log = createStderrLogger('mcp-client');
+const log = createConsoleLogger('mcp-client');
 
 const createSdkClient = () => new Client({ name: 'mcp-client-cli', version: '1.0.0' });
 
@@ -219,7 +219,7 @@ export class MCPClient {
         sessionExpired = true;
         return;
       }
-      // One line, no stack: this prints into an interactive terminal.
+      // One line, no stack: this prints above the interactive prompt.
       log.error('transport error', { server: this.serverName, detail: error.message });
     };
     this.transport = transport;
@@ -375,7 +375,7 @@ export class MCPClient {
           error.message.includes('EPIPE'));
 
       if (isConnectionError) {
-        log.error('connection lost while calling tool', { server: this.serverName, tool: toolName });
+        log.error('connection lost while calling tool', { server: this.serverName, toolName });
         throw new Error(`MCP connection lost for ${this.serverName}. Please retry the operation.`);
       }
 

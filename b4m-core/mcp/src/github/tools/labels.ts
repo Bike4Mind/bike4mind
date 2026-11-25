@@ -4,7 +4,7 @@ import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { ownerSchema, repoSchema, confirmationParams } from '../helpers/schemas.js';
 import { createStderrLogger } from '../../shared/stderrLog.js';
-import { getErrorMessage } from '../helpers/errors.js';
+import { errorLogFields } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import { TOOL_CREATE_LABEL, TOOL_UPDATE_LABEL, TOOL_DELETE_LABEL, TOOL_LIST_LABELS } from '../constants.js';
 
@@ -73,7 +73,7 @@ export function registerLabelTools(server: McpServer) {
           url: result.data.url,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_CREATE_LABEL, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_CREATE_LABEL, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -151,7 +151,7 @@ export function registerLabelTools(server: McpServer) {
           url: result.data.url,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_UPDATE_LABEL, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_UPDATE_LABEL, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -206,7 +206,7 @@ export function registerLabelTools(server: McpServer) {
           repository: fullRepoName,
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_DELETE_LABEL, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_DELETE_LABEL, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -242,7 +242,7 @@ export function registerLabelTools(server: McpServer) {
           })),
         });
       } catch (error) {
-        log.error('failed', { toolName: TOOL_LIST_LABELS, detail: getErrorMessage(error) });
+        log.error('failed', { toolName: TOOL_LIST_LABELS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
