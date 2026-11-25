@@ -6,7 +6,7 @@
  * POST /api/v1/data-lakes/{id}/files/{file_id}, and the obligation update commits in that transaction,
  * so a refused or failed filing leaves the obligation unconfirmed.
  */
-import { getObligationContract, updateObligationContract } from '@bike4mind/common';
+import { ForbiddenError, getObligationContract, updateObligationContract } from '@bike4mind/common';
 import { obligationDayToDate, obligationRepository, type ObligationUpdate } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
@@ -17,7 +17,6 @@ import { toMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAcces
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { addFileToWritableLake, assertLakeMembershipWritable } from '@server/dataLakes/lakeMembershipWrite';
 import { serializeObligation } from '@server/obligations/serializeObligation';
-import { assertNotConnectedApp } from '@server/obligations/assertNotConnectedApp';
 import { assertCanFileObligationIntoLakes, canReadObligationLakes } from '@server/obligations/obligationLakeScopes';
 
 const dismissedConflict = () => new ConflictError('This obligation was dismissed and can no longer change');
@@ -29,7 +28,10 @@ const getRoute = nextRouteForContract(getObligationContract, {
   exemptReadsFromDailyRateLimit: true,
   recordsActivity: false,
 }).get(async (req, res) => {
-  assertNotConnectedApp(req.apiKeyInfo);
+  // An obligation reads the user's files, spends credits and files into lakes, none of which a connected app is granted.
+  if (req.apiKeyInfo?.oauthExchangeClientId) {
+    throw new ForbiddenError('Keys minted for a connected app cannot use obligations');
+  }
   const item = await obligationRepository.findByIdForUser(req.validatedParams.id, req.user.id);
   if (!item) throw new NotFoundError('Obligation not found');
   return res.json(serializeObligation(item, { showDestination: canReadObligationLakes(req.apiKeyInfo) }));
@@ -38,7 +40,10 @@ const getRoute = nextRouteForContract(getObligationContract, {
 const updateRoute = nextRouteForContract(updateObligationContract, {
   rateLimit: perUserRateLimit('PATCH /api/v1/obligations/[id]'),
 }).patch(async (req, res) => {
-  assertNotConnectedApp(req.apiKeyInfo);
+  // An obligation reads the user's files, spends credits and files into lakes, none of which a connected app is granted.
+  if (req.apiKeyInfo?.oauthExchangeClientId) {
+    throw new ForbiddenError('Keys minted for a connected app cannot use obligations');
+  }
   const userId = req.user.id;
   const body = req.validated;
   if (!Object.values(body).some(value => value !== undefined)) {
