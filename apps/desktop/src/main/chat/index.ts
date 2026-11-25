@@ -3,7 +3,7 @@ import { registerOrchestrationIpc } from './orchestrationIpc';
 import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
   app,
@@ -79,6 +79,7 @@ import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
+import { archiveAskingFirst } from './sessionArchive';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
@@ -122,14 +123,6 @@ import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { MODEL_SETTINGS_FILE_NAME } from '@shared/modelSettings';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
-import {
-  branchCheckouts,
-  currentBranch,
-  isGitRepository,
-  listBranches,
-  projectDisplayName,
-  unusableProjectReason,
-} from './project/git';
 import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
@@ -145,7 +138,6 @@ import {
 } from './capabilities/capabilityHandlers';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
-import { RecentFolderStore } from './project/RecentFolderStore';
 import { appWorktreeMainCheckout, SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
@@ -375,7 +367,6 @@ export function registerChat(
   const capabilityLedger = new CapabilityLedger(join(userData, 'capability-ledger.json'));
   // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
-  const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
   const spareWorktrees = new SpareWorktrees();
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
@@ -754,10 +745,13 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (event, sessionId: unknown, archived: unknown) => {
     if (typeof sessionId !== 'string' || typeof archived !== 'boolean') return null;
-    return runtime.setSessionArchived(sessionId, archived, options => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
-    });
+    return archiveAskingFirst(
+      decision => runtime.setSessionArchived(sessionId, archived, decision),
+      options => {
+        const window = BrowserWindow.fromWebContents(event.sender);
+        return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+      }
+    );
   });
   ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, raw: unknown) => {
     const scope = parseSkillsScope(raw);
@@ -947,74 +941,33 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityIpc.getState());
   ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, (_event, grantId: unknown) => capabilityIpc.revoke(grantId));
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => runtime.sessionStatuses());
-  const rememberFolder = (directory: string | null): void => {
-    if (!directory) return;
-    recentFolders
-      .record(directory)
-      .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
-  };
   registerSessionCreateIpc(ipcMain, {
     createSession: mode => runtime.createSession(mode),
-    createCodeSession: request => service.createCodeSession(request),
+    createCodeSession: request => runtime.createCodeSession(request),
     place: (sessionId, sectionId) =>
       placeNewSession(sidebarSections, sessionId, sectionId, error =>
         logger.warn(`CHAT: could not place new session in its sidebar section: ${String(error)}`)
       ),
-    rememberFolder,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatUpdateProject, async (_event, request: UpdateProjectRequest) => {
     const result = await service.updateProject(request);
-    rememberFolder(folderToRemember(request, result));
+    void runtime.rememberRecentFolder(folderToRemember(request, result));
     return result;
   });
 
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
-  ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => recentFolders.list());
-  ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, async (_event, directory: unknown) => {
-    if (typeof directory === 'string') {
-      await recentFolders.remove(directory);
-      void spareWorktrees.forget(directory);
-    }
-    return recentFolders.list();
-  });
+  ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => runtime.listRecentFolders());
+  ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, (_event, directory: unknown) =>
+    typeof directory === 'string' ? runtime.forgetRecentFolder(directory) : runtime.listRecentFolders()
+  );
 
   // Reading branches is a git call on a path the user just chose in a native dialog, so it is
   // not gated: nothing here writes, and the alternative is a branch field the user must type
   // from memory.
-  ipcMain.handle(IPC_CHANNELS.chatInspectProject, async (_event, directory: string): Promise<ProjectInspection> => {
-    const resolved = resolve(directory);
-    if (!(await isGitRepository(resolved))) {
-      const base = {
-        directory: resolved,
-        name: basename(resolved),
-        isRepository: false,
-        branches: [],
-        currentBranch: null,
-      };
-      const refusal = await unusableProjectReason(resolved);
-      return refusal ? { ...base, refusal } : base;
-    }
-    const base = { directory: resolved, name: await projectDisplayName(resolved) };
-    try {
-      // The marks are an aid, not the list: a worktree listing git cannot answer leaves the
-      // branches standing, and a toggle-off pick is still checked against git in main.
-      const [branches, head, checkedOutElsewhere] = await Promise.all([
-        listBranches(resolved),
-        currentBranch(resolved),
-        branchCheckouts(resolved).catch(() => ({})),
-      ]);
-      return { ...base, isRepository: true, branches, currentBranch: head, checkedOutElsewhere };
-    } catch (err) {
-      return {
-        ...base,
-        isRepository: true,
-        branches: [],
-        currentBranch: null,
-        error: err instanceof Error ? err.message : 'Could not read this repository.',
-      };
-    }
-  });
+  ipcMain.handle(IPC_CHANNELS.chatInspectProject, (_event, directory: string): Promise<ProjectInspection> =>
+    runtime.inspectProject(directory)
+  );
 
   ipcMain.handle(
     IPC_CHANNELS.chatAddContextDirectory,
@@ -1054,15 +1007,7 @@ export function registerChat(
   });
   // Only a repository the user already has a conversation or recent folder for is ever touched.
   const knownRepository = async (directory: string) => {
-    const recent = await recentFolders.list();
-    if (
-      !(await service.isKnownRepository(
-        directory,
-        recent.map(folder => folder.path)
-      ))
-    ) {
-      throw new Error('Unknown project directory');
-    }
+    if (!(await runtime.isKnownRepository(directory))) throw new Error('Unknown project directory');
   };
   ipcMain.handle(IPC_CHANNELS.chatListWorktrees, async (_event, directory: unknown) => {
     if (typeof directory !== 'string') throw new Error('Invalid project directory');
@@ -1262,7 +1207,7 @@ export function registerChat(
     background.tail(processId, sessionId, PANEL_TAIL_CHARS)
   );
   ipcMain.handle(IPC_CHANNELS.chatStopBackground, (_event, sessionId: string, processId: string) =>
-    background.kill(processId, sessionId).then(() => undefined)
+    runtime.stopBackgroundProcess(sessionId, processId).then(() => undefined)
   );
   ipcMain.handle(IPC_CHANNELS.chatMoveToBackground, (_event, sessionId: string, callId: string) =>
     foreground.moveToBackground(sessionId, callId)
