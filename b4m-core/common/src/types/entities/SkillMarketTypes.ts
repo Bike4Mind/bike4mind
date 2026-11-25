@@ -271,6 +271,84 @@ export interface ISkillTemplatePreviewImage {
   approved: boolean;
 }
 
+/** Example runs one author may start per UTC day, across all their templates. */
+export const SKILL_TEMPLATE_EXAMPLE_DAILY_RUN_CAP = 5;
+/** Longest stored example reply, in characters; a longer reply is cut. */
+export const SKILL_TEMPLATE_EXAMPLE_REPLY_MAX = 8000;
+/** Tool steps stored per example run, and the longest step line. */
+export const SKILL_TEMPLATE_EXAMPLE_STEPS_MAX = 12;
+export const SKILL_TEMPLATE_EXAMPLE_STEP_LABEL_MAX = 80;
+/** Longest rendered artifact kept, in characters of sanitized HTML; a larger one makes the example chat-only. */
+export const SKILL_TEMPLATE_EXAMPLE_ARTIFACT_HTML_MAX = 200_000;
+export const SKILL_TEMPLATE_EXAMPLE_ARTIFACT_TITLE_MAX = 120;
+/** Media caps. Media over a cap is dropped, never re-encoded. Seconds and bytes. */
+export const SKILL_TEMPLATE_EXAMPLE_VIDEO_MAX_SECONDS = 30;
+export const SKILL_TEMPLATE_EXAMPLE_VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+export const SKILL_TEMPLATE_EXAMPLE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const SKILL_TEMPLATE_EXAMPLE_CAROUSEL_MAX_SLIDES = 10;
+
+export type SkillTemplateExampleStatus = 'running' | 'ready' | 'failed';
+
+/** One tool call of the example run, as a short line; `simulated` when the dry run faked the result. */
+export interface ISkillTemplateExampleStep {
+  label: string;
+  simulated: boolean;
+}
+
+/** The run's first artifact as a sanitized, read-only HTML render made server-side. */
+export interface ISkillTemplateExampleArtifact {
+  type: string;
+  title: string;
+  html: string;
+}
+
+export interface ISkillTemplateExampleMediaItem {
+  /** Storage key of the generated file. */
+  key: string;
+  mime: string;
+  bytes: number;
+  durationS?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface ISkillTemplateExampleMedia {
+  kind: 'video' | 'image' | 'carousel';
+  items: ISkillTemplateExampleMediaItem[];
+}
+
+/** The file the example prompt was run on, for skills that take one. Metadata only on the page. */
+export interface ISkillTemplateExampleSampleFile {
+  name: string;
+  mime: string;
+  pages?: number;
+  source: 'generated' | 'upload';
+  /** An author-owned FabFile. */
+  fabFileId?: string;
+}
+
+/**
+ * A run of the skill on the example prompt, made by the platform (server/skillMarket/templateExample.ts).
+ * The author can trim the reply or switch the demo off, never write the reply or artifact.
+ */
+export interface ISkillTemplateExample {
+  status: SkillTemplateExampleStatus;
+  /** The author's switch; off shows the page without the demo. */
+  enabled: boolean;
+  prompt: string;
+  reply: string;
+  /** Characters of `reply` the page shows; null shows all of it. */
+  replyTrimmedTo?: number | null;
+  artifact?: ISkillTemplateExampleArtifact | null;
+  media?: ISkillTemplateExampleMedia | null;
+  sampleFile?: ISkillTemplateExampleSampleFile | null;
+  steps: ISkillTemplateExampleStep[];
+  /** The approved listing version the run used. */
+  generatedFromVersionId?: string | null;
+  runAt?: Date;
+  error?: string;
+}
+
 export interface ISkillListingTemplate {
   id: string;
   listingId: string;
@@ -279,6 +357,9 @@ export interface ISkillListingTemplate {
   inputs: ISkillTemplateInput[];
   examplePrompt: string;
   previewImage?: ISkillTemplatePreviewImage | null;
+  /** The skill works on an attached file, so the page shows a file card and a paperclip. */
+  takesFile?: boolean;
+  example?: ISkillTemplateExample | null;
   status: SkillTemplateStatus;
   freeRunEnabled: boolean;
   /** The approved listing version the copy was last drafted from or confirmed against. */
@@ -301,7 +382,9 @@ export interface ISkillListingTemplate {
 }
 
 /** The copy the draft endpoint proposes; every field is empty when drafting fails. */
-export type SkillTemplateDraft = Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt'>;
+export type SkillTemplateDraft = Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt'> & {
+  takesFile?: boolean;
+};
 
 export const SkillTemplateInputSchema = z.object({
   label: z.string().trim().min(1).max(SKILL_TEMPLATE_INPUT_LABEL_MAX),
@@ -317,6 +400,7 @@ export const SkillTemplateUpdateSchema = z.strictObject({
   headline: z.string().trim().max(SKILL_TEMPLATE_HEADLINE_MAX).optional(),
   inputs: z.array(SkillTemplateInputSchema).max(SKILL_TEMPLATE_MAX_INPUTS).optional(),
   examplePrompt: z.string().trim().max(SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX).optional(),
+  takesFile: z.boolean().optional(),
   /** The listing's current approved version: the copy was (re)drafted from it or reviewed against it. */
   generatedFromVersionId: z.string().min(1).optional(),
 });
@@ -332,6 +416,23 @@ export const SkillTemplateImageGenerateSchema = z.strictObject({
 
 /** POST /api/skills/market/[id]/template/image/from-generation: the finished image generation to use. */
 export const SkillTemplateImageFromGenerationSchema = z.strictObject({ questId: z.string().min(1).max(64) });
+
+/** POST /api/skills/market/[id]/template/example: run (or re-run) the example; defaults to the template's example prompt. */
+export const SkillTemplateExampleRunSchema = z.strictObject({
+  prompt: z.string().trim().min(1).max(SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX).optional(),
+});
+export type SkillTemplateExampleRun = z.infer<typeof SkillTemplateExampleRunSchema>;
+
+/**
+ * PUT /api/skills/market/[id]/template/example. Trimming can only shorten the stored reply; nothing
+ * here writes reply or artifact text. A null sample file id goes back to a generated sample.
+ */
+export const SkillTemplateExampleUpdateSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  replyTrimmedTo: z.number().int().min(1).max(SKILL_TEMPLATE_EXAMPLE_REPLY_MAX).nullable().optional(),
+  sampleFabFileId: z.string().min(1).max(64).nullable().optional(),
+});
+export type SkillTemplateExampleUpdate = z.infer<typeof SkillTemplateExampleUpdateSchema>;
 
 /** PUT /api/skills/market/[id]/template/free-run. */
 export const SkillTemplateFreeRunSchema = z.strictObject({ enabled: z.boolean() });

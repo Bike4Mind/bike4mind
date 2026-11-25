@@ -84,6 +84,53 @@ describe('SkillListingTemplate', () => {
       create({ listingId: 'listing-2', slug: 'other', previewImage: { fabFileId: 'f', source: 'stock' } })
     ).rejects.toThrow(/source/);
   });
+
+  it('has no example and does not take a file by default', async () => {
+    const doc = (await create()).toJSON();
+    expect(doc.example).toBeUndefined();
+    expect(doc.takesFile).toBe(false);
+  });
+
+  it('stores an example run with its defaults', async () => {
+    await create({
+      example: {
+        status: 'ready',
+        prompt: 'Plan the launch',
+        reply: 'Here is the plan',
+        steps: [{ label: 'Searched issues in example-org/app', simulated: true }],
+        artifact: { type: 'html', title: 'Plan', html: '<p>Plan</p>' },
+        media: { kind: 'video', items: [{ key: 'k', mime: 'video/mp4', bytes: 10, durationS: 12 }] },
+        sampleFile: { name: 'notes.md', mime: 'text/markdown', pages: 1, source: 'generated' },
+      },
+    });
+    expect((await find()).example).toMatchObject({
+      status: 'ready',
+      enabled: true,
+      replyTrimmedTo: null,
+      steps: [{ label: 'Searched issues in example-org/app', simulated: true }],
+      artifact: { type: 'html', title: 'Plan', html: '<p>Plan</p>' },
+      media: { kind: 'video', items: [{ key: 'k', mime: 'video/mp4', bytes: 10, durationS: 12 }] },
+      sampleFile: { name: 'notes.md', source: 'generated' },
+    });
+  });
+
+  it.each([
+    ['an unknown status', { status: 'queued' }, /status/],
+    ['too many steps', { steps: Array.from({ length: 13 }, () => ({ label: 's' })) }, /at most 12 steps/],
+    ['a long step label', { steps: [{ label: 'x'.repeat(81) }] }, /label/],
+    [
+      'too many media items',
+      {
+        media: {
+          kind: 'carousel',
+          items: Array.from({ length: 11 }, () => ({ key: 'k', mime: 'image/png', bytes: 1 })),
+        },
+      },
+      /at most 10 items/,
+    ],
+  ])('refuses an example with %s', async (_name, fields, error) => {
+    await expect(create({ example: { status: 'ready', ...fields } })).rejects.toThrow(error);
+  });
 });
 
 describe('template scan claim and verdict', () => {

@@ -1,6 +1,12 @@
 import mongoose, { Document, FilterQuery, Model, Schema, model } from 'mongoose';
 import {
+  SKILL_TEMPLATE_EXAMPLE_ARTIFACT_HTML_MAX,
+  SKILL_TEMPLATE_EXAMPLE_ARTIFACT_TITLE_MAX,
+  SKILL_TEMPLATE_EXAMPLE_CAROUSEL_MAX_SLIDES,
   SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX,
+  SKILL_TEMPLATE_EXAMPLE_REPLY_MAX,
+  SKILL_TEMPLATE_EXAMPLE_STEP_LABEL_MAX,
+  SKILL_TEMPLATE_EXAMPLE_STEPS_MAX,
   SKILL_TEMPLATE_HEADLINE_MAX,
   SKILL_TEMPLATE_INPUT_LABEL_MAX,
   SKILL_TEMPLATE_MAX_INPUTS,
@@ -18,6 +24,89 @@ import { SkillScanFindingSchema } from './SkillListingVersionModel';
 export interface ISkillListingTemplateDocument extends Omit<ISkillListingTemplate, 'id'>, Document {
   id: string;
 }
+
+const SkillTemplateExampleSchema = new Schema(
+  {
+    status: { type: String, required: true, enum: ['running', 'ready', 'failed'] },
+    enabled: { type: Boolean, default: true },
+    prompt: { type: String, default: '', maxlength: SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX },
+    reply: { type: String, default: '', maxlength: SKILL_TEMPLATE_EXAMPLE_REPLY_MAX },
+    replyTrimmedTo: { type: Number, default: null, min: 1, max: SKILL_TEMPLATE_EXAMPLE_REPLY_MAX },
+    artifact: {
+      type: new Schema(
+        {
+          type: { type: String, required: true, maxlength: 64 },
+          title: { type: String, default: '', maxlength: SKILL_TEMPLATE_EXAMPLE_ARTIFACT_TITLE_MAX },
+          html: { type: String, required: true, maxlength: SKILL_TEMPLATE_EXAMPLE_ARTIFACT_HTML_MAX },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    media: {
+      type: new Schema(
+        {
+          kind: { type: String, required: true, enum: ['video', 'image', 'carousel'] },
+          items: {
+            type: [
+              new Schema(
+                {
+                  key: { type: String, required: true, maxlength: 1024 },
+                  mime: { type: String, required: true, maxlength: 128 },
+                  bytes: { type: Number, required: true, min: 0 },
+                  durationS: { type: Number, min: 0 },
+                  width: { type: Number, min: 0 },
+                  height: { type: Number, min: 0 },
+                },
+                { _id: false }
+              ),
+            ],
+            default: [],
+            validate: {
+              validator: (items: unknown[]) => items.length <= SKILL_TEMPLATE_EXAMPLE_CAROUSEL_MAX_SLIDES,
+              message: `Example media has at most ${SKILL_TEMPLATE_EXAMPLE_CAROUSEL_MAX_SLIDES} items`,
+            },
+          },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    sampleFile: {
+      type: new Schema(
+        {
+          name: { type: String, required: true, maxlength: 255 },
+          mime: { type: String, required: true, maxlength: 128 },
+          pages: { type: Number, min: 0 },
+          source: { type: String, required: true, enum: ['generated', 'upload'] },
+          fabFileId: { type: String },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    steps: {
+      type: [
+        new Schema(
+          {
+            label: { type: String, required: true, maxlength: SKILL_TEMPLATE_EXAMPLE_STEP_LABEL_MAX },
+            simulated: { type: Boolean, default: false },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+      validate: {
+        validator: (steps: unknown[]) => steps.length <= SKILL_TEMPLATE_EXAMPLE_STEPS_MAX,
+        message: `An example has at most ${SKILL_TEMPLATE_EXAMPLE_STEPS_MAX} steps`,
+      },
+    },
+    generatedFromVersionId: { type: String, default: null },
+    runAt: { type: Date },
+    error: { type: String, maxlength: 500 },
+  },
+  { _id: false }
+);
 
 const SkillListingTemplateSchema = new Schema<ISkillListingTemplateDocument>(
   {
@@ -52,6 +141,9 @@ const SkillListingTemplateSchema = new Schema<ISkillListingTemplateDocument>(
       ),
       default: undefined,
     },
+    takesFile: { type: Boolean, default: false },
+    // Absent on templates made before example runs; the page then keeps the layout without a demo.
+    example: { type: SkillTemplateExampleSchema, default: undefined },
     status: { type: String, required: true, enum: ['draft', 'in_review', 'published'], default: 'draft' },
     freeRunEnabled: { type: Boolean, default: false },
     generatedFromVersionId: { type: String, default: null },
@@ -89,7 +181,10 @@ export type SkillTemplateScanVerdictPatch = Pick<ISkillListingTemplate, 'scanSta
 
 /** Copy fields an author edit may write in the same update that claims the scan. */
 export type SkillTemplateCopyPatch = Partial<
-  Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt' | 'generatedFromVersionId' | 'stale'>
+  Pick<
+    ISkillListingTemplate,
+    'headline' | 'inputs' | 'examplePrompt' | 'takesFile' | 'generatedFromVersionId' | 'stale'
+  >
 >;
 
 /**

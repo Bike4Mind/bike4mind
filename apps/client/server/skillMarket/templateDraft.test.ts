@@ -19,6 +19,7 @@ const good = {
   headline: 'Turn any article into three bullets',
   inputs: [{ label: 'Article text', required: true }],
   examplePrompt: 'Summarize this post about solar panels',
+  takesFile: false,
 };
 
 afterEach(() => {
@@ -70,7 +71,17 @@ describe('normalizeTemplateDraft', () => {
       headline: 'Only a headline',
       inputs: [],
       examplePrompt: '',
+      takesFile: false,
     });
+  });
+
+  it.each([
+    [true, true],
+    ['true', false],
+    [1, false],
+    [undefined, false],
+  ])('reads takesFile %j strictly as %j', (value, expected) => {
+    expect(normalizeTemplateDraft({ ...good, takesFile: value }).takesFile).toBe(expected);
   });
 });
 

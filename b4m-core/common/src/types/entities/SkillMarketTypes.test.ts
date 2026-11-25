@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX,
+  SKILL_TEMPLATE_EXAMPLE_REPLY_MAX,
   SKILL_TEMPLATE_SLUG_MAX,
+  SkillTemplateExampleRunSchema,
+  SkillTemplateExampleUpdateSchema,
   SkillTemplateImageGenerateSchema,
   skillTemplateFreeRunEligibility,
   skillTemplateFreeRunInputKey,
@@ -81,5 +85,42 @@ describe('SkillTemplateImageGenerateSchema', () => {
     expect(SkillTemplateImageGenerateSchema.parse({ result: '  done  ' })).toEqual({ result: 'done' });
     expect(SkillTemplateImageGenerateSchema.safeParse({ result: '   ' }).success).toBe(false);
     expect(SkillTemplateImageGenerateSchema.safeParse({ result: 'x', extra: 1 }).success).toBe(false);
+  });
+});
+
+describe('SkillTemplateExampleRunSchema', () => {
+  it('takes an optional trimmed prompt within the cap and nothing else', () => {
+    expect(SkillTemplateExampleRunSchema.parse({})).toEqual({});
+    expect(SkillTemplateExampleRunSchema.parse({ prompt: '  plan it  ' })).toEqual({ prompt: 'plan it' });
+    expect(
+      SkillTemplateExampleRunSchema.safeParse({ prompt: 'x'.repeat(SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX + 1) }).success
+    ).toBe(false);
+    expect(SkillTemplateExampleRunSchema.safeParse({ prompt: 'x', reply: 'written by hand' }).success).toBe(false);
+  });
+});
+
+describe('SkillTemplateExampleUpdateSchema', () => {
+  it('accepts the switch, a trim and a sample file swap', () => {
+    expect(
+      SkillTemplateExampleUpdateSchema.parse({ enabled: false, replyTrimmedTo: 40, sampleFabFileId: 'f1' })
+    ).toEqual({
+      enabled: false,
+      replyTrimmedTo: 40,
+      sampleFabFileId: 'f1',
+    });
+    expect(SkillTemplateExampleUpdateSchema.parse({ replyTrimmedTo: null, sampleFabFileId: null })).toEqual({
+      replyTrimmedTo: null,
+      sampleFabFileId: null,
+    });
+  });
+
+  it.each([
+    { reply: 'hand written' },
+    { artifact: { html: '<p>x</p>' } },
+    { replyTrimmedTo: 0 },
+    { replyTrimmedTo: 1.5 },
+    { replyTrimmedTo: SKILL_TEMPLATE_EXAMPLE_REPLY_MAX + 1 },
+  ])('refuses %j', body => {
+    expect(SkillTemplateExampleUpdateSchema.safeParse(body).success).toBe(false);
   });
 });

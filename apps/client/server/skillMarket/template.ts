@@ -131,6 +131,7 @@ function copyPatch(input: SkillTemplateUpdate): SkillTemplateCopyPatch {
     ...(input.headline !== undefined ? { headline: input.headline } : {}),
     ...(input.inputs !== undefined ? { inputs: input.inputs.map(({ label, required }) => ({ label, required })) } : {}),
     ...(input.examplePrompt !== undefined ? { examplePrompt: input.examplePrompt } : {}),
+    ...(input.takesFile !== undefined ? { takesFile: input.takesFile } : {}),
     // Naming the current version is the author regenerating or confirming the copy against it.
     ...(input.generatedFromVersionId !== undefined
       ? { generatedFromVersionId: input.generatedFromVersionId, stale: false }
@@ -211,11 +212,15 @@ export async function saveOwnTemplate(
   }
 
   // A published template's copy is unchanged on this path; a change takes the scan branch above.
+  // `takesFile` is not shown as text, so it needs no scan.
   const set: SkillTemplateCopyPatch =
     existing.status === 'published'
-      ? patch.generatedFromVersionId !== undefined
-        ? { generatedFromVersionId: patch.generatedFromVersionId, stale: false }
-        : {}
+      ? {
+          ...(patch.generatedFromVersionId !== undefined
+            ? { generatedFromVersionId: patch.generatedFromVersionId, stale: false }
+            : {}),
+          ...(patch.takesFile !== undefined ? { takesFile: patch.takesFile } : {}),
+        }
       : patch;
   let updated: ISkillListingTemplateDocument | null;
   try {
