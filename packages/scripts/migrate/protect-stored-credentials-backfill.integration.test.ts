@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import speakeasy from 'speakeasy';
 import bcrypt from 'bcryptjs';
 import { mfaService } from '@bike4mind/auth';
+import { TOTP_STEP_SECONDS, generateTOTPSecret, totpCode } from '@bike4mind/auth/mfaService/totp';
 import { ApiKey, McpServer, SlackDevWorkspace, User, SecretRotation, userRepository } from '@bike4mind/database';
 import {
   configureSecretsAtRest,
@@ -135,7 +135,7 @@ describe('credential backfill', () => {
 });
 
 describe('TOTP seed backfill', () => {
-  const seed = speakeasy.generateSecret({ length: 20 }).base32;
+  const seed = generateTOTPSecret();
   const mfaOf = (id: unknown) => User.collection.findOne({ _id: id as never }).then(row => row?.mfa);
   const seedUsers = async () => {
     const encrypted = encryptAtRest('ALREADYENCRYPTEDSEED');
@@ -171,7 +171,7 @@ describe('TOTP seed backfill', () => {
 
     const user = await userRepository.findByIdWithMfaSecrets(String(ids.plain));
     const result = await mfaService.verifyMFA(
-      { user: user!, token: speakeasy.totp({ secret: seed, encoding: 'base32' }) },
+      { user: user!, token: totpCode(seed, Math.floor(Date.now() / 1000 / TOTP_STEP_SECONDS)) },
       userRepository
     );
     expect(result.verified).toBe(true);

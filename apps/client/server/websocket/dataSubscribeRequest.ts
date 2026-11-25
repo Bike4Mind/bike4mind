@@ -1,6 +1,6 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { DataSubscribeRequestAction, Permission, canViewOrgMemberCredits } from '@bike4mind/common';
+import { DataSubscribeRequestAction, Permission, canViewOrgMemberCredits, limitConcurrency } from '@bike4mind/common';
 import { z } from 'zod';
 import {
   AdminSettings,
@@ -17,25 +17,19 @@ import {
   Organization,
   Project,
   Quest,
-  QuestMasterPlan,
   realtimeConnectionRepository,
   User,
 } from '@bike4mind/database';
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
-import {
-  adminSettingsSubscriptionScope,
-  inviteSubscriptionScope,
-  questMasterPlanSubscriptionScope,
-} from '@server/websocket/subscriptionScopes';
+import { adminSettingsSubscriptionScope, inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { verifyWsSubscriberToken } from '@server/websocket/verifyWsAccessToken';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
 import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import crypto from 'crypto';
 import pickBy from 'lodash/pickBy';
-import pLimit from 'p-limit';
 import ability from '@bike4mind/server-utils/auth/ability';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
@@ -169,14 +163,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     isOwnQuestSession =
       !!requestedSessionId &&
       accessibleSessions.some(s => s._id.toString() === requestedSessionId && s.userId === user.id);
-  } else if (collectionName === QuestMasterPlan.collection.collectionName) {
-    const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), { _id: true });
-    // Plan access is user-based (owner/shared/public) with a session-based
-    // fallback for legacy and session-visibility plans
-    scope = questMasterPlanSubscriptionScope(
-      user._id.toString(),
-      accessibleSessions.map(s => s._id)
-    );
   } else if (collectionName === Invite.collection.collectionName) {
     const canShareProjectsQuery = accessibleBy(userAbility, Permission.share).ofType(Project);
     const shareableProjectIds = await Project.find(canShareProjectsQuery).distinct('_id');
@@ -337,7 +323,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       await assertConnectionStillRegistered();
       await registerSubscriber();
     }
-    const limit = pLimit(50);
+    const limit = limitConcurrency(50);
     const sendingOutcomes = await Promise.allSettled(
       results.map(r =>
         limit(() => {

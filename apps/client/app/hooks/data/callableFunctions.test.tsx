@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  callableFunctionBreakingChanges,
+  callableFunctionContractUnreadable,
   callableFunctionErrorCode,
   callableFunctionErrorMessage,
   callableFunctionErrorProblems,
@@ -10,9 +12,13 @@ import {
   useArtifactCallableFunction,
   useCallableFunctionsEnabled,
   useCreateCallableFunction,
+  useCallableFunctionShare,
   useDeleteCallableFunction,
   useRepinCallableFunction,
   useSetCallableFunctionEnabled,
+  useSharedCallableFunctions,
+  useShareCallableFunction,
+  useStopSharingCallableFunction,
 } from './callableFunctions';
 import { CALLABLE_FUNCTIONS_LIST_QUERY_KEY, CALLABLE_FUNCTIONS_STATUS_QUERY_KEY } from './queryKeys';
 
@@ -20,12 +26,13 @@ const h = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   patch: vi.fn(),
+  put: vi.fn(),
   delete: vi.fn(),
   accessToken: 'token' as string | null,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: h.get, post: h.post, patch: h.patch, delete: h.delete },
+  api: { get: h.get, post: h.post, patch: h.patch, put: h.put, delete: h.delete },
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (select: (s: { accessToken: string | null }) => unknown) => select({ accessToken: h.accessToken }),
@@ -100,25 +107,34 @@ describe('useArtifactCallableFunction', () => {
 
   it('reads the list filtered by the artifact, under a key that carries the artifact id and version', async () => {
     h.get.mockResolvedValue({ data: [saved] });
-    const { client, result } = renderWith(() => useArtifactCallableFunction('artifact-1', 2));
+    const { client, result } = renderWith(() => useArtifactCallableFunction('artifact-1', 2, 'double_it'));
 
-    await waitFor(() => expect(result.current.data).toEqual(saved));
+    await waitFor(() => expect(result.current.data).toEqual({ saved, others: [] }));
     expect(h.get).toHaveBeenCalledWith('/api/callable-functions', { params: { artifactId: 'artifact-1' } });
-    expect(client.getQueryData([...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'artifact-1', 2])).toEqual(saved);
+    expect(client.getQueryData([...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'artifact-1', 2])).toEqual([saved]);
   });
 
-  it('is null when the artifact has no saved function', async () => {
-    h.get.mockResolvedValue({ data: [] });
-    const { result } = renderWith(() => useArtifactCallableFunction('artifact-1', 1));
+  it('picks the tool named in the code and returns the other tools in order', async () => {
+    const renamed = { id: 'fn-2', slug: 'double_it_v2', pin: { version: 4 } };
+    const third = { id: 'fn-3', slug: 'double_it_v3', pin: { version: 5 } };
+    h.get.mockResolvedValue({ data: [saved, renamed, third] });
+    const { result } = renderWith(() => useArtifactCallableFunction('artifact-1', 5, 'double_it_v2'));
+
+    await waitFor(() => expect(result.current.data).toEqual({ saved: renamed, others: [saved, third] }));
+  });
+
+  it('has no saved tool, and the rest as others, when none has the name in the code', async () => {
+    h.get.mockResolvedValue({ data: [saved] });
+    const { result } = renderWith(() => useArtifactCallableFunction('artifact-1', 1, 'triple_it'));
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toBeNull();
+    expect(result.current.data).toEqual({ saved: null, others: [saved] });
   });
 
   it('does not ask without an artifact id or a session', () => {
-    renderWith(() => useArtifactCallableFunction(null, 1));
+    renderWith(() => useArtifactCallableFunction(null, 1, 'double_it'));
     h.accessToken = null;
-    renderWith(() => useArtifactCallableFunction('artifact-1', 1));
+    renderWith(() => useArtifactCallableFunction('artifact-1', 1, 'double_it'));
 
     expect(h.get).not.toHaveBeenCalled();
   });
@@ -155,7 +171,7 @@ describe('callable function mutations', () => {
   });
 
   it('a refused create re-reads the list too', async () => {
-    h.post.mockRejectedValue(axiosError(409, { error: 'This artifact is already saved as a tool.' }));
+    h.post.mockRejectedValue(axiosError(409, { error: 'You can have at most 100 saved tools.' }));
     const client = newClient();
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     const { result } = renderWith(() => useCreateCallableFunction(), client);
@@ -209,6 +225,81 @@ describe('callable function mutations', () => {
   });
 });
 
+describe('callable function sharing hooks', () => {
+  beforeEach(() => {
+    h.get.mockReset();
+    h.put.mockReset();
+    h.delete.mockReset();
+    h.accessToken = 'token';
+  });
+
+  it('reads the share from the grants route, and drops it when nothing watches it', async () => {
+    h.get.mockResolvedValue({ data: { grants: null, people: [] } });
+    const { result, client, unmount } = renderWith(() => useCallableFunctionShare('fn/1'));
+    await waitFor(() => expect(result.current.data).toEqual({ grants: null, people: [] }));
+    expect(h.get).toHaveBeenCalledWith('/api/callable-functions/fn%2F1/grants');
+
+    unmount();
+    await waitFor(() => expect(client.getQueryCache().findAll()).toHaveLength(0));
+  });
+
+  it('share puts the grants without the id, then re-reads the list', async () => {
+    h.put.mockResolvedValue({ data: saved });
+    const client = newClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderWith(() => useShareCallableFunction(), client);
+
+    await act(() => result.current.mutateAsync({ id: 'fn/1', visibility: 'private', userIds: ['person-1'] }));
+
+    expect(h.put).toHaveBeenCalledWith('/api/callable-functions/fn%2F1/grants', {
+      visibility: 'private',
+      userIds: ['person-1'],
+    });
+    expect(invalidate).toHaveBeenCalled();
+  });
+
+  it('stop sharing deletes the grants, then re-reads the list', async () => {
+    h.delete.mockResolvedValue({ data: saved });
+    const client = newClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderWith(() => useStopSharingCallableFunction(), client);
+
+    await act(() => result.current.mutateAsync('fn/1'));
+
+    expect(h.delete).toHaveBeenCalledWith('/api/callable-functions/fn%2F1/grants');
+    expect(invalidate).toHaveBeenCalled();
+  });
+
+  it('drops the cached share once a save or stop lands, so a reopened dialog reads it fresh', async () => {
+    h.put.mockResolvedValue({ data: saved });
+    h.delete.mockResolvedValue({ data: saved });
+    const client = newClient();
+    const key = [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'fn-1', 'grants'];
+    const share = renderWith(() => useShareCallableFunction(), client);
+    const stop = renderWith(() => useStopSharingCallableFunction(), client);
+
+    client.setQueryData(key, { grants: { visibility: 'private' }, people: [] });
+    await act(() => share.result.current.mutateAsync({ id: 'fn-1', visibility: 'private', userIds: ['p'] }));
+    expect(client.getQueryData(key)).toBeUndefined();
+
+    client.setQueryData(key, { grants: { visibility: 'private' }, people: [] });
+    await act(() => stop.result.current.mutateAsync('fn-1'));
+    expect(client.getQueryData(key)).toBeUndefined();
+  });
+
+  it('lists what is shared with the caller, and does not ask without a session', async () => {
+    h.get.mockResolvedValue({ data: [{ id: 'fn-1' }] });
+    const { result } = renderWith(() => useSharedCallableFunctions());
+    await waitFor(() => expect(result.current.data).toEqual([{ id: 'fn-1' }]));
+    expect(h.get).toHaveBeenCalledWith('/api/callable-functions/shared');
+
+    h.get.mockClear();
+    h.accessToken = null;
+    renderWith(() => useSharedCallableFunctions());
+    expect(h.get).not.toHaveBeenCalled();
+  });
+});
+
 describe('callable function error helpers', () => {
   it('reads the code, the message, and the problems of an invalid_contract answer', () => {
     const error = axiosError(400, {
@@ -259,9 +350,28 @@ describe('callable function error helpers', () => {
     });
     expect(callableFunctionSlugHolder(taken({}))).toBeNull();
     expect(
-      callableFunctionSlugHolder(
-        axiosError(409, { code: 'artifact_has_function', functionId: 'fn-1', sourceDeleted: true })
-      )
+      callableFunctionSlugHolder(axiosError(409, { code: 'name_changed', functionId: 'fn-1', sourceDeleted: true }))
     ).toBeNull();
+  });
+
+  it('reads the changes a breaking_change answer lists, and nothing from other answers', () => {
+    const removed = { path: 'outputs.deflection', side: 'outputs', field: 'deflection', kind: 'removed' };
+    const renamed = { path: 'name', side: null, field: '', kind: 'name_changed', before: 'a', after: 'b' };
+    const refused = axiosError(409, {
+      code: 'breaking_change',
+      changes: [removed, renamed, { path: 'inputs.x', side: 'elsewhere', field: 'x', kind: 'removed' }, null],
+    });
+
+    expect(callableFunctionBreakingChanges(refused)).toEqual([removed, renamed]);
+    expect(callableFunctionBreakingChanges(axiosError(409, { code: 'version_changed', changes: [removed] }))).toEqual(
+      []
+    );
+    expect(callableFunctionBreakingChanges(new Error('Network Error'))).toEqual([]);
+  });
+
+  it('reads a contract_unreadable answer, and nothing from other answers', () => {
+    expect(callableFunctionContractUnreadable(axiosError(409, { code: 'contract_unreadable' }))).toBe(true);
+    expect(callableFunctionContractUnreadable(axiosError(409, { code: 'breaking_change', changes: [] }))).toBe(false);
+    expect(callableFunctionContractUnreadable(new Error('Network Error'))).toBe(false);
   });
 });

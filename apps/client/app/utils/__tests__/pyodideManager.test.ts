@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// The sandbox replies within a few microtasks; vi.waitFor's default 50ms poll would dominate each test.
+const POLL = { interval: 1 };
+
 // We test the exported functions/class by mocking the Worker dependency
 // For detectPackages, we can test directly since it's a pure function
 
@@ -526,34 +529,47 @@ describe('execution results', () => {
   });
 });
 
+type Posted = Array<Record<string, unknown>>;
+
+/** Answer the newest sandbox frame's handshake and report the runtime ready; returns a sender from that frame. */
+async function bringUpFrame(posted: Posted) {
+  await Promise.resolve();
+  const frame = [...document.querySelectorAll('iframe')].at(-1) as HTMLIFrameElement;
+  Object.defineProperty(frame, 'contentWindow', {
+    configurable: true,
+    value: { postMessage: (message: Record<string, unknown>) => posted.push(message) },
+  });
+  const send = (data: unknown, source: MessageEventSource | null = frame.contentWindow) =>
+    window.dispatchEvent(new MessageEvent('message', { data, source }));
+  send({ type: 'pyodide-sandbox-ready' });
+  await Promise.resolve();
+  await Promise.resolve();
+  send({ type: 'ready' });
+  return { frame, send };
+}
+
+const lastNonce = (posted: Posted) => [...posted].reverse().find(message => message.type === 'call')?.nonce;
+
 describe('function calls', () => {
+  let posted: Posted = [];
+
+  // Brings up the network-free frame with one answered call, then forgets what it posted.
   const readySandbox = async () => {
     vi.resetModules();
     const imported = await import('../pyodideManager');
-    const pending = imported.pyodideManager.initialize();
-    void pending.catch(() => {});
-    await Promise.resolve();
-
-    const frame = document.querySelector('iframe') as HTMLIFrameElement;
-    const posted: Array<Record<string, unknown>> = [];
-    Object.defineProperty(frame, 'contentWindow', {
-      configurable: true,
-      value: { postMessage: (message: Record<string, unknown>) => posted.push(message) },
-    });
-    const fromSandbox = (data: unknown, source: MessageEventSource | null = frame.contentWindow) =>
-      window.dispatchEvent(new MessageEvent('message', { data, source }));
-
-    fromSandbox({ type: 'pyodide-sandbox-ready' });
-    await Promise.resolve();
-    await Promise.resolve();
-    fromSandbox({ type: 'ready' });
-    await pending;
-
-    return { ...imported, posted, fromSandbox };
+    posted = [];
+    const warmUp = imported.pyodideManager.callFunction('warm_up = 1');
+    const { frame, send } = await bringUpFrame(posted);
+    await vi.waitFor(() => expect(lastNonce(posted)).toBeDefined(), POLL);
+    send(callResult({}));
+    await warmUp;
+    posted.length = 0;
+    return { ...imported, posted, fromSandbox: send, frame };
   };
 
-  const callResult = (result: Record<string, unknown>) => ({
+  const callResult = (result: Record<string, unknown>, nonce: unknown = lastNonce(posted)) => ({
     type: 'call-result',
+    nonce,
     result: { success: true, output: '', executionTime: 3, ...result },
   });
 
@@ -562,7 +578,7 @@ describe('function calls', () => {
   });
 
   it('posts a describe call with paramsJson null and resolves with the parsed contract', async () => {
-    const { pyodideManager, posted, fromSandbox } = await readySandbox();
+    const { pyodideManager, posted, fromSandbox, FUNCTION_READ_TIMEOUT_MS } = await readySandbox();
     const call = pyodideManager.callFunction('FUNCTION = {}', ['numpy']);
     await Promise.resolve();
 
@@ -571,7 +587,8 @@ describe('function calls', () => {
       code: 'FUNCTION = {}',
       packages: ['numpy'],
       paramsJson: null,
-      timeoutMs: 30000,
+      timeoutMs: FUNCTION_READ_TIMEOUT_MS,
+      nonce: expect.any(String),
     });
     fromSandbox(callResult({ contractJson: '{"name": "f"}', output: 'hi\n' }));
     await expect(call).resolves.toEqual({
@@ -686,15 +703,99 @@ describe('function calls', () => {
   });
 
   it('leaves an execute running when a call-result arrives with no call pending', async () => {
-    const { pyodideManager, fromSandbox } = await readySandbox();
+    const { pyodideManager } = await readySandbox();
     const run = pyodideManager.execute('print(1)');
     void run.catch(() => {});
-    await vi.waitFor(() => expect(pyodideManager.getState().isExecuting).toBe(true));
+    const { send } = await bringUpFrame(posted);
+    await vi.waitFor(() => expect(pyodideManager.getState().isExecuting).toBe(true), POLL);
 
-    fromSandbox(callResult({ valueJson: '{"forged": 1}' }));
+    send(callResult({ valueJson: '{"forged": 1}' }, null));
 
     expect(pyodideManager.getState().isExecuting).toBe(true);
     pyodideManager.interrupt();
+  });
+
+  it('settles a call only with the nonce it posted', async () => {
+    const { pyodideManager, posted, fromSandbox } = await readySandbox();
+    let settled: unknown = 'pending';
+    const call = pyodideManager.callFunction('code', [], {});
+    void call.then(result => (settled = result));
+    await Promise.resolve();
+    const nonce = lastNonce(posted);
+    expect(typeof nonce).toBe('string');
+
+    const { nonce: _dropped, ...withoutNonce } = callResult({ valueJson: '{"deflection": 1}' });
+    fromSandbox(withoutNonce);
+    for (const forged of [null, 'guessed', { nonce }]) {
+      fromSandbox(callResult({ valueJson: '{"deflection": 1}' }, forged));
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe('pending');
+    expect(pyodideManager.getState().isExecuting).toBe(true);
+
+    fromSandbox(callResult({ valueJson: '{"deflection": 2}' }, nonce));
+    await expect(call).resolves.toMatchObject({ value: { deflection: 2 } });
+    const next = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+    expect(lastNonce(posted)).not.toBe(nonce);
+    pyodideManager.interrupt();
+    await next;
+  });
+
+  it('reads and calls in the network-free frame, and executes in the frame with the data origins', async () => {
+    const { pyodideManager, frame, PYODIDE_SANDBOX_SRC } = await readySandbox();
+    expect(frame.getAttribute('src')).toBe(`${PYODIDE_SANDBOX_SRC}?network=none`);
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+
+    const run = pyodideManager.execute('print(1)');
+    const data = await bringUpFrame(posted);
+    expect(frame.isConnected).toBe(false);
+    expect(data.frame.getAttribute('src')).toBe(PYODIDE_SANDBOX_SRC);
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'execute' }), POLL);
+    data.send({ type: 'result', result: { success: true, output: '1\n', plots: [], executionTime: 1 } });
+    await expect(run).resolves.toMatchObject({ success: true });
+
+    const call = pyodideManager.callFunction('code', [], {});
+    const none = await bringUpFrame(posted);
+    expect(data.frame.isConnected).toBe(false);
+    expect(none.frame.getAttribute('src')).toBe(`${PYODIDE_SANDBOX_SRC}?network=none`);
+    expect(document.querySelectorAll('iframe')).toHaveLength(1);
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call' }), POLL);
+    pyodideManager.interrupt();
+    await call;
+  });
+
+  it('refuses an execute while a call runs, and keeps the call and its frame', async () => {
+    const { pyodideManager, frame, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+
+    await expect(pyodideManager.execute('print(1)')).rejects.toThrow('Another Python script is already running');
+    expect(frame.isConnected).toBe(true);
+    fromSandbox(callResult({ valueJson: '{"deflection": 1}' }));
+    await expect(call).resolves.toMatchObject({ success: true });
+  });
+
+  it('writes a whole number of 1e21 or more in digits, so Python reads an integer', async () => {
+    const { pyodideManager, posted, toPythonJson } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], { count: 1e21, big: -2.5e22, small: 1e20, ratio: 1.5e-7 });
+    await Promise.resolve();
+
+    expect(posted.at(-1)?.paramsJson).toBe(
+      '{"count":1000000000000000000000,"big":-25000000000000000000000,"small":100000000000000000000,"ratio":1.5e-7}'
+    );
+    expect(JSON.parse(String(posted.at(-1)?.paramsJson))).toEqual({
+      count: 1e21,
+      big: -2.5e22,
+      small: 1e20,
+      ratio: 1.5e-7,
+    });
+    expect(toPythonJson({ xs: [1e21, 'a', null, true], nested: { n: 3e21 }, gone: undefined })).toBe(
+      '{"xs":[1000000000000000000000,"a",null,true],"nested":{"n":3000000000000000000000}}'
+    );
+    pyodideManager.interrupt();
+    await call;
   });
 
   it('ignores a call-result from a window other than the sandbox frame', async () => {
@@ -713,6 +814,20 @@ describe('function calls', () => {
     await expect(call).resolves.toMatchObject({ value: { deflection: 2 } });
   });
 
+  it('refuses a call when an execute switches the frame before the call is posted', async () => {
+    const { pyodideManager, PYODIDE_SANDBOX_SRC } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], {});
+    const run = pyodideManager.execute('print(1)');
+
+    await expect(call).rejects.toThrow('Another Python script is already running');
+    expect(posted.some(message => message.type === 'call')).toBe(false);
+    const data = await bringUpFrame(posted);
+    expect(data.frame.getAttribute('src')).toBe(PYODIDE_SANDBOX_SRC);
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'execute' }), POLL);
+    data.send({ type: 'result', result: { success: true, output: '1\n', plots: [], executionTime: 1 } });
+    await expect(run).resolves.toMatchObject({ success: true });
+  });
+
   it('shares the single-run guard with execute and is settled by interrupt', async () => {
     const { pyodideManager } = await readySandbox();
     const call = pyodideManager.callFunction('code', [], {});
@@ -721,6 +836,122 @@ describe('function calls', () => {
     await expect(pyodideManager.execute('print(1)')).rejects.toThrow('Another Python script is already running');
     pyodideManager.interrupt();
     await expect(call).resolves.toMatchObject({ success: false, error: 'Execution interrupted' });
+  });
+});
+
+describe('wall-clock guard', () => {
+  const RUNNING = { type: 'executing', message: 'Running...' };
+
+  const start = async () => {
+    vi.resetModules();
+    const imported = await import('../pyodideManager');
+    const posted: Posted = [];
+    const pending = imported.pyodideManager.initialize();
+    const frame = await bringUpFrame(posted);
+    await pending;
+    return { ...imported, posted, ...frame };
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    document.querySelectorAll('iframe').forEach(node => node.remove());
+  });
+
+  it('stops an execute at its time limit, timed from Running, and loads a new sandbox without a click', async () => {
+    const { pyodideManager, send, frame, runTimeLimitMessage } = await start();
+    const run = pyodideManager.execute('while True:\n    pass', [], 1000);
+    await Promise.resolve();
+    send({ type: 'executing', message: 'Loading packages: numpy' });
+    vi.advanceTimersByTime(5000);
+    expect(frame.isConnected).toBe(true);
+
+    send(RUNNING);
+    vi.advanceTimersByTime(999);
+    expect(frame.isConnected).toBe(true);
+    vi.advanceTimersByTime(1);
+
+    await expect(run).resolves.toMatchObject({ success: false, error: runTimeLimitMessage(1000) });
+    expect(runTimeLimitMessage(1000)).toBe('Stopped at the time limit of 1 s.');
+    expect(frame.isConnected).toBe(false);
+    expect(document.querySelectorAll('iframe')).toHaveLength(1);
+    expect(pyodideManager.getState().isExecuting).toBe(false);
+  });
+
+  it('is not extended by guest code posting Running again', async () => {
+    const { pyodideManager, send, runTimeLimitMessage } = await start();
+    const run = pyodideManager.execute('code', [], 1000);
+    await Promise.resolve();
+    send(RUNNING);
+    vi.advanceTimersByTime(600);
+    send(RUNNING);
+    vi.advanceTimersByTime(400);
+    await expect(run).resolves.toMatchObject({ error: runTimeLimitMessage(1000) });
+  });
+
+  it('clears the limit when the run returns, so it cannot stop the next one early', async () => {
+    const { pyodideManager, send, frame } = await start();
+    const first = pyodideManager.execute('print(1)', [], 1000);
+    await Promise.resolve();
+    send(RUNNING);
+    vi.advanceTimersByTime(900);
+    send({ type: 'result', result: { success: true, output: '1\n', plots: [], executionTime: 1 } });
+    await expect(first).resolves.toMatchObject({ success: true });
+
+    const second = pyodideManager.execute('print(2)', [], 1000);
+    await Promise.resolve();
+    send(RUNNING);
+    vi.advanceTimersByTime(500);
+    expect(frame.isConnected).toBe(true);
+    send({ type: 'result', result: { success: true, output: '2\n', plots: [], executionTime: 1 } });
+    await expect(second).resolves.toMatchObject({ success: true });
+  });
+
+  it('drops the frame on an error posted during a run, so code still looping stops with it', async () => {
+    const { pyodideManager, send, frame, posted, PYODIDE_SANDBOX_SRC } = await start();
+    const run = pyodideManager.execute('code', [], 1000);
+    await Promise.resolve();
+    send(RUNNING);
+    send({ type: 'error', error: 'forged' });
+
+    await expect(run).resolves.toMatchObject({ success: false, error: 'forged' });
+    expect(frame.isConnected).toBe(false);
+    const frames = document.querySelectorAll('iframe');
+    expect(frames).toHaveLength(1);
+    expect(frames[0].getAttribute('src')).toBe(PYODIDE_SANDBOX_SRC);
+
+    const call = pyodideManager.callFunction('code', [], {}, 2000);
+    const none = await bringUpFrame(posted);
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call' }), POLL);
+    none.send(RUNNING);
+    none.send({ type: 'error', error: 'forged' });
+    await expect(call).resolves.toMatchObject({ success: false, error: 'forged' });
+    expect(none.frame.isConnected).toBe(false);
+    expect(document.querySelector('iframe')?.getAttribute('src')).toBe(`${PYODIDE_SANDBOX_SRC}?network=none`);
+  });
+
+  it('stops a call at its time limit and a contract read at the read cap', async () => {
+    const { pyodideManager, posted, runTimeLimitMessage, FUNCTION_READ_TIMEOUT_MS } = await start();
+    const call = pyodideManager.callFunction('code', [], {}, 2000);
+    let none = await bringUpFrame(posted);
+    await vi.waitFor(() => expect(lastNonce(posted)).toBeDefined(), POLL);
+    none.send(RUNNING);
+    vi.advanceTimersByTime(2000);
+    await expect(call).resolves.toMatchObject({ success: false, error: runTimeLimitMessage(2000) });
+
+    expect(FUNCTION_READ_TIMEOUT_MS).toBe(10000);
+    const read = pyodideManager.callFunction('FUNCTION = {}\nwhile True:\n    pass');
+    none = await bringUpFrame(posted);
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call', paramsJson: null }), POLL);
+    none.send(RUNNING);
+    vi.advanceTimersByTime(FUNCTION_READ_TIMEOUT_MS - 1);
+    expect(none.frame.isConnected).toBe(true);
+    vi.advanceTimersByTime(1);
+    await expect(read).resolves.toMatchObject({ success: false, error: runTimeLimitMessage(10000) });
+    expect(none.frame.isConnected).toBe(false);
   });
 });
 

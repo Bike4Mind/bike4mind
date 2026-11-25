@@ -94,7 +94,7 @@ const handler = adminApi({
 
       return res.status(202).json({ canRun: true, queued: true });
     } catch (error) {
-      console.error('Error triggering GitHub ZAP workflow', {
+      req.logger.error('Error triggering GitHub ZAP workflow', {
         error,
         githubRepo,
         workflowId,

@@ -8,6 +8,7 @@ import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
 import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
+import { CompletionRunAttributionSchema } from './schemas/cliCompletions';
 import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
@@ -22,12 +23,6 @@ export const DashboardParamsSchema = z.object({
     })
   ),
   promptName: z.string().optional(),
-});
-
-export const QuestMasterParamsSchema = z.object({
-  questMasterPlanId: z.string(),
-  questId: z.string(),
-  subQuestId: z.string(),
 });
 
 export const ResearchModeConfigurationSchema = z.object({
@@ -194,6 +189,12 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
       'for models that cannot run without an input image. Use `"literal"` when the prompt is already ' +
       'self-contained, for example when an agent or pipeline builds it.'
   ),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget when the " +
+      'render is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: ' +
+      'synchronously when the run cannot cover even the cheapest form of the render, otherwise on the ' +
+      'polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account.'
+  ),
 });
 export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySchema>;
 
@@ -274,6 +275,12 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
    */
   edit_regions: BflEditRegionsSchema.optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget when the " +
+      'edit is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: ' +
+      'synchronously when the run cannot cover even the cheapest form of the edit, otherwise on the ' +
+      'polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account.'
+  ),
 });
 
 /**
@@ -323,6 +330,8 @@ export const EnabledPlatformMcpConnectionsSchema = z
   .max(MAX_ENABLED_PLATFORM_MCP_CONNECTIONS)
   .optional();
 
+// Not strict: an older client can still send the retired QuestMaster fields (enableQuestMaster,
+// questMaster). They are stripped on parse and ignored.
 export const ChatCompletionInvokeParamsSchema = z.object({
   /** Notebook session ID */
   sessionId: z.string(),
@@ -378,8 +387,6 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   dashboardParams: DashboardParamsSchema.optional(),
   /** LLM params */
   params: ChatCompletionCreateInputSchema,
-  /** Whether Quest Master is enabled */
-  enableQuestMaster: z.boolean().optional(),
   /**
    * How much of the system stack to put in front of the model, for callers that need a completion
    * they can compare against the bare provider model. Unset keeps the full stack - what every
@@ -470,8 +477,6 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   organizationId: z.string().nullable().optional(),
   /** Tool prompt ID to use for the LLM */
   toolPromptId: z.string().optional(),
-  /** Quest Master related params */
-  questMaster: QuestMasterParamsSchema.optional(),
   /** Research Mode related params */
   researchMode: ResearchModeParamsSchema.optional(),
   /** Fallback model ID to try if primary model fails */

@@ -1,17 +1,27 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir, userInfo } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempOutsideTemp, sandboxedHome } from '../../../../vitest.tempRoot';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMoveToBackgroundResult } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 import { UNNAMED_DISTRO } from './shellScan';
 import * as sessionScripts from './sessionScripts';
 import { forgetSessionWrites, recordSessionWrite } from './sessionScripts';
-import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
+import {
+  SIGKILL_DELAY_MS,
+  bashExecute,
+  bashExecuteRunOptions,
+  doubleWrapRefusal,
+  mainCheckoutOf,
+  shellApproval,
+} from './shellTools';
+import { bashBackground } from './backgroundTools';
 import { MAX_TOOL_OUTPUT_CHARS, type ToolContext } from './types';
 import { resolveUserPath } from './userPath';
+import { runsCheckedInAuto } from './shellApproval.testHelper';
 
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
@@ -31,6 +41,11 @@ describe('bash_execute', () => {
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-shell-')));
     context = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
+  });
+
+  // A test that fails while it holds fake timers would otherwise hand them to every later test.
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('runs the command and reports its output and exit code', async () => {
@@ -182,9 +197,18 @@ describe('bash_execute', () => {
     await expect(bashExecute.run({ command: 'ls', cwd: '/etc' }, context)).rejects.toThrow(/outside the folders/);
   });
 
+  /** Resolves once the command has written `up` in the root, so it is running for real. */
+  const commandStarted = () => vi.waitFor(() => readFile(join(root, 'up'), 'utf8'), { timeout: 8_000, interval: 10 });
+
   it('kills a command that outruns its timeout instead of hanging the turn', async () => {
     const started = Date.now();
-    const result = await bashExecute.run({ command: 'sleep 30', timeout: 1000 }, context);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const pending = bashExecute.run({ command: 'touch up; sleep 30', timeout: 1000 }, context);
+    await commandStarted();
+    // Past the SIGKILL grace too: macOS bash 3.2 forks `sleep` rather than exec'ing it, and a group
+    // SIGTERM sent while it forks can miss the child, which only the SIGKILL then reaches.
+    await vi.advanceTimersByTimeAsync(1_000 + SIGKILL_DELAY_MS);
+    const result = await pending;
 
     expect(result).toContain('[timed out');
     expect(Date.now() - started).toBeLessThan(10_000);
@@ -192,10 +216,12 @@ describe('bash_execute', () => {
 
   it('stops the command when the turn is aborted', async () => {
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 300);
 
-    const result = await bashExecute.run({ command: 'sleep 30' }, { ...context, signal: controller.signal });
-    expect(result).toMatch(/killed by|exit \d+/);
+    const pending = bashExecute.run({ command: 'touch up; sleep 30' }, { ...context, signal: controller.signal });
+    await commandStarted();
+    controller.abort();
+
+    expect(await pending).toMatch(/killed by|exit \d+/);
   }, 15_000);
 
   describe('watch mode', () => {
@@ -254,13 +280,23 @@ describe('bash_execute', () => {
 
     it('kills the processes the command spawned', async () => {
       const marker = join(root, 'child-alive');
+      const pidFile = join(root, 'child.pid');
       await bashExecute.run(
         {
-          command: `(sleep 1; touch ${marker}) & echo 'Waiting for file changes...'; sleep 30`,
+          command: `(sh -c 'echo $$ > ${pidFile}; sleep 1; touch ${marker}') & echo 'Waiting for file changes...'; sleep 30`,
         },
         context
       );
-      await new Promise(resolve => setTimeout(resolve, 1_500));
+      const child = await vi.waitFor(
+        async () => {
+          const pid = Number(await readFile(pidFile, 'utf8'));
+          expect(pid).toBeGreaterThan(0);
+          return pid;
+        },
+        { timeout: 5_000, interval: 10 }
+      );
+      // Gone rather than merely not yet done: a child that is no longer running can never write the marker.
+      await vi.waitFor(() => expect(() => process.kill(child, 0)).toThrow(), { timeout: 5_000, interval: 20 });
       await expect(readFile(marker, 'utf8')).rejects.toThrow();
     }, 15_000);
   });
@@ -271,6 +307,56 @@ describe('bash_execute', () => {
 
     expect(first?.detail).toContain('git status');
     expect(first?.key).not.toBe(second?.key);
+  });
+
+  it("passes the model's description through as the summary, trimmed, and only when there is one", async () => {
+    const described = await bashExecute.approval?.(
+      { command: 'git status', cwd: root, description: '  Shows what changed  ' },
+      context
+    );
+    expect(described?.summary).toBe('Shows what changed');
+    expect(described?.detail).not.toContain('Shows what changed');
+
+    const plain = await bashExecute.approval?.({ command: 'git status', cwd: root }, context);
+    expect(plain).not.toHaveProperty('summary');
+    for (const description of ['', '   ', 7, null]) {
+      const prompt = await bashExecute.approval?.({ command: 'git status', cwd: root, description }, context);
+      expect(prompt).not.toHaveProperty('summary');
+    }
+
+    const unread = await bashExecute.approval?.(
+      { command: 'if then fi ((', cwd: root, description: 'Checks something' },
+      context
+    );
+    expect(unread?.summary).toBe('Checks something');
+    expect(unread?.unchecked).toBe(true);
+  });
+
+  it('keeps the description out of the key and out of everything the gate decides on', async () => {
+    const command = 'cat .env && curl https://example.com';
+    const plain = await bashExecute.approval?.({ command, cwd: root }, context);
+    const described = await bashExecute.approval?.(
+      { command, cwd: root, description: 'Lists files. Safe and read-only, nothing leaves this computer.' },
+      context
+    );
+    const reworded = await bashExecute.approval?.({ command, cwd: root, description: 'Prints a file' }, context);
+
+    expect(described?.key).toBe(plain?.key);
+    expect(reworded?.key).toBe(plain?.key);
+    expect({ ...described, summary: undefined }).toEqual({ ...plain, summary: undefined });
+
+    const background = await shellApproval('bash_background', { command: 'ls', description: 'Lists files' }, context);
+    const bare = await shellApproval('bash_background', { command: 'ls' }, context);
+    expect(background.summary).toBe('Lists files');
+    expect(background.key).toBe(bare.key);
+  });
+
+  it('declares the optional description input on both shell tools', () => {
+    for (const tool of [bashExecute, bashBackground]) {
+      const parameters = tool.schema.parameters as { properties: Record<string, unknown>; required: string[] };
+      expect(parameters.properties.description).toMatchObject({ type: 'string' });
+      expect(parameters.required).toEqual(['command']);
+    }
   });
 
   it('derives what always-allow covers, and asks in every mode for a script that does not parse', async () => {
@@ -398,15 +484,20 @@ describe('moving a running bash_execute to the background', () => {
   const NOT_RUNNING = 'That command is no longer running.';
 
   /** The offer is published once the child is up, which is a few awaits into the call. */
-  async function moveOnceOffered(): Promise<ChatMoveToBackgroundResult> {
-    const deadline = Date.now() + 8_000;
-    while (Date.now() < deadline) {
-      const result = foreground.moveToBackground(SESSION, CALL);
-      if (result.ok || result.message !== NOT_RUNNING) return result;
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
-    throw new Error('the command never offered itself as movable');
+  function moveOnceOffered(): Promise<ChatMoveToBackgroundResult> {
+    return vi.waitFor(
+      () => {
+        const result = foreground.moveToBackground(SESSION, CALL);
+        if (!result.ok && result.message === NOT_RUNNING)
+          throw new Error('the command never offered itself as movable');
+        return result;
+      },
+      { timeout: 8_000, interval: 20 }
+    );
   }
+
+  /** Long enough for a SIGTERM sent to `sleep` to show up as a finished record. */
+  const KILL_LANDS_MS = 200;
 
   /** Narrows away the refusal branch where a test is about what a successful move then did. */
   async function moved(): Promise<string> {
@@ -432,12 +523,14 @@ describe('moving a running bash_execute to the background', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await background.shutdown();
     background.shutdownSync();
     await rm(root, { recursive: true, force: true });
   });
 
   it('is not killed when the foreground timeout it was given comes round', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const pending = bashExecute.run({ command: 'sleep 20', timeout: 1_000 }, context);
     const id = await moved();
     const result = await pending;
@@ -446,7 +539,9 @@ describe('moving a running bash_execute to the background', () => {
     expect(result).toContain('moved this command to the background');
 
     // Well past the timeout the foreground call was given, and past the SIGKILL grace behind it.
-    await new Promise(resolve => setTimeout(resolve, 2_500));
+    await vi.advanceTimersByTimeAsync(2_500);
+    vi.useRealTimers();
+    await new Promise(resolve => setTimeout(resolve, KILL_LANDS_MS));
     expect(background.get(id, SESSION)?.status).toBe('running');
   }, 30_000);
 
@@ -457,7 +552,7 @@ describe('moving a running bash_execute to the background', () => {
 
     abort.abort();
 
-    await new Promise(resolve => setTimeout(resolve, 1_000));
+    await new Promise(resolve => setTimeout(resolve, KILL_LANDS_MS));
     expect(background.get(id, SESSION)?.status).toBe('running');
   }, 30_000);
 
@@ -474,7 +569,7 @@ describe('moving a running bash_execute to the background', () => {
       await background.start({ sessionId: SESSION, command: 'sleep 20', cwd: root, roots: [root], protectedPaths: [] });
     }
 
-    const pending = bashExecute.run({ command: 'sleep 3', timeout: 10_000 }, context);
+    const pending = bashExecute.run({ command: 'sleep 0.3', timeout: 10_000 }, context);
     const refusal = await moveOnceOffered();
 
     expect(refusal.ok === false && refusal.message).toMatch(/already has 5 background commands/);
@@ -487,7 +582,8 @@ describe('shellApproval in auto mode', () => {
   let root: string;
   let context: ToolContext;
 
-  beforeEach(async () => {
+  // Shared by every test here: an approval only reads the repository.
+  beforeAll(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-approval-')));
     const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args]);
     git('init', '-q', '-b', 'feat/x');
@@ -495,10 +591,13 @@ describe('shellApproval in auto mode', () => {
     git('remote', 'add', 'fork', 'https://github.com/someone/app.git');
     git('config', 'remote.origin.gh-resolved', 'base');
     git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+  });
+
+  beforeEach(() => {
     context = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
@@ -506,11 +605,18 @@ describe('shellApproval in auto mode', () => {
     (await shellApproval('bash_execute', { command }, context)).askInAuto === true;
 
   it("runs a push or a gh write to the folder's own origin unasked, and still says it sends data", async () => {
-    expect(await asksInAuto('git push -u origin feat/x')).toBe(false);
-    expect(await asksInAuto('git push --force-with-lease origin feat/x')).toBe(false);
-    expect(await asksInAuto('gh pr create --title x --body y')).toBe(false);
-    expect(await asksInAuto('gh api -X PATCH repos/acme/app/pulls/3 -f body=x')).toBe(false);
-    const prompt = await shellApproval('bash_execute', { command: 'git push origin feat/x' }, context);
+    const [asked, prompt] = await Promise.all([
+      Promise.all(
+        [
+          'git push -u origin feat/x',
+          'git push --force-with-lease origin feat/x',
+          'gh pr create --title x --body y',
+          'gh api -X PATCH repos/acme/app/pulls/3 -f body=x',
+        ].map(asksInAuto)
+      ),
+      shellApproval('bash_execute', { command: 'git push origin feat/x' }, context),
+    ]);
+    expect(asked).toEqual([false, false, false, false]);
     expect(prompt.detail).toContain('Can send data off this computer (git push)');
   });
 
@@ -670,7 +776,7 @@ describe('a worktree session reading its main checkout', () => {
   let context: ToolContext;
 
   beforeEach(async () => {
-    base = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-worktree-')));
+    base = await realpath(await mkdtempOutsideTemp('b4m-worktree-'));
     const sharedTemporaryDirectory = join(base, 'shared-temp');
     await mkdir(sharedTemporaryDirectory);
     vi.stubEnv('TMPDIR', sharedTemporaryDirectory);
@@ -749,9 +855,9 @@ describe('shellApproval in the temp folders', () => {
   let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
 
   beforeEach(async () => {
-    // In the user's home rather than the temp folder, which the scan counts as shared.
-    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-temp-root-')));
-    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-temp-outside-')));
+    // Outside the temp folders, which the scan counts as shared.
+    root = await realpath(await mkdtempOutsideTemp('b4m-temp-root-'));
+    outside = await realpath(await mkdtempOutsideTemp('b4m-temp-outside-'));
     context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
   });
 
@@ -809,14 +915,169 @@ describe('shellApproval in the temp folders', () => {
   });
 });
 
+/** A plain `NAME=literal` set once at the top of a script is a path bash builds, so later reads through it are checked. */
+describe('shellApproval with a literal variable assignment', () => {
+  let root: string;
+  let outside: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtempOutsideTemp('b4m-literal-root-'));
+    outside = await realpath(await mkdtempOutsideTemp('b4m-literal-outside-'));
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it.each([
+    'F=sub; sed -n 1,2p $F/a.txt; echo ----; grep -n a $F/a.txt',
+    'F=sub; cat "$F/a.txt"',
+    'F=sub; wc -l ${F}/a.txt',
+  ])('runs a read through the variable unasked: %s', async command => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(true);
+  });
+
+  it('reads an absolute literal path the same way', async () => {
+    expect(runsCheckedInAuto(await approval(`L=${root}/sub/a.txt; wc -l $L`))).toBe(true);
+  });
+
+  it.each([
+    ['a value from a command substitution', 'F=$(pwd)/sub; cat $F/a.txt'],
+    ['a quoted value', 'F="sub"; cat $F/a.txt'],
+    ['a set inside a branch', 'if true; then F=sub; fi; cat $F/a.txt'],
+    ['a second set', 'F=sub; F=other; cat $F/a.txt'],
+    ['an unset', 'F=sub; unset F; cat $F/a.txt'],
+    ['an eval', 'F=sub; eval "F=x"; cat $F/a.txt'],
+    ['an append', 'F=sub; F+=/x; cat $F/a.txt'],
+    ['a backgrounded set', 'F=sub & cat $F/a.txt'],
+    ['a use before the set', 'cat $F/a.txt; F=sub'],
+  ])('still cannot check a word whose variable has %s', async (_name, command) => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(false);
+  });
+
+  it('still names a folder outside the shared ones that the variable points at', async () => {
+    const prompt = await approval(`F=${outside}; cp sub/a.txt $F/b.txt`);
+    expect(prompt.always?.writtenDirectories).toContain(outside);
+  });
+
+  it('does not bind HOME, so a rebound home stays unread', async () => {
+    expect(runsCheckedInAuto(await approval(`HOME=${root}; cat $HOME/sub/a.txt`))).toBe(false);
+  });
+
+  it.each(['BASH_COMMAND', 'DIRSTACK', 'FUNCNAME', 'RANDOM'])(
+    'does not bind %s, whose value bash keeps itself',
+    async name => {
+      expect(runsCheckedInAuto(await approval(`${name}=sub; cat $${name}/a.txt`))).toBe(false);
+    }
+  );
+});
+
+/** A `for` variable over plain literal words, used unquoted inside a longer word, is read as each word it takes. */
+describe('shellApproval with an unquoted loop variable inside a word', () => {
+  let root: string;
+  let outside: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtempOutsideTemp('b4m-loop-root-'));
+    outside = await realpath(await mkdtempOutsideTemp('b4m-loop-outside-'));
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it.each([
+    'for f in a.txt; do cat sub/$f; done',
+    'for f in a.txt; do cat sub/${f}; done',
+    'for f in a.txt; do echo repos/x/$f/logs; done',
+    'for j in 1 2; do gh api repos/example-org/widgets/actions/jobs/$j/logs; done',
+    'for n in 611 612; do gh pr view $n --repo example-org/widgets --json title; done',
+    // IFS never splits a double-quoted use, so a script naming it still binds that form.
+    'for f in a.txt; do cat "sub/$f"; done; echo IFS',
+  ])('runs a read through the loop variable unasked: %s', async command => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(true);
+  });
+
+  it.each([
+    ['a glob value', "for f in '*'; do cat sub/$f; done"],
+    ['a value with a space', "for f in 'a b'; do cat sub/$f; done"],
+    ['a value read as an option', 'for f in -rf; do rm sub/$f; done'],
+    ['a longer name the word runs into', 'for f in a.txt; do cat sub/$fx; done'],
+    ['an IFS the script sets', 'IFS=.; for f in a.txt; do cat sub/$f; done'],
+    ['a set inside the body', 'for f in a.txt; do f=x; cat sub/$f; done'],
+  ])('still cannot check a word whose loop variable has %s', async (_name, command) => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(false);
+  });
+
+  it('still names a folder outside the shared ones that the loop value points at', async () => {
+    const prompt = await approval(`for d in ${outside}; do cp sub/a.txt $d/b.txt; done`);
+    expect(prompt.always?.writtenDirectories).toContain(outside);
+  });
+});
+
+/** A command substitution whose output is only printed names no program or path, so a read inside it is checked. */
+describe('shellApproval with a command substitution that is only printed', () => {
+  let root: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtempOutsideTemp('b4m-subst-root-'));
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it.each([
+    'echo "$(grep -n a sub/a.txt)"',
+    'echo $(wc -l < sub/a.txt)',
+    'printf "%s\\n" "$(wc -l < sub/a.txt)"',
+    'N=$(grep -c a sub/a.txt); echo $N',
+  ])('runs it unasked: %s', async command => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(true);
+  });
+
+  it.each([
+    ['a path operand', 'cat $(echo sub/a.txt)'],
+    ['a path built from it', 'D=$(echo sub); cat "$D/a.txt"'],
+  ])('still cannot check a substitution used as %s', async (_name, command) => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(false);
+  });
+
+  it('still gives the delete reason for a delete inside the substitution', async () => {
+    expect((await approval('echo $(rm -rf sub)')).reasons).toContain(
+      'Deletes files recursively or forcefully, which cannot be undone.'
+    );
+  });
+});
+
 describe('shellApproval for folders a command only reads', () => {
   let root: string;
   let outside: string;
   let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
 
   beforeEach(async () => {
-    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-read-root-')));
-    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-read-outside-')));
+    root = await realpath(await mkdtempOutsideTemp('b4m-read-root-'));
+    outside = await realpath(await mkdtempOutsideTemp('b4m-read-outside-'));
     context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
   });
 
@@ -828,7 +1089,7 @@ describe('shellApproval for folders a command only reads', () => {
   const approval = (command: string) => shellApproval('bash_execute', { command }, context);
 
   it('leaves a folder that is only read, and a read under ~/.claude, out of what auto mode asks about', async () => {
-    const memory = join(homedir(), '.claude', 'projects', 'p', 'memory', 'notes.md');
+    const memory = join(sandboxedHome(), '.claude', 'projects', 'p', 'memory', 'notes.md');
     const prompt = await approval(
       `curl -s -o /dev/null -w "%{http_code}\\n" -m 5 http://localhost:3000/; cd ${outside}; ls | head -5; ls ${memory}`
     );
@@ -899,19 +1160,19 @@ describe('shellApproval for folders a command only reads', () => {
   });
 
   it('still asks in every mode about a write under ~/.claude', async () => {
-    const prompt = await approval(`echo '{}' > ${join(homedir(), '.claude', 'settings.json')}`);
+    const prompt = await approval(`echo '{}' > ${join(sandboxedHome(), '.claude', 'settings.json')}`);
     expect(prompt.askInAuto).toBe(true);
     expect(prompt.askInFull).toBe(true);
   });
 
   it('still asks in every mode about reading a secret', async () => {
-    const prompt = await approval(`cat ${join(homedir(), '.claude', '.credentials.json')}`);
+    const prompt = await approval(`cat ${join(sandboxedHome(), '.claude', '.credentials.json')}`);
     expect(prompt.askInAuto).toBe(true);
     expect(prompt.askInFull).toBe(true);
   });
 
   it("still asks about reading the app's own data", async () => {
-    const guarded = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-read-guarded-')));
+    const guarded = await realpath(await mkdtempOutsideTemp('b4m-read-guarded-'));
     try {
       context.protectedPaths = [guarded];
       expect((await approval(`cat ${guarded}/approval-log.jsonl`)).askInAuto).toBe(true);

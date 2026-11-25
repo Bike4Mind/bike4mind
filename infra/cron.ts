@@ -5,11 +5,11 @@ import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
 import { providerAdminKeyCronAccess, providerAdminKeyStore } from './providerAdminKeys';
+import { providerSpendScopeCronAccess } from './providerSpendScope';
 import { eventBus } from './bus';
 import {
   researchEngineQueue,
   agentProactiveMessageQueue,
-  liveOpsTriageQueue,
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
   fabFileChunkQueue,
@@ -446,45 +446,6 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
     },
   },
 });
-
-/**
- * LiveOps Triage Dispatcher (Multi-Config)
- * Dispatches triage jobs to SQS for each enabled LiveOpsTriageConfig.
- *
- * Schedule: Every 6 hours at 2am, 8am, 2pm, 8pm CST (8, 14, 20, 2 UTC)
- * For each enabled config where shouldRunAtCurrentHour(config.runIntervalHours) is true:
- * - Publishes SQS message with { configId, dispatchedAt }
- *
- * Workers process jobs independently via SQS fan-out pattern.
- * Only enabled in production environment.
- */
-const liveopsTriageDispatcherCron = runsScheduledJobs
-  ? new sst.aws.Cron('liveopsTriageDispatcherCron', {
-      schedule: 'cron(0 2,8,14,20 * * ? *)', // Every 6 hours UTC
-      function: {
-        handler: 'apps/workers/src/cron/liveopsTriageDispatcher.handler',
-        vpc: lambdaVpc,
-        link: [...allSecrets, liveOpsTriageQueue],
-        timeout: '2 minutes',
-        runtime: 'nodejs24.x',
-        environment: {
-          ...DEFAULT_LAMBDA_ENVIRONMENT,
-        },
-        permissions: [
-          {
-            actions: ['cloudwatch:PutMetricData'],
-            resources: ['*'],
-          },
-          {
-            actions: ['sqs:SendMessage'],
-            resources: [liveOpsTriageQueue.arn],
-          },
-        ],
-      },
-      // Only enabled in production
-      enabled: $app.stage === 'production',
-    })
-  : undefined;
 
 // Telemetry TTL Cleanup — GDPR Article 5(1)(e) storage limitation
 // Removes contextTelemetry from Quest documents older than 90 days
@@ -1299,6 +1260,8 @@ const agentExecutionAbandonedSweepCron = runsScheduledJobs
 // Provider admin keys come from the secret store in infra/providerAdminKeys.ts where it exists; the
 // linked Config secrets remain the source for stages and self-host deploys without it.
 const providerAdminKeyAccess = providerAdminKeyCronAccess(providerAdminKeyStore);
+// Both spend crons read the same per-stage scope, so the hourly and nightly figures cover the same spend.
+const providerSpendScopeAccess = providerSpendScopeCronAccess();
 
 // Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
 // admin APIs and compares against internal COGS estimates.
@@ -1314,6 +1277,7 @@ const spendReconciliationCron = runsScheduledJobs
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
           ...providerAdminKeyAccess.environment,
+          ...providerSpendScopeAccess.environment,
         },
         // PutMetricData publishes the drift and nothing-reconciled metrics alarmed in infra/providerSpend.ts.
         permissions: [
@@ -1322,6 +1286,7 @@ const spendReconciliationCron = runsScheduledJobs
             resources: ['*'],
           },
           ...providerAdminKeyAccess.permissions,
+          ...providerSpendScopeAccess.permissions,
         ],
       },
     })
@@ -1345,6 +1310,7 @@ const providerUsagePollCron = runsScheduledJobs
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
           ...providerAdminKeyAccess.environment,
+          ...providerSpendScopeAccess.environment,
           ...modelPriceSnapshotAccess.environment,
         },
         permissions: [
@@ -1354,6 +1320,7 @@ const providerUsagePollCron = runsScheduledJobs
           },
           ...modelPriceSnapshotAccess.read,
           ...providerAdminKeyAccess.permissions,
+          ...providerSpendScopeAccess.permissions,
         ],
       },
     })
@@ -1745,7 +1712,6 @@ export {
   abuseAssessmentSweep,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
-  liveopsTriageDispatcherCron,
   cloudSecurityScanCron,
   cloudSecurityScanFunction,
   integrationHealthCheckCron,

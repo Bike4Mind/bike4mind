@@ -42,15 +42,16 @@ export const chatContract = defineEndpoint({
     'signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); ' +
     '`errorCode` is an optional refinement present only when the failure has a classified ' +
     'reason. A recovered stuck quest is NOT in that list: one that still has renderable content ' +
-    'resolves as a success by design. `QUEST_ERROR_CODES` has four members: ' +
-    '`insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. ' +
+    'resolves as a success by design. `QUEST_ERROR_CODES` has five members: ' +
+    '`insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, `free_quest_limit_reached`, and ' +
+    '`run_budget_exhausted`. ' +
     '`insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a ' +
     'spending pause in force when the request arrives is refused synchronously with a 403, and one ' +
-    'that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused ' +
-    'synchronously with 403 before a quest exists; an older queued start can instead settle as an ' +
-    'error quest with `free_quest_limit_reached`. ' +
+    'that lands after the ACK reaches the quest. `free_quest_limit_reached` is no longer raised: ' +
+    'it survives only on quests that settled with it before the in-chat QuestMaster plan was retired. ' +
     "`spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which " +
-    'fires outside the process try/catch that would classify it onto a quest. A turn that ' +
+    'fires outside the process try/catch that would classify it onto a quest, and ' +
+    '`run_budget_exhausted` only by image generation. A turn that ' +
     'prompt moderation refuses settles as `type: "error"` with `errorCode: "content_blocked"` ' +
     'and the refusal text in `reply`, on the 200 `wait: true` body and on the polled quest alike; ' +
     'do not resend it unchanged. A ' +
@@ -94,10 +95,8 @@ export const chatContract = defineEndpoint({
         'content resolves as a success (`status: "done"`, no error) by design, to avoid destroying ' +
         'content to report a failure. The one exception is output-budget exhaustion: a `wait: true` ' +
         'request answers it with the 422 or 502 error envelope (plus `quest_id`) instead of this body. ' +
-        '`errorCode` names a classified failure: `insufficient_credits`, `spend_frozen` (a spending ' +
-        'pause that landed after the ACK), or `free_quest_limit_reached` when an older queued ' +
-        'QuestMaster start is refused during processing. A new exhausted start is refused ' +
-        'synchronously with 403 before a quest exists. Other `type: "error"` turns may have no ' +
+        '`errorCode` names a classified failure: `insufficient_credits` or `spend_frozen` (a spending ' +
+        'pause that landed after the ACK). Other `type: "error"` turns may have no ' +
         'classifier, so never use ' +
         'its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` ' +
         'body. The body also carries `sessionId`, the notebook the turn was recorded in - for an ' +
@@ -118,12 +117,13 @@ export const chatContract = defineEndpoint({
           'credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the ' +
           'synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a ' +
           'spending pause that lands after the ACK arrives as `spend_frozen`. ' +
-          'An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new ' +
-          'exhausted starts are refused synchronously with 403 before a quest exists. ' +
-          '`QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current ' +
+          'A quest that settled before the in-chat QuestMaster plan was retired can still carry ' +
+          '`free_quest_limit_reached`; no current turn raises it. ' +
+          '`QUEST_ERROR_CODES` also publishes `spend_cap_exceeded`, but no current ' +
           'throw site on this endpoint raises it as a quest errorCode: its only one, the embed ' +
           "chat route's pre-flight 422, fires outside the process try/catch that would classify " +
-          'it onto the quest. A turn that prompt moderation refuses arrives as `content_blocked`; ' +
+          'it onto the quest; `run_budget_exhausted` is raised only by image generation. A turn that ' +
+          'prompt moderation refuses arrives as `content_blocked`; ' +
           'do not resend it unchanged. Most `type: "error"` turns - an abort, a provider timeout or ' +
           'overload - have NO `errorCode`; its absence does not mean success, only that the ' +
           'failure is unclassified. A recovered stuck quest that still has renderable content is ' +
@@ -153,7 +153,6 @@ export const chatContract = defineEndpoint({
       description:
         'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
         'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
-        'a free account already started its QuestMaster quest (`errorCode: "free_quest_limit_reached"`), ' +
         'organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key ' +
         `caller named a built-in tool the organization does not allow (\`errorCode: "org_tool_not_allowed"\`). ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
       schema: ChatForbiddenErrorSchema,

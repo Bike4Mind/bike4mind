@@ -10,28 +10,21 @@ import type {
   IncidentRange,
   IncidentSignals,
   IncidentState,
-} from '@client/app/components/admin/SecurityDashboard/incidentTypes';
+} from '@bike4mind/server-utils/app/components/admin/SecurityDashboard/incidentTypes';
 import type { SignupAnomalySnapshot } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import type { SecopsTriageStatusResponse } from '@client/pages/api/admin/secops-triage/status';
 
-export interface LiveOpsTriageEnv {
+export interface DeploymentInfo {
   stage: string;
   isForkProduction: boolean;
-  isSourceDeployment: boolean;
-  isPreviewEnvironment: boolean;
-  isLocalDevelopment: boolean;
-  showTab: boolean;
 }
 
-/**
- * Deployment descriptor shared by the admin tabs: the stage, plus whether this is a fork's
- * production stage. One query key, so AdminPage and the tab it renders share a single request.
- */
-export function useLiveOpsTriageEnv(enabled = true) {
+/** The stage this deployment runs on, and whether it is a fork's production stage. */
+export function useDeploymentInfo(enabled = true) {
   return useQuery({
-    queryKey: ['liveops-triage', 'env'],
+    queryKey: ['admin', 'deployment-info'],
     queryFn: async () => {
-      const { data } = await api.get<LiveOpsTriageEnv>('/api/admin/liveops-triage-env');
+      const { data } = await api.get<DeploymentInfo>('/api/admin/deployment-info');
       return data;
     },
     enabled,

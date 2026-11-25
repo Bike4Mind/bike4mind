@@ -1495,6 +1495,112 @@ describe('PUT /api/users/:id/update - user.profile.updated audit', () => {
   });
 });
 
+describe('PUT /api/users/:id/update - moderation status decisions', () => {
+  const MODERATOR = { id: 'mod1', isAdmin: false, adminPermissions: ['users:moderate'] };
+  const REASON = 'Appeal accepted';
+  const target = (status?: string) => ({
+    id: 'other-user',
+    name: 'Other',
+    isAdmin: false,
+    adminPermissions: [],
+    ...(status ? { moderation: { status } } : {}),
+  });
+  const decide = (before: string, after: string) => {
+    mockUserFindById.mockReturnValue(target(before));
+    mockAdminUpdateUser.mockResolvedValue({ user: target(after), creditAdjustment: undefined });
+  };
+
+  it.each([
+    ['confirms the suspension', 'suspend_pending', 'suspended'],
+    ['returns the user to active', 'suspend_pending', 'active'],
+    ['keeps the user throttled', 'suspend_pending', 'throttled'],
+  ] as const)('%s through the admin update and records the change', async (_label, before, after) => {
+    decide(before, after);
+    const { res, promise } = run({
+      user: MODERATOR,
+      userId: 'other-user',
+      body: { moderationStatus: after, statusChangeReason: REASON },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdminUpdateUser).toHaveBeenCalledWith(
+      MODERATOR.id,
+      expect.objectContaining({ moderationStatus: after }),
+      expect.anything()
+    );
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.moderation_status.changed',
+        target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
+        reason: REASON,
+        changes: [{ field: 'moderation.status', before, after }],
+      })
+    );
+  });
+
+  it('reads a user with no moderation record as active', async () => {
+    decide('', 'suspended');
+    await run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { moderationStatus: 'suspended', statusChangeReason: REASON },
+    }).promise;
+
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [{ field: 'moderation.status', before: 'active', after: 'suspended' }] })
+    );
+  });
+
+  it('records a decision that keeps the status, with the throttle expiry it re-armed', async () => {
+    const until = new Date('2026-11-19T00:00:00.000Z');
+    mockUserFindById.mockReturnValue({
+      ...target('throttled'),
+      moderation: { status: 'throttled', throttledUntil: new Date('2026-11-18T06:00:00.000Z') },
+    });
+    mockAdminUpdateUser.mockResolvedValue({
+      user: { ...target('throttled'), moderation: { status: 'throttled', throttledUntil: until } },
+      creditAdjustment: undefined,
+    });
+    await run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { moderationStatus: 'throttled', statusChangeReason: REASON },
+    }).promise;
+
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.moderation_status.changed',
+        reason: REASON,
+        changes: [
+          { field: 'moderation.status', before: 'throttled', after: 'throttled' },
+          {
+            field: 'moderation.throttledUntil',
+            before: '2026-11-18T06:00:00.000Z',
+            after: until.toISOString(),
+          },
+        ],
+      })
+    );
+  });
+
+  it('refuses a delegate without users:moderate', async () => {
+    decide('suspend_pending', 'suspended');
+    const { res, promise } = run({
+      user: { id: 'reader', isAdmin: false, adminPermissions: ['support:read'] },
+      userId: 'other-user',
+      body: { moderationStatus: 'suspended', statusChangeReason: REASON },
+    });
+    await promise.catch(() => undefined);
+
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).not.toBe(200);
+  });
+});
+
 describe('PUT /api/users/:id/update - restricted tier', () => {
   const REASON = 'Signed up in bulk';
   const body = (overrides: Record<string, unknown> = {}) => ({

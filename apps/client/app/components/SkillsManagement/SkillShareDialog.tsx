@@ -83,7 +83,7 @@ const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
     try {
       const user = await lookupUserByEmail(trimmed);
       if (!user) {
-        setError(`No user found with email "${trimmed}"`);
+        setError(`No one in your organizations has the email "${trimmed}"`);
         return;
       }
       if (user.id === skill.userId) {

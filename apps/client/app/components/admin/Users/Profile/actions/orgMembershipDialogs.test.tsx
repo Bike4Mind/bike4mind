@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { AddToOrganizationDialog, ChangeOrgRoleDialog, RemoveFromOrganizationDialog } from './orgMembershipDialogs';
+import {
+  AddToOrganizationDialog,
+  ChangeOrgRoleDialog,
+  ClearHomeOrgDialog,
+  RemoveFromOrganizationDialog,
+} from './orgMembershipDialogs';
 import { ProfileTestWrapper, buildProfile } from '../profileTestUtils';
 
 const mocks = vi.hoisted(() => ({
@@ -170,7 +175,7 @@ describe('RemoveFromOrganizationDialog', () => {
       wrapper: ProfileTestWrapper,
     });
 
-    expect(screen.getByText(/active organization/)).toBeInTheDocument();
+    expect(screen.getByText(/their home org/)).toBeInTheDocument();
     pickReason('org-remove-dialog');
     fireEvent.click(confirmButton('org-remove-dialog'));
 
@@ -226,5 +231,36 @@ describe('RemoveFromOrganizationDialog', () => {
 
     expect(confirmButton('org-remove-dialog')).toBeDisabled();
     expect(screen.getByTestId('org-remove-dialog-hint')).toHaveTextContent('Ada Lovelace is no longer in Acme.');
+  });
+});
+
+describe('ClearHomeOrgDialog', () => {
+  it('clears the home org with the reason, says what changes, and offers no undo', async () => {
+    const onClose = vi.fn();
+    render(<ClearHomeOrgDialog user={user} orgName="Acme" onClose={onClose} />, { wrapper: ProfileTestWrapper });
+
+    expect(screen.getByText(/billed to their personal balance instead of Acme/)).toBeInTheDocument();
+    expect(screen.getByText(/memberships and roles are not changed/)).toBeInTheDocument();
+    pickReason('org-clear-home-dialog');
+    fireEvent.click(confirmButton('org-clear-home-dialog'));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.delete).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/home-organization`, {
+      data: { reason: 'Customer request' },
+    });
+    expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+  });
+
+  it('stays open when the clear fails', async () => {
+    mocks.delete.mockRejectedValue(new Error('boom'));
+    const onClose = vi.fn();
+    render(<ClearHomeOrgDialog user={user} orgName={null} onClose={onClose} />, { wrapper: ProfileTestWrapper });
+
+    expect(screen.getByText(/instead of their home org/)).toBeInTheDocument();
+    pickReason('org-clear-home-dialog');
+    fireEvent.click(confirmButton('org-clear-home-dialog'));
+
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

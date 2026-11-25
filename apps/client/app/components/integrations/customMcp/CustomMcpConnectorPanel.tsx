@@ -7,6 +7,7 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import AddMcpConnectorForm from './AddMcpConnectorForm';
 import McpConnectionItem from './McpConnectionItem';
+import SharedFunctionsSection from './SharedFunctionsSection';
 import { connectionsFor } from './customMcpModel';
 
 /**
@@ -112,6 +113,7 @@ const CustomMcpConnectorPanel = ({ presetId, presetName }: { presetId?: McpPrese
           </Box>
         )
       )}
+      {!presetId && <SharedFunctionsSection />}
       <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
         New or changed tools stay off until you review them. Tools that can change data ask before each call unless you
         choose otherwise.

@@ -34,6 +34,7 @@ import { SHELL_TOOLS, autoFixBudget, planAutoFix } from './autoFix';
 import { desktopMergeReadiness } from './autoMerge';
 import { MAX_BATCH, mergeMethodFor } from './github';
 import { POLL_MS, alignToTick, pollDelay } from './pollSchedule';
+import { prIconStatus, type PrIconStatus } from '@shared/prAttention';
 
 /** Branches a PR lookup is never made for: a PR "for main" is someone else's fork, not this session's work. */
 const UNOWNED_BRANCHES = new Set(['main', 'master', 'develop', 'HEAD']);
@@ -896,13 +897,22 @@ export class PrMonitor {
     const archiving = shouldAutoArchive(current, snapshot.state);
     const finished = isFinishedState(snapshot.state);
     const draftChanged = (current.lastDraft === true) !== snapshot.isDraft;
-    if (current.lastState !== snapshot.state || draftChanged || archiving || finished || current.finalSnapshot) {
-      const { finalSnapshot: _previous, ...rest } = current;
+    const icon = storedIcon(snapshot);
+    if (
+      current.lastState !== snapshot.state ||
+      draftChanged ||
+      !sameStoredIcon(current, icon) ||
+      archiving ||
+      finished ||
+      current.finalSnapshot
+    ) {
+      const { finalSnapshot: _previous, lastAttention: _a, lastBehind: _b, lastAutoMerge: _m, ...rest } = current;
       // Recorded before archiving, so a crash in between errs toward not archiving twice.
       await this.deps.store.set(sessionId, {
         ...rest,
         lastState: snapshot.state,
         lastDraft: snapshot.isDraft,
+        ...icon,
         ...(archiving ? { archivedOnClose: true } : {}),
         // Without checks: a finished bar draws none, and every launch reads this file whole.
         ...(finished ? { finalSnapshot: { ...forTheBar(snapshot), checks: [] } } : {}),
@@ -1059,10 +1069,13 @@ export class PrMonitor {
     // stored flag would keep a row the app has not re-read queued long after it left.
     const queued = !!this.live.get(sessionId)?.queued;
     const repo = `${binding.owner}/${binding.repo}`;
-    if (snapshot)
-      return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft, queued), repo };
+    const appAutoMerge = binding.autoMerge === true;
+    if (snapshot) return { number: binding.number, ...prIconStatus(snapshot, { queued, appAutoMerge }), repo };
     if (!binding.lastState) return null;
-    return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft), repo };
+    const state = prDisplayState(binding.lastState, binding.lastDraft);
+    // A finished PR will not change again, so its stored state is not merely last known.
+    if (isFinishedState(binding.lastState)) return { number: binding.number, state, repo };
+    return { number: binding.number, state, ...storedExtras(binding, state === 'open'), stale: true, repo };
   }
 
   private async sidebarSummaries(): Promise<Map<string, PrSummary>> {
@@ -1096,6 +1109,35 @@ export class PrMonitor {
     this.deps.emit(await this.state(sessionId, binding));
     await this.pushSummary(sessionId, binding);
   }
+}
+
+type StoredIcon = Pick<PrBinding, 'lastAttention' | 'lastBehind' | 'lastAutoMerge'>;
+
+/** The icon extras a read found, as the binding file keeps them: absent rather than false. */
+function storedIcon(snapshot: PrSnapshot): StoredIcon {
+  const icon = prIconStatus(snapshot, { queued: false, appAutoMerge: false });
+  return {
+    ...(icon.attention ? { lastAttention: icon.attention } : {}),
+    ...(icon.behind ? { lastBehind: true } : {}),
+    ...(icon.autoMerge ? { lastAutoMerge: true } : {}),
+  };
+}
+
+function storedExtras(binding: PrBinding, open: boolean): Omit<PrIconStatus, 'state' | 'stale'> {
+  if (!open) return {};
+  return {
+    ...(binding.lastAttention ? { attention: binding.lastAttention } : {}),
+    ...(binding.lastBehind ? { behind: true } : {}),
+    ...(binding.lastAutoMerge || binding.autoMerge ? { autoMerge: true } : {}),
+  };
+}
+
+function sameStoredIcon(binding: PrBinding, icon: StoredIcon): boolean {
+  return (
+    binding.lastAttention === icon.lastAttention &&
+    binding.lastBehind === icon.lastBehind &&
+    binding.lastAutoMerge === icon.lastAutoMerge
+  );
 }
 
 function forTheBar(snapshot: PrSnapshot): PrBarSnapshot {

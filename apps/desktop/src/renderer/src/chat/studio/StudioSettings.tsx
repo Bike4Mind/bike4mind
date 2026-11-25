@@ -12,6 +12,7 @@ import Alert from '@mui/joy/Alert';
 import { AVAILABLE_TTS_VOICES, VOICE_VENDOR_SUPPORTED_FORMATS } from '@bike4mind/common';
 import type { StudioDraft } from '@shared/studioIpc';
 import type { StudioController, StudioCreationDraft } from './controller';
+import { studioMicroLabelSx } from './design/studioTokens';
 
 type Settings = StudioDraft['settings'];
 export function defaultStudioSettings(kind: StudioDraft['kind'], controller: StudioController): Settings {
@@ -344,7 +345,7 @@ export function StudioSettings({
       )}
       {references && (
         <Stack spacing={1}>
-          <Typography level="title-sm">{draft.kind === 'video' ? 'First frame' : 'Reference images'}</Typography>
+          <Typography sx={studioMicroLabelSx}>{draft.kind === 'video' ? 'First frame' : 'Reference images'}</Typography>
           {s.references?.map(reference => (
             <Stack key={reference.fileId} direction="row" alignItems="center" justifyContent="space-between">
               <Typography level="body-xs" noWrap>

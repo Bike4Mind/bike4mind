@@ -33,14 +33,12 @@ import {
   Input,
   List,
   ListItem,
-  Modal,
-  ModalClose,
-  ModalDialog,
   Radio,
   RadioGroup,
   Stack,
   Typography,
 } from '@mui/joy';
+import { AdminDialog, AdminDialogFooter } from '@client/app/components/admin/shared/AdminDialog';
 import React, { useState } from 'react';
 
 type BulkAbuseResponseModalProps = {
@@ -196,179 +194,177 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({
   };
 
   return (
-    <Modal open onClose={handleClose}>
-      <ModalDialog
-        data-testid="bulk-abuse-modal"
-        aria-labelledby="bulk-abuse-title"
-        sx={{ minWidth: { xs: '90%', sm: 600 }, maxWidth: 720, maxHeight: '90vh', overflow: 'auto' }}
-      >
-        <ModalClose disabled={executeMutation.isPending} />
-        <Typography id="bulk-abuse-title" level="h4">
-          {recordAction === 'suspend'
-            ? 'Suspend account'
-            : recordAction === 'revoke'
-              ? 'Revoke API keys'
-              : 'Bulk abuse response'}
+    <AdminDialog
+      onClose={handleClose}
+      closeDisabled={executeMutation.isPending}
+      title={
+        recordAction === 'suspend'
+          ? 'Suspend account'
+          : recordAction === 'revoke'
+            ? 'Revoke API keys'
+            : 'Bulk abuse response'
+      }
+      width={720}
+      data-testid="bulk-abuse-modal"
+    >
+      {recordAction && (
+        <Typography level="body-sm">
+          This audited flow excludes paid, admin, system and organization accounts. Preview checks eligibility before
+          any change. Suspension also revokes API keys and signs the user out.
         </Typography>
-        {recordAction && (
-          <Typography level="body-sm">
-            This audited flow excludes paid, admin, system and organization accounts. Preview checks eligibility before
-            any change. Suspension also revokes API keys and signs the user out.
-          </Typography>
-        )}
+      )}
 
-        {stage.kind !== 'executed' && (
-          <>
-            <FormControl>
-              <FormLabel>Target</FormLabel>
-              <RadioGroup
-                orientation="horizontal"
-                value={targetKind}
+      {stage.kind !== 'executed' && (
+        <>
+          <FormControl>
+            <FormLabel>Target</FormLabel>
+            <RadioGroup
+              orientation="horizontal"
+              value={targetKind}
+              onChange={event => {
+                setTargetKind(event.target.value === 'users' ? 'users' : 'domain');
+                setAfterUserId(undefined);
+                resetPreview();
+              }}
+            >
+              <Radio
+                value="users"
+                label={`Selected users (${selectedUserIds.length})`}
+                disabled={selectedUserIds.length === 0 || executeMutation.isPending}
+                slotProps={{ input: { 'data-testid': 'bulk-abuse-target-users-radio' } }}
+              />
+              <Radio
+                value="domain"
+                label="Email domain"
+                disabled={executeMutation.isPending || !!recordAction}
+                slotProps={{ input: { 'data-testid': 'bulk-abuse-target-domain-radio' } }}
+              />
+            </RadioGroup>
+            {targetKind === 'users' && tooManySelected && (
+              <FormHelperText>Select at most {MAX_BULK_ABUSE_BATCH} users per run.</FormHelperText>
+            )}
+          </FormControl>
+
+          {targetKind === 'domain' && (
+            <FormControl error={domain.length > 0 && !normalizedDomain}>
+              <FormLabel>Domain</FormLabel>
+              <Input
+                placeholder="example.com"
+                value={domain}
+                disabled={executeMutation.isPending}
                 onChange={event => {
-                  setTargetKind(event.target.value === 'users' ? 'users' : 'domain');
+                  setDomain(event.target.value);
                   setAfterUserId(undefined);
                   resetPreview();
                 }}
-              >
-                <Radio
-                  value="users"
-                  label={`Selected users (${selectedUserIds.length})`}
-                  disabled={selectedUserIds.length === 0 || executeMutation.isPending}
-                  slotProps={{ input: { 'data-testid': 'bulk-abuse-target-users-radio' } }}
-                />
-                <Radio
-                  value="domain"
-                  label="Email domain"
-                  disabled={executeMutation.isPending || !!recordAction}
-                  slotProps={{ input: { 'data-testid': 'bulk-abuse-target-domain-radio' } }}
-                />
-              </RadioGroup>
-              {targetKind === 'users' && tooManySelected && (
-                <FormHelperText>Select at most {MAX_BULK_ABUSE_BATCH} users per run.</FormHelperText>
-              )}
+                slotProps={{ input: { 'data-testid': 'bulk-abuse-domain-input' } }}
+              />
+              <FormHelperText data-testid="bulk-abuse-domain-helper">
+                {afterUserId
+                  ? 'Continuing after the previous batch. Edit the domain to start over.'
+                  : 'Covers every subdomain. Banning also blocks new signups from it.'}
+              </FormHelperText>
             </FormControl>
+          )}
 
-            {targetKind === 'domain' && (
-              <FormControl error={domain.length > 0 && !normalizedDomain}>
-                <FormLabel>Domain</FormLabel>
-                <Input
-                  placeholder="example.com"
-                  value={domain}
-                  disabled={executeMutation.isPending}
-                  onChange={event => {
-                    setDomain(event.target.value);
-                    setAfterUserId(undefined);
-                    resetPreview();
-                  }}
-                  slotProps={{ input: { 'data-testid': 'bulk-abuse-domain-input' } }}
-                />
-                <FormHelperText data-testid="bulk-abuse-domain-helper">
-                  {afterUserId
-                    ? 'Continuing after the previous batch. Edit the domain to start over.'
-                    : 'Covers every subdomain. Banning also blocks new signups from it.'}
-                </FormHelperText>
-              </FormControl>
-            )}
-
-            <Stack component="fieldset" spacing={0.5} sx={{ border: 0, p: 0, m: 0 }}>
-              <Typography component="legend" level="title-sm">
-                Actions
+          <Stack component="fieldset" spacing={0.5} sx={{ border: 0, p: 0, m: 0 }}>
+            <Typography component="legend" level="title-sm">
+              Actions
+            </Typography>
+            {(Object.keys(ACTION_LABELS) as BulkAbuseAction[]).map(action => (
+              <Checkbox
+                key={action}
+                label={ACTION_LABELS[action]}
+                title={missingPermission(action) ?? undefined}
+                checked={effectiveActions[action]}
+                disabled={
+                  executeMutation.isPending ||
+                  !!recordAction ||
+                  (action === 'revokeApiKeys' && actions.ban) ||
+                  !!missingPermission(action)
+                }
+                onChange={event => {
+                  setActions(current => ({ ...current, [action]: event.target.checked }));
+                  resetPreview();
+                }}
+                slotProps={{
+                  input: {
+                    'data-testid': `bulk-abuse-action-${action}-checkbox`,
+                    'aria-label': ACTION_LABELS[action],
+                  },
+                }}
+              />
+            ))}
+            {effectiveActions.ban && (
+              <Typography level="body-xs" data-testid="bulk-abuse-ban-subscriptions-note">
+                Banning cancels their live Stripe subscriptions, including those of organizations they own, with no
+                refund. They stay canceled if the ban is lifted.
               </Typography>
-              {(Object.keys(ACTION_LABELS) as BulkAbuseAction[]).map(action => (
-                <Checkbox
-                  key={action}
-                  label={ACTION_LABELS[action]}
-                  title={missingPermission(action) ?? undefined}
-                  checked={effectiveActions[action]}
-                  disabled={
-                    executeMutation.isPending ||
-                    !!recordAction ||
-                    (action === 'revokeApiKeys' && actions.ban) ||
-                    !!missingPermission(action)
-                  }
-                  onChange={event => {
-                    setActions(current => ({ ...current, [action]: event.target.checked }));
-                    resetPreview();
-                  }}
-                  slotProps={{
-                    input: {
-                      'data-testid': `bulk-abuse-action-${action}-checkbox`,
-                      'aria-label': ACTION_LABELS[action],
-                    },
-                  }}
-                />
-              ))}
-              {effectiveActions.ban && (
-                <Typography level="body-xs" data-testid="bulk-abuse-ban-subscriptions-note">
-                  Banning cancels their live Stripe subscriptions, including those of organizations they own, with no
-                  refund. They stay canceled if the ban is lifted.
-                </Typography>
-              )}
-            </Stack>
+            )}
+          </Stack>
+        </>
+      )}
+
+      {error && (
+        <Alert color="danger" data-testid="bulk-abuse-error">
+          {getErrorMessage(error)}
+        </Alert>
+      )}
+
+      {stage.kind === 'previewed' && <PreviewSummary preview={stage.preview} actions={stage.request.actions} />}
+      {stage.kind === 'executed' && <ExecuteSummary result={stage.result} />}
+
+      {hasWork && (
+        <ReasonPicker
+          presets={ADMIN_REASON_PRESETS.bulkAbuseResponse}
+          value={reason}
+          onChange={setReason}
+          data-testid="bulk-abuse-reason-input"
+        />
+      )}
+
+      <AdminDialogFooter>
+        {stage.kind !== 'edit' && stage.request.target.kind === 'domain' && nextBatchCursor && (
+          <Button data-testid="bulk-abuse-next-batch-btn" loading={busy} onClick={handleNextBatch}>
+            Preview next batch
+          </Button>
+        )}
+        {stage.kind === 'executed' ? (
+          <>
+            <Button data-testid="bulk-abuse-done-btn" variant="outlined" onClick={onClose}>
+              Done
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              data-testid="bulk-abuse-preview-btn"
+              variant="outlined"
+              disabled={!targetValid || !hasAction || busy}
+              loading={previewMutation.isPending}
+              onClick={handlePreview}
+            >
+              {stage.kind === 'previewed' ? 'Preview again' : 'Preview'}
+            </Button>
+            <Button
+              data-testid="bulk-abuse-execute-btn"
+              color="danger"
+              disabled={!canExecute}
+              loading={executeMutation.isPending}
+              onClick={handleExecute}
+            >
+              {stage.kind !== 'previewed'
+                ? 'Apply'
+                : stage.preview.includedCount > 0
+                  ? `Apply to ${stage.preview.includedCount} ${stage.preview.includedCount === 1 ? 'user' : 'users'}`
+                  : stage.request.target.kind === 'domain'
+                    ? 'Block domain only'
+                    : 'No eligible users'}
+            </Button>
           </>
         )}
-
-        {error && (
-          <Alert color="danger" data-testid="bulk-abuse-error">
-            {getErrorMessage(error)}
-          </Alert>
-        )}
-
-        {stage.kind === 'previewed' && <PreviewSummary preview={stage.preview} actions={stage.request.actions} />}
-        {stage.kind === 'executed' && <ExecuteSummary result={stage.result} />}
-
-        {hasWork && (
-          <ReasonPicker
-            presets={ADMIN_REASON_PRESETS.bulkAbuseResponse}
-            value={reason}
-            onChange={setReason}
-            data-testid="bulk-abuse-reason-input"
-          />
-        )}
-
-        <Stack direction="row" spacing={1} justifyContent="flex-end">
-          {stage.kind !== 'edit' && stage.request.target.kind === 'domain' && nextBatchCursor && (
-            <Button data-testid="bulk-abuse-next-batch-btn" loading={busy} onClick={handleNextBatch}>
-              Preview next batch
-            </Button>
-          )}
-          {stage.kind === 'executed' ? (
-            <>
-              <Button data-testid="bulk-abuse-done-btn" variant="outlined" onClick={onClose}>
-                Done
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                data-testid="bulk-abuse-preview-btn"
-                variant="outlined"
-                disabled={!targetValid || !hasAction || busy}
-                loading={previewMutation.isPending}
-                onClick={handlePreview}
-              >
-                {stage.kind === 'previewed' ? 'Preview again' : 'Preview'}
-              </Button>
-              <Button
-                data-testid="bulk-abuse-execute-btn"
-                color="danger"
-                disabled={!canExecute}
-                loading={executeMutation.isPending}
-                onClick={handleExecute}
-              >
-                {stage.kind !== 'previewed'
-                  ? 'Apply'
-                  : stage.preview.includedCount > 0
-                    ? `Apply to ${stage.preview.includedCount} ${stage.preview.includedCount === 1 ? 'user' : 'users'}`
-                    : stage.request.target.kind === 'domain'
-                      ? 'Block domain only'
-                      : 'No eligible users'}
-              </Button>
-            </>
-          )}
-        </Stack>
-      </ModalDialog>
-    </Modal>
+      </AdminDialogFooter>
+    </AdminDialog>
   );
 };
 

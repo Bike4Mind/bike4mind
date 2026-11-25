@@ -69,7 +69,8 @@
       "title": "Studio media gallery",
       "web": "green",
       "ios": "green",
-      "android": "red"
+      "android": "yellow",
+      "notes": "Android: green once the gallery items in apps/android/DEVICE_TESTING.md pass on a device."
     },
     {
       "id": "deep-links",
@@ -106,7 +107,16 @@
       "title": "Live agent progress outside the app (Live Activities)",
       "web": "na",
       "ios": "green",
-      "android": "red"
+      "android": "yellow",
+      "notes": "Android: green once the agent-run items in apps/android/DEVICE_TESTING.md pass on a device, including an Android 16 Live Update."
+    },
+    {
+      "id": "scan-hand-to-assistant",
+      "title": "Scan a bill and hand it to the assistant: confirm the extracted obligation, see it in a brief before it is due",
+      "web": "na",
+      "ios": "yellow",
+      "android": "yellow",
+      "notes": "Both platforms: green once a scanned invoice is handed off, corrected, confirmed and filed on a physical device (the document scanner is unavailable on simulators and emulators)."
     }
   ]
 }

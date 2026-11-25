@@ -1,5 +1,10 @@
-import { LIFECYCLE_SUNSET_STATUSES, ModelBackend, bedrockFoundationIdOf, type ModelRecord } from '@bike4mind/common';
-import { limitConcurrency } from '../concurrency';
+import {
+  LIFECYCLE_SUNSET_STATUSES,
+  ModelBackend,
+  bedrockFoundationIdOf,
+  type ModelRecord,
+  limitConcurrency,
+} from '@bike4mind/common';
 import type {
   DiscoveredModel,
   DiscoveryCredentials,

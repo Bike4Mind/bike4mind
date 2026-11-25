@@ -58,6 +58,7 @@ async function loadRouter(
   vi.stubGlobal('$output', <T>(value: T) => ({ apply: <R>(callback: (resolved: T) => R) => callback(value) }));
   vi.stubGlobal('$dev', shared);
   vi.stubGlobal('$transform', vi.fn());
+  vi.stubGlobal('$util', { runtime: { registerStackTransformation: vi.fn() } });
   vi.stubGlobal('$interpolate', (parts: TemplateStringsArray, ...values: unknown[]) =>
     parts.reduce((result, part, index) => result + part + (values[index] ?? ''), '')
   );

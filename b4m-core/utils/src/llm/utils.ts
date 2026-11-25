@@ -713,8 +713,8 @@ export async function fetchAndProcessPreviousMessages(
      * a 400 error with Gemini 3 Pro". Revisit once thought_signature is persisted.
      *
      * Deliberately taken as the model id rather than a caller-computed boolean: the prior
-     * design made this an opt-out flag, and a second caller (QuestMasterFeature) went
-     * live without ever setting it. Pass the model here and this stays correct
+     * design made this an opt-out flag, and a second caller went live without ever
+     * setting it. Pass the model here and this stays correct
      * automatically for every caller instead of depending on each one remembering to opt in.
      */
     model?: string;

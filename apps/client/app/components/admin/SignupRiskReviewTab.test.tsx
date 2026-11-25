@@ -117,17 +117,12 @@ beforeEach(() => {
 });
 
 describe('SignupRiskReviewTab', () => {
-  it('leaves the outer padding to the admin page frame', () => {
+  it('lists flagged accounts with their risk tone, signals and activity, leaving the outer padding to the admin page frame', () => {
     renderTab();
-    const root = screen.getByTestId('admin-signup-risk-review-tab');
-    const style = getComputedStyle(root);
+    const style = getComputedStyle(screen.getByTestId('admin-signup-risk-review-tab'));
     for (const side of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
       expect(parseFloat(side || '0')).toBe(0);
     }
-  });
-
-  it('lists flagged accounts with their risk tone, signals and activity', () => {
-    renderTab();
 
     const high = screen.getByTestId('signup-risk-row-u1');
     expect(within(high).getByText('High risk')).toBeTruthy();

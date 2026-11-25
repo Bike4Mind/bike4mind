@@ -13,7 +13,16 @@ type ReadOrganization = { id: string | { toString(): string }; name?: string };
  * A union rather than a free string so a new call site cannot coin a second spelling of a label
  * that already exists and silently split an audit query over both.
  */
-export type OrgReadView = 'list' | 'detail' | 'member_activity' | 'stats';
+export type OrgReadView =
+  | 'list'
+  | 'detail'
+  | 'member_activity'
+  | 'stats'
+  | 'roster'
+  | 'storage_usage'
+  | 'api_keys'
+  | 'api_key_options'
+  | 'member_api_keys';
 
 /**
  * Records a platform admin's read of organizations they do not belong to in AdminAuditLog

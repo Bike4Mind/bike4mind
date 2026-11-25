@@ -18,6 +18,9 @@ import {
   CONFLUENCE_DOWNLOAD_ATTACHMENT,
   CONFLUENCE_DELETE_ATTACHMENT,
 } from '../constants.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+
+const log = createStderrLogger('atlassian');
 
 export function registerConfluenceAttachmentTools(server: McpServer) {
   // LIST ATTACHMENTS
@@ -240,7 +243,7 @@ export function registerConfluenceAttachmentTools(server: McpServer) {
           }
         } catch (embedError) {
           const errMsg = embedError instanceof Error ? embedError.message : String(embedError);
-          console.error(`[Confluence] Failed to embed attachment in page ${pageId}: ${errMsg}`);
+          log.error('failed to embed attachment in page', { pageId, detail: errMsg });
           embedNote = `Attachment uploaded but could not be embedded in page content: ${errMsg}`;
         }
 

@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
-import Divider from '@mui/joy/Divider';
 import Dropdown from '@mui/joy/Dropdown';
 import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
@@ -17,21 +16,24 @@ import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import type { StudioAsset, StudioMediaKind } from '@shared/studio';
 import { studioAssetTitle } from '@shared/studioAssetTitle';
-import { ArrowLeftIcon, CloseIcon, ImageIcon, MusicIcon, SoundIcon, VideoIcon, VoiceIcon } from '../icons';
+import { ArrowLeftIcon, CloseIcon } from '../icons';
 import { thinScrollbarSx } from '../layout';
+import { GenerationPayerNote } from '../../credits/GenerationPayerNote';
 import type { StudioController, StudioCreationDraft } from './controller';
 import { STUDIO_PANE_WIDTH } from './layout';
+import { StudioScope } from './design/StudioScope';
+import {
+  studioColor,
+  studioFocusSx,
+  studioMicroLabelSx,
+  studioPanelSx,
+  studioRadius,
+  studioTransitionSx,
+} from './design/studioTokens';
+import { mediaLabel, STUDIO_MEDIA } from './media';
+import { AssetTake, JobTake, TakesEmpty, TakesGrid, TakesHeading } from './StudioTakes';
 import { StudioSettings, defaultStudioSettings } from './StudioSettings';
 
-export const STUDIO_TILES: readonly { kind: StudioMediaKind; label: string; icon: ReactNode; accent: string }[] = [
-  { kind: 'image', label: 'Image', icon: <ImageIcon />, accent: 'primary' },
-  { kind: 'video', label: 'Video', icon: <VideoIcon />, accent: 'warning' },
-  { kind: 'music', label: 'Music', icon: <MusicIcon />, accent: 'success' },
-  { kind: 'speech', label: 'Voice', icon: <VoiceIcon />, accent: 'primary' },
-  { kind: 'sound-effect', label: 'Sound FX', icon: <SoundIcon />, accent: 'danger' },
-];
-
-const mediaLabel = (kind: StudioMediaKind) => STUDIO_TILES.find(tile => tile.kind === kind)?.label ?? kind;
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Studio could not complete this operation.';
 const selectSx = {
@@ -148,6 +150,20 @@ function CreationForm({
       onSubmit={event => event.preventDefault()}
       spacing={2}
       data-testid="studio-creation-form"
+      sx={{
+        ...studioPanelSx,
+        p: 2,
+        // StudioSettings draws its own fields; this gives them web Studio's label and control styling.
+        '& .MuiFormLabel-root': studioMicroLabelSx,
+        '& select': {
+          minHeight: 34,
+          fontSize: '13px',
+          bgcolor: studioColor('raised'),
+          borderColor: studioColor('border'),
+          borderRadius: studioRadius('md'),
+          color: studioColor('text'),
+        },
+      }}
     >
       {contextNotice && (
         <Alert size="sm" color="neutral" data-testid="studio-context-changed">
@@ -159,6 +175,7 @@ function CreationForm({
         <FormLabel>{kind === 'speech' ? 'Script or instructions' : 'What would you like to create?'}</FormLabel>
         <Textarea
           minRows={5}
+          sx={{ bgcolor: studioColor('sunken'), borderColor: studioColor('border'), borderRadius: studioRadius('md') }}
           value={draft.prompt}
           onChange={event => edit({ ...draft, prompt: event.target.value })}
           slotProps={{ textarea: { 'data-testid': 'studio-prompt-input' } }}
@@ -172,7 +189,7 @@ function CreationForm({
         onChange={event => edit({ ...draft, selection: { mode: event.target.checked ? 'current-session' : 'none' } })}
         slotProps={{ input: { 'data-testid': 'studio-use-session-context-checkbox' } }}
       />
-      <Typography level="body-xs" textColor="text.tertiary">
+      <Typography level="body-xs" sx={{ color: studioColor('text-muted'), mt: '4px !important' }}>
         Studio prepares prompts using this conversation's chat model, even when session context is off.
       </Typography>
       {!controller.catalog &&
@@ -234,10 +251,13 @@ function CreationForm({
         </Alert>
       )}
       <Button
-        size="sm"
-        variant="outlined"
-        color="neutral"
-        sx={{ '&.Mui-disabled': { borderColor: 'neutral.outlinedBorder' } }}
+        variant="solid"
+        color="primary"
+        sx={{
+          borderRadius: studioRadius('md'),
+          fontWeight: 600,
+          '&:active:not(.Mui-disabled)': { transform: 'translateY(1px)' },
+        }}
         disabled={locked || !draft.prompt.trim()}
         loading={phase !== 'idle'}
         onClick={() => void generate()}
@@ -245,6 +265,7 @@ function CreationForm({
       >
         Generate
       </Button>
+      <GenerationPayerNote data-testid="studio-payer-note" />
       {error && (
         <Alert size="sm" color="danger" data-testid="studio-creation-error">
           {error}
@@ -472,7 +493,21 @@ function AssetPreview({
   );
 }
 
-function StudioContent({
+/** Why a medium cannot be started right now, or null when it can. Shared with the Studio place's sidebar. */
+export function tileUnavailableReason(
+  controller: StudioController | undefined,
+  kind: StudioMediaKind,
+  unavailableReason?: string
+): string | null {
+  const capability = controller?.capabilities[kind];
+  if (!controller) return unavailableReason ?? 'Studio is not connected yet.';
+  if (!capability) return 'Not supported.';
+  if (capability.status !== 'available') return capability.reason;
+  return controller.busy ? 'Studio is busy.' : null;
+}
+
+/** The pane's body - the medium tiles, a creation form, or an asset preview - with the medium owned by the caller. */
+export function StudioContent({
   controller,
   kind,
   setKind,
@@ -522,64 +557,75 @@ function StudioContent({
         role="group"
         aria-label="Create media"
         data-testid="studio-creation-tiles"
-        sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.25 }}
+        sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(132px, 1fr))', gap: 1.25 }}
       >
-        {STUDIO_TILES.map(tile => {
-          const capability = controller?.capabilities[tile.kind];
-          const reason = !controller
-            ? (unavailableReason ?? 'Studio is not connected yet.')
-            : !capability
-              ? 'Not supported.'
-              : capability.status !== 'available'
-                ? capability.reason
-                : controller.busy
-                  ? 'Studio is busy.'
-                  : null;
+        {STUDIO_MEDIA.map(medium => {
+          const reason = tileUnavailableReason(controller, medium.kind, unavailableReason);
           return (
-            <Box key={tile.kind}>
-              <Button
-                fullWidth
-                size="sm"
-                variant="outlined"
-                color="neutral"
-                startDecorator={
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      p: 0.75,
-                      borderRadius: 'sm',
-                      color: `${tile.accent}.softColor`,
-                      bgcolor: `${tile.accent}.softBg`,
-                    }}
-                  >
-                    {tile.icon}
-                  </Box>
-                }
+            <Box key={medium.kind} sx={{ minWidth: 0 }}>
+              <Box
+                component="button"
+                type="button"
                 disabled={!!reason}
                 onClick={() => {
                   setInitial(undefined);
-                  setKind(tile.kind);
+                  setKind(medium.kind);
                 }}
-                aria-describedby={reason ? `studio-${tile.kind}-reason` : undefined}
-                data-testid={`studio-create-${tile.kind}-tile`}
-                title={reason ?? `Create ${tile.label}`}
+                aria-describedby={reason ? `studio-${medium.kind}-reason` : undefined}
+                data-testid={`studio-create-${medium.kind}-tile`}
+                title={reason ?? `Create ${medium.label}`}
                 sx={{
-                  minHeight: 62,
-                  px: 1.25,
+                  ...studioPanelSx,
+                  ...studioTransitionSx,
+                  ...studioFocusSx,
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
                   gap: 1,
-                  justifyContent: 'flex-start',
-                  borderColor: 'divider',
-                  borderRadius: 'md',
-                  bgcolor: 'background.surface',
-                  fontWeight: 500,
-                  '&:hover': { borderColor: `${tile.accent}.outlinedBorder`, bgcolor: 'background.level1' },
+                  p: 1.5,
+                  font: 'inherit',
+                  textAlign: 'left',
+                  color: studioColor('text'),
+                  cursor: 'pointer',
+                  '& .studio-medium-glyph': {
+                    ...studioTransitionSx,
+                    display: 'grid',
+                    placeItems: 'center',
+                    width: 36,
+                    height: 36,
+                    flexShrink: 0,
+                    borderRadius: studioRadius('md'),
+                    bgcolor: studioColor('raised'),
+                    border: `1px solid ${studioColor('hairline')}`,
+                    color: studioColor('text-secondary'),
+                  },
+                  '&:hover:not(:disabled)': {
+                    borderColor: studioColor('accent-border'),
+                    bgcolor: studioColor('hover'),
+                    '& .studio-medium-glyph': {
+                      bgcolor: studioColor('accent'),
+                      borderColor: studioColor('accent'),
+                      color: studioColor('accent-contrast'),
+                    },
+                  },
+                  '&:disabled': { cursor: 'default', opacity: 0.55 },
                 }}
               >
-                {tile.label}
-              </Button>
+                <span className="studio-medium-glyph">{medium.icon}</span>
+                <Box component="span" sx={{ minWidth: 0 }}>
+                  <Typography level="title-sm" sx={{ color: studioColor('text-strong') }}>
+                    {medium.label}
+                  </Typography>
+                  <Typography level="body-xs" sx={{ color: studioColor('text-muted') }}>
+                    {medium.hint}
+                  </Typography>
+                </Box>
+              </Box>
               {reason && (
                 <Typography
-                  id={`studio-${tile.kind}-reason`}
+                  id={`studio-${medium.kind}-reason`}
                   level="body-xs"
                   textColor="text.tertiary"
                   sx={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }}
@@ -591,7 +637,6 @@ function StudioContent({
           );
         })}
       </Box>
-      <Divider />
       {(controller?.hasMoreAssets || controller?.hasMoreJobs) && (
         <Typography level="body-xs">Partial history loaded. Load remaining pages to browse all records.</Typography>
       )}
@@ -649,183 +694,37 @@ function StudioContent({
               )
               .map(item => ({ type: 'job' as const, item })),
           ].sort((a, b) => b.item.createdAt.localeCompare(a.item.createdAt));
-          return rows.length === 0 ? (
-            <Typography
-              level="body-sm"
-              textColor="text.tertiary"
-              data-testid="studio-empty"
-              sx={{ textAlign: 'center', py: 5 }}
-            >
-              Your creations will appear here.
-            </Typography>
-          ) : (
-            <Stack component="ul" spacing={1} sx={{ p: 0, m: 0, listStyle: 'none' }} data-testid="studio-asset-list">
-              {rows.map(row => (
-                <Box component="li" key={`${row.type}-${row.item.id}`}>
-                  {row.type === 'asset' ? (
-                    <Button
-                      fullWidth
-                      variant="plain"
-                      color="neutral"
-                      onClick={() => setSelected(row.item.id)}
-                      data-testid={`studio-asset-${row.item.id}-btn`}
-                      sx={{
-                        justifyContent: 'flex-start',
-                        textAlign: 'left',
-                        minWidth: 0,
-                        gap: 1.5,
-                        p: 1,
-                        borderRadius: 'md',
-                      }}
-                    >
-                      {row.item.kind === 'image' ? (
-                        <Box
-                          component="img"
-                          src={row.item.url}
-                          alt=""
-                          sx={{
-                            width: 44,
-                            height: 44,
-                            objectFit: 'cover',
-                            borderRadius: 'sm',
-                            bgcolor: 'background.level1',
-                          }}
-                        />
-                      ) : (
-                        <Box
-                          sx={{
-                            width: 44,
-                            height: 44,
-                            flexShrink: 0,
-                            display: 'grid',
-                            placeItems: 'center',
-                            borderRadius: 'sm',
-                            bgcolor: `${STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.accent ?? 'primary'}.softBg`,
-                            color: `${STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.accent ?? 'primary'}.softColor`,
-                          }}
-                        >
-                          {STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.icon}
-                        </Box>
-                      )}
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography
-                          level="title-sm"
-                          title={studioAssetTitle(row.item)}
-                          sx={{
-                            display: '-webkit-box',
-                            WebkitBoxOrient: 'vertical',
-                            WebkitLineClamp: 2,
-                            overflow: 'hidden',
-                            overflowWrap: 'anywhere',
-                          }}
-                        >
-                          {studioAssetTitle(row.item)}
-                        </Typography>
-                        <Typography level="body-xs" textColor="text.tertiary" sx={{ opacity: 0.65 }}>
-                          {new Date(row.item.createdAt).toLocaleDateString()}
-                        </Typography>
-                      </Box>
-                    </Button>
-                  ) : (
-                    <Box
-                      data-testid={`studio-job-${row.item.id}`}
-                      sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1, py: 1, borderRadius: 'md' }}
-                    >
-                      <Box
-                        aria-hidden="true"
-                        sx={{
-                          width: 44,
-                          height: 44,
-                          flexShrink: 0,
-                          display: 'grid',
-                          placeItems: 'center',
-                          borderRadius: 'sm',
-                          bgcolor: `${STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.accent ?? 'primary'}.softBg`,
-                          color: `${STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.accent ?? 'primary'}.softColor`,
-                          position: 'relative',
-                          overflow: 'hidden',
-                          ...(['submitting', 'queued', 'running'].includes(row.item.state) && {
-                            '&::after': {
-                              content: '""',
-                              position: 'absolute',
-                              inset: 0,
-                              background:
-                                'linear-gradient(110deg, transparent 20%, rgba(128,128,128,0.16) 50%, transparent 80%)',
-                              animation: 'studio-job-shimmer 1.8s ease-in-out infinite',
-                            },
-                            '@keyframes studio-job-shimmer': {
-                              from: { transform: 'translateX(-100%)' },
-                              to: { transform: 'translateX(100%)' },
-                            },
-                            '@media (prefers-reduced-motion: reduce)': { '&::after': { animation: 'none' } },
-                          }),
-                        }}
-                      >
-                        {STUDIO_TILES.find(tile => tile.kind === row.item.kind)?.icon}
-                      </Box>
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography level="title-sm" noWrap>
-                          {mediaLabel(row.item.kind)}
-                        </Typography>
-                        <Typography
-                          level="body-xs"
-                          textColor="text.tertiary"
-                          noWrap
-                          title={row.item.error ?? undefined}
-                        >
-                          {row.item.error ??
-                            {
-                              submitting: 'Starting...',
-                              queued: 'Queued',
-                              running: 'Creating...',
-                              completed: 'Completed',
-                              failed: 'Failed',
-                              cancelled: 'Cancelled',
-                              unknown: 'Status unavailable',
-                            }[row.item.state]}
-                        </Typography>
-                      </Box>
-                      {controller.jobAction && !['completed', 'failed', 'cancelled'].includes(row.item.state) && (
-                        <Dropdown>
-                          <MenuButton
-                            size="sm"
-                            variant="plain"
-                            aria-label="Generation actions"
-                            sx={{ minWidth: 28, px: 0.75, flexShrink: 0 }}
-                          >
-                            {'\u22ef'}
-                          </MenuButton>
-                          <Menu placement="bottom-end">
-                            <MenuItem
-                              data-testid={`studio-job-${row.item.id}-recheck-btn`}
-                              onClick={() =>
-                                void controller.jobAction!(row.item.id, 'recheck').catch(cause =>
+          return (
+            <Stack spacing={1.25}>
+              <TakesHeading count={rows.length} />
+              {rows.length === 0 ? (
+                <TakesEmpty />
+              ) : (
+                <TakesGrid>
+                  {rows.map(row =>
+                    row.type === 'asset' ? (
+                      <AssetTake
+                        key={`asset-${row.item.id}`}
+                        asset={row.item}
+                        onOpen={() => setSelected(row.item.id)}
+                      />
+                    ) : (
+                      <JobTake
+                        key={`job-${row.item.id}`}
+                        job={row.item}
+                        onAction={
+                          controller.jobAction
+                            ? action =>
+                                void controller.jobAction!(row.item.id, action).catch(cause =>
                                   setPagingError(errorText(cause))
                                 )
-                              }
-                            >
-                              Recheck status
-                            </MenuItem>
-                            {['video', 'music'].includes(row.item.kind) && row.item.providerJobId && (
-                              <MenuItem
-                                color="danger"
-                                data-testid={`studio-job-${row.item.id}-cancel-btn`}
-                                onClick={() =>
-                                  void controller.jobAction!(row.item.id, 'cancel').catch(cause =>
-                                    setPagingError(errorText(cause))
-                                  )
-                                }
-                              >
-                                Cancel job
-                              </MenuItem>
-                            )}
-                          </Menu>
-                        </Dropdown>
-                      )}
-                    </Box>
+                            : undefined
+                        }
+                      />
+                    )
                   )}
-                </Box>
-              ))}
+                </TakesGrid>
+              )}
             </Stack>
           );
         })()}
@@ -862,7 +761,7 @@ export function StudioPane({
         direction="row"
         alignItems="center"
         spacing={1}
-        sx={{ px: 1.5, py: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}
+        sx={{ px: 1.5, py: 1.25, borderBottom: `1px solid ${studioColor('hairline')}` }}
       >
         {kind && (
           <IconButton
@@ -878,7 +777,11 @@ export function StudioPane({
           </IconButton>
         )}
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography id="studio-pane-title" level="title-md">
+          <Typography
+            id="studio-pane-title"
+            level="title-md"
+            sx={{ color: studioColor('text-strong'), fontWeight: 700 }}
+          >
             {kind ? `Create ${mediaLabel(kind)}` : 'Studio'}
           </Typography>
         </Box>
@@ -924,10 +827,9 @@ export function StudioPane({
         borderLeft: variant === 'docked' ? '1px solid' : undefined,
         borderTop: variant === 'stacked' ? '1px solid' : undefined,
         borderColor: 'divider',
-        bgcolor: 'background.surface',
       }}
     >
-      {content}
+      <StudioScope sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{content}</StudioScope>
     </Box>
   );
 }

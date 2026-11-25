@@ -21,6 +21,7 @@ import {
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
 import { assertNewAccountSpendWithinCap, type NewAccountSpendCapAdapters } from './newAccountSpendCap';
+import { assertInterventionSpendAllowed } from './interventionSpendGate';
 import { aiAccessDeniedMessage } from '../userService/accountState';
 import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
 import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
@@ -185,6 +186,23 @@ export async function holdCredits(
     throw insufficientCreditsError(
       holdInsufficientCreditsMessage(featureLabel, availableCredits, requiredCredits, Boolean(organization))
     );
+  }
+
+  try {
+    await assertInterventionSpendAllowed(
+      { userId, credits: requiredCredits },
+      { users: adapters.users, window: adapters.newAccountSpendCap.interventionSpendWindow }
+    );
+  } catch (refusal) {
+    await holderMethods.incrementCredits(ownerId, requiredCredits).catch((err: unknown) =>
+      logger.error(`${featureLabel} intervention rollback failed - owner debited with no charge`, {
+        ownerId,
+        ownerType,
+        requiredCredits,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      })
+    );
+    throw refusal;
   }
 
   return {

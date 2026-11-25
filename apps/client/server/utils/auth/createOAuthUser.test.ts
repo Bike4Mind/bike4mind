@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { isReservedUsername, PENDING_FREE_CREDITS_TAG, usernameSchema, USERNAME_MAX_LENGTH } from '@bike4mind/common';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
@@ -122,7 +123,7 @@ describe('createUniqueOAuthUser', () => {
 
   it('retries with a disambiguated username on a username collision and keeps the verified stamp', async () => {
     mockCreate.mockRejectedValueOnce({ code: 11000, keyPattern: { username: 1 } });
-    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'info').mockImplementation(() => undefined);
 
     await createUniqueOAuthUser({ name: 'Pat', baseUsername: 'pat', email: 'pat@example.com', oauthCredentials });
 
@@ -181,7 +182,7 @@ describe('deriveOAuthUsername', () => {
 describe('createUniqueOAuthUser retry suffixes', () => {
   beforeEach(() => {
     mockCreate.mockReset();
-    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'info').mockImplementation(() => undefined);
   });
 
   it('only ever tries usernames that satisfy the username rules', async () => {

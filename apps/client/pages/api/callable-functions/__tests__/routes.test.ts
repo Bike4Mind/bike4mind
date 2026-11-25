@@ -8,7 +8,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { BadRequestError, CallableFunctionSlugConflictError, ConflictError, NotFoundError } from '@bike4mind/common';
+import {
+  BadRequestError,
+  CallableFunctionBreakingChangeError,
+  CallableFunctionSlugConflictError,
+  ConflictError,
+  NotFoundError,
+  type FunctionContractChange,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   enabled: true,
@@ -21,6 +28,7 @@ const h = vi.hoisted(() => ({
     getCallableFunction: vi.fn(),
     repinCallableFunction: vi.fn(),
     setCallableFunctionEnabled: vi.fn(),
+    setCallableFunctionApproval: vi.fn(),
     deleteCallableFunction: vi.fn(),
   },
 }));
@@ -149,6 +157,7 @@ beforeEach(() => {
   h.registry.createCallableFunction.mockResolvedValue(VIEW);
   h.registry.getCallableFunction.mockResolvedValue({ ...VIEW, contract: CONTRACT, source: 'def run(): ...' });
   h.registry.setCallableFunctionEnabled.mockResolvedValue({ ...VIEW, enabled: false, status: 'disabled' });
+  h.registry.setCallableFunctionApproval.mockResolvedValue({ ...VIEW, approval: 'always_ask' });
   h.registry.repinCallableFunction.mockResolvedValue(VIEW);
   h.registry.deleteCallableFunction.mockResolvedValue(undefined);
 });
@@ -291,11 +300,29 @@ describe('request bodies', () => {
     expect(h.registry.createCallableFunction).not.toHaveBeenCalled();
   });
 
-  it('patch takes only enabled', async () => {
-    for (const body of [{}, { enabled: 'no' }, { enabled: true, slug: 'x' }]) {
+  it('patch takes enabled or approval, one at a time', async () => {
+    for (const body of [
+      {},
+      { enabled: 'no' },
+      { enabled: true, slug: 'x' },
+      { approval: 'sometimes' },
+      { enabled: true, approval: 'always_ask' },
+    ]) {
       const res = await fire({ ...PATCH, body });
       expect(res._getStatusCode()).toBe(400);
     }
+    expect(h.registry.setCallableFunctionEnabled).not.toHaveBeenCalled();
+    expect(h.registry.setCallableFunctionApproval).not.toHaveBeenCalled();
+  });
+
+  it('patch with approval sets it and leaves enabled alone', async () => {
+    const res = await fire({ ...PATCH, body: { approval: 'always_ask' } });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.registry.setCallableFunctionApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'jwt-user' }),
+      FUNCTION_ID,
+      'always_ask'
+    );
     expect(h.registry.setCallableFunctionEnabled).not.toHaveBeenCalled();
   });
 });
@@ -381,6 +408,21 @@ describe('forwarding to the registry', () => {
       slug: 'beam_midspan_deflection',
       functionId: FUNCTION_ID,
       sourceDeleted: true,
+    });
+  });
+
+  it('answers a breaking repin with 409 breaking_change and each change', async () => {
+    const changes: FunctionContractChange[] = [
+      { path: 'inputs.load.unit', side: 'inputs', field: 'load', kind: 'unit_changed', before: 'N', after: 'kN' },
+      { path: 'outputs.deflection', side: 'outputs', field: 'deflection', kind: 'removed' },
+    ];
+    h.registry.repinCallableFunction.mockRejectedValue(new CallableFunctionBreakingChangeError(changes));
+    const refused = await fire(PIN);
+    expect(refused._getStatusCode()).toBe(409);
+    expect(refused._getJSONData()).toMatchObject({
+      error: 'This version changes the contract in a way that could break callers of the tool.',
+      code: 'breaking_change',
+      changes,
     });
   });
 });

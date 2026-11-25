@@ -24,7 +24,8 @@ export interface ErrorInfo {
  *   await octokit.issues.create(...);
  * } catch (error) {
  *   const { message, status } = getErrorInfo(error);
- *   console.error(`[${TOOL_NAME}] ERROR: ${message}`);
+ *   if (status === 404) return createCustomErrorResponse(`Not found: ${message}`);
+ *   log.error('failed', { toolName: TOOL_NAME, ...errorLogFields(error) });
  *   return createErrorResponse(error);
  * }
  */
@@ -66,7 +67,9 @@ export function getErrorInfo(error: unknown): ErrorInfo {
  * Convenience function when only the message is needed.
  *
  * @example
- * console.error(`[${TOOL_NAME}] ERROR: ${getErrorMessage(error)}`);
+ * const message = getErrorMessage(error);
+ * log.error('failed', { toolName: TOOL_NAME, ...errorLogFields(error) });
+ * return createCustomErrorResponse(`Failed: ${message}`);
  */
 export function getErrorMessage(error: unknown): string {
   return getErrorInfo(error).message;
@@ -106,4 +109,10 @@ export function isRateLimitError(error: unknown): boolean {
  */
 export function asGitHubError(error: unknown): GitHubApiError {
   return error as GitHubApiError;
+}
+
+/** Log fields for a failed tool call: the message plus the HTTP status, so a 404 reads differently from a 5xx. */
+export function errorLogFields(error: unknown): { detail: string; status: number | undefined } {
+  const { message, status } = getErrorInfo(error);
+  return { detail: message, status };
 }

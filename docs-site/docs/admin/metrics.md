@@ -17,12 +17,12 @@ The Model Metrics tab provides detailed analytics on AI model usage and performa
 
 The filter bar at the top of Model Metrics applies each filter as you pick it. There is no Apply button. Period, Model and Status are kept in the page URL, so a filtered view can be bookmarked or shared; the User filter is not.
 
-| Filter | Description |
-|--------|-------------|
+| Filter     | Description                                                                                                                                                                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Period** | One of Today, Last 24 hours, Last 7 days or Last 30 days. Overview, Raw data and the CSV export show at most the 500 most recent matching calls; Analytics runs its own query with a higher cap. |
-| **Model** | Filter by AI model |
-| **User** | Filter by specific user |
-| **Status** | Done, Error or Pending |
+| **Model**  | Filter by AI model                                                                                                                                                                               |
+| **User**   | Filter by specific user                                                                                                                                                                          |
+| **Status** | Done, Error or Pending                                                                                                                                                                           |
 
 A **Short names** / **Full names** control next to the filters switches between simplified model names and full identifiers. When a filter matches nothing, use **Clear filters** to reset them all.
 
@@ -30,12 +30,12 @@ A **Short names** / **Full names** control next to the filters switches between 
 
 Model Metrics is organized into four sub-tabs:
 
-| Tab | Description |
-|-----|-------------|
-| **Overview** | Summary cards and charts showing key metrics and distributions for the filtered dataset |
-| **Analytics** | Detailed chart visualizations with trend analysis based on the applied filters |
-| **Raw data** | A sortable table of individual metric records with all fields visible. Supports column sorting and includes access to performance metrics documentation via an info modal. |
-| **Spend** | Spend for the selected period, user and model |
+| Tab           | Description                                                                                                                                                                |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Overview**  | Summary cards and charts showing key metrics and distributions for the filtered dataset                                                                                    |
+| **Analytics** | Detailed chart visualizations with trend analysis based on the applied filters                                                                                             |
+| **Raw data**  | A sortable table of individual metric records with all fields visible. Supports column sorting and includes access to performance metrics documentation via an info modal. |
+| **Spend**     | Spend for the selected period, user and model                                                                                                                              |
 
 ### CSV Export
 
@@ -80,6 +80,7 @@ changing, not the product getting slower, so do not compare across it.
   records once per quest and so stays relative to the first attempt. And a turn with no TTFVT at all
   may have been retried rather than never streamed. Treat a large gap on any of these as an artifact
   of what each side measured, not as client-side slowness.
+
 - **Turns with no TTFVT and no first-chunk time.** The response was not streamed at all. Check the
   model's streaming support rather than reading it as a latency problem.
 
@@ -93,12 +94,12 @@ The Event Metrics tab tracks system-wide events across the platform, providing v
 
 ### Filters
 
-| Filter | Description |
-|--------|-------------|
+| Filter         | Description                                                                                                                                                     |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Date Range** | Quick ranges **7d**, **30d**, **90d** and **All time**, plus a **Range** chip with Today, Yesterday, This month, Last month and Custom (whole From and To days) |
-| **User** | Filter by specific user |
-| **Event** | Filter by event type |
-| **Category** | Filter by event category (e.g., Slack, System, User) |
+| **User**       | Filter by specific user                                                                                                                                         |
+| **Event**      | Filter by event type                                                                                                                                            |
+| **Category**   | Filter by event category (e.g., Slack, System, User)                                                                                                            |
 
 A filter applies as soon as you pick it. **Clear filters** resets the range to All time and removes the other filters.
 
@@ -106,9 +107,9 @@ A filter applies as soon as you pick it. **Clear filters** resets the range to A
 
 Event Metrics is organized into two sub-tabs:
 
-| Tab | Description |
-|-----|-------------|
-| **Overview** | Summary visualizations and charts for the filtered event data |
+| Tab                    | Description                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| **Overview**           | Summary visualizations and charts for the filtered event data                    |
 | **Curation breakdown** | Detailed breakdown of events by curation category, showing distribution patterns |
 
 When no curation events were recorded, the **Curation breakdown** tab says **No curation events yet** with a **Refresh metrics** button. When a range or filter is set, it says **No curation events in this range** with a **Clear filters** button instead.
@@ -121,12 +122,12 @@ A row of key numbers above the tabs shows Total events, Filtered, Unique events 
 
 The **Events / By user** switch at the top of the tab opens the per-user activity log: one row per day, action and user, with a metadata sample and a count. The view is kept in the page URL.
 
-| Control | Description |
-|---------|-------------|
-| **Organizations** | Limit rows to one or more organizations |
-| **Exclude** | Hide rows without an organization, and staff and test accounts |
-| **Advanced filters** | Date range presets, action and email search, and metadata filters |
-| **Export CSV** | Download every row that matches the filters, not just the current page |
+| Control              | Description                                                            |
+| -------------------- | ---------------------------------------------------------------------- |
+| **Organizations**    | Limit rows to one or more organizations                                |
+| **Exclude**          | Hide rows without an organization, and staff and test accounts         |
+| **Advanced filters** | Date range presets, action and email search, and metadata filters      |
+| **Export CSV**       | Download every row that matches the filters, not just the current page |
 
 ## Slack Metrics
 
@@ -134,23 +135,23 @@ The Slack Metrics tab provides focused analytics for Slack integration usage. It
 
 ### Filters
 
-| Filter | Description |
-|--------|-------------|
+| Filter         | Description                                                                                                                                                     |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Date Range** | Quick ranges **7d**, **30d**, **90d** and **All time**, plus a **Range** chip with Today, Yesterday, This month, Last month and Custom (whole From and To days) |
-| **User** | Filter by specific user |
-| **Event** | Filter by specific Slack event type |
+| **User**       | Filter by specific user                                                                                                                                         |
+| **Event**      | Filter by specific Slack event type                                                                                                                             |
 
 ### Visualizations
 
 The Slack Metrics tab displays several chart panels:
 
-| Chart | Description |
-|-------|-------------|
-| **Slack Event Activity** | Horizontal bar chart showing event counts by type |
-| **Agent Usage** | Donut/pie chart showing distribution of agent persona usage in Slack interactions |
-| **Intent Breakdown** | Donut/pie chart showing the distribution of detected intents |
-| **Export Formats** | Donut/pie chart showing which export formats (JSON, CSV, Markdown) are used |
-| **Export Success Rate** | Pie chart showing the ratio of successful to failed exports |
+| Chart                    | Description                                                                       |
+| ------------------------ | --------------------------------------------------------------------------------- |
+| **Slack event activity** | Horizontal bar chart showing event counts by type                                 |
+| **Agent usage**          | Donut/pie chart showing distribution of agent persona usage in Slack interactions |
+| **Intent breakdown**     | Donut/pie chart showing the distribution of detected intents                      |
+| **Export formats**       | Donut/pie chart showing which export formats (JSON, CSV, Markdown) are used       |
+| **Export success rate**  | Pie chart showing the ratio of successful to failed exports                       |
 
 When no Slack data is available, the tab says **No Slack events yet** with a **Refresh metrics** button. When a range or filter is set, it says **No events match these filters** with a **Clear filters** button instead.
 

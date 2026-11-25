@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/infra",
-  "version": "7.1.0",
+  "version": "7.3.0",
   "publishConfig": {
     "access": "restricted"
   },

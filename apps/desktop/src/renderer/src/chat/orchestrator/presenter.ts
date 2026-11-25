@@ -23,7 +23,7 @@ const presenterApprovalLabel = (index: number) => `Approval ${index + 1}`;
 
 /**
  * Every AgentView field and what Presenter mode does with it. A field added to AgentView fails to compile
- * here until it has a decision, and presenter.test.ts checks redactAgent against this table field by field.
+ * here until it has a decision, and presenter.views.test.tsx checks redactAgent against this table field by field.
  */
 export const AGENT_FIELD_REDACTION = {
   id: 'keep',
@@ -48,8 +48,10 @@ export const AGENT_FIELD_REDACTION = {
   lastSnippet: 'drop',
   usdCost: 'drop',
   credits: 'drop',
+  plan: 'drop',
   pr: 'drop',
   branch: 'drop',
+  background: 'drop',
   redacted: 'replace',
 } as const satisfies Record<keyof AgentView, FieldRedaction>;
 

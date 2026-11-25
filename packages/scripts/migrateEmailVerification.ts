@@ -1,4 +1,4 @@
-#!/usr/bin/env npx ts-node -r tsconfig-paths/register
+#!/usr/bin/env tsx
 
 import { connectDB, userRepository } from '@bike4mind/database';
 import { IUserDocument } from '@bike4mind/common';
@@ -23,8 +23,8 @@ type MigrationOptions = {
  * - pendingEmailUsed: null (initialize for future email changes)
  *
  * Usage:
- * - Dry run (preview changes): npx ts-node migrateEmailVerification.ts
- * - Execute migration: npx ts-node migrateEmailVerification.ts --execute
+ * - Dry run (preview changes): npx tsx migrateEmailVerification.ts
+ * - Execute migration: npx tsx migrateEmailVerification.ts --execute
  */
 class EmailVerificationMigration {
   private options: MigrationOptions;
@@ -99,7 +99,7 @@ class EmailVerificationMigration {
         console.log('');
         console.log('⚠️  This was a DRY RUN - no changes were made to the database.');
         console.log('To execute the migration, run with --execute flag:');
-        console.log('   npx ts-node migrateEmailVerification.ts --execute');
+        console.log('   npx tsx migrateEmailVerification.ts --execute');
         return 0;
       }
 

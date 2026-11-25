@@ -208,8 +208,8 @@ export const IMAGE_MODEL_CATALOG: Record<ImageModels, ImageModelCatalogEntry> = 
     qualities: GPT_IMAGE_QUALITIES,
     transparentBackground: true,
   }),
-  // The API rejects `background: 'transparent'`. The request path steps such a request down to gpt-image-1.5
-  // (rejectsTransparentBackground); declaring it here lets a caller fail it instead.
+  // The API rejects `background: 'transparent'`, so a request for one fails validation rather than
+  // being moved to another model.
   [ImageModels.GPT_IMAGE_2]: gptImage(ga('flagship', '2026-04-21'), {
     sizing: GPT_IMAGE_2_SIZING,
     qualities: GPT_IMAGE_QUALITIES,
@@ -349,3 +349,16 @@ export function getImageModelCatalogEntry(model: ImageJobModelId): ImageModelCat
   if (isLocalImageModelId(model)) return LOCAL_IMAGE_CATALOG_ENTRY;
   return IMAGE_MODEL_CATALOG[model];
 }
+
+/**
+ * Whether `model` renders a real alpha channel for `background: 'transparent'`, per the catalog.
+ * A model with no catalog entry cannot be shown to, so it is treated as unable.
+ */
+export function supportsTransparentBackgroundByCatalog(model: string): boolean {
+  const entry = (IMAGE_MODEL_CATALOG as Partial<Record<string, ImageModelCatalogEntry>>)[model];
+  return entry?.transparentBackground === true;
+}
+
+/** The message a transparent-background request fails with on a model that cannot produce one. */
+export const transparentBackgroundUnsupportedMessage = (model: string): string =>
+  `Model ${model} cannot render a transparent background. Choose a model that supports it or omit background: 'transparent'.`;

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionSummary } from '@shared/chat';
+import { isSessionPlace, type SessionPlace } from './rail/places';
 
 /**
  * The conversation the user last had open, so the chat screen reopens it after a restart and
@@ -14,7 +15,7 @@ const STORAGE_KEY = 'b4m.chat.lastSession';
 
 export interface LastSession {
   id: string;
-  mode: ChatSessionMode;
+  mode: SessionPlace;
 }
 
 export function readLastSession(): LastSession | null {
@@ -91,7 +92,8 @@ export function useLastSession(input: {
   // Keyed on the id and its mode rather than the list, which reloads on every status push.
   const activeMode = sessions.find(session => session.id === activeId)?.mode;
   useEffect(() => {
-    if (restoring || !activeId || !activeMode) return;
+    // A Studio session is the Studio place's, never the conversation a restart reopens.
+    if (restoring || !activeId || !activeMode || !isSessionPlace(activeMode)) return;
     writeLastSession({ id: activeId, mode: activeMode });
   }, [restoring, activeId, activeMode]);
 

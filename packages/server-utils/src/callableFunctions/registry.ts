@@ -1,31 +1,51 @@
 import {
   BadRequestError,
+  CALLABLE_FUNCTION_EXAMPLE_LIMITS,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  CallableFunctionBreakingChangeError,
+  CallableFunctionContractUnreadableError,
   CallableFunctionSlugConflictError,
   ConflictError,
+  FUNCTION_CONTRACT_LIMITS,
   NotFoundError,
   calculateContentHash,
+  canonicalJson,
   calculateContentSize,
+  diffFunctionContracts,
   effectiveCallableFunctionStatus,
   hasFunctionEntryPoint,
   parseFunctionContract,
   toCallableFunctionDetail,
   toCallableFunctionPublic,
+  type CallableFunctionCallSummary,
+  type CallableFunctionExample,
   type CallableFunctionHead,
   type CallableFunctionOwner,
   type FunctionContract,
+  type FunctionContractProblem,
   type ICallableFunctionDetail,
+  type ICallableFunctionOfferable,
   type ICallableFunctionPin,
   type ICallableFunctionPublic,
+  type McpToolApprovalMode,
 } from '@bike4mind/common';
-import { artifactContentRepository, artifactRepository, callableFunctionRepository } from '@bike4mind/database';
+import {
+  artifactContentRepository,
+  artifactRepository,
+  callableFunctionCallRepository,
+  callableFunctionRepository,
+  callableFunctionReviewRepository,
+} from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 
 /**
  * Saved callable functions behind pages/api/callable-functions/**. Every operation is owner-scoped: another
  * person's function or artifact reads as not found. The routes check `assertCallableFunctionsEnabled` first.
  */
+
+// The size refusal of `parseFunctionContract` (b4m-core/common/src/schemas/functionContract.ts).
+const CONTRACT_SIZE_PROBLEM = /^FUNCTION is \d+ bytes/;
 
 export interface CallableFunctionActor {
   id: string;
@@ -36,6 +56,11 @@ export interface CallableFunctionPinInput {
   expectedVersion: number;
   /** The caller's read of `FUNCTION`, checked with `parseFunctionContract`. */
   contract: unknown;
+}
+
+export interface CallableFunctionRepinInput extends CallableFunctionPinInput {
+  /** Confirms an update that breaks the promoted contract; ignored before the first promotion. */
+  acceptBreaking?: boolean;
 }
 
 const userOwner = (actor: CallableFunctionActor): CallableFunctionOwner => ({ ownerType: 'user', ownerKey: actor.id });
@@ -159,7 +184,6 @@ export async function createCallableFunction(
         userId: actor.id,
         slug: contract.name,
         description: contract.description,
-        state: 'draft',
         enabled: true,
         pin,
         contract,
@@ -191,11 +215,14 @@ export async function getCallableFunction(actor: CallableFunctionActor, id: stri
   return toCallableFunctionDetail(fn, await readHead(actor, fn.pin.artifactId));
 }
 
-/** Moves the pin to the artifact's current version. The name is fixed at create, so a renamed contract is refused. */
+/**
+ * Moves the pin to the artifact's current version. The name is fixed at create, so a renamed contract is refused, as
+ * is one that could break callers of the pinned contract (`diffFunctionContracts`).
+ */
 export async function repinCallableFunction(
   actor: CallableFunctionActor,
   id: string,
-  input: CallableFunctionPinInput
+  input: CallableFunctionRepinInput
 ): Promise<ICallableFunctionPublic> {
   const owner = userOwner(actor);
   const current = await callableFunctionRepository.findByIdForOwner(id, owner);
@@ -208,9 +235,18 @@ export async function repinCallableFunction(
   );
   if (contract.name !== current.slug) {
     throw new ConflictError(
-      `The function name in the code changed from ${current.slug} to ${contract.name}. Delete this tool and save it again to use the new name.`,
+      `The function name in the code changed from ${current.slug} to ${contract.name}. Save this version as a new tool under the new name.`,
       { code: 'name_changed' }
     );
+  }
+  // Once promoted, callers rely on the promoted contract. Breaking it is allowed only when confirmed, since the
+  // tool returns to draft and promotion will refuse this version.
+  if (!current.promoted || !input.acceptBreaking) {
+    const diff = diffFunctionContracts(current.promoted?.contract ?? current.contract, contract);
+    if (!diff) throw new CallableFunctionContractUnreadableError();
+    if (diff.breaking.length > 0) {
+      throw new CallableFunctionBreakingChangeError(diff.breaking, current.promoted?.seq);
+    }
   }
   const repinned = await callableFunctionRepository.repin(id, owner, current.pin.version, {
     pin,
@@ -236,7 +272,115 @@ export async function setCallableFunctionEnabled(
   return toCallableFunctionPublic(fn, await readHead(actor, fn.pin.artifactId));
 }
 
-/** The pinned code goes with the record; the artifact is not touched. */
+export async function setCallableFunctionApproval(
+  actor: CallableFunctionActor,
+  id: string,
+  approval: McpToolApprovalMode
+): Promise<ICallableFunctionPublic> {
+  const fn = await callableFunctionRepository.setApproval(id, userOwner(actor), approval);
+  if (!fn) throw notFound();
+  return toCallableFunctionPublic(fn, await readHead(actor, fn.pin.artifactId));
+}
+
+/** The actor's functions chat may offer: live, turned on, and with their artifact still in place. */
+export async function listOfferedCallableFunctions(
+  actor: CallableFunctionActor,
+  options: { limit?: number; excludeAlwaysAsk?: boolean } = {}
+): Promise<ICallableFunctionOfferable[]> {
+  const { limit, excludeAlwaysAsk } = options;
+  const functions = await callableFunctionRepository.listLiveForOwner(userOwner(actor), { excludeAlwaysAsk });
+  const heads = await readHeads(
+    actor,
+    functions.map(fn => fn.pin.artifactId)
+  );
+  const live = functions.filter(
+    fn => effectiveCallableFunctionStatus(fn, heads.get(fn.pin.artifactId) ?? null) === 'live'
+  );
+  // After the head filter, so a function whose artifact is gone never takes one of the `limit` slots.
+  return limit ? live.slice(0, limit) : live;
+}
+
+/**
+ * Replaces the owner's worked examples, each checked against the stored contract the way declared tests are. A live
+ * tool whose examples change is `unverified` until the next promotion.
+ */
+export async function setCallableFunctionExamples(
+  actor: CallableFunctionActor,
+  id: string,
+  examples: CallableFunctionExample[]
+): Promise<ICallableFunctionPublic> {
+  const owner = userOwner(actor);
+  const current = await callableFunctionRepository.findByIdForOwner(id, owner);
+  if (!current) throw notFound();
+  const { maxExamples, maxCitationLength } = CALLABLE_FUNCTION_EXAMPLE_LIMITS;
+  if (examples.length > maxExamples) {
+    throw new BadRequestError(`At most ${maxExamples} worked examples are allowed.`, { code: 'too_many_examples' });
+  }
+  const problems: FunctionContractProblem[] = [];
+  examples.forEach((example, index) => {
+    const citation = example.citation.trim();
+    if (!citation || citation.length > maxCitationLength) {
+      problems.push({
+        path: `examples.${index}.citation`,
+        message: `must name a source a reader can check, in at most ${maxCitationLength} characters`,
+      });
+    }
+  });
+  // Checked as declared tests of the stored contract, so an example obeys the same rules as a test in the code.
+  const cases = examples.map(({ name, input, expected, tolerance }) => ({
+    name,
+    input,
+    expected,
+    ...(tolerance ? { tolerance } : {}),
+  }));
+  const parsed = parseFunctionContract({ ...current.contract, tests: cases });
+  if (!parsed.ok) {
+    for (const problem of parsed.problems) {
+      if (problem.path === '' && CONTRACT_SIZE_PROBLEM.test(problem.message)) {
+        problems.push({
+          path: 'examples',
+          message: `together with the contract must fit in ${FUNCTION_CONTRACT_LIMITS.maxContractBytes} bytes; shorten or remove an example`,
+        });
+        continue;
+      }
+      const path = problem.path.startsWith('tests') ? `examples${problem.path.slice(5)}` : problem.path;
+      problems.push({ ...problem, path });
+    }
+  }
+  if (problems.length > 0) {
+    throw new BadRequestError('The worked examples have problems.', { code: 'invalid_examples', problems });
+  }
+  const next = examples.map(example => ({ ...example, citation: example.citation.trim() }));
+  // A live tool's label stands for the examples it was promoted with; changed ones have not run on the server.
+  const unverify = current.state === 'live' && canonicalJson(next) !== canonicalJson(current.examples ?? []);
+  const saved = await callableFunctionRepository.setExamples(id, owner, { updatedAt: current.updatedAt }, next, {
+    unverify,
+  });
+  if (!saved) {
+    throw new ConflictError('The tool changed since you opened it. Reload it and try again.', {
+      code: 'version_changed',
+    });
+  }
+  return toCallableFunctionPublic(saved, await readHead(actor, saved.pin.artifactId));
+}
+
+export const CALLABLE_FUNCTION_CALLS_WINDOW_DAYS = 30;
+const RECENT_CALLS = 5;
+
+/** The owner's own calls of their function over the last 30 days: counts by outcome and the latest few. */
+export async function summarizeCallableFunctionCalls(
+  actor: CallableFunctionActor,
+  id: string,
+  now: Date = new Date()
+): Promise<CallableFunctionCallSummary> {
+  const fn = await callableFunctionRepository.findByIdForOwner(id, userOwner(actor));
+  if (!fn) throw notFound();
+  const since = new Date(now.getTime() - CALLABLE_FUNCTION_CALLS_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  return callableFunctionCallRepository.summarizeForCaller(fn.id, actor.id, since, RECENT_CALLS);
+}
+
+/** The pinned code and recipients' reviews go with the record; the artifact is not touched. */
 export async function deleteCallableFunction(actor: CallableFunctionActor, id: string): Promise<void> {
   if (!(await callableFunctionRepository.deleteForOwner(id, userOwner(actor)))) throw notFound();
+  await callableFunctionReviewRepository.deleteForFunction(id);
 }

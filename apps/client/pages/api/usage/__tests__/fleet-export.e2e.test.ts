@@ -9,6 +9,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { connectDB, CounterLog, UsageEvent, User } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { FLEET_USAGE_MAX_ROWS, resolveApiCompletionSource } from '@bike4mind/common';
 import handler, { __resetMisconfiguredWarning } from '../fleet-export';
 
@@ -254,7 +255,7 @@ describe('Fleet export route against real Mongo', () => {
   });
 
   it('answers 500 without data or an audit row when the denial audit write fails', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     vi.spyOn(CounterLog, 'updateOne').mockRejectedValueOnce(new Error('audit unavailable'));
     const { status, body } = await call({ authorization: 'Bearer wrong' });
     expect(status).toBe(500);
@@ -267,7 +268,7 @@ describe('Fleet export route against real Mongo', () => {
   it('answers 404 without connecting or auditing when the route is not provisioned', async () => {
     __resetMisconfiguredWarning();
     vi.mocked(connectDB).mockClear();
-    const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logError = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const read = vi.spyOn(UsageEvent, 'find');
     for (const config of [
       '',
@@ -332,7 +333,7 @@ describe('Fleet export route against real Mongo', () => {
   });
 
   it('never releases invalid accounting or data whose audit write failed', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     await UsageEvent.collection.insertOne(event({ costUsd: -1 }));
     expect((await call()).status).toBe(500);
     await UsageEvent.deleteMany({});

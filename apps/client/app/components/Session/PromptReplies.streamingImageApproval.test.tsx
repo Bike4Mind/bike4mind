@@ -6,6 +6,9 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
 import PromptReplies from './PromptReplies';
 
+// jsdom has no Element.scrollTo, and the reply's auto-scroll timer can fire after a test ends.
+Element.prototype.scrollTo = vi.fn();
+
 vi.mock('./ImageContainer', () => ({
   default: ({ src }: { src: string }) => <img data-testid="reply-image-loaded" src={src} alt="" />,
 }));
@@ -43,7 +46,7 @@ const Reply = ({ text, status }: { text: string; status: string }) => (
   <QueryClientProvider client={queryClient}>
     <CssVarsProvider theme={appTheme}>
       <PromptReplies
-        messageData={{ id: 'quest-r3', sessionId: 'session-1', questMasterReply: text, status } as never}
+        messageData={{ id: 'quest-r3', sessionId: 'session-1', replies: [text], status } as never}
         onSendMessage={sendMessage}
       />
     </CssVarsProvider>

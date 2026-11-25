@@ -17,17 +17,11 @@ import {
   Radio,
   RadioGroup,
   Checkbox,
-  Table,
   LinearProgress,
   Accordion,
   AccordionSummary,
   AccordionDetails,
   AccordionGroup,
-  Modal,
-  ModalDialog,
-  ModalClose,
-  DialogTitle,
-  DialogContent,
   IconButton,
 } from '@mui/joy';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -62,6 +56,9 @@ import EmailStatusSummary from './EmailStatusSummary';
 import EmailActivityHistory from './EmailActivityHistory';
 import EmailPreviewModal from './EmailPreviewModal';
 import { parseTestEmailAddresses } from './parseTestEmailAddresses';
+import { AdminDialog } from '../shared/AdminDialog';
+import { DataTable, type DataColumn } from '../shared/DataTable';
+import { EmptyState } from '../shared/EmptyState';
 
 // Email attempt for Activity History
 interface EmailAttempt {
@@ -128,6 +125,12 @@ interface RecipientPreview {
   type: 'user' | 'subscriber' | 'direct';
 }
 
+const recipientColumns: DataColumn<RecipientPreview>[] = [
+  { id: 'email', label: 'Email', width: '60%', render: r => r.email },
+  { id: 'name', label: 'Name', width: '40%', render: r => r.name || '-' },
+];
+const getRecipientId = (r: RecipientPreview) => r.email;
+
 interface EmailJobDetailProps {
   jobId?: string; // undefined for create mode
   onBack: () => void;
@@ -166,8 +169,6 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   // Recipients list state
   const [viewUsersSearch, setViewUsersSearch] = useState('');
   const [viewUsersModalOpen, setViewUsersModalOpen] = useState(false);
-  const [viewUsersPage, setViewUsersPage] = useState(1);
-  const USERS_PER_PAGE = 25;
 
   // Email Preview Modal state
   const [emailPreviewModalOpen, setEmailPreviewModalOpen] = useState(false);
@@ -463,6 +464,32 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
     );
   }
 
+  const renderRecipientsEmpty = (testId: string) =>
+    viewUsersSearch ? (
+      <EmptyState
+        title="No recipients match your search"
+        action={
+          <Button variant="outlined" onClick={() => setViewUsersSearch('')} data-testid={`${testId}-clear-search-btn`}>
+            Clear search
+          </Button>
+        }
+      />
+    ) : (
+      <EmptyState
+        title="No recipients found"
+        action={
+          <Button
+            variant="outlined"
+            onClick={handlePreviewRecipients}
+            loading={previewRecipientsMutation.isPending}
+            data-testid={`${testId}-refresh-btn`}
+          >
+            Refresh recipients
+          </Button>
+        }
+      />
+    );
+
   // Scrolling layout - no nested scroll areas
   return (
     <Box sx={{ pb: 4 }}>
@@ -732,28 +759,21 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                       </Box>
 
                       {/* Recipients List - Compact inline preview */}
-                      <Box sx={{ maxHeight: 150, overflow: 'auto' }}>
-                        <Table size="sm" stickyHeader>
-                          <thead>
-                            <tr>
-                              <th style={{ width: '60%' }}>Email</th>
-                              <th style={{ width: '40%' }}>Name</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {filteredViewUsersRecipients.slice(0, 5).map(recipient => (
-                              <tr key={recipient.email}>
-                                <td>
-                                  <Typography level="body-xs">{recipient.email}</Typography>
-                                </td>
-                                <td>
-                                  <Typography level="body-xs">{recipient.name || '-'}</Typography>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </Table>
-                      </Box>
+                      <DataTable
+                        label="Recipients preview"
+                        testId="email-job-recipients-inline-table"
+                        rows={filteredViewUsersRecipients.slice(0, 5)}
+                        columns={recipientColumns}
+                        getRowId={getRecipientId}
+                        pagination={false}
+                        framed={false}
+                        // At most five rows, so the table never needs its own scroll box.
+                        maxHeight="none"
+                        // The form column is a fixed half of the page, so the table squeezes to fit it.
+                        minWidth="0"
+                        onRetry={handlePreviewRecipients}
+                        empty={renderRecipientsEmpty('email-job-recipients-inline-table')}
+                      />
 
                       {/* View All Button */}
                       {filteredViewUsersRecipients.length > 5 && (
@@ -763,20 +783,10 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                             variant="soft"
                             color="primary"
                             startDecorator={<PeopleIcon />}
-                            onClick={() => {
-                              setViewUsersPage(1);
-                              setViewUsersModalOpen(true);
-                            }}
+                            onClick={() => setViewUsersModalOpen(true)}
                           >
                             View All {filteredViewUsersRecipients.length} Recipients
                           </Button>
-                        </Box>
-                      )}
-                      {filteredViewUsersRecipients.length === 0 && viewUsersSearch && (
-                        <Box sx={{ p: 2, textAlign: 'center' }}>
-                          <Typography level="body-sm" color="neutral">
-                            No recipients match your search
-                          </Typography>
                         </Box>
                       )}
                     </Sheet>
@@ -1091,6 +1101,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                 onClick={() => setFullscreenPreviewOpen(true)}
                 disabled={!previewHtml}
                 title="Full screen preview"
+                data-testid="email-job-fullscreen-btn"
               >
                 <FullscreenIcon />
               </IconButton>
@@ -1188,200 +1199,115 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
         attemptId={selectedAttempt?.id || null}
       />
 
-      {/* View All Recipients Modal */}
-      <Modal open={viewUsersModalOpen} onClose={() => setViewUsersModalOpen(false)}>
-        <ModalDialog sx={{ width: 600, maxHeight: '80vh', overflow: 'hidden' }}>
-          <ModalClose />
-          <DialogTitle>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <PeopleIcon />
-              <span>Recipients ({recipientPreviewData?.eligibleCount || 0} total)</span>
-            </Stack>
-          </DialogTitle>
-          <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: 0, overflow: 'hidden' }}>
-            {/* Info about limited preview */}
-            {recipientPreviewData?.hasMore && (
-              <Alert color="neutral" variant="soft" sx={{ mx: 2, mt: 1 }}>
-                Showing first {recipientPreviewData.recipients.length} of {recipientPreviewData.eligibleCount}{' '}
-                recipients for preview.
-              </Alert>
-            )}
+      <AdminDialog
+        open={viewUsersModalOpen}
+        onClose={() => setViewUsersModalOpen(false)}
+        title={`Recipients (${recipientPreviewData?.eligibleCount ?? 0} total)`}
+        width={600}
+        data-testid="email-job-recipients-dialog"
+      >
+        <Stack gap={2}>
+          {recipientPreviewData?.hasMore && (
+            <Alert color="neutral" variant="soft">
+              Showing first {recipientPreviewData.recipients.length} of {recipientPreviewData.eligibleCount} recipients
+              for preview.
+            </Alert>
+          )}
+          <Input
+            size="sm"
+            placeholder="Search by email or name..."
+            value={viewUsersSearch}
+            onChange={e => setViewUsersSearch(e.target.value)}
+            startDecorator={<SearchIcon />}
+          />
+          <DataTable
+            label="Recipients"
+            testId="email-job-recipients-table"
+            rows={filteredViewUsersRecipients}
+            columns={recipientColumns}
+            getRowId={getRecipientId}
+            pageResetKey={viewUsersSearch}
+            maxHeight="55vh"
+            minWidth="16rem"
+            onRetry={handlePreviewRecipients}
+            empty={renderRecipientsEmpty('email-job-recipients-table')}
+          />
+        </Stack>
+      </AdminDialog>
 
-            {/* Search */}
-            <Box sx={{ px: 2, pt: recipientPreviewData?.hasMore ? 0 : 1 }}>
-              <Input
-                size="sm"
-                placeholder="Search by email or name..."
-                value={viewUsersSearch}
-                onChange={e => {
-                  setViewUsersSearch(e.target.value);
-                  setViewUsersPage(1);
-                }}
-                startDecorator={<SearchIcon />}
+      <AdminDialog
+        open={fullscreenPreviewOpen}
+        onClose={() => setFullscreenPreviewOpen(false)}
+        title="Email preview"
+        width={1200}
+        data-testid="email-job-fullscreen-preview-dialog"
+      >
+        <Stack gap={2}>
+          <Select
+            size="sm"
+            placeholder={
+              recipientPreviewData
+                ? `Select recipient (${recipientPreviewData.eligibleCount} total)...`
+                : 'Loading recipients...'
+            }
+            disabled={!recipientPreviewData || recipientPreviewData.recipients.length === 0}
+            value={selectedPreviewRecipient?.email || ''}
+            onChange={(_, value) => {
+              const recipient = recipientPreviewData?.recipients.find(r => r.email === value);
+              setSelectedPreviewRecipient(recipient || null);
+            }}
+            sx={{ width: '100%', maxWidth: 420 }}
+            data-testid="email-job-preview-recipient-select"
+          >
+            {recipientPreviewData?.recipients.map(recipient => (
+              <Option key={recipient.email} value={recipient.email}>
+                {recipient.email}
+                {recipient.name ? ` - ${recipient.name}` : ''}
+              </Option>
+            ))}
+            {recipientPreviewData?.hasMore && (
+              <Option disabled value="__more__">
+                ... and {recipientPreviewData.eligibleCount - recipientPreviewData.recipients.length} more
+              </Option>
+            )}
+          </Select>
+          <Box>
+            {selectedPreviewRecipient && (
+              <Chip size="sm" variant="soft" color="primary" sx={{ mb: 1 }}>
+                Previewing as: {selectedPreviewRecipient.name || selectedPreviewRecipient.email}
+              </Chip>
+            )}
+            <Typography level="body-xs" sx={{ color: 'neutral.500', mb: 0.5 }}>
+              Subject:
+            </Typography>
+            <Typography level="body-lg" fontWeight="md">
+              {formData.isTestMode ? '[TEST] ' : ''}
+              {renderedSubject || 'No subject'}
+            </Typography>
+          </Box>
+          {previewHtml && (
+            // Leaves room for the title, select and subject under the dialog's max height, so only the email scrolls.
+            <Box
+              sx={{
+                height: 'calc(100vh - 340px)',
+                minHeight: 320,
+                bgcolor: 'white',
+                borderRadius: 'md',
+                overflow: 'hidden',
+              }}
+            >
+              <iframe
+                srcDoc={previewHtml}
+                // Opaque-origin, no scripts: rendered email HTML must not run with the
+                // admin's app-origin session.
+                sandbox=""
+                style={{ width: '100%', height: '100%', border: 'none' }}
+                title="Email Preview Fullscreen"
               />
             </Box>
-
-            {/* Recipients Table */}
-            <Box sx={{ flex: 1, overflow: 'auto', px: 2 }}>
-              <Table size="sm" stickyHeader>
-                <thead>
-                  <tr>
-                    <th style={{ width: '60%' }}>Email</th>
-                    <th style={{ width: '40%' }}>Name</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredViewUsersRecipients
-                    .slice((viewUsersPage - 1) * USERS_PER_PAGE, viewUsersPage * USERS_PER_PAGE)
-                    .map(recipient => (
-                      <tr key={recipient.email}>
-                        <td>
-                          <Typography level="body-sm">{recipient.email}</Typography>
-                        </td>
-                        <td>
-                          <Typography level="body-sm">{recipient.name || '-'}</Typography>
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </Table>
-              {filteredViewUsersRecipients.length === 0 && (
-                <Box sx={{ p: 4, textAlign: 'center' }}>
-                  <Typography level="body-md" color="neutral">
-                    {viewUsersSearch ? 'No recipients match your search' : 'No recipients found'}
-                  </Typography>
-                </Box>
-              )}
-            </Box>
-
-            {/* Pagination */}
-            {Math.ceil(filteredViewUsersRecipients.length / USERS_PER_PAGE) > 1 && (
-              <Box
-                sx={{
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  gap: 2,
-                  p: 2,
-                  borderTop: '1px solid',
-                  borderColor: 'divider',
-                }}
-              >
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  disabled={viewUsersPage <= 1}
-                  onClick={() => setViewUsersPage(p => p - 1)}
-                >
-                  Previous
-                </Button>
-                <Typography level="body-sm">
-                  Page {viewUsersPage} of {Math.ceil(filteredViewUsersRecipients.length / USERS_PER_PAGE)}
-                </Typography>
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  disabled={viewUsersPage >= Math.ceil(filteredViewUsersRecipients.length / USERS_PER_PAGE)}
-                  onClick={() => setViewUsersPage(p => p + 1)}
-                >
-                  Next
-                </Button>
-              </Box>
-            )}
-          </DialogContent>
-        </ModalDialog>
-      </Modal>
-
-      {/* Fullscreen Preview Modal */}
-      <Modal open={fullscreenPreviewOpen} onClose={() => setFullscreenPreviewOpen(false)}>
-        <ModalDialog
-          size="lg"
-          sx={{
-            width: '95vw',
-            height: '95vh',
-            maxWidth: '95vw',
-            maxHeight: '95vh',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
-          <ModalClose />
-          <DialogTitle sx={{ pb: 1 }}>
-            <Stack
-              direction="row"
-              spacing={2}
-              alignItems="center"
-              justifyContent="space-between"
-              sx={{ width: '100%', pr: 4 }}
-            >
-              <Typography level="title-lg">Email Preview</Typography>
-              {/* Recipient Selection in Fullscreen */}
-              <Select
-                size="sm"
-                placeholder={
-                  recipientPreviewData
-                    ? `Select recipient (${recipientPreviewData.eligibleCount} total)...`
-                    : 'Loading recipients...'
-                }
-                disabled={!recipientPreviewData || recipientPreviewData.recipients.length === 0}
-                value={selectedPreviewRecipient?.email || ''}
-                onChange={(_, value) => {
-                  const recipient = recipientPreviewData?.recipients.find(r => r.email === value);
-                  setSelectedPreviewRecipient(recipient || null);
-                }}
-                sx={{ minWidth: 300 }}
-              >
-                {recipientPreviewData?.recipients.map(recipient => (
-                  <Option key={recipient.email} value={recipient.email}>
-                    {recipient.email}
-                    {recipient.name ? ` - ${recipient.name}` : ''}
-                  </Option>
-                ))}
-                {recipientPreviewData?.hasMore && (
-                  <Option disabled value="__more__">
-                    ... and {recipientPreviewData.eligibleCount - recipientPreviewData.recipients.length} more
-                  </Option>
-                )}
-              </Select>
-            </Stack>
-          </DialogTitle>
-          <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', flex: 1 }}>
-            {/* Subject Preview */}
-            <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.surface' }}>
-              {selectedPreviewRecipient && (
-                <Chip size="sm" variant="soft" color="primary" sx={{ mb: 1 }}>
-                  Previewing as: {selectedPreviewRecipient.name || selectedPreviewRecipient.email}
-                </Chip>
-              )}
-              <Typography level="body-xs" sx={{ color: 'neutral.500', mb: 0.5 }}>
-                Subject:
-              </Typography>
-              <Typography level="body-lg" fontWeight="md">
-                {formData.isTestMode ? '[TEST] ' : ''}
-                {renderedSubject || 'No subject'}
-              </Typography>
-            </Box>
-
-            {/* Full HTML Preview */}
-            <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'white' }}>
-              {previewHtml && (
-                <iframe
-                  srcDoc={previewHtml}
-                  // Opaque-origin, no scripts: rendered email HTML must not run with the
-                  // admin's app-origin session.
-                  sandbox=""
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    border: 'none',
-                  }}
-                  title="Email Preview Fullscreen"
-                />
-              )}
-            </Box>
-          </DialogContent>
-        </ModalDialog>
-      </Modal>
+          )}
+        </Stack>
+      </AdminDialog>
     </Box>
   );
 }

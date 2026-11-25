@@ -146,6 +146,8 @@ export interface ClaudeImportState {
   web: {
     settings: WebSyncSettings;
     running: boolean;
+    /** While running: notebooks this run has to read (new or changed on the web) and how many it has read. */
+    progress?: { done: number; total: number };
     lastSyncAt: string | null;
     lastSyncMs: number | null;
     /** Notebooks on the web; imported includes the ones continued here. */

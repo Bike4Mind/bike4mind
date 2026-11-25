@@ -33,9 +33,11 @@ export function transitPhase(state: AgentState, activity?: string): TransitPhase
     case 'done':
       return 'done';
     case 'failed':
+    case 'paused':
     case 'stopped':
       return 'off-line';
     case 'needs-you':
+    case 'waiting':
     case 'idle':
       return 'waiting';
     case 'working': {

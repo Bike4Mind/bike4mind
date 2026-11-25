@@ -28,8 +28,8 @@ describe('useSendMessage - skipAutoOffers reaches both dispatch paths (#2961)', 
     expect(callSite).toMatch(/\bskipAutoOffers\b/);
   });
 
-  it('forwards skipAutoOffers on the /llm command-map dispatch (handleCommand)', () => {
-    const handlerIdx = source.indexOf('return await handleCommand(commandHandlers,');
+  it('forwards skipAutoOffers on the /llm command-map dispatch (dispatchSend)', () => {
+    const handlerIdx = source.indexOf('return await dispatchSend(commandHandlers, imageSendMode,');
     expect(handlerIdx).toBeGreaterThan(-1);
     const callSite = source.slice(handlerIdx, source.indexOf('});', handlerIdx));
     expect(callSite).toMatch(/^\s*skipAutoOffers,\s*$/m);

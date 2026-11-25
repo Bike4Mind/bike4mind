@@ -106,6 +106,7 @@ Copy `.env.e2e.example` to `.env.e2e` and fill in the values:
 ```
 e2e/
 ├── core.setup.ts              # Creates core test users (admin/manager) and seeds auth state
+├── admin.setup.ts             # Signs the setup admin in again right before the admin project
 ├── global-setup.ts            # Pre-run cleanup of stale test data
 ├── global-teardown.ts         # Post-run cleanup
 ├── fixtures.ts                # Custom fixtures (page objects, helpers)
@@ -177,6 +178,10 @@ run before the tests:
 4. **Saves credentials** to `.auth/*-data.json` (including tokens) for API-based test setup and mid-test user switching
 5. **Creates invite code** for the signup spec
 
+An access token lasts 30 minutes and the `admin` project starts last, so `admin.setup.ts`
+(project `setup-admin`) signs the setup admin in again through OTC right before it and saves the
+new tokens over the old ones.
+
 For mid-test user switching, `seedAuthOnPage` swaps the same cookie on a live
 page's context and navigates to `/` to bootstrap the authenticated app. An agent
 (Claude Code + Playwright MCP) authenticates the same way — by cookie-seeding, not
@@ -244,7 +249,7 @@ Cloudflare's widget script and adds the secret header to the browser's `/api/otc
 `bypassTurnstile(page)` before it requests a code.
 
 **MFA** needs no extra infra: the MFA setup endpoint returns the `totpSecret`, so a test
-can enroll, then generate valid codes in-test with `otplib`/`speakeasy`.
+can enroll, then generate valid codes in-test with `generateTotp` in `helpers/mfa.ts`.
 
 The OTC verification logic is also covered by unit tests in `b4m-core/services`
 (`sendOTC.test.ts` / `verifyOTC.test.ts`), the endpoint gating by `apps/client/__tests__/otc-code.test.ts`,

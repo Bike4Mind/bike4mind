@@ -1,8 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
-import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import path from 'path';
 
-dotenv.config({ path: path.resolve(__dirname, '../.env.e2e') });
+const envFile = path.resolve(__dirname, '../.env.e2e');
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 // Standalone entry point: this check replaces pods on the target, so it is never part of the
 // default suite in playwright.config.ts and takes none of its setup projects or cleanup sweep.

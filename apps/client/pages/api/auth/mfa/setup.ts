@@ -56,7 +56,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
         res.json(result);
       } catch (error: any) {
-        console.error('Error setting up MFA:', error);
+        req.logger.error('Error setting up MFA', { error });
         res.status(400).json({ error: error.message || 'Failed to setup MFA' });
       }
     })

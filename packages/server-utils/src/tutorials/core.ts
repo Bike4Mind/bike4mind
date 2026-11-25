@@ -3,11 +3,11 @@ import type { TutorialRequest } from './routes/types';
 import { isFullAdmin } from '@bike4mind/common';
 import type { EntitlementUser } from '../entitlements/index';
 import { coreTutorialDepsFor } from './coreDeps';
+import { coreModels } from './coreModels';
 import { coreKnownSelectors } from './coreDraftProfile';
 import { CORE_TUTORIAL_CONTENT } from './content';
 import { CORE_TUTORIAL_SETTING } from './settingName';
 import { tutorialContent } from './effectiveModules';
-import { tutorialModels } from './models';
 import type { FieldMap } from './overrides';
 import { CORE_TUTORIALS, resolveCoreTutorial } from './registry';
 import type { TutorialSummary } from './routes/index';
@@ -18,7 +18,7 @@ import editableFields from './editableFields.json';
 
 export { CORE_TUTORIAL_SETTING };
 
-export const coreModels = tutorialModels({ prefix: '', modelPrefix: 'Core' });
+export { coreModels };
 export { coreKnownSelectors };
 export const coreOverridePolicy = { editable: editableFields as FieldMap };
 

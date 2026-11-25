@@ -407,7 +407,6 @@ export class CommandHandler {
           },
           questId: questId, // Use existing quest instead of creating a new one
           extraContextMessages: extraContextMessages.length > 0 ? extraContextMessages : undefined, // Pass system prompt + Slack context as structured messages
-          enableQuestMaster: false,
           enableMementos: false,
           enableArtifacts: false,
           enableAgents: true,

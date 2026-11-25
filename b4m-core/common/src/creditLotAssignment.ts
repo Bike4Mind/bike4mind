@@ -44,6 +44,33 @@ export function assignConsumptionFIFO<T extends CreditLotLike>(lots: T[], consum
   });
 }
 
+export interface ExpiringLotLike extends CreditLotLike {
+  expiresAt: Date;
+  settledAt?: Date;
+}
+
+export interface PendingCreditExpiry {
+  /** Unspent part of the lot: what the sweep would deduct if nothing more were spent. */
+  amount: number;
+  expiresAt: Date;
+}
+
+/**
+ * What a holder's balance still owes to expiry, soonest first: each unsettled lot's
+ * unspent remainder under the same soonest-expiry-first assignment the daily sweep
+ * (apps/workers/src/cron/creditLotSweep.ts) uses. A lot already past `expiresAt` but not
+ * yet swept is kept, since the next sweep will deduct it. A settled lot is left out: the
+ * sweep treats it as fully consumed. Lots must be sorted ascending by expiresAt.
+ */
+export function pendingCreditExpiries<T extends ExpiringLotLike>(
+  lots: T[],
+  currentCredits: number
+): PendingCreditExpiry[] {
+  return assignConsumptionFIFO(lots, computeConsumption(lots, currentCredits))
+    .filter(({ lot, remaining }) => remaining > 0 && !lot.settledAt)
+    .map(({ lot, remaining }) => ({ amount: remaining, expiresAt: lot.expiresAt }));
+}
+
 /** Legacy lots are the migration backfill of pre-lot balances, so their origin is not known. */
 export const FUNDING_SOURCE_BY_LOT_SOURCE: Record<CreditLotSource, UsageFundingSource> = {
   pack: 'purchased',

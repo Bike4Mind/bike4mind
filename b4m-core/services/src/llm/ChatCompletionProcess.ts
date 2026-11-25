@@ -1,5 +1,3 @@
-import { isQuestMasterCompatible } from './questMasterEligibility';
-import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import {
   type EmbeddingCredential,
   type EmbeddingRuntime,
@@ -81,6 +79,7 @@ import {
   withholdsReasoning,
   type ThinkingVisibility,
   readOrgModelPolicy,
+  createMutex,
 } from '@bike4mind/common';
 import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import { resolveUsageProject } from './usageProject';
@@ -246,7 +245,6 @@ import { logLlmUsageSettled } from './llmUsageSettledLog';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
-import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
@@ -256,7 +254,13 @@ import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import type { ImageToolConfig } from './tools/implementation/imageGeneration';
-import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
+import {
+  applyModerationHit,
+  MODERATION_POLICY,
+  moderationEscalationAlert,
+  moderationThrottleKey,
+  type ModerationEscalationAlert,
+} from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
 import { createStreamingStatusSender } from './streamingStatusSender';
@@ -270,7 +274,6 @@ import {
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
   ProjectFeature,
-  QuestMasterFeature,
   SlackFeature,
   SummarizeNotebookFeature,
   IChatCompletionServiceOptions,
@@ -328,6 +331,7 @@ import {
   getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
   checkNewAccountSpendCap,
+  assertInterventionSpendAllowed,
 } from '../creditService';
 import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
 import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
@@ -608,7 +612,7 @@ export function resolveModelAwareHistoryCount({
  */
 const SESSION_LENGTH_WARNING_THRESHOLD = 100;
 
-const questSaveMutex = new Mutex();
+const questSaveMutex = createMutex();
 // Identity and server-owned keys; `deletedAt` belongs to soft delete, never to a turn's save.
 // `lakeSaveCount` moves only by claimLakeSaveSlot's atomic $inc; writing the in-memory copy back
 // would reset the count to what it was when the turn loaded the quest.
@@ -626,7 +630,6 @@ interface ProcessInitContext {
   parsedBody: z.infer<typeof QuestStartBodySchema>;
   quest: IChatHistoryItemDocument;
   historyCount: number;
-  enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableAgents?: boolean;
   message: string;
@@ -636,7 +639,6 @@ interface ProcessInitContext {
   enabledTools: (z.infer<typeof b4mLLMTools> | string)[];
   projectId?: string;
   organizationId?: string | null;
-  questMaster?: z.infer<typeof QuestStartBodySchema>['questMaster'];
   toolPromptId?: string;
   researchMode?: z.infer<typeof QuestStartBodySchema>['researchMode'];
   embeddingModel?: string;
@@ -1143,10 +1145,10 @@ export class ChatCompletionProcess {
   public logEvent: IChatCompletionServiceOptions['logEvent'];
   public queue: IChatCompletionServiceOptions['queue'];
   public autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
+  public notifyModerationEscalation: IChatCompletionServiceOptions['notifyModerationEscalation'];
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
-  public createCompletionMeter: IChatCompletionServiceOptions['createCompletionMeter'];
   public features: Map<featureNames, ChatCompletionFeature>;
   public userAbility: MongoAbility | null = null;
   public sessionId: string;
@@ -1329,6 +1331,7 @@ export class ChatCompletionProcess {
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private customMcp: IChatCompletionServiceOptions['customMcp'];
+  private customMcpDeadline: IChatCompletionServiceOptions['customMcpDeadline'];
   private statusManager: StatusManager | null = null;
   private systemFilesCache: Map<string, [string[], string[]]> | null = null;
   private abortControllers: Map<string, AbortController> | null = null;
@@ -1405,6 +1408,7 @@ export class ChatCompletionProcess {
     this.logEvent = options.logEvent;
     this.queue = options.queue;
     this.autoNameSession = options.autoNameSession;
+    this.notifyModerationEscalation = options.notifyModerationEscalation;
     this.summarizeSession = options.summarizeSession;
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
@@ -1414,14 +1418,13 @@ export class ChatCompletionProcess {
     this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
-    this.admitQuestStart = options.admitQuestStart;
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
+    this.customMcpDeadline = options.customMcpDeadline;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
-    this.createCompletionMeter = options.createCompletionMeter;
     this.sessionId = options.sessionId;
     this.cacheRepository = options.cacheRepository;
     this.publishTelemetryAlert = options.publishTelemetryAlert;
@@ -2012,7 +2015,6 @@ export class ChatCompletionProcess {
       tools: enabledTools = [],
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       embeddingModel,
@@ -2063,12 +2065,7 @@ export class ChatCompletionProcess {
       }
     }
 
-    const {
-      historyCount: requestedHistoryCount = DEFAULT_HISTORY_COUNT,
-      enableQuestMaster,
-      enableMementos,
-      enableAgents,
-    } = parsedBody;
+    const { historyCount: requestedHistoryCount = DEFAULT_HISTORY_COUNT, enableMementos, enableAgents } = parsedBody;
 
     // The one place the client's slider sentinel becomes the internal marker. Everything
     // downstream works in that vocabulary, so no later step has to know the wire value.
@@ -2080,7 +2077,6 @@ export class ChatCompletionProcess {
       parsedBody,
       quest,
       historyCount,
-      enableQuestMaster,
       enableMementos,
       enableAgents,
       message,
@@ -2090,7 +2086,6 @@ export class ChatCompletionProcess {
       enabledTools: finalEnabledTools,
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       embeddingModel,
@@ -2206,8 +2201,6 @@ export class ChatCompletionProcess {
     return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
   }
 
-  private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
-
   public async process({
     body,
     logger,
@@ -2273,21 +2266,6 @@ export class ChatCompletionProcess {
       return;
     }
 
-    if (
-      body.enableQuestMaster &&
-      !body.questMaster &&
-      isQuestMasterCompatible(resolveSuccessorChain(body.params.model)) &&
-      (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true
-    ) {
-      // A message queued without admission (sent before this check shipped, or EnableQuestMaster turned on
-      // after invoke) is admitted here; the quest id stays the same across redelivery.
-      if (!body.questMasterStartId || !body.questAdmittedAs) {
-        await this.admitQuestStart(this.user, body.questId);
-      } else if (body.questAdmittedAs === 'free') {
-        await this.admitQuestStart(this.user, body.questMasterStartId);
-      }
-    }
-
     // Started now so its reads overlap context assembly instead of delaying the first token.
     void this.resolveThinkingVisibility();
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
@@ -2297,7 +2275,6 @@ export class ChatCompletionProcess {
       parsedBody,
       quest,
       historyCount: initialHistoryCount,
-      enableQuestMaster: initialEnableQuestMaster,
       enableMementos: initialEnableMementos,
       enableAgents: initialEnableAgents,
       message,
@@ -2307,7 +2284,6 @@ export class ChatCompletionProcess {
       enabledTools,
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       embeddingModel,
@@ -2318,7 +2294,6 @@ export class ChatCompletionProcess {
       userTimezone,
     } = initContext;
     let historyCount = initialHistoryCount;
-    let enableQuestMaster = initialEnableQuestMaster;
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
     const { questId, sessionId, promptMode } = parsedBody;
@@ -2419,7 +2394,7 @@ export class ChatCompletionProcess {
         case 'contextual':
           return [...baseFeatures, 'agentDetection']; // Add agent detection for contextual queries (includes @mentions)
         case 'complex':
-          return [...baseFeatures, 'mementos', 'questMaster', 'agentDetection']; // Full feature set
+          return [...baseFeatures, 'mementos', 'agentDetection']; // Full feature set
         default:
           return [...baseFeatures, 'agentDetection']; // Safe fallback
       }
@@ -2432,20 +2407,9 @@ export class ChatCompletionProcess {
       optimizedFeatureList = optimizedFeatureList.filter(feature => feature !== 'autoNameSession');
     }
 
-    // Honor explicit user enablement BEFORE any complexity-based optimizations.
-    // When a user explicitly enables QuestMaster (toggle or New Quest flow) they want a
-    // quest; user intent takes precedence over automatic optimization.
-    const userExplicitlyEnabledQuestMaster = enableQuestMaster;
+    // Honor explicit user enablement BEFORE any complexity-based optimizations: user intent
+    // takes precedence over automatic optimization.
     const userExplicitlyEnabledAgents = enableAgents;
-
-    // Add QuestMaster to feature list if user explicitly enabled it (regardless of query complexity)
-    if (userExplicitlyEnabledQuestMaster && !optimizedFeatureList.includes('questMaster')) {
-      optimizedFeatureList = [...optimizedFeatureList, 'questMaster'];
-      logger.info(`🎯 [EXPLICIT_ENABLEMENT] QuestMaster explicitly enabled by user - adding to feature list`, {
-        queryComplexity,
-        sessionId,
-      });
-    }
 
     // Reduce features for simple queries, but NEVER override explicit user settings
     if (isSimpleQuery) {
@@ -2453,11 +2417,6 @@ export class ChatCompletionProcess {
       // Note: Session agent attachment is already handled in classifyQueryComplexity
       // which receives session.agentIds and considers them when determining complexity
       const hasAgentMentions = message.includes('@');
-
-      // Only disable QuestMaster if user did NOT explicitly enable it
-      if (!userExplicitlyEnabledQuestMaster) {
-        enableQuestMaster = false;
-      }
 
       // Only disable agents if NOT explicitly enabled AND no @mentions
       // (attached agents are already handled by query complexity classification)
@@ -2467,9 +2426,7 @@ export class ChatCompletionProcess {
 
       // History is deliberately NOT reduced for simple queries: the count sets where the history
       // window starts, and one that changed with each turn's complexity rewrote the prompt cache.
-      logger.info(
-        `[SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`
-      );
+      logger.info(`[SIMPLE_QUERY] Optimizations: Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`);
     }
 
     // Conservative cap before model info is available; the model-aware adjustment happens after
@@ -2874,7 +2831,6 @@ export class ChatCompletionProcess {
       const vettedPreauthorizedLakeIds = this.turnPreauthorizedLakeIds;
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
-        enableQuestMaster || false,
         // Tri-state, deliberately NOT coerced: explicit false is the caller's memory
         // opt-out and must stay distinguishable from absence (#1319, resolveMementoGates).
         enableMementos,
@@ -3241,7 +3197,6 @@ export class ChatCompletionProcess {
               historyCount,
               fabFileIds: sessionFabFileIds,
               questId,
-              questMaster,
               organizationId: organization?.id ?? null,
             });
 
@@ -3804,6 +3759,7 @@ export class ChatCompletionProcess {
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
         customMcp: this.customMcp,
+        customMcpDeadline: this.customMcpDeadline,
         toolCreditsMap: this.toolCreditsMap,
         toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
@@ -4489,7 +4445,6 @@ export class ChatCompletionProcess {
         toolPrompt: toolPromptMessages.guidance ? [toolPromptMessages.guidance] : [],
         toolContext: toolPromptMessages.context ? [toolPromptMessages.context] : [],
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
-        questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
         sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
         // Skills catalog (model-invocable `skill` tool discovery) + expanded `/skill-name`
@@ -5234,6 +5189,15 @@ export class ChatCompletionProcess {
             availableCredits: actualBalance,
           });
           throw new InsufficientCreditsError(errorMessage, 'insufficient_credits');
+        }
+        try {
+          await assertInterventionSpendAllowed(
+            { userId: this.user.id, credits: requiredCredits },
+            { users: this.db.users, window: this.db.newAccountSpendCap.interventionSpendWindow }
+          );
+        } catch (refusal) {
+          await reservationMethods.incrementCredits(reservationOwnerId, requiredCredits);
+          throw refusal;
         }
 
         // Update in-memory balance so mid-stream tool validation sees the reduced balance
@@ -7834,7 +7798,7 @@ export class ChatCompletionProcess {
           'summarizeNotebook', // Publishes event to EventBridge
           'contextSummarization', // Publishes event to EventBridge
         ];
-        const postSaveFeatures: Array<featureNames> = ['mementos', 'questMaster'];
+        const postSaveFeatures: Array<featureNames> = ['mementos'];
 
         // P5-a: Truly fire-and-forget the EventBridge features - don't await them.
         fireAndForgetFeatures.forEach(feature => {
@@ -7844,7 +7808,6 @@ export class ChatCompletionProcess {
               quest,
               session,
               messages,
-              questMaster,
               model: runModel,
               historyCount,
               oldestIncludedQuestId,
@@ -7860,7 +7823,7 @@ export class ChatCompletionProcess {
         // remains fire-and-forget since losing perf data is harmless.)
         await saveQuest(quest);
 
-        // P4-a: Post-save features (mementos, questMaster) create side-effect documents -
+        // P4-a: Post-save features (mementos) create side-effect documents -
         // they don't affect quest.reply/replies. Fire-and-forget to avoid blocking response.
         const postSavePromises = postSaveFeatures
           .map(feature =>
@@ -7868,7 +7831,6 @@ export class ChatCompletionProcess {
               quest,
               session,
               messages,
-              questMaster,
               model: runModel,
               historyCount,
               oldestIncludedQuestId,
@@ -8628,7 +8590,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   private getDefaultAdminSettings(): Partial<Record<SettingKey, string>> {
     return {
       // Feature toggles - default to enabled for best user experience
-      EnableQuestMaster: 'true',
       EnableMementos: 'true',
       EnableArtifacts: 'true',
       EnableAgents: 'true',
@@ -8719,7 +8680,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
 
   private async buildOptimizedFeatures(
     adminSettings: Record<string, string>,
-    enableQuestMaster: boolean,
     enableMementos: boolean | undefined,
     enableAgents: boolean,
     projectId?: string,
@@ -8738,7 +8698,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     includeLibraryFiles?: boolean
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
-    const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
     const adminSettingsEnableAgents = getSettingsValue('EnableAgents', adminSettings);
     const adminSettingsEnableLakeMemory = getSettingsValue('EnableLakeMemory', adminSettings);
     const adminSettingsAutoNameNotebook = getSettingsValue('AutoNameNotebook', adminSettings);
@@ -8790,11 +8749,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     if (optimizedFeatureList.includes('autoNameSession') && adminSettingsAutoNameNotebook) {
       this.logger.log('  - Enabling AutoNameSession feature');
       this.features.set('autoNameSession', new AutoNameSessionFeature(this, adminSettingsAutoNameNotebook));
-    }
-
-    if (optimizedFeatureList.includes('questMaster') && enableQuestMaster && adminSettingsEnableQuestMaster) {
-      this.logger.log('  - Enabling QuestMaster feature');
-      this.features.set('questMaster', new QuestMasterFeature(this));
     }
 
     // Agent feature initialization
@@ -9142,16 +9096,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     logger: Logger
   ): Promise<void> {
     try {
-      const decision = await applyModerationHit({
-        users: this.db.users,
-        userId: this.user.id,
-        hit: { at: new Date(), categories, source, questId },
-      });
+      const hit = { at: new Date(), categories, source, questId };
+      const decision = await applyModerationHit({ users: this.db.users, userId: this.user.id, hit });
       logger.warn(
         `[Moderation] User ${this.user.id} flagged by ${source}` +
           (categories.length ? ` (${categories.join(', ')})` : '') +
           `; ${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
       );
+      this.sendModerationEscalationAlert(moderationEscalationAlert(this.user.id, hit, decision), logger);
     } catch (recordError) {
       logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
@@ -9184,6 +9136,17 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       apiKeyId: this.turnApiKeyId,
     });
     return true;
+  }
+
+  /** Fire-and-forget: alert delivery never delays or fails the chat request. */
+  private sendModerationEscalationAlert(alert: ModerationEscalationAlert | null, logger: Logger): void {
+    const notify = this.notifyModerationEscalation;
+    if (!alert || !notify) return;
+    void Promise.resolve()
+      .then(() => notify(alert))
+      .catch(alertError =>
+        logger.warn(`[Moderation] Failed to send the escalation alert for user ${this.user.id}:`, alertError)
+      );
   }
 
   private getBedrockGuardrailsService(

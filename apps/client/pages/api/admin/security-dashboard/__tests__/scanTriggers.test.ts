@@ -80,6 +80,7 @@ type Route = (req: unknown, res: unknown) => Promise<void>;
 const post = async (route: unknown) => {
   const { req, res } = createMocks({ method: 'POST' });
   (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+  (req as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   await (route as Route)(req, res);
   return { req, res };
 };

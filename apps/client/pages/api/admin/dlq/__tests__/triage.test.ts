@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
     return route;
   },
 }));
-vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.visible }));
+vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.visible }));
 vi.mock('@bike4mind/database', () => ({
   adminAiSuggestionRepository: { transition: h.transition },
   dlqReplayLogRepository: { findSuggestionOutcome: h.outcome },

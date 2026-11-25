@@ -23,12 +23,6 @@ const ALL_COMMANDS: CommandSuggestion[] = [
     requiresAgentsFeature: true,
   },
   {
-    command: '/gen_image',
-    description: 'Generate an image',
-    template: '/gen_image describe-your-image-here',
-    example: 'A sunset over mountains',
-  },
-  {
     command: '/feedback',
     description: 'Send the team feedback about this conversation',
     template: '/feedback what-is-on-your-mind',

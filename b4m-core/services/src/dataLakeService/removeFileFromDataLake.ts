@@ -17,7 +17,7 @@ import type { LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 import type { StorageOwnerTransferDb } from '../fabFileService/reassignStorageOwner';
 
 /** How long a removal's restore record stays live - see `lakeMembershipRemovals` below. */
-const REMOVAL_RECORD_TTL_MS = 30 * 60 * 1000;
+export const REMOVAL_RECORD_TTL_MS = 30 * 60 * 1000;
 
 export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
   // Matches the three sibling recompute callers (see archiveDataLake). The audit repos are declared

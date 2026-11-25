@@ -32,6 +32,7 @@ export const ACCOUNT_ARCHIVE_METADATA_MODELS = [
   'AssistantBrief',
   'AssistantInstruction',
   'EmailTriageItem',
+  'DelegatedItem',
   'ImageGenerationTemplate',
   'StudioComposition',
   'ResearchData',

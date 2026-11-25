@@ -1,11 +1,74 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatSessionStatusEvent } from '@shared/chat';
-import { SessionActivity } from './SessionActivity';
+import { SessionActivity, endsUnread } from './SessionActivity';
 
 function track(): { activity: SessionActivity; events: ChatSessionStatusEvent[] } {
   const events: ChatSessionStatusEvent[] = [];
   return { activity: new SessionActivity(event => events.push(event)), events };
 }
+
+describe('SessionActivity background jobs', () => {
+  function trackChanges(): {
+    activity: SessionActivity;
+    events: { event: ChatSessionStatusEvent; statusChanged: boolean }[];
+  } {
+    const events: { event: ChatSessionStatusEvent; statusChanged: boolean }[] = [];
+    return { activity: new SessionActivity((event, statusChanged) => events.push({ event, statusChanged })), events };
+  }
+
+  it('carries running jobs on a done session without calling it a status change', () => {
+    const { activity, events } = trackChanges();
+    activity.backgroundChanged('a', { running: 1, label: 'pnpm test' });
+
+    expect(activity.statusOf('a')).toBe('done');
+    expect(events).toEqual([
+      {
+        event: { sessionId: 'a', status: 'done', background: { running: 1, label: 'pnpm test' } },
+        statusChanged: false,
+      },
+    ]);
+    expect(activity.snapshot()).toEqual([
+      { sessionId: 'a', status: 'done', background: { running: 1, label: 'pnpm test' } },
+    ]);
+  });
+
+  it('keeps the jobs on the done event of a turn that ends while they run', () => {
+    const { activity, events } = trackChanges();
+    activity.replyStarted('a');
+    activity.backgroundChanged('a', { running: 2, label: 'pnpm build' });
+    activity.replyEnded('a');
+
+    expect(events.at(-1)).toEqual({
+      event: { sessionId: 'a', status: 'done', background: { running: 2, label: 'pnpm build' } },
+      statusChanged: true,
+    });
+  });
+
+  it('sends nothing for the same jobs again, and clears them when the last one ends', () => {
+    const { activity, events } = trackChanges();
+    activity.backgroundChanged('a', { running: 1, label: 'pnpm test' });
+    activity.backgroundChanged('a', { running: 1, label: 'pnpm test' });
+    expect(events).toHaveLength(1);
+
+    activity.backgroundChanged('a', undefined);
+    expect(events.at(-1)).toEqual({ event: { sessionId: 'a', status: 'done' }, statusChanged: false });
+    expect(activity.snapshot()).toEqual([]);
+  });
+
+  it('treats a zero count as none', () => {
+    const { activity, events } = trackChanges();
+    activity.backgroundChanged('a', { running: 0, label: 'x' });
+    expect(events).toEqual([]);
+  });
+
+  it('forgets the jobs of a deleted conversation silently', () => {
+    const { activity, events } = trackChanges();
+    activity.backgroundChanged('a', { running: 1, label: 'pnpm test' });
+    activity.forget('a');
+    expect(events).toHaveLength(1);
+    expect(activity.snapshot()).toEqual([]);
+  });
+});
 
 describe('SessionActivity', () => {
   it('badges an unread finished reply until viewed without keeping its turn open', () => {
@@ -241,5 +304,18 @@ describe('SessionActivity', () => {
     activity.forget('b');
     expect(activity.snapshot()).toEqual([]);
     expect(events.map(event => event.status)).toEqual(['needs-action', 'done', 'needs-action']);
+  });
+});
+
+describe('endsUnread', () => {
+  it('leaves a finished answer with text, or a failed turn, unread', () => {
+    expect(endsUnread('completed', 'Here it is')).toBe(true);
+    expect(endsUnread('failed', '')).toBe(true);
+  });
+
+  it('leaves nothing for an empty answer, a stop, or an expired session', () => {
+    expect(endsUnread('completed', '  ')).toBe(false);
+    expect(endsUnread('aborted', 'partial')).toBe(false);
+    expect(endsUnread('expired', '')).toBe(false);
   });
 });

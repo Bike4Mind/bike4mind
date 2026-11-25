@@ -25,8 +25,10 @@ export interface ResolvedEnvironment {
  * Whether tokens can be written to the OS keychain. `unavailable` is the Linux-without-a-keyring
  * case: the app still works, but nothing is persisted, so the user re-authenticates next launch.
  * Reported rather than papered over, because the alternative is writing tokens in plaintext.
+ * `file-permissions` is a headless host's storage: persisted unencrypted in a file only the
+ * owning OS account can read, as SSH keys are.
  */
-export type TokenStorageStatus = 'available' | 'unavailable';
+export type TokenStorageStatus = 'available' | 'unavailable' | 'file-permissions';
 
 export type AuthStatus =
   /** Reading stored tokens; nothing decided yet. */

@@ -363,7 +363,6 @@ describe('SaveFunctionDialog', () => {
   it.each([
     ['version_changed', 409, 'The artifact changed since you opened it. Reload it and try again.'],
     ['invalid_name', 400, 'A function name cannot contain two underscores in a row or end with an underscore.'],
-    ['artifact_has_function', 409, 'This artifact is already saved as a tool.'],
     ['function_limit', 409, 'You can have at most 100 saved tools.'],
     ['source_too_large', 400, 'The code is larger than 256 KB.'],
     ['no_entry_point', 400, 'The saved code has no FUNCTION contract and run function.'],

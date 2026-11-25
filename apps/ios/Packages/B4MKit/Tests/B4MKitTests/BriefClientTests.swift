@@ -55,6 +55,15 @@ final class BriefClientTests: XCTestCase {
     XCTAssertEqual(get.url?.path(), "/api/v1/briefs")
   }
 
+  func testObligationSourcedItemDecodes() async throws {
+    let json = Self.readyJSON.replacingOccurrences(
+      of: #"{"id":"h1","text":"Something happened"}"#,
+      with: #"{"id":"h1","text":"Due Dec 5: City Water $120.50","source":{"kind":"obligation","obligationId":"ob-1"}}"#)
+    let (client, _) = client(200, json)
+    let brief = try await client.brief(id: "b1")
+    XCTAssertEqual(brief.happened, [BriefItem(id: "h1", text: "Due Dec 5: City Water $120.50")])
+  }
+
   func testUnknownStatusDecodesToUnknown() async throws {
     let (client, _) = client(200, Self.readyJSON.replacingOccurrences(of: "\"ready\"", with: "\"archived\""))
     let brief = try await client.brief(id: "b1")

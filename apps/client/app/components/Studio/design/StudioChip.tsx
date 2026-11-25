@@ -37,6 +37,7 @@ const Swatch = styled('span')({
 
 type StudioChipProps = {
   children: ReactNode;
+  /** Makes the chip a toggle (`aria-pressed`); leave it out for a one-shot action chip, such as a snippet. */
   selected?: boolean;
   /** Any CSS color or gradient; shows as a small round swatch before the label (scene chips). */
   swatch?: string;
@@ -45,15 +46,8 @@ type StudioChipProps = {
   testId?: string;
 };
 
-/** A round toggle chip; selection is exposed as `aria-pressed` and drawn in the accent. */
-const StudioChip = ({
-  children,
-  selected = false,
-  swatch,
-  disabled,
-  onClick,
-  testId = 'studio-chip',
-}: StudioChipProps) => (
+/** A round chip: a toggle when given `selected` (exposed as `aria-pressed`, drawn in the accent), else an action. */
+const StudioChip = ({ children, selected, swatch, disabled, onClick, testId = 'studio-chip' }: StudioChipProps) => (
   <ChipRoot type="button" aria-pressed={selected} disabled={disabled} onClick={onClick} data-testid={testId}>
     {swatch && <Swatch aria-hidden="true" style={{ background: swatch }} data-testid={`${testId}-swatch`} />}
     {children}

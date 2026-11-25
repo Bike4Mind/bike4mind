@@ -6,7 +6,7 @@ import {
 } from '@client/app/hooks/data/settings';
 import { getErrorMessage } from '@client/app/utils/error';
 import TuneIcon from '@mui/icons-material/Tune';
-import { Alert, Box, Button, Card, FormControl, FormLabel, Input, Option, Select, Stack, Typography } from '@mui/joy';
+import { Alert, Box, Button, FormControl, FormLabel, Input, Option, Select, Stack, Typography } from '@mui/joy';
 import { useMemo, useState } from 'react';
 import {
   displayValue,
@@ -16,8 +16,13 @@ import {
   type AdminSetting,
   type OverrideLevel,
 } from './ScopedSettingOverrides';
+import { SettingsSection } from './shared/SettingsSection';
 
 const ALL_LEVELS: OverrideLevel[] = [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake];
+
+/** Object settings (and their Mixed platform rows) are objects at runtime; String() would print [object Object]. */
+const platformValueText = (value: unknown): string =>
+  typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value);
 
 /** See INERT_RUNG_NOTE for why a stored value at an unsettable rung is not reported as applying. */
 function describeOverride(
@@ -69,108 +74,110 @@ export function ScopedOverridesByScope() {
   const clearError = clearOverride.error ? getErrorMessage(clearOverride.error) : undefined;
 
   return (
-    <Card variant="outlined" sx={{ mb: 2 }} data-testid="scoped-overrides-by-scope">
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <TuneIcon />
-        <Typography level="title-lg">Overrides by scope</Typography>
-      </Stack>
-      <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-        What one organization, owner or lake has set for itself. {OVERRIDE_STALENESS_NOTE}
-      </Typography>
-
-      <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
-        <FormControl size="sm">
-          <FormLabel>Scope</FormLabel>
-          <Select
-            value={level}
-            onChange={(_e, next) => next && setLevel(next)}
-            slotProps={{ button: { 'data-testid': 'scoped-overrides-by-scope-level-select' } }}
-            sx={{ minWidth: 140 }}
-          >
-            {ALL_LEVELS.map(option => (
-              <Option key={option} value={option} data-testid={`scoped-overrides-by-scope-level-option-${option}`}>
-                {LEVEL_LABELS[option]}
-              </Option>
-            ))}
-          </Select>
-        </FormControl>
-
-        <FormControl size="sm">
-          <FormLabel>Scope id</FormLabel>
-          <Input
-            slotProps={{ input: { 'data-testid': 'scoped-overrides-by-scope-id-input' } }}
-            value={scopeId}
-            onChange={e => setScopeId(e.target.value)}
-            placeholder="id"
-            sx={{ minWidth: 240 }}
-          />
-        </FormControl>
-      </Box>
-
-      {clearError && (
-        <Alert color="danger" variant="soft" data-testid="scoped-overrides-by-scope-error">
-          {clearError}
-        </Alert>
-      )}
-
-      {!address ? (
-        <Typography level="body-sm" sx={{ color: 'text.secondary' }} data-testid="scoped-overrides-by-scope-prompt">
-          Enter a scope id to see what it overrides.
-        </Typography>
-      ) : (
-        <Stack spacing={0.5}>
-          {scopeCapableSettings.map(setting => {
-            const override = (allOverrides ?? []).find(
-              row => row.settingName === setting.key && row.scopeLevel === level && row.scopeId === address
-            );
-            const isSettableHere = setting.scope?.settableAt.includes(level) === true;
-            // A clearDeletesRow setting with no row - or a blank one, which the resolver also reads
-            // as unset - is unset, not its declared default (see AdminSettingsTab).
-            const storedPlatformValue = platformSettings?.find(row => row.settingName === setting.key)?.settingValue;
-            const platformValue =
-              setting.clearDeletesRow && isBlankSettingValue(storedPlatformValue)
-                ? undefined
-                : (storedPlatformValue ?? setting.defaultValue);
-
-            return (
-              <Box
-                key={setting.key}
-                data-testid={`scoped-overrides-by-scope-row-${setting.key}`}
-                sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
-              >
-                <Typography level="body-sm" sx={{ flex: 1, minWidth: 0 }}>
-                  <strong>{setting.name}</strong>
-                  {' - '}
-                  {describeOverride(
-                    setting,
-                    override?.settingValue,
-                    isSettableHere,
-                    platformValue === undefined ? undefined : String(platformValue)
-                  )}
-                </Typography>
-                {override && (
-                  <Button
-                    data-testid={`scoped-overrides-by-scope-clear-btn-${setting.key}`}
-                    size="sm"
-                    variant="soft"
-                    color="danger"
-                    loading={clearOverride.isPending}
-                    onClick={() =>
-                      clearOverride.mutate({
-                        settingName: override.settingName,
-                        scopeLevel: override.scopeLevel,
-                        scopeId: override.scopeId,
-                      })
-                    }
-                  >
-                    Clear
-                  </Button>
-                )}
-              </Box>
-            );
-          })}
+    <SettingsSection data-testid="scoped-overrides-by-scope">
+      <Stack spacing={1.5}>
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <TuneIcon />
+          <Typography level="title-lg">Overrides by scope</Typography>
         </Stack>
-      )}
-    </Card>
+        <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+          What one organization, owner or lake has set for itself. {OVERRIDE_STALENESS_NOTE}
+        </Typography>
+
+        <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
+          <FormControl size="sm">
+            <FormLabel>Scope</FormLabel>
+            <Select
+              value={level}
+              onChange={(_e, next) => next && setLevel(next)}
+              slotProps={{ button: { 'data-testid': 'scoped-overrides-by-scope-level-select' } }}
+              sx={{ minWidth: 140 }}
+            >
+              {ALL_LEVELS.map(option => (
+                <Option key={option} value={option} data-testid={`scoped-overrides-by-scope-level-option-${option}`}>
+                  {LEVEL_LABELS[option]}
+                </Option>
+              ))}
+            </Select>
+          </FormControl>
+
+          <FormControl size="sm">
+            <FormLabel>Scope id</FormLabel>
+            <Input
+              slotProps={{ input: { 'data-testid': 'scoped-overrides-by-scope-id-input' } }}
+              value={scopeId}
+              onChange={e => setScopeId(e.target.value)}
+              placeholder="id"
+              sx={{ minWidth: 240 }}
+            />
+          </FormControl>
+        </Box>
+
+        {clearError && (
+          <Alert color="danger" variant="soft" data-testid="scoped-overrides-by-scope-error">
+            {clearError}
+          </Alert>
+        )}
+
+        {!address ? (
+          <Typography level="body-sm" sx={{ color: 'text.secondary' }} data-testid="scoped-overrides-by-scope-prompt">
+            Enter a scope id to see what it overrides.
+          </Typography>
+        ) : (
+          <Stack spacing={0.5}>
+            {scopeCapableSettings.map(setting => {
+              const override = (allOverrides ?? []).find(
+                row => row.settingName === setting.key && row.scopeLevel === level && row.scopeId === address
+              );
+              const isSettableHere = setting.scope?.settableAt.includes(level) === true;
+              // A clearDeletesRow setting with no row - or a blank one, which the resolver also reads
+              // as unset - is unset, not its declared default (see AdminSettingsTab).
+              const storedPlatformValue = platformSettings?.find(row => row.settingName === setting.key)?.settingValue;
+              const platformValue =
+                setting.clearDeletesRow && isBlankSettingValue(storedPlatformValue)
+                  ? undefined
+                  : (storedPlatformValue ?? setting.defaultValue);
+
+              return (
+                <Box
+                  key={setting.key}
+                  data-testid={`scoped-overrides-by-scope-row-${setting.key}`}
+                  sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
+                >
+                  <Typography level="body-sm" sx={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+                    <strong>{setting.name}</strong>
+                    {' - '}
+                    {describeOverride(
+                      setting,
+                      override?.settingValue,
+                      isSettableHere,
+                      platformValue === undefined ? undefined : platformValueText(platformValue)
+                    )}
+                  </Typography>
+                  {override && (
+                    <Button
+                      data-testid={`scoped-overrides-by-scope-clear-btn-${setting.key}`}
+                      size="sm"
+                      variant="soft"
+                      color="danger"
+                      loading={clearOverride.isPending}
+                      onClick={() =>
+                        clearOverride.mutate({
+                          settingName: override.settingName,
+                          scopeLevel: override.scopeLevel,
+                          scopeId: override.scopeId,
+                        })
+                      }
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </Box>
+              );
+            })}
+          </Stack>
+        )}
+      </Stack>
+    </SettingsSection>
   );
 }

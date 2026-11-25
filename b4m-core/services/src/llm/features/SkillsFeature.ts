@@ -65,7 +65,6 @@ export class SkillsFeature implements ChatCompletionFeature {
     historyCount: number;
     fabFileIds: string[];
     questId: string;
-    questMaster: unknown;
   }): Promise<{ shouldContinue: boolean }> {
     const { message, quest } = args;
     if (!this.service.db.skills) {

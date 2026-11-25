@@ -9,6 +9,7 @@ import { CreditHolderType } from './CreditHolderTypes';
 export const ACCOUNT_SEGMENTS = ['internal', 'partner', 'customer'] as const;
 export const AccountSegmentSchema = z.enum(ACCOUNT_SEGMENTS);
 export type AccountSegment = z.infer<typeof AccountSegmentSchema>;
+export type SpendSegment = AccountSegment | 'platform';
 export const DEFAULT_ACCOUNT_SEGMENT: AccountSegment = 'customer';
 
 /** A user is internal only through `IUser.isInternal`, so the stored user segment can only mark a partner. */
@@ -95,7 +96,7 @@ export type SpendBreakdownActor = {
 export type SpendBreakdown = {
   totalCostUsd: number;
   byProvider: Array<{ provider: string; costUsd: number }>;
-  bySegment: Array<{ segment: AccountSegment; costUsd: number }>;
+  bySegment: Array<{ segment: SpendSegment; costUsd: number }>;
   topActors: SpendBreakdownActor[];
 };
 
@@ -159,6 +160,174 @@ export type SpendAccountRow = {
 export type SpendAccountsResponse = {
   totalCostUsd: number;
   byProvider: Array<{ provider: string; costUsd: number }>;
-  bySegment: Array<{ segment: AccountSegment; costUsd: number }>;
+  bySegment: Array<{ segment: SpendSegment; costUsd: number }>;
   accounts: SpendAccountRow[];
+};
+
+/*
+ * Feature cost: the Spend explorer's per-feature view (GET /api/admin/spend-explorer/features
+ * and /feature-users). Error rows (SPEND_EXCLUDED_STATUSES) are left out of cost, credits and
+ * units; error and timeout rows (SPEND_FAILED_STATUSES) are counted on their own as a reliability signal.
+ */
+
+/**
+ * Whose usage a feature view counts. Same values and meaning as the Analytics tab's
+ * `accounts` filter (ANALYTICS_ACCOUNTS): internal is the admin / system / synthetic /
+ * staff-domain / Developer-tagged set `isCountedUser` excludes, so the two pages agree.
+ */
+export const SPEND_AUDIENCES = ['all', 'external', 'internal'] as const;
+export const SpendAudienceSchema = z.enum(SPEND_AUDIENCES);
+export type SpendAudience = z.infer<typeof SpendAudienceSchema>;
+
+/** Statuses counted under `failedRequests`. */
+export const SPEND_FAILED_STATUSES = ['error', 'timeout'] as const;
+
+/**
+ * Statuses left out of cost, credits and units. Timeouts stay in: a timed-out attempt records
+ * the provider cost it absorbed (see timedOutAttemptUsage), so dropping it would hide real spend
+ * and disagree with the explorer's timeline and breakdown, which count every row.
+ */
+export const SPEND_EXCLUDED_STATUSES = ['error'] as const;
+
+/**
+ * Largest `offset` the feature-users endpoint accepts. Only a sanity bound, set past any real
+ * user count so every page the pager offers loads: grouping every user costs more than $skip.
+ */
+export const SPEND_FEATURE_USERS_MAX_OFFSET = 1_000_000;
+
+/** A `UsageEvent.feature` id as the feature endpoints accept it. */
+export const SPEND_FEATURE_ID_PATTERN = /^[a-z0-9_]{1,64}$/;
+
+/** Days before the last day that a feature's or user's trailing average covers. */
+export const FEATURE_SPIKE_TRAILING_DAYS = 7;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * End of the last complete UTC day a spike compares: `to`, or the start of today when `to` is
+ * later. A preset range ends at tomorrow's midnight, and today's partial cost against full-day
+ * averages would almost never flag. `to` must sit on a UTC day boundary.
+ */
+export function featureSpikeEnd(to: Date, now: Date): Date {
+  const startOfToday = Math.floor(now.getTime() / DAY_MS) * DAY_MS;
+  return new Date(Math.min(to.getTime(), startOfToday));
+}
+
+/** Default for the `spendExplorerFeatureSpikeMultiple` admin setting. */
+export const DEFAULT_FEATURE_SPIKE_MULTIPLE = 3;
+
+/** Hard cap on one page of a feature's top users. */
+export const SPEND_FEATURE_USERS_MAX_LIMIT = 100;
+
+/**
+ * What `UsageEvent.units` counts for a feature, where every writer of that feature agrees.
+ * A feature missing here has no meaningful unit (token-billed, or mixed writers).
+ */
+export const FEATURE_UNIT_LABELS: Partial<Record<string, string>> = {
+  image_generation: 'images',
+  image_edit: 'images',
+  text_to_speech: 'characters',
+  sound_effects: 'seconds',
+  music_generation: 'seconds',
+  transcription: 'minutes',
+};
+
+export type FeatureSpikeInput = { lastDayUsd: number; trailingAvgUsd: number };
+
+/**
+ * A spike is last-day cost at or above SPEND_SPIKE_MIN_USD and above `multiple` times the
+ * trailing daily average. With no trailing spend, any last day over the floor is a spike:
+ * new spend on a feature is exactly what this flag is for.
+ */
+export function isFeatureSpendSpike({ lastDayUsd, trailingAvgUsd }: FeatureSpikeInput, multiple: number): boolean {
+  return lastDayUsd >= SPEND_SPIKE_MIN_USD && lastDayUsd > trailingAvgUsd * multiple;
+}
+
+/** Sums the feature aggregations produce per group; error rows carry no cost. */
+export type SpendFeatureTotals = {
+  requests: number;
+  failedRequests: number;
+  costUsd: number;
+  creditsCharged: number;
+  units: number;
+  /** Cost in the last complete UTC day, [spikeEnd - 1d, spikeEnd). */
+  lastDayUsd: number;
+  /** Cost over the FEATURE_SPIKE_TRAILING_DAYS days before the last day, which may start before `from`. */
+  trailingUsd: number;
+};
+
+export type SpendFeaturesParams = {
+  from: Date;
+  to: Date;
+  /** End of the last day the spike flags compare; at most `to` (see featureSpikeEnd). */
+  spikeEnd: Date;
+  /** Narrow to one acting user (UsageEvent.userId). */
+  actorUserId?: string;
+  /** Keep only these acting users (internal audience), or drop them (external). */
+  userFilter?: { mode: 'include' | 'exclude'; userIds: string[] };
+};
+
+export type SpendFeatureAggregate = SpendFeatureTotals & {
+  feature: string;
+  distinctUsers: number;
+  /** Cost per UTC day (`YYYY-MM-DD`) within [from, to); absent days are zero. */
+  daily: Array<{ day: string; costUsd: number }>;
+};
+
+export type SpendFeatureUsersParams = Omit<SpendFeaturesParams, 'actorUserId'> & {
+  feature: string;
+  limit: number;
+  offset: number;
+};
+
+export type SpendFeatureUserAggregate = SpendFeatureTotals & { userId: string };
+
+export type SpendFeatureUsersPage = {
+  users: SpendFeatureUserAggregate[];
+  totalUsers: number;
+  /** The feature's cost across every user in the view, not just this page. */
+  featureCostUsd: number;
+};
+
+/** The window (and optionally one feature) whose distinct acting users an audience filter classifies. */
+export type SpendActorScanParams = { from: Date; to: Date; spikeEnd: Date; feature?: string };
+
+export type SpendFeatureRow = Omit<SpendFeatureAggregate, 'trailingUsd' | 'daily'> & {
+  /** Share of the view's total cost. */
+  share: number;
+  unitLabel: string | null;
+  trailingAvgUsd: number;
+  isSpike: boolean;
+  /** One value per UTC day of the range, oldest first. */
+  dailyUsd: number[];
+};
+
+export type SpendFeaturesResponse = {
+  audience: SpendAudience;
+  totalCostUsd: number;
+  spikeMultiple: number;
+  /** Start of the last UTC day the spike flags compare, ISO-8601. */
+  lastDayStart: string;
+  /** Days of `dailyUsd`, `YYYY-MM-DD`. */
+  days: string[];
+  features: SpendFeatureRow[];
+};
+
+export type SpendFeatureUserRow = Omit<SpendFeatureUserAggregate, 'trailingUsd'> & {
+  name: string;
+  /** Share of the feature's cost in this view. */
+  share: number;
+  trailingAvgUsd: number;
+  isSpike: boolean;
+};
+
+export type SpendFeatureUsersResponse = {
+  feature: string;
+  audience: SpendAudience;
+  unitLabel: string | null;
+  featureCostUsd: number;
+  /** Users with any row for the feature in the view; drives pagination. */
+  totalUsers: number;
+  spikeMultiple: number;
+  users: SpendFeatureUserRow[];
 };

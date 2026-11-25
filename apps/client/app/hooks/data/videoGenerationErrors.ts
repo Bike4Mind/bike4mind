@@ -25,6 +25,8 @@ const MESSAGES: Record<VideoGenerationApiErrorCode, string> = {
   input_image_not_found: 'The selected image was not found. Pick another image.',
   idempotency_key_reused: 'This request was already sent with different settings. Try again.',
   invalid_idempotency_key: 'The request could not be sent. Try again.',
+  run_not_found: 'The run this request belongs to was not found.',
+  run_budget_exhausted: 'The run does not have enough budget left for this video.',
 };
 
 export function describeVideoGenerationError(

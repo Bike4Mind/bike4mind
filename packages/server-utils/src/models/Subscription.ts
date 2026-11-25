@@ -2,6 +2,7 @@ import { mongoose } from '@bike4mind/database';
 import {
   ISubscription,
   ISubscriptionRepository,
+  PLAN_STORAGE_GRANTING_STATUSES,
   SubscriptionOwnerType,
   SubscriptionSource,
   TERMINAL_SUBSCRIPTION_STATUSES,
@@ -93,6 +94,10 @@ const SubscriptionSchema = new mongoose.Schema<ISubscription>(
     nonPaymentCancelNotifiedAt: {
       type: Date,
       required: false,
+    },
+    billingNoticeKeys: {
+      type: [String],
+      default: undefined,
     },
     acquisition: {
       type: new mongoose.Schema(
@@ -194,6 +199,21 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
         status: 'active',
       })
       .lean({ virtuals: true });
+  }
+
+  /**
+   * Whether the user still has an active or trialing subscription other than `excludeSubscriptionId`
+   * (any source, admin grants included). An ended subscription must not take away a storage allowance
+   * another live subscription still grants.
+   */
+  async hasOtherGrantingUserSubscription(userId: string, excludeSubscriptionId: string): Promise<boolean> {
+    const row = await this.model.exists({
+      ownerType: SubscriptionOwnerType.User,
+      ownerId: userId,
+      status: { $in: [...PLAN_STORAGE_GRANTING_STATUSES] },
+      subscriptionId: { $ne: excludeSubscriptionId },
+    });
+    return row !== null;
   }
 
   /** Active subscriptions of any of `ownerIds`, in one `$in` read on the {ownerType, ownerId, status} index. */
@@ -366,6 +386,21 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
   async releaseNonPaymentCancelNotice(subscriptionId: string): Promise<void> {
     if (!subscriptionId) return;
     await this.model.updateOne({ subscriptionId }, { $unset: { nonPaymentCancelNotifiedAt: '' } });
+  }
+
+  async claimBillingNotice(subscriptionId: string, key: string): Promise<boolean> {
+    if (!subscriptionId) return false;
+    const { modifiedCount } = await this.model.updateOne(
+      { subscriptionId, billingNoticeKeys: { $ne: key } },
+      { $push: { billingNoticeKeys: { $each: [key], $slice: -PAYMENT_FAILURE_NOTICE_HISTORY } } },
+      { runValidators: true }
+    );
+    return modifiedCount === 1;
+  }
+
+  async releaseBillingNotice(subscriptionId: string, key: string): Promise<void> {
+    if (!subscriptionId) return;
+    await this.model.updateOne({ subscriptionId }, { $pull: { billingNoticeKeys: key } }, { runValidators: true });
   }
 
   /**

@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import type { EventBridgeEvent } from 'aws-lambda';
-import type { LiveActivityPushEvent, PushNotificationEvent } from '@bike4mind/common';
+import {
+  BUSY_BLOCK_HELD_CATEGORIES,
+  PUSH_NOTIFICATION_CATEGORIES,
+  type LiveActivityPushEvent,
+  type PushNotificationEvent,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   createTransport: vi.fn(),
@@ -140,6 +145,78 @@ const payloadOf = (request: ApnsRequest) => JSON.parse(request.payload);
 
 describe('deliverPush', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  describe('approval_needed expiry and clearing', () => {
+    const NOW_MS = 1_700_000_000_000;
+    const PENDING_TS = NOW_MS - 60_000;
+    const APPROVAL: PushNotificationEvent = {
+      userId: 'user-1',
+      category: 'approval_needed',
+      title: 'Approval needed',
+      body: 'An agent wants to run create_issue and is waiting for your confirmation.',
+      deepLink: '/notebooks/session-1',
+      collapseId: 'approval:quest-1',
+      questId: 'quest-1',
+      sessionId: 'session-1',
+      pendingActionTs: PENDING_TS,
+    };
+
+    it('expires the push at the pending action deadline, in epoch seconds', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush(APPROVAL, deps, logger, NOW_MS);
+      expect(sent[0].headers['apns-expiration']).toBe(String(Math.floor((PENDING_TS + 15 * 60 * 1000) / 1000)));
+    });
+
+    it('starts the window now when the event carries no pendingActionTs', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush({ ...APPROVAL, pendingActionTs: undefined }, deps, logger, NOW_MS);
+      expect(sent[0].headers['apns-expiration']).toBe(String((NOW_MS + 15 * 60 * 1000) / 1000));
+    });
+
+    it('sets no expiration on other categories', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush(EVENT, deps, logger, NOW_MS);
+      expect(sent[0].headers).not.toHaveProperty('apns-expiration');
+    });
+
+    it('gives the clearing push a fresh window even when the original deadline has passed', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      const lapsedTs = NOW_MS - 20 * 60 * 1000;
+      await deliverPush({ ...APPROVAL, pendingActionTs: lapsedTs, approvalResolved: 'lapsed' }, deps, logger, NOW_MS);
+      expect(sent[0].headers['apns-expiration']).toBe(String((NOW_MS + 15 * 60 * 1000) / 1000));
+    });
+
+    it('sends a quiet replacement under the same collapse id, with no buttons and no sound', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush({ ...APPROVAL, approvalResolved: 'approved' }, deps, logger, NOW_MS);
+
+      expect(sent[0].headers['apns-collapse-id']).toBe('approval:quest-1');
+      const payload = payloadOf(sent[0]);
+      expect(payload.aps.alert).toEqual({ title: 'Approval handled', body: 'This request was approved.' });
+      expect(payload.aps['interruption-level']).toBe('passive');
+      expect(payload.aps).not.toHaveProperty('sound');
+      expect(payload.aps).not.toHaveProperty('category');
+      expect(payload).not.toHaveProperty('approval');
+      expect(payload.approvalResolved).toBe('approved');
+    });
+
+    it('keeps the approve and deny buttons and the sound on the original push', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush(APPROVAL, deps, logger, NOW_MS);
+      const payload = payloadOf(sent[0]);
+      expect(payload.aps.sound).toBe('default');
+      expect(payload.aps.category).toBe('approval_needed');
+      expect(payload.approval).toMatchObject({ questId: 'quest-1', pendingActionTs: PENDING_TS });
+    });
+
+    it('words an expired approval as expired, even for a redacting organization', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+        loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
+      });
+      await deliverPush({ ...APPROVAL, approvalResolved: 'lapsed' }, deps, logger, NOW_MS);
+      expect(payloadOf(sent[0]).aps.alert.title).toBe('Approval expired');
+    });
+  });
 
   it('sends a handoff only to the selected registration with no transcript or destination metadata', async () => {
     const { deps, sent } = makeDeps([
@@ -472,6 +549,72 @@ describe('deliverPush', () => {
     });
   });
 
+  it('never holds the busy-block summary push', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production', id: 'dest-1' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false, inBusyBlock: true })),
+    });
+    const event = {
+      ...EVENT,
+      category: 'agent_completed' as const,
+      busyBlockDigest: true as const,
+      destinationId: 'dest-1',
+      destinationSid: 'sid-live',
+    };
+
+    const result = await deliverPush(event, deps, logger);
+
+    expect(result).not.toEqual({ status: 'skipped', reason: 'busy_block_hold' });
+  });
+
+  it.each(PUSH_NOTIFICATION_CATEGORIES)(
+    'holds %s only when it is a held category inside a busy block',
+    async category => {
+      const { deps } = makeDeps([{ token: 'tok-a', environment: 'production', id: 'dest-1' }], {
+        loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false, inBusyBlock: true })),
+      });
+      const event = { ...EVENT, category, destinationId: 'dest-1', destinationSid: 'sid-live' };
+
+      const result = await deliverPush(event, deps, logger);
+
+      if ((BUSY_BLOCK_HELD_CATEGORIES as readonly string[]).includes(category)) {
+        expect(result).toEqual({ status: 'skipped', reason: 'busy_block_hold' });
+        expect(deps.transport.send).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({ status: 'sent', delivered: 1 });
+      }
+    }
+  );
+
+  it('delivers a held category outside a busy block, and reports a switched-off one as disabled inside it', async () => {
+    const outside = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false, inBusyBlock: false })),
+    });
+    await expect(deliverPush(EVENT, outside.deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+
+    const disabled = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({
+        preferences: { agent_completed: false },
+        redactContent: false,
+        inBusyBlock: true,
+      })),
+    });
+    await expect(deliverPush(EVENT, disabled.deps, logger)).resolves.toEqual({
+      status: 'skipped',
+      reason: 'category_disabled',
+    });
+  });
+
+  it('does not hold a run result inside a busy block when brief_ready is switched off', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({
+        preferences: { brief_ready: false },
+        redactContent: false,
+        inBusyBlock: true,
+      })),
+    });
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+  });
+
   it('drops the event when the user no longer exists', async () => {
     const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
       loadRecipient: vi.fn(async () => null),
@@ -594,14 +737,30 @@ describe('loadPushRecipient', () => {
     await expect(loadPushRecipient('u1')).resolves.toEqual({
       preferences: { agent_message: false },
       redactContent: true,
+      inBusyBlock: false,
     });
     expect(h.orgFindById).toHaveBeenCalledWith('org-1');
   });
 
   it('does not redact for a user without an organization', async () => {
     h.userFindById.mockResolvedValue({ organizationId: null, preferences: null });
-    await expect(loadPushRecipient('u1')).resolves.toEqual({ preferences: undefined, redactContent: false });
+    await expect(loadPushRecipient('u1')).resolves.toEqual({
+      preferences: undefined,
+      redactContent: false,
+      inBusyBlock: false,
+    });
     expect(h.orgFindById).not.toHaveBeenCalled();
+  });
+
+  it('reports a user inside a freshly synced busy block', async () => {
+    const now = Date.now();
+    h.userFindById.mockResolvedValue({
+      organizationId: null,
+      preferences: { busyBlockBrief: { enabled: true } },
+      busyBlocks: [{ start: new Date(now - 60_000), end: new Date(now + 60_000) }],
+      busyBlocksSyncedAt: new Date(now - 60_000),
+    });
+    await expect(loadPushRecipient('u1')).resolves.toMatchObject({ inBusyBlock: true });
   });
 });
 

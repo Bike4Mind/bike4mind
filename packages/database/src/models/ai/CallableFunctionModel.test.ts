@@ -3,7 +3,6 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import {
   CALLABLE_FUNCTION_LIMITS,
-  CallableFunctionArtifactConflictError,
   CallableFunctionCapError,
   CallableFunctionProtectedFieldError,
   CallableFunctionSlugConflictError,
@@ -58,7 +57,6 @@ const fn = (overrides: Partial<CallableFunctionCreateInput> = {}): CallableFunct
   userId: 'user-1',
   slug: 'beam_midspan_deflection',
   description: RAW_CONTRACT.description,
-  state: 'draft',
   enabled: true,
   pin: {
     artifactId: 'artifact-1',
@@ -90,16 +88,19 @@ describe('CallableFunctionModel', () => {
   });
 
   describe('indexes', () => {
-    it('declares both unique indexes by name', async () => {
+    it('declares the unique name index, the three grant indexes and no index on the artifact', async () => {
       const byName = new Map((await CallableFunction.collection.indexes()).map(index => [index.name, index]));
       expect(byName.get('callablefn_owner_slug')).toMatchObject({
         key: { ownerType: 1, ownerKey: 1, slug: 1 },
         unique: true,
       });
-      expect(byName.get('callablefn_owner_artifact')).toMatchObject({
-        key: { ownerType: 1, ownerKey: 1, 'pin.artifactId': 1 },
-        unique: true,
-      });
+      expect([...byName.keys()].sort()).toEqual([
+        '_id_',
+        'callablefn_grant_org_state',
+        'callablefn_grant_project',
+        'callablefn_grant_users',
+        'callablefn_owner_slug',
+      ]);
     });
 
     it('refuses a second function with the same slug for one owner', async () => {
@@ -115,11 +116,10 @@ describe('CallableFunctionModel', () => {
       expect(await CallableFunction.countDocuments({ slug: 'beam_midspan_deflection' })).toBe(2);
     });
 
-    it('refuses a second function from the same artifact for one owner', async () => {
+    it('allows a second function from the same artifact under another name', async () => {
       await callableFunctionRepository.create(fn());
-      const again = callableFunctionRepository.create(fn({ slug: 'other_name' }));
-      await expect(again).rejects.toThrow(CallableFunctionArtifactConflictError);
-      await expect(again).rejects.toMatchObject({ statusCode: 409, additionalInfo: { code: 'artifact_has_function' } });
+      await callableFunctionRepository.create(fn({ slug: 'other_name' }));
+      expect(await CallableFunction.countDocuments({ 'pin.artifactId': fn().pin.artifactId })).toBe(2);
     });
   });
 

@@ -297,9 +297,9 @@ describe('filterByPromptMode', () => {
 
 describe('filterFeaturesByPromptMode', () => {
   it('builds every feature when no mode is set', () => {
-    expect(filterFeaturesByPromptMode(['mementos', 'questMaster', 'skills'], undefined)).toEqual([
+    expect(filterFeaturesByPromptMode(['mementos', 'agentDetection', 'skills'], undefined)).toEqual([
       'mementos',
-      'questMaster',
+      'agentDetection',
       'skills',
     ]);
   });
@@ -312,7 +312,7 @@ describe('filterFeaturesByPromptMode', () => {
   });
 
   it('drops the features that author their own prompt content when a mode is set', () => {
-    expect(filterFeaturesByPromptMode(['questMaster', 'agentDetection', 'skills'], 'raw')).toEqual(['skills']);
+    expect(filterFeaturesByPromptMode(['agentDetection', 'skills'], 'raw')).toEqual(['skills']);
   });
 
   // contextSummarization writes session.contextSummary as a side effect, and that field is an

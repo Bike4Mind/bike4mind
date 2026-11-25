@@ -26,6 +26,7 @@ import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { VIDEO_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
@@ -88,8 +89,12 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.
   // Idempotency keys are scoped per source, so the same key sent from both is two different requests.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
-  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-  const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
+  // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
+  // Otherwise an org-billed API key bills its org; null = personal, undefined = the caller's own org.
+  const paidRun = await resolvePaidCallRun(req, req.validated.run, req.validated.organization_id);
+  const organizationId = paidRun
+    ? paidRun.billingOrganizationId
+    : await resolveMediaBillingOrgId(req, req.validated.organization_id);
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
@@ -98,6 +103,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
       source,
       apiKeyId: req.apiKeyInfo?.keyId,
       apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      ...(paidRun && { run: paidRun.attribution }),
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per
       // source keeps a studio retry from replaying an API job that reused the same key.
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),

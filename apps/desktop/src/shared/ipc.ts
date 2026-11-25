@@ -1,14 +1,16 @@
+import type { HostBridgeApi } from './hostBridge';
 import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
+import type { LibraryApi } from './library';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
-import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { AppWorktree, SessionTreeDeletion, SessionWorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
 import type { AppMenuAction, RendererErrorReport } from './appShell';
-import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
+import type { AccountBilling, AccountCredits, AccountProfile, AccountSelection, SubscribePlanResult } from './account';
 import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -61,9 +63,11 @@ import type {
   ChatQueueEvent,
   ChatQueuedMessage,
   ChatSession,
+  ChatSessionMode,
   ChatSessionStatusEvent,
   ChatSessionExportResult,
   ChatSessionSummary,
+  RaiseRunBudgetResult,
   ChatStreamEvent,
   ChatVideoJob,
   ChatVideoLinkResult,
@@ -85,10 +89,11 @@ import type {
 } from './chat';
 import type { GenerationSettings } from './generation';
 import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from './modelSettings';
-import type { DevLogRecord, DevLogSnapshot } from './devLog';
+import type { DevLogErrorReport, DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
+import type { SpawnLocation } from './spawnLocation';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { ComposerDrafts } from './composerDrafts';
 import type { WorkspaceChanges } from './workspaceChanges';
@@ -145,6 +150,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LaunchSignals } from './launchSignals';
 import type {
   ModelBuildReport,
   ModelCaptureRequestEvent,
@@ -158,6 +164,7 @@ import type {
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
+import type { OrchestrateMiniPayload } from './orchestrateMini';
 import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnapshot } from './watch';
 
 /**
@@ -170,6 +177,8 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  hostRequest: 'host:request',
+  hostNotification: 'host:notification',
   studioGet: 'studio:get',
   studioPage: 'studio:page',
   studioJobAction: 'studio:job-action',
@@ -179,6 +188,9 @@ export const IPC_CHANNELS = {
   studioUploadReference: 'studio:upload-reference',
   studioAssetAction: 'studio:asset-action',
   studioChanged: 'studio:changed',
+  libraryPage: 'library:page',
+  libraryMedia: 'library:media',
+  libraryLocate: 'library:locate',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -196,6 +208,9 @@ export const IPC_CHANNELS = {
   accountSubscribePlan: 'account:subscribe-plan',
   accountPurchaseCredits: 'account:purchase-credits',
   accountSendFeedback: 'account:send-feedback',
+  accountGetSelection: 'account:get-selection',
+  accountSelectPayer: 'account:select-payer',
+  accountSelectionChanged: 'account:selection-changed',
   usageGetHistory: 'usage:get-history',
   usageGetLocal: 'usage:get-local',
   fleetGetState: 'fleet:get-state',
@@ -211,6 +226,10 @@ export const IPC_CHANNELS = {
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
   chatGetLocalContextFit: 'chat:get-local-context-fit',
+  /** Where a suggested session starts (SpawnLocation); main pushes `chatSpawnLocation` when it changes. */
+  chatGetSpawnLocation: 'chat:get-spawn-location',
+  chatSetSpawnLocation: 'chat:set-spawn-location',
+  chatSpawnLocation: 'chat:spawn-location',
   chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
   chatSettleLocalModel: 'chat:settle-local-model',
@@ -221,6 +240,9 @@ export const IPC_CHANNELS = {
   chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
+  /** The Settings cap on automatic turn extensions; main validates it, see @shared/turnExtensionSetting. */
+  chatGetTurnExtensions: 'chat:get-turn-extensions',
+  chatSetTurnExtensions: 'chat:set-turn-extensions',
   chatSetSessionGeneration: 'chat:set-session-generation',
   chatGetModelSettings: 'chat:get-model-settings',
   chatGetUnsupportedModelSettings: 'chat:get-unsupported-model-settings',
@@ -228,6 +250,7 @@ export const IPC_CHANNELS = {
   chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
   chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
+  chatRaiseRunBudget: 'chat:raise-run-budget',
   chatGetRolePolicy: 'chat:get-role-policy',
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
@@ -251,6 +274,7 @@ export const IPC_CHANNELS = {
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
   chatListRecentFolders: 'chat:list-recent-folders',
+  chatLaunchSignals: 'chat:launch-signals',
   chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
   chatWorkspaceChanges: 'chat:workspace-changes',
@@ -259,6 +283,7 @@ export const IPC_CHANNELS = {
   chatGetSession: 'chat:get-session',
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
+  chatDeleteSessionTree: 'chat:delete-session-tree',
   chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
   chatListWorktrees: 'chat:list-worktrees',
   chatRemoveWorktrees: 'chat:remove-worktrees',
@@ -542,8 +567,9 @@ export const IPC_CHANNELS = {
   /** main -> renderer push; what the pane's standing indicator draws. */
   browserCookiesChanged: 'browser:cookies-changed',
   /**
-   * The developer log. Every one of these belongs to the dev window alone, and none of them is
-   * reachable from a tool or from a reply: the window is opened by a chord the user presses.
+   * The developer log. All but devLogReportError belong to the dev window alone, and none of
+   * them is reachable from a tool or from a reply: the window is opened by a chord the user
+   * presses. devLogReportError is the one any window may call, and its input is untrusted.
    *
    * Source-agnostic by design - see @shared/devLog. Adding a source to the log adds nothing
    * here.
@@ -554,6 +580,8 @@ export const IPC_CHANNELS = {
   devLogCopy: 'devlog:copy',
   /** main -> renderer push; a batch of newly captured records, coalesced in the sink. */
   devLogRecords: 'devlog:records',
+  /** Renderer -> main, fire-and-forget (no reply). A caught renderer failure; main validates and rate-limits it. */
+  devLogReportError: 'devlog:report-error',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
   /**
@@ -632,6 +660,18 @@ export const IPC_CHANNELS = {
   watchRespond: 'watch:respond',
   watchFocusAgent: 'watch:focus-agent',
   watchCloseMini: 'watch:close-mini',
+  /** An app window's stage -> main: the OrchestrateMiniPayload the Orchestrate mini window shows, or null. */
+  orchestrateMiniPublish: 'orchestrate:mini-publish',
+  orchestrateMiniToggle: 'orchestrate:mini-toggle',
+  orchestrateMiniGetOpen: 'orchestrate:mini-get-open',
+  /** main -> app windows push: the Orchestrate mini window opened or closed. */
+  orchestrateMiniOpen: 'orchestrate:mini-open',
+  /** The Orchestrate mini window's own surface (preload/orchestrateMini.ts); refused from any other window. */
+  orchestrateMiniGetSnapshot: 'orchestrate:mini-get-snapshot',
+  /** main -> Orchestrate mini window push of the latest payload, or null. */
+  orchestrateMiniSnapshot: 'orchestrate:mini-snapshot',
+  orchestrateMiniFocus: 'orchestrate:mini-focus',
+  orchestrateMiniClose: 'orchestrate:mini-close',
   /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
   skinsList: 'skins:list',
   /** main -> renderer push after the mods folder changed on disk. */
@@ -760,6 +800,8 @@ export interface CreateSessionRequest {
    * id and before replying, so the row never shows in the default groups first.
    */
   sectionId?: string;
+  /** Omitted means Chat. Code sessions start through their own request; see CreateCodeSessionRequest. */
+  mode?: Exclude<ChatSessionMode, 'code'>;
 }
 
 /**
@@ -797,8 +839,23 @@ export interface MiniTavernApi {
   close(): Promise<void>;
 }
 
+/**
+ * Everything the Orchestrate mini window can reach, exposed as `window.b4mOrchestrateMini` by
+ * preload/orchestrateMini.ts: the stage's snapshot and two actions, neither of which answers anything.
+ * Pushed values are `unknown` on purpose: the page parses them (parseOrchestrateMiniPayload) on receipt.
+ */
+export interface OrchestrateMiniApi {
+  getSnapshot(): Promise<unknown>;
+  onSnapshot(listener: (payload: unknown) => void): () => void;
+  /** Raise the main window on the decision this agent (or the root) waits on. */
+  focus(agentId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface DesktopApi {
   studio: StudioApi;
+  host: HostBridgeApi;
+  library: LibraryApi;
   getAppInfo(): Promise<AppInfo>;
   /** App-menu items (Cmd+N, Cmd+,) that act on the renderer's views. */
   appMenu: {
@@ -898,6 +955,15 @@ export interface DesktopApi {
     /** Resolves when the payment window closes, not as proof of payment. */
     purchaseCredits(packageId: string, acceptedTerms?: boolean): Promise<SubscribePlanResult>;
     sendFeedback(content: string): Promise<FeedbackSubmitResult>;
+    /**
+     * Who pays for credit-spending calls, and the accounts that could. `fresh` re-reads balances
+     * and organizations; otherwise main answers from its last read.
+     */
+    getSelection(fresh?: boolean): Promise<AccountSelection>;
+    /** Null is Personal. Rejects for an organization the user is not listed in. */
+    selectPayer(organizationId: string | null): Promise<AccountSelection>;
+    /** Any pick (this window's included), a fallback to Personal, or a sign-in or out; returns the unsubscribe. */
+    onSelectionChanged(listener: (selection: AccountSelection) => void): () => void;
   };
   usage: {
     /**
@@ -943,6 +1009,10 @@ export interface DesktopApi {
     setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
     /** Which local models each fixed size may not fit, by the memory estimate. */
     getLocalContextFit(): Promise<LocalContextFit>;
+    /** Where a suggested session starts; see @shared/spawnLocation. */
+    getSpawnLocation(): Promise<SpawnLocation>;
+    setSpawnLocation(location: SpawnLocation): Promise<SpawnLocation>;
+    onSpawnLocation(listener: (location: SpawnLocation) => void): () => void;
     /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
     listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
@@ -958,6 +1028,10 @@ export interface DesktopApi {
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** How long this conversation's prompt cache lives. Null when the session is gone. */
     setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null>;
+    /** How many times a productive turn is carried on past its budget; 0 always stops. */
+    getTurnExtensions(): Promise<number>;
+    /** Answers with what was saved: anything out of range lands as the default. */
+    setTurnExtensions(extensions: number): Promise<number>;
     /** Replace this conversation's sampling and output overrides; `{}` clears them. Null when the session is gone. */
     setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null>;
     /** A device-side model's defaults from the Models screen; `{}` when none are set, null for an id that is not one. */
@@ -973,7 +1047,14 @@ export interface DesktopApi {
     getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
-    setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;
+    /** `budgetCredits` caps the run Orchestrate starts; only read when it turns on. */
+    setSessionOrchestrate(
+      sessionId: string,
+      orchestrate: boolean,
+      budgetCredits?: number
+    ): Promise<ChatSessionSummary | null>;
+    /** Set or raise the credit budget of the session's orchestration run; a raise resumes a paused run. */
+    raiseRunBudget(sessionId: string, budgetCredits: number): Promise<RaiseRunBudgetResult>;
     getRolePolicy(): Promise<RolePolicy>;
     setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
     taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
@@ -1010,6 +1091,8 @@ export interface DesktopApi {
     pickProjectDirectory(): Promise<string | null>;
     /** Recently used project folders that still exist, most recent first. */
     listRecentFolders(): Promise<RecentFolder[]>;
+    /** Local hints for which place a first launch opens on; see shared/launchSignals.ts. */
+    launchSignals(): Promise<LaunchSignals>;
     /** Forget one; the folder itself is untouched. Resolves to the list that is left. */
     removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
@@ -1029,7 +1112,18 @@ export interface DesktopApi {
     getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
-    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /**
+     * Deletes the listed nested sessions, deepest first, then the session itself. `removeWorktree`
+     * is the parent's worktree; `nestedWorktreeIds` are the nested sessions whose worktrees go too.
+     */
+    deleteSessionTree(
+      sessionId: string,
+      nestedIds: string[],
+      removeWorktree?: boolean,
+      nestedWorktreeIds?: string[]
+    ): Promise<SessionTreeDeletion>;
+    /** `alsoDeleting` are nested sessions deleted with it, which then do not hold its worktree. */
+    inspectWorktreeRemoval(sessionId: string, alsoDeleting?: string[]): Promise<SessionWorktreeRemoval | null>;
     /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
     listWorktrees(directory: string): Promise<AppWorktree[]>;
     /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */
@@ -1532,6 +1626,7 @@ export interface DesktopApi {
   };
   /** OS notices for sessions that need the user while the app is not focused. */
   attention: {
+    /** Opens the signed-in environment's web app in the default browser. */
     openServerSessions(): Promise<void>;
     /**
      * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
@@ -1561,6 +1656,15 @@ export interface DesktopApi {
     setPreferences(patch: WatchPreferencesPatch): Promise<WatchPreferences>;
     onPreferences(listener: (preferences: WatchPreferences) => void): () => void;
   };
+  /** The Orchestrate mini window (main/orchestrateMini): the stage feeds it and toggles it. */
+  orchestrateMini: {
+    /** The stage's current payload, or null when no orchestration is on stage. Main validates it. */
+    publish(payload: OrchestrateMiniPayload | null): Promise<void>;
+    /** Resolves with whether the window is open afterwards. */
+    toggle(): Promise<boolean>;
+    isOpen(): Promise<boolean>;
+    onOpenChanged(listener: (open: boolean) => void): () => void;
+  };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.
    */
@@ -1573,5 +1677,7 @@ export interface DesktopApi {
     copy(text: string): Promise<void>;
     /** Subscribe to batches of newly captured records; returns the unsubscribe. */
     onRecords(listener: (records: DevLogRecord[]) => void): () => void;
+    /** Report a renderer failure to the log. Fire-and-forget, so it cannot reject into a handler. */
+    reportError(report: DevLogErrorReport): void;
   };
 }

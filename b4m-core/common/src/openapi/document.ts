@@ -55,7 +55,7 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills** and **Account**.',
+      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills**, **Functions** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -133,10 +133,17 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       '`GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **Briefs** (`POST /api/v1/briefs`) return `202`. Poll ' +
       '`GET /api/v1/briefs/{id}` until `status` is `ready` or `failed`.',
+    '- **Follow-up briefs** (`POST /api/v1/briefs/follow-ups`) return `202` too and are polled the same way, ' +
+      'at `GET /api/v1/briefs/{id}`.',
     '- **Brief replies** (`POST /api/v1/briefs/{id}/decisions/{decisionId}/reply`) return `202` with the ' +
       '`executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.',
     '- **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll ' +
       '`GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`.',
+    '- **Delegations** (`POST /api/v1/delegations`) return `202`. Poll ' +
+      '`GET /api/v1/delegations/{id}` until `status` is `handled`, `needs_decision` or `failed`.',
+    '- **Function calls** (`POST /api/v1/functions/{id}/invoke` with `mode: "async"`) return `202` with a ' +
+      '`call_id`. Poll `GET /api/v1/functions/calls/{call_id}` until `status` is `finished`, then check ' +
+      '`outcome` before reading `output`. Results are kept 24 hours.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly. A text-to-speech ' +
@@ -441,6 +448,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       name: 'Skills',
       description:
         "Create, update and read your own skills from a SKILL.md, and the Skill Market: your organization's approved listings, served as a Claude Code plugin marketplace.",
+    },
+    {
+      name: 'Functions',
+      description:
+        'Your live functions: Python artifacts saved as functions and promoted after their tests passed on the server. List and read them, and call one to get its output with a stamp of what it ran on.',
     },
     {
       name: 'Slack',

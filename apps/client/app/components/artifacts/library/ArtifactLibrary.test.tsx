@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -116,11 +116,20 @@ describe('ArtifactLibrary', () => {
     renderLibrary();
     await screen.findByTestId('artifact-library-empty');
 
-    fireEvent.change(screen.getByTestId('artifact-library-search-input'), { target: { value: 'mods' } });
+    // Skips the 300ms search debounce; shouldAdvanceTime keeps waitFor's own timers moving.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fireEvent.change(screen.getByTestId('artifact-library-search-input'), { target: { value: 'mods' } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
 
-    await waitFor(() => expect(h.get).toHaveBeenCalledTimes(2));
-    expect(requestedParams(1).get('search')).toBe('mods');
-    expect(await screen.findByTestId('artifact-library-empty')).toHaveTextContent('No artifacts match');
+      await waitFor(() => expect(h.get).toHaveBeenCalledTimes(2));
+      expect(requestedParams(1).get('search')).toBe('mods');
+      expect(await screen.findByTestId('artifact-library-empty')).toHaveTextContent('No artifacts match');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows an error when the list fails to load', async () => {

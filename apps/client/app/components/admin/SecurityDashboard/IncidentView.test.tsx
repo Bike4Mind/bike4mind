@@ -3,7 +3,11 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { SignupTimeseries } from '@bike4mind/server-utils/app/utils/signupSignals';
-import type { IncidentRange, IncidentSignals, IncidentState } from './incidentTypes';
+import type {
+  IncidentRange,
+  IncidentSignals,
+  IncidentState,
+} from '@bike4mind/server-utils/app/components/admin/SecurityDashboard/incidentTypes';
 
 const mocks = vi.hoisted(() => ({
   signals: vi.fn(),

@@ -1,4 +1,4 @@
-import { latestMorningBriefSchema } from '@client/shared/adminMorningBrief';
+import { latestMorningBriefSchema } from '@bike4mind/server-utils/shared/adminMorningBrief';
 import { ForbiddenError, isFullAdmin } from '@bike4mind/common';
 import { adminMorningBriefRepository } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';

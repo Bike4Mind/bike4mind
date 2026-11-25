@@ -3,6 +3,7 @@ import { randomBytes } from 'crypto';
 import { claudeSkillNameFor, type ISkillListing } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import { SkillBundle } from './SkillBundleModel';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * A Skill Market listing. Holds a denormalized copy of its current APPROVED version (name,
@@ -196,7 +197,7 @@ export async function approvePendingListingVersion(
     await assignClaudePluginName(listingId, denorm.name);
   } catch (err) {
     // The approve already landed; the Claude Code feed assigns the name on its next build instead.
-    console.error('[SkillListing] assigning claudePluginName failed', listingId, err);
+    Logger.error('[SkillListing] assigning claudePluginName failed', { listingId, error: err });
   }
   return true;
 }

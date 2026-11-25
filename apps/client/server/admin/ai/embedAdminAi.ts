@@ -14,10 +14,10 @@ import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import { resolveEmbeddingProvider } from '@bike4mind/services/llm/embeddingProviders';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { reserveAdminAiSpend } from './budget';
-import { AdminAiSkip, type AdminAiSkipReason } from './adminAiSkip';
-import { pseudonymiseEvidence } from './pseudonymiseEvidence';
-import { recordAdminAiAttempt } from './telemetry';
+import { reserveAdminAiSpend } from '@bike4mind/server-utils/admin/ai/budget';
+import { AdminAiSkip, type AdminAiSkipReason } from '@bike4mind/server-utils/admin/ai/adminAiSkip';
+import { pseudonymiseEvidence } from '@bike4mind/server-utils/admin/ai/pseudonymiseEvidence';
+import { recordAdminAiAttempt } from '@bike4mind/server-utils/admin/ai/telemetry';
 
 export const FEEDBACK_EMBEDDING_MODEL = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
 export const loadFeedbackAiConfig = async (): Promise<AdminAiConfig> => {

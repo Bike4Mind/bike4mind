@@ -10,6 +10,7 @@ import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
+import type { InterventionHold } from '../../schemas/autoContainment';
 import type { SuspensionReasonCategory } from '../../accountSuspensionCategories';
 import type { SignupRiskSignal } from '../../schemas/settings';
 import type { SignupRiskAutoApprovalPolicy } from '../../schemas/signupRiskReview';
@@ -271,6 +272,8 @@ export interface IUserPreferences {
    * the GET route treat a missing or disabled schedule as off.
    */
   briefSchedule?: BriefSchedule;
+  /** Opt-in for a brief after each synced busy block; set through `PUT /api/v1/briefs/busy-blocks`. */
+  busyBlockBrief?: { enabled: boolean };
 }
 
 /**
@@ -318,7 +321,7 @@ export interface IUserModeration {
   hits: IModerationHit[];
   /** Current escalation state. */
   status: UserModerationStatus;
-  /** When `status` last changed. */
+  /** When an admin last set `status`. Automatic escalations leave it alone, so it marks the last human review. */
   statusChangedAt: Date | null;
   /** While `throttled`, the instant the throttle expires. */
   throttledUntil: Date | null;
@@ -326,6 +329,36 @@ export interface IUserModeration {
   appealedAt?: Date | null;
   /** The most recent appeal message the user submitted, surfaced to admins for review. */
   appealText?: string | null;
+}
+
+/**
+ * Moderation categories severe enough that every hit is alerted on and queued for admin review,
+ * whatever the user's escalation status. Matching is exact against `IModerationHit.categories`.
+ */
+export const MODERATION_SEVERE_CATEGORIES: readonly string[] = ['sexual/minors'];
+
+/** Display names for each {@link ModerationHitSource}, shared by the review list and the escalation alert. */
+export const MODERATION_SOURCE_LABELS: Record<ModerationHitSource, string> = {
+  openai: 'OpenAI moderation',
+  bedrock: 'Bedrock guardrail',
+  provider: 'Provider refusal',
+};
+
+/** Statuses the admin moderation review list always shows: they await a human decision. */
+export const MODERATION_REVIEW_STATUSES = [
+  'throttled',
+  'suspend_pending',
+] as const satisfies readonly UserModerationStatus[];
+
+/** One row of the admin text-moderation review list. */
+export interface ModerationReviewUser {
+  id: string;
+  name: string | null;
+  email: string | null;
+  createdAt: Date | null;
+  moderation: IUserModeration;
+  /** Whether a retained hit carries a {@link MODERATION_SEVERE_CATEGORIES} label newer than the last status change. */
+  hasUnreviewedSevereHit: boolean;
 }
 
 export const THROTTLE_TIERS = ['none', 'shadow'] as const;
@@ -444,7 +477,7 @@ export interface IClientUsageEntry {
 
 export interface IUser extends ICreditHolder {
   id: string;
-  /** Durable admission id; deleting a QuestMaster plan never restores the allowance. */
+  /** Stored data only: written by the retired in-chat QuestMaster free start, read by nothing. */
   freeQuestStartId?: string;
   username: string;
   name: string;
@@ -505,6 +538,8 @@ export interface IUser extends ICreditHolder {
   signupGrantHeldReason?: 'budget_exhausted' | 'risk_review' | null;
   /** When the signup tranche was last held for an exhausted daily budget. */
   signupGrantHeldAt?: Date | null;
+  /** Graduated automated holds (apps/workers/src/security/autoContainment), one per deciding decision. */
+  interventionHolds?: InterventionHold[];
   level: UserLevelType;
   isBanned: boolean;
   /** Why the account is suspended, as told to the user; null when not suspended or suspended without one. */
@@ -533,6 +568,15 @@ export interface IUser extends ICreditHolder {
   deletion?: IUserDeletion | null;
   /** When the next scheduled brief is due; unset while the brief schedule is off. See `preferences.briefSchedule`. */
   nextBriefAt?: Date;
+  /** When the last scheduled or event-triggered brief started; the debounce both paths claim. */
+  lastBriefStartedAt?: Date;
+  /** Busy intervals synced from the device calendar, merged and sorted; see `preferences.busyBlockBrief`. */
+  busyBlocks?: { start: Date; end: Date }[];
+  busyBlocksSyncedAt?: Date;
+  /** End of the earliest stored block not yet briefed; unset when none is pending or the opt-in is off. */
+  nextBlockBriefAt?: Date;
+  /** End of the last block a brief was claimed for, so a re-sync cannot re-arm it. */
+  lastBlockBriefEnd?: Date;
   /** Private erasure retry state, including restored accounts with no deletion schedule. */
   accountFilePurge?: {
     startedAt?: Date;
@@ -1246,6 +1290,11 @@ export interface IUserRepository
    * override field first gets its legacy-derived override written. False when the user does not exist.
    */
   setPlanStorageLimit: (userId: string, planStorageLimitMb: number) => Promise<boolean>;
+  /**
+   * Clears `planStorageLimit` (to null) and re-derives `storageLimit` the same way, so it falls back to the
+   * override, or to DEFAULT_STORAGE_LIMIT_MB without one. Deletes nothing. False when the user does not exist.
+   */
+  clearPlanStorageLimit: (userId: string) => Promise<boolean>;
   /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
   findCurrentStorageSize: (userId: string) => Promise<number | null>;
   /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */
@@ -1270,13 +1319,21 @@ export interface IUserRepository
    */
   recordModerationHit: (userId: string, hit: IModerationHit) => Promise<IUserDocument | null>;
   /**
+   * The admin text-moderation review list: users in a {@link MODERATION_REVIEW_STATUSES} status, plus
+   * users with a severe-category hit newer than their last status change. Most recent hit first.
+   */
+  findModerationReviewQueue: (limit: number) => Promise<ModerationReviewUser[]>;
+  /** How many users {@link findModerationReviewQueue} would list, counting stops at `limit`. */
+  countModerationReviewQueue: (options?: { limit?: number }) => Promise<number>;
+  /**
    * Transition a user's moderation escalation state. Leaves `isModerated` alone. Returns the
-   * updated user.
+   * updated user. `automatic` marks a policy-driven transition: it does not stamp
+   * `statusChangedAt`, which records the last admin decision.
    */
   setModerationStatus: (
     userId: string,
     status: UserModerationStatus,
-    options?: { throttledUntil?: Date | null }
+    options?: { throttledUntil?: Date | null; automatic?: boolean }
   ) => Promise<IUserDocument | null>;
   /**
    * Store a recomputed risk score. Preserve pending holds and approved/banned rulings in the

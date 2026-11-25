@@ -20,7 +20,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { getCallerModelList } from '@server/utils/callerModelList';
-import { CLIENT_CONFIG_FEATURE_SETTINGS } from '@server/utils/clientConfigFeatures';
+import { CLIENT_CONFIG_FEATURE_SETTINGS, RETIRED_CLIENT_CONFIG_FEATURES } from '@server/utils/clientConfigFeatures';
 import { callablePublicModels, toPublicModelWithReasoning } from '@server/utils/publicModels';
 import { publicAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { configuredSupportEmail } from '@server/auth/blockedSignIn';
@@ -45,7 +45,7 @@ const resolveFeatures = (settings: Record<string, string>): ClientConfigFeatures
     flag,
     readSetting(key, settings) === true,
   ]);
-  return Object.fromEntries(entries) as ClientConfigFeatures;
+  return { ...Object.fromEntries(entries), ...RETIRED_CLIENT_CONFIG_FEATURES } as ClientConfigFeatures;
 };
 
 const isServerStatus = (value: string): value is ClientConfigResponse['server']['status'] =>

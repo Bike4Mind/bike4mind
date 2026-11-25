@@ -1,5 +1,6 @@
-# Bike4Mind iOS. Simulator-only until a team id is configured; override SIMULATOR to pick another device,
+# Bike4Mind iOS. The default targets build for the simulator; override SIMULATOR to pick another device,
 # or DESTINATION for a full xcodebuild destination (CI passes one by simulator id).
+# `make device` builds, installs and launches on a connected iPhone and needs a team id (see DEVICE_TESTING.md).
 SIMULATOR ?= iPhone 17
 DESTINATION ?= platform=iOS Simulator,name=$(SIMULATOR),OS=latest
 PROJECT := Bike4Mind.xcodeproj
@@ -8,7 +9,7 @@ DERIVED_DATA := $(CURDIR)/build/DerivedData
 # Generated sources are excluded from formatting so a regeneration diff is exactly the generator's output.
 SWIFT_SOURCES = $(shell find Bike4Mind Widgets CaptureUI ActivityIntents ShareExtension Tools/GenerateAppIcon.swift Packages -name '*.swift' -not -path '*/Generated/*' -not -path '*/.build/*')
 
-.PHONY: build test format lint clean generate-client generate-tokens check-entitlements
+.PHONY: build device test format lint clean generate-client generate-tokens check-entitlements
 
 CLIENT_PKG := Packages/B4MClient
 GENERATOR_PKG := Tools/Generator
@@ -17,6 +18,20 @@ SPEC_PATH_IN_REPO := apps/client/public/openapi.json
 
 build:
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) build
+
+# Builds for, installs on and launches on a connected iPhone. DEVICE=<name|udid> picks one when several are plugged in.
+# The team comes from Config/Local.xcconfig (DEVELOPMENT_TEAM) or `make device DEVELOPMENT_TEAM=<id>`.
+# Installing over an existing copy keeps its data, so the app stays signed in.
+device:
+	@if [ -z "$(DEVELOPMENT_TEAM)" ] && { ! grep -Eq '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[A-Z0-9]{10}[[:space:]]*$$' Config/Local.xcconfig 2>/dev/null || grep -q YOURTEAMID Config/Local.xcconfig 2>/dev/null; }; then \
+		echo "error: no signing team configured. Copy Config/Local.xcconfig.example to Config/Local.xcconfig and set DEVELOPMENT_TEAM (see DEVICE_TESTING.md)." >&2; exit 1; fi
+	@set -e; udid=$$(Tools/select-device.sh "$$DEVICE"); \
+	echo "Building for device $$udid"; \
+	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Debug -destination "id=$$udid" -derivedDataPath $(DERIVED_DATA) -allowProvisioningUpdates $(if $(DEVELOPMENT_TEAM),DEVELOPMENT_TEAM=$(DEVELOPMENT_TEAM)) build; \
+	app="$(DERIVED_DATA)/Build/Products/Debug-iphoneos/$(SCHEME).app"; \
+	bundle_id=$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$$app/Info.plist"); \
+	xcrun devicectl device install app --device "$$udid" "$$app"; \
+	xcrun devicectl device process launch --device "$$udid" --terminate-existing "$$bundle_id"
 
 # The unit suites live in the local packages and run on the simulator through each package's own
 # SwiftPM scheme: a project scheme cannot list a local package's test target as a testable.

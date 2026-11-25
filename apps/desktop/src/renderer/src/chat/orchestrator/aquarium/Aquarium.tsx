@@ -163,6 +163,7 @@ function Fish({ placement, onAction }: { placement: FishPlacement; onAction(acti
             }}
           >
             <AgentPrIndicator
+              agentId={agent.id}
               pr={agent.pr}
               onOpen={() => onAction({ kind: 'open-pr', agentId: agent.id })}
               compact

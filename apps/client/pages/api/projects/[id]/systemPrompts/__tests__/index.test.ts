@@ -33,6 +33,8 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},
+  userRepository: {},
+  inviteRepository: {},
   withTransaction: (fn: () => unknown) => fn(),
 }));
 

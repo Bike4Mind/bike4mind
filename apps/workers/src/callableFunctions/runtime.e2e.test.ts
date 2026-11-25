@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
@@ -471,6 +472,8 @@ describe('callable function runtime with real Pyodide', () => {
     const result = await runner({ op: 'call', code: BEAM, contract, params });
     expect(result.outcome).toBe('ok');
     expect(result.outputs?.deflection).toBeCloseTo((5 * 1000 * 5 ** 4) / (384 * 200e9 * 8e-6), 12);
+    const lock = readFileSync(path.join(PYODIDE_DIR, 'pyodide-lock.json'));
+    expect(result.runtime).toEqual({ lockHash: createHash('sha256').update(lock).digest('hex'), packages: [] });
     expect(spawnedPids().slice(-2).every(pidGone)).toBe(true);
     expect(liveCallableFunctionChildren()).toEqual([]);
   }, 120_000);
@@ -611,6 +614,39 @@ def attempt(arg):
       120_000
     );
   });
+
+  it('names the packages loaded before guest code ran, so a guest that edits the list changes nothing', async () => {
+    const child = spawn(process.execPath, [CHILD, PYODIDE_DIR, '--unsafe-no-isolation'], {
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    const exited = new Promise(resolve => child.once('exit', resolve));
+    const replied = new Promise<{ packages?: string[]; outputsJson?: string }>(resolve => {
+      createInterface({ input: child.stdout }).on('line', line => {
+        const message = JSON.parse(line) as { started?: boolean };
+        if (message.started !== true) resolve(message);
+      });
+    });
+    const code = probe(`
+def attempt(arg):
+    import pyodide_js
+    pyodide_js.loadedPackages.numpy = "forged"
+    return getattr(pyodide_js.loadedPackages, "numpy", None) == "forged", "wrote numpy into loadedPackages"
+`);
+    const request = {
+      op: 'call',
+      glue: FUNCTION_CALL_GLUE_PY,
+      code,
+      paramsJson: '{"arg": ""}',
+      pyodideVersion: PYODIDE_VERSION,
+    };
+    child.stdin.write(`${JSON.stringify(request)}\n`);
+    const reply = await replied;
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await exited;
+    expect(asAttempt(JSON.parse(reply.outputsJson ?? '{}')).reached).toBe(true);
+    expect(reply.packages).toEqual([]);
+  }, 120_000);
 
   // A sweep, not the live set: a run keeps its pid in the set when its group outlived the reap.
   it('leaves no child once the hostile attempts end', () => {

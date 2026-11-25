@@ -26,6 +26,7 @@ export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
 export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
 export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
 export const BRIEF_QUESTION_CLOSED_ERROR_CODE = 'question_closed';
+export const BRIEF_DECISION_CLOSED_ERROR_CODE = 'decision_closed';
 export const END_USER_ID_NOT_ALLOWED_ERROR_CODE = 'end_user_id_not_allowed';
 export const INVALID_END_USER_ID_ERROR_CODE = 'invalid_end_user_id';
 
@@ -74,6 +75,7 @@ export const API_ERROR_CODES = [
   UNKNOWN_MODEL_ERROR_CODE,
   /** The model is outside the free-tier allowlist; remediation is a paid plan or a model from GET /api/v1/models. */
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  /** No longer raised: kept because quests that settled before the in-chat QuestMaster plan was retired carry it. */
   FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   /** An organization-billed API key named a different billing organization; remediation is omitting it. */
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
@@ -101,6 +103,16 @@ export const API_ERROR_CODES = [
   RUN_BUDGET_EXHAUSTED_ERROR_CODE,
   /** A 409: a run budget change that is not a raise - the new budget is not above the current one, or the run was minted without one. */
   RUN_BUDGET_NOT_RAISED_ERROR_CODE,
+  /** A 403: evaluation runs are not enabled for this account by the deployment. Not retryable. */
+  'evaluation_not_enabled',
+  /** A 409: an evaluation run already exists for this owner and rootSessionId with different limits or models. */
+  'evaluation_identity_conflict',
+  /** A 409: this evaluation requestId already has a receipt; recover it from GET /api/v1/completion-runs/{runId}/evaluation. */
+  'evaluation_request_exists',
+  /** A 409: another evaluation receipt on the run is pending or unknown; recover it before admitting more. */
+  'evaluation_receipt_outstanding',
+  /** A 422: the evaluation run's provider budget, token or request limit is used up, or the model is not in its limits. */
+  'evaluation_budget_exhausted',
   /** A 409: the pending action the caller answered was replaced by a newer one; review the new one. */
   MCP_ACTION_REPLACED_ERROR_CODE,
   /** A 409: the pending action lapsed before it was answered; it is cleared and the agent must ask again. */
@@ -109,6 +121,8 @@ export const API_ERROR_CODES = [
   PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE,
   /** A 409: the brief question was already replied to, or the conversation moved past it; nothing was sent. */
   BRIEF_QUESTION_CLOSED_ERROR_CODE,
+  /** A 409: the brief follow-up decision was already approved or dismissed; nothing changed. */
+  BRIEF_DECISION_CLOSED_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',

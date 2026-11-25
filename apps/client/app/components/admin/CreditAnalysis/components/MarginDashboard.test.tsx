@@ -375,6 +375,7 @@ describe('MarginDashboard funding cohort section', () => {
     costUsd: { granted: 3, purchased: 1, subscription: 0, unknown: 0 },
     credits: { granted: 300, purchased: 100, subscription: 0, unknown: 0 },
     unattributedCostUsd: 0.5,
+    platformCostUsd: 0,
     ...overrides,
   });
 
@@ -386,6 +387,18 @@ describe('MarginDashboard funding cohort section', () => {
     expect(row).toHaveTextContent('$3.00');
     expect(row).toHaveTextContent('$0.50');
     expect(screen.getByTestId('margin-funding-cohort-share-2026-07-06')).toHaveTextContent('75%');
+  });
+
+  it('keeps platform operations separate from unattributed cost and granted share', async () => {
+    setResponses({
+      'view=funding-cohort': { targetCreditsPerUsd: 1200, rows: [cohortRow({ platformCostUsd: 8.25 })] },
+    });
+    renderDashboard();
+
+    expect(await screen.findByTestId('margin-funding-cohort-platform-2026-07-06')).toHaveTextContent('$8.25');
+    expect(screen.getByTestId('margin-funding-cohort-row-2026-07-06')).toHaveTextContent('$0.50');
+    expect(screen.getByTestId('margin-funding-cohort-share-2026-07-06')).toHaveTextContent('75%');
+    expect(screen.getByRole('columnheader', { name: 'Platform operations $' })).toBeInTheDocument();
   });
 
   it('labels a cohort whose user record is gone as Unknown', async () => {

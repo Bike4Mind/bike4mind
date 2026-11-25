@@ -51,6 +51,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   publishTelemetryAlertCallback: vi.fn(),
+  publishModerationEscalation: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services/llm', async () => {
@@ -78,11 +79,6 @@ vi.mock('@bike4mind/database', async () => {
     spendFreezeRepository: { findActiveForSubject: mockFindActiveFreeze },
   };
 });
-
-vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/meterPlatformCompletion')>()),
-  createCompletionMeter: vi.fn(),
-}));
 
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 
@@ -238,32 +234,18 @@ describe('processQuest', () => {
     expect(mockResolveCallableFunctions).toHaveBeenCalledWith(user);
   }, 120_000);
 
-  it("hands the queued turn's key to the QuestMaster completion meter", async () => {
+  it('wires the moderation escalation notifier', async () => {
     const { processQuest } = await import('./questProcessor');
-    const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
+    const { publishModerationEscalation } = await import('@bike4mind/server-utils/utils/chatCompletionDefaults');
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
-    const params = {
-      userId: 'user-1',
-      sessionId: 'session-1',
-      questId: 'quest-1',
-      params: {},
-      apiKeyId: 'k1',
-      apiKeyBillingOwnerType: 'Organization',
-    };
 
-    await processQuest(params as never, logger as never);
-    const options = processOptions.mock.calls.at(-1)?.[0] as {
-      createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
-    };
-    options.createCompletionMeter({ organizationId: 'org-1', featureLabel: 'QuestMaster planning' });
+    await processQuest(
+      { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+      logger as never
+    );
 
-    expect(createCompletionMeter).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'QuestMaster planning', {
-      sessionId: 'session-1',
-      organizationId: 'org-1',
-      apiKeyId: 'k1',
-      apiKeyBillingOwnerType: 'Organization',
-    });
-  });
+    expect(processOptions.mock.calls.at(-1)?.[0].notifyModerationEscalation).toBe(publishModerationEscalation);
+  }, 120_000);
 
   it.each([
     ['withholds the admin role when the payload says so', true, false],
@@ -534,27 +516,6 @@ describe('processQuest', () => {
       await expect(run()).rejects.toThrow('model down');
       expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
     }, 120_000);
-
-    it('settles a typed quest allowance refusal without retrying', async () => {
-      const { ForbiddenError } = await import('@bike4mind/common');
-      const { questRepository } = await import('@bike4mind/database');
-      const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
-      mockProcess.mockRejectedValueOnce(
-        new ForbiddenError('Free quest already started', {
-          errorCode: 'free_quest_limit_reached',
-        })
-      );
-      await expect(run()).resolves.toBeUndefined();
-      expect(settle).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          status: 'done',
-          type: 'error',
-          errorCode: 'free_quest_limit_reached',
-        })
-      );
-      settle.mockRestore();
-    });
   });
 });
 

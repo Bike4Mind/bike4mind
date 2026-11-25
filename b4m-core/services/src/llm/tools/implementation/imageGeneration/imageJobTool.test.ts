@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ImageModels, type GenerateImageToolCall } from '@bike4mind/common';
+import {
+  getImageModelCatalogEntry,
+  ImageModels,
+  validateImageRequest,
+  type GenerateImageToolCall,
+} from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 import type { CreateImageJobsInput } from '../../../../imageJobs/types';
 import {
@@ -70,12 +75,32 @@ describe('buildGenerateJobRequest', () => {
     });
   });
 
-  it('steps gpt-image-2 down to gpt-image-1.5 for a transparent background', () => {
+  it('keeps the selected model and carries a transparent request through for the engine to refuse', () => {
     const request = buildGenerateJobRequest(selectionOf({ model: ImageModels.GPT_IMAGE_2 }), 'a logo', {
+      background: 'transparent',
+    });
+    expect(request.model).toBe(ImageModels.GPT_IMAGE_2);
+    expect(request.transparentBackground).toBe(true);
+    expect(
+      validateImageRequest({ ...request, count: 1 }, getImageModelCatalogEntry(ImageModels.GPT_IMAGE_2))
+    ).toMatchObject({
+      ok: false,
+      failures: [expect.objectContaining({ code: 'unsupported_transparent_background' })],
+    });
+  });
+
+  it('keeps a transparent request on a capable model', () => {
+    const request = buildGenerateJobRequest(selectionOf({ model: ImageModels.GPT_IMAGE_1_5 }), 'a logo', {
       background: 'transparent',
     });
     expect(request.model).toBe(ImageModels.GPT_IMAGE_1_5);
     expect(request.transparentBackground).toBe(true);
+  });
+
+  it('sets no transparency when none is requested', () => {
+    const request = buildGenerateJobRequest(selectionOf({ model: ImageModels.GPT_IMAGE_2 }), 'a logo', {});
+    expect(request.model).toBe(ImageModels.GPT_IMAGE_2);
+    expect(request.transparentBackground).toBeUndefined();
   });
 
   it('drops a saved selection value the model cannot take, but keeps a tool value for the engine to refuse', () => {

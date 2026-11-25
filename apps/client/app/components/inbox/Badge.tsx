@@ -2,6 +2,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetInbox } from '@client/app/hooks/data/inbox';
 import { useGetUserInvites } from '@client/app/hooks/data/invites';
 import { Badge } from '@mui/joy';
+import { isInboxInvite } from './inboxInvites';
 import { FC, ReactNode, useMemo } from 'react';
 
 /**
@@ -27,7 +28,7 @@ export function useInboxHasUnread(): boolean {
       }
       return !item.readAt;
     });
-    const pendingInvites = invites?.filter(invite => invite?.recipients?.pending?.includes(userEmail || ''));
+    const pendingInvites = invites?.filter(invite => !!invite && isInboxInvite(invite, userEmail));
     return !!unreadInbox || (!!pendingInvites && pendingInvites.length > 0);
   }, [inbox, invites, userEmail]);
 }

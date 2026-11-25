@@ -81,8 +81,38 @@ describe('contributed DLQ registry', () => {
   it('registers a contributed entry without queue help', async () => {
     const entry = (await load([QUEUE])).getDlqByLabel('example-job');
     expect(entry).toBeDefined();
-    expect(entry!.description).toBeUndefined();
-    expect(entry!.replay).toBeUndefined();
+    for (const key of ['description', 'replay', 'replayNote', 'owner']) expect(entry).not.toHaveProperty(key);
+  });
+
+  it('copies declared queue help into the entry, as a core entry carries it', async () => {
+    const help = {
+      description: 'Runs the example job.',
+      replay: 'side-effects',
+      replayNote: 'A replay can send the notice again.',
+      owner: 'Example',
+    };
+    const entry = (await load([{ ...QUEUE, ...help, dlqVisibilityTimeout: '15 minutes' }])).getDlqByLabel(
+      'example-job'
+    );
+    expect(entry).toEqual({
+      label: 'example-job',
+      displayName: 'Example Job',
+      application: 'Example',
+      sourceQueue: 'exampleJobQueue',
+      ...help,
+    });
+  });
+
+  it('copies only the help fields a pair declares', async () => {
+    const entry = (await load([{ ...QUEUE, replay: 'safe' }])).getDlqByLabel('example-job');
+    expect(entry?.replay).toBe('safe');
+    for (const key of ['description', 'replayNote', 'owner']) expect(entry).not.toHaveProperty(key);
+  });
+
+  it('drops a pair whose help text is malformed, like any other invalid field', async () => {
+    const registry = await load([{ ...QUEUE, description: 'Runs\nthe job.' }]);
+    expect(registry.getDlqRegistry().map(d => d.label)).toEqual(baseline);
+    expect(() => registry.contributedDlqLabel('example-job')).toThrow('not registered');
   });
 
   it('appends contributed entries and leaves the core labels and order alone', async () => {

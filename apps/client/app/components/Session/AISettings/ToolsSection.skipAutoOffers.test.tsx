@@ -17,7 +17,6 @@ const mocks = vi.hoisted(() => {
   const state: Record<string, unknown> = {
     tools: [],
     toolMode: 'smart',
-    isQuestMasterEnabled: false,
     isAgentsEnabled: false,
     agentMode: { enabled: false, source: 'toggle' },
     isLatticeEnabled: false,
@@ -63,6 +62,10 @@ vi.mock('@client/app/hooks/useComposerMcpConnections', () => ({
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useConfig: () => ({ data: { toolAvailability: undefined } }),
+}));
+vi.mock('@client/app/hooks/data/callableFunctions', () => ({
+  useCallableFunctionsEnabled: () => false,
+  useCallableFunctionList: () => ({ data: undefined }),
 }));
 vi.mock('./DeepResearchConfigModal', () => ({ default: () => null }));
 vi.mock('./ImageGenerationModelSelectionModal', () => ({ default: () => null }));

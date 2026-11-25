@@ -1,3 +1,4 @@
+import type { PlanProgress } from '@bike4mind/common';
 import {
   pendingDecisionOf,
   type ModelSelection,
@@ -6,7 +7,7 @@ import {
   type WorkerTask,
 } from '@shared/orchestration';
 import type { ChildOutcome } from '@shared/agentOutcome';
-import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@shared/chat';
+import type { ChatSessionStatus, ChatSessionSummary, SessionBackgroundJobs, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { descendantsOf } from '@shared/spawnTree';
 import { formatCredits } from '../statusLine';
@@ -46,11 +47,14 @@ export interface AgentView {
   state: AgentState;
   /** Working, but still being prepared: the setup step it is on. Stays 'working' for every count. */
   preparing?: SessionSetupStep;
+  /** Waiting: the running wake-on-exit background jobs it waits on. Set only in that state. */
+  background?: SessionBackgroundJobs;
   outcome?: ChildOutcome;
   activity?: AgentActivity;
   lastSnippet?: string;
   usdCost?: number;
   credits?: number;
+  plan?: PlanProgress;
   pr?: PrSummary;
   branch?: string;
   /**
@@ -83,10 +87,13 @@ export function descendantIds(sessions: readonly ChatSessionSummary[], rootId: s
 export function agentStates(
   sessions: readonly ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
-  rootId: string | null
+  rootId: string | null,
+  background?: ReadonlyMap<string, SessionBackgroundJobs>
 ): AgentState[] {
   if (rootId === null) return [];
-  return descendantsOf(sessions, rootId).map(({ session }) => deriveTaskAgentState(session, statuses.get(session.id)));
+  return descendantsOf(sessions, rootId).map(({ session }) =>
+    deriveTaskAgentState(session, statuses.get(session.id), background?.get(session.id))
+  );
 }
 
 /**
@@ -107,16 +114,19 @@ export function buildRoster(input: {
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;
   preparing?: ReadonlyMap<string, SessionSetupStep>;
+  background?: ReadonlyMap<string, SessionBackgroundJobs>;
   activity: ReadonlyMap<string, AgentActivity>;
   prSummaries: ReadonlyMap<string, PrSummary>;
   rootId: string;
 }): AgentView[] {
-  const { sessions, statuses, preparing, activity, prSummaries, rootId } = input;
+  const { sessions, statuses, preparing, background, activity, prSummaries, rootId } = input;
   const views: AgentView[] = [];
 
   for (const { session, depth } of descendantsOf(sessions, rootId)) {
-    const state = deriveTaskAgentState(session, statuses.get(session.id));
+    const jobs = background?.get(session.id);
+    const state = deriveTaskAgentState(session, statuses.get(session.id), jobs);
     const setup = state === 'working' ? preparing?.get(session.id) : undefined;
+    const waitingOn = state === 'waiting' ? jobs : undefined;
     const decision = pendingDecisionOf(session.workerTask);
     views.push({
       id: session.id,
@@ -133,11 +143,13 @@ export function buildRoster(input: {
       orchestrationPolicy: session.orchestrationPolicy,
       state,
       ...(setup && { preparing: setup }),
+      ...(waitingOn && { background: waitingOn }),
       outcome: session.lastOutcome,
       activity: state === 'working' || state === 'needs-you' ? activity.get(session.id) : undefined,
       lastSnippet: session.lastSnippet,
       usdCost: session.totalUsdCost,
       credits: session.totalCredits,
+      plan: session.plan,
       pr: prSummaries.get(session.id),
       branch: session.project?.workspaceBranch ?? session.project?.branch,
     });

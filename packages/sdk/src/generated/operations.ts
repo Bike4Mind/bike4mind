@@ -53,6 +53,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/briefs',
   },
+  composeFollowUpBrief: {
+    method: 'POST',
+    path: '/api/v1/briefs/follow-ups',
+  },
   createAgent: {
     method: 'POST',
     path: '/api/v1/agents',
@@ -88,6 +92,10 @@ export const operations = {
   createDecision: {
     method: 'POST',
     path: '/api/v1/decisions',
+  },
+  createDelegation: {
+    method: 'POST',
+    path: '/api/v1/delegations',
   },
   createEmbeddings: {
     method: 'POST',
@@ -189,6 +197,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/pending-actions/{questId}/deny',
   },
+  editBriefDecision: {
+    method: 'PATCH',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}',
+  },
   editImage: {
     method: 'POST',
     path: '/api/v1/image-edits',
@@ -257,6 +269,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/briefs/schedule',
   },
+  getBusyBlocks: {
+    method: 'GET',
+    path: '/api/v1/briefs/busy-blocks',
+  },
   getClaudeBundleZip: {
     method: 'GET',
     path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
@@ -272,6 +288,10 @@ export const operations = {
   getClientConfig: {
     method: 'GET',
     path: '/api/v1/client-config',
+  },
+  getCompletionRunEvaluation: {
+    method: 'GET',
+    path: '/api/v1/completion-runs/{runId}/evaluation',
   },
   getCompletionRunUsage: {
     method: 'GET',
@@ -305,6 +325,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/data-lakes/{id}/research/runs/{run_id}',
   },
+  getDelegation: {
+    method: 'GET',
+    path: '/api/v1/delegations/{id}',
+  },
   getFile: {
     method: 'GET',
     path: '/api/v1/files/{id}',
@@ -317,6 +341,14 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files/by-ids',
   },
+  getFunction: {
+    method: 'GET',
+    path: '/api/v1/functions/{id}',
+  },
+  getFunctionCall: {
+    method: 'GET',
+    path: '/api/v1/functions/calls/{call_id}',
+  },
   getImageJob: {
     method: 'GET',
     path: '/api/v1/image-jobs/{id}',
@@ -328,6 +360,10 @@ export const operations = {
   getMusicGeneration: {
     method: 'GET',
     path: '/api/v1/music-generations/{id}',
+  },
+  getObligation: {
+    method: 'GET',
+    path: '/api/v1/obligations/{id}',
   },
   getPendingDecisionCount: {
     method: 'GET',
@@ -377,9 +413,17 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/whats-new/media/{id}/{asset}',
   },
+  handOffObligation: {
+    method: 'POST',
+    path: '/api/v1/obligations',
+  },
   importSkillMarketListing: {
     method: 'POST',
     path: '/api/v1/skills/market/listings/{id}/import',
+  },
+  invokeFunction: {
+    method: 'POST',
+    path: '/api/v1/functions/{id}/invoke',
   },
   listAgents: {
     method: 'GET',
@@ -437,6 +481,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files',
   },
+  listFunctions: {
+    method: 'GET',
+    path: '/api/v1/functions',
+  },
   listHandoffDevices: {
     method: 'GET',
     path: '/api/v1/handoff-devices',
@@ -468,6 +516,10 @@ export const operations = {
   listMySkills: {
     method: 'GET',
     path: '/api/v1/skills/mine',
+  },
+  listObligations: {
+    method: 'GET',
+    path: '/api/v1/obligations',
   },
   listProjectFiles: {
     method: 'GET',
@@ -549,6 +601,10 @@ export const operations = {
     method: 'PUT',
     path: '/api/v1/briefs/schedule',
   },
+  putBusyBlocks: {
+    method: 'PUT',
+    path: '/api/v1/briefs/busy-blocks',
+  },
   raiseCompletionRunBudget: {
     method: 'POST',
     path: '/api/v1/completion-runs/{runId}/budget',
@@ -588,6 +644,10 @@ export const operations = {
   rescanSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/rescan',
+  },
+  resolveBriefDecision: {
+    method: 'POST',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}/resolve',
   },
   reviewSkillMarketVersion: {
     method: 'POST',
@@ -641,6 +701,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/agents/{id}/transfer-credits',
   },
+  undoDataLakeConfigChange: {
+    method: 'POST',
+    path: '/api/v1/data-lakes/{id}/config-history/{event_id}/undo',
+  },
   unpublishArtifact: {
     method: 'DELETE',
     path: '/api/v1/artifacts/{id}/publish',
@@ -664,6 +728,10 @@ export const operations = {
   updateFile: {
     method: 'PATCH',
     path: '/api/v1/files/{id}',
+  },
+  updateObligation: {
+    method: 'PATCH',
+    path: '/api/v1/obligations/{id}',
   },
   updateProject: {
     method: 'PATCH',

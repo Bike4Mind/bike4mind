@@ -1,6 +1,6 @@
 /**
  * POST /api/v1/briefs - ask the assistant to compose a brief (asynchronous; 202 with the brief `composing`).
- * GET  /api/v1/briefs  - the caller's recent briefs.
+ * GET  /api/v1/briefs  - the caller's recent activity briefs; a memo brief is read by id.
  * JWT only; every read is scoped to `req.user`.
  */
 import { composeBriefContract, listBriefsContract } from '@bike4mind/common';

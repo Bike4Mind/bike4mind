@@ -207,8 +207,14 @@ describe('SystemPromptsManager', () => {
       await waitFor(() => expect(pickerSearches().at(-1)).toBe(''));
       expect(within(dialog).getByTestId('system-files-search-input')).toHaveValue('');
       if (close === 'system-files-add-cancel-btn') {
-        fireEvent.change(within(dialog).getByTestId('system-files-search-input'), { target: { value: 'x' } });
-        await waitFor(() => expect(pickerSearches().at(-1)).toBe('x'));
+        vi.useFakeTimers();
+        try {
+          fireEvent.change(within(dialog).getByTestId('system-files-search-input'), { target: { value: 'x' } });
+          await act(() => vi.advanceTimersByTimeAsync(300));
+        } finally {
+          vi.useRealTimers();
+        }
+        expect(pickerSearches().at(-1)).toBe('x');
       }
     }
   });

@@ -1,7 +1,12 @@
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { LOCAL_FILE_PROXY_BASE, resolveProxyTarget } from '@bike4mind/server-utils/utils/appFileProxy';
+import {
+  LOCAL_FILE_PROXY_BASE,
+  generatedKeyFromProxyPath,
+  resolveProxyTarget,
+} from '@bike4mind/server-utils/utils/appFileProxy';
+import { verifyGeneratedMediaUrlToken } from '@bike4mind/server-utils/utils/generatedMediaUrlToken';
 import { Resource } from 'sst';
 import { Readable } from 'stream';
 
@@ -16,8 +21,9 @@ const s3 = new S3Client(s3Endpoint ? { endpoint: s3Endpoint, forcePathStyle: tru
 // Local file proxy for stages with no CloudFront distribution. Personal `sst dev`
 // stages (infra/web.ts) AND self-host both point NEXT_PUBLIC_CDN_URL at
 // `/api/app-files/serve`, so file URLs resolve here instead of the shared CloudFront
-// router. auth:false matches the unauthenticated CloudFront serving it replaces and
-// permits the pre-auth public-settings fetch. Hosted deploys set NEXT_PUBLIC_CDN_URL
+// router. auth:false matches the unauthenticated CloudFront serving of the app-file prefixes
+// and permits the pre-auth public-settings fetch; `generated/` is the exception and is served
+// only with a valid signed token (see generatedMediaUrlToken.ts). Hosted deploys set NEXT_PUBLIC_CDN_URL
 // to the real distribution and never reach this route.
 const handler = baseApi({ auth: false }).get(
   asyncHandler(async (req, res) => {
@@ -35,13 +41,30 @@ const handler = baseApi({ auth: false }).get(
       return;
     }
 
-    const target = resolveProxyTarget(cdnPath);
-    if (!target) {
-      res.status(404).end();
-      return;
+    let bucketName: string;
+    let key: string;
+    let cacheControl: string | undefined;
+    const generatedKey = generatedKeyFromProxyPath(cdnPath);
+    if (generatedKey !== null) {
+      // Every token failure gets the same bare 404 as an unknown key.
+      const token = (req.query as Record<string, string | string[] | undefined>).t;
+      if (!verifyGeneratedMediaUrlToken(token, generatedKey, Math.floor(Date.now() / 1000))) {
+        res.status(404).end();
+        return;
+      }
+      bucketName = Resource.generatedImagesBucket.name;
+      key = generatedKey;
+      // A shared cache must not keep a tokened response past the token's expiry.
+      cacheControl = 'private, max-age=300';
+    } else {
+      const target = resolveProxyTarget(cdnPath);
+      if (!target) {
+        res.status(404).end();
+        return;
+      }
+      bucketName = Resource.appFilesBucket.name;
+      key = target.key;
     }
-    const { bucket, key } = target;
-    const bucketName = bucket === 'generated' ? Resource.generatedImagesBucket.name : Resource.appFilesBucket.name;
 
     const rangeHeader = typeof req.headers.range === 'string' ? req.headers.range : undefined;
 
@@ -76,7 +99,7 @@ const handler = baseApi({ auth: false }).get(
       }
       if (out.ContentType) res.setHeader('Content-Type', out.ContentType);
       if (out.ContentLength != null) res.setHeader('Content-Length', String(out.ContentLength));
-      res.setHeader('Cache-Control', out.CacheControl ?? 'private, max-age=300');
+      res.setHeader('Cache-Control', cacheControl ?? out.CacheControl ?? 'private, max-age=300');
       // Once piping starts the response is already committed, so a mid-transfer
       // S3 error can't be turned into an HTTP status. Destroy the socket instead
       // of letting an unhandled 'error' event surface on the stream.

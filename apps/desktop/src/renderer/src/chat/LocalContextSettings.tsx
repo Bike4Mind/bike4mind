@@ -102,7 +102,9 @@ export function LocalContextSettings({
             );
         }}
         sx={{ alignSelf: 'flex-start', minWidth: 220 }}
-        slotProps={{ button: { 'aria-label': 'Local model context', 'data-testid': 'settings-local-context-select' } }}
+        slotProps={{
+          button: { 'aria-label': 'Memory for local models', 'data-testid': 'settings-local-context-select' },
+        }}
       >
         <Option value={AUTO} data-testid="settings-local-context-option-auto">
           Auto (fits this computer)

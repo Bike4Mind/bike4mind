@@ -776,6 +776,102 @@ describe('GitHubService', () => {
       });
     });
 
+    describe('listAllIssues', () => {
+      const raw = (number: number, pr = false) => ({
+        number,
+        title: `Issue ${number}`,
+        body: null,
+        state: 'open',
+        html_url: `https://github.com/owner/repo/issues/${number}`,
+        labels: [],
+        assignees: [],
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+        ...(pr ? { pull_request: {} } : {}),
+      });
+
+      const feedPages = (pages: unknown[][], lastHasNext = false) =>
+        mockOctokit.paginate.mockImplementation(
+          async (
+            _method: unknown,
+            _params: unknown,
+            mapFn: (response: { data: unknown[] }, done: () => void) => unknown[]
+          ) => {
+            const out: unknown[] = [];
+            let stopped = false;
+            for (const [i, data] of pages.entries()) {
+              if (stopped) break;
+              const hasNext = i < pages.length - 1 || lastHasNext;
+              const headers = hasNext ? { link: '<https://api.github.com/next>; rel="next"' } : {};
+              out.push(...mapFn({ data, headers } as never, () => (stopped = true)));
+            }
+            return out;
+          }
+        );
+
+      it('keeps paging past a page that is all pull requests and reports no truncation', async () => {
+        const prPage = Array.from({ length: 100 }, (_, i) => raw(i + 1, true));
+        feedPages([prPage, [raw(500), raw(501)]]);
+
+        const result = await service.listAllIssues('owner/repo', { state: 'all', since: '2024-01-01T00:00:00Z' });
+
+        expect(result.issues.map(i => i.number)).toEqual([500, 501]);
+        expect(result.truncated).toBe(false);
+        expect(mockOctokit.paginate).toHaveBeenCalledWith(
+          mockOctokit.issues.listForRepo,
+          expect.objectContaining({ state: 'all', since: '2024-01-01T00:00:00Z', per_page: 100 }),
+          expect.any(Function)
+        );
+      });
+
+      it('reports truncated when maxPages is reached on a full page', async () => {
+        const full = (start: number) => Array.from({ length: 100 }, (_, i) => raw(start + i));
+        feedPages([full(1), full(101), full(201)]);
+
+        const result = await service.listAllIssues('owner/repo', { state: 'open', maxPages: 2 });
+
+        expect(result.issues).toHaveLength(200);
+        expect(result.truncated).toBe(true);
+      });
+
+      it('reports no truncation when the last page is exactly full', async () => {
+        const full = (start: number) => Array.from({ length: 100 }, (_, i) => raw(start + i));
+        feedPages([full(1), full(101)]);
+
+        const result = await service.listAllIssues('owner/repo', { state: 'open', maxPages: 2 });
+
+        expect(result.issues).toHaveLength(200);
+        expect(result.truncated).toBe(false);
+      });
+
+      it.each([0, -3, Number.NaN, undefined])('clamps maxPages %s so at least one page is read', async maxPages => {
+        const full = Array.from({ length: 100 }, (_, i) => raw(i + 1));
+        feedPages([full, full], true);
+
+        const result = await service.listAllIssues('owner/repo', { state: 'open', maxPages });
+
+        expect(result.issues).toHaveLength(maxPages === undefined || Number.isNaN(maxPages) ? 200 : 100);
+      });
+
+      it('throws for a repo outside the whitelist without calling GitHub', async () => {
+        await expect(service.listAllIssues('other/repo', { state: 'open' })).rejects.toBeInstanceOf(
+          GitHubRepoNotAllowedError
+        );
+        expect(mockOctokit.paginate).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('listCommits', () => {
+      it('omits sha from the request when none is given', async () => {
+        mockOctokit.repos.listCommits.mockResolvedValue({ data: [] });
+
+        await service.listCommits('owner/repo', { since: new Date('2024-01-01T00:00:00Z') });
+
+        const params = mockOctokit.repos.listCommits.mock.calls[0][0] as Record<string, unknown>;
+        expect('sha' in params).toBe(false);
+      });
+    });
+
     describe('listIssues author', () => {
       it('maps the issue author, or null when absent', async () => {
         const issue = (number: number, user: unknown) => ({
@@ -1610,6 +1706,7 @@ describe('GitHubService', () => {
             commits: 1,
             base: { ref: 'main' },
             head: { ref: 'feat/x' },
+            requested_reviewers: [{ login: 'rev', avatar_url: 'https://a/rev' }],
           },
         });
 
@@ -1624,6 +1721,7 @@ describe('GitHubService', () => {
           base_ref: 'main',
           head_ref: 'feat/x',
           additions: 10,
+          requestedReviewers: [{ login: 'rev', avatarUrl: 'https://a/rev' }],
         });
       });
     });
@@ -1719,6 +1817,27 @@ describe('GitHubService', () => {
           [2, true],
         ]);
         expect(result.items[0]).toMatchObject({ repo: 'owner/repo', labels: ['bug', 'plain'], user: 'dev' });
+      });
+
+      it('maps mergedAt and draft, null and false for plain issues', async () => {
+        mockOctokit.search.issuesAndPullRequests.mockResolvedValue({
+          data: {
+            total_count: 3,
+            items: [
+              item(1, false),
+              { ...item(2, true), pull_request: { merged_at: '2024-02-01T00:00:00Z' } },
+              { ...item(3, true), draft: true },
+            ],
+          },
+        });
+
+        const result = await service.searchIssuesAndPulls(['owner/repo'], 'x');
+
+        expect(result.items.map(i => [i.mergedAt, i.draft])).toEqual([
+          [null, false],
+          ['2024-02-01T00:00:00Z', false],
+          [null, true],
+        ]);
       });
 
       it('drops items from non-whitelisted or unrequested repos and keeps mixed-case matches', async () => {
@@ -1834,6 +1953,9 @@ describe('GitHubService', () => {
         const denied = 'other/repo';
         await expect(service.listContributors(denied)).rejects.toBeInstanceOf(GitHubRepoNotAllowedError);
         await expect(service.getCommitActivity(denied)).rejects.toBeInstanceOf(GitHubRepoNotAllowedError);
+        await expect(service.listAllIssues(denied, { state: 'open' })).rejects.toBeInstanceOf(
+          GitHubRepoNotAllowedError
+        );
         await expect(service.getPullRequest(denied, 1)).rejects.toBeInstanceOf(GitHubRepoNotAllowedError);
         await expect(service.listCommitsByAuthor(denied, { author: 'a' })).rejects.toBeInstanceOf(
           GitHubRepoNotAllowedError

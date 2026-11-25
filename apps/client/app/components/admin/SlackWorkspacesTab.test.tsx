@@ -286,6 +286,20 @@ describe('SlackWorkspacesTab dialogs', () => {
     expect(screen.queryByTestId('slack-workspace-export-btn-ws-new')).toBeNull();
   });
 
+  it('links an installed workspace to its install page from the row menu, and offers none before an install', async () => {
+    renderTab();
+    await loaded();
+    fireEvent.click(screen.getByTestId('slack-workspace-menu-btn-T1'));
+    expect(await screen.findByTestId('slack-workspace-reinstall-btn-T1')).toHaveAttribute(
+      'href',
+      '/integrations/slack/install?workspaceId=ws-ok'
+    );
+
+    fireEvent.click(screen.getByTestId('slack-workspace-menu-btn-ws-new'));
+    await screen.findByTestId('slack-workspace-deactivate-btn-ws-new');
+    expect(screen.queryByTestId('slack-workspace-reinstall-btn-ws-new')).toBeNull();
+  });
+
   it('holds the deactivate confirm open while its PATCH runs', async () => {
     let resolvePatch: (value: unknown) => void = () => undefined;
     mocks.patch.mockImplementation(() => new Promise(resolve => (resolvePatch = resolve)));
@@ -332,6 +346,8 @@ describe('SlackWorkspacesTab dialogs', () => {
     await openExport('T1');
     const dialog = await screen.findByTestId('slack-export-dialog');
     expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Export channel history');
+    expect(screen.getByTestId('slack-export-date-start-input-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('slack-export-date-end-input-empty')).toBeInTheDocument();
     fireEvent.change(screen.getByTestId('slack-export-channel-id-input'), { target: { value: 'C0123' } });
     fireEvent.click(screen.getByTestId('slack-export-confirm-btn'));
 
@@ -342,6 +358,54 @@ describe('SlackWorkspacesTab dialogs', () => {
         { responseType: 'blob' }
       )
     );
+  });
+
+  it('sends a start date only once one is set', async () => {
+    mocks.post.mockResolvedValue({ data: new Blob(['{}']), headers: {} });
+    global.URL.createObjectURL = vi.fn(() => 'blob:export');
+    global.URL.revokeObjectURL = vi.fn();
+    renderTab();
+    await loaded();
+
+    await openExport('T1');
+    await screen.findByTestId('slack-export-dialog');
+    fireEvent.click(screen.getByTestId('slack-export-date-start-input-set-btn'));
+    fireEvent.change(screen.getByTestId('slack-export-date-start-input'), { target: { value: '2026-01-02' } });
+    fireEvent.change(screen.getByTestId('slack-export-channel-id-input'), { target: { value: 'C0123' } });
+    fireEvent.click(screen.getByTestId('slack-export-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenCalledWith(
+        '/api/slack/export/channel',
+        expect.objectContaining({ dateRange: { start: new Date('2026-01-02').toISOString() } }),
+        { responseType: 'blob' }
+      )
+    );
+  });
+
+  it('locks the export dates while the export runs and unlocks them when it fails', async () => {
+    let rejectPost: (reason: unknown) => void = () => undefined;
+    mocks.post.mockImplementation(() => new Promise((_, reject) => (rejectPost = reject)));
+    renderTab();
+    await loaded();
+
+    await openExport('T1');
+    await screen.findByTestId('slack-export-dialog');
+    fireEvent.click(screen.getByTestId('slack-export-date-start-input-set-btn'));
+    fireEvent.change(screen.getByTestId('slack-export-date-start-input'), { target: { value: '2026-01-02' } });
+    fireEvent.change(screen.getByTestId('slack-export-channel-id-input'), { target: { value: 'C0123' } });
+    fireEvent.click(screen.getByTestId('slack-export-confirm-btn'));
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByTestId('slack-export-date-start-input')).toBeDisabled();
+    expect(screen.getByTestId('slack-export-date-start-input-clear-btn')).toBeDisabled();
+    expect(screen.getByTestId('slack-export-date-end-input-set-btn')).toBeDisabled();
+
+    await act(async () => rejectPost(new Error('Server error')));
+    await waitFor(() => expect(screen.getByTestId('slack-export-date-start-input')).toBeEnabled());
+    expect(screen.getByTestId('slack-export-date-start-input')).toHaveValue('2026-01-02');
+    expect(screen.getByTestId('slack-export-date-start-input-clear-btn')).toBeEnabled();
+    expect(screen.getByTestId('slack-export-date-end-input-set-btn')).toBeEnabled();
   });
 
   it('confirms cancelling a background export in a danger ActionDialog before the DELETE', async () => {

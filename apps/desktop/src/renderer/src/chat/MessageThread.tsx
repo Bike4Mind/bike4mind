@@ -22,6 +22,7 @@ import { useNavigate } from '@tanstack/react-router';
 import {
   isTurnBudgetStop,
   lastBoundaryIndex,
+  RUN_BUDGET_STOP,
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
   type ChatMessage,
@@ -53,6 +54,9 @@ import { useThreadFind } from './useThreadFind';
 import { SelectionActions } from './SelectionActions';
 import { automaticSummary, displayText, relaySummaryParts } from './relayRows';
 import { MentionedText, SessionLink } from './SessionLink';
+import { ChildReportCard } from './ChildReportCard';
+import { childCardLayout, type ChildCardsLive } from './childCardLayout';
+import { ChildSessionCards } from './ChildSessionCards';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
@@ -63,6 +67,7 @@ import { railGroupId, ReplyStatsRail, turnGridSx, useRailDrawn } from './ReplySt
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
+import { RunBudgetRaiseRow } from './orchestrator/RunBudgetRaiseRow';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
 const BUDGET_STOP_LABELS: Record<string, string> = {
@@ -78,7 +83,32 @@ const BUDGET_STOP_LABELS: Record<string, string> = {
  * happened and here is what to do about it" - the chip alone read as a dead end, which is
  * exactly what it no longer is.
  */
-function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: () => void }) {
+/**
+ * The reply a run-budget pause stopped, when only app notices (an agent's report, a waiting
+ * notice) landed under it: its raise row is still the way the run resumes, so it stays on offer.
+ */
+export function budgetPausedReplyIndex(messages: readonly ChatMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'assistant') return message.stopReason === RUN_BUDGET_STOP ? index : -1;
+    if (!message.system) return -1;
+  }
+  return -1;
+}
+
+function StopReasonRow({
+  reason,
+  onContinue,
+  sessionId,
+}: {
+  reason?: string;
+  onContinue?: () => void;
+  sessionId?: string | null;
+}) {
+  // Continue alone would be refused again: only a raise resumes the run. Offered on the last turn only.
+  if (reason === RUN_BUDGET_STOP) {
+    return onContinue && sessionId ? <RunBudgetRaiseRow sessionId={sessionId} /> : null;
+  }
   if (reason === 'max_tokens') {
     return (
       <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-truncated-chip">
@@ -145,7 +175,7 @@ function ServerCredentialsRow() {
         size="sm"
         variant="soft"
         color="primary"
-        onClick={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
+        onClick={() => void navigate({ to: '/settings', search: { section: 'models', setting: 'model-servers' } })}
         data-testid="chat-server-credentials-btn"
       >
         Open Model servers
@@ -414,6 +444,7 @@ const AssistantTurn = memo(function AssistantTurn({
   onContinue,
   onRegenerate,
   regenerateWarns = false,
+  sessionId,
   status,
   live = false,
   skipRounds = 0,
@@ -424,6 +455,8 @@ const AssistantTurn = memo(function AssistantTurn({
   onRegenerate?: () => void;
   /** The reply's tools changed things, so Regenerate asks first. */
   regenerateWarns?: boolean;
+  /** The open conversation, for the controls a stopped turn offers; absent with none open. */
+  sessionId?: string | null;
   onRespond: RespondToApproval;
   /** Absent with no conversation open; the running-command control is then not drawn. */
   onMove?: MoveCallToBackground;
@@ -517,7 +550,7 @@ const AssistantTurn = memo(function AssistantTurn({
         </Alert>
       )}
 
-      <StopReasonRow reason={message.stopReason} onContinue={onContinue} />
+      <StopReasonRow reason={message.stopReason} onContinue={onContinue} sessionId={sessionId} />
 
       {/* Last, under the reply it describes, which is where the eye already is while a turn
           runs. It lived in the composer before and read as a property of the input box rather
@@ -548,6 +581,7 @@ const AssistantTurn = memo(function AssistantTurn({
  */
 const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage }) {
   if (message.sideChatOf) return <SideChatOpening message={message} from={message.sideChatOf} />;
+  if (message.childReport) return <ChildReportCard message={message} report={message.childReport} />;
   return (
     <Sheet
       variant="soft"
@@ -834,9 +868,17 @@ function isReplyTurn(message: ChatMessage): boolean {
  * How many grid rows the rail of the reply at `index` runs down: its own, and the one group of
  * turns after it in the same list, if any come before the next reply. See turnGridSx.
  */
-export function railRows(messages: readonly ChatMessage[], index: number, end: number): number {
-  const after = messages[index + 1];
-  return index + 1 < end && after && !isReplyTurn(after) ? 2 : 1;
+export function railRows(
+  messages: readonly ChatMessage[],
+  index: number,
+  end: number,
+  drawn: (index: number) => boolean = () => true
+): number {
+  // Skips what turn() draws nothing for (a notice folded into a card drawn elsewhere), so the rail never claims a row no group fills.
+  let next = index + 1;
+  while (next < end && !drawn(next)) next += 1;
+  const after = messages[next];
+  return next < end && after && !isReplyTurn(after) ? 2 : 1;
 }
 
 /** The turns between two replies, one grid item so that their gap is theirs and not the rows'. */
@@ -947,6 +989,7 @@ function WindowedTurns({
   for (let index = start; index < to; index++) {
     const message = messages[index]!;
     const node = turn(message, index, index === start ? skip : 0, to);
+    if (node === null) continue;
     if (isReplyTurn(message)) {
       closeRun();
       items.push(node);
@@ -983,6 +1026,7 @@ export function MessageThread({
   onEditMessage,
   onRegenerate,
   findable = false,
+  childSessions,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -1029,6 +1073,8 @@ export function MessageThread({
   onRegenerate?: () => void;
   /** Mod+F opens a find bar over this thread. Only one thread on screen should take it. */
   findable?: boolean;
+  /** Live state of the sessions this one started, for their cards; without it a card goes by its latest notice. */
+  childSessions?: ChildCardsLive;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -1045,7 +1091,13 @@ export function MessageThread({
   const liveReplyId = streaming ? (liveTurn?.messageId ?? last?.id) : undefined;
   const warnings = useMemo(() => editWarnings(messages), [messages]);
   const regenerable = !streaming && onRegenerate ? regenerableReply(messages) : null;
+  const budgetPaused = useMemo(() => budgetPausedReplyIndex(messages), [messages]);
   const regenerateWarns = useMemo(() => (regenerable ? turnsChangedThings([regenerable]) : false), [regenerable]);
+  const childCards = useMemo(() => childCardLayout(messages, childSessions), [messages, childSessions]);
+  const drawnAt = (index: number) => {
+    const message = messages[index];
+    return !message || !childCards.folded.has(message.id) || index === childCards.anchor;
+  };
   // Through a ref so UserTurn's memo holds: the callback changes with every thread update.
   const editRef = useRef(onEditMessage);
   editRef.current = onEditMessage;
@@ -1061,6 +1113,11 @@ export function MessageThread({
     if (message.boundary) return <BoundaryRow key={message.id} message={message} />;
     if (message.automatic) return <AutomaticTurn key={message.id} message={message} />;
     if (message.relay) return <RelayTurn key={message.id} message={message} />;
+    if (childCards.folded.has(message.id)) {
+      return index === childCards.anchor ? (
+        <ChildSessionCards key="child-session-cards" cards={childCards.cards} />
+      ) : null;
+    }
     if (message.system) return <SystemTurn key={message.id} message={message} />;
     if (message.role === 'user') {
       // An optimistic prompt has no stored id yet for main to rewind to.
@@ -1081,7 +1138,7 @@ export function MessageThread({
           <ReplyStatsRail
             message={message}
             {...(message.id === liveReplyId ? { turn: liveTurn } : {})}
-            span={railRows(messages, index, end)}
+            span={railRows(messages, index, end, drawnAt)}
           />
         )}
         <AssistantTurn
@@ -1089,8 +1146,11 @@ export function MessageThread({
           onRespond={onRespond}
           {...(onMove ? { onMove } : {})}
           // Only the last turn, and only while nothing is running: resuming writes back
-          // into its own message, so a Continue on an older one would edit history.
-          {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+          // into its own message, so a Continue on an older one would edit history. A budget
+          // pause is the exception: its raise row resumes the run, not this message.
+          {...((index === messages.length - 1 || index === budgetPaused) && !streaming
+            ? { onContinue, sessionId }
+            : {})}
           {...(regenerable?.id === message.id && onRegenerate ? { onRegenerate, regenerateWarns } : {})}
           {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
           {...(skipRounds > 0 ? { skipRounds } : {})}

@@ -4,9 +4,12 @@ import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
-import type { ParsedArtifact } from '../../utils/artifactParser';
+import type { ParsedArtifact } from '@bike4mind/server-utils/app/utils/artifactParser';
 import type { ReactArtifactGroupRole } from '../../utils/reactArtifactGroup';
 import PromptReplies from './PromptReplies';
+
+// jsdom has no Element.scrollTo, and the reply's auto-scroll timer can fire after a test ends.
+Element.prototype.scrollTo = vi.fn();
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
@@ -36,8 +39,9 @@ vi.mock('@client/app/hooks/useMessageEditMode', () => {
 // Stands in for the id resolver's no-row-yet path: the card shows the id it would mint from the
 // index it was handed, which is what has to match the row persistence writes.
 vi.mock('./artifacts/ArtifactRenderer', async () => {
-  const { generateCompleteArtifactId, getArtifactTimestamp } =
-    await vi.importActual<typeof import('../../utils/artifactParser')>('../../utils/artifactParser');
+  const { generateCompleteArtifactId, getArtifactTimestamp } = await vi.importActual<
+    typeof import('@bike4mind/server-utils/app/utils/artifactParser')
+  >('@bike4mind/server-utils/app/utils/artifactParser');
   return {
     default: ({
       artifact,
@@ -94,7 +98,7 @@ const Reply = ({ text, status }: { text: string; status: string | undefined }) =
   <QueryClientProvider client={queryClient}>
     <CssVarsProvider theme={appTheme}>
       <PromptReplies
-        messageData={{ id: 'quest-r', sessionId: 'session-1', questMasterReply: text, status } as never}
+        messageData={{ id: 'quest-r', sessionId: 'session-1', replies: [text], status } as never}
         onSendMessage={async () => {}}
       />
     </CssVarsProvider>

@@ -13,6 +13,7 @@ export { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } fr
 export { createCompletionContract } from './contracts/completions.contract';
 export {
   createCompletionRunContract,
+  getCompletionRunEvaluationContract,
   getCompletionRunUsageContract,
   raiseCompletionRunBudgetContract,
 } from './contracts/completionRuns.contract';
@@ -24,13 +25,25 @@ export { getClientConfigContract, getPublicClientConfigContract } from './contra
 export { approvePendingActionContract, denyPendingActionContract } from './contracts/pendingActions.contract';
 export {
   composeBriefContract,
+  composeFollowUpBriefContract,
   listBriefsContract,
   getBriefContract,
   getBriefScheduleContract,
   putBriefScheduleContract,
+  getBusyBlocksContract,
+  putBusyBlocksContract,
   replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './contracts/briefs.contract';
+export { createDelegationContract, getDelegationContract } from './contracts/delegations.contract';
+export {
+  getObligationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  updateObligationContract,
+} from './contracts/obligations.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { listHandoffDevicesContract, sendSessionHandoffContract } from './contracts/sessionHandoff.contract';
 export {
@@ -115,6 +128,7 @@ export {
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 } from './contracts/dataLakeResearch.contract';
 export { listImageModelsContract } from './contracts/imageModels.contract';
 export {
@@ -199,4 +213,10 @@ export {
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
 } from './contracts/skillMarketReview.contract';
+export {
+  listFunctionsContract,
+  getFunctionContract,
+  invokeFunctionContract,
+  getFunctionCallContract,
+} from './contracts/functions.contract';
 export { CONTRACTS } from './contracts';

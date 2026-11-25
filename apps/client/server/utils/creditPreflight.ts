@@ -6,7 +6,13 @@ import {
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { CreditHolderType, UnprocessableEntityError, type IUserDocument } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  UnprocessableEntityError,
+  type CompletionRunAttribution,
+  type IUserDocument,
+} from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import { reserveRequestCredits, type CreditLedgerEntry } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import type { SpendFreezeApiKey } from '@bike4mind/server-utils/billing/spendFreezeSubject';
@@ -132,6 +138,7 @@ export async function holdPreflightCredits({
   featureLabel,
   billingOrganizationId,
   spendFreezeApiKey,
+  run,
 }: {
   req: PreflightBillingRequest;
   requiredCredits: number;
@@ -139,6 +146,8 @@ export async function holdPreflightCredits({
   billingOrganizationId?: string | null;
   /** See reserveRequestCredits' spendFreezeApiKey: joins the freeze subject, never moves the payer. */
   spendFreezeApiKey?: SpendFreezeApiKey;
+  /** The completion run this call draws from (resolvePaidCallRun): claimed with the hold, recorded on the ledger row. */
+  run?: CompletionRunAttribution;
 }): Promise<PreflightCreditHold> {
   const { user, logger } = req;
   const settings = await getSettingsMap(
@@ -155,8 +164,13 @@ export async function holdPreflightCredits({
       featureLabel,
       billingOrganizationId,
       spendFreezeApiKey,
+      run,
     });
   } catch (err) {
+    // A spent run is not a credit shortfall: it keeps its own 422 code so the caller can pause rather than top up.
+    if (err instanceof UnprocessableEntityError && err.additionalInfo?.errorCode === RUN_BUDGET_EXHAUSTED_ERROR_CODE) {
+      throw err;
+    }
     if (err instanceof UnprocessableEntityError) throw new InsufficientCreditsPreflightError(err.message);
     throw err;
   }
@@ -170,7 +184,7 @@ export async function holdPreflightCredits({
         userId: user.id,
         reservation,
         credits,
-        entry: attributeToRequestApiKey(entry, req),
+        entry: attributeToRequestApiKey(run ? { ...entry, run } : entry, req),
         featureLabel,
         logger,
       });

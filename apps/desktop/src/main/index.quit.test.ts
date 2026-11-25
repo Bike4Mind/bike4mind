@@ -18,6 +18,8 @@ const harness = vi.hoisted(() => {
     cookies: { clearOnQuit: shutdown() },
     spareWorktrees: { dispose: shutdown() },
     stopLocalServers: shutdown(),
+    initialize: shutdown(),
+    runLiveEvaluation: vi.fn(async () => undefined),
     quit: vi.fn(),
     windows: [] as EventEmitter[],
   };
@@ -52,9 +54,10 @@ vi.mock('electron', async () => {
 });
 vi.mock('./account', () => ({ registerAccount: vi.fn() }));
 vi.mock('./auth', () => ({
-  registerAuth: () => ({ getState: () => ({}), initialize: vi.fn() }),
+  registerAuth: () => ({ getState: () => ({}), initialize: harness.initialize }),
   onAuthStateChanged: vi.fn(),
 }));
+vi.mock('./chat/liveEvaluation', () => ({ runLiveEvaluation: harness.runLiveEvaluation }));
 vi.mock('./attention', () => ({
   registerAttention: () => ({ watchNeedsYou: () => ({}) }),
 }));
@@ -83,6 +86,16 @@ vi.mock('./mainWindowState', () => ({
   trackMainWindowState: vi.fn(),
 }));
 vi.mock('./windows', () => ({ appWindows: () => harness.windows }));
+// resetModules re-evaluates the real watch's import graph before every test, about 100ms each.
+vi.mock('./watch', () => ({
+  registerWatch: () => ({
+    observeStream: vi.fn(),
+    observeStatus: vi.fn(),
+    closeMini: vi.fn(),
+    start: async () => undefined,
+    scopeChanged: vi.fn(),
+  }),
+}));
 vi.mock('./chat/sessionScope', () => ({ sessionScopeFor: () => null, sessionScopeForChat: () => null }));
 vi.mock('./chat/browser/browserScope', () => ({ closeBrowsersOnScopeChange: vi.fn() }));
 vi.mock('./chat/tools/userPath', () => ({ resolveUserPath: vi.fn() }));
@@ -91,6 +104,16 @@ vi.mock('./chat/model3d/engineProtocol', () => ({ registerModelScheme: vi.fn() }
 vi.mock('./chat/media/protocol', () => ({ registerMediaScheme: vi.fn() }));
 vi.mock('./mods/skinProtocol', () => ({ registerSkinScheme: vi.fn() }));
 vi.mock('./mods', () => ({ registerSkins: vi.fn() }));
+vi.mock('./orchestrateMini', () => ({
+  registerOrchestrateMini: () => ({
+    isOpen: () => false,
+    toggle: vi.fn(),
+    close: vi.fn(),
+    onOpenChanged: vi.fn(),
+    start: async () => undefined,
+  }),
+}));
+vi.mock('./host/registerHostConnections', () => ({ registerHostConnections: vi.fn() }));
 vi.mock('./chat', () => ({
   registerChat: () => ({
     service: { sessionStatuses: harness.sessionStatuses },
@@ -120,6 +143,8 @@ describe('application quit', () => {
   beforeEach(async () => {
     vi.resetModules();
     harness.quit.mockReset();
+    harness.initialize.mockReset().mockResolvedValue(undefined);
+    harness.runLiveEvaluation.mockReset().mockResolvedValue(undefined);
     harness.windows.length = 0;
     harness.sessionStatuses.mockReset().mockReturnValue([]);
     harness.registerUpdates.mockReset();
@@ -150,6 +175,22 @@ describe('application quit', () => {
     app.emit('before-quit', event);
     return event;
   }
+
+  it('restores authentication before bootstrapping with evaluation disabled', async () => {
+    await vi.waitFor(() => expect(harness.runLiveEvaluation).toHaveBeenCalledOnce());
+    expect(harness.initialize).toHaveBeenCalledOnce();
+    expect(harness.runLiveEvaluation).toHaveBeenCalledWith(
+      expect.objectContaining({ initialize: harness.initialize }),
+      expect.any(String),
+      false,
+      undefined,
+      { finalPhase: false, recoverRunId: undefined }
+    );
+    expect(harness.initialize.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.runLiveEvaluation.mock.invocationCallOrder[0]
+    );
+    expect(harness.quit).not.toHaveBeenCalled();
+  });
 
   it('resumes a single quit on a new event-loop turn after cleanup', async () => {
     const cleanup = Promise.withResolvers<void>();

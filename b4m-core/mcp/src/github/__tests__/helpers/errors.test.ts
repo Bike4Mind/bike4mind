@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { getErrorInfo, getErrorMessage, hasStatus, isRateLimitError, asGitHubError } from '../../helpers/errors.js';
+import {
+  errorLogFields,
+  getErrorInfo,
+  getErrorMessage,
+  hasStatus,
+  isRateLimitError,
+  asGitHubError,
+} from '../../helpers/errors.js';
 
 describe('Error Helpers', () => {
   describe('getErrorInfo', () => {
@@ -149,6 +156,18 @@ describe('Error Helpers', () => {
       expect(githubError.message).toBe('Test');
       expect(githubError.status).toBe(404);
       expect(githubError.response?.data).toEqual({});
+    });
+  });
+
+  describe('errorLogFields', () => {
+    const withStatus = Object.assign(new Error('Not Found'), { status: 404 });
+    it.each([
+      ['Error with numeric status', withStatus, { detail: 'Not Found', status: 404 }],
+      ['plain Error', new Error('boom'), { detail: 'boom', status: undefined }],
+      ['thrown string', 'just a string', { detail: 'just a string', status: undefined }],
+      ['null', null, { detail: 'Unknown error', status: undefined }],
+    ])('maps %s', (_name, input, expected) => {
+      expect(errorLogFields(input)).toEqual(expected);
     });
   });
 });

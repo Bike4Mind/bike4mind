@@ -68,6 +68,15 @@ export function adminModerationIncidentPath(incidentId: string): string {
   return `/admin?${params.toString()}`;
 }
 
+/** Admin console text-prompt moderation review tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. */
+export const ADMIN_TEXT_MODERATION_REVIEW_TAB_SLUG = 'text-moderation-review';
+
+/** Deep link to the text-prompt moderation review list. */
+export function adminTextModerationReviewPath(): string {
+  const params = new URLSearchParams({ [ADMIN_TAB_PARAM]: ADMIN_TEXT_MODERATION_REVIEW_TAB_SLUG });
+  return `/admin?${params.toString()}`;
+}
+
 /** Admin console Dead letters tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. */
 export const ADMIN_DLQ_REPLAY_TAB_SLUG = 'dlq-replay';
 /** Preselects one queue on the Dead letters tab, by its DLQ registry label. */

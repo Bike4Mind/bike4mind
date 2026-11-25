@@ -94,7 +94,7 @@ const handler = baseApi().get(async (req, res) => {
   } catch (error) {
     // Expected account states, not server faults: answer with a typed code the picker shows as-is.
     if (error instanceof NotionNotConnectedError) {
-      console.warn('[Notion Pages] Browse requested without a Notion connection');
+      req.logger.warn('Notion page browse requested without a connection', { userId: req.user.id });
       return res.status(401).json({
         error: 'Notion is not connected. Please connect your Notion account in Settings > Integrations.',
         code: 'NOTION_NOT_CONNECTED',
@@ -102,14 +102,14 @@ const handler = baseApi().get(async (req, res) => {
     }
 
     if (error instanceof NotionReconnectRequiredError) {
-      console.warn('[Notion Pages] Browse requested on a Notion connection that needs reconnecting');
+      req.logger.warn('Notion page browse requested on a connection needing reconnect', { userId: req.user.id });
       return res.status(401).json({
         error: 'Your Notion connection needs to be re-established. Please reconnect in Settings > Integrations.',
         code: 'NOTION_RECONNECT_REQUIRED',
       });
     }
 
-    console.error('[Notion Pages] Error browsing pages:', error);
+    req.logger.error('Notion page browse failed', { userId: req.user.id, error });
 
     // Surface specific, actionable error messages to the client
     if (error instanceof Error) {

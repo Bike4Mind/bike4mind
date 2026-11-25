@@ -108,6 +108,18 @@ describe('related discovery', () => {
     expect(await runRelated({ plan: null, script: 'test', shard: '--shard=2/3', root, run })).toBe(7);
     expect(run.mock.calls[0].slice(0, 2)).toEqual(['pnpm', ['--filter', '@bike4mind/client', 'test', '--shard=2/3']]);
   });
+  it('pins NODE_ENV to test for the fallback when the caller left it unset', async () => {
+    const previous = process.env.NODE_ENV;
+    delete process.env.NODE_ENV;
+    try {
+      const run = vi.fn().mockReturnValue({ status: 0 });
+      await runRelated({ plan: null, script: 'test', root, run });
+      expect(run.mock.calls[0][2].env.NODE_ENV).toBe('test');
+    } finally {
+      if (previous === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previous;
+    }
+  });
   it('rejects executable shard strings before invoking a command', async () => {
     await expect(runRelated({ script: 'test', shard: '--shard=1/3;echo bad' })).rejects.toThrow('invalid shard');
   });
@@ -161,6 +173,31 @@ describe('related discovery', () => {
       expect(create).toHaveBeenCalled();
       expect(run).not.toHaveBeenCalled();
       expect(close).toHaveBeenCalledOnce();
+    } finally {
+      if (previous === undefined) delete process.env.CLIENT_TEST_LANE;
+      else process.env.CLIENT_TEST_LANE = previous;
+    }
+  });
+  it('drops the module graph that selection built before running the selected tests', async () => {
+    const file = 'apps/client/app/constants/apiKeyScopeEndpoints.generated.test.ts';
+    const spec = { moduleId: resolve(root, file), project: { name: 'node' } };
+    const order = [];
+    const moduleGraph = () => ({ invalidateAll: () => order.push('invalidate') });
+    const create = vi.fn(async () => ({
+      config: {}, close: vi.fn(), standalone: async () => {},
+      projects: [
+        { vite: { environments: { ssr: { moduleGraph: moduleGraph() }, client: { moduleGraph: moduleGraph() } } } },
+        { vite: { environments: { ssr: { moduleGraph: moduleGraph() } } } },
+      ],
+      globTestSpecifications: async () => [spec],
+      getRelevantTestSpecifications: async () => { order.push('select'); return [spec]; },
+      runTestSpecifications: async () => { order.push('run'); return { testModules: [], unhandledErrors: [] }; },
+    }));
+    const previous = process.env.CLIENT_TEST_LANE;
+    try {
+      expect(await runRelated({ plan: { mode: 'related', files: [file] }, script: 'test:integration', root, create, run: vi.fn() })).toBe(0);
+      expect(order.slice(-4)).toEqual(['invalidate', 'invalidate', 'invalidate', 'run']);
+      expect(order.indexOf('invalidate')).toBeGreaterThan(order.lastIndexOf('select'));
     } finally {
       if (previous === undefined) delete process.env.CLIENT_TEST_LANE;
       else process.env.CLIENT_TEST_LANE = previous;

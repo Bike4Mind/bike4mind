@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { ReviewGateEntry } from '../storage/types.js';
 
@@ -152,7 +151,7 @@ export function createReviewGateTool(
     toolFn: async (args: unknown) => {
       const params = validateParams(args);
 
-      const id = uuidv4();
+      const id = crypto.randomUUID();
       const requestedAt = new Date().toISOString();
 
       const response = await requestReviewFn({
