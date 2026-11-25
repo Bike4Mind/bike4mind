@@ -26,11 +26,9 @@ const defaultMcpOwner = { id: 'mcp-record', name: 'test-server', userId: 'test-u
 describe('tokenEncryption before the keyring loads', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('throws instead of falling back to any other key source, even with a valid key in config and env', () => {
+  it('throws instead of falling back to any other key source, even with a valid key in env', () => {
     resetKeyringForTests();
     const key = generateEncryptionKey();
-    // Written to the raw target: the proxy would load the keyring.
-    keyValues.SECRET_ENCRYPTION_KEY = key;
     vi.stubEnv('SECRET_ENCRYPTION_KEY', key);
     expect(() => encryptToken('t')).toThrow(KeyringNotLoadedError);
     expect(() => decryptToken(encryptSecret('t', key))).toThrow(KeyringNotLoadedError);

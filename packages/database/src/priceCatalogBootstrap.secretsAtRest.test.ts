@@ -14,6 +14,7 @@ const WRAPPED = Buffer.from('blob').toString('base64');
 
 const resource = vi.hoisted(() => ({
   values: {} as Record<string, string | undefined>,
+  reads: [] as string[],
 }));
 const kms = vi.hoisted(() => ({ decrypt: vi.fn() }));
 
@@ -23,7 +24,11 @@ vi.mock('sst', () => ({
   Resource: new Proxy(
     { App: { stage: 'test' } },
     {
-      get: (target, name: string) => (name in target ? target[name as 'App'] : { value: resource.values[name] }),
+      get: (target, name: string) => {
+        if (name in target) return target[name as 'App'];
+        resource.reads.push(name);
+        return { value: resource.values[name] };
+      },
     }
   ),
 }));
@@ -61,6 +66,7 @@ describe('keyring loading from SST resources', () => {
   beforeEach(() => {
     resetKeyringForTests();
     kms.decrypt.mockReset();
+    resource.reads = [];
     resource.values = { SECRET_ENCRYPTION_KEY: KEY };
   });
 
@@ -81,8 +87,10 @@ describe('keyring loading from SST resources', () => {
   it('skips Resource reads once the keyring has settled', async () => {
     const { ensureKeyringLoaded } = await import('./security/loadKeyringFromResource');
     await ensureKeyringLoaded();
+    resource.reads = [];
     resource.values = { SECRET_DATA_KEY_WRAPPED: WRAPPED };
     await ensureKeyringLoaded();
+    expect(resource.reads).toEqual([]);
     expect(kms.decrypt).not.toHaveBeenCalled();
     expect(getStageDataKey()?.id).toBe('static');
   });
