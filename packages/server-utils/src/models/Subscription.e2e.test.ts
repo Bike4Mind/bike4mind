@@ -441,6 +441,16 @@ describe('payment failure notice claims', () => {
     expect(await subscriptionRepository.claimBillingNotice('sub_notice', 'unpaid:in_1')).toBe(true);
   });
 
+  it('lets exactly one concurrent caller claim a billing notice key', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_notice_race' }));
+
+    const claims = await Promise.all([
+      subscriptionRepository.claimBillingNotice('sub_notice_race', 'unpaid:in_1'),
+      subscriptionRepository.claimBillingNotice('sub_notice_race', 'unpaid:in_1'),
+    ]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+  });
+
   it('claims nothing for a subscription this stage has no row for', async () => {
     expect(await subscriptionRepository.claimPaymentFailureNotice('sub_missing', 'in_1')).toBe(false);
     expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_missing')).toBe(false);

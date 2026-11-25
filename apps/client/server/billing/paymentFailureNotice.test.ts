@@ -232,8 +232,10 @@ describe('notifyCanceledForNonPayment', () => {
 });
 
 describe('notifyPaymentActionRequired', () => {
+  const renewal = { id: 'in_1', billing_reason: 'subscription_cycle' as const };
+
   it('claims the invoice and publishes one email linking the billing page', async () => {
-    await expect(notifyPaymentActionRequired(userSub, { id: 'in_1' }, logger)).resolves.toBe(true);
+    await expect(notifyPaymentActionRequired(userSub, renewal, logger)).resolves.toBe(true);
 
     expect(mocks.claimNotice).toHaveBeenCalledWith('sub_1', 'payment_action_required:in_1');
     expect(mocks.publish).toHaveBeenCalledTimes(1);
@@ -246,7 +248,7 @@ describe('notifyPaymentActionRequired', () => {
   it('sends nothing on a redelivery whose invoice is already claimed', async () => {
     mocks.claimNotice.mockResolvedValue(false);
 
-    await expect(notifyPaymentActionRequired(userSub, { id: 'in_1' }, logger)).resolves.toBe(false);
+    await expect(notifyPaymentActionRequired(userSub, renewal, logger)).resolves.toBe(false);
 
     expect(mocks.publish).not.toHaveBeenCalled();
   });
@@ -254,13 +256,25 @@ describe('notifyPaymentActionRequired', () => {
   it('releases the claim when publishing fails, so a retry can send', async () => {
     mocks.publish.mockRejectedValue(new Error('bus down'));
 
-    await expect(notifyPaymentActionRequired(userSub, { id: 'in_1' }, logger)).resolves.toBe(false);
+    await expect(notifyPaymentActionRequired(userSub, renewal, logger)).resolves.toBe(false);
 
     expect(mocks.releaseNotice).toHaveBeenCalledWith('sub_1', 'payment_action_required:in_1');
   });
 
+  it.each(['subscription_update', 'subscription_create', 'manual'] as const)(
+    'sends nothing and claims nothing for a %s invoice',
+    async billingReason => {
+      await expect(
+        notifyPaymentActionRequired(userSub, { ...renewal, billing_reason: billingReason }, logger)
+      ).resolves.toBe(false);
+
+      expect(mocks.claimNotice).not.toHaveBeenCalled();
+      expect(mocks.publish).not.toHaveBeenCalled();
+    }
+  );
+
   it('emails the org owner, linking the org Billing tab, for an org subscription', async () => {
-    await notifyPaymentActionRequired(orgSub, { id: 'in_9' }, logger);
+    await notifyPaymentActionRequired(orgSub, { ...renewal, id: 'in_9' }, logger);
 
     const sent = mocks.publish.mock.calls[0][0];
     expect(sent.to).toBe('owner_1@example.com');

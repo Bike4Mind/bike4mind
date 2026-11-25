@@ -185,14 +185,22 @@ export async function notifyCanceledForNonPayment(subscription: ISubscription, l
   );
 }
 
-/** Email the owner, once per invoice, that the bank needs them to confirm the payment. Resolves true only when this call sent it. */
+/**
+ * Email the owner, once per invoice, that the bank needs them to confirm a renewal payment.
+ * Renewals only, for the same reason as notifyPaymentFailed: the copy is wrong for a proration
+ * or a one-off invoice. Resolves true only when this call sent it.
+ */
 export async function notifyPaymentActionRequired(
   subscription: ISubscription,
-  invoice: Pick<Stripe.Invoice, 'id'>,
+  invoice: Pick<Stripe.Invoice, 'id' | 'billing_reason'>,
   logger: Logger
 ): Promise<boolean> {
   const subscriptionId = subscription.subscriptionId;
   if (!subscriptionId || !invoice.id) return false;
+  if (invoice.billing_reason !== 'subscription_cycle') {
+    logger.debug(`Invoice ${invoice.id} is ${invoice.billing_reason}, not a renewal; no confirm-payment email`);
+    return false;
+  }
   const key = `payment_action_required:${invoice.id}`;
 
   return sendOnce(

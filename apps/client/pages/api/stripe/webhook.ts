@@ -508,9 +508,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // Once per unpaid invoice, so later updates and redeliveries in the same state stay silent.
       if (subscription.status === 'unpaid') {
         const row = await subscriptionRepository.findByStripeSubscriptionId(subscription.id);
-        if (row && !isCancellableSubscriptionStatus(row.status)) {
-          req.logger.warn(`Ignoring unpaid notice on subscription ${subscription.id}: it is already closed`);
-        } else if (row) {
+        if (!row || !isCancellableSubscriptionStatus(row.status)) {
+          req.logger.warn(
+            `Ignoring unpaid notice on subscription ${subscription.id}: no row in this stage, or it is already closed`
+          );
+        } else {
           const latestInvoice = subscription.latest_invoice;
           await notifyUnpaid(
             row,
