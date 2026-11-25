@@ -34,6 +34,7 @@ import {
   type CallableFunctionRunner,
   type CallableFunctionTenant,
 } from './runtimeRunner';
+import { hasCurrentReview } from './reviews';
 import { canCallFunction } from './sharing';
 
 /**
@@ -49,7 +50,7 @@ export type CallableFunctionDispatchReason =
   | 'setting_off'
   | 'not_found'
   | 'not_caller'
-  | 'pending_review'
+  | 'review_required'
   | 'disabled'
   | 'source_deleted'
   | 'not_live'
@@ -381,10 +382,11 @@ export async function recordCallableFunctionRefusal(
 }
 
 /**
- * Checks, in order, the setting, the record, the caller (`canCallFunction`; a recipient is refused as pending
- * review), the status, the input size, and the inputs, then runs the pinned code, checks the outputs, and stamps the
- * result. Every path, a throw included, writes one call-log row with hashes and sizes only. A function the caller
- * cannot call answers `not_found`, as a missing one does; only the row says `not_caller`.
+ * Checks, in order, the setting, the record, the caller (`canCallFunction`; a recipient also needs a current,
+ * enabled review of the interface the call runs against), the status, the input size, and the inputs, then runs the
+ * pinned code, checks the outputs, and stamps the result. Every path, a throw included, writes one call-log row with
+ * hashes and sizes only. A function the caller cannot call answers `not_found`, as a missing one does; only the row
+ * says `not_caller`.
  */
 export async function dispatchFunctionCall(
   request: DispatchFunctionCallRequest,
@@ -418,10 +420,12 @@ export async function dispatchFunctionCall(
     row.codeHash = fn.pin.contentHash;
     if (fn.pin.seq !== undefined) row.pinSeq = fn.pin.seq;
 
+    const contract = options.contract ?? fn.contract;
     const access = await canCallFunction(caller, fn);
     if (!access) return finish({ outcome: 'refused', reason: 'not_found' }, 'not_caller');
-    // A recipient calls only after reviewing the shared function, which no surface offers yet.
-    if (access !== 'owner') return refuse('pending_review');
+    if (access !== 'owner' && !(await hasCurrentReview(caller.id, { id: fn.id, contract }))) {
+      return refuse('review_required');
+    }
 
     const status = effectiveCallableFunctionStatus(fn, await readHead(fn));
     if (status === 'disabled' || status === 'source_deleted') return refuse(status);
@@ -437,7 +441,6 @@ export async function dispatchFunctionCall(
       return finish({ outcome: 'input_invalid', reason: 'input_too_large' });
     }
 
-    const contract = options.contract ?? fn.contract;
     if (isObject(args)) row.inputHash = functionInputHash(args);
     const problems = validateFunctionValue(contract.inputs, args);
     if (problems.length > 0) return finish({ outcome: 'input_invalid', problems });

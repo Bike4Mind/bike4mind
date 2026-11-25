@@ -167,10 +167,21 @@ describe('account purge reconciliation', () => {
     expect(matched('CallableFunction', { ownerType: 'user', ownerKey: 'other', userId: 'other' })).toEqual([]);
   });
 
+  it("deletes the recipients' reviews of a person's functions before the functions go", () => {
+    expect(DATA_HOLDER_REGISTRY.CallableFunction).toMatchObject({
+      beforeErasure: ['deleteReviewsOfOwnedCallableFunctions'],
+    });
+  });
+
   it("removes a person from the grants of another person's shared function", () => {
     const shared = { ownerType: 'user', ownerKey: 'other', userId: 'other' };
     expect(matched('CallableFunction', { ...shared, grants: { userIds: ['x', userId] } })).toEqual(['pullFromArray']);
     expect(matched('CallableFunction', { ...shared, grants: { userIds: ['x'] } })).toEqual([]);
+  });
+
+  it("deletes a person's reviews of functions shared with them and leaves another person's alone", () => {
+    expect(matched('CallableFunctionReview', { functionId: 'fn-1', userId })).toEqual(['deleteDocument']);
+    expect(matched('CallableFunctionReview', { functionId: 'fn-1', userId: 'other' })).toEqual([]);
   });
 
   it("deletes the function call rows a person made, and only names the owner on someone else's call", () => {

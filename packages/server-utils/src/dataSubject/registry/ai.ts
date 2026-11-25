@@ -24,6 +24,8 @@ export const aiHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } },
       { path: 'grants.userIds', matchBy: 'userId', action: 'pullFromArray' },
     ],
+    // Recipients' reviews name the function, not its owner, so they are deleted before the functions are.
+    beforeErasure: ['deleteReviewsOfOwnedCallableFunctions'],
   },
   CallableFunctionCall: {
     kind: 'holder',
@@ -34,6 +36,10 @@ export const aiHolders = {
     ],
     // A digest of the function's source, not a credential; listed because the name matches the secret pattern.
     secretPaths: ['codeHash'],
+  },
+  CallableFunctionReview: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   CodeAgentEvent: {
     kind: 'holder',

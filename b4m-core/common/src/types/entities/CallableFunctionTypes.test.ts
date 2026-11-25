@@ -150,17 +150,60 @@ describe('sharing', () => {
     expect(toCallableFunctionPublic(doc({ grants }), { version: 2 }).grants).toEqual(grants);
   });
 
-  it('shows a recipient no code, artifact, examples, grants, or owner fields, and always pending review', () => {
-    const view = toCallableFunctionShared(
-      doc({ state: 'live', trustLabel: 'verified', grants, pin: { ...doc().pin, seq: 2 } }),
-      'project'
+  const hash = 'a'.repeat(64);
+  const review = {
+    functionId: 'fn-1',
+    userId: 'user-2',
+    reviewHash: hash,
+    approval: 'always_ask' as const,
+    enabled: true,
+    reviewedAt: new Date(),
+  };
+  const shared = (reviewed: typeof review | null) =>
+    toCallableFunctionShared(
+      doc({
+        state: 'live',
+        trustLabel: 'verified',
+        grants,
+        pin: { ...doc().pin, seq: 2 },
+        contract: { ...contract, tests: [{ name: 'secret case', input: {}, expected: {} }] },
+      }),
+      'project',
+      { ownerName: 'Owner Name', reviewHash: hash, review: reviewed }
     );
+
+  it('shows a recipient the interface but no code, tests, artifact, examples, grants, or owner ids', () => {
+    const view = shared(null);
     expect(Object.keys(view).sort()).toEqual(
-      ['description', 'id', 'pin', 'sharedVia', 'slug', 'status', 'trustLabel', 'updatedAt'].sort()
+      [
+        'dataPins',
+        'description',
+        'id',
+        'inputs',
+        'outputs',
+        'ownerName',
+        'pin',
+        'review',
+        'reviewHash',
+        'sharedVia',
+        'slug',
+        'sources',
+        'status',
+        'trustLabel',
+        'updatedAt',
+      ].sort()
     );
     expect(Object.keys(view.pin).sort()).toEqual(['pinnedAt', 'seq', 'version']);
     expect(view).toMatchObject({ status: 'pending_review', sharedVia: 'project', trustLabel: 'verified' });
-    expect(JSON.stringify(view)).not.toMatch(/def run|artifact-1|user-2/);
+    expect(view.inputs).toEqual(contract.inputs);
+    expect(JSON.stringify(view)).not.toMatch(/def run|artifact-1|user-2|secret case/);
+  });
+
+  it('reads reviewed only while the review names the current hash and is on', () => {
+    expect(shared(review)).toMatchObject({ status: 'reviewed', review: { approval: 'always_ask', current: true } });
+    expect(shared({ ...review, enabled: false }).status).toBe('disabled');
+    const stale = shared({ ...review, reviewHash: 'b'.repeat(64), enabled: false });
+    expect(stale).toMatchObject({ status: 'pending_review', review: { current: false } });
   });
 
   it('has no public rung and protects the grants', () => {

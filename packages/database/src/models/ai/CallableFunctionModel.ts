@@ -25,6 +25,7 @@ import {
   type ICallableFunctionGrants,
   type ICallableFunctionOfferable,
   type ICallableFunctionRepository,
+  type ICallableFunctionSharedSource,
   type McpToolApprovalMode,
   type ICallableFunctionSummary,
   type IMongoDocument,
@@ -294,6 +295,12 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     return docs.map(doc => doc.toObject() as ICallableFunctionSummary);
   }
 
+  /** Ids of the functions a person owns directly, not through a team. */
+  async listIdsForUser(userId: string): Promise<string[]> {
+    const docs = await this.model.find(ownerFilter({ ownerType: 'user', ownerKey: userId }), { _id: 1 }).lean();
+    return docs.map(doc => String(doc._id));
+  }
+
   async countForOwner(owner: CallableFunctionOwner): Promise<number> {
     return this.model.countDocuments(ownerFilter(owner));
   }
@@ -449,7 +456,7 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     userId: string;
     projectIds: string[];
     organizationIds: string[];
-  }): Promise<ICallableFunctionSummary[]> {
+  }): Promise<ICallableFunctionSharedSource[]> {
     const docs = await this.model
       .find(
         {
@@ -462,13 +469,14 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
             { 'grants.visibility': 'organization', 'grants.organizationId': { $in: reach.organizationIds } },
           ],
         },
-        SUMMARY_PROJECTION
+        // A recipient reviews the contract; the pinned code never leaves the server.
+        OFFERABLE_PROJECTION
       )
       .sort({ updatedAt: -1 })
       // Capped before the caller's membership filter drops stale project/organization grants, so the cap counts them too;
       // shares past the most recent are not listed but stay callable.
       .limit(CALLABLE_FUNCTION_LIMITS.maxPerOwner);
-    return docs.map(doc => doc.toObject() as ICallableFunctionSummary);
+    return docs.map(doc => doc.toObject() as ICallableFunctionSharedSource);
   }
 
   async deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean> {
