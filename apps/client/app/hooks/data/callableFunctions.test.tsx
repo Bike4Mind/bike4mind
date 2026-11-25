@@ -12,9 +12,13 @@ import {
   useArtifactCallableFunction,
   useCallableFunctionsEnabled,
   useCreateCallableFunction,
+  useCallableFunctionShare,
   useDeleteCallableFunction,
   useRepinCallableFunction,
   useSetCallableFunctionEnabled,
+  useSharedCallableFunctions,
+  useShareCallableFunction,
+  useStopSharingCallableFunction,
 } from './callableFunctions';
 import { CALLABLE_FUNCTIONS_LIST_QUERY_KEY, CALLABLE_FUNCTIONS_STATUS_QUERY_KEY } from './queryKeys';
 
@@ -22,12 +26,13 @@ const h = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   patch: vi.fn(),
+  put: vi.fn(),
   delete: vi.fn(),
   accessToken: 'token' as string | null,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: h.get, post: h.post, patch: h.patch, delete: h.delete },
+  api: { get: h.get, post: h.post, patch: h.patch, put: h.put, delete: h.delete },
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (select: (s: { accessToken: string | null }) => unknown) => select({ accessToken: h.accessToken }),
@@ -217,6 +222,64 @@ describe('callable function mutations', () => {
 
     expect(h.delete).toHaveBeenCalledWith('/api/callable-functions/fn-1');
     expect(listInvalidations(invalidate)).toBe(1);
+  });
+});
+
+describe('callable function sharing hooks', () => {
+  beforeEach(() => {
+    h.get.mockReset();
+    h.put.mockReset();
+    h.delete.mockReset();
+    h.accessToken = 'token';
+  });
+
+  it('reads the share from the grants route, and drops it when nothing watches it', async () => {
+    h.get.mockResolvedValue({ data: { grants: null, people: [] } });
+    const { result, client, unmount } = renderWith(() => useCallableFunctionShare('fn/1'));
+    await waitFor(() => expect(result.current.data).toEqual({ grants: null, people: [] }));
+    expect(h.get).toHaveBeenCalledWith('/api/callable-functions/fn%2F1/grants');
+
+    unmount();
+    await waitFor(() => expect(client.getQueryCache().findAll()).toHaveLength(0));
+  });
+
+  it('share puts the grants without the id, then re-reads the list', async () => {
+    h.put.mockResolvedValue({ data: saved });
+    const client = newClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderWith(() => useShareCallableFunction(), client);
+
+    await act(() => result.current.mutateAsync({ id: 'fn/1', visibility: 'private', userIds: ['person-1'] }));
+
+    expect(h.put).toHaveBeenCalledWith('/api/callable-functions/fn%2F1/grants', {
+      visibility: 'private',
+      userIds: ['person-1'],
+    });
+    expect(invalidate).toHaveBeenCalled();
+  });
+
+  it('stop sharing deletes the grants, then re-reads the list', async () => {
+    h.delete.mockResolvedValue({ data: saved });
+    const client = newClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderWith(() => useStopSharingCallableFunction(), client);
+
+    await act(() => result.current.mutateAsync('fn/1'));
+
+    expect(h.delete).toHaveBeenCalledWith('/api/callable-functions/fn%2F1/grants');
+    expect(invalidate).toHaveBeenCalled();
+  });
+
+  it('lists what is shared with the caller, and does not ask without a session', async () => {
+    h.get.mockResolvedValue({ data: [{ id: 'fn-1' }] });
+    const { result } = renderWith(() => useSharedCallableFunctions());
+    await waitFor(() => expect(result.current.data).toEqual([{ id: 'fn-1' }]));
+    expect(h.get).toHaveBeenCalledWith('/api/callable-functions/shared');
+
+    h.get.mockClear();
+    h.accessToken = null;
+    renderWith(() => useSharedCallableFunctions());
+    expect(h.get).not.toHaveBeenCalled();
   });
 });
 

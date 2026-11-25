@@ -150,4 +150,51 @@ describe('ShareFunctionDialog', () => {
     expect(screen.getByTestId('python-function-share-email')).toBeDisabled();
     expect(screen.getByText('People (50 of 50)')).toBeTruthy();
   });
+
+  it('shows why the share could not be saved, and stays open', () => {
+    const onClose = vi.fn();
+    h.share = {
+      data: { grants: null, people: [{ id: 'person-1', name: 'Person One' }] },
+      isPending: false,
+      isError: false,
+    };
+    h.save.mutate.mockImplementation((_input, options) => options.onError(new Error('Request failed')));
+    renderDialog({ onClose });
+    fireEvent.click(screen.getByTestId('python-function-share-confirm'));
+    fireEvent.click(screen.getByTestId('python-function-share-submit-btn'));
+    expect(screen.getByTestId('python-function-share-error').textContent).toBe('The tool could not be shared.');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes once the share is saved', () => {
+    const onClose = vi.fn();
+    h.share = {
+      data: { grants: null, people: [{ id: 'person-1', name: 'Person One' }] },
+      isPending: false,
+      isError: false,
+    };
+    h.save.mutate.mockImplementation((_input, options) => options.onSuccess());
+    renderDialog({ onClose });
+    fireEvent.click(screen.getByTestId('python-function-share-confirm'));
+    fireEvent.click(screen.getByTestId('python-function-share-submit-btn'));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('says so when the address could not be looked up, and adds nobody', async () => {
+    h.lookup.mockRejectedValue(new Error('network'));
+    renderDialog();
+    fireEvent.change(screen.getByTestId('python-function-share-email'), { target: { value: 'one@example.com' } });
+    fireEvent.click(screen.getByTestId('python-function-share-add-btn'));
+    await waitFor(() =>
+      expect(screen.getByTestId('python-function-share-error').textContent).toBe('That address could not be looked up.')
+    );
+    expect(screen.queryByTestId('python-function-share-person')).toBeNull();
+  });
+
+  it('says so when the share could not be loaded, and shows no form', () => {
+    h.share = { data: undefined, isPending: false, isError: true };
+    renderDialog();
+    expect(screen.getByTestId('python-function-share-load-error').textContent).toBe('The share could not be loaded.');
+    expect(screen.queryByTestId('python-function-share-submit-btn')).toBeNull();
+  });
 });

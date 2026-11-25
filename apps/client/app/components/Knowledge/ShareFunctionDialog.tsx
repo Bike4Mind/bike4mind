@@ -294,7 +294,7 @@ export default function ShareFunctionDialog(props: ShareFunctionDialogProps) {
         </Typography>
         {isPending && <Skeleton variant="rectangular" height={120} />}
         {isError && (
-          <Alert color="danger" variant="soft" sx={dangerAlertSx}>
+          <Alert color="danger" variant="soft" sx={dangerAlertSx} data-testid="python-function-share-load-error">
             The share could not be loaded.
           </Alert>
         )}
