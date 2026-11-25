@@ -68,13 +68,16 @@ describe('DataTable', () => {
   });
 
   it('stripes alternate rows only when asked', () => {
-    const cellBackground = () =>
-      getComputedStyle(screen.getAllByRole('row')[1].querySelector('td') as HTMLElement).backgroundColor;
+    // jsdom does not resolve the stripe's CSS variable, so check for Joy's stripe rule in the injected styles.
+    const stripeRuleInjected = () =>
+      Array.from(document.querySelectorAll('style')).some(style =>
+        style.textContent?.includes('--TableRow-stripeBackground')
+      );
     const { unmount } = renderTable();
-    const plain = cellBackground();
+    expect(stripeRuleInjected()).toBe(false);
     unmount();
     renderTable({ stripe: 'odd' });
-    expect(cellBackground()).not.toBe(plain);
+    expect(stripeRuleInjected()).toBe(true);
   });
 
   it('offers a way back from an empty server page past the end', () => {
