@@ -1046,19 +1046,21 @@ export function registerChat(
     if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
       throw new Error('Invalid delete request');
     }
-    await runtime.deleteSession(sessionId, removeWorktree === true);
+    // The Electron dialog lists what cleanup discards before the user confirms.
+    await runtime.deleteSession(sessionId, removeWorktree === true, true);
   });
   ipcMain.handle(
     IPC_CHANNELS.chatDeleteSessionTree,
-    (_event, sessionId: unknown, nestedIds: unknown, removeWorktree: unknown) => {
+    (_event, sessionId: unknown, nestedIds: unknown, removeWorktree: unknown, nestedWorktreeIds: unknown) => {
       if (
         typeof sessionId !== 'string' ||
         !isIdList(nestedIds) ||
-        (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')
+        (removeWorktree !== undefined && typeof removeWorktree !== 'boolean') ||
+        (nestedWorktreeIds !== undefined && !isIdList(nestedWorktreeIds))
       ) {
         throw new Error('Invalid delete request');
       }
-      return runtime.deleteSessionTree(sessionId, nestedIds, removeWorktree === true);
+      return runtime.deleteSessionTree(sessionId, nestedIds, removeWorktree === true, nestedWorktreeIds ?? []);
     }
   );
   const isKnownSession = (sessionId: string) =>

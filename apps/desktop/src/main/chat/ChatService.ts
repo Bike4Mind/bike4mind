@@ -3242,7 +3242,7 @@ export class ChatService {
     const inspection = await inspectWorktreeRemoval(
       session.project,
       owners.map(owner => owner.project),
-      { owners }
+      { owners, hold: this.preparationHold([sessionId, ...alsoDeleting]) }
     );
     if (inspection && this.hasTurnInFlight(sessionId)) {
       return { ...inspection, safe: false, removable: false, reason: 'Conversation is still running' };
@@ -3253,6 +3253,12 @@ export class ChatService {
   /**
    * Preparation stays active until its binding is persisted under the same lease as cleanup.
    */
+  /** Another session cutting a workspace may be about to bind this checkout; see orphanOptions. */
+  private preparationHold(deleting: readonly string[]) {
+    return () =>
+      [...this.preparing.keys()].some(id => !deleting.includes(id)) ? 'A workspace is being prepared' : null;
+  }
+
   private orphanOptions(titles?: ReadonlyMap<ChatProject, string>) {
     return {
       ...(titles ? { titles } : {}),
@@ -3320,7 +3326,15 @@ export class ChatService {
     return true;
   }
 
-  async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {
+  /**
+   * `allowDiscard` lets cleanup force-remove a dirty or unproven checkout, keeping its branch. Only a
+   * caller that showed the user what is discarded passes it; the host protocol has no such step.
+   */
+  async deleteSession(
+    sessionId: string,
+    removeWorktree = false,
+    { allowDiscard = false }: { allowDiscard?: boolean } = {}
+  ): Promise<void> {
     const expectedScope = this.deps.store.scopeKey();
     const remove = async () => {
       if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
@@ -3328,21 +3342,25 @@ export class ChatService {
         await this.cleanupDeletedSession(sessionId, true, undefined, expectedScope);
         return;
       }
-      await this.withWorkspaceBindings(() => this.deleteSessionWithWorkspaceLease(sessionId, expectedScope));
+      await this.withWorkspaceBindings(() =>
+        this.deleteSessionWithWorkspaceLease(sessionId, expectedScope, allowDiscard)
+      );
     };
     return this.studioWithSessionDeletion ? this.studioWithSessionDeletion(sessionId, remove) : remove();
   }
 
   /**
    * Deletes the named nested sessions of `sessionId`, deepest first, then the session itself.
-   * Ids that are not its descendants are ignored. With `removeWorktree`, a nested session's own
-   * worktree goes only when removable at that moment; the parent's goes as `deleteSession` would.
-   * Stops at the first failure and reports it with what was already deleted.
+   * Ids that are not its descendants are ignored. `removeWorktree` covers the parent's worktree;
+   * a nested session's goes only when its id is in `nestedWorktreeIds` - the ones the dialog showed
+   * the user - and it is still removable then. Discarding is allowed for both, since the dialog
+   * listed what each discards. Stops at the first failure and reports what was already deleted.
    */
   async deleteSessionTree(
     sessionId: string,
     nestedIds: readonly string[],
-    removeWorktree = false
+    removeWorktree = false,
+    nestedWorktreeIds: readonly string[] = []
   ): Promise<SessionTreeDeletion> {
     const wanted = new Set(nestedIds);
     const sessions = await this.listSessions();
@@ -3367,11 +3385,12 @@ export class ChatService {
     const deleted: string[] = [];
     try {
       for (const id of order) {
-        const removable = removeWorktree && (await this.inspectSessionWorktreeRemoval(id))?.removable === true;
-        await this.deleteSession(id, removable);
+        const removable =
+          nestedWorktreeIds.includes(id) && (await this.inspectSessionWorktreeRemoval(id))?.removable === true;
+        await this.deleteSession(id, removable, { allowDiscard: true });
         deleted.push(id);
       }
-      await this.deleteSession(sessionId, removeWorktree);
+      await this.deleteSession(sessionId, removeWorktree, { allowDiscard: true });
       deleted.push(sessionId);
     } catch (err) {
       return { deleted, error: err instanceof Error ? err.message : String(err) };
@@ -3379,7 +3398,11 @@ export class ChatService {
     return { deleted, error: null };
   }
 
-  private async deleteSessionWithWorkspaceLease(sessionId: string, expectedScope: string | null): Promise<void> {
+  private async deleteSessionWithWorkspaceLease(
+    sessionId: string,
+    expectedScope: string | null,
+    allowDiscard: boolean
+  ): Promise<void> {
     const assertScope = () => {
       if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
     };
@@ -3395,6 +3418,9 @@ export class ChatService {
       const inspection = await this.inspectSessionWorktreeRemoval(sessionId);
       assertScope();
       if (!inspection?.removable) throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+      if (!inspection.safe && !allowDiscard) {
+        throw new Error(inspection.safeReason ?? 'Cannot verify the upstream or base branch');
+      }
       await this.deps.background?.killSession(sessionId);
       assertScope();
       releaseTerminals = await this.deps.releaseSessionTerminals?.(sessionId);
@@ -3407,7 +3433,7 @@ export class ChatService {
       await removeSessionWorktree(
         session.project,
         owners.map(owner => owner.project),
-        { owners }
+        { owners, allowDiscard, hold: this.preparationHold([sessionId]) }
       );
       assertScope();
       await this.cleanupDeletedSession(sessionId, true, undefined, expectedScope);

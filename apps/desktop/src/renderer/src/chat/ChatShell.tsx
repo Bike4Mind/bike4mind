@@ -1622,7 +1622,12 @@ export function ChatShell({
     [sessions, deleteSessionId]
   );
   const onDelete = useCallback(
-    async (sessionId: string, removeWorktree: boolean, nestedIds: readonly string[] = []) => {
+    async (
+      sessionId: string,
+      removeWorktree: boolean,
+      nestedIds: readonly string[] = [],
+      nestedWorktreeIds: readonly string[] = []
+    ) => {
       const settle = (ids: readonly string[]) => {
         for (const id of ids) {
           clearAddFolderAlert(id);
@@ -1631,7 +1636,7 @@ export function ChatShell({
         setActiveId(current => (current && ids.includes(current) ? null : current));
       };
       try {
-        settle(await remove(sessionId, removeWorktree, nestedIds));
+        settle(await remove(sessionId, removeWorktree, nestedIds, nestedWorktreeIds));
       } catch (err) {
         settle((err as { deleted?: string[] }).deleted ?? []);
         throw err;

@@ -1112,8 +1112,16 @@ export interface DesktopApi {
     getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
-    /** Deletes the listed nested sessions, deepest first, then the session itself. */
-    deleteSessionTree(sessionId: string, nestedIds: string[], removeWorktree?: boolean): Promise<SessionTreeDeletion>;
+    /**
+     * Deletes the listed nested sessions, deepest first, then the session itself. `removeWorktree`
+     * is the parent's worktree; `nestedWorktreeIds` are the nested sessions whose worktrees go too.
+     */
+    deleteSessionTree(
+      sessionId: string,
+      nestedIds: string[],
+      removeWorktree?: boolean,
+      nestedWorktreeIds?: string[]
+    ): Promise<SessionTreeDeletion>;
     /** `alsoDeleting` are nested sessions deleted with it, which then do not hold its worktree. */
     inspectWorktreeRemoval(sessionId: string, alsoDeleting?: string[]): Promise<SessionWorktreeRemoval | null>;
     /** Checkouts under the repository's app worktree root, with the conversation that owns each. */

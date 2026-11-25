@@ -70,7 +70,12 @@ export interface SessionsController {
    * With `nestedIds`, deletes those nested sessions first. Resolves the ids deleted; a failure part
    * way throws an error whose `deleted` lists the ones already gone.
    */
-  remove: (sessionId: string, removeWorktree?: boolean, nestedIds?: readonly string[]) => Promise<string[]>;
+  remove: (
+    sessionId: string,
+    removeWorktree?: boolean,
+    nestedIds?: readonly string[],
+    nestedWorktreeIds?: readonly string[]
+  ) => Promise<string[]>;
   togglePin: (session: ChatSessionSummary) => Promise<void>;
   toggleArchived: (session: ChatSessionSummary) => Promise<void>;
   /** Rename any listed session, shown at once and rolled back (with `renameError`) if main refuses. */
@@ -222,26 +227,36 @@ export function useSessions(): SessionsController {
     [list]
   );
 
-  const remove = useCallback(async (sessionId: string, removeWorktree = false, nestedIds: readonly string[] = []) => {
-    const forget = (ids: readonly string[]) => {
-      for (const id of ids) {
-        backgroundNotices.delete(id);
-        backgroundReturned.delete(id);
-        forgetSessionPrefs(id);
+  const remove = useCallback(
+    async (
+      sessionId: string,
+      removeWorktree = false,
+      nestedIds: readonly string[] = [],
+      nestedWorktreeIds: readonly string[] = []
+    ) => {
+      const forget = (ids: readonly string[]) => {
+        for (const id of ids) {
+          backgroundNotices.delete(id);
+          backgroundReturned.delete(id);
+          forgetSessionPrefs(id);
+        }
+        const gone = new Set(ids);
+        editSessions(current => current.filter(session => !gone.has(session.id)));
+      };
+      if (nestedIds.length === 0) {
+        await window.b4m.chat.deleteSession(sessionId, removeWorktree);
+        forget([sessionId]);
+        return [sessionId];
       }
-      const gone = new Set(ids);
-      editSessions(current => current.filter(session => !gone.has(session.id)));
-    };
-    if (nestedIds.length === 0) {
-      await window.b4m.chat.deleteSession(sessionId, removeWorktree);
-      forget([sessionId]);
-      return [sessionId];
-    }
-    const { deleted, error } = await window.b4m.chat.deleteSessionTree(sessionId, [...nestedIds], removeWorktree);
-    forget(deleted);
-    if (error) throw Object.assign(new Error(error), { deleted });
-    return deleted;
-  }, []);
+      const { deleted, error } = await window.b4m.chat.deleteSessionTree(sessionId, [...nestedIds], removeWorktree, [
+        ...nestedWorktreeIds,
+      ]);
+      forget(deleted);
+      if (error) throw Object.assign(new Error(error), { deleted });
+      return deleted;
+    },
+    []
+  );
 
   const apply = useCallback((summary: ChatSessionSummary) => {
     editSessions(current => [summary, ...current.filter(session => session.id !== summary.id)]);

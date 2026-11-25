@@ -75,7 +75,7 @@ describe('session worktree removal', () => {
       removable: true,
       reason: `1 uncommitted file will be discarded; branch ${project.workspaceBranch} is kept`,
     });
-    await removeSessionWorktree(project, []);
+    await removeSessionWorktree(project, [], { allowDiscard: true });
     await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     await git(project.directory, ['show-ref', '--verify', `refs/heads/${project.workspaceBranch}`]);
   });
@@ -89,7 +89,7 @@ describe('session worktree removal', () => {
       removable: true,
       reason: `Branch ${project.workspaceBranch} is kept: 1 commit not pushed or merged`,
     });
-    await removeSessionWorktree(project, []);
+    await removeSessionWorktree(project, [], { allowDiscard: true });
     await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await git(project.directory, ['rev-parse', `refs/heads/${project.workspaceBranch}`])).trim()).toBe(tip);
   });
@@ -126,7 +126,7 @@ describe('session worktree removal', () => {
     await git(project.workingDirectory, ['commit', '--allow-empty', '-qm', 'merged']);
     await git(project.directory, ['merge', '--ff-only', project.workspaceBranch!]);
     expect(await inspectWorktreeRemoval(project, [])).toMatchObject({ safe: false, removable: true });
-    await removeSessionWorktree(project, []);
+    await removeSessionWorktree(project, [], { allowDiscard: true });
     await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     await git(project.directory, ['show-ref', '--verify', `refs/heads/${project.workspaceBranch}`]);
     expect((await git(project.directory, ['config', '--get', `branch.${project.workspaceBranch}.merge`])).trim()).toBe(
@@ -142,7 +142,7 @@ describe('session worktree removal', () => {
       removable: true,
       reason: expect.stringContaining('1 uncommitted file will be discarded'),
     });
-    await removeSessionWorktree(project, []);
+    await removeSessionWorktree(project, [], { allowDiscard: true });
     await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -552,10 +552,75 @@ describe('session deletion integration', () => {
       await writeFile(join(project.workingDirectory, 'late.txt'), 'scratch');
     });
     try {
-      await service.deleteSession(session.id, true);
+      await service.deleteSession(session.id, true, { allowDiscard: true });
       expect(await store.get(session.id)).toBeNull();
       await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
       await git(project.directory, ['show-ref', '--verify', `refs/heads/${project.workspaceBranch}`]);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('refuses to discard without allowDiscard, as host protocol deletes ask', async () => {
+    const { project, store, session, service } = await serviceFixture();
+    try {
+      await writeFile(join(project.workingDirectory, 'work.txt'), 'keep this');
+      await expect(service.deleteSession(session.id, true)).rejects.toThrow('1 uncommitted file');
+      expect(await store.get(session.id)).not.toBeNull();
+      expect((await stat(join(project.workingDirectory, 'work.txt'))).isFile()).toBe(true);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('keeps the checkout while another session is preparing a workspace', async () => {
+    const { project, session, service } = await serviceFixture();
+    try {
+      (service as unknown as { preparing: Map<string, unknown> }).preparing.set('other', { since: 0, base: 'main' });
+      expect(await service.inspectSessionWorktreeRemoval(session.id)).toMatchObject({
+        removable: false,
+        reason: 'A workspace is being prepared',
+      });
+      await expect(service.deleteSession(session.id, true, { allowDiscard: true })).rejects.toThrow('being prepared');
+      expect((await stat(project.workingDirectory)).isDirectory()).toBe(true);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('removes only the nested worktrees named for removal, keeping a running one and continuing', async () => {
+    const { project, store, session, service } = await serviceFixture();
+    try {
+      const nestedWorktree = async (name: string) => {
+        const workingDirectory = join(appWorktreeRoot(project.directory), name);
+        const workspaceBranch = `b4m/${name}`;
+        await git(project.directory, ['worktree', 'add', '-qb', workspaceBranch, workingDirectory]);
+        await writeFile(join(workingDirectory, 'scratch.txt'), 'scratch');
+        return store.create(undefined, {
+          project: { ...project, workspaceBranch, workingDirectory },
+          origin: { parentSessionId: session.id, depth: 1, seedPrompt: name },
+        });
+      };
+      const listed = await nestedWorktree('listed');
+      const unlisted = await nestedWorktree('unlisted');
+      const running = await nestedWorktree('running');
+      const inFlight = vi.spyOn(service as unknown as { hasTurnInFlight(id: string): boolean }, 'hasTurnInFlight');
+      inFlight.mockImplementation(id => id === running.id);
+      const result = await service.deleteSessionTree(session.id, [listed.id, unlisted.id, running.id], true, [
+        listed.id,
+        running.id,
+      ]);
+      expect(result.error).toBeNull();
+      expect(result.deleted).toEqual(expect.arrayContaining([listed.id, unlisted.id, running.id, session.id]));
+      const exists = (path: string) =>
+        stat(path).then(
+          () => true,
+          () => false
+        );
+      expect(await exists(listed.project!.workingDirectory)).toBe(false);
+      expect(await exists(unlisted.project!.workingDirectory)).toBe(true);
+      expect(await exists(running.project!.workingDirectory)).toBe(true);
+      expect(await exists(project.workingDirectory)).toBe(false);
     } finally {
       service.dispose();
     }
