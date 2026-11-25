@@ -12,7 +12,6 @@ export default {
   'ModelMetrics/components/SpendTab.tsx': [[2, 'c909d4ea5a207560']],
   'RateLimits/components/OverviewTab.tsx': [[2, '39e3228c2b9fa22a']],
   'RateLimits/index.tsx': [[2, 'e1c3c0708902ccc5']],
-  'ScopedOverridesByScope.tsx': [[9, '3599e2aac9a178b8']],
   'SreAgentTab.tsx': [[11, '5f9ffda28ac67420']],
   'Team/index.tsx': [[1, '78a3901c08799aeb']],
   'Users/ComplianceModal.tsx': [[1, '8a42634a236316b4']],

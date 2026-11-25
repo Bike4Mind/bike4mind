@@ -11,7 +11,6 @@ const componentsByFile = {
   'ModelMetrics/components/SpendTab.tsx': ['Table'],
   'RateLimits/components/OverviewTab.tsx': ['Table'],
   'RateLimits/index.tsx': ['Table'],
-  'ScopedOverridesByScope.tsx': ['Card'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
   'Team/index.tsx': ['Card', 'Modal'],
   'Users/ComplianceModal.tsx': ['Table'],
