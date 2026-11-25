@@ -21821,7 +21821,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The key was minted for a connected app, which cannot use obligations. */
+      /** @description The key was minted for a connected app, which cannot use obligations. Also returned (`spend_frozen`) when your account or organization spend is frozen. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -21949,7 +21949,7 @@ export interface operations {
           'application/json': components['schemas']['UpgradeRequiredResponse'];
         };
       };
-      /** @description Per-user rate limit exceeded. */
+      /** @description Per-user rate limit exceeded. Also returned when the free tier's daily usage cap is reached. */
       429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

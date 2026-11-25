@@ -85,6 +85,16 @@ describe('createHandOffDeps', () => {
     });
   });
 
+  it('rethrows a daily cap or spend freeze instead of reporting no credits', async () => {
+    const deps = createHandOffDeps(ctx, logger, { offerLakes: false });
+    const dailyCapError = Object.assign(new Error('daily cap'), { statusCode: 429 });
+    mocks.checkCredits.mockResolvedValue({ allowed: false, reason: 'cap', dailyCapError });
+    await expect(deps.canFund('user-1')).rejects.toBe(dailyCapError);
+    const frozenError = Object.assign(new Error('frozen'), { statusCode: 403 });
+    mocks.checkCredits.mockResolvedValue({ allowed: false, reason: 'frozen', frozenError });
+    await expect(deps.canFund('user-1')).rejects.toBe(frozenError);
+  });
+
   it('joins the streamed reply and charges the obligation id as a document_obligation', async () => {
     const modelInfo = { id: 'm' };
     const info = { inputTokens: 1 };

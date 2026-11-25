@@ -60,7 +60,10 @@ export const handOffObligationContract = defineEndpoint({
   responses: {
     201: { description: 'The extracted obligation, `pending`.', schema: ObligationSchema, example: OBLIGATION_EXAMPLE },
     200: { description: 'This file was already handed off; the existing obligation.', schema: ObligationSchema },
-    403: CONNECTED_APP,
+    403: {
+      description: `${CONNECTED_APP.description} Also returned (\`spend_frozen\`) when your account or organization spend is frozen.`,
+      schema: ApiErrorSchema,
+    },
     404: {
       description: "`file_id` names no file of yours. Another user's file reads the same.",
       schema: ApiErrorSchema,
@@ -71,7 +74,10 @@ export const handOffObligationContract = defineEndpoint({
         'The file cannot be processed, has no readable text, or (`insufficient_credits`) you are out of credits.',
       schema: ApiErrorSchema,
     },
-    429: RATE_LIMITED,
+    429: {
+      description: `${RATE_LIMITED.description} Also returned when the free tier's daily usage cap is reached.`,
+      schema: ApiErrorSchema,
+    },
     502: {
       description: 'The assistant could not read the document. Nothing was saved, but the reading is charged.',
       schema: ApiErrorSchema,

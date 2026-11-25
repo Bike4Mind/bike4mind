@@ -133,9 +133,18 @@ export function createHandOffDeps(ctx: AccessContext, logger: Logger, opts: { of
         .filter(lake => lake.canManage === true && !dataLakeService.isFallbackLake(lake))
         .map(lake => ({ id: lake.id, name: lake.name }));
     },
-    canFund: async userId =>
-      (await checkSessionOperationalCredits({ userId, operationCount: 1, operation: 'scanned document', logger }))
-        .allowed,
+    canFund: async userId => {
+      const verdict = await checkSessionOperationalCredits({
+        userId,
+        operationCount: 1,
+        operation: 'scanned document',
+        logger,
+      });
+      if (verdict.allowed) return true;
+      // A spend freeze (403) or the free tier's daily cap (429) is not an empty balance.
+      if (verdict.dailyCapError ?? verdict.frozenError) throw verdict.dailyCapError ?? verdict.frozenError;
+      return false;
+    },
     complete: async (userId, prompt, store) => {
       const startTime = Date.now();
       const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });

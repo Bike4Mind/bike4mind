@@ -49711,7 +49711,7 @@
             }
           },
           "403": {
-            "description": "The key was minted for a connected app, which cannot use obligations.",
+            "description": "The key was minted for a connected app, which cannot use obligations. Also returned (`spend_frozen`) when your account or organization spend is frozen.",
             "content": {
               "application/json": {
                 "schema": {
@@ -50005,7 +50005,7 @@
             }
           },
           "429": {
-            "description": "Per-user rate limit exceeded.",
+            "description": "Per-user rate limit exceeded. Also returned when the free tier's daily usage cap is reached.",
             "content": {
               "application/json": {
                 "schema": {
