@@ -519,3 +519,23 @@ export function automaticUpgradeAllowed(
     task.automaticUpgrades < policy.escalation.maxAutomaticUpgrades
   );
 }
+
+/**
+ * The bounds a host holds a task decision answer to before it reaches the worker; the answer is
+ * checked against the card's own shapes again where it is applied (sanitizeAnswers).
+ */
+export const taskDecisionReplySchema = z.object({
+  sessionId: z.uuid(),
+  decisionId: z.string().min(1).max(100),
+  answer: z.union([
+    z.strictObject({ status: z.literal('skipped') }),
+    z.strictObject({
+      status: z.literal('answered'),
+      answers: z
+        .array(
+          z.strictObject({ selected: z.array(z.string().max(200)).max(4), other: z.string().max(5000).optional() })
+        )
+        .max(4),
+    }),
+  ]) satisfies z.ZodType<TaskDecisionAnswer>,
+});

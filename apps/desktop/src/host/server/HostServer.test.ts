@@ -296,6 +296,7 @@ describe('HostServer', () => {
     });
   });
 
+  const workerId = '0f8fad5b-d9cb-469f-a165-70867728950e';
   it('routes request/respond to the approval or the task decision by kind', async () => {
     const { client, runtime } = serve();
     const { call } = client();
@@ -303,10 +304,25 @@ describe('HostServer', () => {
       resultOf(await call('request/respond', { kind: 'approval', requestId: 'r1', answer: { decision: 'once' } }))
     ).toEqual({});
     expect(runtime.respondToApproval).toHaveBeenCalledWith('r1', { decision: 'once' });
-    const decision = { kind: 'taskDecision', sessionId: 's1', decisionId: 'd1', answer: { status: 'skipped' } };
+    const decision = { kind: 'taskDecision', sessionId: workerId, decisionId: 'd1', answer: { status: 'skipped' } };
     expect(resultOf(await call('request/respond', decision))).toEqual({});
-    expect(runtime.answerTaskDecision).toHaveBeenCalledWith('s1', 'd1', { status: 'skipped' });
+    expect(runtime.answerTaskDecision).toHaveBeenCalledWith(workerId, 'd1', { status: 'skipped' });
     expect(runtime.respondToApproval).toHaveBeenCalledTimes(1);
+  });
+
+  const tooMany = { selected: ['a', 'b', 'c', 'd', 'e'] };
+  it.each([
+    ['a session id that is not one', { sessionId: 's1' }],
+    ['an empty decision id', { decisionId: '' }],
+    ['an over-long decision id', { decisionId: 'd'.repeat(101) }],
+    ['an answer with extra keys', { answer: { status: 'skipped', note: 'x' } }],
+    ['an answer over its bounds', { answer: { status: 'answered', answers: [tooMany] } }],
+  ])('refuses a task decision answer with %s, before the runtime sees it', async (_case, change) => {
+    const { client, runtime } = serve();
+    const decision = { kind: 'taskDecision', sessionId: workerId, decisionId: 'd1', answer: { status: 'skipped' } };
+    const error = errorOf(await client().call('request/respond', { ...decision, ...change }));
+    expect(error.code).toBe(HOST_ERROR_CODES.invalidParams);
+    expect(runtime.answerTaskDecision).not.toHaveBeenCalled();
   });
 
   it('stops a background process, and answers an unknown one with processNotFound', async () => {

@@ -16,6 +16,7 @@ import {
   type HostResponse,
   type HostResult,
 } from '@shared/hostProtocol';
+import { taskDecisionReplySchema } from '@shared/orchestration';
 import { sessionForRenderer } from '../../main/chat/ChatService';
 import type { HostRuntime } from '../HostRuntime';
 import type { HostEventSink } from '../ports';
@@ -212,8 +213,15 @@ export class HostServer {
         return {};
       },
       'request/respond': async request => {
-        if (request.kind === 'approval') await runtime.respondToApproval(request.requestId, request.answer);
-        else await runtime.answerTaskDecision(request.sessionId, request.decisionId, request.answer);
+        if (request.kind === 'approval') {
+          await runtime.respondToApproval(request.requestId, request.answer);
+          return {};
+        }
+        const reply = taskDecisionReplySchema.safeParse(request);
+        if (!reply.success) {
+          throw new HostMethodError(HOST_ERROR_CODES.invalidParams, 'Invalid task decision answer', reply.error.issues);
+        }
+        await runtime.answerTaskDecision(reply.data.sessionId, reply.data.decisionId, reply.data.answer);
         return {};
       },
       'background/stop': async ({ sessionId, processId }) => {
