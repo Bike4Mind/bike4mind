@@ -157,3 +157,5 @@ export * from './adminUserTimeline';
 export * from './adminSubscriptionTimeline';
 
 export * from './SignupProtectionTypes';
+
+export * from './PlatformAccountingTypes';
