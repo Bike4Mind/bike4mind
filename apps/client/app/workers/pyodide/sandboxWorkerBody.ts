@@ -46,11 +46,13 @@ export function pyodideSandboxWorkerBody(): void {
       analyzePath: (path: string) => { exists: boolean };
       mkdir: (path: string) => void;
       readdir: (path: string) => string[];
-      stat: (path: string) => { mode: number };
+      lstat: (path: string) => { mode: number };
       isDir: (mode: number) => boolean;
       writeFile: (path: string, data: Uint8Array) => void;
       chmod: (path: string, mode: number) => void;
+      lchmod: (path: string, mode: number) => void;
       unlink: (path: string) => void;
+      rmdir: (path: string) => void;
     };
   }
 
@@ -338,14 +340,24 @@ _result
       }
       // One Pyodide serves every call, so /data is emptied first; files and directory are then made read-only.
       const fs = pyodide.FS;
+      // lstat and lchmod so a guest's symlink is removed itself, never followed out of /data.
+      const empty = (dir: string) => {
+        for (const entry of fs.readdir(dir)) {
+          if (entry === '.' || entry === '..') continue;
+          const path = `${dir}/${entry}`;
+          if (fs.isDir(fs.lstat(path).mode)) {
+            fs.lchmod(path, 0o755);
+            empty(path);
+            fs.rmdir(path);
+          } else {
+            fs.lchmod(path, 0o644);
+            fs.unlink(path);
+          }
+        }
+      };
       if (fs.analyzePath('/data').exists) {
         fs.chmod('/data', 0o755);
-        for (const entry of fs.readdir('/data')) {
-          if (entry === '.' || entry === '..') continue;
-          if (fs.isDir(fs.stat(`/data/${entry}`).mode)) continue;
-          fs.chmod(`/data/${entry}`, 0o644);
-          fs.unlink(`/data/${entry}`);
-        }
+        empty('/data');
       } else if (files.length > 0) {
         fs.mkdir('/data');
       }

@@ -139,15 +139,21 @@ describe('pyodideSandboxWorkerBody package loading', () => {
           .map(key => key.slice(path.length + 1))
           .filter(name => !name.includes('/')),
       ],
-      stat: (path: string) => ({ mode: fsFiles.get(path)?.dir ? 0o040000 : 0o100000 }),
+      lstat: (path: string) => ({ mode: fsFiles.get(path)?.dir ? 0o040000 : 0o100000 }),
       isDir: (mode: number) => (mode & 0o170000) === 0o040000,
       writeFile: (path: string, data: Uint8Array) => {
         if (!writable(path)) throw new Error('EACCES');
         fsFiles.set(path, { mode: 0o644, data });
       },
       chmod: (path: string, mode: number) => void (fsFiles.get(path)!.mode = mode),
+      lchmod: (path: string, mode: number) => void (fsFiles.get(path)!.mode = mode),
       unlink: (path: string) => {
         if (fsFiles.get(path)?.dir) throw new Error('EISDIR');
+        fsFiles.delete(path);
+      },
+      rmdir: (path: string) => {
+        if (!fsFiles.get(path)?.dir) throw new Error('ENOTDIR');
+        if ([...fsFiles.keys()].some(key => key.startsWith(`${path}/`))) throw new Error('ENOTEMPTY');
         fsFiles.delete(path);
       },
     };
@@ -382,18 +388,30 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     expect([...fsFiles.keys()]).toEqual(['/data']);
   });
 
-  it('skips a directory a guest made under /data and still runs the next call', async () => {
-    const { posted, send, fsFiles } = startWorker();
+  it('removes a directory a guest made under /data, with its files, before the next call', async () => {
+    const { posted, pyodide, send, fsFiles } = startWorker();
     await send({ type: 'initialize' });
     const call = { type: 'call' as const, code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 };
     const bytes = new TextEncoder().encode('x,y\n1,2\n').buffer as ArrayBuffer;
+    const done = { toJs: () => ({ stdout: '', stderr: '', plots: [], error: null }) };
+    let seen: string[] = [];
+    pyodide.runPythonAsync
+      .mockImplementationOnce(async () => {
+        fsFiles.set('/data/sub', { mode: 0o755, dir: true });
+        fsFiles.set('/data/sub/out.txt', { mode: 0o644, data: new Uint8Array(1) });
+        return done;
+      })
+      .mockImplementationOnce(async () => {
+        seen = pyodide.FS.readdir('/data').filter(name => name !== '.' && name !== '..');
+        return done;
+      });
+
     await send({ ...call, nonce: 'd1', files: [{ name: 'points.csv', bytes }] });
-    fsFiles.set('/data/made', { mode: 0o755, dir: true });
+    await send({ ...call, nonce: 'd2', files: [{ name: 'other.csv', bytes }] });
 
-    await send({ ...call, nonce: 'd2', files: [{ name: 'points.csv', bytes }] });
-
-    expect(posted.at(-1)).toMatchObject({ type: 'call-result', result: { success: true } });
-    expect(fsFiles.get('/data/points.csv')?.mode).toBe(0o444);
+    expect(posted.at(-1)).toMatchObject({ type: 'call-result', nonce: 'd2', result: { success: true } });
+    expect(seen).toEqual(['other.csv']);
+    expect([...fsFiles.keys()].filter(key => key.startsWith('/data/'))).toEqual(['/data/other.csv']);
   });
 
   it('reports a runtime failure during a call as a failed call-result', async () => {
