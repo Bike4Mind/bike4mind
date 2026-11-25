@@ -1076,6 +1076,32 @@ describe('web session sync', () => {
       expect(await store.list()).toHaveLength(2);
     });
 
+    it('reports how many notebooks a run has read, and clears it when the run ends', async () => {
+      const web = fakeWeb({
+        ...oneNotebook(),
+        nb2: {
+          name: 'Second',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          quests: [{ id: 'q2', prompt: 'Hi', reply: 'Yo' }],
+        },
+      });
+      const inner = web.get.getMockImplementation()!;
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      web.get.mockImplementation(async url => {
+        if (url.includes('/chat')) await gate;
+        return inner(url);
+      });
+      const { service } = await setup(new Map([['account-a', web.api]]));
+      await service.setWebSettings({ enabled: false });
+      const enabled = service.setWebSettings({ enabled: true });
+      await vi.waitFor(async () => expect((await service.state()).web.progress).toEqual({ done: 0, total: 2 }));
+      release();
+      await enabled;
+      await vi.waitFor(async () => expect((await service.state()).web.running).toBe(false));
+      expect((await service.state()).web.progress).toBeUndefined();
+    });
+
     describe('on window focus', () => {
       afterEach(() => vi.useRealTimers());
       const listReads = (web: ReturnType<typeof fakeWeb>) =>
@@ -1126,6 +1152,104 @@ describe('web session sync', () => {
         await vi.waitFor(() => expect(listReads(web)).toBe(base + 1));
         await settle();
         expect(listReads(web)).toBe(base + 1);
+      });
+    });
+
+    describe('while a window stays focused', () => {
+      // File I/O resolves on real time, so waits use the timer captured before the clock is faked.
+      const realSetTimeout = globalThis.setTimeout;
+      const realSleep = (ms: number) => new Promise(resolve => realSetTimeout(resolve, ms));
+      const until = async (check: () => boolean) => {
+        for (let i = 0; i < 200 && !check(); i++) await realSleep(10);
+        expect(check()).toBe(true);
+      };
+      const MINUTE = 60_000;
+      const listReads = (web: ReturnType<typeof fakeWeb>) =>
+        web.get.mock.calls.filter(([url]) => new URL(url, 'https://web.test').pathname === '/api/sessions').length;
+
+      async function focusedService(web: ReturnType<typeof fakeWeb>) {
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+        const { service } = await setup(new Map([['account-a', web.api]]));
+        await service.setWebSettings({ enabled: true });
+        await service.syncWeb();
+        service.onWindowFocus();
+        return service;
+      }
+      afterEach(() => vi.useRealTimers());
+
+      it('picks up the web every three minutes', async () => {
+        const web = fakeWeb(oneNotebook());
+        await focusedService(web);
+        const base = listReads(web);
+
+        await vi.advanceTimersByTimeAsync(3 * MINUTE - 1000);
+        await realSleep(30);
+        expect(listReads(web)).toBe(base);
+        await vi.advanceTimersByTimeAsync(1000);
+        await until(() => listReads(web) === base + 1);
+        await realSleep(30);
+        await vi.advanceTimersByTimeAsync(3 * MINUTE);
+        await until(() => listReads(web) === base + 2);
+      });
+
+      it('stops once no window of the app is focused, and resumes on the next focus', async () => {
+        const web = fakeWeb(oneNotebook());
+        const service = await focusedService(web);
+        const base = listReads(web);
+
+        service.onAppBlur();
+        await vi.advanceTimersByTimeAsync(30 * MINUTE);
+        await realSleep(30);
+        expect(listReads(web)).toBe(base);
+
+        service.onWindowFocus();
+        await until(() => listReads(web) === base + 1);
+      });
+
+      it('backs off after a failed poll and resets once one succeeds', async () => {
+        const web = fakeWeb(oneNotebook());
+        const service = await focusedService(web);
+        const inner = web.get.getMockImplementation()!;
+        let failing = true;
+        web.get.mockImplementation(async url => {
+          if (failing && new URL(url, 'https://web.test').pathname === '/api/sessions') throw new Error('502');
+          return inner(url);
+        });
+        const base = listReads(web);
+
+        await vi.advanceTimersByTimeAsync(3 * MINUTE);
+        await until(() => listReads(web) === base + 1);
+        await until(() => (service as unknown as { webPollTimer: unknown }).webPollTimer !== null);
+        failing = false;
+        await vi.advanceTimersByTimeAsync(3 * MINUTE);
+        await realSleep(30);
+        expect(listReads(web)).toBe(base + 1);
+        await vi.advanceTimersByTimeAsync(3 * MINUTE);
+        await until(() => listReads(web) === base + 2);
+        await until(() => (service as unknown as { webPollTimer: unknown }).webPollTimer !== null);
+        await vi.advanceTimersByTimeAsync(3 * MINUTE);
+        await until(() => listReads(web) === base + 3);
+      });
+
+      it('never stacks a poll on a sync that is still running', async () => {
+        const web = fakeWeb(oneNotebook());
+        await focusedService(web);
+        const inner = web.get.getMockImplementation()!;
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        web.get.mockImplementation(async url => {
+          await gate;
+          return inner(url);
+        });
+        const base = listReads(web);
+
+        await vi.advanceTimersByTimeAsync(3 * MINUTE);
+        await until(() => listReads(web) === base + 1);
+        await vi.advanceTimersByTimeAsync(10 * MINUTE);
+        await realSleep(30);
+        expect(listReads(web)).toBe(base + 1);
+        release();
       });
     });
   });

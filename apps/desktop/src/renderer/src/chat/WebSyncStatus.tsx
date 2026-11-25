@@ -4,7 +4,7 @@ import Link from '@mui/joy/Link';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import type { ClaudeImportKind, ClaudeImportState } from '@shared/claudeImport';
+import type { ClaudeImportState } from '@shared/claudeImport';
 import { ReloadIcon } from './icons';
 import { timeAgo } from './prBarModel';
 
@@ -13,14 +13,19 @@ import { timeAgo } from './prBarModel';
  * (main/claudeImport/WebSessionSync), never through the account menu's "Open Bike4Mind web".
  */
 export type WebSyncLine =
-  { kind: 'off' } | { kind: 'syncing' } | { kind: 'failed' } | { kind: 'never' } | { kind: 'synced'; ago: string };
+  | { kind: 'off' }
+  | { kind: 'syncing'; progress?: { done: number; total: number } }
+  | { kind: 'failed' }
+  | { kind: 'never' }
+  | { kind: 'synced'; ago: string };
 
 export function webSyncLine(state: ClaudeImportState | null, now: number): WebSyncLine | null {
   if (!state?.signedIn) return null;
   const { web } = state;
   // A probe that found no notebooks means there is nothing on the web to bring here.
   if (!web.settings.enabled) return state.hints.webNotebooks === 0 ? null : { kind: 'off' };
-  if (web.running) return { kind: 'syncing' };
+  if (web.running)
+    return web.progress && web.progress.total > 0 ? { kind: 'syncing', progress: web.progress } : { kind: 'syncing' };
   if (web.error) return { kind: 'failed' };
   const ago = web.lastSyncAt ? timeAgo(web.lastSyncAt, now) : null;
   return ago ? { kind: 'synced', ago } : { kind: 'never' };
@@ -51,11 +56,12 @@ function useMinuteClock(): number {
 export function WebSyncStatus({
   state,
   onSyncNow,
-  onOpenSettings,
+  onTurnOn,
 }: {
   state: ClaudeImportState | null;
   onSyncNow: () => void;
-  onOpenSettings: (focus: ClaudeImportKind) => void;
+  /** Turns web sync on, which starts the first sync (main's setWebSettings). */
+  onTurnOn: () => void;
 }) {
   const now = useMinuteClock();
   const line = webSyncLine(state, now);
@@ -85,12 +91,15 @@ export function WebSyncStatus({
         data-testid="sidebar-web-sync-text"
       >
         {line.kind === 'off' && 'Web conversations not synced'}
-        {line.kind === 'syncing' && 'Syncing from web...'}
+        {line.kind === 'syncing' &&
+          (line.progress
+            ? `Syncing from web - ${line.progress.done.toLocaleString()} of ${line.progress.total.toLocaleString()}`
+            : 'Syncing from web...')}
         {line.kind === 'failed' && 'Could not sync from web'}
         {line.kind === 'never' && 'Not synced from web yet'}
         {line.kind === 'synced' && `Synced from web - ${line.ago}`}
       </Typography>
-      {line.kind === 'off' && action('Set up', () => onOpenSettings('b4m-web'), 'sidebar-web-sync-setup-btn')}
+      {line.kind === 'off' && action('Turn on', onTurnOn, 'sidebar-web-sync-turn-on-btn')}
       {line.kind === 'failed' && action('Retry', onSyncNow, 'sidebar-web-sync-now-btn')}
       {line.kind === 'never' && action('Sync now', onSyncNow, 'sidebar-web-sync-now-btn')}
       {line.kind === 'synced' && (
