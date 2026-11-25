@@ -321,11 +321,12 @@ describe('partyGroups', () => {
 });
 
 describe('partySummary', () => {
-  it('leads with who needs the user, then who is working, else all done', () => {
+  it('leads with who needs the user, then who is working, then who did not finish, else all done', () => {
     const n = (state: ChildChip['state'], count: number) =>
       Array.from({ length: count }, (_, i) => chip({ id: `${state}${i}`, state }));
     expect(partySummary([...n('needs-action', 3), ...n('processing', 9)])).toBe('Party: 12 - 3 need you');
     expect(partySummary([...n('processing', 4), ...n('finished', 2)])).toBe('Party: 6 - 4 working');
-    expect(partySummary([...n('finished', 5), ...n('failed', 1)])).toBe('Party: 6 - all done');
+    expect(partySummary([...n('finished', 5), ...n('failed', 1)])).toBe('Party: 6 - 1 did not finish');
+    expect(partySummary(n('finished', 5))).toBe('Party: 5 - all done');
   });
 });

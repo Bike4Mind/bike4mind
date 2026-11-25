@@ -255,32 +255,34 @@ export function partyGroups(chips: readonly ChildChip[]): PartyGroup[] {
     .filter(group => group.chips.length > 0);
 }
 
-/** The pill's text: the party size, then the most pressing count. */
+/** The state the pill leads with: the first of needs you, working, did not finish, finished that any chip is in. */
+export function partyLead(chips: readonly ChildChip[]): ChildChipState {
+  const order: readonly ChildChipState[] = ['needs-action', 'processing', 'failed'];
+  return order.find(state => chips.some(chip => chip.state === state)) ?? 'finished';
+}
+
+/** The pill's text: the party size, then the count for its lead state. */
 export function partySummary(chips: readonly ChildChip[]): string {
-  const needs = chips.filter(chip => chip.state === 'needs-action').length;
-  const working = chips.filter(chip => chip.state === 'processing').length;
-  const detail =
-    needs > 0 ? `${needs} ${needs === 1 ? 'needs' : 'need'} you` : working > 0 ? `${working} working` : 'all done';
-  return `Party: ${chips.length} - ${detail}`;
+  const lead = partyLead(chips);
+  const count = chips.filter(chip => chip.state === lead).length;
+  const detail: Record<ChildChipState, string> = {
+    'needs-action': `${count} ${count === 1 ? 'needs' : 'need'} you`,
+    processing: `${count} working`,
+    failed: `${count} did not finish`,
+    finished: 'all done',
+  };
+  return `Party: ${chips.length} - ${detail[lead]}`;
 }
 
 function PartyPill({ chips, onOpen }: { chips: readonly ChildChip[]; onOpen: (sessionId: string) => void }) {
-  const needsYou = chips.some(chip => chip.state === 'needs-action');
+  const lead = partyLead(chips);
   return (
     <Dropdown>
       <MenuButton
         size="sm"
         variant="outlined"
-        color={needsYou ? 'warning' : 'neutral'}
-        startDecorator={
-          needsYou ? (
-            <SessionBadge status="needs-action" />
-          ) : chips.some(chip => chip.state === 'processing') ? (
-            <SessionBadge status="processing" />
-          ) : (
-            <ChipIcon state="finished" />
-          )
-        }
+        color={lead === 'needs-action' ? 'warning' : lead === 'failed' ? 'danger' : 'neutral'}
+        startDecorator={<ChipIcon state={lead} />}
         aria-label={`${partySummary(chips)}. Show every session this conversation started`}
         data-testid="children-strip-party-btn"
         sx={{ minHeight: 28, px: 1.25, gap: 0.75, fontWeight: 'md', borderRadius: 'xl' }}
