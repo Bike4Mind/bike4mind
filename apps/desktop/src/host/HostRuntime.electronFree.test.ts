@@ -8,9 +8,10 @@ import type { AuthState } from '@shared/auth';
 import type { ChatSessionStatusEvent } from '@shared/chat';
 import { hostErrorData, hostMethods, type HostResult } from '@shared/hostProtocol';
 import { HostRuntime, hostProtectedLocations, type HostEnvironment, type HostEventSink } from '.';
+import { HostEventRelay, HostServer, createInProcessTransport } from './server';
 
-// A headless host has no Electron to load: any import of it from src/host, direct or through a
-// dependency, fails the file here, whether or not the importer ever touches what it imported.
+// A headless host has no Electron to load: any import of it from src/host (src/host/server
+// included), direct or through a dependency, fails the file here, whether or not the importer ever touches what it imported.
 vi.mock('electron', () => {
   throw new Error('src/host loaded electron');
 });
@@ -165,6 +166,21 @@ describe('HostRuntime without Electron', () => {
     await runtime.deleteSession(session.id, false);
 
     await expect(runtime.listSessions()).resolves.toEqual([]);
+  });
+});
+
+describe('HostServer without Electron', () => {
+  it('serves a runtime over the in-process transport', async () => {
+    const { runtime } = await headlessRuntime();
+    const created = await runtime.createSession();
+    const server = new HostServer(runtime, new HostEventRelay(vi.fn()), { warn: vi.fn() });
+    const transport = createInProcessTransport(server, vi.fn());
+
+    await expect(transport.request('session/list')).resolves.toEqual({
+      sessions: [expect.objectContaining({ id: created.id })],
+    });
+    transport.close();
+    server.dispose();
   });
 });
 

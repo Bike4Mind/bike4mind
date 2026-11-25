@@ -156,6 +156,8 @@ import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 import { HostRuntime, hostProtectedLocations, type HostEnvironment, type HostEventSink } from '../../host';
+import { HostEventRelay } from '../../host/server';
+import type { LocalHost } from '../host/registerHostConnections';
 
 const editMessageRequestSchema = z.object({
   sessionId: z.string(),
@@ -267,6 +269,8 @@ function permissionLists(value: unknown): PermissionRuleLists | null {
 
 export interface RegisteredChat {
   service: ChatService;
+  /** The runtime and a tee of its pushes, for main/host to serve through the host protocol. */
+  host: LocalHost;
   /** Background processes, exposed so main/index.ts can tear them down on every quit path. */
   background: BackgroundProcessRegistry;
   /** MCP connections, torn down on the same two quit passes for the same reason. */
@@ -635,9 +639,10 @@ export function registerChat(
   };
 
   // Annotated: the machine tools' callbacks read the runtime's store, so inference would cycle.
+  const hostEvents = new HostEventRelay(error => logger.warn(`HOST: a protocol listener failed: ${String(error)}`));
   const runtime: HostRuntime = new HostRuntime({
     environment,
-    events,
+    events: hostEvents.tee(events),
     auth,
     logger,
     protection,
@@ -1451,6 +1456,7 @@ export function registerChat(
 
   return {
     service,
+    host: { runtime, events: hostEvents, logger },
     background,
     mcp,
     browser,
