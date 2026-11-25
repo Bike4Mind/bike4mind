@@ -35,7 +35,13 @@ import {
 } from '@bike4mind/common';
 import type { MarketActor } from '@bike4mind/server-utils/skillMarket/market';
 import type { QuestDispatchIdentity } from '@server/utils/questDispatchSignature';
-import { plainTemplate, requireLiveListing, requireOwnListing } from './template';
+import {
+  plainTemplate,
+  requireLiveListing,
+  requireOwnListing,
+  writeTemplateExample,
+  type TemplateScanDeps,
+} from './template';
 import { releaseExampleRun, reserveExampleRun } from './templateExampleCap';
 import { renderFreeRunResult } from './templateFreeRun';
 
@@ -153,12 +159,14 @@ export async function startOwnTemplateExample(
 
 /**
  * PUT /api/skills/market/[id]/template/example: the demo switch, a trim of the stored reply and the
- * sample file. A trim only shortens the reply; a sample file must be the author's own.
+ * sample file. A trim only shortens the reply; a sample file must be the author's own. A change to
+ * what a published page shows is re-scanned before it goes live (writeTemplateExample).
  */
 export async function editOwnTemplateExample(
   user: MarketActor,
   listingId: string,
-  input: SkillTemplateExampleUpdate
+  input: SkillTemplateExampleUpdate,
+  deps: TemplateScanDeps
 ): Promise<ISkillListingTemplate> {
   const listing = await requireOwnListing(user, listingId);
   const id = String(listing.id);
@@ -180,9 +188,22 @@ export async function editOwnTemplateExample(
     edit.sampleFile = input.sampleFabFileId === null ? null : await ownSampleFile(user.id, input.sampleFabFileId);
   }
   if (Object.keys(edit).length === 0) return plainTemplate(doc);
-  const updated = await editSkillTemplateExample(id, edit);
+
+  // Switching the demo off, or editing it while it stays off, shows nothing new.
+  const showsNew = edit.enabled ?? example.enabled;
+  if (!showsNew) {
+    const updated = await editSkillTemplateExample(id, edit);
+    if (!updated) throw new ConflictError('The template changed while saving. Reload and try again.');
+    return plainTemplate(updated);
+  }
+  if (doc.status === 'published') await deps.beforeScan?.();
+  const set: Record<string, unknown> = {};
+  if (edit.enabled !== undefined) set['example.enabled'] = edit.enabled;
+  if (edit.replyTrimmedTo !== undefined) set['example.replyTrimmedTo'] = edit.replyTrimmedTo;
+  if (edit.sampleFile !== undefined) set['example.sampleFile'] = edit.sampleFile;
+  const updated = await writeTemplateExample(id, { example: { $exists: true } }, { $set: set }, {}, deps);
   if (!updated) throw new ConflictError('The template changed while saving. Reload and try again.');
-  return plainTemplate(updated);
+  return updated;
 }
 
 /** A sample file the author uploaded; used by the next run. */

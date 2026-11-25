@@ -11,7 +11,6 @@ import {
   sessionRepository,
   skillRepository,
   User,
-  writeSkillTemplateExampleResult,
 } from '@bike4mind/database';
 import {
   KnowledgeType,
@@ -28,7 +27,8 @@ import { OperationsModelService } from '@bike4mind/server-utils/services/operati
 import { findListing } from '@bike4mind/server-utils/skillMarket/market';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { parseArtifacts } from '@bike4mind/utils/artifactParser';
-import { approvedSnapshotOf, isLive } from './template';
+import { getOperationsClassifierLlm, type ClassifierLlm } from './classifySkill';
+import { approvedSnapshotOf, isLive, writeTemplateExample } from './template';
 import {
   TEMPLATE_EXAMPLE_SESSION_SURFACE,
   capExampleSteps,
@@ -54,6 +54,8 @@ export type TemplateExampleRunDeps = {
   storeSample: (userId: string, text: string, fileName: string) => Promise<string>;
   /** Size and type of a generated media object; null when it cannot be read. */
   mediaInfo: (key: string, kind: 'image' | 'video') => Promise<{ bytes: number; mime: string } | null>;
+  /** The scan classifier, used when the result lands on a published page and must be re-scanned. */
+  getClassifier: (logger: Logger, userId: string) => Promise<ClassifierLlm>;
 };
 
 const SAMPLE_MAX_CHARS = 4000;
@@ -200,15 +202,27 @@ export async function runTemplateExample(
     const media = selectExampleMedia(await collectMedia(finished, deps));
     if (!reply && !artifact && !media) throw new Error('The run did not produce a reply');
 
-    const written = await writeSkillTemplateExampleResult(payload.listingId, runAt, {
-      prompt: payload.prompt,
-      reply,
-      artifact,
-      media,
-      sampleFile,
-      steps: capExampleSteps(steps),
-      generatedFromVersionId: versionId,
-    });
+    // Only the run in flight at `runAt` may land; the author's `enabled` switch is kept.
+    const written = await writeTemplateExample(
+      payload.listingId,
+      { 'example.status': 'running', 'example.runAt': runAt },
+      {
+        $set: {
+          'example.status': 'ready',
+          'example.prompt': payload.prompt,
+          'example.reply': reply,
+          'example.replyTrimmedTo': null,
+          'example.artifact': artifact ?? null,
+          'example.media': media ?? null,
+          'example.sampleFile': sampleFile ?? null,
+          'example.steps': capExampleSteps(steps),
+          'example.generatedFromVersionId': versionId,
+        },
+        $unset: { 'example.error': 1 },
+      },
+      { 'example.enabled': true },
+      { getClassifier: () => deps.getClassifier(logger, payload.userId) }
+    );
     if (!written) logger.info('[template-example] a newer run replaced this one', { listingId: payload.listingId });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -284,6 +298,7 @@ export const templateExampleRunDeps = (
     };
   },
   storeSample: storeSampleFile,
+  getClassifier: getOperationsClassifierLlm,
   mediaInfo: async (key, kind) => {
     const storage = kind === 'image' ? getGeneratedImageStorage() : getFilesStorage();
     const meta = await storage.getMetadata(key);

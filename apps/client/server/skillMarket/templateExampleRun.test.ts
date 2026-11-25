@@ -21,7 +21,6 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: { create: h.createSession },
   skillRepository: { findById: h.findSkill },
   fabFileRepository: { findById: h.findFile },
-  writeSkillTemplateExampleResult: h.write,
   failSkillTemplateExampleRun: h.fail,
   adminSettingsRepository: {},
   dataLakeRepository: {},
@@ -38,7 +37,9 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 vi.mock('./template', () => ({
   approvedSnapshotOf: h.snapshot,
   isLive: (listing: { status: string }) => listing.status === 'approved',
+  writeTemplateExample: h.write,
 }));
+vi.mock('./classifySkill', () => ({ getOperationsClassifierLlm: vi.fn() }));
 vi.mock('./templateExample', async importOriginal => ({
   ...(await importOriginal<typeof import('./templateExample')>()),
   releaseExampleRun: h.release,
@@ -70,6 +71,7 @@ const deps = (overrides: Partial<TemplateExampleRunDeps> = {}): TemplateExampleR
   textModel: vi.fn(async () => ({ modelId: 'ops-model', complete: vi.fn(async () => '# Sample notes') })),
   storeSample: vi.fn(async () => 'sample-file-1'),
   mediaInfo: vi.fn(async () => ({ bytes: 1000, mime: 'image/png' })),
+  getClassifier: vi.fn(async () => ({ model: 'stub', complete: vi.fn() })),
   ...overrides,
 });
 
@@ -95,7 +97,7 @@ beforeEach(() => {
     replies: [],
     images: ['generated/one.png'],
   });
-  h.write.mockResolvedValue(true);
+  h.write.mockResolvedValue({ status: 'draft' });
   h.fail.mockResolvedValue(true);
   h.release.mockResolvedValue(undefined);
 });
@@ -120,18 +122,32 @@ describe('runTemplateExample', () => {
       tools: ['web_search'],
       mcpServers: ['github'],
     });
-    expect(h.write).toHaveBeenCalledWith('l1', RUN_AT, {
-      prompt: 'Plan the launch',
-      reply: 'Here is the plan.',
-      artifact: { type: 'code', title: 'Launch plan', html: '<p># Steps</p>' },
-      media: { kind: 'image', items: [{ key: 'generated/one.png', mime: 'image/png', bytes: 1000 }] },
-      sampleFile: null,
-      steps: [
-        { label: 'Searched issues in example-org/app', simulated: true },
-        { label: 'Generated an image', simulated: false },
-      ],
-      generatedFromVersionId: 'v1',
-    });
+    expect(h.write).toHaveBeenCalledWith(
+      'l1',
+      { 'example.status': 'running', 'example.runAt': RUN_AT },
+      {
+        $set: {
+          'example.status': 'ready',
+          'example.prompt': 'Plan the launch',
+          'example.reply': 'Here is the plan.',
+          'example.replyTrimmedTo': null,
+          'example.artifact': { type: 'code', title: 'Launch plan', html: '<p># Steps</p>' },
+          'example.media': { kind: 'image', items: [{ key: 'generated/one.png', mime: 'image/png', bytes: 1000 }] },
+          'example.sampleFile': null,
+          'example.steps': [
+            { label: 'Searched issues in example-org/app', simulated: true },
+            { label: 'Generated an image', simulated: false },
+          ],
+          'example.generatedFromVersionId': 'v1',
+        },
+        $unset: { 'example.error': 1 },
+      },
+      // A shown example on a published page is re-scanned in the same write.
+      { 'example.enabled': true },
+      { getClassifier: expect.any(Function) }
+    );
+    await h.write.mock.calls[0][4].getClassifier();
+    expect(d.getClassifier).toHaveBeenCalledWith(logger, 'author-1');
     expect(h.fail).not.toHaveBeenCalled();
     expect(h.release).not.toHaveBeenCalled();
   });
@@ -144,7 +160,7 @@ describe('runTemplateExample', () => {
       messageFileIds: ['sample-file-1'],
       fabFileIds: ['sample-file-1'],
     });
-    expect(h.write.mock.calls[0][2].sampleFile).toEqual({
+    expect(h.write.mock.calls[0][2].$set['example.sampleFile']).toEqual({
       name: 'launch-plan-sample.md',
       mime: 'text/markdown',
       pages: 1,
@@ -159,7 +175,7 @@ describe('runTemplateExample', () => {
     const sampleFile = { fabFileId: 'up-1', name: 'brief.pdf', mime: 'application/pdf' };
     await runTemplateExample(payload({ takesFile: true, sampleFile }), logger, d);
     expect(d.storeSample).not.toHaveBeenCalled();
-    expect(h.write.mock.calls[0][2].sampleFile).toEqual({ ...sampleFile, source: 'upload' });
+    expect(h.write.mock.calls[0][2].$set['example.sampleFile']).toEqual({ ...sampleFile, source: 'upload' });
   });
 
   it.each([

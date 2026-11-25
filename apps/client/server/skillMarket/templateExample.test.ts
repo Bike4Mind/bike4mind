@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   edit: vi.fn(),
   findFile: vi.fn(),
   requireOwnListing: vi.fn(),
+  writeExample: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -29,6 +30,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('./template', () => ({
   plainTemplate: (doc: unknown) => doc,
   requireOwnListing: h.requireOwnListing,
+  writeTemplateExample: h.writeExample,
   requireLiveListing: (listing: { status: string }) => {
     if (listing.status !== 'approved') throw Object.assign(new Error('not live'), { statusCode: 409 });
   },
@@ -176,46 +178,89 @@ describe('startOwnTemplateExample', () => {
 
 describe('editOwnTemplateExample', () => {
   const withExample = templateDoc({ example: { status: 'ready', reply: 'x'.repeat(100), enabled: true } });
+  const scanDeps = { getClassifier: vi.fn(), beforeScan: vi.fn() };
 
-  it('switches the demo off and trims the reply', async () => {
+  it('switches the demo off without a scan', async () => {
     h.findTemplate.mockResolvedValue(withExample);
     h.edit.mockResolvedValue({ updated: true });
-    expect(await editOwnTemplateExample(AUTHOR, 'l1', { enabled: false, replyTrimmedTo: 40 })).toEqual({
+    expect(await editOwnTemplateExample(AUTHOR, 'l1', { enabled: false, replyTrimmedTo: 40 }, scanDeps)).toEqual({
       updated: true,
     });
     expect(h.edit).toHaveBeenCalledWith('l1', { enabled: false, replyTrimmedTo: 40 });
+    expect(h.writeExample).not.toHaveBeenCalled();
+  });
+
+  it('routes a trim of a shown example through the scanning write', async () => {
+    h.findTemplate.mockResolvedValue(withExample);
+    h.writeExample.mockResolvedValue({ status: 'draft' });
+    await editOwnTemplateExample(AUTHOR, 'l1', { replyTrimmedTo: 40 }, scanDeps);
+    expect(h.writeExample).toHaveBeenCalledWith(
+      'l1',
+      { example: { $exists: true } },
+      { $set: { 'example.replyTrimmedTo': 40 } },
+      {},
+      scanDeps
+    );
+    expect(h.edit).not.toHaveBeenCalled();
+    expect(scanDeps.beforeScan).not.toHaveBeenCalled();
+  });
+
+  it('spends a scan rate-limit slot when a published example changes', async () => {
+    h.findTemplate.mockResolvedValue(
+      templateDoc({ status: 'published', example: { status: 'ready', reply: 'x', enabled: false } })
+    );
+    h.writeExample.mockResolvedValue({ status: 'in_review' });
+    await editOwnTemplateExample(AUTHOR, 'l1', { enabled: true }, scanDeps);
+    expect(scanDeps.beforeScan).toHaveBeenCalled();
+    expect(h.writeExample).toHaveBeenCalledWith(
+      'l1',
+      expect.anything(),
+      { $set: { 'example.enabled': true } },
+      {},
+      scanDeps
+    );
   });
 
   it('refuses a trim that does not shorten the reply', async () => {
     h.findTemplate.mockResolvedValue(withExample);
-    await expect(editOwnTemplateExample(AUTHOR, 'l1', { replyTrimmedTo: 100 })).rejects.toMatchObject({
+    await expect(editOwnTemplateExample(AUTHOR, 'l1', { replyTrimmedTo: 100 }, scanDeps)).rejects.toMatchObject({
       statusCode: 400,
     });
   });
 
   it("swaps in an author-owned sample file and refuses another user's file", async () => {
     h.findTemplate.mockResolvedValue(withExample);
-    h.edit.mockResolvedValue({});
+    h.writeExample.mockResolvedValue({});
     h.findFile.mockResolvedValue({
       userId: 'author-1',
       filePath: 'p',
       fileName: 'brief.pdf',
       mimeType: 'application/pdf; charset=binary',
     });
-    await editOwnTemplateExample(AUTHOR, 'l1', { sampleFabFileId: 'f1' });
-    expect(h.edit).toHaveBeenCalledWith('l1', {
-      sampleFile: { name: 'brief.pdf', mime: 'application/pdf', source: 'upload', fabFileId: 'f1' },
-    });
+    await editOwnTemplateExample(AUTHOR, 'l1', { sampleFabFileId: 'f1' }, scanDeps);
+    expect(h.writeExample).toHaveBeenCalledWith(
+      'l1',
+      expect.anything(),
+      {
+        $set: {
+          'example.sampleFile': { name: 'brief.pdf', mime: 'application/pdf', source: 'upload', fabFileId: 'f1' },
+        },
+      },
+      {},
+      scanDeps
+    );
 
     h.findFile.mockResolvedValue({ userId: 'someone-else', filePath: 'p', fileName: 'x', mimeType: 'text/plain' });
-    await expect(editOwnTemplateExample(AUTHOR, 'l1', { sampleFabFileId: 'f2' })).rejects.toMatchObject({
+    await expect(editOwnTemplateExample(AUTHOR, 'l1', { sampleFabFileId: 'f2' }, scanDeps)).rejects.toMatchObject({
       statusCode: 404,
     });
   });
 
   it('needs an example first', async () => {
     h.findTemplate.mockResolvedValue(templateDoc());
-    await expect(editOwnTemplateExample(AUTHOR, 'l1', { enabled: false })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(editOwnTemplateExample(AUTHOR, 'l1', { enabled: false }, scanDeps)).rejects.toMatchObject({
+      statusCode: 409,
+    });
   });
 });
 

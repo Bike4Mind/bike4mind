@@ -2,6 +2,8 @@
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { SkillTemplateExampleRunSchema, SkillTemplateExampleUpdateSchema } from '@bike4mind/common';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { enforceSubmitRateLimits } from '@bike4mind/server-utils/skillMarket/market';
+import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
 import {
   TEMPLATE_EXAMPLE_DISPATCH_PATH,
   editOwnTemplateExample,
@@ -26,10 +28,17 @@ const handler = baseApi({ auth: 'jwtOnly' })
     });
     res.status(202).json({ template });
   })
-  /** PUT /api/skills/market/[id]/template/example - the demo switch, a reply trim or the sample file. */
+  /**
+   * PUT /api/skills/market/[id]/template/example - the demo switch, a reply trim or the sample file.
+   * A change to a published page's example re-runs the template scan, so it draws on the submit limits.
+   */
   .put(async (req, res) => {
     const body = SkillTemplateExampleUpdateSchema.parse(req.body ?? {});
-    res.json({ template: await editOwnTemplateExample(req.user!, String(req.query.id), body) });
+    const template = await editOwnTemplateExample(req.user!, String(req.query.id), body, {
+      beforeScan: () => enforceSubmitRateLimits(req, res),
+      getClassifier: () => getOperationsClassifierLlm(req.logger, req.user!.id),
+    });
+    res.json({ template });
   });
 
 export default handler;

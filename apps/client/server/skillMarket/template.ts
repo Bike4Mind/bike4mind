@@ -1,3 +1,4 @@
+import type { FilterQuery, UpdateQuery } from 'mongoose';
 import {
   SkillListingTemplate,
   SkillListingVersion,
@@ -17,6 +18,7 @@ import {
   type ISkillListingTemplate,
   type ISkillScanFinding,
   type ISkillSnapshot,
+  type ISkillTemplateExample,
   type ISkillTemplatePreviewImage,
   type SkillListingTemplateSummary,
   type SkillTemplateUpdate,
@@ -244,7 +246,7 @@ export async function deleteOwnTemplate(user: MarketActor, listingId: string): P
   if (res.deletedCount === 0) throw new NotFoundError('Template not found');
 }
 
-/** Scan the draft's copy and publish it on a pass. A failing scan leaves it a draft with the findings. */
+/** Scan the draft's copy and shown example and publish them on a pass. A failing scan leaves it a draft with the findings. */
 export async function publishOwnTemplate(
   user: MarketActor,
   listingId: string,
@@ -301,6 +303,71 @@ export async function setOwnTemplateFreeRun(
   throw new ConflictError('The template is being scanned. Try again in a moment.');
 }
 
+/**
+ * Write a change to the stored example. When `shown` matches a published (or in-review) template,
+ * the change lands in the same update that claims a fresh scan, as a copy edit does
+ * (saveOwnTemplate), so the public page never shows an unscanned example; the scan then runs and an
+ * earlier in-flight verdict is voided by the new claim. Null when `match` no longer holds.
+ */
+export async function writeTemplateExample(
+  listingId: string,
+  match: FilterQuery<ISkillListingTemplateDocument>,
+  change: { $set: Record<string, unknown>; $unset?: Record<string, 1> },
+  shown: FilterQuery<ISkillListingTemplateDocument> | null,
+  deps: ScanDeps
+): Promise<ISkillListingTemplate | null> {
+  const live: FilterQuery<ISkillListingTemplateDocument> = { status: { $in: ['published', 'in_review'] }, ...shown };
+  // Two passes: the template can be published or unpublished between them.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (shown) {
+      const claimedAt = new Date();
+      const claimed = await SkillListingTemplate.findOneAndUpdate(
+        { ...match, ...live, listingId },
+        {
+          $set: {
+            ...change.$set,
+            status: 'in_review',
+            scanStatus: 'scanning',
+            scanClaimedAt: claimedAt,
+            scanFindings: [],
+          },
+          $unset: { ...change.$unset, scanError: 1, scanModel: 1, riskTier: 1 },
+        },
+        { new: true, runValidators: true }
+      );
+      if (claimed) return scanClaimedExample(listingId, plainTemplate(claimed), claimedAt, deps);
+    }
+    const update: UpdateQuery<ISkillListingTemplateDocument> = { $set: change.$set };
+    if (change.$unset) update.$unset = change.$unset;
+    const quiet = await SkillListingTemplate.findOneAndUpdate(
+      { ...match, listingId, ...(shown ? { $nor: [live] } : {}) },
+      update,
+      { new: true, runValidators: true }
+    );
+    if (quiet) return plainTemplate(quiet);
+  }
+  return null;
+}
+
+async function scanClaimedExample(
+  listingId: string,
+  template: ISkillListingTemplate,
+  claimedAt: Date,
+  deps: ScanDeps
+): Promise<ISkillListingTemplate> {
+  const listing = await findListing(listingId);
+  if (!listing || !isLive(listing)) {
+    await writeSkillTemplateScanVerdict(
+      listingId,
+      claimedAt,
+      { scanStatus: 'error', scanFindings: [], scanError: 'The listing is no longer live' },
+      false
+    );
+    return reload(listingId);
+  }
+  return runTemplateScan(listing, template, claimedAt, deps);
+}
+
 /** Each listing's template slug and status in one query; a listing with no template is absent. */
 export async function templateSummariesByListing(
   listingIds: string[]
@@ -322,11 +389,31 @@ export async function unpublishOwnTemplate(user: MarketActor, listingId: string)
   return reload(id);
 }
 
-/** The template copy in snapshot form, so it runs through the market scan unchanged (scanSkillSnapshot). */
-export function templateScanSnapshot(
-  listing: Pick<ISkillListing, 'name'>,
-  copy: Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt'>
-): ISkillSnapshot {
+type ScannedCopy = Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt'> &
+  Partial<Pick<ISkillListingTemplate, 'example'>>;
+
+/** The example content a public page shows: nothing while the author has the demo switched off. */
+export function templateExampleScanFields(
+  example: ISkillTemplateExample | null | undefined
+): Array<{ label: string; text: string }> {
+  if (!example?.enabled) return [];
+  const reply = example.replyTrimmedTo ? example.reply.slice(0, example.replyTrimmedTo) : example.reply;
+  const artifactText = (example.artifact?.html ?? '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return [
+    { label: 'Example run prompt', text: example.prompt },
+    { label: 'Example sample file', text: example.sampleFile?.name ?? '' },
+    ...example.steps.map(step => ({ label: 'Example step', text: step.label })),
+    { label: 'Example reply', text: reply },
+    { label: 'Example artifact title', text: example.artifact?.title ?? '' },
+    { label: 'Example artifact', text: artifactText },
+  ].filter(field => field.text.trim());
+}
+
+/** The template copy and shown example in snapshot form, so they run through the market scan unchanged (scanSkillSnapshot). */
+export function templateScanSnapshot(listing: Pick<ISkillListing, 'name'>, copy: ScannedCopy): ISkillSnapshot {
   return {
     name: listing.name,
     description: copy.headline,
@@ -334,6 +421,7 @@ export function templateScanSnapshot(
       `Headline: ${copy.headline}`,
       ...copy.inputs.map(input => `Input${input.required ? ' (required)' : ''}: ${input.label}`),
       `Example prompt: ${copy.examplePrompt}`,
+      ...templateExampleScanFields(copy.example).map(field => `${field.label}: ${field.text}`),
     ].join('\n'),
     disableModelInvocation: false,
   };
@@ -349,23 +437,34 @@ export async function scanTemplatePreviewImage(
   return [];
 }
 
+const onePerRule = (findings: ISkillScanFinding[]) => [...new Map(findings.map(f => [f.rule, f])).values()];
+
 /**
- * The market scan over the template copy and preview image. Every copy field is shown on a public
- * page, so each also gets the public-text rules (links, markup, hidden characters), one finding per rule.
+ * The market scan over the template copy, the shown example run and the preview image. Every field
+ * is shown on a public page, so each also gets the public-text rules (links, markup, hidden
+ * characters), one finding per rule; example findings carry an `example_` rule and say which part.
  */
 export async function scanTemplate(
   listing: Pick<ISkillListing, 'name'>,
-  template: Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt' | 'previewImage'>,
+  template: ScannedCopy & Pick<ISkillListingTemplate, 'previewImage'>,
   settings: MarketSettings,
   getClassifier: ScanDeps['getClassifier']
 ): Promise<SnapshotScan> {
   const fields = [template.headline, ...template.inputs.map(input => input.label), template.examplePrompt];
-  const publicFindings = [
-    ...new Map(fields.flatMap(field => scanPublicText(field, settings.urlAllowlist)).map(f => [f.rule, f])).values(),
-  ];
+  const publicFindings = onePerRule(fields.flatMap(field => scanPublicText(field, settings.urlAllowlist)));
+  const exampleFindings = onePerRule(
+    templateExampleScanFields(template.example).flatMap(({ label, text }) =>
+      scanPublicText(text, settings.urlAllowlist).map(f => ({
+        ...f,
+        rule: `example_${f.rule}`,
+        message: `${label}: ${f.message}`,
+      }))
+    )
+  );
   const imageFindings = await scanTemplatePreviewImage(template.previewImage);
   return scanSkillSnapshot(templateScanSnapshot(listing, template), settings, getClassifier, [
     ...publicFindings,
+    ...exampleFindings,
     ...imageFindings,
   ]);
 }

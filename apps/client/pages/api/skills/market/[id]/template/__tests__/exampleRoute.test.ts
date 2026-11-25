@@ -28,6 +28,8 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: h.assertAi }));
+vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ enforceSubmitRateLimits: vi.fn() }));
+vi.mock('@server/skillMarket/classifySkill', () => ({ getOperationsClassifierLlm: vi.fn() }));
 vi.mock('@server/utils/dispatchQuest', () => ({ dispatchSigned: h.dispatchSigned }));
 vi.mock('@server/skillMarket/templateExample', () => ({
   TEMPLATE_EXAMPLE_DISPATCH_PATH: '/template-example',
@@ -89,11 +91,12 @@ describe('template example route', () => {
     const { run, res } = call('PUT', { enabled: false, replyTrimmedTo: 120, sampleFabFileId: null });
     await run();
     expect(res._getStatusCode()).toBe(200);
-    expect(h.edit).toHaveBeenCalledWith(USER, 'listing-1', {
-      enabled: false,
-      replyTrimmedTo: 120,
-      sampleFabFileId: null,
-    });
+    expect(h.edit).toHaveBeenCalledWith(
+      USER,
+      'listing-1',
+      { enabled: false, replyTrimmedTo: 120, sampleFabFileId: null },
+      expect.objectContaining({ beforeScan: expect.any(Function), getClassifier: expect.any(Function) })
+    );
   });
 
   it.each([{ reply: 'x' }, { artifact: { html: '<p>x</p>' } }, { replyTrimmedTo: 0 }])(
