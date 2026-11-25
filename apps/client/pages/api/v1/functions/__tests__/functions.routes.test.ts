@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
   ApiKeyScope,
+  getFunctionCallContract,
   getFunctionContract,
   invokeFunctionContract,
   isZodError,
@@ -31,6 +32,26 @@ const h = vi.hoisted(() => ({
   calls: [] as Record<string, unknown>[],
   runner: vi.fn(),
   runnerConfigured: { value: true },
+  limitMs: { value: 30_000 },
+  pendingLimit: { value: 10 },
+  results: new Map<string, Record<string, unknown>>(),
+  sent: [] as { url: string; message: Record<string, unknown> }[],
+  sendFails: { value: false },
+}));
+
+vi.mock('@bike4mind/server-utils/callableFunctions/timeLimit', () => ({
+  resolveCallableFunctionTimeLimitMs: async () => h.limitMs.value,
+  resolveCallableFunctionPendingCallLimit: async () => h.pendingLimit.value,
+}));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
+  getSourceQueueUrl: (name: string) => `queue://${name}`,
+}));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
+  sendToQueue: async (url: string, message: Record<string, unknown>) => {
+    if (h.sendFails.value) throw new Error('queue down');
+    h.sent.push({ url, message });
+    return 'message-1';
+  },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -116,7 +137,31 @@ vi.mock('@bike4mind/database', async () => ({
   callableFunctionCallRepository: {
     record: async (row: Record<string, unknown>) => {
       h.calls.push(row);
-      return { ...row, id: `call-${h.calls.length}` };
+      // A 24-hex id, as Mongo would give, so the poll route reads it.
+      return { ...row, id: `6c${String(h.calls.length).padStart(22, '0')}` };
+    },
+    rewrite: async (id: string, row: Record<string, unknown>) => {
+      const index = Number(id.slice(2)) - 1;
+      h.calls[index] = { ...h.calls[index], ...row };
+      return { ...h.calls[index], id };
+    },
+  },
+  callableFunctionResultRepository: {
+    createQueued: async (row: Record<string, unknown>) => {
+      h.results.set(row.callId as string, { ...row, state: 'queued', createdAt: new Date() });
+      return row;
+    },
+    finish: async (callId: string, end: Record<string, unknown>) => {
+      h.results.set(callId, { ...h.results.get(callId), ...end, state: 'finished' });
+      return end.outcome;
+    },
+    countPending: async (callerUserId: string) =>
+      [...h.results.values()].filter(
+        doc => doc.callerUserId === callerUserId && (doc.state === 'queued' || doc.state === 'running')
+      ).length,
+    findForCaller: async (callId: string, callerUserId: string) => {
+      const doc = h.results.get(callId);
+      return doc && doc.callerUserId === callerUserId ? doc : null;
     },
   },
 }));
@@ -124,8 +169,17 @@ vi.mock('@bike4mind/database', async () => ({
 const { default: listRoute } = await import('@pages/api/v1/functions/index');
 const { default: getRoute } = await import('@pages/api/v1/functions/[id]/index');
 const { default: invokeRoute, config: invokeConfig } = await import('@pages/api/v1/functions/[id]/invoke');
-const { FUNCTION_INVOKE_BUDGET_MS, FUNCTION_INVOKE_MAX_BODY_BYTES, invokeAnswer } =
-  await import('@server/callableFunctions/publicFunctions');
+const { default: pollRoute } = await import('@pages/api/v1/functions/calls/[call_id]');
+const { queueFunctionCall } = await import('@bike4mind/server-utils/callableFunctions/asyncCalls');
+const {
+  FUNCTION_INVOKE_BUDGET_MS,
+  FUNCTION_CALL_STOPPED_MESSAGE,
+  FUNCTION_INVOKE_MAX_BODY_BYTES,
+  FUNCTION_SYNC_STOP_MESSAGE,
+  TIMEOUT_MESSAGE,
+  functionCallAnswer,
+  invokeAnswer,
+} = await import('@server/callableFunctions/publicFunctions');
 // The limiters are built once, at module load, before any beforeEach clears the recorder.
 const rateLimitBuckets = h.rateLimitOptions.map(o => o.bucket);
 
@@ -225,6 +279,11 @@ beforeEach(() => {
   h.buckets.clear();
   h.enabled.value = true;
   h.runnerConfigured.value = true;
+  h.limitMs.value = 30_000;
+  h.pendingLimit.value = 10;
+  h.results = new Map();
+  h.sent = [];
+  h.sendFails.value = false;
   h.calls = [];
   h.functions = [
     fnDoc(LIVE_ID),
@@ -245,6 +304,7 @@ describe('scopes and limits', () => {
     ['listFunctions', listFunctionsContract],
     ['getFunction', getFunctionContract],
     ['invokeFunction', invokeFunctionContract],
+    ['getFunctionCall', getFunctionCallContract],
   ] as const;
 
   it.each(contracts)('%s names functions:invoke and declares the 403 scope envelope', (_name, contract) => {
@@ -264,6 +324,7 @@ describe('scopes and limits', () => {
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
+      [ApiKeyScope.FUNCTIONS_INVOKE],
     ]);
   });
 
@@ -276,7 +337,12 @@ describe('scopes and limits', () => {
   });
 
   it('uses one stable per-user rate-limit bucket per route, with no id in it', () => {
-    expect(rateLimitBuckets).toEqual(['/api/v1/functions', '/api/v1/functions/[id]', '/api/v1/functions/[id]/invoke']);
+    expect(rateLimitBuckets).toEqual([
+      '/api/v1/functions',
+      '/api/v1/functions/[id]',
+      '/api/v1/functions/[id]/invoke',
+      '/api/v1/functions/calls/[call_id]',
+    ]);
   });
 
   it('answers 429 from the limiter before the function is read or run', async () => {
@@ -589,5 +655,189 @@ describe('invoke', () => {
   it("raises Next's body parser limit above the route's own body cap", () => {
     expect(invokeConfig.api.bodyParser.sizeLimit).toBe('6mb');
     expect(FUNCTION_INVOKE_MAX_BODY_BYTES).toBeLessThanOrEqual(6 * 1024 * 1024);
+  });
+});
+
+describe('synchronous stop', () => {
+  const pastBudget = async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      h.runner.mockImplementation(() => new Promise(() => undefined));
+      const pending = invoke(LIVE_ID, { input: { load: 1, span: 2 } });
+      await vi.advanceTimersByTimeAsync(FUNCTION_INVOKE_BUDGET_MS);
+      return await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  it('stops at 45 s and names async mode when the organization allows a longer run', async () => {
+    h.limitMs.value = 300_000;
+    const res = await pastBudget();
+    expect(res.status).toBe(504);
+    expect(res.body).toMatchObject({ error: FUNCTION_SYNC_STOP_MESSAGE, errorCode: 'request_timeout' });
+    expect(FUNCTION_SYNC_STOP_MESSAGE).toContain('"mode": "async"');
+    // The route's deadline starts at the request's arrival, so the run gets what is left of the 45 s.
+    const { timeoutMs } = h.runner.mock.calls[0][0].limits;
+    expect(timeoutMs).toBeLessThanOrEqual(FUNCTION_INVOKE_BUDGET_MS);
+    expect(timeoutMs).toBeGreaterThan(FUNCTION_INVOKE_BUDGET_MS - 5_000);
+  });
+
+  it('does not name async mode when async mode would stop at the same limit', async () => {
+    h.limitMs.value = 40_000;
+    const res = await pastBudget();
+    expect(res.body.error).toBe(TIMEOUT_MESSAGE);
+    expect(h.runner.mock.calls[0][0].limits.timeoutMs).toBe(40_000);
+  });
+
+  it('names async mode when the runtime stops a run the 45 s cap cut short', async () => {
+    h.limitMs.value = 300_000;
+    h.runner.mockResolvedValue({ outcome: 'timeout', durationMs: 45_000 });
+    const res = await invoke(LIVE_ID, { input: { load: 1, span: 2 } });
+    expect(res.status).toBe(504);
+    expect(res.body.error).toBe(FUNCTION_SYNC_STOP_MESSAGE);
+  });
+});
+
+describe('async invoke and poll', () => {
+  const asyncInvoke = (id = LIVE_ID, input: Record<string, unknown> = { load: 1, span: 2 }) =>
+    invoke(id, { input, mode: 'async' });
+  const poll = (callId: string, user?: string) => call(pollRoute, { query: { call_id: callId }, user });
+
+  it('answers 202 with a call id after the checks, writes one queued row, and sends one job without inputs', async () => {
+    const res = await asyncInvoke();
+    expect(res.status).toBe(202);
+    const callId = res.body.call_id as string;
+    expect(res.body).toEqual({ call_id: callId, status: 'queued' });
+    expect(h.runner).not.toHaveBeenCalled();
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]).toMatchObject({ outcome: 'queued', surface: 'rest', apiKeyId: 'k1' });
+    expect(h.sent).toEqual([{ url: 'queue://callableFunctionCallQueue', message: { callId } }]);
+    expect(h.results.get(callId)).toMatchObject({ state: 'queued', input: { load: 1, span: 2 } });
+  });
+
+  it.each([
+    ['an input that does not fit', LIVE_ID, { load: 1, span: 'four' }, 422],
+    ['a draft', DRAFT_ID, { load: 1, span: 2 }, 404],
+    ["another person's function", OTHERS_ID, { load: 1, span: 2 }, 404],
+  ])('refuses %s before anything is queued', async (_name, id, input, status) => {
+    const res = await asyncInvoke(id, input);
+    expect(res.status).toBe(status);
+    expect(h.sent).toHaveLength(0);
+    expect(h.results.size).toBe(0);
+  });
+
+  it('answers 503 on self-host before any row, result, or job is written', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    try {
+      const res = await asyncInvoke();
+      expect(res).toEqual({
+        status: 503,
+        body: { error: 'Asynchronous calls are not available on self-hosted installs.' },
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(h.calls).toHaveLength(0);
+    expect(h.results.size).toBe(0);
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('answers 503 and keeps nothing queued when the job cannot be sent', async () => {
+    h.sendFails.value = true;
+    const res = await asyncInvoke();
+    expect(res.status).toBe(503);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]).toMatchObject({ outcome: 'error', reason: 'queue_failed' });
+    expect([...h.results.values()][0]).toMatchObject({ state: 'finished', outcome: 'error' });
+  });
+
+  it("answers 429 naming the cap once the caller's queued and running calls reach it, and queues nothing", async () => {
+    h.pendingLimit.value = 2;
+    const first = (await asyncInvoke()).body.call_id as string;
+    expect((await asyncInvoke()).status).toBe(202);
+    h.results.set(first, { ...h.results.get(first), state: 'running' });
+
+    const refused = await asyncInvoke();
+    expect(refused.status).toBe(429);
+    expect(refused.body.error).toContain('At most 2 asynchronous calls');
+    // The route's error handler spreads additionalInfo into the body; this file's `call` keeps only the message.
+    const request = { caller: { id: 'u1' }, functionId: LIVE_ID, args: { load: 1, span: 2 }, surface: 'rest' as const };
+    await expect(queueFunctionCall(request, { send: async () => undefined })).rejects.toMatchObject({
+      statusCode: 429,
+      additionalInfo: { errorCode: 'concurrency_limit_exceeded', limit: 2 },
+    });
+    expect(h.calls).toHaveLength(2);
+    expect(h.sent).toHaveLength(2);
+
+    h.results.set(first, { ...h.results.get(first), state: 'finished', outcome: 'ok' });
+    expect((await asyncInvoke()).status).toBe(202);
+  });
+
+  it('polls queued, running, then the output and stamp', async () => {
+    const callId = (await asyncInvoke()).body.call_id as string;
+    expect((await poll(callId)).body).toEqual({ call_id: callId, status: 'queued' });
+    h.results.set(callId, { ...h.results.get(callId), state: 'running' });
+    expect((await poll(callId)).body).toEqual({ call_id: callId, status: 'running' });
+    const stamp = { function_id: LIVE_ID, surface: 'rest' };
+    const outputs = { deflection: 2 };
+    h.results.set(callId, { ...h.results.get(callId), state: 'finished', outcome: 'ok', outputs, stamp });
+    const done = await poll(callId);
+    expect(done.status).toBe(200);
+    expect(done.body).toEqual({ call_id: callId, status: 'finished', outcome: 'ok', output: outputs, stamp });
+  });
+
+  it('polls a call that ran out of time as finished with outcome timeout', async () => {
+    const callId = (await asyncInvoke()).body.call_id as string;
+    h.results.set(callId, { ...h.results.get(callId), state: 'finished', outcome: 'timeout' });
+    expect((await poll(callId)).body).toMatchObject({
+      status: 'finished',
+      outcome: 'timeout',
+      error: TIMEOUT_MESSAGE,
+    });
+  });
+
+  it.each(['worker_lost', 'dispatch_failed'] as const)(
+    'polls a call ended as %s as stopped before it finished, not as a function error',
+    reason => {
+      const answer = functionCallAnswer({
+        callId: 'c1',
+        state: 'finished',
+        outcome: 'error',
+        reason,
+      } as Parameters<typeof functionCallAnswer>[0]);
+      expect(answer).toEqual({
+        call_id: 'c1',
+        status: 'finished',
+        outcome: 'error',
+        error: FUNCTION_CALL_STOPPED_MESSAGE,
+      });
+    }
+  );
+
+  it('still polls a call whose function raised as a function error', () => {
+    const answer = functionCallAnswer({
+      callId: 'c1',
+      state: 'finished',
+      outcome: 'error',
+      errorClass: 'ValueError',
+    } as Parameters<typeof functionCallAnswer>[0]);
+    expect(answer.error).toBe('The function raised an error (ValueError).');
+  });
+
+  it("answers another person's call id exactly as a made-up or malformed one", async () => {
+    const callId = (await asyncInvoke()).body.call_id as string;
+    const theirs = await poll(callId, 'u2');
+    const madeUp = await poll('6c9999999999999999999999');
+    const malformed = await poll('not-an-id');
+    expect(theirs).toEqual({ status: 404, body: { error: 'Call not found' } });
+    expect(madeUp).toEqual(theirs);
+    expect(malformed).toEqual(theirs);
+  });
+
+  it('answers 403 on the poll when callable functions are off', async () => {
+    const callId = (await asyncInvoke()).body.call_id as string;
+    h.enabled.value = false;
+    expect((await poll(callId)).status).toBe(403);
   });
 });

@@ -4,6 +4,9 @@ import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 import { categorizeToolError } from '@bike4mind/services';
 import { isOperatorFault } from '@bike4mind/services/llm';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'processingFailedMetric' } });
 
 /** Completion entry point a failure came from: internal `/process`, the CLI SSE route, or embed chat. */
 export type ProcessingFailureSurface = '/process' | 'cli-sse' | 'embed';
@@ -45,6 +48,6 @@ export async function emitProcessingFailed(surface: ProcessingFailureSurface, er
       surfaceDatum,
     ]);
   } catch (metricErr) {
-    console.error('[ProcessingFailed] Failed to emit metric', metricErr);
+    logger.error('[ProcessingFailed] Failed to emit metric', { error: metricErr });
   }
 }

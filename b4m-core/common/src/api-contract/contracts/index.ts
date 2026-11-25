@@ -64,7 +64,12 @@ import {
 } from './files.contract';
 import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
 import { postSlackMessageContract } from './slackMessages.contract';
-import { getFunctionContract, invokeFunctionContract, listFunctionsContract } from './functions.contract';
+import {
+  getFunctionCallContract,
+  getFunctionContract,
+  invokeFunctionContract,
+  listFunctionsContract,
+} from './functions.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract, listQuestFilesContract } from './quest.contract';
@@ -383,4 +388,5 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listFunctionsContract,
   getFunctionContract,
   invokeFunctionContract,
+  getFunctionCallContract,
 ];

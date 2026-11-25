@@ -1,7 +1,7 @@
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { remarkGfmNoSingleTilde, promoteInlineLatexDollars, UNESCAPED } from '@client/app/utils/remarkPlugins';
+import { remarkGfmNoSingleTilde, promoteInlineLatexDollars, unescapedDelimiter } from '@client/app/utils/remarkPlugins';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Box, Typography, IconButton, Tooltip } from '@mui/joy';
@@ -117,7 +117,7 @@ export const UnmarkedCitedPassage = ({ passage, title }: { passage: string; titl
 // A passage clipped mid-span keeps a dangling delimiter that the promoted document no longer has.
 function trimDanglingLatexDelimiters(text: string): string {
   const delimiters = (s: string) =>
-    [...s.matchAll(new RegExp(String.raw`${UNESCAPED}\\([()[\]])`, 'g'))].map(m => ({
+    [...s.matchAll(new RegExp(unescapedDelimiter(String.raw`([()[\]])`), 'g'))].map(m => ({
       kind: m[1] === '(' || m[1] === ')' ? 'paren' : 'bracket',
       opens: m[1] === '(' || m[1] === '[',
       start: m.index,

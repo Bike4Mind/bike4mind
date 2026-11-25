@@ -33,6 +33,8 @@ import { useQuickApprovals } from './quickApprovals';
 import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
 import { useAvatarDetailsPosition } from './useAvatarDetailsPosition';
+import type { FillWindow } from './useFillWindow';
+import { ExpandIcon } from '../icons';
 
 export interface AgentActions {
   open(id: string): void;
@@ -149,6 +151,11 @@ export interface OrchestratorStageProps {
   conversationRequest?: number;
   presenter?: StagePresenter;
   /**
+   * Fill window (useFillWindow.ts): the shell hides everything around the stage, and the header slims to
+   * the view name, the counts and Exit. Without it the header offers no Fill window button.
+   */
+  fillWindow?: FillWindow;
+  /**
    * The shell's sessions, so a pane in a split can be pinned to another session (panePins.ts) and draw its
    * roster. Without it every pane shows this stage's roster.
    */
@@ -197,6 +204,7 @@ export function OrchestratorStage({
   conversationRequest,
   presenter,
   paneSessions,
+  fillWindow,
 }: OrchestratorStageProps) {
   const [prAgentId, setPrAgentId] = useState<string | null>(null);
   const [needsYouFocusRequest, setNeedsYouFocusRequest] = useState(0);
@@ -213,6 +221,7 @@ export function OrchestratorStage({
   // The one place Presenter mode applies: everything below draws from `agents`, `parent`, `approvals` and
   // `desk`, except the peek drawer, which reads the real roster.
   const presenting = presenter?.on === true;
+  const filling = fillWindow?.on === true;
   const presenterNumbers = usePresenterNumbers(presenting, rosterAgents);
   const shown = useMemo((): PresentedStage => {
     const real = { agents: rosterAgents, parent: rosterParent, approvals: rosterApprovals, desk: rosterDesk };
@@ -515,15 +524,21 @@ export function OrchestratorStage({
         </Box>
       ) : (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1, minWidth: 0 }}>
-          <ViewSwitcher
-            layout={layout}
-            onLayoutChange={onLayoutChange}
-            ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
-            focus={focus}
-            presenter={presenter}
-            miniWindow={miniWindow}
-            paneSessions={paneSessions && { activeId: rootId, sessions: paneSessions.sessions, presenting }}
-          />
+          {filling ? (
+            <Typography level="title-sm" noWrap data-testid="orchestrator-fill-view-name" sx={{ flexShrink: 0 }}>
+              {ORCHESTRATOR_VIEW_INFO[view].label}
+            </Typography>
+          ) : (
+            <ViewSwitcher
+              layout={layout}
+              onLayoutChange={onLayoutChange}
+              ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
+              focus={focus}
+              presenter={presenter}
+              miniWindow={miniWindow}
+              paneSessions={paneSessions && { activeId: rootId, sessions: paneSessions.sessions, presenting }}
+            />
+          )}
           {presenting && <PresentingBadge />}
           <Typography
             level="body-sm"
@@ -567,7 +582,38 @@ export function OrchestratorStage({
             </Button>
           )}
           <Box sx={{ flex: 1 }} />
-          {dockControl}
+          {fillWindow &&
+            (filling ? (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                title="Exit full window (Esc)"
+                aria-keyshortcuts="Escape"
+                data-testid="orchestrator-fill-exit-btn"
+                data-fill-window-toggle
+                onClick={() => fillWindow.setOn(false)}
+                sx={{ flexShrink: 0 }}
+              >
+                Exit {'\u00b7'} Esc
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="primary"
+                title="Fill window (F)"
+                aria-keyshortcuts="F"
+                startDecorator={<ExpandIcon expanded={false} />}
+                data-testid="orchestrator-fill-window-btn"
+                data-fill-window-toggle
+                onClick={() => fillWindow.setOn(true)}
+                sx={{ flexShrink: 0 }}
+              >
+                Fill window
+              </Button>
+            ))}
+          {!filling && dockControl}
         </Box>
       )}
       {!settled && !presenting && !inSceneDecisions && (
