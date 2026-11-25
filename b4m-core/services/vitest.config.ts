@@ -1,9 +1,8 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 import { sharedTest } from '../../vitest.shared';
-import tsconfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  resolve: { tsconfigPaths: true },
   test: {
     ...sharedTest,
     globals: true,

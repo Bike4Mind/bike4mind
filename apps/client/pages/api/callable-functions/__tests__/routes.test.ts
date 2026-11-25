@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
     getCallableFunction: vi.fn(),
     repinCallableFunction: vi.fn(),
     setCallableFunctionEnabled: vi.fn(),
+    setCallableFunctionApproval: vi.fn(),
     deleteCallableFunction: vi.fn(),
   },
 }));
@@ -156,6 +157,7 @@ beforeEach(() => {
   h.registry.createCallableFunction.mockResolvedValue(VIEW);
   h.registry.getCallableFunction.mockResolvedValue({ ...VIEW, contract: CONTRACT, source: 'def run(): ...' });
   h.registry.setCallableFunctionEnabled.mockResolvedValue({ ...VIEW, enabled: false, status: 'disabled' });
+  h.registry.setCallableFunctionApproval.mockResolvedValue({ ...VIEW, approval: 'always_ask' });
   h.registry.repinCallableFunction.mockResolvedValue(VIEW);
   h.registry.deleteCallableFunction.mockResolvedValue(undefined);
 });
@@ -298,11 +300,29 @@ describe('request bodies', () => {
     expect(h.registry.createCallableFunction).not.toHaveBeenCalled();
   });
 
-  it('patch takes only enabled', async () => {
-    for (const body of [{}, { enabled: 'no' }, { enabled: true, slug: 'x' }]) {
+  it('patch takes enabled or approval, one at a time', async () => {
+    for (const body of [
+      {},
+      { enabled: 'no' },
+      { enabled: true, slug: 'x' },
+      { approval: 'sometimes' },
+      { enabled: true, approval: 'always_ask' },
+    ]) {
       const res = await fire({ ...PATCH, body });
       expect(res._getStatusCode()).toBe(400);
     }
+    expect(h.registry.setCallableFunctionEnabled).not.toHaveBeenCalled();
+    expect(h.registry.setCallableFunctionApproval).not.toHaveBeenCalled();
+  });
+
+  it('patch with approval sets it and leaves enabled alone', async () => {
+    const res = await fire({ ...PATCH, body: { approval: 'always_ask' } });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.registry.setCallableFunctionApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'jwt-user' }),
+      FUNCTION_ID,
+      'always_ask'
+    );
     expect(h.registry.setCallableFunctionEnabled).not.toHaveBeenCalled();
   });
 });

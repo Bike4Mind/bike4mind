@@ -61,7 +61,7 @@ const NOT_A_REWRITE = new Set([
   // Only uploads while the row is still `pending` (a first write); the S3 event charges it.
   'apps/client/pages/api/files/[id]/upload.ts',
   // Each creates a NEW row (or presigns the first write for one); the S3 event charges it.
-  'apps/client/pages/api/files/copy-generated-image.ts',
+  'apps/client/server/files/copyGeneratedImage.ts',
   'apps/client/pages/api/files/createFabFile.ts',
   'apps/client/pages/api/files/createFabFileURL.ts',
   'apps/client/pages/api/files/generate-presigned-urls-batch.ts',

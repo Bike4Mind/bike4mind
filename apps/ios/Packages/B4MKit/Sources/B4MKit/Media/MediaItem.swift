@@ -30,7 +30,7 @@ public struct MediaItem: Identifiable, Hashable, Sendable, Codable {
   /// A presigned storage URL. Short-lived: see `isURLUsable(at:)`.
   public let url: URL?
   public let urlExpiresAt: Date?
-  /// The notebook a generated file came from; an image edit must run in a session, so it reuses this one.
+  /// The notebook a generated file came from.
   public let sessionID: String?
   /// The prompt that made it, when the server recorded one.
   public let prompt: String?

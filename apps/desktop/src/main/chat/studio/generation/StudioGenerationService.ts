@@ -1,11 +1,11 @@
 import { studioSubmissionFailure } from './StudioSubmissionFailure';
+import { toCreateImageJobBody } from './imageJobBody';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { z } from 'zod';
 import {
   CreateMusicGenerationBodySchema,
   CreateVideoGenerationBodySchema,
-  GenerateImageRequestBodySchema,
   ImageJobRequestSchema,
   soundEffectsRequestSchema,
   ttsRequestSchema,
@@ -19,21 +19,15 @@ import {
   type StudioJob,
 } from '@shared/studio';
 import { titleFromStudioPrompt } from '@shared/studioAssetTitle';
-import { isTerminalQuest, type MediaApiClient } from '../../media/MediaApiClient';
+import { MediaToolError, type MediaApiClient } from '../../media/MediaApiClient';
 import { MediaStore, parseMediaUrl } from '../../media/MediaStore';
-import { resolveImageUrls } from '../../media/imageGeneration';
 import type { StudioDiagnosticSink } from '../StudioDiagnostics';
 import type { StudioWorkspaceStore } from '../StudioWorkspaceStore';
 
 export const studioGenerationRequestSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('image'),
-    body: z.union([
-      ImageJobRequestSchema,
-      GenerateImageRequestBodySchema.pick({ prompt: true, model: true })
-        .extend({ size: z.string().optional() })
-        .strict(),
-    ]),
+    body: ImageJobRequestSchema,
     count: z.number().int().min(1).max(4).optional(),
   }),
   z.object({ kind: z.literal('video'), body: CreateVideoGenerationBodySchema }),
@@ -53,7 +47,6 @@ export type StudioGenerationRequest = z.input<typeof studioGenerationRequestSche
 export interface StudioGenerationConnection {
   scope: string;
   client: MediaApiClient;
-  cdnUrl: string;
 }
 
 export interface StudioGenerationDeps {
@@ -167,35 +160,30 @@ export class StudioGenerationService {
       if ((await this.requireWorkspace(sessionId, connection)).workspaceId !== workspace.workspaceId) {
         throw new Error('The Studio workspace changed.');
       }
+      const imageBody = request.kind === 'image' ? toCreateImageJobBody(request.body, request.count ?? 1) : undefined;
       await this.saveJob(sessionId, job, connection);
       try {
         this.assertConnection(connection);
         if (request.kind === 'image') {
-          if ('mode' in request.body) {
-            const result = await connection.client.createStudioImages(
-              request.body,
-              request.count ?? 1,
-              job.idempotencyKey
-            );
-            job = {
-              ...job,
-              state: 'queued',
-              imageBatch: true,
-              providerGroupId: result.groupId,
-              providerJobId: result.jobs[0].id,
-              providerJobIds: result.jobs.map(child => child.id),
-            };
-          } else {
-            const result = await connection.client.generateImage({ ...request.body, prompt_resolution: 'literal' });
-            job = { ...job, state: 'queued', providerJobId: result.questId };
-          }
+          if (!imageBody) throw new Error('The image request body was not prepared.');
+          const result = await connection.client.createImageJobGroup(imageBody, job.idempotencyKey);
+          const first = result.data[0];
+          if (!first) throw new Error('The server accepted the image request but returned no job to follow.');
+          job = {
+            ...job,
+            state: 'queued',
+            imageBatch: true,
+            providerGroupId: result.group_id,
+            providerJobId: first.id,
+            providerJobIds: result.data.map(child => child.id),
+          };
         } else if (request.kind === 'video' || request.kind === 'music') {
           const result =
             request.kind === 'video'
               ? await connection.client.createVideoGeneration(request.body, job.idempotencyKey)
               : await connection.client.createMusicGeneration(request.body, job.idempotencyKey);
           job = { ...job, state: 'queued', providerJobId: result.id };
-        } else {
+        } else if (request.kind === 'speech' || request.kind === 'sound-effect') {
           const response =
             request.kind === 'speech'
               ? await connection.client.synthesizeSpeech(request.body)
@@ -258,19 +246,8 @@ export class StudioGenerationService {
       }
       const outputs: { url: string; mimeType: string }[] = [];
       if (job.kind === 'image') {
-        const remote = await connection.client.getQuest(job.providerJobId);
-        this.assertConnection(connection);
-        if (remote.type === 'error')
-          job = { ...job, state: 'failed', error: remote.reply ?? 'Image generation failed.' };
-        else if (isTerminalQuest(remote)) {
-          if (remote.status === 'stopped') job = { ...job, state: 'cancelled' };
-          else {
-            outputs.push(
-              ...resolveImageUrls(remote, connection.cdnUrl).urls.map(url => ({ url, mimeType: 'image/png' }))
-            );
-            if (!outputs.length) throw new Error('The image job has no downloadable output.');
-          }
-        } else job = { ...job, state: 'running' };
+        // A non-batch image job holds a quest id from the retired quest route; it has no image-job equivalent.
+        job = { ...job, state: 'unknown', error: 'This earlier image job cannot be recovered automatically.' };
       } else if (job.kind === 'video' || job.kind === 'music') {
         const remote =
           job.kind === 'video'
@@ -330,44 +307,45 @@ export class StudioGenerationService {
   ): Promise<StudioJob> {
     const ids = job.providerJobIds ?? [];
     if (!ids.length) return job;
-    const remaining = new Set(ids);
-    const found = new Map<string, Awaited<ReturnType<MediaApiClient['listStudioImages']>>['data'][number]>();
-    let cursor: string | undefined;
-    do {
-      const page = await connection.client.listStudioImages(cursor);
-      this.assertConnection(connection);
-      for (const child of page.data) if (remaining.delete(child.id)) found.set(child.id, child);
-      cursor = page.next_cursor ?? undefined;
-    } while (cursor && remaining.size);
     const assetIds: string[] = [];
     const errors: string[] = [];
-    let unsettled = remaining.size > 0;
+    let unsettled = false;
+    // At most four children (the count cap), read one by one; StudioJobScheduler paces and backs off the calls.
     for (const [index, id] of ids.entries()) {
-      const child = found.get(id);
-      if (!child) continue;
+      const assetId = `${job.id}_${index}`;
+      // A stored child is settled; skip the read so a batch does not re-poll finished images.
+      if (await this.findAsset(sessionId, assetId, connection)) {
+        assetIds.push(assetId);
+        continue;
+      }
+      const child = await this.readImageChild(id, connection);
+      this.assertConnection(connection);
+      if (!child) {
+        errors.push(`Image ${index + 1} is no longer available.`);
+        continue;
+      }
       if (child.state === 'failed' || child.state === 'cancelled' || child.state === 'blocked') {
         errors.push(child.error?.message ?? `Image ${index + 1} ${child.state}.`);
         continue;
       }
-      if (child.state !== 'succeeded' || !child.output?.fileId) {
+      if (child.state !== 'succeeded' || child.output?.availability === 'pending_scan') {
         unsettled = true;
         continue;
       }
-      const assetId = `${job.id}_${index}`;
-      if (!(await this.findAsset(sessionId, assetId, connection))) {
-        const file = await connection.client.getFile(child.output.fileId);
-        this.assertConnection(connection);
-        if (file.moderation_status === 'blocked') {
-          errors.push(`Image ${index + 1} is unavailable.`);
-          continue;
-        }
-        if (!file.download_url) {
-          unsettled = true;
-          continue;
-        }
-        const output = await connection.client.fetchGenerated(file.download_url);
-        await this.storeOutput(sessionId, workspaceId, job, index, output.bytes, file.mime_type, connection);
+      if (child.output?.availability !== 'ready' || !child.output.url) {
+        errors.push(`Image ${index + 1} is unavailable.`);
+        continue;
       }
+      const output = await connection.client.fetchGenerated(child.output.url);
+      await this.storeOutput(
+        sessionId,
+        workspaceId,
+        job,
+        index,
+        output.bytes,
+        output.contentType || child.output.content_type,
+        connection
+      );
       assetIds.push(assetId);
     }
     const updated: StudioJob = {
@@ -379,6 +357,16 @@ export class StudioGenerationService {
     };
     await this.saveJob(sessionId, updated, connection);
     return updated;
+  }
+
+  /** A child the server no longer has (404) is settled as missing, so its batch stops polling for it. */
+  private async readImageChild(id: string, connection: StudioGenerationConnection) {
+    try {
+      return await connection.client.getImageJob(id);
+    } catch (error) {
+      if (error instanceof MediaToolError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   async recover(sessionId: string): Promise<StudioJob[]> {

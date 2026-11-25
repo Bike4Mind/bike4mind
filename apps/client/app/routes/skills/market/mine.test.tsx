@@ -15,6 +15,7 @@ vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn()
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: 'u1' } }) }));
 vi.mock('@client/app/hooks/data/skills', () => ({ useGetSkills: () => ({ data: [] }) }));
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
+  useMarketMe: () => ({ data: { spaces: [] } }),
   useMyListings: () => ({ data: h.listings, isLoading: false, isError: false }),
   useRescanVersion: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useSubmitNewVersion: () => ({ mutateAsync: vi.fn(), isPending: false }),

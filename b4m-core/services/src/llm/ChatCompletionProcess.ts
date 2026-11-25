@@ -81,6 +81,7 @@ import {
   withholdsReasoning,
   type ThinkingVisibility,
   readOrgModelPolicy,
+  createMutex,
 } from '@bike4mind/common';
 import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import { resolveUsageProject } from './usageProject';
@@ -246,7 +247,6 @@ import { logLlmUsageSettled } from './llmUsageSettledLog';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
-import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
@@ -256,7 +256,13 @@ import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import type { ImageToolConfig } from './tools/implementation/imageGeneration';
-import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
+import {
+  applyModerationHit,
+  MODERATION_POLICY,
+  moderationEscalationAlert,
+  moderationThrottleKey,
+  type ModerationEscalationAlert,
+} from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
 import { createStreamingStatusSender } from './streamingStatusSender';
@@ -328,6 +334,7 @@ import {
   getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
   checkNewAccountSpendCap,
+  assertInterventionSpendAllowed,
 } from '../creditService';
 import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
 import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
@@ -608,7 +615,7 @@ export function resolveModelAwareHistoryCount({
  */
 const SESSION_LENGTH_WARNING_THRESHOLD = 100;
 
-const questSaveMutex = new Mutex();
+const questSaveMutex = createMutex();
 // Identity and server-owned keys; `deletedAt` belongs to soft delete, never to a turn's save.
 // `lakeSaveCount` moves only by claimLakeSaveSlot's atomic $inc; writing the in-memory copy back
 // would reset the count to what it was when the turn loaded the quest.
@@ -1143,6 +1150,7 @@ export class ChatCompletionProcess {
   public logEvent: IChatCompletionServiceOptions['logEvent'];
   public queue: IChatCompletionServiceOptions['queue'];
   public autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
+  public notifyModerationEscalation: IChatCompletionServiceOptions['notifyModerationEscalation'];
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
@@ -1329,6 +1337,7 @@ export class ChatCompletionProcess {
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private customMcp: IChatCompletionServiceOptions['customMcp'];
+  private customMcpDeadline: IChatCompletionServiceOptions['customMcpDeadline'];
   private statusManager: StatusManager | null = null;
   private systemFilesCache: Map<string, [string[], string[]]> | null = null;
   private abortControllers: Map<string, AbortController> | null = null;
@@ -1405,6 +1414,7 @@ export class ChatCompletionProcess {
     this.logEvent = options.logEvent;
     this.queue = options.queue;
     this.autoNameSession = options.autoNameSession;
+    this.notifyModerationEscalation = options.notifyModerationEscalation;
     this.summarizeSession = options.summarizeSession;
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
@@ -1418,6 +1428,7 @@ export class ChatCompletionProcess {
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
+    this.customMcpDeadline = options.customMcpDeadline;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
@@ -3804,6 +3815,7 @@ export class ChatCompletionProcess {
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
         customMcp: this.customMcp,
+        customMcpDeadline: this.customMcpDeadline,
         toolCreditsMap: this.toolCreditsMap,
         toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
@@ -5234,6 +5246,15 @@ export class ChatCompletionProcess {
             availableCredits: actualBalance,
           });
           throw new InsufficientCreditsError(errorMessage, 'insufficient_credits');
+        }
+        try {
+          await assertInterventionSpendAllowed(
+            { userId: this.user.id, credits: requiredCredits },
+            { users: this.db.users, window: this.db.newAccountSpendCap.interventionSpendWindow }
+          );
+        } catch (refusal) {
+          await reservationMethods.incrementCredits(reservationOwnerId, requiredCredits);
+          throw refusal;
         }
 
         // Update in-memory balance so mid-stream tool validation sees the reduced balance
@@ -9142,16 +9163,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     logger: Logger
   ): Promise<void> {
     try {
-      const decision = await applyModerationHit({
-        users: this.db.users,
-        userId: this.user.id,
-        hit: { at: new Date(), categories, source, questId },
-      });
+      const hit = { at: new Date(), categories, source, questId };
+      const decision = await applyModerationHit({ users: this.db.users, userId: this.user.id, hit });
       logger.warn(
         `[Moderation] User ${this.user.id} flagged by ${source}` +
           (categories.length ? ` (${categories.join(', ')})` : '') +
           `; ${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
       );
+      this.sendModerationEscalationAlert(moderationEscalationAlert(this.user.id, hit, decision), logger);
     } catch (recordError) {
       logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
@@ -9184,6 +9203,17 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       apiKeyId: this.turnApiKeyId,
     });
     return true;
+  }
+
+  /** Fire-and-forget: alert delivery never delays or fails the chat request. */
+  private sendModerationEscalationAlert(alert: ModerationEscalationAlert | null, logger: Logger): void {
+    const notify = this.notifyModerationEscalation;
+    if (!alert || !notify) return;
+    void Promise.resolve()
+      .then(() => notify(alert))
+      .catch(alertError =>
+        logger.warn(`[Moderation] Failed to send the escalation alert for user ${this.user.id}:`, alertError)
+      );
   }
 
   private getBedrockGuardrailsService(

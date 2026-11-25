@@ -90,7 +90,7 @@ function RiderButton({ rider, onAction }: { rider: Rider; onAction(action: ViewA
         borderColor: asking ? 'warning.outlinedBorder' : 'divider',
         borderLeft: '4px solid',
         borderLeftColor: `${color}.solidBg`,
-        opacity: rider.state === 'stopped' || rider.state === 'idle' ? 0.55 : 1,
+        opacity: rider.state === 'paused' || rider.state === 'stopped' || rider.state === 'idle' ? 0.55 : 1,
         '&:hover': { bgcolor: 'background.level1', opacity: 1 },
         '&:focus-visible': { outline: '2px solid', outlineColor: 'focusVisible', outlineOffset: 2 },
       }}
@@ -119,7 +119,11 @@ function RiderButton({ rider, onAction }: { rider: Rider; onAction(action: ViewA
           {rider.line}
         </Typography>
       )}
-      <AgentPrIndicator pr={rider.pr} onOpen={() => onAction({ kind: 'open-pr', agentId: rider.key })} />
+      <AgentPrIndicator
+        agentId={rider.key}
+        pr={rider.pr}
+        onOpen={() => onAction({ kind: 'open-pr', agentId: rider.key })}
+      />
     </Box>
   );
 }

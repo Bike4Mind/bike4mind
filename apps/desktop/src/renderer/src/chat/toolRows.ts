@@ -271,6 +271,12 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Archived ${n} sessions`,
     active: 'Archiving a session...',
   },
+  session_rename: {
+    didAlone: 'Renamed a session',
+    toAlone: 'rename a session',
+    many: n => `Renamed ${n} sessions`,
+    active: 'Renaming a session...',
+  },
   session_delete: {
     didAlone: 'Deleted a session',
     toAlone: 'delete a session',

@@ -49,4 +49,12 @@ describe('BriefItemSchema source', () => {
       false
     );
   });
+
+  it('accepts a delegation source and rejects one missing its id', () => {
+    const source = { kind: 'delegation', delegationId: 'g1' };
+    expect(BriefItemSchema.parse({ id: 'x1', text: 't', source }).source).toEqual(source);
+    expect(
+      BriefItemSchema.safeParse({ id: 'x1', text: 't', source: { kind: 'delegation', emailId: 'e1' } }).success
+    ).toBe(false);
+  });
 });

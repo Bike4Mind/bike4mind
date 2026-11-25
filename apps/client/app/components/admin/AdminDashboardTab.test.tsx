@@ -73,6 +73,12 @@ describe('AdminDashboardTab', () => {
     });
   });
 
+  it('opens with the shared page header as the only h1', () => {
+    render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('admin-dashboard').firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    expect(screen.getAllByRole('heading', { level: 1 }).map(h => h.textContent)).toEqual(['Admin dashboard']);
+  });
+
   it('does not show an extension section when no routes contribute a dashboard', () => {
     render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.queryByText('More dashboards')).not.toBeInTheDocument();

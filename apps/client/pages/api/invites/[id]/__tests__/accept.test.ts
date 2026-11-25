@@ -41,7 +41,8 @@ const tagMocks = vi.hoisted(() => ({
 }));
 const payOrgInviteBonus = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus }));
-vi.mock('@bike4mind/services', () => ({ sharingService: { acceptInvite } }));
+vi.mock('@bike4mind/services', () => ({ sharingService: { acceptInvite, resolveAddressedInvite } }));
+const resolveAddressedInvite = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => false) }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -79,7 +80,10 @@ vi.mock('@server/utils/inviteAcceptLimits', () => ({ reserveInviteAccept }));
 import '@pages/api/invites/[id]/accept';
 
 describe('POST /api/invites/[id]/accept - recipient filtering', () => {
-  beforeEach(() => acceptInvite.mockClear());
+  beforeEach(() => {
+    acceptInvite.mockClear();
+    reserveInviteAccept.mockClear();
+  });
 
   it('strips co-recipients from the returned invite', async () => {
     const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
@@ -91,6 +95,19 @@ describe('POST /api/invites/[id]/accept - recipient filtering', () => {
     expect(body.recipients.accepted).toEqual(['me@x.com']);
     expect(JSON.stringify(body)).not.toContain('other@x.com');
     expect(body.acceptOutcome).toBe('accepted');
+  });
+
+  it('answers 404 for a Space invite with EnableSpaces off, without charging or accepting', async () => {
+    resolveAddressedInvite.mockResolvedValueOnce({ id: 'inv1', type: 'Space' });
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
+    Object.assign(req, { user: { id: 'u1', email: 'me@x.com' }, ability: {} });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 404,
+      message: 'Invite not found',
+    });
+    expect(reserveInviteAccept).not.toHaveBeenCalled();
+    expect(acceptInvite).not.toHaveBeenCalled();
   });
 
   it('reports an existing member accepting a named org invite as already-member', async () => {

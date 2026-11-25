@@ -190,4 +190,16 @@ describe('POST /api/admin/slack-app/create', () => {
     const serialized = JSON.stringify(allLoggerArgs(logger));
     for (const field of SECRET_FIELDS) expect(serialized).not.toContain(field);
   });
+
+  it('logs a rejected config token at warn and tells the admin to generate a fresh one', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      json: () => Promise.resolve({ ok: false, error: 'token_expired' }),
+    } as Response);
+
+    const { req, res, logger } = fire({ manifest, configToken: 'xoxe-config-token' });
+    await expect(handlers.post!(req, res)).rejects.toThrow('Generate a fresh app configuration token');
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('config token'), { error: 'token_expired' });
+    expect(logger.error).not.toHaveBeenCalled();
+  });
 });

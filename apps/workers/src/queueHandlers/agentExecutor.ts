@@ -74,6 +74,8 @@ import {
   isSupportedEmbeddingModel,
   libraryFlagForScope,
   readOrgModelPolicy,
+  ForbiddenError,
+  UnprocessableEntityError,
 } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import {
@@ -243,8 +245,19 @@ import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentE
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
 import { buildAgentAudioToolJobs, getAgentAudioToolJobsDeps } from './agentExecutor.audioToolConfig';
 import { buildAgentImageToolConfig, getAgentImageToolConfigDeps } from './agentExecutor.imageToolConfig';
+import {
+  buildAgentProductionToolConfig,
+  getAgentProductionToolConfigDeps,
+  productionToolsOpen,
+} from './agentExecutor.productionToolConfig';
 import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
-import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
+import {
+  directedFinalCheck,
+  loadDirectorBriefing,
+  withDirectedSessionTools,
+  withDirectedSystemContext,
+} from './agentExecutor.directedSession';
+import { resolveImageJobFiles } from '@bike4mind/server-utils/generations/resolveImageJobFiles';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import { resolveMediaRoot } from './agentExecutor.mediaRoot';
 import {
@@ -280,6 +293,7 @@ import {
   resolveShadowRouting,
 } from '@bike4mind/services/llm/shadowTier';
 import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
+import { PRODUCTION_TOOL_NAMES } from '@bike4mind/services/llm/tools';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -304,7 +318,7 @@ import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIteratio
 import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
-import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
+import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import { loadAgentMcpTools, withAutoApprovedCustomTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
@@ -635,6 +649,7 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
   let executionId: string;
   let connectionId: string;
   let isNewExecution: boolean;
+  let resumedByUser = false;
   let startPayload: StartExecutionPayload | undefined;
 
   if (isSqsEvent) {
@@ -717,9 +732,10 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
     executionId = continuation.executionId;
     connectionId = continuation.connectionId;
     isNewExecution = false;
+    resumedByUser = continuation.resumedBy === 'user';
   }
 
-  await processExecution(executionId, connectionId, isNewExecution, startPayload, context, logger);
+  await processExecution(executionId, connectionId, isNewExecution, startPayload, context, logger, 0, resumedByUser);
 };
 
 // ---------------------------------------------------------------------------
@@ -737,7 +753,12 @@ async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMc
   const enableMCPServer = (await adminSettingsRepository.getSettingsValue('EnableMCPServer')) ?? false;
   try {
     return await loadAgentMcpTools(
-      { mcpServers: mcpServerRepository, getMcpClient: getMcpClientAdapter, customMcp: customMcpToolHost, logger },
+      {
+        mcpServers: mcpServerRepository,
+        getMcpClient: getMcpClientAdapter,
+        customMcp: functionAndConnectorToolHost('agent'),
+        logger,
+      },
       { userId, enableMCPServer }
     );
   } catch (err) {
@@ -839,6 +860,20 @@ async function readPayerBalance(payer: { organizationId?: string | null; userId:
 async function readUserAccessDenial(userId: string): Promise<string | null> {
   const user = await userRepository.findById(userId);
   return user ? aiAccessDeniedMessage(user) : 'User not found';
+}
+
+/** Meters one iteration's credits against an active limit hold; the refusal message when the hold stops it. */
+async function readInterventionSpendRefusal(userId: string, credits: number): Promise<string | null> {
+  try {
+    await creditService.assertInterventionSpendAllowed(
+      { userId, credits },
+      { users: userRepository, window: cacheRepository }
+    );
+    return null;
+  } catch (error) {
+    if (error instanceof ForbiddenError || error instanceof UnprocessableEntityError) return error.message;
+    throw error;
+  }
 }
 
 const spendFreezeReadDeps: SpendFreezeDenialDeps = {
@@ -1029,7 +1064,8 @@ async function processExecution(
   startPayload: StartExecutionPayload | undefined,
   context: Context,
   logger: Logger,
-  checkpointDepth: number = 0
+  checkpointDepth: number = 0,
+  resumedByUser = false
 ): Promise<void> {
   logger.updateMetadata({ executionId });
   // Every terminal frame of a top-level run also publishes its push, and progress frames feed its live
@@ -1048,7 +1084,8 @@ async function processExecution(
       startPayload,
       context,
       logger,
-      checkpointDepth
+      checkpointDepth,
+      resumedByUser
     );
   } finally {
     // An invocation can exit without a terminal frame (checkpoint self-dispatch); its last throttled
@@ -1065,7 +1102,8 @@ async function runExecution(
   startPayload: StartExecutionPayload | undefined,
   context: Context,
   logger: Logger,
-  checkpointDepth: number
+  checkpointDepth: number,
+  resumedByUser: boolean
 ): Promise<void> {
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
@@ -1219,6 +1257,9 @@ async function runExecution(
           return;
         }
         await sendWs('resumed', { executionId, reason: 'subagent_handoff', subagentHandoffCount });
+      } else if (resumedByUser) {
+        // Each approval or gate Proceed is a click, not a loop; timeouts after it still count below.
+        await sendWs('resumed', { executionId, reason: 'user_resume' });
       } else {
         const invocationCount = await agentExecutionRepository.incrementLambdaInvocationCount(executionId);
         if (invocationCount > MAX_LAMBDA_HANDOFFS) {
@@ -2390,15 +2431,21 @@ async function runExecution(
     // default `enabledTools` when the payload doesn't pin them - that's how
     // the agentless path (Agent-mode toggle / `@agent` literal trigger) ends
     // up with a non-empty toolbelt instead of mission-tools only.
-    const profileEnabledTools = resolveInvocationEnabledTools({
-      isNewExecution,
-      persistedEnabledTools: execution.resolvedEnabledTools,
-      persistedProfileDeniedTools: execution.profileDeniedTools,
-      payloadEnabledTools: startPayload?.enabledTools,
-      payloadIsAmbient: startPayload?.enabledToolsAreAmbient,
-      profile: orchestrationProfile,
-      hasApprover: hasApprover(execution.connectionId),
-    });
+    //
+    // A directed session (Studio Direct) gets the director tools on every turn, whatever the send picked.
+    const directedSession = { productionCompositionId: session.productionCompositionId, apiKeyId: execution.apiKeyId };
+    const profileEnabledTools = withDirectedSessionTools(
+      resolveInvocationEnabledTools({
+        isNewExecution,
+        persistedEnabledTools: execution.resolvedEnabledTools,
+        persistedProfileDeniedTools: execution.profileDeniedTools,
+        payloadEnabledTools: startPayload?.enabledTools,
+        payloadIsAmbient: startPayload?.enabledToolsAreAmbient,
+        profile: orchestrationProfile,
+        hasApprover: hasApprover(execution.connectionId),
+      }),
+      directedSession
+    );
     if (isNewExecution) {
       await agentExecutionRepository.persistResolvedEnabledTools(executionId, profileEnabledTools);
     }
@@ -2418,53 +2465,89 @@ async function runExecution(
       executionEnableLattice: execution.enableLattice,
     });
 
+    // The production tools drive the same capped image, video and music jobs, so they need those configs even
+    // when the toolbelt does not name the plain media tools (the media tools are offered only when named).
+    const productionDeps = getAgentProductionToolConfigDeps(logger);
+    const productionToolsEnabled = await productionToolsOpen(
+      {
+        user: user as IUserDocument,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: PRODUCTION_TOOL_NAMES.some(name => profileEnabledTools.includes(name)),
+      },
+      productionDeps
+    );
+    const imageJobConfig = await buildAgentImageToolConfig(
+      {
+        userId: execution.userId,
+        organizationId: execution.organizationId,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        selection: execution.imageConfig,
+        toolEnabled:
+          productionToolsEnabled ||
+          profileEnabledTools.includes('image_generation') ||
+          profileEnabledTools.includes('edit_image'),
+      },
+      getAgentImageToolConfigDeps(logger)
+    );
+    const videoConfig = await buildAgentVideoToolConfig(
+      {
+        userId: execution.userId,
+        organizationId: execution.organizationId,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: productionToolsEnabled || profileEnabledTools.includes('video_generation'),
+      },
+      getAgentVideoToolConfigDeps(logger)
+    );
+    const musicConfig = await buildAgentMusicToolConfig(
+      {
+        userId: execution.userId,
+        organizationId: execution.organizationId,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: productionToolsEnabled || profileEnabledTools.includes('music_generation'),
+      },
+      getAgentMusicToolConfigDeps(logger)
+    );
+    const audioJobs = await buildAgentAudioToolJobs(
+      {
+        userId: execution.userId,
+        organizationId: execution.organizationId,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: productionToolsEnabled || profileEnabledTools.includes('audio_generation'),
+      },
+      getAgentAudioToolJobsDeps(logger)
+    );
+    const productionConfig = await buildAgentProductionToolConfig(
+      {
+        user: user as IUserDocument,
+        apiKeyId: execution.apiKeyId,
+        questId: runQuestId,
+        toolEnabled: productionToolsEnabled,
+        image: imageJobConfig,
+        video: videoConfig,
+        music: musicConfig,
+        imageSelection: execution.imageConfig,
+        audioSettings: execution.audioConfig,
+        audioJobs,
+      },
+      productionDeps
+    );
+
     const subagentToolConfig = buildSubagentToolConfig({
       model: agentModel,
       // An OpenAI key swaps the analysis model; restricted users keep their own.
       apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
-      audioJobs: await buildAgentAudioToolJobs(
-        {
-          userId: execution.userId,
-          organizationId: execution.organizationId,
-          apiKeyId: execution.apiKeyId,
-          questId: runQuestId,
-          toolEnabled: profileEnabledTools.includes('audio_generation'),
-        },
-        getAgentAudioToolJobsDeps(logger)
-      ),
-      imageJobConfig: await buildAgentImageToolConfig(
-        {
-          userId: execution.userId,
-          organizationId: execution.organizationId,
-          apiKeyId: execution.apiKeyId,
-          questId: runQuestId,
-          selection: execution.imageConfig,
-          toolEnabled: profileEnabledTools.includes('image_generation') || profileEnabledTools.includes('edit_image'),
-        },
-        getAgentImageToolConfigDeps(logger)
-      ),
-      videoConfig: await buildAgentVideoToolConfig(
-        {
-          userId: execution.userId,
-          organizationId: execution.organizationId,
-          apiKeyId: execution.apiKeyId,
-          questId: runQuestId,
-          toolEnabled: profileEnabledTools.includes('video_generation'),
-        },
-        getAgentVideoToolConfigDeps(logger)
-      ),
-      musicConfig: await buildAgentMusicToolConfig(
-        {
-          userId: execution.userId,
-          organizationId: execution.organizationId,
-          apiKeyId: execution.apiKeyId,
-          questId: runQuestId,
-          toolEnabled: profileEnabledTools.includes('music_generation'),
-        },
-        getAgentMusicToolConfigDeps(logger)
-      ),
+      audioJobs,
+      imageJobConfig,
+      videoConfig,
+      musicConfig,
+      productionConfig,
       imageUrlSigningSecret: signingKey('search-image-url'),
     });
 
@@ -3301,8 +3384,8 @@ async function runExecution(
             lastInputTokens,
             readBalance: () =>
               readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id }),
-            checkSpendCap: requiredCredits =>
-              creditService.checkNewAccountSpendCap(
+            checkSpendCap: async requiredCredits =>
+              (await creditService.checkNewAccountSpendCap(
                 {
                   user: user as IUserDocument,
                   requestedCredits: requiredCredits,
@@ -3310,7 +3393,7 @@ async function runExecution(
                   logger,
                 },
                 newAccountSpendCapAdaptersWithAlert
-              ),
+              )) ?? readInterventionSpendRefusal((user as IUserDocument).id, requiredCredits),
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();
               return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
@@ -3475,7 +3558,14 @@ async function runExecution(
           });
         }
       }
-      const systemContext = withRecentImagesNote(startPayload?.systemContext, recentImagesNote);
+      const systemContext = withRecentImagesNote(
+        withDirectedSystemContext(startPayload?.systemContext, {
+          ...directedSession,
+          productionToolsReady: productionConfig !== null,
+          briefing: await loadDirectorBriefing(directedSession, productionConfig?.compositions, logger),
+        }),
+        recentImagesNote
+      );
 
       // Fold extracted content in last, so it sits after every preamble. Stays a plain string
       // unless an image was inlined - only then does the message become a MessageContent array,
@@ -3516,6 +3606,10 @@ async function runExecution(
               // gated call instead of running it, so nothing is spent on a call the user has
               // not approved yet.
               toolGate,
+              drainFeedback: directedFinalCheck(
+                { ...directedSession, productionToolsReady: productionConfig !== null },
+                iterationIndex
+              ),
               signal,
             }),
         },

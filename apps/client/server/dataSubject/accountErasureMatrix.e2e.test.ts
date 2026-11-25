@@ -2,20 +2,18 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { ADMIN_ERASURE_COMPLETED_ACTION } from '@bike4mind/common';
 import { adminAuditLogRepository, mongoose } from '@bike4mind/database';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-// Registered outside the `@bike4mind/database` barrel, so they register only when imported.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
+import { DELETED_USER_ID, DELETED_USER_NAME } from '@bike4mind/server-utils/dataSubject/placeholder';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { setPath, valuesAt } from './documentPaths';
-import { erasureRegistry } from './erasureRegistry';
-import { DATA_HOLDER_REGISTRY } from './registry';
-import { SubjectErasurePlan } from './subjectErasurePlan';
-import type { UserReference } from './types';
+import { setPath, valuesAt } from '@bike4mind/server-utils/dataSubject/documentPaths';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
+import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry/index';
+import { SubjectErasurePlan } from '@bike4mind/server-utils/dataSubject/subjectErasurePlan';
+import type { UserReference } from '@bike4mind/server-utils/dataSubject/types';
 
 type Outcome = 'deleted' | 'anonymized' | 'retained';
 
@@ -589,6 +587,59 @@ describe.each([
       SUBJECT_STRIPE_CUSTOMER,
       SUBJECT_STRIPE_CUSTOMER,
     ]);
+  });
+});
+
+describe('retired audit history erasure', () => {
+  it('anonymizes raw legacy triage audit rows while preserving history and its retention index', async () => {
+    const { subject } = await seedSubject('self');
+    const db = mongoose.connection.db;
+    if (!db) throw new Error('Test database unavailable');
+    // Independent of registry enumeration: omitting the holder must not omit the regression input.
+    const collectionName = 'liveopstriageconfigauditlogs';
+    const collection = db.collection(collectionName);
+    await collection.createIndex({ timestamp: 1 }, { expireAfterSeconds: 365 * 24 * 60 * 60 });
+    const legacy = {
+      _id: new ObjectId(),
+      configId: new ObjectId(),
+      configName: 'Historical triage config',
+      action: 'update',
+      userId: subject.userId,
+      userName: 'Legacy subject',
+      changes: { enabled: { old: true, new: false } },
+      timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    };
+    const other = {
+      ...legacy,
+      _id: new ObjectId(),
+      configId: new ObjectId(),
+      userId: String(new ObjectId()),
+      userName: 'Other admin',
+    };
+    await collection.insertMany([legacy, other]);
+
+    expect(await completeAccountDeletion(subject.userId, { logger, erasureRegistry })).toMatchObject({ deleted: true });
+
+    const anonymized = { ...legacy, userId: DELETED_USER_ID, userName: DELETED_USER_NAME };
+    expect(await collection.findOne({ _id: legacy._id })).toEqual(anonymized);
+    expect(await collection.findOne({ _id: other._id })).toEqual(other);
+    expect(await collection.countDocuments({ userId: subject.userId })).toBe(0);
+    expect(await collection.countDocuments({ userName: legacy.userName })).toBe(0);
+    const model = mongoose.models.LiveopsTriageConfigAuditLog;
+    expect(model?.collection.collectionName).toBe(collectionName);
+    expect(model?.schema.indexes()).toContainEqual([
+      { timestamp: 1 },
+      expect.objectContaining({ expireAfterSeconds: 365 * 24 * 60 * 60 }),
+    ]);
+    expect(await collection.indexes()).toContainEqual(
+      expect.objectContaining({
+        key: { timestamp: 1 },
+        expireAfterSeconds: 365 * 24 * 60 * 60,
+      })
+    );
+    expect(await erasureRegistry.audit(subject)).toEqual(EMPTY_AUDIT);
+    await completeAccountDeletion(subject.userId, { logger, erasureRegistry });
+    expect(await collection.findOne({ _id: legacy._id })).toEqual(anonymized);
   });
 });
 

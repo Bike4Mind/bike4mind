@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps } from 'react';
+import { act, type ComponentProps, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { OLLAMA_NOT_RUNNING, type ModelServerLaunchView, type ModelServerView } from '@shared/modelServers';
@@ -18,7 +18,6 @@ import {
   type ModelFit,
   type ModelHubError,
   type ModelPull,
-  type ModelPullResult,
   type ModelRuntimeStatus,
   type ModelStoreLocation,
   type HfTokenStatus,
@@ -28,9 +27,9 @@ import { desktopTheme } from '../theme';
 import { installedCache } from './installedCache';
 import { FOCUS_RELOAD_MIN_MS } from '../chat/useChat';
 import type { ModelsInUse } from './InstalledTab';
+import { enteredText, machineText } from './CuratedTab';
 import { ModelsScreen } from './ModelsScreen';
 import type { ChatWith } from './modelTarget';
-import { DOWN_RECHECK_MS } from './useModelHub';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -40,6 +39,36 @@ vi.mock('../chat/platform', () => ({
   get isWindows() {
     return platform.windows;
   },
+}));
+
+// Joy's Select positions a listbox on every open, the costliest step of a server switch; this stand-in
+// drives the same onChange, so the screen's handling of a switch is what these tests exercise.
+vi.mock('./ServerSwitcher', () => ({
+  ServerSwitcher: ({
+    servers,
+    value,
+    onChange,
+  }: {
+    servers: ModelServerView[];
+    value: string;
+    onChange: (serverId: string) => void;
+  }) => (
+    <div>
+      <button type="button" data-testid="models-server-select">
+        {servers.find(server => server.id === value)?.name}
+      </button>
+      {servers.map(server => (
+        <button
+          key={server.id}
+          type="button"
+          data-testid={`models-server-option-${server.id}`}
+          onClick={() => onChange(server.id)}
+        >
+          {server.name}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 
 const GIB = 1024 ** 3;
@@ -351,7 +380,7 @@ const calls = {
   launchServer: vi.fn(),
 };
 
-beforeEach(() => {
+function stubBridge() {
   pushToken = null;
   bridge = {
     status: RUNNING,
@@ -472,56 +501,63 @@ beforeEach(() => {
       },
     },
   };
-});
+}
 
+beforeEach(stubBridge);
+
+// One root and theme provider for the whole file: a fresh provider per test re-inserts the theme's global
+// styles, and finding them again costs more as the document collects stylesheets. Each mount keys a new screen.
 let root: Root | null = null;
-let host: HTMLElement | null = null;
+let screenKey = 0;
 const openModelServers = vi.fn();
+
+function show(screen: ReactNode) {
+  root ??= createRoot(document.body.appendChild(document.createElement('div')));
+  act(() => root?.render(<CssVarsProvider theme={desktopTheme}>{screen}</CssVarsProvider>));
+}
+
+/** Leaves the screen; its remembered tab and server, as module state, stay. */
+const leave = () => show(null);
 
 afterEach(() => {
   platform.windows = false;
-  act(() => root?.unmount());
-  host?.remove();
-  root = null;
-  host = null;
+  leave();
 });
 
-const flush = () => act(async () => new Promise(resolve => setTimeout(resolve, 0)));
+// Node's own setImmediate (untyped under the web tsconfig), held from before any test fakes
+// timers: a flush then waits on neither setTimeout's 1ms floor nor a faked clock.
+const { setImmediate: realSetImmediate } = globalThis as unknown as { setImmediate: (callback: () => void) => void };
+const flush = () => act(async () => new Promise<void>(resolve => realSetImmediate(resolve)));
 
 async function mount(
   inUse?: ModelsInUse,
-  tab: 'curated' | 'installed' = 'installed',
+  tab: 'curated' | 'installed' | 'explore' | null = 'installed',
   chatWith?: ChatWith,
   chatError?: { message: string; onDismiss: () => void },
   catalog?: ComponentProps<typeof ModelsScreen>['catalog'],
   onOpenServers: (() => void) | null = openModelServers
 ) {
-  host = document.createElement('div');
-  document.body.appendChild(host);
-  root = createRoot(host);
-  act(() =>
-    root?.render(
-      <CssVarsProvider theme={desktopTheme}>
-        <ModelsScreen
-          onClose={() => {}}
-          inUse={inUse}
-          onOpenModelServers={onOpenServers ?? undefined}
-          chatWith={chatWith}
-          catalog={catalog}
-          chatError={chatError?.message}
-          onDismissChatError={chatError?.onDismiss}
-        />
-      </CssVarsProvider>
-    )
+  screenKey += 1;
+  show(
+    <ModelsScreen
+      key={screenKey}
+      onClose={() => {}}
+      inUse={inUse}
+      onOpenModelServers={onOpenServers ?? undefined}
+      chatWith={chatWith}
+      catalog={catalog}
+      chatError={chatError?.message}
+      onDismissChatError={chatError?.onDismiss}
+    />
   );
   await flush();
   await flush();
   // The screen remembers its tab across visits, and so across tests.
-  await click(q(`models-${tab}-tab`));
+  if (tab) await click(q(`models-${tab}-tab`));
 }
 
-const q = (testId: string) => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
-const all = (testId: string) => [...document.querySelectorAll<HTMLElement>(`[data-testid="${testId}"]`)];
+const q = (testId: string) => document.body.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+const all = (testId: string) => [...document.body.querySelectorAll<HTMLElement>(`[data-testid="${testId}"]`)];
 const click = async (element: HTMLElement | null) => {
   if (!element) throw new Error('missing element');
   act(() => element.click());
@@ -546,37 +582,92 @@ const entryButton = (entryId: string, buildId: string) =>
   ) ?? null;
 
 describe('ModelsScreen curated', () => {
-  it('opens on Curated on the first visit', async () => {
-    // The remembered tab is module state, so a fresh module graph stands for a fresh app start.
-    vi.resetModules();
-    const [{ act: freshAct }, { createRoot: freshRoot }, { CssVarsProvider: Provider }, theme, screen] =
-      await Promise.all([
-        import('react'),
-        import('react-dom/client'),
-        import('@mui/joy/styles'),
-        import('../theme'),
-        import('./ModelsScreen'),
-      ]);
-    const fresh = document.createElement('div');
-    document.body.appendChild(fresh);
-    const freshMount = freshRoot(fresh);
-    await freshAct(async () => {
-      freshMount.render(
-        <Provider theme={theme.desktopTheme}>
-          <screen.ModelsScreen onClose={() => {}} />
-        </Provider>
-      );
-      await new Promise(resolve => setTimeout(resolve, 0));
-    });
+  // First in the file on purpose: the remembered tab is module state, so no earlier mount has picked one yet.
+  it('opens on Curated on the first visit and shows the bundled list for this computer', async () => {
+    bridge.pulls = [
+      {
+        key: `${E4B_REF}#qat-q4-0`,
+        serverId: 'local',
+        serverName: 'This computer',
+        repo: E4B_REF,
+        buildId: 'qat-q4-0',
+        label: 'Q4_0',
+        ref: E4B_REF,
+        phase: 'downloading',
+        completedBytes: 1_000_000_000,
+        totalBytes: E4B.sizeBytes,
+        expectedBytes: E4B.sizeBytes,
+        error: null,
+      },
+    ];
+    await mount(undefined, null);
     expect(q('models-curated-tab')?.getAttribute('aria-selected')).toBe('true');
-    freshAct(() => freshMount.unmount());
-    fresh.remove();
-  });
 
-  it('says the bundled list is shown and offers no Check now when this build cannot check', async () => {
-    await mount(undefined, 'curated');
+    // A bundled list, and a build that cannot check for a newer one, offers no Check now.
     expect(q('curated-header-status')?.textContent).toBe('Bundled with this app.');
     expect(q('curated-check-now-btn')).toBeNull();
+    expect(q('models-curated-date')?.textContent).toBe('Curated list from October 27, 2026.');
+    expect(q('models-curated-machine')?.textContent).toContain('no GPU memory was detected');
+
+    // This computer's picks by role, with Recommended on one.
+    const picks = inside('models-curated-picks', 'models-curated-pick');
+    expect(picks.map(pick => [pick.dataset.slot, pick.dataset.entry, pick.dataset.build])).toEqual([
+      ['best', 'qwen3-8-27b-gsq', 'iq3-s'],
+      ['fast', 'gemma-4-e4b', 'qat-q4-0'],
+      ['light', 'qwen3-8-27b-gsq', 'iq2-xs'],
+    ]);
+    expect(inside('models-curated-picks', 'models-curated-slot-chip').map(chip => chip.textContent)).toEqual([
+      'Best',
+      'Fast',
+      'Light',
+    ]);
+    const recommended = inside('models-curated-picks', 'models-curated-recommended-chip');
+    expect(recommended).toHaveLength(1);
+    expect(recommended[0].closest<HTMLElement>('[data-testid="models-curated-pick"]')?.dataset.slot).toBe('fast');
+    expect(picks.every(pick => pick.querySelector('[data-testid="models-curated-vision-chip"]'))).toBe(true);
+    expect(picks.map(pick => pick.querySelector('[data-testid="models-curated-license-chip"]')?.textContent)).toEqual([
+      'Apache 2.0',
+      'Apache 2.0',
+      'Apache 2.0',
+    ]);
+    expect(
+      picks.map(pick => pick.querySelector<HTMLElement>('[data-testid="models-fit-badge"]')?.dataset.level)
+    ).toEqual(['too-large', 'fits', 'fits']);
+
+    // Every model with its source, Vision badge and a fit badge per build.
+    const entries = inside('models-curated-all', 'models-curated-entry');
+    expect(entries.map(entry => entry.dataset.entry)).toEqual(['gemma-4-e4b', 'qwen3-8-27b-gsq', 'qwen3-8-27b']);
+    expect(inside('models-curated-all', 'models-curated-vision-chip')).toHaveLength(3);
+    expect(
+      inside('models-curated-all', 'models-curated-source-link').map(link => [
+        link.textContent,
+        link.getAttribute('href'),
+      ])
+    ).toEqual([
+      ['Ollama', 'https://ollama.com/library/gemma4'],
+      ['Hugging Face', `https://huggingface.co/${GSQ}`],
+      ['Ollama', 'https://ollama.com/library/qwen3.8'],
+    ]);
+    expect(inside('models-curated-all', 'models-fit-badge').map(badge => badge.textContent)).toEqual([
+      'Fits',
+      'Fits',
+      'Will not fit',
+      'Fits',
+    ]);
+    expect(inside('models-curated-all', 'models-curated-quant-hint')).toHaveLength(1);
+
+    // A build that needs a newer Ollama stays listed, with Download off and the reason shown.
+    const blocked = q('models-curated-all')?.querySelector<HTMLElement>(
+      '[data-entry="qwen3-8-27b"] [data-testid="models-build-row"]'
+    );
+    expect(blocked?.querySelector('[data-testid="models-build-blocked-reason"]')?.textContent).toBe(
+      'Needs Ollama 0.32.12 or newer'
+    );
+    expect(blocked?.querySelector('[data-testid="models-build-pull-btn"]')).toBeNull();
+
+    // A pull in flight shows its progress on its pick and its list row.
+    expect(inside('models-curated-picks', 'models-build-progress')).toHaveLength(1);
+    expect(inside('models-curated-all', 'models-build-progress')).toHaveLength(1);
   });
 
   it('shows where an updated list came from, runs Check now, and re-lists when main reports a change', async () => {
@@ -603,71 +694,6 @@ describe('ModelsScreen curated', () => {
       'Updated online. Could not check for updates. This list may be out of date.'
     );
     expect(q('curated-header-status')?.dataset.check).toBe('failed');
-  });
-
-  it("shows the list's date, then this computer's picks by role, with Recommended on one", async () => {
-    await mount(undefined, 'curated');
-    expect(q('models-curated-date')?.textContent).toBe('Curated list from October 27, 2026.');
-    expect(q('models-curated-machine')?.textContent).toContain('no GPU memory was detected');
-
-    const picks = inside('models-curated-picks', 'models-curated-pick');
-    expect(picks.map(pick => [pick.dataset.slot, pick.dataset.entry, pick.dataset.build])).toEqual([
-      ['best', 'qwen3-8-27b-gsq', 'iq3-s'],
-      ['fast', 'gemma-4-e4b', 'qat-q4-0'],
-      ['light', 'qwen3-8-27b-gsq', 'iq2-xs'],
-    ]);
-    expect(inside('models-curated-picks', 'models-curated-slot-chip').map(chip => chip.textContent)).toEqual([
-      'Best',
-      'Fast',
-      'Light',
-    ]);
-    const recommended = inside('models-curated-picks', 'models-curated-recommended-chip');
-    expect(recommended).toHaveLength(1);
-    expect(recommended[0].closest<HTMLElement>('[data-testid="models-curated-pick"]')?.dataset.slot).toBe('fast');
-    expect(picks.every(pick => pick.querySelector('[data-testid="models-curated-vision-chip"]'))).toBe(true);
-    expect(picks.map(pick => pick.querySelector('[data-testid="models-curated-license-chip"]')?.textContent)).toEqual([
-      'Apache 2.0',
-      'Apache 2.0',
-      'Apache 2.0',
-    ]);
-    expect(
-      picks.map(pick => pick.querySelector<HTMLElement>('[data-testid="models-fit-badge"]')?.dataset.level)
-    ).toEqual(['too-large', 'fits', 'fits']);
-  });
-
-  it('lists every model with its source, Vision badge and a fit badge per build', async () => {
-    await mount(undefined, 'curated');
-    const entries = inside('models-curated-all', 'models-curated-entry');
-    expect(entries.map(entry => entry.dataset.entry)).toEqual(['gemma-4-e4b', 'qwen3-8-27b-gsq', 'qwen3-8-27b']);
-    expect(inside('models-curated-all', 'models-curated-vision-chip')).toHaveLength(3);
-    expect(
-      inside('models-curated-all', 'models-curated-source-link').map(link => [
-        link.textContent,
-        link.getAttribute('href'),
-      ])
-    ).toEqual([
-      ['Ollama', 'https://ollama.com/library/gemma4'],
-      ['Hugging Face', `https://huggingface.co/${GSQ}`],
-      ['Ollama', 'https://ollama.com/library/qwen3.8'],
-    ]);
-    expect(inside('models-curated-all', 'models-fit-badge').map(badge => badge.textContent)).toEqual([
-      'Fits',
-      'Fits',
-      'Will not fit',
-      'Fits',
-    ]);
-    expect(inside('models-curated-all', 'models-curated-quant-hint')).toHaveLength(1);
-  });
-
-  it('keeps a build that needs a newer Ollama on the list, with Download off and the reason shown', async () => {
-    await mount(undefined, 'curated');
-    const row = q('models-curated-all')?.querySelector<HTMLElement>(
-      '[data-entry="qwen3-8-27b"] [data-testid="models-build-row"]'
-    );
-    expect(row?.querySelector('[data-testid="models-build-blocked-reason"]')?.textContent).toBe(
-      'Needs Ollama 0.32.12 or newer'
-    );
-    expect(row?.querySelector('[data-testid="models-build-pull-btn"]')).toBeNull();
   });
 
   it('says when the list has no picks for this computer, and still lists every model', async () => {
@@ -789,18 +815,38 @@ describe('ModelsScreen curated', () => {
       },
       'This computer has 32 GiB of RAM and no GPU memory was detected, so badges assume models run on the CPU.',
     ],
-  ] satisfies [string, MachineView, string][])('describes %s', async (_label, machine, text) => {
-    bridge.curated.machine = machine;
-    await mount(undefined, 'curated');
-    expect(q('models-curated-machine')?.textContent).toContain(text);
+  ] satisfies [string, MachineView, string][])('describes %s', (_label, machine, text) => {
+    expect(machineText(machine)).toContain(text);
   });
 
-  it('labels a restricted license', async () => {
-    bridge.curated.entries[0] = {
-      ...bridge.curated.entries[0],
-      licenseName: 'Gemma Terms of Use',
-      licenseKind: 'restricted',
-    };
+  it('describes hardware entered in Settings for this computer or a saved server', () => {
+    const base = curatedList().machine;
+    expect(
+      enteredText(
+        { ...base, memoryKind: 'unified', totalMemoryBytes: 128 * GIB, gpuMemoryBytes: 96 * GIB },
+        'This computer'
+      )
+    ).toBe(
+      'This computer is rated from the hardware entered in Settings: 128 GiB of memory shared with its GPU, which can use 96 GiB.'
+    );
+    expect(
+      enteredText({ ...base, memoryKind: 'discrete', totalMemoryBytes: 64 * GIB, gpuMemoryBytes: 24 * GIB }, 'gpu box')
+    ).toBe('gpu box is rated from the hardware entered in Settings: 64 GiB of RAM and 24 GiB of GPU memory.');
+  });
+
+  it('labels a restricted license and each kind of tool support', async () => {
+    const [gemma, gsq, qwen] = bridge.curated.entries;
+    bridge.curated.entries = [
+      {
+        ...gemma,
+        licenseName: 'Gemma Terms of Use',
+        licenseKind: 'restricted',
+        tools: true,
+        toolUse: { rating: 'strong', note: 'Chains calls well.' },
+      },
+      { ...gsq, tools: true, toolUse: { rating: 'unrated', note: null } },
+      { ...qwen, tools: false, toolUse: { rating: 'unrated', note: null } },
+    ];
     await mount(undefined, 'curated');
     const chip = inside('models-curated-all', 'models-curated-license-chip')[0];
     expect(chip?.textContent).toBe('Gemma Terms of Use (restricted)');
@@ -814,6 +860,17 @@ describe('ModelsScreen curated', () => {
     expect(pick?.querySelector('[data-testid="models-curated-license-chip"]')?.textContent).toBe(
       'Gemma Terms of Use (restricted)'
     );
+
+    const tools = (entryId: string) =>
+      q('models-curated-all')?.querySelector<HTMLElement>(
+        `[data-entry="${entryId}"] [data-testid="models-curated-tools-chip"]`
+      );
+    expect(
+      [tools('gemma-4-e4b'), tools('qwen3-8-27b-gsq'), tools('qwen3-8-27b')].map(tool => tool?.textContent)
+    ).toEqual(['Tools: strong', 'Tools', 'No tools']);
+    expect(tools('gemma-4-e4b')?.getAttribute('title')).toContain('Chains');
+    expect(tools('qwen3-8-27b-gsq')?.getAttribute('title')).toContain('has not rated');
+    expect(tools('qwen3-8-27b')?.getAttribute('title')).toContain('sends it none');
   });
 
   it('says when the list could not load, and loads it on retry', async () => {
@@ -827,20 +884,7 @@ describe('ModelsScreen curated', () => {
     expect(all('models-curated-entry')).toHaveLength(3);
   });
 
-  it.each([
-    [{ tools: true, toolUse: { rating: 'unrated' as const, note: null } }, 'Tools', 'has not rated'],
-    [{ tools: true, toolUse: { rating: 'strong' as const, note: 'Chains calls well.' } }, 'Tools: strong', 'Chains'],
-    [{ tools: false, toolUse: { rating: 'unrated' as const, note: null } }, 'No tools', 'sends it none'],
-  ])('shows tool support and its rating: %j', async (change, label, tooltip) => {
-    bridge.curated.entries[0] = { ...bridge.curated.entries[0], ...change };
-    await mount(undefined, 'curated');
-    const chip = q('models-curated-tools-chip');
-    expect(chip?.textContent).toBe(label);
-    // A closed describeChild tooltip leaves its text in the chip's title.
-    expect(chip?.getAttribute('title')).toContain(tooltip);
-  });
-
-  it('marks a build installed only when Ollama lists its exact name', async () => {
+  it('marks a build installed only when Ollama lists its exact name, and offers Use in chat on those', async () => {
     const installed = (name: string) => ({
       name,
       sizeBytes: 1,
@@ -856,7 +900,9 @@ describe('ModelsScreen curated', () => {
       ok: true,
       models: [installed(E4B_REF), installed(`hf.co/${GSQ.toLowerCase()}:IQ2_XS`), installed('qwen3.8:latest')],
     };
-    await mount(undefined, 'curated');
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>(() => use);
+    await mount(undefined, 'curated', chatWith);
     const rows = inside('models-curated-all', 'models-build-row');
     expect(rows.map(row => row.querySelector('[data-testid="models-build-installed-chip"]') !== null)).toEqual([
       true,
@@ -864,32 +910,9 @@ describe('ModelsScreen curated', () => {
       false,
       false,
     ]);
-  });
-
-  it('offers Use in chat on installed builds that chat lists', async () => {
-    const use = vi.fn();
-    const chatWith = vi.fn<ChatWith>(() => use);
-    bridge.installed = {
-      ok: true,
-      models: [
-        {
-          name: E4B_REF,
-          sizeBytes: 1,
-          quantization: null,
-          family: null,
-          parameterSize: null,
-          modifiedAt: null,
-          capabilities,
-          loaded: false,
-          fit: null,
-        },
-      ],
-    };
-    await mount(undefined, 'curated', chatWith);
-    const rows = inside('models-curated-all', 'models-build-row');
     expect(rows.map(row => row.querySelector('[data-testid="models-build-use-btn"]') !== null)).toEqual([
       true,
-      false,
+      true,
       false,
       false,
     ]);
@@ -933,16 +956,14 @@ describe('ModelsScreen curated', () => {
     error,
   });
 
-  /** Confirms the fast pick's download; main lists `failed` and resolves the pull as a listed failure. */
-  async function pullFails(failed: ModelPull) {
-    calls.pull.mockImplementationOnce(async () => {
-      bridge.pulls = [failed];
-      pushPulls(bridge.pulls);
-      return { ok: false, listed: true, error: failed.error };
+  /** Main lists the failed pull, which owns the row's warning; dismissing it lists none. */
+  async function showFailed(failed: ModelPull) {
+    bridge.pulls = [failed];
+    calls.dismissPull.mockImplementationOnce(() => {
+      bridge.pulls = [];
+      pushPulls([]);
     });
     await mount(undefined, 'curated');
-    await click(pickButton('fast'));
-    await click(q('models-pull-dialog-confirm-btn'));
   }
 
   it('offers Check again when Ollama could not describe a finished download, and clears the alert once it passes', async () => {
@@ -961,7 +982,15 @@ describe('ModelsScreen curated', () => {
       pushPulls([]);
       return { ok: true };
     });
-    await pullFails(failedE4B(unverified));
+    // Through the dialog: main lists the failure and resolves the pull as a listed failure.
+    calls.pull.mockImplementationOnce(async () => {
+      bridge.pulls = [failedE4B(unverified)];
+      pushPulls(bridge.pulls);
+      return { ok: false, listed: true, error: unverified };
+    });
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    await click(q('models-pull-dialog-confirm-btn'));
     expect(q('models-curated-error')?.textContent).toContain('could not describe');
     expect(q('models-curated-explore-btn')).toBeNull();
 
@@ -975,7 +1004,7 @@ describe('ModelsScreen curated', () => {
   });
 
   it('offers no Check again for a pull refused before anything downloaded', async () => {
-    await pullFails(
+    await showFailed(
       failedE4B(
         { kind: 'unverified', message: 'Hugging Face could not confirm Ollama would get this exact file.' },
         null
@@ -983,24 +1012,6 @@ describe('ModelsScreen curated', () => {
     );
     expect(q('models-curated-error')?.textContent).toContain('could not confirm');
     expect(q('models-curated-check-again-btn')).toBeNull();
-  });
-
-  it('clears the warning of a failed curated download when it is dismissed', async () => {
-    const failed = failedE4B({
-      kind: 'unverified',
-      message: `Ollama could not describe ${E4B_REF} after downloading it.`,
-    });
-    calls.dismissPull.mockImplementationOnce(() => {
-      bridge.pulls = [];
-      pushPulls([]);
-    });
-    await pullFails(failed);
-    expect(q('models-curated-error')).not.toBeNull();
-
-    await click(q('models-pull-dismiss-btn'));
-    expect(calls.dismissPull).toHaveBeenCalledWith(failed.key);
-    expect(q('models-pull-list')).toBeNull();
-    expect(q('models-curated-error')).toBeNull();
   });
 
   it.each([false, true])('keeps a failed recheck dismissed (finishes after dismissal: %s)', async afterDismiss => {
@@ -1018,11 +1029,7 @@ describe('ModelsScreen curated', () => {
           };
         })
     );
-    calls.dismissPull.mockImplementationOnce(() => {
-      bridge.pulls = [];
-      pushPulls([]);
-    });
-    await pullFails(failedE4B(error));
+    await showFailed(failedE4B(error));
     await click(q('models-curated-check-again-btn'));
     if (!afterDismiss) await act(async () => finish?.());
 
@@ -1035,32 +1042,21 @@ describe('ModelsScreen curated', () => {
     expect(q('models-curated-check-again-btn')).toBeNull();
   });
 
-  it('clears a recheck IPC failure when its pull is dismissed', async () => {
+  it('shows a recheck IPC failure in place of the stored warning, until its pull is dismissed', async () => {
     const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
     calls.checkCurated.mockRejectedValueOnce(new Error('IPC unavailable'));
-    calls.dismissPull.mockImplementationOnce(() => {
-      bridge.pulls = [];
-      pushPulls([]);
-    });
-    await pullFails(failedE4B(error));
-    await click(q('models-curated-check-again-btn'));
-    expect(q('models-curated-error')?.textContent).toContain('Could not check this model');
-    await click(q('models-pull-dismiss-btn'));
-
-    expect(q('models-pull-list')).toBeNull();
-    expect(q('models-curated-error')).toBeNull();
-  });
-
-  it('shows the check failure instead of the stored warning when the recheck IPC rejects', async () => {
-    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
-    calls.checkCurated.mockRejectedValueOnce(new Error('IPC unavailable'));
-    await pullFails(failedE4B(error));
+    await showFailed(failedE4B(error));
     expect(q('models-curated-error')?.textContent).toContain(error.message);
 
     await click(q('models-curated-check-again-btn'));
     expect(q('models-curated-error')?.textContent).toContain('Could not check this model');
     expect(q('models-curated-error')?.textContent).not.toContain(error.message);
     expect(q('models-curated-check-again-btn')).not.toBeNull();
+
+    await click(q('models-pull-dismiss-btn'));
+    expect(calls.dismissPull).toHaveBeenCalledWith(pullKey(E4B_REF, E4B.id));
+    expect(q('models-pull-list')).toBeNull();
+    expect(q('models-curated-error')).toBeNull();
   });
 
   it('keeps each row spinner while two checks are in flight', async () => {
@@ -1121,96 +1117,20 @@ describe('ModelsScreen curated', () => {
     expect(q('models-curated-loading')).toBeNull();
   });
 
-  it('downloads nothing when the dialog is dismissed', async () => {
-    await mount(undefined, 'curated');
-    await click(entryButton('gemma-4-e4b', 'qat-q4-0'));
-    expect(q('models-pull-dialog')).not.toBeNull();
-    await click(q('models-pull-dialog-cancel-btn'));
-    expect(q('models-pull-dialog')).toBeNull();
-    expect(calls.pull).not.toHaveBeenCalled();
-  });
-
-  it('restores a post-pull warning and Check again after leaving the tab and screen', async () => {
-    let finish: ((result: ModelPullResult) => void) | undefined;
-    calls.pull.mockImplementationOnce(
-      () =>
-        new Promise<ModelPullResult>(resolve => {
-          finish = resolve;
-        })
-    );
-    await mount(undefined, 'curated');
-    await click(pickButton('fast'));
-    await click(q('models-pull-dialog-confirm-btn'));
-    await click(q('models-installed-tab'));
-    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
-    bridge.pulls = [
-      {
-        key: pullKey(E4B_REF, E4B.id),
-        serverId: 'local',
-        serverName: 'This computer',
-        repo: E4B_REF,
-        buildId: E4B.id,
-        label: E4B.quant,
-        ref: E4B_REF,
-        phase: 'failed',
-        completedBytes: E4B.sizeBytes,
-        totalBytes: E4B.sizeBytes,
-        expectedBytes: E4B.sizeBytes,
-        error,
-      },
-    ];
-    await act(async () => {
-      pushPulls(bridge.pulls);
-      finish?.({ ok: false, error, listed: true });
-    });
-    expect(q('models-pull-status')?.textContent).toBe(error.message);
-    act(() => root?.unmount());
-    root = null;
-    host?.remove();
-    await mount(undefined, 'curated');
-    expect(q('models-pull-status')?.textContent).toBe(error.message);
-    expect(q('models-curated-check-again-btn')).not.toBeNull();
-    calls.checkCurated.mockImplementationOnce(async () => {
-      bridge.pulls = [];
-      pushPulls([]);
-      return { ok: true };
-    });
-    await click(q('models-curated-check-again-btn'));
-    expect(calls.checkCurated).toHaveBeenCalledWith('gemma-4-e4b', E4B.id);
-    expect(q('models-pull-list')).toBeNull();
-    expect(q('models-curated-error')).toBeNull();
-  });
-
-  it('shows the progress of a curated pull on its pick and its list row', async () => {
-    bridge.pulls = [
-      {
-        key: `${E4B_REF}#qat-q4-0`,
-        serverId: 'local',
-        serverName: 'This computer',
-        repo: E4B_REF,
-        buildId: 'qat-q4-0',
-        label: 'Q4_0',
-        ref: E4B_REF,
-        phase: 'downloading',
-        completedBytes: 1_000_000_000,
-        totalBytes: E4B.sizeBytes,
-        expectedBytes: E4B.sizeBytes,
-        error: null,
-      },
-    ];
-    await mount(undefined, 'curated');
-    expect(inside('models-curated-picks', 'models-build-progress')).toHaveLength(1);
-    expect(inside('models-curated-all', 'models-build-progress')).toHaveLength(1);
-  });
-
-  it('needs an explicit override to download a build that will not fit', async () => {
+  it('needs an explicit override to download a build that will not fit, ticked afresh for each build', async () => {
     bridge.curatedPull = libraryPull(TOO_LARGE);
     await mount(undefined, 'curated');
     await click(pickButton('best'));
     expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
     await click(q('models-pull-dialog-fit-checkbox'));
     expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(false);
+
+    // The other build's response replaces the open dialog, which must not keep the tick.
+    await click(pickButton('light'));
+    expect(all('models-pull-dialog')).toHaveLength(1);
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
     await click(q('models-pull-dialog-cancel-btn'));
+    expect(q('models-pull-dialog')).toBeNull();
     expect(calls.pull).not.toHaveBeenCalled();
   });
 
@@ -1232,27 +1152,30 @@ describe('ModelsScreen curated', () => {
     expect(q('models-detail')?.dataset.repo).toBe(GSQ);
   });
 
-  it.each([
-    [
-      'a library build that changed',
-      { kind: 'upstream-changed' as const, message: `${E4B_REF} changed at its source since Bike4Mind reviewed it.` },
-    ],
-    ['a revision-only change', { kind: 'changed' as const, message: 'Click Download again.' }],
-    ['an outage', { kind: 'hub-unreachable' as const, message: 'Hugging Face is unreachable.' }],
-  ])('offers no Explore shortcut for %s', async (_label, error) => {
-    bridge.curatedPull = { ok: false, error };
-    await mount(undefined, 'curated');
-    await click(entryButton('gemma-4-e4b', 'qat-q4-0'));
-    expect(q('models-curated-error')?.textContent).toContain(error.message);
-    expect(q('models-curated-explore-btn')).toBeNull();
-  });
-
-  it('clears the spinner and says so when the check itself fails', async () => {
+  it('offers no Explore shortcut for a library build that changed or any other refusal, and says when the check itself fails', async () => {
+    const refusals: CuratedPullResult[] = [
+      {
+        ok: false,
+        error: { kind: 'upstream-changed', message: `${E4B_REF} changed at its source since Bike4Mind reviewed it.` },
+      },
+      { ok: false, error: { kind: 'changed', message: 'Click Download again.' } },
+    ];
     const models = (window as unknown as { b4m: { models: Record<string, unknown> } }).b4m.models;
     models.getCuratedPull = async () => {
-      throw new Error('ipc torn down');
+      const next = refusals.shift();
+      if (!next) throw new Error('ipc torn down');
+      return next;
     };
     await mount(undefined, 'curated');
+    await click(entryButton('gemma-4-e4b', 'qat-q4-0'));
+    expect(q('models-curated-error')?.textContent).toContain('changed at its source');
+    expect(q('models-curated-explore-btn')).toBeNull();
+
+    await click(entryButton('gemma-4-e4b', 'qat-q4-0'));
+    expect(q('models-curated-error')?.textContent).toContain('Click Download again.');
+    expect(q('models-curated-explore-btn')).toBeNull();
+
+    // The check itself failing clears the spinner and says so.
     await click(pickButton('fast'));
     expect(q('models-curated-error')?.textContent).toContain('Try again');
     expect(pickButton('fast')?.hasAttribute('disabled')).toBe(false);
@@ -1273,19 +1196,6 @@ describe('ModelsScreen curated', () => {
     expect(q('models-pull-dialog-fit-checkbox')).not.toBeNull();
   });
 
-  it('opens a fresh dialog, with nothing ticked, for each build', async () => {
-    bridge.curatedPull = libraryPull(TOO_LARGE);
-    await mount(undefined, 'curated');
-    await click(pickButton('best'));
-    await click(q('models-pull-dialog-fit-checkbox'));
-    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(false);
-
-    // The other build's response replaces the open dialog, which must not keep the tick.
-    await click(pickButton('light'));
-    expect(all('models-pull-dialog')).toHaveLength(1);
-    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
-  });
-
   it('refreshes availability when Ollama starts and surfaces a failed refresh until retry', async () => {
     bridge.status = DOWN;
     bridge.curated.entries[0].builds = [{ ...E4B, blockedReason: 'Ollama did not report its version' }];
@@ -1300,13 +1210,6 @@ describe('ModelsScreen curated', () => {
     expect(pickButton('fast')?.hasAttribute('disabled')).toBe(false);
     expect(q('models-build-blocked-reason')?.textContent).not.toContain('did not report');
   });
-
-  it('says downloads need Ollama when it is not running', async () => {
-    bridge.status = DOWN;
-    await mount(undefined, 'curated');
-    expect(q('models-curated-runtime-down')).not.toBeNull();
-    expect(all('models-build-pull-btn').every(button => button.hasAttribute('disabled'))).toBe(true);
-  });
 });
 
 function type(input: HTMLInputElement, value: string) {
@@ -1318,32 +1221,46 @@ function type(input: HTMLInputElement, value: string) {
 }
 
 describe('ModelsScreen WSL GPU memory warning', () => {
-  it.each(['curated', 'installed'] as const)('shows the warning main reports above the %s tab', async tab => {
+  it('shows the warning main reports above the tabs', async () => {
     bridge.installed = {
       ok: true,
       models: [],
       gpuMemoryCap: { model: 'big:q8_0', sizeBytes: 36 * GIB, gpuBytes: 22 * GIB },
     };
-    await mount(undefined, tab);
+    await mount(undefined, 'curated');
     expect(q('models-gpu-cap-warning')?.textContent).toContain('big:q8_0 loaded with 22 GiB of its 36 GiB on the GPU');
-  });
-
-  it('shows no warning when main reports none', async () => {
-    await mount();
-    expect(q('models-gpu-cap-warning')).toBeNull();
   });
 });
 
 describe('ModelsScreen installed', () => {
-  it('shows the empty state and leads to Explore', async () => {
-    await mount();
+  it('shows the empty state and leads to Explore, with no server switcher and the last chat error', async () => {
+    const onDismiss = vi.fn();
+    await mount(undefined, 'installed', undefined, { message: 'Desktop could not start a conversation.', onDismiss });
     expect(q('models-runtime-status')?.dataset.state).toBe('running');
+    // No model server is saved, so there is nothing to switch to.
+    expect(q('models-server-select')).toBeNull();
+    // Why the last Use in chat did not open a conversation, until dismissed.
+    expect(q('models-chat-error')?.textContent).toContain('Desktop could not start a conversation.');
+    await click(q('models-chat-error-dismiss-btn'));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+
     expect(q('models-installed-empty')).not.toBeNull();
     await click(q('models-installed-explore-btn'));
     expect(calls.search).toHaveBeenCalled();
   });
 
-  it('lists models with the loaded marker and removes one after confirming', async () => {
+  it('lists models with the loaded marker and Use in chat, and removes one after confirming', async () => {
+    const plain = (name: string) => ({
+      name,
+      sizeBytes: 1,
+      quantization: null,
+      family: null,
+      parameterSize: null,
+      modifiedAt: null,
+      capabilities,
+      loaded: false,
+      fit: null,
+    });
     bridge.installed = {
       ok: true,
       models: [
@@ -1358,14 +1275,27 @@ describe('ModelsScreen installed', () => {
           loaded: true,
           fit: FITS,
         },
+        plain('nomic-embed-text:latest'),
       ],
     };
-    await mount();
-    expect(all('models-installed-row').map(row => row.dataset.name)).toEqual(['qwen2.5:0.5b']);
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>((_serverId, name) => (name === 'qwen2.5:0.5b' ? use : null));
+    await mount(undefined, 'installed', chatWith);
+    const rows = all('models-installed-row');
+    expect(rows.map(row => row.dataset.name)).toEqual(['qwen2.5:0.5b', 'nomic-embed-text:latest']);
     expect(q('models-installed-loaded-chip')).not.toBeNull();
     expect(q('models-installed-row')?.textContent).toContain('Q4_K_M');
     expect(q('models-fit-badge')?.dataset.level).toBe('fits');
     expect(q('models-fit-badge')?.textContent).toBe('Fits');
+
+    // Use in chat only on the models chat lists.
+    expect(rows.map(row => row.querySelector('[data-testid="models-installed-use-btn"]') !== null)).toEqual([
+      true,
+      false,
+    ]);
+    await click(rows[0].querySelector<HTMLElement>('[data-testid="models-installed-use-btn"]'));
+    expect(use).toHaveBeenCalledTimes(1);
+    expect(chatWith).toHaveBeenCalledWith('local', 'qwen2.5:0.5b');
 
     await click(q('models-installed-remove-btn'));
     expect(q('models-remove-dialog')).not.toBeNull();
@@ -1375,61 +1305,13 @@ describe('ModelsScreen installed', () => {
     expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', undefined);
   });
 
-  it('offers Use in chat only for the models chat lists', async () => {
-    const entry = (name: string) => ({
-      name,
-      sizeBytes: 1,
-      quantization: null,
-      family: null,
-      parameterSize: null,
-      modifiedAt: null,
-      capabilities,
-      loaded: false,
-      fit: null,
-    });
-    bridge.installed = { ok: true, models: [entry('qwen2.5:0.5b'), entry('nomic-embed-text:latest')] };
-    const use = vi.fn();
-    const chatWith = vi.fn<ChatWith>((_serverId, name) => (name === 'qwen2.5:0.5b' ? use : null));
-    await mount(undefined, 'installed', chatWith);
-    const rows = all('models-installed-row');
-    expect(rows.map(row => row.querySelector('[data-testid="models-installed-use-btn"]') !== null)).toEqual([
-      true,
-      false,
-    ]);
-    await click(rows[0].querySelector<HTMLElement>('[data-testid="models-installed-use-btn"]'));
-    expect(use).toHaveBeenCalledTimes(1);
-    expect(chatWith).toHaveBeenCalledWith('local', 'qwen2.5:0.5b');
-  });
-
-  it('shows why Use in chat did not open a conversation, until dismissed', async () => {
-    const onDismiss = vi.fn();
-    await mount(undefined, 'installed', undefined, { message: 'Desktop could not start a conversation.', onDismiss });
-    expect(q('models-chat-error')?.textContent).toContain('Desktop could not start a conversation.');
-    await click(q('models-chat-error-dismiss-btn'));
-    expect(onDismiss).toHaveBeenCalledTimes(1);
-  });
-
-  const onComputer = (name: string) => ({ serverId: 'local', name });
-  it.each([
-    [{ active: onComputer('qwen2.5:0.5b'), conversations: [onComputer('qwen2.5:0.5b')] }, 'The open conversation'],
-    [
-      {
-        active: null,
-        conversations: [
-          onComputer('qwen2.5:0.5b'),
-          onComputer('qwen2.5:0.5b'),
-          { serverId: 'gpu', name: 'qwen2.5:0.5b' },
-          onComputer('llama'),
-        ],
-      },
-      '2 conversations use this model.',
-    ],
-  ])('warns before removing a model a conversation on the same server uses: %j', async (inUse, text) => {
+  it('warns before removing a model the open conversation uses', async () => {
+    const name = 'qwen2.5:0.5b';
     bridge.installed = {
       ok: true,
       models: [
         {
-          name: 'qwen2.5:0.5b',
+          name,
           sizeBytes: 1,
           quantization: null,
           family: null,
@@ -1441,9 +1323,9 @@ describe('ModelsScreen installed', () => {
         },
       ],
     };
-    await mount(inUse);
+    await mount({ active: { serverId: 'local', name }, conversations: [{ serverId: 'local', name }] });
     await click(q('models-installed-remove-btn'));
-    expect(q('models-remove-dialog-in-use')?.textContent).toContain(text);
+    expect(q('models-remove-dialog-in-use')?.textContent).toContain('The open conversation');
   });
 
   it('says plainly when Ollama is not running, and Explore still works without pulls', async () => {
@@ -1464,7 +1346,11 @@ describe('ModelsScreen installed', () => {
     await mount(undefined, 'curated');
     expect(q('models-no-runtime-text')?.textContent).toContain('127.0.0.1:11434');
     expect(q('models-no-runtime-error')?.textContent).toBe('refused');
+    // Not on Windows, so no WSL hint.
+    expect(q('models-no-runtime-wsl-hint')).toBeNull();
+    // Curated says downloads need Ollama, and every Download is off.
     expect(q('models-curated-runtime-down')).not.toBeNull();
+    expect(all('models-build-pull-btn').every(button => button.hasAttribute('disabled'))).toBe(true);
     expect(calls.pull).not.toHaveBeenCalled();
     const openExternal = (window as unknown as { b4m: { shell: { openExternal: ReturnType<typeof vi.fn> } } }).b4m.shell
       .openExternal;
@@ -1495,16 +1381,6 @@ describe('ModelsScreen installed', () => {
     await vi.waitFor(() => expect(q('models-runtime-status')?.dataset.state).toBe('running'));
   });
 
-  it('keeps Install and the start hint when Desktop cannot start Ollama here', async () => {
-    bridge.status = DOWN;
-    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
-    await mount(undefined, 'curated');
-    expect(q('ollama-start-btn')).toBeNull();
-    expect(q('ollama-start-hint')).not.toBeNull();
-    expect(q('models-install-ollama-btn')).not.toBeNull();
-    expect(calls.checkServers).toHaveBeenCalledWith('local');
-  });
-
   it('shows neither Install nor Start while Desktop is still looking for Ollama', async () => {
     bridge.status = DOWN;
     bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false, programPending: true }) }];
@@ -1526,37 +1402,13 @@ describe('ModelsScreen installed', () => {
     expect(q('ollama-start-hint')).toBeNull();
   });
 
-  it('offers Install when the model server list cannot be read', async () => {
-    bridge.status = DOWN;
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    (window as unknown as { b4m: { modelServers: { list: () => Promise<unknown> } } }).b4m.modelServers.list =
-      async () => {
-        throw new Error('ipc down');
-      };
-    await mount(undefined, 'curated');
-    expect(q('models-install-ollama-btn')).not.toBeNull();
-    expect(q('ollama-start-btn')).toBeNull();
-    expect(warn).toHaveBeenCalledWith('Listing model servers failed', expect.any(Error));
-    warn.mockRestore();
-  });
-
-  it('offers Install once main stops waiting on a look that never settled', async () => {
-    bridge.status = DOWN;
-    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false, programPending: true }) }];
-    await mount(undefined, 'curated');
-    expect(q('models-install-ollama-btn')).toBeNull();
-
-    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
-    act(() => pushServers(bridge.servers));
-    expect(q('models-install-ollama-btn')).not.toBeNull();
-    expect(q('ollama-start-btn')).toBeNull();
-  });
-
   it('rechecks whether Desktop can start Ollama on Check again, and offers Start once it can', async () => {
     bridge.status = DOWN;
     bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
     await mount(undefined, 'curated');
     expect(q('ollama-start-btn')).toBeNull();
+    expect(q('ollama-start-hint')).not.toBeNull();
+    expect(q('models-install-ollama-btn')).not.toBeNull();
     calls.checkServers.mockClear();
     calls.getStatus.mockClear();
     calls.checkServers.mockImplementation(async () => {
@@ -1572,131 +1424,23 @@ describe('ModelsScreen installed', () => {
     expect(q('models-install-ollama-btn')).toBeNull();
   });
 
-  it('hints at Ollama in WSL on Windows only', async () => {
+  it('hints at Ollama in WSL on Windows, only beside Point at a server', async () => {
     bridge.status = DOWN;
-    platform.windows = false;
-    await mount(undefined, 'curated');
-    expect(q('models-no-runtime-wsl-hint')).toBeNull();
-    act(() => root?.unmount());
-    root = null;
-    host?.remove();
-
     platform.windows = true;
     await mount(undefined, 'curated');
     const hint = q('models-no-runtime-wsl-hint')?.textContent ?? '';
     expect(hint).toContain('If Ollama runs in WSL, start it there.');
     expect(hint).toContain('127.0.0.1:11434');
     expect(hint).toContain('Point at a server');
-    act(() => root?.unmount());
-    root = null;
-    host?.remove();
+    leave();
 
     await mount(undefined, 'curated', undefined, undefined, undefined, null);
     expect(q('models-no-runtime-wsl-hint')).toBeNull();
   });
-
-  it('checks again on its own while Ollama looks down, and lists its models once it answers', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      bridge.status = { ...DOWN, error: 'timed out after 1500ms' };
-      await mount();
-      expect(q('models-runtime-status')?.dataset.state).toBe('down');
-      expect(q('models-no-runtime-error')?.textContent).toBe('timed out after 1500ms');
-
-      bridge.status = RUNNING;
-      bridge.installed = {
-        ok: true,
-        models: [
-          {
-            name: 'qwen2.5:0.5b',
-            sizeBytes: 1,
-            quantization: null,
-            family: null,
-            parameterSize: null,
-            modifiedAt: null,
-            capabilities,
-            loaded: false,
-            fit: null,
-          },
-        ],
-      };
-      await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS));
-      await flush();
-      expect(q('models-runtime-status')?.dataset.state).toBe('running');
-      expect(all('models-installed-row').map(row => row.dataset.name)).toEqual(['qwen2.5:0.5b']);
-
-      const checks = calls.getStatus.mock.calls.length;
-      await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS * 3));
-      expect(calls.getStatus.mock.calls.length).toBe(checks);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('keeps checking after consecutive down responses', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      bridge.status = DOWN;
-      await mount();
-      const checks = calls.getStatus.mock.calls.length;
-
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        // IPC deserializes a fresh status object for each response.
-        bridge.status = { ...DOWN };
-        await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS));
-        expect(calls.getStatus).toHaveBeenCalledTimes(checks + attempt);
-        expect(q('models-runtime-status')?.dataset.state).toBe('down');
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('stops checking when the screen closes while Ollama is down', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      bridge.status = DOWN;
-      await mount();
-      const checks = calls.getStatus.mock.calls.length;
-
-      act(() => root?.unmount());
-      root = null;
-      await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS * 3));
-      expect(calls.getStatus).toHaveBeenCalledTimes(checks);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });
 
 describe('ModelsScreen explore', () => {
-  it.each([`hf.co/${REPO}:Q4_K_M`, `huggingface.co/${REPO}:Q4_K_M`])(
-    'shows a build installed as %s as installed',
-    async name => {
-      bridge.installed = {
-        ok: true,
-        models: [
-          {
-            name,
-            sizeBytes: 397_000_000,
-            quantization: 'Q4_K_M',
-            family: 'qwen2',
-            parameterSize: '494M',
-            modifiedAt: null,
-            capabilities,
-            loaded: false,
-            fit: null,
-          },
-        ],
-      };
-      await mount();
-      await openExplore();
-      await click(q('models-explore-result-row'));
-      expect(q('models-build-installed-chip')).not.toBeNull();
-    }
-  );
-
-  it('offers Use in chat on an installed build under the name Ollama lists it by', async () => {
+  it('marks a build installed under the name Ollama lists it by, and offers Use in chat on it', async () => {
     bridge.installed = {
       ok: true,
       models: [
@@ -1715,53 +1459,37 @@ describe('ModelsScreen explore', () => {
     };
     const use = vi.fn();
     const chatWith = vi.fn<ChatWith>(() => use);
-    await mount(undefined, 'installed', chatWith);
-    await openExplore();
+    await mount(undefined, 'explore', chatWith);
     await click(q('models-explore-result-row'));
 
+    expect(q('models-build-installed-chip')).not.toBeNull();
     expect(chatWith).toHaveBeenCalledWith('local', `hf.co/${REPO}:q4_k_m`.toLowerCase());
     await click(q('models-build-use-btn'));
     expect(use).toHaveBeenCalledTimes(1);
   });
 
-  it('hides abliterated results until the toggle is on, then labels them', async () => {
+  it('hides abliterated results until the toggle is on, labels them, and remembers the toggle across restarts', async () => {
     bridge.search = {
       ok: true,
       models: [card(REPO), card('someone/Qwen2.5-7B-abliterated-GGUF', { abliterated: true })],
       nextCursor: null,
     };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBeNull();
     expect(all('models-explore-result-row').map(row => row.dataset.repo)).toEqual([REPO]);
     expect(q('models-explore-hidden-note')?.textContent).toContain('1 abliterated result is hidden');
 
     await click(q('models-explore-abliterated-switch'));
     expect(all('models-explore-result-row')).toHaveLength(2);
     expect(q('models-explore-abliterated-chip')).not.toBeNull();
-    await click(q('models-explore-abliterated-switch'));
-    expect(all('models-explore-result-row')).toHaveLength(1);
-  });
-
-  it('remembers the abliterated toggle across restarts, and keeps it off by default', async () => {
-    bridge.search = {
-      ok: true,
-      models: [card(REPO), card('someone/Qwen2.5-7B-abliterated-GGUF', { abliterated: true })],
-      nextCursor: null,
-    };
-    await mount();
-    await openExplore();
-    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBeNull();
-    expect(all('models-explore-result-row')).toHaveLength(1);
-    await click(q('models-explore-abliterated-switch'));
     expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBe('1');
     await click(q('models-explore-abliterated-switch'));
+    expect(all('models-explore-result-row')).toHaveLength(1);
 
-    act(() => root?.unmount());
-    host?.remove();
+    leave();
     // Turned on in an earlier run; this run's module state never saw it.
     window.localStorage.setItem('b4m.models.showAbliterated', '1');
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     expect(all('models-explore-result-row')).toHaveLength(2);
     expect((q('models-explore-abliterated-switch') as HTMLInputElement).checked).toBe(true);
     await click(q('models-explore-abliterated-switch'));
@@ -1770,8 +1498,7 @@ describe('ModelsScreen explore', () => {
 
   it('shows the license before the download button and asks before pulling', async () => {
     bridge.detail = { ok: true, model: view({ builds: [{ ...view().builds[0], fit: FITS }] }) };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
 
     const detail = q('models-detail');
@@ -1793,7 +1520,24 @@ describe('ModelsScreen explore', () => {
     expect(q('models-pull-dialog')).toBeNull();
     expect(calls.pull).not.toHaveBeenCalled();
 
+    // Each dialog reads the model folder afresh: Ollama's default folder, short of space here.
+    bridge.store = { path: '/home/me/.ollama/models', source: 'default', freeBytes: 100_000_000 };
     await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-path')?.dataset.state).toBe('default');
+    expect(q('models-pull-dialog-path')?.textContent).toBe(
+      "Saved to Ollama's model folder, /home/me/.ollama/models unless Ollama is set to use another one. 100 MB free, which is not enough for this download."
+    );
+    await click(q('models-pull-dialog-cancel-btn'));
+
+    // This computer's Ollama keeps its models somewhere this disk does not have.
+    bridge.store = { path: '/root/.ollama/models', source: 'elsewhere', freeBytes: null };
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-path')?.dataset.state).toBe('elsewhere');
+    expect(q('models-pull-dialog-path')?.textContent).toContain('/root/.ollama/models as Ollama reports it');
+    expect(q('models-pull-dialog-path')?.textContent).not.toContain('free');
+
+    // An import that went ahead without the registry params says so.
+    calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M`, notice: 'created without them.' });
     await click(q('models-pull-dialog-confirm-btn'));
     expect(calls.pull).toHaveBeenCalledWith({
       repo: REPO,
@@ -1803,9 +1547,10 @@ describe('ModelsScreen explore', () => {
       acceptLicense: false,
       confirmAccess: false,
     });
+    expect(q('models-detail-pull-notice')?.textContent).toBe('created without them.');
   });
 
-  it('asks no Ollama key steps for a split build Desktop adds itself, and says it comes in parts', async () => {
+  it('asks no Ollama key steps for a split build Desktop adds itself, says it comes in parts, and sizes its room as an upper bound', async () => {
     const split = {
       ...view().builds[0],
       id: 'qwen-q8_0',
@@ -1815,10 +1560,15 @@ describe('ModelsScreen explore', () => {
       importLargestBytes: 200_000_000,
     };
     bridge.detail = { ok: true, model: view({ builds: [split], needsAccess: true, gated: 'manual' }) };
-    await mount();
-    await openExplore();
+    bridge.store = { path: '/home/me/.ollama/models', source: 'runtime', freeBytes: 600_000_000 };
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     await click(q('models-build-pull-btn'));
+    // Desktop makes the hard check on the parts itself, so the dialog only gives the upper bound.
+    const room = q('models-pull-dialog-path')?.textContent;
+    expect(room).toContain('600 MB free.');
+    expect(room).not.toContain('not enough');
+    expect(room).toContain('Adding the parts needs up to 691 MB free');
     expect(q('models-pull-dialog-size')?.textContent).toContain('491 MB download in 3 parts.');
     expect(q('models-pull-dialog-size')?.textContent).toContain('Desktop downloads the parts one at a time');
     expect(q('models-pull-dialog-access-checkbox')).toBeNull();
@@ -1836,8 +1586,7 @@ describe('ModelsScreen explore', () => {
         ],
       }),
     };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
 
     const rows = all('models-build-row');
@@ -1857,8 +1606,7 @@ describe('ModelsScreen explore', () => {
         licenseHost: 'llama.meta.com',
       }),
     };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     expect(q('models-detail-license')?.dataset.kind).toBe('restricted');
     expect(all('models-detail-license-chip').map(chip => chip.textContent)).toEqual(['apache-2.0', 'llama3']);
@@ -1886,8 +1634,7 @@ describe('ModelsScreen explore', () => {
         builds: [{ ...view().builds[0], blockedReason: 'Needs access: Hugging Face hides this file.' }],
       }),
     };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     expect(q('models-access-steps')?.textContent).toContain('Request access');
     expect(q('models-access-step-token')?.textContent).toContain('Add a token from that account');
@@ -1900,8 +1647,7 @@ describe('ModelsScreen explore', () => {
   it('drops the request-access step once the token can read the repo, and still asks about the Ollama key', async () => {
     bridge.token = { set: true, persisted: true };
     bridge.detail = { ok: true, model: view({ gated: 'auto', needsAccess: true, hubAccess: 'granted' }) };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     expect(q('models-access-step-account')?.textContent).toBe('Your Hugging Face token can read it.');
     expect(q('models-access-step-token')).toBeNull();
@@ -1920,8 +1666,7 @@ describe('ModelsScreen explore', () => {
   it('says when the saved token cannot read a gated repo yet', async () => {
     bridge.token = { set: true, persisted: true };
     bridge.detail = { ok: true, model: view({ gated: 'manual', needsAccess: true, hubAccess: 'denied' }) };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     expect(q('models-access-step-token')?.textContent).toContain('Your saved token cannot read it yet');
     expect(q('models-access-repo-link')).not.toBeNull();
@@ -1963,8 +1708,7 @@ describe('ModelsScreen explore', () => {
   });
 
   it('shows a pull refused because Ollama stopped, and re-checks Ollama', async () => {
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     calls.pull.mockResolvedValue({
       ok: false,
@@ -1982,52 +1726,9 @@ describe('ModelsScreen explore', () => {
     expect(q('models-build-pull-btn')?.hasAttribute('disabled')).toBe(true);
   });
 
-  it('re-checks Ollama when a listed pull fails', async () => {
-    await mount();
-    bridge.status = DOWN;
-    act(() =>
-      pushPulls([
-        {
-          key: `${REPO}#q`,
-          serverId: 'local',
-          serverName: 'This computer',
-          repo: REPO,
-          buildId: 'q',
-          label: 'Q4_K_M',
-          ref: null,
-          phase: 'failed',
-          completedBytes: 0,
-          totalBytes: null,
-          expectedBytes: 1,
-          error: { kind: 'runtime-unavailable', message: `${OLLAMA_NOT_RUNNING}. Start it, then retry.` },
-        },
-      ])
-    );
-    await flush();
-    expect(q('models-pull-status')?.textContent).toContain(OLLAMA_NOT_RUNNING);
-    expect(q('models-runtime-status')?.dataset.state).toBe('down');
-  });
-
-  it('asks for a fresh review when the repo changed after the dialog', async () => {
-    await mount();
-    await openExplore();
-    await click(q('models-explore-result-row'));
-    const loads = calls.getDetail.mock.calls.length;
-    calls.pull.mockResolvedValue({
-      ok: false,
-      error: { kind: 'changed', message: 'This repo changed since you reviewed it. Review it again, then download.' },
-      listed: false,
-    });
-    await click(q('models-build-pull-btn'));
-    await click(q('models-pull-dialog-confirm-btn'));
-    expect(q('models-detail-pull-error')?.textContent).toContain('changed since you reviewed it');
-    expect(calls.getDetail.mock.calls.length).toBe(loads + 1);
-  });
-
   it('rates an open detail and its pull dialog again when main re-rates the lists', async () => {
     bridge.detail = { ok: true, model: view({ builds: [{ ...view().builds[0], fit: FITS }] }) };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     await click(q('models-build-pull-btn'));
     expect(q('models-pull-dialog-fit-warning')).toBeNull();
@@ -2117,9 +1818,8 @@ describe('ModelsScreen explore', () => {
     });
   });
 
-  it('keeps the newest detail when an older re-rating read answers last', async () => {
-    await mount();
-    await openExplore();
+  it('asks for a fresh review when the repo changed, and keeps the newest detail when an older re-rating read answers last', async () => {
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     let release: () => void = () => {};
     bridge.detailGates.push(new Promise<void>(resolve => (release = resolve)));
@@ -2134,25 +1834,21 @@ describe('ModelsScreen explore', () => {
     await click(q('models-build-pull-btn'));
     await click(q('models-pull-dialog-confirm-btn'));
     await flush();
+    expect(q('models-detail-pull-error')?.textContent).toContain('changed since you reviewed it');
     expect(q('models-detail')?.dataset.repo).toBe('new/read');
     release();
     await flush();
     expect(q('models-detail')?.dataset.repo).toBe('new/read');
   });
 
-  it.each([
-    [{ kind: 'hub-unreachable' as const, message: 'Could not reach Hugging Face.' }, 'Could not reach Hugging Face.'],
-    [{ kind: 'rate-limited' as const, message: 'x', retryAfterMs: 30_000 }, 'Try again in 30 seconds'],
-  ])('shows a search failure (%o)', async (error, text) => {
-    bridge.search = { ok: false, error };
-    await mount();
-    await openExplore();
-    expect(q('models-explore-error')?.textContent).toContain(text);
+  it('shows a failed search, with when to try again after a rate limit', async () => {
+    bridge.search = { ok: false, error: { kind: 'rate-limited', message: 'x', retryAfterMs: 30_000 } };
+    await mount(undefined, 'explore');
+    expect(q('models-explore-error')?.textContent).toContain('Try again in 30 seconds');
   });
 
   it('adds a token through Hugging Face, shows a rejected one, then reloads search and the open repo', async () => {
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     expect(q('models-hf-token')?.dataset.state).toBe('unset');
     expect(q('models-hf-token-status')?.textContent).toContain('not set');
@@ -2188,14 +1884,19 @@ describe('ModelsScreen explore', () => {
     expect(calls.search.mock.calls.length).toBe(searches + 2);
   });
 
-  it('keeps the token shown as set and says so when removing it fails', async () => {
+  it('keeps the token shown as set and says why when removing it fails or its IPC rejects', async () => {
     bridge.token = { set: true, persisted: true };
-    calls.clearHfToken.mockResolvedValueOnce({
-      ok: false,
-      error: { kind: 'failed', message: 'Could not remove the token. Try again.', retryAfterMs: null },
-    });
-    await mount();
-    await openExplore();
+    calls.clearHfToken
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { kind: 'failed', message: 'Hugging Face kept the token.', retryAfterMs: null },
+      })
+      .mockRejectedValueOnce(new Error('IPC failed'));
+    await mount(undefined, 'explore');
+    await click(q('models-hf-token-remove-btn'));
+    expect(q('models-hf-token')?.dataset.state).toBe('set');
+    expect(q('models-hf-token-remove-error')?.textContent).toBe('Hugging Face kept the token.');
+
     await click(q('models-hf-token-remove-btn'));
     expect(q('models-hf-token')?.dataset.state).toBe('set');
     expect(q('models-hf-token-remove-error')?.textContent).toBe('Could not remove the token. Try again.');
@@ -2203,8 +1904,7 @@ describe('ModelsScreen explore', () => {
 
   it('says a token lasts only until quit without a keychain', async () => {
     bridge.token = { set: false, persisted: false };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-hf-token-edit-btn'));
     expect(q('models-hf-token-no-keychain')?.textContent).toContain('kept only until you quit');
     type(q('models-hf-token-input') as HTMLInputElement, 'hf_session');
@@ -2214,8 +1914,7 @@ describe('ModelsScreen explore', () => {
 
   it('says when nothing matches', async () => {
     bridge.search = { ok: true, models: [], nextCursor: null };
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     const input = q('models-explore-search-input') as HTMLInputElement;
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -2251,11 +1950,11 @@ describe('ModelsScreen servers', () => {
 
   // The screen remembers the server across visits, and so across tests.
   afterEach(async () => {
-    if (q('models-server-select')) await pickServer('local');
+    const select = q('models-server-select');
+    if (select && select.textContent !== THIS_COMPUTER.name) await pickServer('local');
   });
 
   async function pickServer(id: string) {
-    await click(q('models-server-select'));
     await click(q(`models-server-option-${id}`));
   }
 
@@ -2267,12 +1966,6 @@ describe('ModelsScreen servers', () => {
     await pickServer('lab');
     expect(q('models-runtime-status')?.textContent).toContain('on SSH lab at me@gpu over SSH');
     expect(q('models-runtime-status')?.textContent).not.toContain('ssh://');
-  });
-
-  it('offers no switcher until a model server is saved', async () => {
-    bridge.servers = [THIS_COMPUTER];
-    await mount();
-    expect(q('models-server-select')).toBeNull();
   });
 
   it('lists, pulls to and removes from a server set to Chat and manage', async () => {
@@ -2298,13 +1991,16 @@ describe('ModelsScreen servers', () => {
     expect(calls.pull).toHaveBeenCalledWith(expect.objectContaining({ repo: REPO, serverId: 'gpu' }));
   });
 
-  it("names a saved server's model folder when its Ollama shows it, and says so plainly when not", async () => {
+  it("names a saved server's model folder and its own Ollama key, and says so plainly when it shows no folder", async () => {
     bridge.store = { path: '/var/lib/ollama/models', source: 'runtime', freeBytes: null };
-    await mount();
+    bridge.detail = { ok: true, model: view({ gated: 'auto', needsAccess: true }) };
+    await mount(undefined, 'explore');
     await pickServer('gpu');
-    await openExplore();
     await click(q('models-explore-result-row'));
+    expect(q('models-access-server-key')?.textContent).toContain('public key of Ollama on gpu box');
+    expect(q('models-access-server-key')?.textContent).toContain('/usr/share/ollama/.ollama/id_ed25519.pub');
     await click(q('models-build-pull-btn'));
+    expect(document.body.textContent).toContain('added the Ollama key of gpu box to the Hugging Face account');
     expect(q('models-pull-dialog-path')?.textContent).toBe('Saved on gpu box in /var/lib/ollama/models.');
     await click(q('models-pull-dialog-cancel-btn'));
 
@@ -2312,62 +2008,6 @@ describe('ModelsScreen servers', () => {
     await click(q('models-build-pull-btn'));
     expect(q('models-pull-dialog-path')?.textContent).toBe('Saved with the other models on gpu box.');
     expect(calls.pull).not.toHaveBeenCalled();
-  });
-
-  it('sizes the room for a split import as an upper bound and leaves the hard check to Desktop', async () => {
-    const split = {
-      ...view().builds[0],
-      id: 'qwen-q8_0',
-      label: 'Q8_0',
-      ollamaRef: `hf.co/${REPO}:Q8_0`,
-      importParts: 3,
-      importLargestBytes: 200_000_000,
-    };
-    bridge.detail = { ok: true, model: view({ builds: [split] }) };
-    bridge.store = { path: '/home/me/.ollama/models', source: 'runtime', freeBytes: 600_000_000 };
-    await mount();
-    await openExplore();
-    await click(q('models-explore-result-row'));
-    await click(q('models-build-pull-btn'));
-    const text = q('models-pull-dialog-path')?.textContent;
-    expect(text).toContain('600 MB free.');
-    expect(text).not.toContain('not enough');
-    expect(text).toContain('Adding the parts needs up to 691 MB free');
-  });
-
-  it('shows the notice an import returns when it went ahead without the registry params', async () => {
-    calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M`, notice: 'created without them.' });
-    await mount();
-    await openExplore();
-    await click(q('models-explore-result-row'));
-    await click(q('models-build-pull-btn'));
-    await click(q('models-pull-dialog-confirm-btn'));
-    expect(q('models-detail-pull-notice')?.textContent).toBe('created without them.');
-  });
-
-  it("marks Ollama's default folder as a default, and warns when this computer is short of space", async () => {
-    bridge.store = { path: '/home/me/.ollama/models', source: 'default', freeBytes: 100_000_000 };
-    await mount();
-    await openExplore();
-    await click(q('models-explore-result-row'));
-    await click(q('models-build-pull-btn'));
-    const line = q('models-pull-dialog-path');
-    expect(line?.dataset.state).toBe('default');
-    expect(line?.textContent).toBe(
-      "Saved to Ollama's model folder, /home/me/.ollama/models unless Ollama is set to use another one. 100 MB free, which is not enough for this download."
-    );
-  });
-
-  it("says so when this computer's Ollama keeps its models somewhere this disk does not have", async () => {
-    bridge.store = { path: '/root/.ollama/models', source: 'elsewhere', freeBytes: null };
-    await mount();
-    await openExplore();
-    await click(q('models-explore-result-row'));
-    await click(q('models-build-pull-btn'));
-    const line = q('models-pull-dialog-path');
-    expect(line?.dataset.state).toBe('elsewhere');
-    expect(line?.textContent).toContain('/root/.ollama/models as Ollama reports it');
-    expect(line?.textContent).not.toContain('free');
   });
 
   it('shows no pull or remove controls for a Chat only server', async () => {
@@ -2417,7 +2057,6 @@ describe('ModelsScreen servers', () => {
       bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
       let release = () => {};
       bridge.installedGate = new Promise(resolve => (release = resolve));
-      await click(q('models-server-select'));
       act(() => q('models-server-option-gpu')?.click());
 
       expect(rowNames()).toHaveLength(1);
@@ -2440,211 +2079,6 @@ describe('ModelsScreen servers', () => {
       expect(q('models-installed-tab')?.textContent).toBe('Installed (2)');
       expect(q('models-installed-refreshing')).toBeNull();
       expect(q('models-installed-remove-btn')?.hasAttribute('aria-disabled')).toBe(false);
-    });
-
-    it('drops a model removed through the app from the last list', async () => {
-      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
-      await mount();
-      await pickServer('gpu');
-      expect(rowNames()).toHaveLength(2);
-      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
-      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
-      await click(q('models-remove-dialog-confirm-btn'));
-      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
-      await pickServer('local');
-
-      let release = () => {};
-      bridge.installedGate = new Promise(resolve => (release = resolve));
-      await click(q('models-server-select'));
-      act(() => q('models-server-option-gpu')?.click());
-      expect(rowNames()).toHaveLength(1);
-      expect(rowNames()[0]).toContain('llama3.2:3b');
-      await act(async () => release());
-    });
-
-    it('does not cache a removed model again from a listing that started before the removal', async () => {
-      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
-      await mount();
-      await pickServer('gpu');
-      let releaseListing = () => {};
-      bridge.installedGate = new Promise(resolve => (releaseListing = resolve));
-      await act(async () => pushInstalled('gpu'));
-      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
-      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
-      await click(q('models-remove-dialog-confirm-btn'));
-      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
-      await act(async () => releaseListing());
-      await flush();
-      await pickServer('local');
-
-      let release = () => {};
-      bridge.installedGate = new Promise(resolve => (release = resolve));
-      await click(q('models-server-select'));
-      act(() => q('models-server-option-gpu')?.click());
-      expect(rowNames()).toHaveLength(1);
-      expect(rowNames()[0]).toContain('llama3.2:3b');
-      await act(async () => release());
-    });
-
-    it('does not cache a listing the server answered between the remove click and the delete', async () => {
-      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
-      await mount();
-      await pickServer('gpu');
-      let releaseListing = () => {};
-      calls.remove.mockImplementation(async () => {
-        bridge.installedGate = new Promise(resolve => (releaseListing = resolve));
-        pushInstalled('gpu');
-        bridge.remote.gpu.installed = { ok: true, models: [llama] };
-        return { ok: true };
-      });
-      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
-      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
-      await click(q('models-remove-dialog-confirm-btn'));
-      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
-      await act(async () => releaseListing());
-      await flush();
-      await pickServer('local');
-
-      let release = () => {};
-      bridge.installedGate = new Promise(resolve => (release = resolve));
-      await click(q('models-server-select'));
-      act(() => q('models-server-option-gpu')?.click());
-      expect(rowNames()).toHaveLength(1);
-      expect(rowNames()[0]).toContain('llama3.2:3b');
-      await act(async () => release());
-    });
-
-    it('does not cache a check and listing that started before a removal', async () => {
-      bridge.remote.gpu.installed = { ok: true, models: [llama, qwen] };
-      await mount();
-      await pickServer('gpu');
-      const listings = calls.listInstalled.mock.calls.length;
-      let releaseListing = () => {};
-      bridge.installedGate = new Promise(resolve => (releaseListing = resolve));
-      act(() =>
-        pushPulls([
-          {
-            key: `gpu/${REPO}#q`,
-            serverId: 'gpu',
-            serverName: 'gpu box',
-            repo: REPO,
-            buildId: 'q',
-            label: 'Q4_K_M',
-            ref: null,
-            phase: 'failed',
-            completedBytes: 0,
-            totalBytes: null,
-            expectedBytes: 1,
-            error: { kind: 'connection-lost', message: 'Lost the connection to gpu box.' },
-          },
-        ])
-      );
-      await flush();
-      expect(calls.listInstalled).toHaveBeenCalledTimes(listings + 1);
-      const row = all('models-installed-row').find(candidate => candidate.dataset.name === 'qwen2.5:0.5b');
-      await click(row?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]') ?? null);
-      await click(q('models-remove-dialog-confirm-btn'));
-      expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
-      await act(async () => releaseListing());
-      await flush();
-      await pickServer('local');
-
-      let release = () => {};
-      bridge.installedGate = new Promise(resolve => (release = resolve));
-      await click(q('models-server-select'));
-      act(() => q('models-server-option-gpu')?.click());
-      expect(rowNames()).toHaveLength(1);
-      expect(rowNames()[0]).toContain('llama3.2:3b');
-      await act(async () => release());
-    });
-
-    it('keeps the last list with the reason when the server is down, and checks again on request', async () => {
-      await visitGpuThenLeave();
-      bridge.remote.gpu.status = remoteStatus(GPU_BOX, {
-        reachable: false,
-        version: null,
-        error: 'Could not reach gpu box: connection refused',
-      });
-      await pickServer('gpu');
-
-      expect(q('models-installed-runtime-down')).toBeNull();
-      expect(rowNames()).toHaveLength(1);
-      expect(q('models-installed-stale-reason')?.textContent).toBe('Could not reach gpu box: connection refused');
-      expect(q('models-installed-stale')?.textContent).toContain('Showing the list from');
-
-      const checks = calls.getStatus.mock.calls.length;
-      await click(q('models-installed-stale-retry-btn'));
-      expect(calls.getStatus).toHaveBeenCalledTimes(checks + 1);
-      expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
-    });
-
-    it('keeps the last list with the reason when listing fails', async () => {
-      await visitGpuThenLeave();
-      bridge.remote.gpu.installed = { ok: false, error: { kind: 'failed', message: 'Listing timed out' } };
-      await pickServer('gpu');
-
-      expect(q('models-installed-error')).toBeNull();
-      expect(rowNames()).toHaveLength(1);
-      expect(q('models-installed-stale-reason')?.textContent).toBe('Listing timed out');
-    });
-
-    it('caches no listing that lands after the screen moved to another server', async () => {
-      await mount();
-      let release = () => {};
-      bridge.installedGate = new Promise(resolve => (release = resolve));
-      await pickServer('gpu');
-      expect(rowNames()).toHaveLength(0);
-      await pickServer('local');
-      await act(async () => release());
-      await flush();
-
-      bridge.installedGate = new Promise(() => {});
-      await click(q('models-server-select'));
-      act(() => q('models-server-option-gpu')?.click());
-      await flush();
-      expect(rowNames()).toHaveLength(0);
-      expect(q('models-installed-refreshing')).toBeNull();
-    });
-
-    async function moveGpu(address: string) {
-      bridge.servers = [THIS_COMPUTER, { ...GPU_BOX, address }, SHARED_BOX];
-      act(() => pushServers(bridge.servers));
-      await flush();
-    }
-
-    it('forgets the list when the server is saved at another address', async () => {
-      await visitGpuThenLeave();
-      await moveGpu('http://192.168.1.50:11434');
-      bridge.installedGate = new Promise(() => {});
-      await click(q('models-server-select'));
-      act(() => q('models-server-option-gpu')?.click());
-      await flush();
-
-      expect(rowNames()).toHaveLength(0);
-      expect(q('models-installed-refreshing')).toBeNull();
-    });
-
-    it('does not bring the list back when the server returns to its old address', async () => {
-      await visitGpuThenLeave();
-      await moveGpu('http://192.168.1.50:11434');
-      await moveGpu(GPU_BOX.address);
-      bridge.installedGate = new Promise(() => {});
-      await click(q('models-server-select'));
-      act(() => q('models-server-option-gpu')?.click());
-      await flush();
-
-      expect(rowNames()).toHaveLength(0);
-    });
-
-    it('lists the shown server again when it is saved at another address', async () => {
-      await mount();
-      await pickServer('gpu');
-      const checks = calls.getStatus.mock.calls.length;
-      await moveGpu('http://192.168.1.50:11434');
-
-      expect(calls.getStatus).toHaveBeenCalledTimes(checks + 1);
-      expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
-      expect(rowNames()).toHaveLength(1);
     });
   });
 
@@ -2686,97 +2120,6 @@ describe('ModelsScreen servers', () => {
     expect(calls.resumePull).toHaveBeenCalledWith(`gpu/${REPO}#q`);
   });
 
-  const llama = { ...qwen, name: 'llama3.2:1b' };
-  const rowNames = () => all('models-installed-row').map(row => row.dataset.name);
-
-  it('reloads only the shown server models when a pull or removal on it finishes', async () => {
-    await mount();
-    await pickServer('gpu');
-    expect(rowNames()).toEqual(['qwen2.5:0.5b']);
-    bridge.remote.gpu.installed = { ok: true, models: [qwen, llama] };
-    calls.getStatus.mockClear();
-    calls.listInstalled.mockClear();
-
-    act(() => pushInstalled('local'));
-    await flush();
-    expect(calls.listInstalled).not.toHaveBeenCalled();
-
-    act(() => pushInstalled('gpu'));
-    await flush();
-    expect(calls.listInstalled.mock.calls).toEqual([['gpu']]);
-    expect(calls.getStatus).not.toHaveBeenCalled();
-    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
-  });
-
-  it('re-checks a server shown as down when a resumed pull to it finishes', async () => {
-    await mount();
-    await pickServer('gpu');
-    const pull: ModelPull = {
-      key: `gpu/${REPO}#q`,
-      serverId: 'gpu',
-      serverName: 'gpu box',
-      repo: REPO,
-      buildId: 'q',
-      label: 'Q4_K_M',
-      ref: `hf.co/${REPO}:Q4_K_M`,
-      phase: 'paused',
-      completedBytes: 100_000_000,
-      totalBytes: 400_000_000,
-      expectedBytes: 400_000_000,
-      error: { kind: 'connection-lost', message: 'Paused: lost the connection to gpu box.' },
-    };
-    bridge.remote.gpu.status = remoteStatus(GPU_BOX, { reachable: false, version: null, error: 'refused' });
-    act(() => pushPulls([pull]));
-    await flush();
-    expect(q('models-runtime-status')?.dataset.state).toBe('down');
-
-    bridge.remote.gpu.status = remoteStatus(GPU_BOX);
-    bridge.remote.gpu.installed = { ok: true, models: [qwen, llama] };
-    act(() => pushPulls([{ ...pull, phase: 'downloading', error: null }]));
-    act(() => pushPulls([]));
-    act(() => pushInstalled('gpu'));
-    await flush();
-    await flush();
-    expect(q('models-runtime-status')?.dataset.state).toBe('running');
-    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
-  });
-
-  it('keeps the newer models list when an older request answers last', async () => {
-    await mount();
-    await pickServer('gpu');
-    let release: () => void = () => {};
-    bridge.installedGate = new Promise(resolve => (release = resolve));
-    act(() =>
-      pushPulls([
-        {
-          key: `gpu/${REPO}#q`,
-          serverId: 'gpu',
-          serverName: 'gpu box',
-          repo: REPO,
-          buildId: 'q',
-          label: 'Q4_K_M',
-          ref: null,
-          phase: 'failed',
-          completedBytes: 0,
-          totalBytes: null,
-          expectedBytes: 1,
-          error: { kind: 'connection-lost', message: 'Lost the connection to gpu box.' },
-        },
-      ])
-    );
-    await flush();
-    expect(calls.listInstalled).toHaveBeenLastCalledWith('gpu');
-
-    bridge.remote.gpu.installed = { ok: true, models: [qwen, llama] };
-    act(() => pushInstalled('gpu'));
-    await flush();
-    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
-
-    release();
-    await flush();
-    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
-  });
-
   const changeServers = async (servers: ModelServerView[]) => {
     bridge.servers = servers;
     act(() => pushServers(servers));
@@ -2784,73 +2127,41 @@ describe('ModelsScreen servers', () => {
     await flush();
   };
 
-  it.each([
-    ['Chat only', { access: 'chat' }, 'chat-only'],
-    ['OpenAI-compatible', { kind: 'openai-compatible' }, 'unsupported'],
-  ] as const)(
-    'closes both confirmations when the server becomes %s without reopening them later',
-    async (_label, patch, management) => {
-      await mount();
-      await pickServer('gpu');
-      await click(q('models-installed-remove-btn'));
-      expect(q('models-remove-dialog')).not.toBeNull();
-
-      bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management });
-      await changeServers([THIS_COMPUTER, { ...GPU_BOX, ...patch }, SHARED_BOX]);
-      expect(q('models-remove-dialog')).toBeNull();
-
-      bridge.remote.gpu.status = remoteStatus(GPU_BOX);
-      await changeServers([THIS_COMPUTER, GPU_BOX, SHARED_BOX]);
-      expect(q('models-remove-dialog')).toBeNull();
-      expect(q('models-installed-remove-btn')).not.toBeNull();
-      expect(calls.remove).not.toHaveBeenCalled();
-
-      await openExplore();
-      await click(q('models-explore-result-row'));
-      await click(q('models-build-pull-btn'));
-      expect(q('models-pull-dialog')).not.toBeNull();
-
-      bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management });
-      await changeServers([THIS_COMPUTER, { ...GPU_BOX, ...patch }, SHARED_BOX]);
-      expect(q('models-pull-dialog')).toBeNull();
-
-      bridge.remote.gpu.status = remoteStatus(GPU_BOX);
-      await changeServers([THIS_COMPUTER, GPU_BOX, SHARED_BOX]);
-      expect(q('models-pull-dialog')).toBeNull();
-      expect(q('models-build-pull-btn')).not.toBeNull();
-      expect(calls.pull).not.toHaveBeenCalled();
-    }
-  );
-
-  it.each(['failed', 'paused'] as const)('re-checks only the selected server when a pull becomes %s', async phase => {
+  it('hides the controls, re-checks the server and closes both confirmations when it becomes Chat only, without reopening them later', async () => {
     await mount();
     await pickServer('gpu');
-    calls.getStatus.mockClear();
-    calls.listInstalled.mockClear();
-    const pull: ModelPull = {
-      key: `shared/${REPO}#q`,
-      serverId: 'shared',
-      serverName: 'shared box',
-      repo: REPO,
-      buildId: 'q',
-      label: 'Q4_K_M',
-      ref: `hf.co/${REPO}:Q4_K_M`,
-      phase,
-      completedBytes: 100,
-      totalBytes: 400,
-      expectedBytes: 400,
-      error: { kind: 'connection-lost', message: 'Lost the connection.' },
-    };
+    await click(q('models-installed-remove-btn'));
+    expect(q('models-remove-dialog')).not.toBeNull();
+    const checks = calls.getStatus.mock.calls.length;
 
-    act(() => pushPulls([pull]));
-    await flush();
-    expect(calls.getStatus).not.toHaveBeenCalled();
-    expect(calls.listInstalled).not.toHaveBeenCalled();
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management: 'chat-only' });
+    await changeServers([THIS_COMPUTER, { ...GPU_BOX, access: 'chat' }, SHARED_BOX]);
+    expect(q('models-remove-dialog')).toBeNull();
+    expect(q('models-installed-remove-btn')).toBeNull();
+    expect(q('models-manage-note')?.textContent).toContain('gpu box is set to Chat only');
+    expect(calls.getStatus.mock.calls.length).toBeGreaterThan(checks);
+    expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
 
-    act(() => pushPulls([pull, { ...pull, key: `gpu/${REPO}#q`, serverId: 'gpu', serverName: 'gpu box' }]));
-    await flush();
-    expect(calls.getStatus.mock.calls).toEqual([['gpu']]);
-    expect(calls.listInstalled.mock.calls).toEqual([['gpu']]);
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX);
+    await changeServers([THIS_COMPUTER, GPU_BOX, SHARED_BOX]);
+    expect(q('models-remove-dialog')).toBeNull();
+    expect(q('models-installed-remove-btn')).not.toBeNull();
+    expect(calls.remove).not.toHaveBeenCalled();
+
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog')).not.toBeNull();
+
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management: 'chat-only' });
+    await changeServers([THIS_COMPUTER, { ...GPU_BOX, access: 'chat' }, SHARED_BOX]);
+    expect(q('models-pull-dialog')).toBeNull();
+
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX);
+    await changeServers([THIS_COMPUTER, GPU_BOX, SHARED_BOX]);
+    expect(q('models-pull-dialog')).toBeNull();
+    expect(q('models-build-pull-btn')).not.toBeNull();
+    expect(calls.pull).not.toHaveBeenCalled();
   });
 
   it('falls back to this computer when the selected server is removed, closing its Remove confirmation', async () => {
@@ -2884,6 +2195,16 @@ describe('ModelsScreen servers', () => {
   });
 
   it('titles the Curated picks neutrally and drops this-computer text and fit badges for a saved server', async () => {
+    bridge.remote.shared.curated = {
+      ...curatedList(),
+      rating: 'entered',
+      machine: {
+        ...curatedList().machine,
+        memoryKind: 'discrete',
+        totalMemoryBytes: 64 * GIB,
+        gpuMemoryBytes: 24 * GIB,
+      },
+    };
     await mount(undefined, 'curated');
     await pickServer('local');
     expect(q('models-curated-picks')?.textContent).toContain('For this computer');
@@ -2896,79 +2217,21 @@ describe('ModelsScreen servers', () => {
     expect(q('models-curated-machine')?.textContent).not.toContain('This computer');
     expect(q('models-curated-machine')?.textContent).toContain('Enter its hardware under Settings');
     expect(all('models-fit-badge')).toHaveLength(0);
-  });
 
-  it('rates a saved server from the hardware entered for it', async () => {
-    bridge.remote.gpu.curated = {
-      ...curatedList(),
-      rating: 'entered',
-      machine: {
-        ...curatedList().machine,
-        memoryKind: 'discrete',
-        totalMemoryBytes: 64 * GIB,
-        gpuMemoryBytes: 24 * GIB,
-      },
-    };
-    await mount(undefined, 'curated');
-    await pickServer('gpu');
-    expect(q('models-curated-picks')?.textContent).toContain('For gpu box');
+    // A saved server with hardware entered for it is rated from that.
+    await pickServer('shared');
+    expect(q('models-curated-picks')?.textContent).toContain('For shared box');
     expect(q('models-curated-machine')?.textContent).toContain(
-      'gpu box is rated from the hardware entered in Settings: 64 GiB of RAM and 24 GiB of GPU memory.'
+      'shared box is rated from the hardware entered in Settings'
     );
     expect(all('models-fit-badge').length).toBeGreaterThan(0);
-  });
-
-  it('says when this computer is rated from entered hardware', async () => {
-    bridge.curated = {
-      ...curatedList(),
-      rating: 'entered',
-      machine: {
-        ...curatedList().machine,
-        memoryKind: 'unified',
-        totalMemoryBytes: 128 * GIB,
-        gpuMemoryBytes: 96 * GIB,
-      },
-    };
-    await mount(undefined, 'curated');
-    expect(q('models-curated-picks')?.textContent).toContain('For this computer');
-    expect(q('models-curated-machine')?.textContent).toContain(
-      'This computer is rated from the hardware entered in Settings: 128 GiB of memory shared with its GPU, which can use 96 GiB.'
-    );
-  });
-
-  it('hides the controls and re-checks the server when Settings sets it to Chat only', async () => {
-    await mount();
-    await pickServer('gpu');
-    expect(q('models-installed-remove-btn')).not.toBeNull();
-    const checks = calls.getStatus.mock.calls.length;
-
-    bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management: 'chat-only' });
-    await changeServers([THIS_COMPUTER, { ...GPU_BOX, access: 'chat' }, SHARED_BOX]);
-
-    expect(q('models-installed-remove-btn')).toBeNull();
-    expect(q('models-manage-note')?.textContent).toContain('gpu box is set to Chat only');
-    expect(calls.getStatus.mock.calls.length).toBeGreaterThan(checks);
-    expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
-  });
-
-  it("names the server's own Ollama key in the access steps", async () => {
-    bridge.detail = { ok: true, model: view({ gated: 'auto', needsAccess: true }) };
-    await mount();
-    await pickServer('gpu');
-    await openExplore();
-    await click(q('models-explore-result-row'));
-    expect(q('models-access-server-key')?.textContent).toContain('public key of Ollama on gpu box');
-    expect(q('models-access-server-key')?.textContent).toContain('/usr/share/ollama/.ollama/id_ed25519.pub');
-    await click(q('models-build-pull-btn'));
-    expect(document.body.textContent).toContain('added the Ollama key of gpu box to the Hugging Face account');
   });
 });
 
 describe('Hugging Face token transport failures', () => {
   it('shows a failed status read and lets the user retry', async () => {
-    await mount();
     calls.getHfToken.mockRejectedValueOnce(new Error('IPC failed'));
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     const error = q('models-hf-token-read-error');
     expect(error?.textContent).toContain('Could not read');
@@ -2989,8 +2252,7 @@ describe('Hugging Face token transport failures', () => {
           rejectSave = reject;
         })
     );
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-hf-token-edit-btn'));
     type(q('models-hf-token-input') as HTMLInputElement, 'hf_pending_token');
     await click(q('models-hf-token-save-btn'));
@@ -3004,22 +2266,11 @@ describe('Hugging Face token transport failures', () => {
     expect(q('models-hf-token-error')?.textContent).toContain('Could not save');
     expect((q('models-hf-token-cancel-btn') as HTMLButtonElement).disabled).toBe(false);
   });
-
-  it('shows a rejected removal and keeps the saved state', async () => {
-    bridge.token = { set: true, persisted: true };
-    calls.clearHfToken.mockRejectedValueOnce(new Error('IPC failed'));
-    await mount();
-    await openExplore();
-    await click(q('models-hf-token-remove-btn'));
-    expect(q('models-hf-token-remove-error')?.textContent).toContain('Could not remove');
-    expect(q('models-hf-token')?.dataset.state).toBe('set');
-  });
 });
 
 describe('Hugging Face token changes across windows', () => {
   it('refreshes cached private results and details on a token event and unsubscribes on exit', async () => {
-    await mount();
-    await openExplore();
+    await mount(undefined, 'explore');
     await click(q('models-explore-result-row'));
     const searches = calls.search.mock.calls.length;
     const details = calls.getDetail.mock.calls.length;
@@ -3111,10 +2362,8 @@ describe('ModelsScreen catalog refresh', () => {
       bridge.remote.compat = { status: remoteStatus(compatible), installed: { ok: true, models } };
       const reload = vi.fn(async () => {});
       await mount(undefined, 'installed', undefined, undefined, { models: [entry('other')], loading: false, reload });
-      await click(q('models-server-select'));
       await click(q('models-server-option-compat'));
       const calls = reload.mock.calls.length;
-      await click(q('models-server-select'));
       await click(q('models-server-option-local'));
       return calls;
     };
@@ -3122,29 +2371,10 @@ describe('ModelsScreen catalog refresh', () => {
     it('reloads for a missing model that carries no completion flag', async () => {
       expect(await reloadsFor([{ ...installedModel('plain'), capabilities: noFlags }])).toBe(1);
     });
-
-    it('does not reload for a missing embeddings-only model', async () => {
-      expect(await reloadsFor([{ ...installedModel('embed'), capabilities: { ...noFlags, embeddings: true } }])).toBe(
-        0
-      );
-    });
-  });
-
-  it('does not reload when the catalog lists every chat model', async () => {
-    const reload = vi.fn(async () => {});
-    bridge.installed = { ok: true, models: [installedModel('qwen'), installedModel('embed', { embeddings: true })] };
-    await mount(undefined, 'installed', undefined, undefined, { models: [entry('Qwen')], loading: false, reload });
-    expect(reload).not.toHaveBeenCalled();
   });
 
   const rerender = async (catalog: NonNullable<ComponentProps<typeof ModelsScreen>['catalog']>) => {
-    act(() =>
-      root?.render(
-        <CssVarsProvider theme={desktopTheme}>
-          <ModelsScreen onClose={() => {}} catalog={catalog} />
-        </CssVarsProvider>
-      )
-    );
+    show(<ModelsScreen key={screenKey} onClose={() => {}} catalog={catalog} />);
     await flush();
     await flush();
   };

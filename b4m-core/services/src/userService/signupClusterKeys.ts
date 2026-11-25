@@ -1,6 +1,7 @@
 import { domainToASCII } from 'node:url';
 import { emailDomainOf } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+import { Logger } from '@bike4mind/observability';
 
 /** What DNS/RDAP know about a registrable domain. Every field is optional: a missing fact yields fewer keys. */
 export type DomainFacts = {
@@ -213,7 +214,7 @@ export function signupClusterKeys(
 export function cachedFailOpenLookup(
   lookup: DomainFactsLookup,
   onError: (domain: string, error: unknown) => void = (domain, error) => {
-    console.warn(`[signup-cluster-keys] Domain facts lookup failed for ${domain}:`, error);
+    Logger.warn('[signup-cluster-keys] Domain facts lookup failed', { domain, error });
   }
 ): DomainFactsLookup {
   const cache = new Map<string, Promise<DomainFacts | null>>();

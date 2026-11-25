@@ -1,4 +1,9 @@
-import type { IModerationHit, IUserRepository, UserModerationStatus } from '@bike4mind/common';
+import {
+  MODERATION_SEVERE_CATEGORIES,
+  type IModerationHit,
+  type IUserRepository,
+  type UserModerationStatus,
+} from '@bike4mind/common';
 
 /**
  * Per-user moderation-hit policy.
@@ -68,6 +73,8 @@ export interface ApplyModerationHitResult {
   action: ModerationAction;
   /** The user's escalation status after applying the hit. */
   status: UserModerationStatus;
+  /** The status this hit moved the user into, or null when it changed nothing. */
+  transitionedTo: UserModerationStatus | null;
 }
 
 /**
@@ -116,11 +123,44 @@ export async function applyModerationHit(deps: {
 
   if (transitionTo) {
     await users.setModerationStatus(userId, transitionTo, {
+      automatic: true,
       throttledUntil:
         transitionTo === 'throttled' ? new Date(now.getTime() + MODERATION_POLICY.throttleDurationMs) : null,
     });
-    return { hitsInWindow, action, status: transitionTo };
+    return { hitsInWindow, action, status: transitionTo, transitionedTo: transitionTo };
   }
 
-  return { hitsInWindow, action, status: currentStatus };
+  return { hitsInWindow, action, status: currentStatus, transitionedTo: null };
+}
+
+/** Why a moderation hit is alerted on. Ordinary hits are not: they escalate through the policy above. */
+export type ModerationEscalationReason = 'suspend_pending' | 'severe_category';
+
+/**
+ * The liveops alert for one moderation hit. Carries no prompt text and no quest id: the alert links
+ * to the admin review list, where the hit history lives.
+ */
+export interface ModerationEscalationAlert {
+  userId: string;
+  reasons: ModerationEscalationReason[];
+  categories: string[];
+  source: IModerationHit['source'];
+  hitsInWindow: number;
+}
+
+/**
+ * The alert a hit raises, or null for an ordinary hit. A user is alerted once on entering
+ * `suspend_pending` (the transition, not every later hit), and on every hit carrying a
+ * {@link MODERATION_SEVERE_CATEGORIES} label. Pure.
+ */
+export function moderationEscalationAlert(
+  userId: string,
+  hit: Pick<IModerationHit, 'categories' | 'source'>,
+  decision: Pick<ApplyModerationHitResult, 'hitsInWindow' | 'transitionedTo'>
+): ModerationEscalationAlert | null {
+  const reasons: ModerationEscalationReason[] = [];
+  if (decision.transitionedTo === 'suspend_pending') reasons.push('suspend_pending');
+  if (hit.categories.some(category => MODERATION_SEVERE_CATEGORIES.includes(category))) reasons.push('severe_category');
+  if (reasons.length === 0) return null;
+  return { userId, reasons, categories: hit.categories, source: hit.source, hitsInWindow: decision.hitsInWindow };
 }

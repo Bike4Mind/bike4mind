@@ -6,6 +6,8 @@
  * renderer draws it as text and never as markup; see PrStatusBar.
  */
 
+import type { PrAttention, PrIconStatus } from './prAttention';
+
 export type PrState = 'OPEN' | 'MERGED' | 'CLOSED';
 
 export interface PrRef {
@@ -64,6 +66,10 @@ export interface PrBinding extends PrRef {
   lastState?: PrState;
   /** Whether that read found a draft, so the sidebar can tell draft from open without a read. */
   lastDraft?: boolean;
+  /** That read's attention and badges, so the sidebar can draw them, marked stale, before a re-read. See prIconStatus. */
+  lastAttention?: PrAttention;
+  lastBehind?: boolean;
+  lastAutoMerge?: boolean;
   /** Set when auto-archive has fired, so it fires once even if the user unarchives. */
   archivedOnClose?: boolean;
   /**
@@ -189,9 +195,8 @@ export function prDisplayState(state: PrState, isDraft = false, queued = false):
 }
 
 /** What the sidebar shows for one conversation's PR. Built from stored and in-memory state only. */
-export interface PrSummary {
+export interface PrSummary extends PrIconStatus {
   number: number;
-  state: PrDisplayState;
   /** `owner/repo`, so a search for `owner/repo#N` can tell this PR from another repo's. */
   repo?: string;
 }
@@ -203,7 +208,15 @@ export interface PrSummaryEvent {
 }
 
 export function samePrSummary(a: PrSummary | null | undefined, b: PrSummary | null | undefined): boolean {
-  return a?.number === b?.number && a?.state === b?.state && a?.repo === b?.repo;
+  return (
+    a?.number === b?.number &&
+    a?.state === b?.state &&
+    a?.repo === b?.repo &&
+    a?.attention === b?.attention &&
+    a?.behind === b?.behind &&
+    a?.autoMerge === b?.autoMerge &&
+    a?.stale === b?.stale
+  );
 }
 
 /** Whether `gh` can be used at all. Anything but 'ok' replaces the bar's content with a fix-it line. */

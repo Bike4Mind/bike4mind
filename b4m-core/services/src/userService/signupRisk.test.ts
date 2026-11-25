@@ -8,6 +8,7 @@ import {
   signupRiskPolicySchema,
   type SignupRiskAdapters,
 } from './signupRisk';
+import { Logger } from '@bike4mind/observability';
 
 const policy = {
   enabled: true as const,
@@ -208,7 +209,7 @@ describe('assessSignupGrant', () => {
   });
 
   it.each(['readPolicy', 'collectSignals'] as const)('holds on %s failures', async method => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     const adapters = adaptersFor();
     vi.mocked(adapters[method]).mockRejectedValue(new Error('unavailable'));
     expect(await assessSignupGrant(11, adapters)).toMatchObject({ decision: { credits: 0, status: 'unavailable' } });
@@ -216,7 +217,7 @@ describe('assessSignupGrant', () => {
   });
 
   it('reports invalid policy and skips collection without logging policy contents', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     const adapters = adaptersFor();
     vi.mocked(adapters.readPolicy).mockResolvedValue({ enabled: true, version: 'invalid' });
     await expect(assessSignupGrant(11, adapters)).resolves.toMatchObject({ decision: { credits: 0 } });
@@ -240,7 +241,7 @@ describe('assessSignupGrant', () => {
   });
 
   it('propagates atomic commit failures without emitting, but ignores metric failure after commit', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     const adapters = adaptersFor();
     vi.mocked(adapters.commit).mockRejectedValueOnce(new Error('commit failed'));
     await expect(assessSignupGrant(11, adapters)).rejects.toThrow('commit failed');
@@ -251,7 +252,7 @@ describe('assessSignupGrant', () => {
   });
 
   it('keeps a committed grant successful when the telemetry adapter throws synchronously', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     const adapters = adaptersFor();
     vi.mocked(adapters.emitBand).mockImplementation(() => {
       throw new Error('synchronous telemetry failure');

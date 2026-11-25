@@ -327,10 +327,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
     section: 'admin',
     label: 'Credit Analytics',
     description:
-      'Credits per user and adjustments, margins against provider invoices, org and API usage, and the transaction ledger',
+      'Credits per user and adjustments, margins against provider invoices, org and API usage, ElevenLabs plan usage, and the transaction ledger',
     navigationType: 'tab',
     target: '15', // AdminTab.CreditAnalytics
-    keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost'],
+    keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost', 'elevenlabs', 'vendor plan'],
     requiresAdmin: true,
   },
   {
@@ -642,17 +642,6 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
-    id: 'admin.liveops_triage',
-    section: 'admin',
-    label: 'LiveOps Triage',
-    description:
-      'Triage configs that turn Slack error alerts into GitHub or Jira issues: dry run, run now, run history',
-    navigationType: 'tab',
-    target: '35', // AdminTab.LiveOpsTriage
-    keywords: ['liveops', 'triage', 'errors', 'incidents', 'production issues', 'monitoring'],
-    requiresAdmin: true,
-  },
-  {
     id: 'admin.dashboard',
     section: 'admin',
     label: 'Dashboard',
@@ -710,6 +699,24 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '74', // AdminTab.ModerationIncidents
     keywords: ['moderation', 'image moderation', 'incident review', 'flagged images', 'false positive'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.text_moderation_review',
+    section: 'admin',
+    label: 'Text moderation review',
+    description:
+      'Review users throttled or pending suspension for flagged prompts, or with a severe-category hit; confirm the suspension, keep them throttled or return them to active',
+    navigationType: 'tab',
+    target: '84', // AdminTab.TextModerationReview
+    keywords: [
+      'text moderation',
+      'flagged prompts',
+      'moderation hits',
+      'suspend pending',
+      'throttled users',
+      'moderation appeal',
+    ],
     requiresAdmin: true,
   },
   {

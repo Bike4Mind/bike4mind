@@ -5,6 +5,7 @@ import { assertCallableFunctionsEnabled } from '@bike4mind/server-utils/callable
 import {
   deleteCallableFunction,
   getCallableFunction,
+  setCallableFunctionApproval,
   setCallableFunctionEnabled,
 } from '@bike4mind/server-utils/callableFunctions/registry';
 import {
@@ -24,7 +25,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (!req.user) throw new UnauthorizedError('Sign in to use callable functions.');
     await assertCallableFunctionsEnabled(req.user);
     const body = parseCallableFunctionBody(callableFunctionPatchBodySchema, req.body);
-    res.json(await setCallableFunctionEnabled(req.user, functionId(req.query), body.enabled));
+    const id = functionId(req.query);
+    res.json(
+      'approval' in body
+        ? await setCallableFunctionApproval(req.user, id, body.approval)
+        : await setCallableFunctionEnabled(req.user, id, body.enabled)
+    );
   })
   // Not gated, as for custom connections: a person can always remove what they saved.
   .delete(perUserRateLimit('DELETE /api/callable-functions/[id]'), async (req, res) => {

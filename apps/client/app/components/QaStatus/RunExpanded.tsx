@@ -3,7 +3,7 @@ import { CircularProgress, Typography } from '@mui/joy';
 import { useQaRunDetail } from '@client/app/hooks/data/qaStatus';
 import RunDetail from './RunDetail';
 
-/** Lazy-loads a run's detail when its row is expanded on /status. */
+/** Lazy-loads a run's detail when its row is expanded on /admin/qa. */
 const RunExpanded: FC<{ runId: string; onOpenTest: (testKey: string) => void }> = ({ runId, onOpenTest }) => {
   const { data, isLoading, isError } = useQaRunDetail(runId);
   if (isLoading) return <CircularProgress size="sm" />;

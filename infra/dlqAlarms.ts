@@ -57,7 +57,6 @@ import {
   githubLakeRevokeQueueDLQ,
   generationJobDLQ,
   renderJobDLQ,
-  liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
   sreFixQueueDLQ,
@@ -72,6 +71,7 @@ import {
 } from './queues';
 import {
   telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
@@ -494,13 +494,6 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     sourceQueue: 'renderJobQueue',
     queue: renderJobDLQ,
   },
-  {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    queue: liveOpsTriageQueueDLQ,
-  },
   // SRE Agent DLQs
   {
     label: 'sre-fix',
@@ -763,6 +756,12 @@ if (isMonitoredStage) {
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
     queue: telemetryAlertDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    queue: moderationAlertsDeadLetter.queue,
   });
   createDlqAlarms({
     label: 'session-enrichment',

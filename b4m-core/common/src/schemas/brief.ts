@@ -23,10 +23,16 @@ export const BRIEF_LIMITS = {
   draftBody: 4000,
 } as const;
 
-export const BriefSourceRefSchema = z.object({
-  kind: z.enum(['email']),
-  emailId: z.string().min(1).describe('The ingested email the item was triaged from.'),
-});
+export const BriefSourceRefSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('email'),
+    emailId: z.string().min(1).describe('The ingested email the item was triaged from.'),
+  }),
+  z.object({
+    kind: z.literal('delegation'),
+    delegationId: z.string().min(1).describe('The item you delegated; read it with `GET /api/v1/delegations/{id}`.'),
+  }),
+]);
 
 export const BriefItemSchema = z.object({
   id: z.string().min(1).describe('Stable within the brief.'),

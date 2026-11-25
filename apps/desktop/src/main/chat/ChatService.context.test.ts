@@ -11,6 +11,10 @@ import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 /**
  * What `/clear` and `/compact` do to a conversation, end to end through the service.
  *
@@ -274,8 +278,8 @@ describe('ChatService context boundaries', () => {
       expect(messages[boundary + 1]).toMatchObject({ role: 'user', content: 'carry on' });
 
       expect(progress()).toEqual([
-        { type: 'auto-compact', sessionId: id, running: true },
-        { type: 'auto-compact', sessionId: id, running: false },
+        { type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: true },
+        { type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: false },
       ]);
     });
 

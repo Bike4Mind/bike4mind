@@ -8,8 +8,8 @@ import path from 'path';
 // for every vitest package (safe: vitest 4 accepts vite ^6 || ^7 || ^8). This
 // vite devDep and the plugin-react v6 bump are coupled — keep both or revert both.
 import react from '@vitejs/plugin-react';
-import tsconfigPaths from 'vite-tsconfig-paths';
 import { barrelImportsPlugin } from './vitest.barrelImports';
+import { SLOW_TEST_MS, SlowTestReporter } from './vitest.slowTests';
 
 const INTEGRATION_LANE = process.env.CLIENT_TEST_LANE === 'integration';
 // `test:repo`: the `*.repo.test.ts` files, which read the repo far outside this package (`git grep`
@@ -61,6 +61,18 @@ const NODE_PROJECT_INCLUDE = NODE_TEST_ROOTS.flatMap(root =>
   (LANE_INCLUDE ?? VITEST_DEFAULT_INCLUDE).map(glob => `${root}/${glob}`)
 );
 
+// Unit lane only: test files share their worker instead of each getting a fresh one. Per-file
+// startup (module graph, jsdom, setup) was about two thirds of a CI shard; reuse keeps node's own
+// module cache and the worker warm across files. vitest.setup.reuse.ts hands each file a clean
+// slate in place of the fresh worker. CLIENT_TEST_ISOLATE=1 brings isolation back, to tell an
+// order-dependent test from a real failure. The integration lane stays isolated: one mongod a file.
+const REUSE_WORKERS = !INTEGRATION_LANE && !REPO_LANE && process.env.CLIENT_TEST_ISOLATE !== '1';
+
+// Files that cannot share a worker: each pins process state before a module node loads only once
+// per process (the settings schema in @bike4mind/common reads B4M_SELF_HOST as it loads), so they
+// would see, or leave behind, another file's copy. Each gets a fresh worker of its own.
+const ISOLATED_NODE_TESTS = REUSE_WORKERS ? ['server/utils/creditPreflight.selfhost.test.ts'] : [];
+
 const LANE_EXCLUDE = [
   '**/node_modules/**',
   'e2e',
@@ -76,7 +88,13 @@ const LANE_EXCLUDE = [
 const projectTest = {
   ...sharedTest,
   globals: true,
-  setupFiles: [path.resolve(__dirname, 'vitest.setup.ts')],
+  // Order is load-bearing: the reuse reset must run before anything the file's own setup installs.
+  setupFiles: [
+    ...(REUSE_WORKERS ? [path.resolve(__dirname, 'vitest.setup.reuse.ts')] : []),
+    path.resolve(__dirname, 'vitest.setup.ts'),
+  ],
+  // forks, not threads: a worker thread ignores a test's process.env.TZ change.
+  ...(REUSE_WORKERS ? { isolate: false, pool: 'forks' as const } : {}),
   // Raise the 15s shared floor to 30s. Load-bearing for the integration lane, which holds ~60
   // real-Mongo suites (createMongoServer/createMongoReplSet): their first write per worker pays an
   // unavoidable, legitimate cold-start: Mongoose builds every model's indexes on connect (needed
@@ -109,8 +127,9 @@ const projectTest = {
 // app bundle, but vitest would load all ~70 Joy components (~0.5s) for every test that renders one,
 // so the plugin does the same rewrite here. See vitest.barrelImports.ts.
 const projectVite = () => ({
-  plugins: [react(), tsconfigPaths(), barrelImportsPlugin(['@mui/joy'])],
+  plugins: [react(), barrelImportsPlugin(['@mui/joy'])],
   resolve: {
+    tsconfigPaths: true,
     alias: {
       '@server': path.resolve(__dirname, 'server'),
       '@client': path.resolve(__dirname, '.'),
@@ -124,9 +143,6 @@ const projectVite = () => ({
     global: 'globalThis',
     'process.env': {},
   },
-  optimizeDeps: {
-    include: ['uuid'],
-  },
 });
 
 export default defineConfig({
@@ -138,6 +154,14 @@ export default defineConfig({
     // below costs no file parallelism, and VITEST_MAX_WORKERS still caps the whole run rather
     // than being handed out once per project.
     ...sharedTest,
+    // Unit lane only: the integration and repo lanes are slow by design. Naming reporters replaces
+    // vitest's defaults, so the GitHub one it adds on its own in Actions is restated here.
+    ...(INTEGRATION_LANE || REPO_LANE
+      ? {}
+      : {
+          slowTestThreshold: SLOW_TEST_MS,
+          reporters: ['default', ...(process.env.GITHUB_ACTIONS ? ['github-actions'] : []), new SlowTestReporter()],
+        }),
     projects: [
       {
         ...projectVite(),
@@ -153,9 +177,28 @@ export default defineConfig({
             ...(INTEGRATION_LANE ? [] : [path.resolve(__dirname, 'vitest.setup.unitMongoose.ts')]),
           ],
           include: NODE_PROJECT_INCLUDE,
-          exclude: LANE_EXCLUDE,
+          exclude: [...LANE_EXCLUDE, ...ISOLATED_NODE_TESTS],
         },
       },
+      ...(ISOLATED_NODE_TESTS.length
+        ? [
+            {
+              ...projectVite(),
+              test: {
+                ...projectTest,
+                name: 'node-isolated',
+                environment: 'node',
+                isolate: true,
+                setupFiles: [
+                  path.resolve(__dirname, 'vitest.setup.ts'),
+                  path.resolve(__dirname, 'vitest.setup.unitMongoose.ts'),
+                ],
+                include: ISOLATED_NODE_TESTS,
+                exclude: LANE_EXCLUDE,
+              },
+            },
+          ]
+        : []),
       {
         ...projectVite(),
         test: {

@@ -6,7 +6,6 @@ import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '@bike4mind/observability';
 
 const exportRateLimit = rateLimit({ limit: 5, windowMs: 60000, bucket: 'quest-plans/export' });
@@ -35,7 +34,7 @@ const handler = baseApi()
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const exportJobId = uuidv4();
+    const exportJobId = crypto.randomUUID();
 
     Logger.info('[Quest Export] Starting export', { planId, exportJobId, userId });
 

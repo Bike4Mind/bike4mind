@@ -31,6 +31,7 @@ export interface SideAppAlertMessageInput {
 }
 
 const formatHours = (hours: number) => `${Math.round(hours * 10) / 10}h`;
+const formatOpenFor = (ms: number) => (ms < 60 * 60 * 1000 ? 'under 1h' : formatHours(ms / (60 * 60 * 1000)));
 
 /** Slack mrkdwn for one alert. Carries counts and failure reasons only, never user identifiers. */
 export function formatSideAppAlertMessage(input: SideAppAlertMessageInput): { text: string; blocks: unknown[] } {
@@ -65,11 +66,13 @@ export function formatSideAppAlertMessage(input: SideAppAlertMessageInput): { te
       }
     }
   } else if (input.openedForMs !== undefined) {
-    lines.push(`It was open for ${formatHours(input.openedForMs / (60 * 60 * 1000))}.`);
+    lines.push(`It was open for ${formatOpenFor(input.openedForMs)}.`);
   }
 
   if (input.appUrl) {
-    lines.push(`<${input.appUrl.replace(/\/$/, '')}/admin?tab=credit-analytics|Open Credit analytics, Side apps tab>`);
+    lines.push(
+      `<${input.appUrl.replace(/\/$/, '')}/admin?tab=credit-analytics&creditTab=side-apps|Open the Side apps board>`
+    );
   }
   const text = lines.join('\n');
   return { text: headline.replace(/[*]/g, ''), blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] };

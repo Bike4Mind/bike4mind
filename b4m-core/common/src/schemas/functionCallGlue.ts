@@ -53,7 +53,7 @@ def _output_type_problems(field, value, path, problems):
             problems.append({'path': path, 'message': 'must be a number'})
         elif kind == 'integer' and not isinstance(value, int):
             problems.append({'path': path, 'message': 'must be a whole number'})
-    elif kind == 'array' and isinstance(value, list):
+    elif kind == 'array' and isinstance(value, (list, tuple)):
         for index, item in enumerate(value):
             _output_type_problems(field.get('items'), item, path + '.' + str(index) if path else str(index), problems)
     elif kind == 'object' and isinstance(value, dict) and isinstance(field.get('properties'), dict):

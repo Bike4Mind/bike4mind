@@ -10,9 +10,11 @@ import {
   RUN_NOT_FOUND_ERROR_CODE,
 } from '@bike4mind/common';
 
-const { contracts, completionRunRepository } = vi.hoisted(() => ({
+const { contracts, completionRunRepository, userRepository, resolveActiveOrg } = vi.hoisted(() => ({
   contracts: [] as { operationId: string; auth: string; scopes?: readonly string[] }[],
   completionRunRepository: { findById: vi.fn(), raiseBudget: vi.fn() },
+  userRepository: { findById: vi.fn() },
+  resolveActiveOrg: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/defineNextRoute', () => ({
@@ -26,7 +28,8 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   },
 }));
 vi.mock('@server/middlewares/perUserRateLimit', () => ({ perUserRateLimit: () => vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ completionRunRepository }));
+vi.mock('@bike4mind/database', () => ({ completionRunRepository, userRepository }));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg }));
 
 import handler from '../budget';
 
@@ -66,6 +69,19 @@ describe('POST /api/v1/completion-runs/{runId}/budget', () => {
     expect(contracts.map(c => [c.operationId, c.auth, c.scopes])).toEqual([
       ['raiseCompletionRunBudget', 'apiKeyOrJwt', [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE]],
     ]);
+  });
+
+  it('raises the budget of a run bound to the organization named in organization_id', async () => {
+    const orgRun = storedRun({ ownerType: CreditHolderType.Organization, ownerId: 'org-2' });
+    userRepository.findById.mockResolvedValueOnce({ id: 'user-1', isAdmin: false });
+    resolveActiveOrg.mockResolvedValueOnce('org-2');
+    completionRunRepository.findById.mockResolvedValue(orgRun);
+    completionRunRepository.raiseBudget.mockResolvedValue({ kind: 'raised', run: { ...orgRun, budgetCredits: 800 } });
+
+    const res = await call(800, { validated: { budgetCredits: 800, organization_id: 'org-2' } });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(completionRunRepository.raiseBudget).toHaveBeenCalledWith(RUN_ID, 800);
   });
 
   it('raises the budget and answers 200 with the run in the published shape', async () => {

@@ -78,6 +78,7 @@ import {
 } from '@client/app/utils/shareFooter';
 import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
 import { isCrawlerUserAgent } from '@server/utils/crawlerUserAgent';
+import { hasQualifyingSocialParty } from '@server/services/gears/socialParty';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -111,7 +112,8 @@ import {
   type ArtifactParseResult,
 } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
-import { WEBSITE_URL, getBrandName } from '@client/config/general';
+import { getBrandName } from '@client/config/general';
+import { publishedAuthorShareLink, publishMarketingUrl, type ShareLinkVia } from '@server/referrals/shareLink';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 
 /**
@@ -1164,17 +1166,18 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           siteName: process.env.APP_NAME || '',
         })
       : null;
-  // Lead-gen targets, both runtime-derived (no hardcoded brand host): the marketing
-  // site with UTM attribution when configured, else a branded fallback. The embed
-  // pill falls back to the artifact's canonical page; the own-tab bar falls back to
-  // the app root (the viewer is already on the canonical page). The bar only renders
-  // for an own-tab open-public artifact.
-  const marketing = (medium: string) =>
-    WEBSITE_URL
-      ? `${WEBSITE_URL.replace(/\/+$/, '')}/?utm_source=shared-artifact&utm_medium=${medium}&utm_campaign=publish`
-      : '';
-  const pillHref = isEmbed ? marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
-  const barHref = !isEmbed && isOpenPublic ? marketing('share-bar') || `${docOrigin}/` : '';
+  // Lead-gen targets, both runtime-derived (no hardcoded brand host). The author's share
+  // link comes first: it lands on the same tagged marketing page (signup when none is
+  // configured), and a signup that follows credits the author (server/referrals/shareLink.ts).
+  // Without one, the marketing site with UTM attribution when configured, else a branded
+  // fallback. The embed pill falls back to the artifact's canonical page; the own-tab bar
+  // falls back to the app root (the viewer is already on the canonical page). The bar only
+  // renders for an own-tab open-public artifact.
+  const leadVia: ShareLinkVia | null = isEmbed ? 'embed-badge' : isOpenPublic ? 'share-bar' : null;
+  const authorLink = leadVia ? await publishedAuthorShareLink(artifact.ownerId, owner, leadVia) : null;
+  const marketing = (via: ShareLinkVia) => publishMarketingUrl(via) ?? '';
+  const pillHref = isEmbed ? authorLink || marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
+  const barHref = !isEmbed && isOpenPublic ? authorLink || marketing('share-bar') || `${docOrigin}/` : '';
   // "Save as HTML" on the wrapper - see `exportSelfAuthorizes`. Dropped in embed mode,
   // which is chrome-less by design.
   const exportHtmlHref =
@@ -1666,9 +1669,7 @@ function bumpViewCount(
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
   const isCrawler = isCrawlerUserAgent(userAgent);
-  const countsAsExternal = isAuthed && !isOwner && !isCrawler;
-  if (countsAsExternal) void recordVerifiedView(artifact, String(viewer!.id)).catch(() => undefined);
-  const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+  const signedInOther = isAuthed && !isOwner && !isCrawler;
   // The per-link counter needs its own definition, NOT externalViewCount's: a share link exists
   // so the viewer does NOT sign in, so requiring authentication would leave it at zero forever.
   // Anonymous-inclusive and crawler-excluded; owner-excluded only when the owner is
@@ -1677,8 +1678,13 @@ function bumpViewCount(
   // for externalViewCount, where it was a credit-reward bypass): a per-link count is a
   // vanity/diagnostic number that grants nothing.
   const countsAsShareView = !!shareTokenEntryId && !isOwner && !isCrawler;
-  void (
-    countsAsShareView
+  void (async () => {
+    const countsAsExternal =
+      signedInOther &&
+      (await hasQualifyingSocialParty(String(artifact.ownerId), [String(viewer!.id)]).catch(() => false));
+    if (countsAsExternal) void recordVerifiedView(artifact, String(viewer!.id), true).catch(() => undefined);
+    const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+    await (countsAsShareView
       ? PublishedArtifact.updateOne(
           { publicId: artifact.publicId },
           {
@@ -1687,8 +1693,8 @@ function bumpViewCount(
           },
           { arrayFilters: [{ 'entry._id': shareTokenEntryId }] }
         )
-      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc })
-  ).catch(() => undefined);
+      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }));
+  })().catch(() => undefined);
   // Audit non-owner authenticated gate views only: the point is who OTHER than the
   // owner reached a gated artifact, and the owner bypasses their own gate anyway.
   if (gateView && viewer?.id && !isOwner) {

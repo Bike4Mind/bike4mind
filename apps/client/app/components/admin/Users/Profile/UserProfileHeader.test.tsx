@@ -69,7 +69,7 @@ describe('UserProfileHeader', () => {
     );
 
     expect(screen.getByTestId('user-profile-joined')).toHaveTextContent(/^Joined with Google \u00b7 /);
-    expect(screen.getByTestId('user-profile-org-chip')).toHaveTextContent('Acme');
+    expect(screen.getByTestId('user-profile-org-chip')).toHaveTextContent('Home org: Acme');
   });
 
   it('shows an unlisted signup method and level as stored', () => {

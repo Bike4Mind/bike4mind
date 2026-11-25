@@ -73,6 +73,12 @@ describe('ReferralRewardNotice', () => {
     expect(useGetReferralSummary).toHaveBeenCalledWith({ enabled: false });
   });
 
+  it('asks the server for an account that only shares a link', () => {
+    useUser.setState({ currentUser: { id: 'u1', regInvites: [], referralCode: 'abc123' } } as never);
+    render(<ReferralRewardNotice />);
+    expect(useGetReferralSummary).toHaveBeenCalledWith({ enabled: true });
+  });
+
   it('still announces when browser storage is blocked', () => {
     const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('blocked');
@@ -102,5 +108,50 @@ describe('rewardNoticeMessage', () => {
         reward('b', 1000, '2027-02-01T12:00:00.000Z'),
       ])
     ).toBe('You earned 7,000 credits for 2 friends you invited. They are ready to use and expire on Feb 1, 2027.');
+  });
+
+  it('names the milestone a lone milestone reward was paid for', () => {
+    expect(
+      rewardNoticeMessage([
+        {
+          id: 'm',
+          credits: 1500,
+          grantedAt: '2026-11-03T00:00:00.000Z',
+          expiresAt: '2027-02-01T12:00:00.000Z',
+          milestoneFriends: 10,
+        },
+      ])
+    ).toBe(
+      'You earned 1,500 credits for reaching 10 active friends you invited. They are ready to use and expire on Feb 1, 2027.'
+    );
+  });
+
+  it('reads naturally for a one-friend milestone', () => {
+    expect(
+      rewardNoticeMessage([
+        {
+          id: 'm',
+          credits: 100,
+          grantedAt: '2026-11-03T00:00:00.000Z',
+          expiresAt: '2027-02-01T12:00:00.000Z',
+          milestoneFriends: 1,
+        },
+      ])
+    ).toBe('You earned 100 credits for your first active friend. They are ready to use and expire on Feb 1, 2027.');
+  });
+
+  it('does not count a milestone reward as a friend', () => {
+    expect(
+      rewardNoticeMessage([
+        { id: 'a', credits: 1000, grantedAt: '2026-11-03T00:00:00.000Z', expiresAt: '2027-02-01T12:00:00.000Z' },
+        {
+          id: 'm',
+          credits: 500,
+          grantedAt: '2026-11-03T00:00:00.000Z',
+          expiresAt: '2027-02-01T12:00:00.000Z',
+          milestoneFriends: 5,
+        },
+      ])
+    ).toBe('You earned 1,500 credits for your referrals. They are ready to use and expire on Feb 1, 2027.');
   });
 });

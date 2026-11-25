@@ -238,6 +238,16 @@ export const BriefEvents = {
   ),
 };
 
+export const DelegationEvents = {
+  Process: event(
+    'delegation.process',
+    z.object({
+      delegationId: z.string(),
+      userId: z.string(),
+    })
+  ),
+};
+
 export const SessionEvents = {
   AutoName: event(
     'session.auto_name',
@@ -550,6 +560,22 @@ export const TelemetryEvents = {
       telemetry: ContextTelemetrySchema,
       alertConfig: ContextTelemetryAlertsSchema,
       requestId: z.string().optional(), // Quest ID for correlation
+    })
+  ),
+};
+
+export const ModerationEvents = {
+  // A user entering suspend_pending, or any severe-category hit. Published fire-and-forget from the
+  // chat path; apps/workers/src/events/moderationEscalationAlert.ts posts it to the abuse alarm channel.
+  // Mirrors ModerationEscalationAlert in b4m-core/services/src/userService/moderationPolicy.ts.
+  Escalation: event(
+    'moderation.escalation',
+    z.object({
+      userId: z.string(),
+      reasons: z.array(z.enum(['suspend_pending', 'severe_category'])).min(1),
+      categories: z.array(z.string()),
+      source: z.enum(['openai', 'bedrock', 'provider']),
+      hitsInWindow: z.number().int().min(0),
     })
   ),
 };

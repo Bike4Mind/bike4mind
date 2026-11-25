@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   COMPLETION_RUNS_PATH,
   MINT_FAILURE_BACKOFF_MS,
+  RunBudgetNotRaisedError,
   createCompletionRunMinter,
+  fetchRunBudget,
+  raiseRunBudget,
   readCompletionRunUsage,
   requestCompletionRun,
 } from './completionRuns';
@@ -130,5 +133,133 @@ describe('readCompletionRunUsage', () => {
     const get = vi.fn().mockResolvedValue({ status: 200, data: { runId: RUN.runId } });
     const result = await readCompletionRunUsage(axiosGet(get), RUN.runId);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('run budgets', () => {
+  const BUDGET = { budgetCredits: 500, committedCredits: 410, reservedCredits: 60, remainingCredits: 90 };
+
+  it('mints with the budget when one is given, and without the field otherwise', async () => {
+    const post = vi.fn().mockResolvedValue({ status: 201, data: { ...RUN, budgetCredits: 500 } });
+    await requestCompletionRun(axiosWith(post), 'root-1', vi.fn(), 500);
+    await requestCompletionRun(axiosWith(post), 'root-1', vi.fn());
+    expect(post.mock.calls.map(call => call[1])).toEqual([
+      { rootSessionId: 'root-1', budgetCredits: 500 },
+      { rootSessionId: 'root-1' },
+    ]);
+  });
+
+  it('passes the budget through the minter', async () => {
+    const request = vi.fn().mockResolvedValue(RUN);
+    const mint = createCompletionRunMinter(vi.fn(), request);
+    await mint('local-1', axiosWith(vi.fn()), 'root-1', 750);
+    expect(request).toHaveBeenCalledWith(expect.anything(), 'root-1', expect.any(Function), 750, undefined);
+  });
+
+  const spend = {
+    creditsCharged: 0,
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+  const usage = {
+    runId: RUN.runId,
+    createdAt: RUN.createdAt,
+    settled: spend,
+    byRole: [],
+    byPurpose: [],
+    byModel: [],
+    byAttempt: [],
+    byAttemptTruncated: false,
+  };
+
+  it("reads the budget from the run's usage", async () => {
+    const get = vi.fn().mockResolvedValue({ data: { ...usage, budget: BUDGET } });
+    await expect(fetchRunBudget({ get } as unknown as AxiosInstance, RUN.runId)).resolves.toEqual(BUDGET);
+    expect(get).toHaveBeenCalledWith(`${COMPLETION_RUNS_PATH}/${RUN.runId}/usage`, expect.anything());
+  });
+
+  it('reads no budget for a run minted without one', async () => {
+    const get = vi.fn().mockResolvedValue({ data: usage });
+    await expect(fetchRunBudget({ get } as unknown as AxiosInstance, RUN.runId)).resolves.toBeUndefined();
+  });
+
+  it('throws when the usage read fails', async () => {
+    const get = vi.fn().mockRejectedValue(new Error('offline'));
+    await expect(fetchRunBudget({ get } as unknown as AxiosInstance, RUN.runId)).rejects.toThrow('offline');
+  });
+
+  it('raises the budget, and names a change that is not a raise', async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 200, data: {} })
+      .mockRejectedValueOnce(
+        Object.assign(new Error('Conflict'), {
+          isAxiosError: true,
+          response: { status: 409, data: { error: 'Not raised', errorCode: 'run_budget_not_raised' } },
+        })
+      );
+    await raiseRunBudget(axiosWith(post), RUN.runId, 1000);
+    expect(post).toHaveBeenCalledWith(
+      `${COMPLETION_RUNS_PATH}/${RUN.runId}/budget`,
+      { budgetCredits: 1000 },
+      expect.anything()
+    );
+    await expect(raiseRunBudget(axiosWith(post), RUN.runId, 900)).rejects.toBeInstanceOf(RunBudgetNotRaisedError);
+  });
+});
+
+describe('run payer', () => {
+  const ORG = { organization_id: 'org-1' };
+  const PERSONAL = { organization_id: null };
+
+  it('binds a minted run to an organization, and omits the field for Personal', async () => {
+    const post = vi.fn().mockResolvedValue({ status: 201, data: RUN });
+    await requestCompletionRun(axiosWith(post), 'root-1', vi.fn(), undefined, ORG);
+    await requestCompletionRun(axiosWith(post), 'root-1', vi.fn(), undefined, PERSONAL);
+    expect(post.mock.calls.map(call => call[1])).toEqual([
+      { rootSessionId: 'root-1', organization_id: 'org-1' },
+      { rootSessionId: 'root-1' },
+    ]);
+  });
+
+  it('passes the payer through the minter', async () => {
+    const request = vi.fn().mockResolvedValue(RUN);
+    const mint = createCompletionRunMinter(vi.fn(), request);
+    await mint('local-1', axiosWith(vi.fn()), 'root-1', undefined, ORG);
+    expect(request).toHaveBeenCalledWith(expect.anything(), 'root-1', expect.any(Function), undefined, ORG);
+  });
+
+  it("names an organization run's payer on its usage and budget reads", async () => {
+    const get = vi.fn().mockRejectedValue(new Error('offline'));
+    const post = vi.fn().mockResolvedValue({ status: 200, data: {} });
+    const axios = { get, post } as unknown as AxiosInstance;
+
+    await readCompletionRunUsage(axios, RUN.runId, ORG);
+    await readCompletionRunUsage(axios, RUN.runId, PERSONAL);
+    await raiseRunBudget(axios, RUN.runId, 1000, ORG);
+
+    expect(get.mock.calls.map(call => call[0])).toEqual([
+      `${COMPLETION_RUNS_PATH}/${RUN.runId}/usage?organization_id=org-1`,
+      `${COMPLETION_RUNS_PATH}/${RUN.runId}/usage`,
+    ]);
+    // The budget route validates its payer from the body, so the query must carry none.
+    expect(post).toHaveBeenCalledWith(
+      `${COMPLETION_RUNS_PATH}/${RUN.runId}/budget`,
+      { budgetCredits: 1000, organization_id: 'org-1' },
+      expect.anything()
+    );
+  });
+
+  it('raises a Personal run with no organization in the budget body', async () => {
+    const post = vi.fn().mockResolvedValue({ status: 200, data: {} });
+    await raiseRunBudget(axiosWith(post), RUN.runId, 1000, PERSONAL);
+    expect(post).toHaveBeenCalledWith(
+      `${COMPLETION_RUNS_PATH}/${RUN.runId}/budget`,
+      { budgetCredits: 1000 },
+      expect.anything()
+    );
   });
 });

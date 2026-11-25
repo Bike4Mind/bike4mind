@@ -87,13 +87,6 @@ async function click(id: string) {
 }
 
 describe('personal Billing settings', () => {
-  it('does not offer the unavailable Business plan', async () => {
-    await render();
-    expect(element('billing-business-tab')).toBeNull();
-    expect(element('billing-business-card')).toBeNull();
-    expect(element('billing-plan-card')).not.toBeNull();
-  });
-
   it('purchases the selected pack in desktop and refreshes without inventing a credit grant', async () => {
     await render();
     expect(element('billing-credit-pack-package_25k')?.textContent).toContain('33,333');
@@ -132,12 +125,6 @@ describe('personal Billing settings', () => {
     expect(button('billing-top-up-btn').disabled).toBe(false);
     await click('billing-top-up-btn');
     expect(purchaseCredits).toHaveBeenCalledExactlyOnceWith('package_25k', true);
-  });
-
-  it('shows no terms checkbox when the server does not ask for consent', async () => {
-    await render();
-    expect(element('billing-terms-checkbox')).toBeNull();
-    expect(button('billing-top-up-btn').disabled).toBe(false);
   });
 
   it('reports payment-window failures', async () => {
@@ -184,6 +171,12 @@ describe('personal Billing settings', () => {
 
   it('presents real pricing, cadence and benefits with native plan selection', async () => {
     await render();
+    // The Business plan is not offered here.
+    expect(element('billing-business-tab')).toBeNull();
+    expect(element('billing-business-card')).toBeNull();
+    // No terms checkbox when the server does not ask for consent.
+    expect(element('billing-terms-checkbox')).toBeNull();
+    expect(button('billing-top-up-btn').disabled).toBe(false);
     expect(element('billing-balance')?.textContent).toContain('25,000');
     expect(element('billing-plan-card')?.textContent).toContain('Includes');
     expect(element('billing-plan-card')?.textContent).toContain('$30.00 / month');

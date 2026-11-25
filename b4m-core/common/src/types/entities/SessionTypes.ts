@@ -121,13 +121,15 @@ export type SessionProps = {
  * thrown quest error is classified for billing reasons, never for the
  * provider-configuration reasons the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
  * than a second vocabulary - a code added here that is not in `API_ERROR_CODES`
- * fails the build.
+ * fails the build. `run_budget_exhausted` lands on an image generation quest whose `run` budget
+ * could not cover the render's credit hold (ImageGeneration.process).
  */
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
   'spend_frozen',
   'free_quest_limit_reached',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 
@@ -807,6 +809,13 @@ export interface ISession {
    * names. Mirrors how `systemPromptText` scopes a session without a project.
    */
   enabledTools?: string[];
+  /**
+   * The Studio production this notebook directs, set by the agent start of a Direct launch after the server
+   * checks the caller owns the composition and has Productions open. While set, every turn runs in agent mode
+   * with the director tools and system context (client: useSendMessage; executor: agentExecutor.directedSession).
+   * Not copied by clone/fork/snip.
+   */
+  productionCompositionId?: string;
   /**
    * Tools that must NOT be offered to the model for this session, even if the
    * request or global auto-adds include them. Applied as a denylist after all

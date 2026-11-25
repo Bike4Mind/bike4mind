@@ -21,7 +21,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/admin/actionCounts', () => ({ computeAdminActionCounts: mockCompute }));
+vi.mock('@bike4mind/server-utils/admin/actionCounts', () => ({ computeAdminActionCounts: mockCompute }));
 
 import handler from '../action-counts';
 

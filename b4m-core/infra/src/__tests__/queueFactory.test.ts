@@ -74,6 +74,23 @@ describe('buildQueuePair', () => {
     expect(pair.queueArgs('arn').transform).toEqual({ queue: { tags } });
   });
 
+  it('sets a DLQ visibility timeout only when given, next to the DLQ transform', () => {
+    const pair = buildQueuePair({
+      name: 'q',
+      visibilityTimeout: '5 minutes',
+      dlqVisibilityTimeout: '15 minutes',
+      encryption: 'kms',
+    });
+    expect(pair.dlqArgs).toEqual({
+      visibilityTimeout: '15 minutes',
+      transform: { queue: { kmsMasterKeyId: SQS_KMS_KEY_ALIAS } },
+    });
+    expect(pair.queueArgs('arn').visibilityTimeout).toBe('5 minutes');
+    expect(buildQueuePair({ name: 'q', visibilityTimeout: '5 minutes' }).dlqArgs).not.toHaveProperty(
+      'visibilityTimeout'
+    );
+  });
+
   it('is generic over the ARN type (Pulumi Output passthrough)', () => {
     const fakeOutput = { __pulumiOutput: true };
     const pair = buildQueuePair<typeof fakeOutput>({ name: 'q', visibilityTimeout: '1 minute' });

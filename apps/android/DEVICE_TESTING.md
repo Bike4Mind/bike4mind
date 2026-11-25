@@ -117,6 +117,18 @@ Needs a server with the briefs API (`/api/v1/briefs`) and a user with some recen
 - [ ] With the `brief_ready` category switched off for the user (`preferences.pushNotifications.brief_ready: false`,
       set from web or iOS), no brief push arrives; the brief is still reachable from the chats list.
 
+## Studio gallery
+
+Needs a user with some generated images, video and audio (made on web or iOS; Android only views them).
+
+- [ ] "Studio" on the chats list opens the gallery: generated media newest first, each filter (All, Images, Video,
+      Audio) showing only its kind, and more tiles loading as the grid scrolls.
+- [ ] Leave and reopen the gallery, then kill and relaunch the app and open it again: the last grid (tiles included)
+      appears at once, before the network answers. In airplane mode the grid still shows, with an inline error.
+- [ ] An image opens full screen; pinch and double tap zoom it. A video and an audio file play with system controls.
+- [ ] Open a file, wait past its link expiry (about an hour), then play it: it reloads instead of failing.
+- [ ] Sign out and sign in as another user: the first user's grid never appears, not even for a moment.
+
 ## Links
 
 Until the server publishes `assetlinks.json`, open links with `adb shell am start -a android.intent.action.VIEW -d <url>

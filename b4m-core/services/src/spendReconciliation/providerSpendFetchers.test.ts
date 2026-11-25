@@ -319,7 +319,7 @@ describe('spend request serialization', () => {
       );
     const pending = fetchAnthropicSpend('test-admin-key', '2026-07', fetchFn);
     await vi.runAllTimersAsync();
-    expect(await pending).toEqual({ providerUsd: 3, breakdown: { cost: 3 } });
+    expect(await pending).toEqual({ providerUsd: 3, orgUsd: 3, breakdown: { cost: 3 } });
     expect(fetchFn.mock.calls[1][0]).toBe(fetchFn.mock.calls[2][0]);
     vi.useRealTimers();
   });
@@ -338,4 +338,122 @@ it('rejects a failed later page rather than returning partial spend', async () =
     .mockResolvedValueOnce(new Response('private response', { status: 400 }));
   await expect(fetchAnthropicSpend('test-admin-key', '2026-07', fetchFn)).rejects.toThrow('Anthropic API 400');
   expect(fetchFn).toHaveBeenCalledTimes(2);
+});
+
+describe('scoped spend reports', () => {
+  const anthropicRow = (amount: string, workspaceId: string | null, description = 'Input Tokens') => ({
+    amount,
+    description,
+    workspace_id: workspaceId,
+  });
+
+  it('groups the Anthropic cost report by workspace and keeps only the scoped workspaces', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      Response.json({
+        data: [
+          {
+            results: [
+              anthropicRow('1000', 'wrkspc_prod'),
+              anthropicRow('500', null, 'Output Tokens'),
+              anthropicRow('4000', 'wrkspc_other'),
+            ],
+          },
+        ],
+        has_more: false,
+      })
+    );
+
+    const result = await fetchAnthropicSpend(
+      'test-admin-key',
+      '2026-07',
+      fetchFn,
+      {},
+      {
+        workspaceIds: ['wrkspc_prod', 'default'],
+      }
+    );
+
+    const url = new URL(fetchFn.mock.calls[0][0]);
+    expect(url.searchParams.getAll('group_by[]')).toEqual(['description', 'workspace_id']);
+    expect(result).toEqual({
+      providerUsd: 15,
+      orgUsd: 55,
+      breakdown: { 'Input Tokens': 10, 'Output Tokens': 5 },
+    });
+  });
+
+  it('reports Anthropic API key scope as unapplied, since the cost report cannot group by key', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(Response.json({ data: [{ results: [anthropicRow('1000', null)] }], has_more: false }));
+
+    const result = await fetchAnthropicSpend('test-admin-key', '2026-07', fetchFn, {}, { apiKeyIds: ['apikey_prod'] });
+
+    expect(new URL(fetchFn.mock.calls[0][0]).searchParams.getAll('group_by[]')).toEqual(['description']);
+    expect(result).toEqual({
+      providerUsd: 10,
+      orgUsd: 10,
+      breakdown: { 'Input Tokens': 10 },
+      unappliedScope: ['apiKeyIds'],
+    });
+  });
+
+  it('leaves an unscoped Anthropic request unchanged and reports the org total as provider spend', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(Response.json({ data: [{ results: [anthropicRow('1000', null)] }], has_more: false }));
+
+    const result = await fetchAnthropicSpend('test-admin-key', '2026-07', fetchFn);
+
+    expect(new URL(fetchFn.mock.calls[0][0]).searchParams.getAll('group_by[]')).toEqual(['description']);
+    expect(result).toEqual({ providerUsd: 10, orgUsd: 10, breakdown: { 'Input Tokens': 10 } });
+  });
+
+  it('groups the OpenAI cost report by project and API key and keeps rows matching both', async () => {
+    const row = (value: number, projectId: string | null, apiKeyId: string | null) => ({
+      line_item: 'gpt-5, input',
+      project_id: projectId,
+      api_key_id: apiKeyId,
+      amount: { value, currency: 'usd' },
+    });
+    const fetchFn = vi.fn().mockResolvedValue(
+      Response.json({
+        data: [
+          {
+            start_time: 0,
+            end_time: 1,
+            results: [
+              row(3, 'proj_prod', 'key_prod'),
+              row(7, 'proj_prod', 'key_dev'),
+              row(11, 'proj_other', 'key_prod'),
+              row(13, 'proj_prod', null),
+            ],
+          },
+        ],
+      })
+    );
+
+    const result = await fetchOpenAISpend(
+      'test-admin-key',
+      '2026-07',
+      fetchFn,
+      {},
+      {
+        projectIds: ['proj_prod'],
+        apiKeyIds: ['key_prod'],
+      }
+    );
+
+    const url = new URL(fetchFn.mock.calls[0][0]);
+    expect(url.searchParams.getAll('group_by[]')).toEqual(['line_item', 'project_id', 'api_key_id']);
+    expect(result).toEqual({ providerUsd: 3, orgUsd: 34, breakdown: { 'gpt-5, input': 3 } });
+  });
+
+  it('groups the OpenAI cost report by project only when only projects are scoped', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(Response.json({ data: [] }));
+
+    await fetchOpenAISpend('test-admin-key', '2026-07', fetchFn, {}, { projectIds: ['proj_prod'] });
+
+    expect(new URL(fetchFn.mock.calls[0][0]).searchParams.getAll('group_by[]')).toEqual(['line_item', 'project_id']);
+  });
 });

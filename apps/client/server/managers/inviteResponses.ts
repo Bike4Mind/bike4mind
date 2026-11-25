@@ -1,6 +1,7 @@
 import { sharingService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { isDisabledSpaceInviteKey } from '@server/managers/inviteManager';
 import { reserveInviteAccept } from '@server/utils/inviteAcceptLimits';
 import {
   inviteRepository,
@@ -16,7 +17,7 @@ import {
   fileTagRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { foldTagName, InviteType, ProjectEvents } from '@bike4mind/common';
+import { foldTagName, InviteType, NotFoundError, ProjectEvents } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { payOrgInviteBonus } from '@server/credits/orgInviteBonus';
@@ -71,6 +72,7 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
 
 export async function acceptInviteForUser(req: InviteResponder, id: string) {
   const user = req.user!;
+  if (await isDisabledSpaceInviteKey(id)) throw new NotFoundError('Invite not found');
   // Charged before the lookup and outside the transaction, so a refused or rolled-back accept still counts.
   await reserveInviteAccept(user.id);
   // Wrap in a transaction so the invite mutation and the document/user writes it
@@ -145,6 +147,7 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
 }
 
 export async function refuseInviteForUser(req: InviteResponder, id: string) {
+  if (await isDisabledSpaceInviteKey(id)) throw new NotFoundError('Invite not found');
   // Public-ness (link vs email invite) is derived from invite state in the service;
   // no client-supplied flag is trusted for the recipient check. Revoking the whole
   // invite (rather than just the caller's own slot) needs the share-authority

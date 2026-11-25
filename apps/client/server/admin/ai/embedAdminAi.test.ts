@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AdminAiConfigSchema } from '@bike4mind/common';
-import { AdminAiSkip } from './adminAiSkip';
+import { AdminAiSkip } from '@bike4mind/server-utils/admin/ai/adminAiSkip';
 import { embedAdminAi } from './embedAdminAi';
 
 const config = (mode = 'shadow', enabled = true) =>

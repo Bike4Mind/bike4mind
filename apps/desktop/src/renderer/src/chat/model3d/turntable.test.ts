@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { ModelJoint } from '@shared/model3d';
 import { orbitShot, swing, turntableCamera, turntableMimeType, turntablePose, turntableScript } from './turntable';
+import { newPartNames, startBuildIn } from './buildIn';
+import { changedParts, EDIT_FLASH_MS, startEditFlash } from './editFlash';
 
 const lid: ModelJoint = { name: 'lid', motion: 'turn', axis: [1, 0, 0], range: [0, 100] };
 const drawer: ModelJoint = { name: 'drawer', motion: 'slide', axis: [0, 0, 1], range: [-20, 0] };
@@ -117,5 +119,127 @@ describe('turntableMimeType', () => {
     expect(turntableMimeType(() => true)).toBe('video/webm;codecs=vp9');
     expect(turntableMimeType(type => type === 'video/webm')).toBe('video/webm');
     expect(turntableMimeType(() => false)).toBeNull();
+  });
+});
+
+describe('buildIn', () => {
+  function part(name: string, y: number): THREE.Mesh {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), new THREE.MeshStandardMaterial());
+    mesh.name = name;
+    mesh.position.y = y;
+    return mesh;
+  }
+
+  function model(...parts: THREE.Mesh[]): THREE.Group {
+    const root = new THREE.Group();
+    root.add(...parts);
+    return root;
+  }
+
+  describe('newPartNames', () => {
+    it('names only the parts the new model adds', () => {
+      const before = model(part('body', 0), part('lid', 10));
+      const after = model(part('body', 0), part('lid', 10), part('lock', 5));
+      expect([...newPartNames(before, after)]).toEqual(['lock']);
+      expect(newPartNames(after, after).size).toBe(0);
+    });
+
+    it('names every part when there is nothing to compare with', () => {
+      expect([...newPartNames(null, model(part('body', 0), part('lid', 10)))].sort()).toEqual(['body', 'lid']);
+    });
+  });
+
+  describe('startBuildIn', () => {
+    it('prints the named parts up from the bottom, lowest first, then leaves them as they were', () => {
+      const body = part('body', 0);
+      const lid = part('lid', 10);
+      const material = lid.material as THREE.MeshStandardMaterial;
+      const root = model(lid, body);
+      const build = startBuildIn(root, new Set(['body', 'lid']), 0);
+      expect(build).not.toBeNull();
+      const bodyPlane = (body.material as THREE.MeshStandardMaterial).clippingPlanes?.[0];
+      const lidPlane = material.clippingPlanes?.[0];
+      // Nothing shows before a part starts: the plane sits at its bottom.
+      expect(lidPlane?.constant).toBeLessThanOrEqual(5);
+      expect(build?.step(300)).toBe(true);
+      expect(bodyPlane?.constant).toBeGreaterThan(-5);
+      // The lid sits higher, so it starts later and is less far along.
+      expect((lidPlane?.constant ?? 0) - 5).toBeLessThan((bodyPlane?.constant ?? 0) + 5);
+      expect(material.emissive.getHex()).not.toBe(0);
+      expect(build?.step(5000)).toBe(false);
+      expect(material.clippingPlanes).toBeNull();
+      expect(material.emissive.getHex()).toBe(0);
+    });
+
+    it('leaves other parts alone and does nothing without a named part', () => {
+      const body = part('body', 0);
+      const root = model(body, part('lid', 10));
+      expect(startBuildIn(root, new Set(['lock']), 0)).toBeNull();
+      const build = startBuildIn(root, new Set(['lid']), 0);
+      expect((body.material as THREE.MeshStandardMaterial).clippingPlanes).toBeNull();
+      build?.finish();
+      expect(build?.step(0)).toBe(false);
+    });
+  });
+});
+
+describe('editFlash', () => {
+  function part(name: string, size: number, color = '#888888'): THREE.Mesh {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(size, size, size), new THREE.MeshStandardMaterial({ color }));
+    mesh.name = name;
+    return mesh;
+  }
+
+  function model(...parts: THREE.Mesh[]): THREE.Group {
+    const root = new THREE.Group();
+    root.add(...parts);
+    return root;
+  }
+
+  describe('changedParts', () => {
+    it('names only the picked parts whose shape or material changed', () => {
+      const before = model(part('lid', 2), part('body', 4), part('handle', 1));
+      const after = model(part('lid', 3), part('body', 4), part('handle', 1, '#b5862b'));
+      expect(changedParts(before, after, ['lid', 'body', 'handle'])).toEqual(['lid', 'handle']);
+      expect(changedParts(before, after, ['body'])).toEqual([]);
+    });
+
+    it('leaves out a part that is missing from either build', () => {
+      expect(changedParts(model(part('lid', 2)), model(part('cap', 2)), ['lid'])).toEqual([]);
+    });
+  });
+
+  describe('startEditFlash', () => {
+    it('ghosts the old shape, glows the new one, and cleans both up when done', () => {
+      const previous = model(part('lid', 2), part('body', 4));
+      const shown = model(part('lid', 3), part('body', 4));
+      const parent = new THREE.Group();
+      parent.add(shown);
+      const lid = shown.children[0] as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
+      const flash = startEditFlash(parent, shown, previous, ['lid'], 0, false);
+      expect(parent.children).toHaveLength(2);
+      const ghost = parent.children[1];
+      const visible: string[] = [];
+      ghost.traverse(node => node instanceof THREE.Mesh && node.visible && visible.push(node.name));
+      expect(visible).toEqual(['lid']);
+      expect(lid.material.emissiveIntensity).toBeGreaterThan(0.5);
+
+      expect(flash?.step(EDIT_FLASH_MS / 2)).toBe(true);
+      expect(flash?.step(EDIT_FLASH_MS)).toBe(false);
+      expect(parent.children).toEqual([shown]);
+      expect(lid.material.emissive.getHex()).toBe(0);
+      expect(lid.material.emissiveIntensity).toBe(1);
+    });
+
+    it('holds still under reduced motion, without fading', () => {
+      const shown = model(part('lid', 3));
+      const parent = model();
+      parent.add(shown);
+      const flash = startEditFlash(parent, shown, model(part('lid', 2)), ['lid'], 0, true);
+      const ghost = parent.children[1].children[0] as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+      const opacity = ghost.material.opacity;
+      flash?.step(EDIT_FLASH_MS / 2);
+      expect(ghost.material.opacity).toBe(opacity);
+    });
   });
 });

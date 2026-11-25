@@ -130,6 +130,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     systemPromptId: { type: String, required: false },
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
+    productionCompositionId: { type: String, required: false },
     disabledTools: [{ type: String, required: false }],
     autoAddedTools: [{ type: String, required: false }],
     disableUserIntegrations: { type: Boolean, required: false },

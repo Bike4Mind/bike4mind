@@ -10,7 +10,7 @@ const configValues = vi.hoisted((): Record<string, string | undefined> => ({
 
 vi.mock('../config', () => ({ Config: configValues }));
 
-import { getMailConfigStatus, requiredMailSecrets, statusTransportKind } from './configStatus';
+import { getMailConfigStatus, requiredMailSecrets, statusTransportKind, unusedMailSecrets } from './configStatus';
 
 const SMTP_KEYS = ['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_FROM'];
 
@@ -136,6 +136,13 @@ describe('requiredMailSecrets', () => {
   it('needs only the sender on SES and the whole set on SMTP', () => {
     expect(requiredMailSecrets('ses')).toEqual(['MAIL_FROM']);
     expect(requiredMailSecrets('smtp')).toEqual(SMTP_KEYS);
+  });
+});
+
+describe('unusedMailSecrets', () => {
+  it('names the four SMTP settings on SES and nothing on SMTP', () => {
+    expect(unusedMailSecrets('ses')).toEqual(['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD']);
+    expect(unusedMailSecrets('smtp')).toEqual([]);
   });
 });
 

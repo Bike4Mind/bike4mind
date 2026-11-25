@@ -9,6 +9,12 @@ import { imageGenerationTool } from './implementation/imageGeneration';
 import { musicGenerationTool } from './implementation/musicGeneration';
 import { audioGenerationTool } from './implementation/audioGeneration';
 import { videoGenerationTool } from './implementation/videoGeneration';
+import {
+  productionAddAudioTool,
+  productionAssembleTool,
+  productionGenerateShotTool,
+  productionStoryboardTool,
+} from './implementation/production';
 import { webSearchTool } from './implementation/websearch';
 import { webFetchTool } from './implementation/webfetch';
 import { wolframAlphaTool } from './implementation/wolfram_alpha';
@@ -90,7 +96,19 @@ export {
   type AudioToolJobs,
 } from './implementation/audioGeneration';
 export {
+  PRODUCTION_TOOL_NAMES,
+  isProductionToolConfig,
+  type ProductionAudioAdapter,
+  type ProductionAudioResult,
+  type ProductionJobView,
+  type ProductionToolConfig,
+} from './implementation/production';
+export {
+  buildEditJobRequest,
+  buildGenerateJobRequest,
+  clampImageCount,
   isImageJobToolConfig,
+  type ImageJobRequestDraft,
   type ImageLimitRefusal,
   type ImageToolConfig,
   type ImageToolJobsResult,
@@ -125,6 +143,10 @@ export const b4mTools = {
   music_generation: musicGenerationTool,
   audio_generation: audioGenerationTool,
   video_generation: videoGenerationTool,
+  production_storyboard: productionStoryboardTool,
+  production_generate_shot: productionGenerateShotTool,
+  production_add_audio: productionAddAudioTool,
+  production_assemble: productionAssembleTool,
   web_search: webSearchTool,
   web_fetch: webFetchTool,
   wolfram_alpha: wolframAlphaTool,
@@ -200,10 +222,16 @@ export {
   isCustomToolOffered,
   CUSTOM_MCP_DATA_NOTICE,
   MAX_CUSTOM_TOOLS_PER_TURN,
+  CUSTOM_MCP_OUTPUT_TOO_LARGE_BODY,
+  CUSTOM_MCP_AWAITING_APPROVAL_PREFIX,
+  customMcpResultBody,
+  customMcpResultText,
   type CustomMcpToolHost,
   type CustomMcpListOptions,
   type CustomMcpConnectionOffer,
+  type CustomMcpOfferedTool,
   type CustomMcpToolCallInput,
+  type CustomMcpToolCallResult,
   type CustomMcpApprovalRequest,
 } from './customMcpTools';
 

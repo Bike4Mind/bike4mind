@@ -28,6 +28,7 @@
     <string name="sessions_title">Chats</string>
     <string name="sessions_brief">Brief</string>
     <string name="sessions_settings">Settings</string>
+    <string name="sessions_studio">Studio</string>
     <string name="sessions_new_chat">New chat</string>
     <string name="sessions_default_model">Default model: %1$s</string>
     <string name="sessions_load_failed">Could not load chats</string>
@@ -39,6 +40,8 @@
     <string name="chat_send">Send</string>
     <string name="chat_refused">The message was refused (%1$s)</string>
     <string name="chat_refused_unknown">unknown</string>
+    <string name="chat_send_failed">Not sent. Check your connection and try again.</string>
+    <string name="chat_send_failed_reason">Not sent. %1$s</string>
     <string name="chat_reply_failed">The reply failed.</string>
     <string name="chat_reply_failed_code">The reply failed (%1$s).</string>
     <string name="chat_reply_pending" translatable="false">...</string>
@@ -69,6 +72,34 @@
     <string name="approval_failed_upgrade">Update Bike4Mind to answer approvals.</string>
 
     <!-- Brief -->
+    <!-- Studio gallery (apps/ios Features/Media) -->
+    <string name="media_title">Studio</string>
+    <string name="media_filter_all">All</string>
+    <string name="media_filter_images">Images</string>
+    <string name="media_filter_video">Video</string>
+    <string name="media_filter_audio">Audio</string>
+    <string name="media_kind_image">Image</string>
+    <string name="media_kind_video">Video</string>
+    <string name="media_kind_audio">Audio</string>
+    <string name="media_tile_description">%1$s, %2$s</string>
+    <string name="media_open">Open full screen</string>
+    <string name="media_loading">Loading media</string>
+    <string name="media_load_failed">Couldn\'t load your media</string>
+    <string name="media_empty_title">Nothing created yet</string>
+    <string name="media_empty_all">Images, video and music you generate will appear here.</string>
+    <string name="media_empty_images">No images generated yet.</string>
+    <string name="media_empty_video">No video generated yet.</string>
+    <string name="media_empty_audio">No audio generated yet.</string>
+    <string name="media_open_failed">Couldn\'t open this file</string>
+    <string name="media_processing_title">Not available</string>
+    <string name="media_processing_body">This file is still being processed.</string>
+    <string name="media_error_offline">Couldn\'t reach Bike4Mind. Check your connection and try again.</string>
+    <string name="media_error_not_found">This file is no longer available.</string>
+    <string name="media_error_rate_limited">Too many requests. Try again in a moment.</string>
+    <string name="media_error_unreadable">This needs a newer version of Bike4Mind.</string>
+    <string name="media_error_unplayable">The link to this file expired.</string>
+    <string name="media_error_server">The server could not load your media (HTTP %1$d).</string>
+
     <string name="brief_title">Brief</string>
     <string name="brief_load_failed">Couldn\'t load the brief</string>
     <string name="brief_empty_title">No brief yet</string>

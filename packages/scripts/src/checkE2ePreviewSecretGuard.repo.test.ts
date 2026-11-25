@@ -111,7 +111,8 @@ describe('e2e skip rendering', () => {
     const statusExpressions = [...contents.matchAll(/"text": "\*Status\*[^"]*"/g)].map(m => m[0]);
     expect(statusExpressions).toHaveLength(1);
 
-    expect(statusExpressions[0]).toContain('steps.results.outputs.label');
+    // slack_status is the classified label plus its emoji (scripts/e2e-outcome.mjs slackFields).
+    expect(statusExpressions[0]).toContain('steps.results.outputs.slack_status');
     expect(contents).toContain('E2E_PREVIEW_SKIPPED: ${{ steps.e2e.outputs.preview_skipped }}');
     expect(contents).toContain('run: node scripts/e2e-outcome.mjs');
   });

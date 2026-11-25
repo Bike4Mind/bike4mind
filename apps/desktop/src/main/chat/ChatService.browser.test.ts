@@ -14,6 +14,10 @@ import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import type { BrowserPage, BrowserProvider, BrowserTabInfo } from './tools/types';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -261,12 +265,14 @@ describe('ChatService agent browser', () => {
       })
     );
     streams[0].write(frame('[DONE]'));
-    const asked = await vi
-      .waitUntil(() => events.find(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'), {
-        timeout: 1000,
-        interval: 5,
-      })
-      .catch(() => undefined);
+    // A call that runs without a card opens the second request instead.
+    const card = await vi.waitUntil(
+      () =>
+        events.find(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval') ??
+        (post.mock.calls.length >= 2 ? 'none' : undefined),
+      { timeout: 3000, interval: 5 }
+    );
+    const asked = card === 'none' ? undefined : card;
     if (asked && asked.type === 'tool-start' && asked.call.approvalId) {
       approvals.resolve(asked.call.approvalId, { decision: 'once' });
     }

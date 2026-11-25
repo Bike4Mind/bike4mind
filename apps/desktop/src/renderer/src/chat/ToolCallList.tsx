@@ -59,6 +59,12 @@ const HOST_QUESTION: Record<string, string> = {
   loop: 'Start this loop? Each run is a turn that costs credits.',
 };
 
+function deleteManyQuestion(call: ChatToolCall): string | undefined {
+  if (call.name !== 'session_delete' || !Array.isArray(call.input.session_ids)) return undefined;
+  const count = new Set(call.input.session_ids).size;
+  return count > 1 ? `Delete these ${count} conversations for good?` : undefined;
+}
+
 /** Read-only tools that still stop at the gate; "Run this command?" would misname them. */
 const READ_QUESTION: Record<string, string> = {
   [WEB_FETCH_TOOL_NAME]: 'Read this web page?',
@@ -295,7 +301,8 @@ function ApprovalPrompt({
           ? diffs.length > 1
             ? `Apply this patch to ${diffs.length} files?`
             : APPROVAL_QUESTION[diff.operation]
-          : (own(HOST_QUESTION, call.name) ??
+          : (deleteManyQuestion(call) ??
+            own(HOST_QUESTION, call.name) ??
             own(READ_QUESTION, call.name) ??
             (isGeneration(call.name)
               ? 'Generate this? It costs credits.'
@@ -371,7 +378,9 @@ function ApprovalPrompt({
               data-testid="chat-tool-approve-once"
             >
               {irreversible
-                ? 'Delete it'
+                ? deleteManyQuestion(call)
+                  ? 'Delete them'
+                  : 'Delete it'
                 : diff
                   ? 'Apply this change'
                   : isGeneration(call.name)
@@ -421,7 +430,9 @@ function ApprovalPrompt({
               data-testid="chat-tool-deny"
             >
               {irreversible
-                ? 'Keep it'
+                ? deleteManyQuestion(call)
+                  ? 'Keep them'
+                  : 'Keep it'
                 : diff
                   ? "Don't change it"
                   : isGeneration(call.name)

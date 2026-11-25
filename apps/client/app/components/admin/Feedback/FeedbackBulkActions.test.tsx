@@ -1,13 +1,13 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const mocks = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mocks.post } }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
-import FeedbackBulkActions from './FeedbackBulkActions';
+import FeedbackBulkActions, { feedbackRowScrollClearance } from './FeedbackBulkActions';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const ids = ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439012'];
@@ -89,5 +89,102 @@ describe('feedback bulk dialog', () => {
     await waitFor(() => expect(screen.getByTestId('feedback-bulk-error')).toHaveTextContent('Selection changed'));
     expect(screen.getByTestId('feedback-bulk-dialog-confirm-btn')).toBeDisabled();
     expect(onApplied).not.toHaveBeenCalled();
+  });
+});
+
+describe('feedback bulk bar clearance', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reports the sticky bar height and resets it to 0 when the bar goes away', () => {
+    let resize: ResizeObserverCallback = () => {};
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+    const onHeightChange = vi.fn();
+    const { unmount } = render(
+      <CssVarsProvider theme={theme}>
+        <FeedbackBulkActions
+          selection={{ mode: 'explicit', ids }}
+          filters={{ sort: 'desc' }}
+          total={7}
+          disabled={false}
+          onSelectionChange={onSelectionChange}
+          onApplied={onApplied}
+          onHeightChange={onHeightChange}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('feedback-bulk-bar-wrapper')).toContainElement(
+      screen.getByTestId('admin-bulk-action-bar')
+    );
+    resize([{ contentRect: { height: 80 } } as ResizeObserverEntry], {} as ResizeObserver);
+    expect(onHeightChange).toHaveBeenLastCalledWith(80);
+    unmount();
+    expect(onHeightChange).toHaveBeenLastCalledWith(0);
+  });
+
+  it('adds the scroll container bottom padding the stuck bar sits above', () => {
+    let resize: ResizeObserverCallback = () => {};
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+    const onHeightChange = vi.fn();
+    render(
+      <CssVarsProvider theme={theme}>
+        <div style={{ overflowY: 'auto', paddingBottom: '64px' }}>
+          <div>
+            <FeedbackBulkActions
+              selection={{ mode: 'explicit', ids }}
+              filters={{ sort: 'desc' }}
+              total={7}
+              disabled={false}
+              onSelectionChange={onSelectionChange}
+              onApplied={onApplied}
+              onHeightChange={onHeightChange}
+            />
+          </div>
+        </div>
+      </CssVarsProvider>
+    );
+    resize([{ contentRect: { height: 70 } } as ResizeObserverEntry], {} as ResizeObserver);
+    expect(onHeightChange).toHaveBeenLastCalledWith(134);
+  });
+
+  it('renders no wrapper while nothing is selected', () => {
+    render(
+      <CssVarsProvider theme={theme}>
+        <FeedbackBulkActions
+          selection={{ mode: 'explicit', ids: [] }}
+          filters={{ sort: 'desc' }}
+          total={7}
+          disabled={false}
+          onSelectionChange={onSelectionChange}
+          onApplied={onApplied}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('feedback-bulk-bar-wrapper')).not.toBeInTheDocument();
+  });
+
+  it('sizes the row scroll margin for the bar when one is showing, else for the chat pill', () => {
+    expect(feedbackRowScrollClearance(0)).toBe(76);
+    expect(feedbackRowScrollClearance(40)).toBe(76);
+    expect(feedbackRowScrollClearance(120)).toBe(144);
   });
 });

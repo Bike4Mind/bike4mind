@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { GENERATED_IMAGE_EXTENSION_RE, type PublicImageJob } from '@bike4mind/common';
+import type { PublicImageJob } from '@bike4mind/common';
 import type { ChatMedia } from '@shared/chat';
-import { MediaToolError, type MediaApiClient, type QuestPoll } from './MediaApiClient';
+import { MediaToolError, type MediaApiClient } from './MediaApiClient';
 import type { MediaStore } from './MediaStore';
 
 /** First gap between polls. Nothing finishes faster than this, so a tighter first poll is waste. */
@@ -178,27 +178,6 @@ async function pollForOutput(jobId: string, deps: ImageGenerationDeps): Promise<
     if (signal.aborted) await cancelAfterAbort(client, jobId);
     throw error;
   }
-}
-
-/**
- * Where to download each image a legacy quest generated (StudioGenerationService's legacy branch only;
- * see the note on QuestPoll in MediaApiClient).
- *
- * `files` is the server's own resolution and is preferred: each entry carries a short-lived
- * presigned URL (or, on self-host without a browser-reachable storage endpoint, a same-origin
- * proxy URL). The `${cdnUrl}/generated/` fallback applies only to an older server that leaves
- * `files` empty, resolving the bare names on `images` from the serverConfig base. Names that
- * neither path can place are reported rather than dropped.
- */
-export function resolveImageUrls(quest: QuestPoll, cdnUrl: string): { urls: string[]; unreachable: string[] } {
-  const fromFiles = (quest.files ?? []).filter(file => file.isImage && file.url).map(file => file.url);
-  if (fromFiles.length > 0) return { urls: fromFiles, unreachable: [] };
-
-  const names = (quest.images ?? []).filter(name => GENERATED_IMAGE_EXTENSION_RE.test(name));
-  const base = cdnUrl.replace(/\/+$/, '');
-  if (!base) return { urls: [], unreachable: names };
-
-  return { urls: names.map(name => `${base}/generated/${name}`), unreachable: [] };
 }
 
 /**

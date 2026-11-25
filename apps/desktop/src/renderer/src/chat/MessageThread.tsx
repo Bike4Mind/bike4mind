@@ -22,6 +22,7 @@ import { useNavigate } from '@tanstack/react-router';
 import {
   isTurnBudgetStop,
   lastBoundaryIndex,
+  RUN_BUDGET_STOP,
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
   type ChatMessage,
@@ -53,6 +54,7 @@ import { useThreadFind } from './useThreadFind';
 import { SelectionActions } from './SelectionActions';
 import { automaticSummary, displayText, relaySummaryParts } from './relayRows';
 import { MentionedText, SessionLink } from './SessionLink';
+import { ChildReportCard } from './ChildReportCard';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
@@ -63,6 +65,7 @@ import { railGroupId, ReplyStatsRail, turnGridSx, useRailDrawn } from './ReplySt
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
+import { RunBudgetRaiseRow } from './orchestrator/RunBudgetRaiseRow';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
 const BUDGET_STOP_LABELS: Record<string, string> = {
@@ -78,7 +81,32 @@ const BUDGET_STOP_LABELS: Record<string, string> = {
  * happened and here is what to do about it" - the chip alone read as a dead end, which is
  * exactly what it no longer is.
  */
-function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: () => void }) {
+/**
+ * The reply a run-budget pause stopped, when only app notices (an agent's report, a waiting
+ * notice) landed under it: its raise row is still the way the run resumes, so it stays on offer.
+ */
+export function budgetPausedReplyIndex(messages: readonly ChatMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'assistant') return message.stopReason === RUN_BUDGET_STOP ? index : -1;
+    if (!message.system) return -1;
+  }
+  return -1;
+}
+
+function StopReasonRow({
+  reason,
+  onContinue,
+  sessionId,
+}: {
+  reason?: string;
+  onContinue?: () => void;
+  sessionId?: string | null;
+}) {
+  // Continue alone would be refused again: only a raise resumes the run. Offered on the last turn only.
+  if (reason === RUN_BUDGET_STOP) {
+    return onContinue && sessionId ? <RunBudgetRaiseRow sessionId={sessionId} /> : null;
+  }
   if (reason === 'max_tokens') {
     return (
       <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-truncated-chip">
@@ -145,7 +173,7 @@ function ServerCredentialsRow() {
         size="sm"
         variant="soft"
         color="primary"
-        onClick={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
+        onClick={() => void navigate({ to: '/settings', search: { section: 'models', setting: 'model-servers' } })}
         data-testid="chat-server-credentials-btn"
       >
         Open Model servers
@@ -414,6 +442,7 @@ const AssistantTurn = memo(function AssistantTurn({
   onContinue,
   onRegenerate,
   regenerateWarns = false,
+  sessionId,
   status,
   live = false,
   skipRounds = 0,
@@ -424,6 +453,8 @@ const AssistantTurn = memo(function AssistantTurn({
   onRegenerate?: () => void;
   /** The reply's tools changed things, so Regenerate asks first. */
   regenerateWarns?: boolean;
+  /** The open conversation, for the controls a stopped turn offers; absent with none open. */
+  sessionId?: string | null;
   onRespond: RespondToApproval;
   /** Absent with no conversation open; the running-command control is then not drawn. */
   onMove?: MoveCallToBackground;
@@ -517,7 +548,7 @@ const AssistantTurn = memo(function AssistantTurn({
         </Alert>
       )}
 
-      <StopReasonRow reason={message.stopReason} onContinue={onContinue} />
+      <StopReasonRow reason={message.stopReason} onContinue={onContinue} sessionId={sessionId} />
 
       {/* Last, under the reply it describes, which is where the eye already is while a turn
           runs. It lived in the composer before and read as a property of the input box rather
@@ -548,6 +579,7 @@ const AssistantTurn = memo(function AssistantTurn({
  */
 const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage }) {
   if (message.sideChatOf) return <SideChatOpening message={message} from={message.sideChatOf} />;
+  if (message.childReport) return <ChildReportCard message={message} report={message.childReport} />;
   return (
     <Sheet
       variant="soft"
@@ -1045,6 +1077,7 @@ export function MessageThread({
   const liveReplyId = streaming ? (liveTurn?.messageId ?? last?.id) : undefined;
   const warnings = useMemo(() => editWarnings(messages), [messages]);
   const regenerable = !streaming && onRegenerate ? regenerableReply(messages) : null;
+  const budgetPaused = useMemo(() => budgetPausedReplyIndex(messages), [messages]);
   const regenerateWarns = useMemo(() => (regenerable ? turnsChangedThings([regenerable]) : false), [regenerable]);
   // Through a ref so UserTurn's memo holds: the callback changes with every thread update.
   const editRef = useRef(onEditMessage);
@@ -1089,8 +1122,11 @@ export function MessageThread({
           onRespond={onRespond}
           {...(onMove ? { onMove } : {})}
           // Only the last turn, and only while nothing is running: resuming writes back
-          // into its own message, so a Continue on an older one would edit history.
-          {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+          // into its own message, so a Continue on an older one would edit history. A budget
+          // pause is the exception: its raise row resumes the run, not this message.
+          {...((index === messages.length - 1 || index === budgetPaused) && !streaming
+            ? { onContinue, sessionId }
+            : {})}
           {...(regenerable?.id === message.id && onRegenerate ? { onRegenerate, regenerateWarns } : {})}
           {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
           {...(skipRounds > 0 ? { skipRounds } : {})}

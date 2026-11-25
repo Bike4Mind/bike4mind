@@ -7,6 +7,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { sweepAbuseAssessments } from '@bike4mind/server-utils/security/abuseAssessment/abuseAssessment';
 import { linkedAccountGroupEvidence } from '@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence';
 import { applyAutoContainment, liveAutoContainmentDeps } from '@workers/security/autoContainment/executor';
+import { expireInterventionHolds } from '@workers/security/autoContainment/expiry';
 
 /** Stop starting new assessments this long before the Lambda timeout. */
 const STOP_MARGIN_MS = 60_000;
@@ -23,6 +24,13 @@ export async function handler(_event: never, context: Context) {
     stage: Resource.App.stage,
   });
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
+  // Runs even when assessment is disabled, so holds placed before a disable still get their expiry stamped.
+  try {
+    const expired = await expireInterventionHolds(new Date());
+    if (expired.holds > 0) logger.info('Expired automated intervention holds', expired);
+  } catch (error) {
+    logger.error('Expiring automated intervention holds failed', error);
+  }
   const result = await sweepAbuseAssessments({
     logger,
     shouldStop: () => context.getRemainingTimeInMillis() < STOP_MARGIN_MS,

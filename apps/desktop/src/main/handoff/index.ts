@@ -10,6 +10,30 @@ const partitionFor = (scope: string) =>
 
 type Companion = { window: BrowserWindow; ownerScope: string };
 
+// Server side: apps/client/pages/api/auth/desktop-web-session/{index,redeem}.ts.
+const WEB_SESSION_CODE_PATH = '/api/auth/desktop-web-session';
+const WEB_SESSION_REDEEM_PATH = '/api/auth/desktop-web-session/redeem';
+
+/**
+ * A single-use code that opens the companion window already signed in, so the user never runs the
+ * web sign-in inside this embedded browser, where Cloudflare Turnstile can reject it outright.
+ * Null when the code cannot be had; the window then falls back to the ordinary web sign-in.
+ */
+async function mintWebSessionCode(auth: AuthService): Promise<string | null> {
+  const api = auth.getSessionBoundApiClient();
+  if (!api) return null;
+  try {
+    const { code } = await api.post<{ code?: unknown }>(WEB_SESSION_CODE_PATH);
+    return typeof code === 'string' && code.length > 0 ? code : null;
+  } catch (error) {
+    console.warn(
+      'handoff: could not mint a web session code',
+      error instanceof Error ? error.message.slice(0, 200) : 'Unknown failure'
+    );
+    return null;
+  }
+}
+
 export function registerSessionHandoff(auth: AuthService): void {
   const currentScope = () => {
     const state = auth.getState();
@@ -87,7 +111,7 @@ export function registerSessionHandoff(auth: AuthService): void {
     const opened = new BrowserWindow({
       width: 1100,
       height: 800,
-      title: 'Server conversations - sign in to continue',
+      title: 'Web conversations',
       webPreferences: {
         sandbox: true,
         contextIsolation: true,
@@ -109,8 +133,37 @@ export function registerSessionHandoff(auth: AuthService): void {
     opened.on('closed', () => {
       if (companion?.window === opened) companion = null;
     });
-    await opened.loadURL(new URL('/notebooks', base).href, {
-      userAgent: `${opened.webContents.getUserAgent()} B4M-Server-Conversations`,
-    });
+    const userAgent = `${opened.webContents.getUserAgent()} B4M-Server-Conversations`;
+    // Minted after the window exists so concurrent opens still share one window (checked above).
+    const code = await mintWebSessionCode(auth);
+    if (opened.isDestroyed() || companion?.window !== opened || currentScope() !== nextScope) return;
+    if (!code) {
+      await opened.loadURL(new URL('/notebooks', base).href, { userAgent });
+      return;
+    }
+    // Electron counts an HTTP error page as a successful load, so watch the status of the redeem
+    // page itself: a server error there would otherwise leave the window on a raw error body.
+    let redeemFailedWith: number | null = null;
+    const onNavigate = (_event: Electron.Event, url: string, httpResponseCode: number) => {
+      if (new URL(url).pathname === WEB_SESSION_REDEEM_PATH && httpResponseCode >= 400) {
+        redeemFailedWith = httpResponseCode;
+      }
+    };
+    opened.webContents.on('did-navigate', onNavigate);
+    try {
+      // A POST navigation keeps the code out of the URL, history and access logs; the server answers
+      // with the refresh cookie and a 303 to /notebooks.
+      await opened.loadURL(new URL(WEB_SESSION_REDEEM_PATH, base).href, {
+        userAgent,
+        postData: [{ type: 'rawData', bytes: Buffer.from(JSON.stringify({ code })) }],
+        extraHeaders: 'Content-Type: application/json',
+      });
+    } finally {
+      if (!opened.isDestroyed()) opened.webContents.off('did-navigate', onNavigate);
+    }
+    if (redeemFailedWith === null) return;
+    if (opened.isDestroyed() || companion?.window !== opened || currentScope() !== nextScope) return;
+    console.warn('handoff: the web session redeem failed, falling back to web sign-in', redeemFailedWith);
+    await opened.loadURL(new URL('/notebooks', base).href, { userAgent });
   });
 }

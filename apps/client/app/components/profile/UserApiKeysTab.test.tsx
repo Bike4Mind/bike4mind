@@ -41,7 +41,7 @@ const keyWithSigningSecret = {
 };
 
 const h = vi.hoisted(() => ({
-  keys: [] as any[],
+  keys: [] as Record<string, unknown>[],
   deleteMutate: vi.fn(),
   revokeMutate: vi.fn(),
   createResult: { key: 'b4m_live_newkey123' } as Partial<CreateUserApiKeyResponse>,
@@ -61,9 +61,13 @@ const h = vi.hoisted(() => ({
     refusedOrgIds: string[];
   },
   billingOrgs: [] as { id: string; name: string }[],
+  functionsEnabled: false,
 }));
 
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
+vi.mock('@client/app/hooks/data/callableFunctions', () => ({
+  useCallableFunctionsEnabled: () => h.functionsEnabled,
+}));
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
@@ -221,6 +225,81 @@ describe('keyTestPath', () => {
     expect(keyTestPath([ApiKeyScope.AI_CHAT])).toBe('/api/v1/credits');
     expect(keyTestPath([ApiKeyScope.READ_PROJECTS])).toBe('/api/v1/projects');
     expect(keyTestPath([ApiKeyScope.WRITE_FILES])).toBeUndefined();
+    expect(keyTestPath([ApiKeyScope.FUNCTIONS_INVOKE])).toBe('/api/v1/functions');
+  });
+});
+
+describe('UserApiKeysTab - Functions access level', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.functionsEnabled = true;
+    h.createMutate.mockClear();
+  });
+  afterEach(() => {
+    h.functionsEnabled = false;
+  });
+
+  const openModal = () => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+  };
+  const functionsChip = () => screen.getByTestId('api-key-preset-functions').querySelector('button')!;
+
+  it('is not offered while callable functions are off', () => {
+    h.functionsEnabled = false;
+    openModal();
+    expect(screen.queryByTestId('api-key-preset-functions')).toBeNull();
+  });
+
+  it('mints a key holding functions:invoke and nothing else, and hides the other permissions', () => {
+    openModal();
+    fireEvent.click(functionsChip());
+    expect(functionsChip()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('api-key-functions-summary')).toBeTruthy();
+    expect(screen.queryByTestId(`api-key-scope-${ApiKeyScope.READ_FILES}`)).toBeNull();
+    expect(screen.queryByText('Custom')).toBeNull();
+
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Functions key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect((h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes).toEqual([
+      ApiKeyScope.FUNCTIONS_INVOKE,
+    ]);
+  });
+
+  it('returns to the scope list when another access level is chosen', () => {
+    openModal();
+    fireEvent.click(functionsChip());
+    fireEvent.click(screen.getByTestId('api-key-preset-read').querySelector('button')!);
+    expect(functionsChip()).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId(`api-key-scope-${ApiKeyScope.READ_FILES}`)).toBeTruthy();
+  });
+
+  it('keeps the Functions selection when the offered scopes change after it was picked', () => {
+    h.hasOptiAccess = false;
+    try {
+      const view = renderTab();
+      fireEvent.click(screen.getByText('Create API Key'));
+      fireEvent.click(functionsChip());
+      h.hasOptiAccess = true;
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <UserApiKeysTab />
+        </CssVarsProvider>
+      );
+      expect(functionsChip()).toHaveAttribute('aria-pressed', 'true');
+
+      fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+        target: { value: 'Functions key' },
+      });
+      fireEvent.click(screen.getByTestId('api-key-create-btn'));
+      expect((h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes).toEqual([
+        ApiKeyScope.FUNCTIONS_INVOKE,
+      ]);
+    } finally {
+      h.hasOptiAccess = false;
+    }
   });
 });
 

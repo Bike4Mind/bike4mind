@@ -255,6 +255,43 @@ describe('side apps board reads', () => {
       expect(users.users[0]).toMatchObject({ userId: String(u1), requests: 3, failedRequests: 2 });
     });
 
+    it('lists the top five failure codes of failed completions, most frequent first, ties by code', async () => {
+      const clientId = 'coded-app';
+      await OAuthClientModel.collection.insertOne({ clientId, name: 'Coded App' });
+      const observed = (outcome: string, failureCode?: string) => ({
+        completionObservation: { requestId: 'r', requestedModel: 'm', startedAt: 's', outcome, failureCode },
+      });
+      const failed = (failureCode?: string) => observed('failed', failureCode);
+      const rows = (failureCode: string | undefined, times: number) =>
+        Array.from({ length: times }, () => request({ oauthClientId: clientId, ...failed(failureCode) }));
+      await ApiKeyUsageLog.collection.insertMany([
+        ...rows('http_503', 4),
+        ...rows('rate_limited', 3),
+        ...rows('zulu', 2),
+        ...rows('yankee', 2),
+        ...rows('mike', 2),
+        ...rows('charlie', 2),
+        ...rows('alpha', 2),
+        ...rows('bravo', 2),
+        ...rows('rare', 1),
+        ...rows(undefined, 1),
+        request({ oauthClientId: clientId, ...observed('completed', 'completed_code') }),
+        request({ oauthClientId: clientId, ...observed('completed', 'completed_code') }),
+        request({ oauthClientId: clientId, ...observed('completed', 'completed_code') }),
+        request({ oauthClientId: clientId, ...observed('completed', 'completed_code') }),
+        request({ oauthClientId: clientId, ...observed('completed', 'completed_code') }),
+      ]);
+
+      const app = (await readSideApps(30, now)).apps.find(row => row.clientId === clientId);
+      expect(app?.topFailureCodes).toEqual([
+        { code: 'http_503', count: 4 },
+        { code: 'rate_limited', count: 3 },
+        { code: 'alpha', count: 2 },
+        { code: 'bravo', count: 2 },
+        { code: 'charlie', count: 2 },
+      ]);
+    });
+
     it('clamps the windows and caps requests at the log retention', async () => {
       const wide = await readSideApps(1000, now);
       expect(wide.spendWindowDays).toBe(365);

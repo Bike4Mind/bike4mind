@@ -19,8 +19,8 @@ export type GitHubRepositorySelection = 'all' | 'selected';
 /**
  * Organization-level GitHub API connection.
  *
- * Enables system-level GitHub API access for automation features like
- * LiveOps Triage without relying on per-user OAuth tokens.
+ * Enables system-level GitHub API access for automation features without
+ * relying on per-user OAuth tokens.
  *
  * Supports two authentication methods:
  * - GitHub App: Preferred for production (automatic token rotation, scoped permissions)

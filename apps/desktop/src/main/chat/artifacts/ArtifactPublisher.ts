@@ -20,7 +20,7 @@ const MAX_CONTENT_CHARS = 2_000_000;
  *
  * Auth needs nothing new: the route is a `baseApi()` handler reading `req.user?.id`, and its
  * default `auth: true` accepts this client's device-flow JWT, the same one already carrying
- * `/api/models`, `/api/settings/serverConfig` and `/api/ai/generate-image`.
+ * `/api/models`, `/api/settings/serverConfig` and `/api/v1/image-jobs`.
  */
 export class ArtifactPublisher {
   constructor(

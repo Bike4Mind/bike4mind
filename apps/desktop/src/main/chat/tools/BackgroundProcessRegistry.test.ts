@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BackgroundProcessInfo } from '@shared/chat';
-import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
+import { BackgroundProcessRegistry, type BackgroundProcessEvents } from './BackgroundProcessRegistry';
 import type { OutputStream } from './outputBuffer';
 import { resolveUserPath } from './userPath';
 
@@ -21,6 +21,10 @@ const run = promisify(execFile);
 async function isAlive(marker: string): Promise<boolean> {
   const { stdout } = await run('/bin/ps', ['-Ao', 'args']).catch(() => ({ stdout: '' }));
   return stdout.split('\n').some(line => line.includes(marker) && !line.includes('ps -Ao') && !line.includes('grep'));
+}
+
+async function waitUntilAlive(marker: string): Promise<void> {
+  await vi.waitFor(async () => expect(await isAlive(marker)).toBe(true), { timeout: 8_000, interval: 20 });
 }
 
 async function waitUntilGone(marker: string, timeoutMs = 8_000): Promise<boolean> {
@@ -88,6 +92,16 @@ describe('BackgroundProcessRegistry', () => {
   let statuses: BackgroundProcessInfo[];
   let output: string[];
   let exits: string[];
+  let events: BackgroundProcessEvents;
+
+  /**
+   * A group signalled within milliseconds of its spawn can miss a child bash forks just after,
+   * which then holds the pipes until the drain fallback. Tests that stop processes they have
+   * only just started shorten that fallback rather than wait it out.
+   */
+  const useShortStdioDrain = () => {
+    registry = new BackgroundProcessRegistry(events, 20);
+  };
 
   const start = (command: string, sessionId = 'session-a') =>
     registry.start({ sessionId, command, cwd: root, roots: [root], protectedPaths: [] });
@@ -97,11 +111,12 @@ describe('BackgroundProcessRegistry', () => {
     statuses = [];
     output = [];
     exits = [];
-    registry = new BackgroundProcessRegistry({
+    events = {
       output: (_sessionId, _processId, _stream, text) => output.push(text),
       status: (_sessionId, info) => statuses.push(info),
       exited: (sessionId, processId) => exits.push(`${sessionId}:${processId}`),
-    });
+    };
+    registry = new BackgroundProcessRegistry(events);
   });
 
   afterEach(async () => {
@@ -114,7 +129,7 @@ describe('BackgroundProcessRegistry', () => {
     const info = await start(`echo ${marker}; sleep 20`);
 
     expect(info.status).toBe('running');
-    await registry.settle(info.id, 1_500);
+    await vi.waitFor(() => expect(output.join('')).toContain(marker), { timeout: 8_000, interval: 20 });
 
     const read = registry.readForModel(info.id, 'session-a', 5_000);
     expect(read?.text).toContain(marker);
@@ -138,8 +153,11 @@ describe('BackgroundProcessRegistry', () => {
   }, 20_000);
 
   it('hands the model only new output on a second read', async () => {
-    const info = await start('echo one; sleep 0.4; echo two; sleep 20');
-    await registry.settle(info.id, 1_500);
+    const info = await start('echo one; sleep 0.1; echo two; sleep 20');
+    await vi.waitFor(() => expect(registry.tail(info.id, 'session-a', 5_000)).toContain('two'), {
+      timeout: 8_000,
+      interval: 20,
+    });
 
     const first = registry.readForModel(info.id, 'session-a', 5_000);
     expect(first?.text).toContain('one');
@@ -195,6 +213,26 @@ describe('BackgroundProcessRegistry', () => {
 
       expect(exits).toEqual([]);
     }, 20_000);
+
+    it('counts only running wake-on-exit jobs for the session, labelled by the newest', async () => {
+      expect(registry.wakingJobs('session-a')).toBeUndefined();
+
+      const quiet = await start('sleep 30');
+      expect(registry.wakingJobs('session-a')).toBeUndefined();
+
+      const first = await startWaking('sleep 30 # first');
+      const second = await startWaking('sleep 30 # second');
+      await startWaking('sleep 30 # other', 'session-b');
+      expect(registry.wakingJobs('session-a')).toEqual({ running: 2, label: 'sleep 30 # second' });
+
+      await registry.kill(second.id, 'session-a');
+      expect(registry.wakingJobs('session-a')).toEqual({ running: 1, label: 'sleep 30 # first' });
+
+      await registry.kill(first.id, 'session-a');
+      await registry.kill(quiet.id, 'session-a');
+      expect(registry.wakingJobs('session-a')).toBeUndefined();
+      expect(registry.wakingJobs('session-b')?.running).toBe(1);
+    }, 20_000);
   });
 
   /** The reason signals go to -pgid: a bare pid leaves the command's children running. */
@@ -202,8 +240,7 @@ describe('BackgroundProcessRegistry', () => {
     const marker = `b4m-child-${Date.now()}`;
     const info = await start(`sh -c 'sleep 60 # ${marker}' & sleep 60`);
 
-    await registry.settle(info.id, 1_000);
-    expect(await isAlive(marker)).toBe(true);
+    await waitUntilAlive(marker);
 
     await registry.kill(info.id, 'session-a');
 
@@ -221,12 +258,19 @@ describe('BackgroundProcessRegistry', () => {
    * of the app's life.
    */
   it('reports a stopped command as stopped even when a descendant holds its output pipe open', async () => {
+    useShortStdioDrain();
     const pidFile = join(root, 'escapee.pid');
     // setpgrp puts the descendant in a group of its own, so the group signal never reaches it,
     // and it keeps the stdout it inherited.
     const info = await start(`perl -e 'setpgrp; open(F,">","${pidFile}"); print F $$; close F; sleep 60;' & sleep 60`);
-    await registry.settle(info.id, 1_500);
-    const escapee = Number((await readFile(pidFile, 'utf8')).trim());
+    const escapee = await vi.waitFor(
+      async () => {
+        const pid = Number((await readFile(pidFile, 'utf8')).trim());
+        expect(pid).toBeGreaterThan(0);
+        return pid;
+      },
+      { timeout: 8_000, interval: 20 }
+    );
     expect(Number.isInteger(escapee)).toBe(true);
 
     // Raced rather than awaited: before the fix this never resolves, and a hung await would
@@ -248,8 +292,7 @@ describe('BackgroundProcessRegistry', () => {
   it('kills everything on shutdown, which is what app quit calls', async () => {
     const marker = `b4m-quit-${Date.now()}`;
     await start(`sleep 60 # ${marker}`);
-    await new Promise(resolve => setTimeout(resolve, 500));
-    expect(await isAlive(marker)).toBe(true);
+    await waitUntilAlive(marker);
 
     await registry.shutdown();
 
@@ -259,7 +302,7 @@ describe('BackgroundProcessRegistry', () => {
   it('takes a deleted conversation processes with it', async () => {
     const marker = `b4m-session-${Date.now()}`;
     await start(`sleep 60 # ${marker}`, 'doomed');
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await waitUntilAlive(marker);
 
     await registry.killSession('doomed');
 
@@ -277,6 +320,7 @@ describe('BackgroundProcessRegistry', () => {
   }, 20_000);
 
   it('refuses to accumulate background processes without limit', async () => {
+    useShortStdioDrain();
     for (let i = 0; i < 5; i++) await start('sleep 20');
     await expect(start('sleep 20')).rejects.toThrow(/already has 5 background commands/);
   }, 30_000);
@@ -333,6 +377,7 @@ describe('BackgroundProcessRegistry', () => {
     }, 30_000);
 
     it('counts an adopted process against the same cap as one it started', async () => {
+      useShortStdioDrain();
       for (let i = 0; i < 5; i++) await start('sleep 20');
 
       const running = spawnForeground('sleep 20', root);
@@ -349,8 +394,7 @@ describe('BackgroundProcessRegistry', () => {
       const command = `sh -c 'sleep 60 # ${marker}' & sleep 60`;
       const running = spawnForeground(command, root);
       orphans.push(running.child);
-      await new Promise(resolve => setTimeout(resolve, 500));
-      expect(await isAlive(marker)).toBe(true);
+      await waitUntilAlive(marker);
 
       const info = registry.adopt({ sessionId: 'session-a', command, cwd: root, ...running.handover() });
       await registry.kill(info.id, 'session-a');
