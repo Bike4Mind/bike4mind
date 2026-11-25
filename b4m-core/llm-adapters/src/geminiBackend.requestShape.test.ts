@@ -238,6 +238,42 @@ describe.each([
     expect(requests[0].config?.tools).toMatchObject([{ functionDeclarations: [{ name: 'lookup' }] }]);
   });
 
+  describe('function declarations', () => {
+    const declarationFor = async (parameters: unknown) => {
+      const custom = { ...tool, toolSchema: { ...tool.toolSchema, parameters } } as ICompletionOptionTools;
+      const { requests } = await run({ options: { tools: [custom], executeTools: false } });
+      return (requests[0].config?.tools as Array<{ functionDeclarations: unknown[] }>)[0].functionDeclarations[0];
+    };
+
+    it('keeps only type, properties and required, upper-casing the type and sanitizing properties', async () => {
+      const declaration = await declarationFor({
+        type: 'object',
+        properties: { q: { type: 'string', description: 'query', minLength: 1, default: 'x' } },
+        required: ['q'],
+        additionalProperties: false,
+        title: 'dropped',
+      });
+      expect(declaration).toStrictEqual({
+        name: 'lookup',
+        description: 'Look something up',
+        parameters: {
+          type: 'OBJECT',
+          properties: { q: { type: 'string', description: 'query' } },
+          required: ['q'],
+        },
+      });
+    });
+
+    it('omits required when the schema has none', async () => {
+      const declaration = await declarationFor({ type: 'object', properties: { q: { type: 'string' } } });
+      expect(declaration).toStrictEqual({
+        name: 'lookup',
+        description: 'Look something up',
+        parameters: { type: 'OBJECT', properties: { q: { type: 'string' } } },
+      });
+    });
+  });
+
   it.each<[Usage | undefined, number]>([
     [{ candidatesTokenCount: 5, thoughtsTokenCount: 40 }, 45],
     [{ candidatesTokenCount: 5 }, 5],

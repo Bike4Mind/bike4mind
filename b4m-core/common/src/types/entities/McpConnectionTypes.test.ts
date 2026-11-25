@@ -14,6 +14,7 @@ import {
   type IMcpConnectionDocument,
   type IMcpConnectionSummary,
 } from './McpConnectionTypes';
+import { CALLABLE_FUNCTION_TOOL_CONNECTION_ID } from './CallableFunctionTypes';
 import { McpServerName } from './McpServerTypes';
 
 describe('McpConnectionSlugSchema', () => {
@@ -39,6 +40,11 @@ describe('McpConnectionSlugSchema', () => {
     ['a_2345678901234567890', 'too long with underscores'],
   ])('rejects %s (%s)', slug => {
     expect(isValidMcpConnectionSlug(slug)).toBe(false);
+  });
+
+  it('keeps the function namespace outside valid connector slugs without reserving legacy fn', () => {
+    expect(isValidMcpConnectionSlug('fn')).toBe(true);
+    expect(isValidMcpConnectionSlug(CALLABLE_FUNCTION_TOOL_CONNECTION_ID)).toBe(false);
   });
 
   it('reserves every built-in server name and the first-party names', () => {

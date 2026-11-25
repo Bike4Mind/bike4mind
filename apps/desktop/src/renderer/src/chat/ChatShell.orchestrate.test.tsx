@@ -591,6 +591,95 @@ describe('orchestrate mode in the chat shell', () => {
     expect(threadMounts.count).toBe(mountsBefore);
   });
 
+  it('fills the window with the stage from the header button or F, and restores the layout on Escape or Exit', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    const hidden = (testId: string) => getComputedStyle(el(testId)).display === 'none';
+    const expectNormalLayout = () => {
+      expect(hidden('chat-shell-navigation')).toBe(false);
+      expect(hidden('chat-conversation-header')).toBe(false);
+      expect(hidden('chat-composer-region')).toBe(false);
+      expect(query('orchestrator-dock')).not.toBeNull();
+      expect(query('orchestrator-fill-window-btn')).not.toBeNull();
+      expect(query('orchestrator-fill-exit-btn')).toBeNull();
+    };
+    const expectFilled = () => {
+      expect(hidden('chat-shell-navigation')).toBe(true);
+      expect(hidden('chat-conversation-header')).toBe(true);
+      expect(hidden('chat-composer-region')).toBe(true);
+      expect(query('orchestrator-dock')).toBeNull();
+      expect(query('orchestrator-stage')).not.toBeNull();
+      expect(el('orchestrator-fill-view-name').textContent).toBe('Tavern');
+      expect(query('orchestrator-dock-toggle-btn')).toBeNull();
+    };
+    const press = (key: string, target: EventTarget = document.body) =>
+      act(() => {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      });
+    expectNormalLayout();
+
+    act(() => el('orchestrator-fill-window-btn').click());
+    expectFilled();
+    // The composer is hidden, not unmounted, so its draft survives.
+    expect(query('chat-composer-input')).not.toBeNull();
+    act(() => el('orchestrator-fill-exit-btn').click());
+    expectNormalLayout();
+
+    // A key typed into the composer is the composer's.
+    press('f', el('chat-composer-input'));
+    expectNormalLayout();
+
+    press('f');
+    expectFilled();
+    press('Escape');
+    expectNormalLayout();
+
+    // The dock counts as hidden while filled, so a scene click cannot close it behind the user's back.
+    press('f');
+    await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
+    act(() => el('orchestrator-fill-exit-btn').click());
+    expect(query('orchestrator-dock')).not.toBeNull();
+
+    // Opening the conversation from the scene leaves fill window rather than opening it out of sight.
+    press('f');
+    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    expectNormalLayout();
+    expect(document.activeElement).toBe(el('chat-composer-input'));
+
+    // Leaving the Agent view drops it, so coming back opens the normal layout.
+    press('f');
+    act(() => el('chat-surface-toggle-chat').click());
+    expect(hidden('chat-shell-navigation')).toBe(false);
+    await enterOrchestrate();
+    expect(hidden('chat-shell-navigation')).toBe(false);
+    expect(hidden('chat-composer-region')).toBe(false);
+    expect(query('orchestrator-fill-exit-btn')).toBeNull();
+
+    // The Agents place has no stage and so no Exit: going there leaves full window, for good.
+    const sessionPlace = document.querySelector('[data-testid^="place-rail-"][aria-current="page"]');
+    if (!(sessionPlace instanceof HTMLElement)) throw new Error('no current place on the rail');
+    press('f');
+    act(() => el('place-rail-agents-btn').click());
+    expect(query('agents-place')).not.toBeNull();
+    expect(hidden('chat-shell-navigation')).toBe(false);
+    await act(async () => sessionPlace.click());
+    expect(query('orchestrator-fill-exit-btn')).toBeNull();
+    expect(hidden('chat-shell-navigation')).toBe(false);
+  });
+
+  it('keeps the ambient settle off while the window is filled', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    act(() => el('orchestrator-fill-window-btn').click());
+    vi.useFakeTimers();
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
+    await act(async () => vi.advanceTimersByTime(46000));
+    expect(query('orchestrator-ambient-talk-btn')).toBeNull();
+    expect(query('orchestrator-fill-exit-btn')).not.toBeNull();
+  });
+
   it('plays the tavern intro on the first entry only, then marks it seen', async () => {
     window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
     await openParent();

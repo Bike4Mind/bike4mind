@@ -138,7 +138,7 @@ describe('the rail avatar, signed in', () => {
       'account-billing-btn',
       'account-profile-btn',
       'account-feedback-btn',
-      'account-web-conversations-btn',
+      'account-open-web-btn',
       'auth-signout-btn',
     ]);
   });
@@ -188,10 +188,23 @@ describe('the rail avatar, signed in', () => {
     expect(byTestId('account-billing-btn')).toBeNull();
   });
 
-  it('opens the existing web-conversation window action', () => {
+  it('labels the web-app row as leaving for the web app, not as syncing web conversations', async () => {
     mount(<SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />);
     open();
-    act(() => byTestId('account-web-conversations-btn')?.click());
+    const row = byTestId('account-open-web-btn');
+    expect(row?.textContent).toBe('Open Bike4Mind web');
+    expect(document.body.textContent).not.toContain('web conversations');
+    await act(async () => {
+      row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 200));
+    });
+    expect(document.body.textContent).toContain('Opens the full web app in its own window, signed in');
+  });
+
+  it('opens the signed-in web app window', () => {
+    mount(<SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />);
+    open();
+    act(() => byTestId('account-open-web-btn')?.click());
     const b4m = (window as unknown as { b4m: { attention: { openServerSessions: () => void } } }).b4m;
     expect(b4m.attention.openServerSessions).toHaveBeenCalledExactlyOnceWith();
   });

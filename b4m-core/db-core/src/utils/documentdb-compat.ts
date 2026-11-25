@@ -23,6 +23,7 @@
  */
 
 import mongoose from 'mongoose';
+import { Logger } from '@bike4mind/observability';
 
 /** A single aggregation-pipeline stage or $expr condition: an arbitrary BSON document. */
 type AggStage = Record<string, unknown>;
@@ -34,7 +35,7 @@ type AggStage = Record<string, unknown>;
 export const USE_DOCUMENTDB = () => process.env.USE_DOCUMENTDB_COMPATIBILITY === 'true';
 
 if (USE_DOCUMENTDB()) {
-  console.log('[DocumentDB Compatibility] Mode: ENABLED');
+  Logger.info('[DocumentDB Compatibility] Mode: ENABLED');
 }
 
 /**
@@ -361,7 +362,7 @@ export function convertPipelineForDocumentDB(pipeline: any[]): any[] {
 
       if (stage.$facet) {
         // This should be handled by executeFacetCompatible instead
-        console.warn('Found $facet in pipeline. Consider using executeFacetCompatible instead.');
+        Logger.warn('Found $facet in pipeline. Consider using executeFacetCompatible instead.');
         return stage;
       }
 

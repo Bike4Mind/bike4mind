@@ -554,7 +554,6 @@
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
     "@aws-sdk/client-s3": "^3.1150.0",
     "@aws-sdk/client-transcribe": "^3.1150.0",
-    "@aws-sdk/credential-provider-node": "^3.972.86",
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
@@ -568,8 +567,6 @@
     "@google/genai": "^1.46.0",
     "@joplin/turndown-plugin-gfm": "^1.0.67",
     "@mendable/firecrawl-js": "^1.29.3",
-    "@opensearch-project/opensearch": "2.11.0",
-    "async-mutex": "^0.5.0",
     "axios": "1.20.0",
     "bcryptjs": "^3.0.3",
     "cheerio": "1.2.0",
@@ -583,13 +580,9 @@
     "marked": "^15.0.11",
     "mathjs": "^15.2.0",
     "mime-types": "^3.0.2",
-    "mongoose": "^8.24.7",
     "openai": "^6.46.0",
-    "p-limit": "^7.3.2",
     "sharp": "^0.35.4",
-    "tiktoken": "^1.0.22",
     "turndown": "^7.2.4",
-    "uuid": "^14.0.2",
     "write-excel-file": "^4.1.1",
     "yauzl": "^3.4.0",
     "zod": "^4.6.6",
@@ -604,12 +597,15 @@
     "@vitest/coverage-v8": "^4.1.12",
     "@vitest/ui": "^4.1.12",
     "mailparser": "^3.12.4",
+    "mongoose": "^8.24.7",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.12"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"
+  },
+  "peerDependencies": {
+    "mongoose": "^8.22.1"
   }
 }

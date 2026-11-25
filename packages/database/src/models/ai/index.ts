@@ -37,6 +37,8 @@ export * from './McpOAuthPendingModel';
 export * from './McpOAuthClientRegistrationModel';
 export * from './CallableFunctionModel';
 export * from './CallableFunctionCallModel';
+export * from './CallableFunctionResultModel';
+export * from './CallableFunctionReviewModel';
 export * from './MemoryLedgerEventModel';
 export * from './MemoryPrincipalKeyModel';
 export * from './ModelCatalogModel';

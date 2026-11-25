@@ -6,7 +6,6 @@ import { counterService } from '@bike4mind/services';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
-import axios from 'axios';
 
 const generateDailyReport = counterService.generateDailyReport;
 const generateAIInsights = counterService.generateAIInsights;
@@ -106,7 +105,12 @@ class DailyInsightsGenerator {
           throw new Error('SlackGeneralWebhookUrl not configured in admin settings or config');
         }
 
-        await axios.post(slackWebhookUrl, { text: message });
+        const response = await fetch(slackWebhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: message }),
+        });
+        if (!response.ok) throw new Error(`Slack webhook responded with status ${response.status}`);
         logger.log('Slack report sent successfully');
       } catch (settingsError) {
         logger.error('Error getting Slack webhook URL from settings:', settingsError);

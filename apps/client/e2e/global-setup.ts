@@ -1,4 +1,4 @@
-import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import path from 'path';
 import { Resource } from 'sst';
 
@@ -11,8 +11,9 @@ const STALE_SWEEP_MINUTES = 360;
  * so `-e2e@test.com` users don't accumulate over time.
  */
 export default async function globalSetup() {
-  // Load .env.e2e explicitly - globalSetup may run before config's dotenv applies
-  dotenv.config({ path: path.resolve(__dirname, '../.env.e2e') });
+  // Load .env.e2e explicitly - globalSetup may run before the config has loaded it
+  const envFile = path.resolve(__dirname, '../.env.e2e');
+  if (existsSync(envFile)) process.loadEnvFile(envFile);
 
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const secret = process.env.E2E_CLEANUP_SECRET || Resource.E2E_CLEANUP_SECRET?.value;

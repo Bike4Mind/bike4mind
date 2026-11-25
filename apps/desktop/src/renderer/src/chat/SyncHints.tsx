@@ -13,6 +13,7 @@ import {
 } from '@shared/claudeImport';
 import { useClaudeImport } from './ClaudeImportSettings';
 import { ArrowRightIcon, CloseIcon } from './icons';
+import { WebSyncStatus } from './WebSyncStatus';
 import claudeIcon from '../assets/claude.svg';
 import bike4mindIcon from '../../favicon.png';
 
@@ -86,18 +87,32 @@ export interface SyncHintsViewProps {
   choice: SyncHintChoice;
   onDismiss: (id: SyncHintId) => void;
   onOpenSettings: (focus: ClaudeImportKind) => void;
+  /** Turns web sync on and starts the first sync; progress then shows on the sidebar status line. */
+  onTurnOnWeb: () => void;
   onOpenExportHelp: () => void;
 }
 
-export function SyncHintsView({ choice, onDismiss, onOpenSettings, onOpenExportHelp }: SyncHintsViewProps) {
+export function SyncHintsView({
+  choice,
+  onDismiss,
+  onOpenSettings,
+  onTurnOnWeb,
+  onOpenExportHelp,
+}: SyncHintsViewProps) {
   if (!choice) return null;
   const { options } = choice;
-  const option = (testId: string, label: string, description: string, focus: ClaudeImportKind) => (
+  const option = (
+    testId: string,
+    label: string,
+    description: string,
+    focus: ClaudeImportKind,
+    onClick: () => void = () => onOpenSettings(focus)
+  ) => (
     <Button
       size="sm"
       variant="plain"
       color="neutral"
-      onClick={() => onOpenSettings(focus)}
+      onClick={onClick}
       startDecorator={<img src={focus === 'b4m-web' ? bike4mindIcon : claudeIcon} alt="" width={22} height={22} />}
       endDecorator={<ArrowRightIcon />}
       sx={{
@@ -133,7 +148,23 @@ export function SyncHintsView({ choice, onDismiss, onOpenSettings, onOpenExportH
       <Stack spacing={0.25} sx={{ mx: -0.5 }}>
         {options.code && option('sidebar-empty-sync-code-btn', 'Claude Code', 'Sync local sessions', 'claude-code')}
         {options.chat && option('sidebar-empty-sync-chat-btn', 'Claude', 'Import a claude.ai export', 'claude-chat')}
-        {options.web && option('sidebar-empty-sync-web-btn', 'Bike4Mind web', 'Sync your web chats', 'b4m-web')}
+        {options.web && (
+          <Stack direction="row" sx={{ alignItems: 'center' }}>
+            <Stack sx={{ flex: 1, minWidth: 0 }}>
+              {option('sidebar-empty-sync-web-btn', 'Bike4Mind web', 'Sync your web chats', 'b4m-web', onTurnOnWeb)}
+            </Stack>
+            <Link
+              level="body-xs"
+              color="neutral"
+              component="button"
+              onClick={() => onOpenSettings('b4m-web')}
+              sx={{ flexShrink: 0, px: 1 }}
+              data-testid="sidebar-empty-sync-web-settings-link"
+            >
+              Settings
+            </Link>
+          </Stack>
+        )}
       </Stack>
       <Stack spacing={0.5} sx={{ pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
         <Typography level="body-xs" textColor="text.tertiary">
@@ -156,27 +187,49 @@ export function SyncHintsView({ choice, onDismiss, onOpenSettings, onOpenExportH
   );
 }
 
-/** The sidebar's sync hint, kept live from main; `fallback` shows when there is none. */
+/**
+ * The sidebar's sync hint, kept live from main; `fallback` shows when there is none. `showWebSync`
+ * adds the Bike4Mind web sync status line above it (chat lists only: web notebooks import as chats).
+ */
 export function SidebarSyncHints({
   empty,
   fallback = null,
+  showWebSync = false,
   onOpenSettings,
 }: {
   empty: boolean;
   fallback?: ReactNode;
+  showWebSync?: boolean;
   onOpenSettings: (focus: ClaudeImportKind) => void;
 }) {
   const [state, setState] = useClaudeImport();
   const api = typeof window === 'undefined' ? undefined : window.b4m?.claudeImport;
   const choice = pickSyncHint(state, empty);
-  if (!api || !choice) return <>{fallback}</>;
+  const turnOnWeb = () => void api?.setWebSettings({ enabled: true }).then(setState, () => {});
+  // The empty-sidebar card already offers web sync; a second "not synced" line would repeat it.
+  const webStatus =
+    api && showWebSync && !(choice?.options.web && state && !state.web.settings.enabled) ? (
+      <WebSyncStatus state={state} onSyncNow={() => void api.syncWeb().then(setState, () => {})} onTurnOn={turnOnWeb} />
+    ) : null;
+  if (!api || !choice) {
+    return (
+      <>
+        {webStatus}
+        {fallback}
+      </>
+    );
+  }
 
   return (
-    <SyncHintsView
-      choice={choice}
-      onDismiss={id => void api.dismissHint(id).then(setState, () => {})}
-      onOpenSettings={onOpenSettings}
-      onOpenExportHelp={() => void window.b4m.shell.openExternal(CLAUDE_EXPORT_HELP_URL)}
-    />
+    <>
+      {webStatus}
+      <SyncHintsView
+        choice={choice}
+        onDismiss={id => void api.dismissHint(id).then(setState, () => {})}
+        onOpenSettings={onOpenSettings}
+        onTurnOnWeb={turnOnWeb}
+        onOpenExportHelp={() => void window.b4m.shell.openExternal(CLAUDE_EXPORT_HELP_URL)}
+      />
+    </>
   );
 }

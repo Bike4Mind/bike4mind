@@ -348,6 +348,29 @@ describe('recordOperationalUsage', () => {
     expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
   });
 
+  it('records identity-only actors with an explicit bypass even on a debit-capable host', async () => {
+    setToggles({ bill: true, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+    const db = fullBillingDb(record);
+
+    await recordOperationalUsage(
+      { ...baseParams, user: { id: 'requester' }, organization: { id: 'target' }, bypassCreditBilling: true },
+      { db, logger }
+    );
+
+    expect(db.users.decrementCreditsFloored).not.toHaveBeenCalled();
+    expect(deductMock).not.toHaveBeenCalled();
+    expect(getSettingsValueMock).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        creditsCharged: 0,
+        userId: 'requester',
+        ownerId: 'target',
+        ownerType: CreditHolderType.Organization,
+      })
+    );
+  });
+
   // The counterpart of bypassCreditBilling, for spend with its own credit economics (data-lake
   // research): billed even though `billOperationalUsage` defaults off, which is what makes the
   // start-pre-flight and this settlement agree.

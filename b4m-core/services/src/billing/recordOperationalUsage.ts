@@ -98,6 +98,15 @@ export interface RecordOperationalUsageParams {
   settledCredits?: number;
 }
 
+type RecordOnlyOperationalUsageParams = Omit<
+  RecordOperationalUsageParams,
+  'user' | 'organization' | 'bypassCreditBilling'
+> & {
+  user: Pick<IUserDocument, 'id'>;
+  organization?: Pick<IOrganizationDocument, 'id'> | null;
+  bypassCreditBilling: true;
+};
+
 /** The repos the deduct path needs, all-or-nothing; a host passes them to let operational spend debit. */
 export type OperationalBillingAdapters = {
   creditTransactions: ICreditTransactionRepository;
@@ -160,7 +169,7 @@ export interface RecordOperationalUsageAdapters {
  * sessionOperationalCreditGate`), because a chat turn settled at the cap leaves the payer at zero.
  */
 export async function recordOperationalUsage(
-  params: RecordOperationalUsageParams,
+  params: RecordOperationalUsageParams | RecordOnlyOperationalUsageParams,
   adapters: RecordOperationalUsageAdapters
 ): Promise<void> {
   const { user, organization, feature } = params;
@@ -172,27 +181,29 @@ export async function recordOperationalUsage(
   try {
     // A db without billing repos can only ever record, so the flags cannot change the outcome -
     // read them only where the debit path is reachable, keeping the fresh read off record-only hosts.
-    const canDebit = Boolean(db.creditTransactions && db.users && db.organizations);
-    const shouldBill =
+    if (
       !params.bypassCreditBilling &&
       params.settledCredits === undefined &&
-      canDebit &&
-      (params.forceCreditBilling
+      db.creditTransactions &&
+      db.users &&
+      db.organizations
+    ) {
+      const shouldBill = params.forceCreditBilling
         ? await areCreditsEnforced(db, logger)
         : await (adapters.billingCheck ?? (holder => isOperationalBillingEnabled(db, logger, holder)))(
-            db.activePlans ? { user, organization, activePlans: db.activePlans } : undefined
-          ));
-
-    if (shouldBill && db.creditTransactions && db.users && db.organizations) {
-      const credits = usdToCreditsStochastic(params.chargedCostUsd ?? params.costUsd);
+            db.activePlans
+              ? { user: params.user, organization: params.organization, activePlans: db.activePlans }
+              : undefined
+          );
+      const credits = shouldBill ? usdToCreditsStochastic(params.chargedCostUsd ?? params.costUsd) : 0;
       // Stochastic settlement legitimately rounds a sub-credit cost to 0 (paid in
       // expectation across calls); only touch the ledger when it lands above zero.
       if (credits > 0) {
         const settled = await debitFlooredAtZero(
           {
             credits,
-            user,
-            organization,
+            user: params.user,
+            organization: params.organization,
             sessionId: params.sessionId ?? '',
             questId: params.requestId,
             model: params.model,

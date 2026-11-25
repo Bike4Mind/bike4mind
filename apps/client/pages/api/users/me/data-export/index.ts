@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import { ForbiddenError } from '@bike4mind/common';
 import { cacheRepository } from '@bike4mind/database';
 import { TooManyRequestsError } from '@bike4mind/utils';
@@ -34,7 +33,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`);
     }
 
-    const exportJobId = uuidv4();
+    const exportJobId = crypto.randomUUID();
     try {
       await sendToQueue(getSourceQueueUrl('accountDataExportQueue'), { exportJobId, userId: req.user.id });
     } catch (error) {

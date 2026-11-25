@@ -2,6 +2,7 @@ import { ApiKeyStatus } from '@bike4mind/common';
 import mongoose, { Model, Schema, model } from 'mongoose';
 import { realtimeConnectionRepository } from '../social/realtimeConnectionRepository';
 import { UserApiKey } from './UserApiKeyModel';
+import { Logger } from '@bike4mind/observability';
 
 const ModelName = 'CcBridgeDevice';
 
@@ -133,13 +134,13 @@ export const ccBridgeDeviceRepository = {
       if (keyUpdate.modifiedCount > 0) {
         // Log each successful disable so a partial-replay revoke (key
         // disabled but device row not yet updated) stays visible in logs.
-        console.info(`[CC_BRIDGE] Disabled apiKey ${device.apiKeyId} for user ${userId}, device ${deviceId}`);
+        Logger.info('[CC_BRIDGE] Disabled apiKey', { apiKeyId: device.apiKeyId, userId, deviceId });
       }
       // The key is already disabled; a failed prune is backstopped by the realtime sweep.
       try {
         await realtimeConnectionRepository.endConnections({ apiKeyId: String(device.apiKeyId) });
       } catch (error) {
-        console.warn(`[CC_BRIDGE] Failed to end realtime connections for apiKey ${device.apiKeyId}`, error);
+        Logger.warn('[CC_BRIDGE] Failed to end realtime connections', { apiKeyId: device.apiKeyId, error });
       }
     }
 

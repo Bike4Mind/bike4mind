@@ -68,6 +68,7 @@ export * from './McpServerTypes';
 export * from './McpConnectionTypes';
 export * from './CallableFunctionTypes';
 export * from './CallableFunctionCallTypes';
+export * from './CallableFunctionReviewTypes';
 export * from './McpConnectionRules';
 export * from './SecretRotationTypes';
 export * from './ResearchAgentTypes';
