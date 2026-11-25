@@ -6,6 +6,7 @@ const { contracts, mocks } = vi.hoisted(() => ({
   contracts: [] as { operationId: string; auth: string; scopes?: readonly string[] }[],
   mocks: {
     handOffDocument: vi.fn(),
+    createHandOffDeps: vi.fn(() => ({})),
     findByIdForUser: vi.fn(),
     applyUpdate: vi.fn(),
     listForUser: vi.fn(),
@@ -35,7 +36,7 @@ vi.mock('@server/middlewares/dispatchByMethod', () => ({
 vi.mock('@server/middlewares/perUserRateLimit', () => ({ perUserRateLimit: () => vi.fn() }));
 vi.mock('@server/obligations/handOffDocument', () => ({
   handOffDocument: mocks.handOffDocument,
-  createHandOffDeps: () => ({}),
+  createHandOffDeps: mocks.createHandOffDeps,
 }));
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toMemberAccessContext: async () => ({ userId: 'u1' }),
@@ -269,6 +270,22 @@ describe('/api/v1/obligations', () => {
     });
     expect(mocks.addFileToWritableLake).toHaveBeenCalled();
     expect(res._getJSONData().destination).toMatchObject({ lake_id: 'lake-2' });
+  });
+
+  it('suggests a destination at hand-off only to a caller that can file into it', async () => {
+    mocks.handOffDocument.mockResolvedValue({ obligation: row(), created: true });
+    const offered = async (extra: Record<string, unknown>) => {
+      const res = await call(indexHandler, 'POST', { ...extra, validated: { file_id: 'file-1' } });
+      return { offerLakes: mocks.createHandOffDeps.mock.calls.at(-1)?.[2]?.offerLakes, body: res._getJSONData() };
+    };
+    expect((await offered({})).offerLakes).toBe(true);
+    expect((await offered({ apiKeyInfo: { scopes: ['ai:chat', 'datalake:write'] } })).offerLakes).toBe(true);
+    const reader = await offered({ apiKeyInfo: { scopes: ['ai:chat', 'datalake:read'] } });
+    expect(reader.offerLakes).toBe(false);
+    expect(reader.body.destination).toMatchObject({ lake_id: 'lake-1' });
+    const aiOnly = await offered({ apiKeyInfo: { scopes: ['ai:chat'] } });
+    expect(aiOnly.offerLakes).toBe(false);
+    expect(aiOnly.body.destination).toBeNull();
   });
 
   it('answers 409 and rolls the filing back when a dismiss lands mid-confirm', async () => {

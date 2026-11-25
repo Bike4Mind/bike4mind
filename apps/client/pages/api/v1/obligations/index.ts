@@ -14,7 +14,7 @@ import { toMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAcces
 import { createHandOffDeps, handOffDocument } from '@server/obligations/handOffDocument';
 import { serializeObligation } from '@server/obligations/serializeObligation';
 import { assertNotConnectedApp } from '@server/obligations/assertNotConnectedApp';
-import { canReadObligationLakes } from '@server/obligations/obligationLakeScopes';
+import { canFileObligationIntoLakes, canReadObligationLakes } from '@server/obligations/obligationLakeScopes';
 
 const CURSOR_SCOPE = 'v1.obligations';
 
@@ -22,10 +22,14 @@ const handOffRoute = nextRouteForContract(handOffObligationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/obligations'),
 }).post(async (req, res) => {
   assertNotConnectedApp(req.apiKeyInfo);
-  const showDestination = canReadObligationLakes(req.apiKeyInfo);
-  const deps = createHandOffDeps(await toMemberAccessContext(req), req.logger, { offerLakes: showDestination });
+  // A suggestion only a confirm can act on, so it needs the scope confirm needs to file it.
+  const deps = createHandOffDeps(await toMemberAccessContext(req), req.logger, {
+    offerLakes: canFileObligationIntoLakes(req.apiKeyInfo),
+  });
   const { obligation, created } = await handOffDocument(req.user.id, req.validated, deps);
-  return res.status(created ? 201 : 200).json(serializeObligation(obligation, { showDestination }));
+  return res
+    .status(created ? 201 : 200)
+    .json(serializeObligation(obligation, { showDestination: canReadObligationLakes(req.apiKeyInfo) }));
 });
 
 const listRoute = nextRouteForContract(listObligationsContract, {

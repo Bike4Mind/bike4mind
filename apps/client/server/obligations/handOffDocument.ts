@@ -39,9 +39,9 @@ export type HandOffDeps = {
   obligations: Pick<typeof obligationRepository, 'findByFileForUser' | 'create'>;
   findFile(fileId: string, userId: string): Promise<{ moderationStatus?: ModerationStatus } | null>;
   fileText(fileId: string): Promise<string>;
-  /** Lakes the user can file into: manageable and not built in. Empty when the caller may not read lakes. */
+  /** Lakes the user can file into: manageable and not built in. Empty when the caller may not file into lakes. */
   listLakes(): Promise<ObligationLake[]>;
-  /** False only when the payer cannot cover the call; a failed check throws. */
+  /** False when the payer cannot cover the call or is frozen; a billing-read failure fails open. */
   canFund(userId: string): Promise<boolean>;
   complete(
     userId: string,

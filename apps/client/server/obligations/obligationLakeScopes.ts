@@ -16,8 +16,12 @@ const keyHoldsAny = (apiKeyInfo: KeyInfo, scopes: readonly ApiKeyScope[]): boole
 export const canReadObligationLakes = (apiKeyInfo: KeyInfo): boolean =>
   keyHoldsAny(apiKeyInfo, DATA_LAKE_READ_API_KEY_SCOPES);
 
+/** Whether the caller may choose or file into a lake, and so whether a hand-off suggests one. */
+export const canFileObligationIntoLakes = (apiKeyInfo: KeyInfo): boolean =>
+  keyHoldsAny(apiKeyInfo, DATA_LAKE_WRITE_API_KEY_SCOPES);
+
 export function assertCanFileObligationIntoLakes(apiKeyInfo: KeyInfo): void {
-  if (!keyHoldsAny(apiKeyInfo, DATA_LAKE_WRITE_API_KEY_SCOPES)) {
+  if (!canFileObligationIntoLakes(apiKeyInfo)) {
     throw new ForbiddenError('Choosing or filing into a data lake needs a key with the datalake:write scope');
   }
 }

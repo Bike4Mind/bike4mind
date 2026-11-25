@@ -669,7 +669,7 @@ export interface paths {
     put?: never;
     /**
      * Hand a scanned document to the assistant
-     * @description Reads a document you uploaded (a bill, receipt or letter) and extracts the amount, payee and due date, suggesting one of your data lakes to file it in. The result is `pending`: nothing is filed or briefed until you confirm it with `PATCH /api/v1/obligations/{id}`. Pass `text` when the device already recognized the page; otherwise the file's indexed text is read. Handing off the same file again returns the existing obligation with `200` and is not charged again. An API key without a data-lake read scope gets no destination suggestion, and `destination` reads `null` on every obligation route.
+     * @description Reads a document you uploaded (a bill, receipt or letter) and extracts the amount, payee and due date, suggesting one of your data lakes to file it in. The result is `pending`: nothing is filed or briefed until you confirm it with `PATCH /api/v1/obligations/{id}`. Pass `text` when the device already recognized the page; otherwise the file's indexed text is read. Handing off the same file again returns the existing obligation with `200` and is not charged again. An API key without `datalake:write` gets no destination suggestion, and one without a data-lake read scope reads `destination` as `null` on every obligation route.
      */
     post: operations['handOffObligation'];
     delete?: never;
