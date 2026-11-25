@@ -144,6 +144,13 @@ describe('sharing', () => {
     expect(screen.getByTestId('python-function-share-stop-error').textContent).toContain('Tool not found');
   });
 
+  it('a private share whose people were all erased reads as not shared', () => {
+    renderSection({ ...live('verified'), grants: { visibility: 'private', userIds: [] } });
+    expect(screen.getByTestId('python-function-share-status').textContent).toBe('Not shared.');
+    expect(screen.getByTestId('python-function-share-btn').textContent).toBe('Share');
+    expect(screen.queryByTestId('python-function-share-stop-btn')).toBeNull();
+  });
+
   it('a repinned draft that still has a share says promoting shares it again', () => {
     renderSection(tool({ grants: { visibility: 'private', userIds: ['p-1'] } }));
     expect(screen.getByTestId('python-function-share-status').textContent).toBe(

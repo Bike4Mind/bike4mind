@@ -353,9 +353,15 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
   );
 }
 
+/** A private share whose named people were all erased reaches nobody, so it reads as not shared. */
+function isShared(tool: ICallableFunctionPublic): boolean {
+  const grants = tool.grants;
+  return !!grants && (grants.visibility !== 'private' || grants.userIds.length > 0);
+}
+
 function shareSummary(tool: ICallableFunctionPublic): string {
   const grants = tool.grants;
-  if (!grants) return 'Not shared.';
+  if (!grants || !isShared(tool)) return 'Not shared.';
   const parts = [
     ...(grants.userIds.length > 0
       ? [`${grants.userIds.length} ${grants.userIds.length === 1 ? 'person' : 'people'}`]
@@ -379,7 +385,7 @@ function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boole
       <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-share-status">
         {live
           ? shareSummary(tool)
-          : tool.grants
+          : isShared(tool)
             ? 'Paused until the next promotion, which shares it again.'
             : 'Promote the tool to share it. A share covers the live version.'}
       </Typography>
@@ -392,9 +398,9 @@ function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boole
           onClick={() => setOpen(true)}
           data-testid="python-function-share-btn"
         >
-          {tool.grants ? 'Edit share' : 'Share'}
+          {isShared(tool) ? 'Edit share' : 'Share'}
         </Button>
-        {tool.grants && (
+        {isShared(tool) && (
           <Button
             size="sm"
             variant="plain"

@@ -255,7 +255,19 @@ describe('the access matrix, through the dispatcher', () => {
     expect(runner).not.toHaveBeenCalled();
     expect(await canCallFunction(OWNER, repinned!)).toBe('owner');
 
-    await CallableFunction.updateOne({ _id: id }, { $set: { state: 'live' } });
+    const promoted = await callableFunctionRepository.promote(
+      id,
+      owner,
+      { updatedAt: repinned!.updatedAt },
+      {
+        seq: 2,
+        runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
+        lastServerRun: { at: new Date(), passed: 0, failed: 0, results: [] },
+        trustLabel: 'unverified',
+        contract: CONTRACT,
+      }
+    );
+    expect(promoted).toMatchObject({ state: 'live', grants: { visibility: 'organization', userIds: [PERSON.id] } });
     expect(await callAs(PERSON, id)).toMatchObject({ reason: 'pending_review' });
   });
 
