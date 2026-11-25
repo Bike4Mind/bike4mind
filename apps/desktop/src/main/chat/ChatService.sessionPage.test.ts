@@ -79,10 +79,12 @@ describe('ChatService.listSessionPage', () => {
     expect(list).toHaveBeenCalledTimes(2);
   });
 
-  it('sends a busy session on the first page only, and never a finished one', async () => {
+  it('sends a busy session on the first page only, and never a finished one with a background job', async () => {
     activity.replyStarted('s2');
     activity.replyStarted('s1');
     activity.replyEnded('s1');
+    // Done but still holding a background job: listed as 'done' by sessionStatuses().
+    activity.backgroundChanged('s1', { running: 1, label: 'sleep 60' });
 
     const first = await service.listSessionPage({ limit: 1 });
     expect(first.sessions.map(session => session.id)).toEqual(['s0']);
