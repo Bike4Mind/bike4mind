@@ -14,6 +14,14 @@ export interface CoreTutorial {
 // Server-only: the client must never import this file (see registry.clientImports.repo.test.ts).
 export const CORE_TUTORIALS: readonly CoreTutorial[] = [
   { id: 'first-steps', title: 'First steps', visibility: { public: true }, enabled: true, track: 'basics', order: 10 },
+  {
+    id: 'switching-models',
+    title: 'Switch models mid-conversation',
+    visibility: { public: true },
+    enabled: true,
+    track: 'different',
+    order: 20,
+  },
 ];
 
 /** Resolves only core's own tutorials, so an owner's module id never reaches a core route. */

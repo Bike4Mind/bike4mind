@@ -13,5 +13,26 @@
       "title",
       "body"
     ]
+  },
+  "switching-models": {
+    "switching-models-ask": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "switching-models-switch": [
+      "title",
+      "body",
+      "doneBody"
+    ],
+    "switching-models-follow-up": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "switching-models-done": [
+      "title",
+      "body"
+    ]
   }
 }

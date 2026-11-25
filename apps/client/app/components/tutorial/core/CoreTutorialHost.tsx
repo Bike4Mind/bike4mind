@@ -11,14 +11,18 @@ import { useTutorialAutoRouteOff } from '../agentMode';
 import { CORE_TUTORIALS_API_BASE, TutorialHostProvider } from '../TutorialHostContext';
 import { OFF_NOTICE, TutorialRunner } from '../TutorialRunner';
 import { tutorialModulesKey, tutorialProgressKey } from '../tutorialKeys';
-import type { TutorialQuest } from '../types';
+import type { TutorialQuest, TutorialStepRegistry } from '../types';
 import { useTutorialStore, useTutorialStoreApi } from '../useTutorialStore';
+import { ModelSwitchStep } from './ModelSwitchStep';
 import { nextInTrack } from './pickerModel';
 import { TutorialPicker } from './TutorialPicker';
 import { useTutorialPicker } from './tutorialPickerStore';
 import { useCoreTutorialLauncher } from './useCoreTutorialLauncher';
 
 const NO_MODULES: readonly TutorialRunModule[] = [];
+
+/** Core's own step types, on top of the generic ones. */
+const CORE_TUTORIAL_STEPS: TutorialStepRegistry = { 'model-switch': ModelSwitchStep };
 
 /**
  * Core's tutorial host: the picker, and the runner for a walk on the open notebook. Renders nothing, and asks the
@@ -27,7 +31,7 @@ const NO_MODULES: readonly TutorialRunModule[] = [];
 export function CoreTutorialHost() {
   if (!useTutorialsEnabled()) return null;
   return (
-    <TutorialHostProvider apiBase={CORE_TUTORIALS_API_BASE}>
+    <TutorialHostProvider apiBase={CORE_TUTORIALS_API_BASE} steps={CORE_TUTORIAL_STEPS}>
       <CoreTutorialHostInner />
     </TutorialHostProvider>
   );
