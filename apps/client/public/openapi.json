@@ -11505,6 +11505,61 @@
           "text": "Always lead with anything about invoices."
         }
       },
+      "getInterruptionFeedbackResponse200": {
+        "type": "object",
+        "properties": {
+          "feedback": {
+            "type": "object",
+            "properties": {
+              "agent_completed": {
+                "type": "boolean"
+              },
+              "agent_failed": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "feedback"
+        ]
+      },
+      "setInterruptionFeedbackResponse200": {
+        "type": "object",
+        "properties": {
+          "feedback": {
+            "type": "object",
+            "properties": {
+              "agent_completed": {
+                "type": "boolean"
+              },
+              "agent_failed": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "feedback"
+        ]
+      },
+      "setInterruptionFeedbackRequest": {
+        "type": "object",
+        "properties": {
+          "agent_completed": {
+            "type": "boolean"
+          },
+          "agent_failed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "agent_completed": true
+        }
+      },
       "replyToBriefDecisionResponse202": {
         "type": "object",
         "properties": {
@@ -50930,6 +50985,346 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.delete(\n    \"https://your-deployment.example.com/api/v1/assistant/instructions/<id>\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/assistant/interruptions": {
+      "get": {
+        "operationId": "getInterruptionFeedback",
+        "summary": "Get your interruption feedback",
+        "description": "Reads which categories stay quiet after a busy block ends. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still composed and listed. A decision or any other content always pushes.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your interruption feedback.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getInterruptionFeedbackResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/assistant/interruptions\" \\\n  -H \"Authorization: Bearer <access_token>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/assistant/interruptions\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/assistant/interruptions\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n)"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setInterruptionFeedback",
+        "summary": "Set your interruption feedback",
+        "description": "Updates the categories present in the body and leaves the others as they were, then returns the stored feedback. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still composed and listed. A decision or any other content always pushes.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/setInterruptionFeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored interruption feedback.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/setInterruptionFeedbackResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body or an unknown category.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X PUT \"https://your-deployment.example.com/api/v1/assistant/interruptions\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"agent_completed\": true\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/assistant/interruptions\", {\n  method: \"PUT\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"agent_completed\": true\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.put(\n    \"https://your-deployment.example.com/api/v1/assistant/interruptions\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"agent_completed\": True\n    },\n)"
           }
         ]
       }

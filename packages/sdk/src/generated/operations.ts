@@ -353,6 +353,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/image-jobs/{id}',
   },
+  getInterruptionFeedback: {
+    method: 'GET',
+    path: '/api/v1/assistant/interruptions',
+  },
   getMe: {
     method: 'GET',
     path: '/api/v1/me',
@@ -680,6 +684,10 @@ export const operations = {
   sendSessionHandoff: {
     method: 'POST',
     path: '/api/v1/session-handoffs',
+  },
+  setInterruptionFeedback: {
+    method: 'PUT',
+    path: '/api/v1/assistant/interruptions',
   },
   startAgentExecution: {
     method: 'POST',
