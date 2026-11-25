@@ -73,9 +73,16 @@ keep the old value until those backups age out of retention.
 
 Preview and personal stages that read the account-wide fallback do not run the rewrap. Set the old value
 with `sst secret set MEMORY_KEY_SECRET_PREVIOUS <old> --fallback` and the new one with
-`sst secret set MEMORY_KEY_SECRET <new> --fallback`, then clear the previous fallback once no preview
-deployed before the swap remains. Previews accept the single-step swap, without the step 2 deploy. The
-fallback previous key applies to every stage in that account that has no value of its own.
+`sst secret set MEMORY_KEY_SECRET <new> --fallback`. Previews accept the single-step swap, without the
+step 2 deploy. The fallback previous key applies to every stage in that account that has no value of its
+own.
+
+Those stages never run the rewrap, so memory keys they wrapped before the swap stay under the old value
+and are readable only through the fallback previous key. Before clearing it
+(`sst secret set MEMORY_KEY_SECRET_PREVIOUS not-configured --fallback`), run `migrate:rewrap-memory-keys
+--dry-run`, the default run and `--verify` under `sst shell --stage <stage>` for each stage whose memory
+should survive, or accept that memory written before the swap becomes unreadable on every stage that still
+reads the fallback. Long-lived personal stages are the ones most likely to need the rewrap.
 
 The cloud deploy check applies to every stage, including PR previews and personal stages. Before this
 change reaches `main`, set an account-wide default in each AWS account those stages deploy to
