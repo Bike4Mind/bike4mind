@@ -24,7 +24,6 @@ const mocks = vi.hoisted(() => {
   const state: Record<string, unknown> = {
     tools: [],
     toolMode: 'smart',
-    isQuestMasterEnabled: false,
     isAgentsEnabled: false,
     agentMode: { enabled: true, source: 'toggle' },
     isLatticeEnabled: false,

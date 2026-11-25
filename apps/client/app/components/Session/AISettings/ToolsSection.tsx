@@ -56,7 +56,7 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useTheme } from '@mui/joy';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { brand, gray, green } from '@client/app/utils/themes/colors';
+import { brand, gray } from '@client/app/utils/themes/colors';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import DeepResearchConfigModal from './DeepResearchConfigModal';
 import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionModal';
@@ -344,7 +344,6 @@ const ToolsSection = ({
   // Use props if provided, otherwise use context
   const contextTools = useLLM(state => state.tools);
   const toolMode = useLLM(state => state.toolMode);
-  const isQuestMasterEnabled = useLLM(state => state.isQuestMasterEnabled);
   const isAgentsEnabled = useLLM(state => state.isAgentsEnabled);
   const isLatticeEnabled = useLLM(state => state.isLatticeEnabled);
   const researchMode = useLLM(state => state.researchMode);
@@ -375,7 +374,6 @@ const ToolsSection = ({
   const isMobile = useIsMobile();
 
   const { isFeatureEnabled: checkFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
-  const isQuestMasterFeatureEnabled = checkFeatureEnabled('enableQuestMaster');
   const isAgentsFeatureEnabled = checkFeatureEnabled('enableAgents');
   const isLatticeFeatureEnabled = checkFeatureEnabled('enableLattice');
   const isResearchModeFeatureEnabled = checkFeatureEnabled('enableResearchMode');
@@ -574,10 +572,6 @@ const ToolsSection = ({
     [toolMode, toolAvailability]
   );
 
-  const toggleQuestMaster = () => {
-    setLLM({ isQuestMasterEnabled: !isQuestMasterEnabled });
-  };
-
   const toggleAgents = () => {
     setLLM({ isAgentsEnabled: !isAgentsEnabled });
   };
@@ -645,9 +639,7 @@ const ToolsSection = ({
   // state flag) but appear in this panel, so they count like any other tool. Must stay
   // in sync with the same tally in AdvancedAISettings' otherActiveToolsCount.
   const specialToolsCount =
-    (isQuestMasterFeatureEnabled && isQuestMasterEnabled ? 1 : 0) +
-    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) +
-    (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
+    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) + (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
   // Fun & Novelty tools count toward their own section's tally, not Individual tools.
   // Both lines must read displayTools: splitting them (one raw, one filtered) would
   // count a filtered-out tool in the Individual total.
@@ -1458,33 +1450,6 @@ const ToolsSection = ({
               </Box>
             </ToolContainer>
           </Grid>
-          {/* Quest Master */}
-          {isQuestMasterFeatureEnabled && (
-            <Grid xs={12} className="tool-item tool-item-quest-master">
-              <ToolContainer sx={toolContainerSx}>
-                <Box
-                  className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
-                >
-                  <AutoAwesomeIcon
-                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                  />
-                  <Box className="tool-info" sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-                    <ToolLabel
-                      name="Quest Master"
-                      description="Generates a structured plan for your request; auto-disables after"
-                    />
-                    {isQuestMasterEnabled && (
-                      <Typography level="body-xs" sx={{ color: green[800], fontSize: '0.7rem', fontWeight: 500 }}>
-                        Will create plan for next prompt
-                      </Typography>
-                    )}
-                  </Box>
-                </Box>
-                <SquareSlideToggle onChange={toggleQuestMaster} checked={isQuestMasterEnabled} />
-              </ToolContainer>
-            </Grid>
-          )}
           {/* Agent Detection */}
           {isAgentsFeatureEnabled && (
             <Grid xs={12} className="tool-item tool-item-agent-detection">

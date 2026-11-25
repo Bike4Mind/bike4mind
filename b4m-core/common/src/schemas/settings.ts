@@ -330,9 +330,7 @@ export const SettingKeySchema = z.enum([
   'UseFormatPrompt',
   'EnableDeferredToolLoading',
   'DeferredToolStartSetMaxTokens',
-  'EnableQuestMaster',
   'QuestMasterLegacyShutdownDate',
-  'EnableQuestMasterDefault',
   'EnableHearth',
   'EnableHearthDefault',
   'EnableMementos',
@@ -2718,8 +2716,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'HardwareComputeMaxConcurrentRunsPerUser', order: 90 },
       { key: 'HardwareComputeMaxUsdPerUserPerDay', order: 91 },
       { key: 'SimulatorComputeCreditsPerRound', order: 91.5 },
-      { key: 'EnableQuestMaster', order: 92 },
-      { key: 'EnableQuestMasterDefault', order: 93 },
       { key: 'QuestMasterLegacyShutdownDate', order: 93.5 },
       { key: 'EnableHearth', order: 94 },
       { key: 'EnableHearthDefault', order: 95 },
@@ -3572,25 +3568,6 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
-  }),
-  EnableQuestMaster: makeBooleanSetting({
-    key: 'EnableQuestMaster',
-    name: 'Enable Quest Master',
-    defaultValue: true,
-    description: 'Whether to enable the Quest Master feature.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 90,
-  }),
-  EnableQuestMasterDefault: makeBooleanSetting({
-    key: 'EnableQuestMasterDefault',
-    name: 'Quest Master: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, Quest Master is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 91,
-    dependsOn: 'EnableQuestMaster',
   }),
   QuestMasterLegacyShutdownDate: {
     ...makeStringSetting({
@@ -8577,9 +8554,8 @@ export const settingsMap = {
       'only affects later submissions. Set to 0 to make simulator rounds free.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd and
-    // EnableQuestMaster, which would render this row after them instead of beside the Hardware
-    // Compute settings.
+    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd, which
+    // would render this row after it instead of beside the Hardware Compute settings.
     order: 89.5,
     dependsOn: 'EnableComputeSubmission',
   }),

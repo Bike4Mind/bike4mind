@@ -451,19 +451,6 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     super(model);
   }
 
-  async claimFreeQuestStart(userId: string, startId: string): Promise<boolean> {
-    const result = await this.model.updateOne(
-      { _id: userId, $or: [{ freeQuestStartId: null }, { freeQuestStartId: startId }] },
-      { $set: { freeQuestStartId: startId } }
-    );
-    return result.matchedCount === 1;
-  }
-
-  /** Clears the free start only while it still holds `startId`, so a later claim is never undone. */
-  async releaseFreeQuestStart(userId: string, startId: string): Promise<void> {
-    await this.model.updateOne({ _id: userId, freeQuestStartId: startId }, { $unset: { freeQuestStartId: 1 } });
-  }
-
   /** Remove the given group ids from EVERY user that has them (group-type revoke/delete). */
   async removeGroupsFromAllUsers(groupIds: string[]): Promise<void> {
     if (groupIds.length === 0) return;

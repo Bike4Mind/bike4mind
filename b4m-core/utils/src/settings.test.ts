@@ -153,13 +153,13 @@ const repoReturning = (settingValue: unknown) => ({
 describe('getSettingByName - stored boolean false survives the round-trip', () => {
   it('skipCache path returns false, not null', async () => {
     const db = { adminSettings: repoReturning(false) };
-    const v: unknown = await getSettingByName('EnableQuestMaster', db, { skipCache: true });
+    const v: unknown = await getSettingByName('EnableMementos', db, { skipCache: true });
     expect(v).toBe(false);
   });
 
   it('skipCache path returns null when the setting is absent', async () => {
     const db = { adminSettings: repoReturning(undefined) };
-    const v: unknown = await getSettingByName('EnableQuestMaster', db, { skipCache: true });
+    const v: unknown = await getSettingByName('EnableMementos', db, { skipCache: true });
     expect(v).toBeNull();
   });
 
