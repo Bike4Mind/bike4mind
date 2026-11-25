@@ -122,6 +122,8 @@ export const AssistantBriefModel =
 
 /** A brief still composing after this long is treated as abandoned, so a lost event cannot block composing for good. */
 export const BRIEF_COMPOSING_STALE_MS = 5 * 60 * 1000;
+// Busy-block briefs readied since the last regular brief that the pending-decisions count reads.
+const BLOCK_BRIEFS_COUNTED_MAX = 48;
 
 export const assistantBriefRepository = {
   async createComposing(input: {
@@ -167,17 +169,38 @@ export const assistantBriefRepository = {
   },
 
   /**
-   * The latest regular ready brief's id and each decision's approval ref and reply stamp: what the
-   * pending-decisions count reads. Skips busy-block briefs, like findLatestReady.
+   * What the pending-decisions count reads: the latest ready brief's id, and the approval ref and reply stamp
+   * of each decision in the latest regular ready brief plus the busy-block briefs readied since it. A block
+   * brief does not replace the regular one, and the email it carried is not briefed again.
    */
   async findLatestReadyDecisionRefs(userId: string): Promise<{
     _id: mongoose.Types.ObjectId;
     decisions: Array<Pick<StoredBriefDecision, 'approval' | 'repliedAt'>>;
   } | null> {
-    return AssistantBriefModel.findOne({ userId, status: 'ready', trigger: { $ne: 'busy_block' } })
+    type Refs = {
+      _id: mongoose.Types.ObjectId;
+      createdAt: Date;
+      decisions?: Array<Pick<StoredBriefDecision, 'approval' | 'repliedAt'>>;
+    };
+    const fields = '_id createdAt decisions.approval decisions.repliedAt';
+    const regular = await AssistantBriefModel.findOne({ userId, status: 'ready', trigger: { $ne: 'busy_block' } })
       .sort({ createdAt: -1 })
-      .select('_id decisions.approval decisions.repliedAt')
-      .lean();
+      .select(fields)
+      .lean<Refs>();
+    const blockBriefs = await AssistantBriefModel.find({
+      userId,
+      status: 'ready',
+      trigger: 'busy_block',
+      ...(regular && { createdAt: { $gte: regular.createdAt } }),
+    })
+      .sort({ createdAt: -1 })
+      .limit(BLOCK_BRIEFS_COUNTED_MAX)
+      .select(fields)
+      .lean<Refs[]>();
+    const newest = blockBriefs[0] ?? regular;
+    if (!newest) return null;
+    const counted = regular ? [...blockBriefs, regular] : blockBriefs;
+    return { _id: newest._id, decisions: counted.flatMap(brief => brief.decisions ?? []) };
   },
 
   /** Only a `composing` brief can be settled, so a redelivered event never overwrites a finished one. */

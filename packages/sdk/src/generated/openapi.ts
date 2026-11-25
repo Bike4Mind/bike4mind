@@ -6761,9 +6761,9 @@ export interface components {
       count: number;
       /** @description Agent approvals still open in your notebooks: raised within the last 15 minutes and not yet answered. */
       approvals: number;
-      /** @description Decisions in your latest ready brief that are not agent approvals. An approval decision in the brief is counted under `approvals` while it is open, and not at all once it was answered or lapsed. */
+      /** @description Unanswered decisions that are not agent approvals, in your latest regular ready brief and the busy-block briefs readied since it. An approval decision in a brief is counted under `approvals` while it is open, and not at all once it was answered or lapsed. */
       briefDecisions: number;
-      /** @description The latest ready brief `briefDecisions` comes from; null when there is none. */
+      /** @description The latest ready brief, the one a client shows by default; null when there is none. */
       briefId: string | null;
     };
     createDelegationResponse202: {

@@ -177,18 +177,38 @@ describe('assistantBriefRepository.findLatestReadyDecisionRefs', () => {
     expect(refs?.decisions).toEqual([{}, { approval }]);
   });
 
-  it('skips a newer busy-block brief, so the regular brief keeps counting', async () => {
-    const regular = await settle('owner', [{ id: 'd1', text: 'Approve the deploy', approval }]);
-    const blockBrief = await assistantBriefRepository.createComposing({
-      userId: 'owner',
+  const settleBlock = async (userId: string, decisions: AssistantBriefContent['decisions']) => {
+    const brief = await assistantBriefRepository.createComposing({
+      userId,
       periodStart: NOW,
       periodEnd: NOW,
       trigger: 'busy_block',
       busyBlock: { start: NOW, end: NOW },
     });
-    await assistantBriefRepository.markReady(String(blockBrief._id), { ...content, decisions: [] }, NOW);
+    await assistantBriefRepository.markReady(String(brief._id), { ...content, decisions }, NOW);
+    return String(brief._id);
+  };
 
-    expect(String((await assistantBriefRepository.findLatestReadyDecisionRefs('owner'))?._id)).toBe(regular);
+  it('keeps counting the regular brief after newer busy-block briefs, and counts theirs too', async () => {
+    await settleBlock('owner', [{ id: 'old-block', text: 'Briefed before the regular one' }]);
+    await settle('owner', [{ id: 'd1', text: 'Approve the deploy', approval }]);
+    await settleBlock('owner', [{ id: 'b1', text: 'Reply to the email from the meeting' }]);
+    const newest = await settleBlock('owner', []);
+
+    const refs = await assistantBriefRepository.findLatestReadyDecisionRefs('owner');
+
+    expect(String(refs?._id)).toBe(newest);
+    expect(refs?.decisions).toHaveLength(2);
+    expect(refs?.decisions).toEqual(expect.arrayContaining([{ approval }, {}]));
+  });
+
+  it('counts busy-block briefs when there is no regular ready brief', async () => {
+    const only = await settleBlock('owner', [{ id: 'b1', text: 'Reply to the email' }]);
+
+    const refs = await assistantBriefRepository.findLatestReadyDecisionRefs('owner');
+
+    expect(String(refs?._id)).toBe(only);
+    expect(refs?.decisions).toEqual([{}]);
   });
 
   it('is null when the owner has no ready brief', async () => {
