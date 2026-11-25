@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { resetKeyringForTests } from '@bike4mind/utils/security';
 import { encryptSecret, generateEncryptionKey } from './secretEncryption';
 import { configureSecretsAtRest, decryptAtRest } from '@bike4mind/utils/security';
