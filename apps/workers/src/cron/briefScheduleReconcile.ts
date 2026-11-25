@@ -8,14 +8,16 @@
  * event; startScheduledBrief skips users whose schedule was turned off after the claim, users with brief
  * pushes off, windows with no agent runs and no pending triaged email, and starts within
  * SCHEDULED_BRIEF_MIN_GAP_MS of another brief start (`debounced`: a racing event brief covers the slot,
- * which stays advanced).
+ * which stays advanced). The next slot is the earlier of the schedule's next slot and the next approved
+ * reminder, and a debounced slot with a reminder already due is retried once the gap has passed, so a
+ * reminder never waits for the following regular slot.
  *
  * Schedule: rate(5 minutes). Self-host twin: apps/workers/src/selfhost/briefScheduleReconcile.ts.
  */
 import type { Context } from 'aws-lambda';
-import { connectDB, userRepository } from '@bike4mind/database';
+import { assistantBriefRepository, connectDB, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { computeNextBriefAt } from '@bike4mind/server-utils/briefs/briefSchedule';
+import { computeNextBriefAt, SCHEDULED_BRIEF_MIN_GAP_MS } from '@bike4mind/server-utils/briefs/briefSchedule';
 import {
   BriefComposeStartError,
   startScheduledBrief,
@@ -35,6 +37,7 @@ export const RETRY_WINDOW_MS = 60 * 60 * 1000;
 
 export type BriefScheduleReconcileDeps = {
   users: Pick<typeof userRepository, 'findDueBriefSchedules' | 'advanceNextBriefAt'>;
+  reminders: Pick<typeof assistantBriefRepository, 'findEarliestPendingReminderAt' | 'findDueReminders'>;
   startScheduledBrief: (userId: string) => Promise<ScheduledBriefOutcome>;
   /** True once the run should stop claiming users. */
   outOfTime: () => boolean;
@@ -46,6 +49,37 @@ export type BriefScheduleReconcileResult = Record<ScheduledBriefOutcome, number>
   unscheduled: number;
   failed: number;
 };
+
+async function withNextReminder(
+  deps: BriefScheduleReconcileDeps,
+  userId: string,
+  now: Date,
+  next: Date
+): Promise<Date> {
+  try {
+    const reminderAt = await deps.reminders.findEarliestPendingReminderAt(userId, now);
+    return reminderAt && reminderAt < next ? reminderAt : next;
+  } catch (err) {
+    logger.warn('[briefScheduleReconcile] reading the next reminder failed; keeping the regular slot', { userId, err });
+    return next;
+  }
+}
+
+async function retryDebouncedReminders(
+  deps: BriefScheduleReconcileDeps,
+  userId: string,
+  now: Date,
+  next: Date
+): Promise<void> {
+  const retryAt = new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS);
+  if (retryAt >= next) return;
+  try {
+    if ((await deps.reminders.findDueReminders(userId, now, 1)).length === 0) return;
+    await deps.users.advanceNextBriefAt(userId, next, retryAt);
+  } catch (err) {
+    logger.warn('[briefScheduleReconcile] failed to re-arm a debounced slot for a due reminder', { userId, err });
+  }
+}
 
 export async function runBriefScheduleReconcile(
   deps: BriefScheduleReconcileDeps,
@@ -72,6 +106,7 @@ export async function runBriefScheduleReconcile(
     let invalidSchedule = false;
     try {
       next = user.schedule ? computeNextBriefAt(user.schedule, now) : null;
+      if (next && user.schedule?.enabled) next = await withNextReminder(deps, user.id, now, next);
     } catch (err) {
       // A stored schedule that cannot be computed (an unknown zone) is cleared rather than left at the
       // head of the earliest-first batch, where it would fail every run.
@@ -105,7 +140,9 @@ export async function runBriefScheduleReconcile(
     }
 
     try {
-      result[await deps.startScheduledBrief(user.id)]++;
+      const outcome = await deps.startScheduledBrief(user.id);
+      result[outcome]++;
+      if (outcome === 'debounced' && next) await retryDebouncedReminders(deps, user.id, now, next);
     } catch (err) {
       result.failed++;
       // Only release submission failures when non-delivery and cleanup are established.
@@ -136,6 +173,7 @@ export async function handler(_event: unknown, context?: Pick<Context, 'getRemai
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
   const result = await runBriefScheduleReconcile({
     users: userRepository,
+    reminders: assistantBriefRepository,
     startScheduledBrief: userId => startScheduledBrief(userId),
     outOfTime: () => (context ? context.getRemainingTimeInMillis() < STOP_BEFORE_TIMEOUT_MS : false),
   });

@@ -12,7 +12,7 @@ import { serializeBrief } from '@server/briefs/serializeBrief';
 const composeFollowUpRoute = nextRouteForContract(composeFollowUpBriefContract, {
   rateLimit: perUserRateLimit('POST /api/v1/briefs/follow-ups'),
 }).post(async (req, res) => {
-  const brief = await startFollowUpComposition(req.user.id, req.body);
+  const brief = await startFollowUpComposition(req.user.id, req.validated);
   return res.status(202).json(await serializeBrief(brief));
 });
 

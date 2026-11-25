@@ -75,6 +75,11 @@ describe('POST /api/v1/briefs/follow-ups through the contract wrapper', () => {
     });
   });
 
+  it('passes on the validated body, not the raw one', async () => {
+    await post({ transcript: 'Email Sam the notes', origin: 'injected' });
+    expect(startFollowUpComposition).toHaveBeenCalledWith('user-1', { transcript: 'Email Sam the notes' });
+  });
+
   it.each([
     ['an empty transcript', { transcript: '' }],
     ['a blank transcript', { transcript: '  \n ' }],

@@ -138,10 +138,18 @@ describe('follow-up decision routes', () => {
   });
 
   it('passes a reminder time through as a Date', async () => {
-    await edit('fu-reminder-2', { remindAt: '2026-11-27T09:00:00-05:00' });
-    expect(assistantBriefRepository.editFollowUpDecision.mock.calls[0][3].remindAt).toEqual(
-      new Date('2026-11-27T14:00:00.000Z')
-    );
+    const at = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await edit('fu-reminder-2', { remindAt: at.toISOString() });
+    expect(assistantBriefRepository.editFollowUpDecision.mock.calls[0][3].remindAt).toEqual(at);
+  });
+
+  it.each([
+    ['in the past', -60_000],
+    ['more than a year ahead', 367 * 24 * 60 * 60 * 1000],
+  ])('400s a reminder time %s', async (_label, offsetMs) => {
+    const at = new Date(Date.now() + offsetMs).toISOString();
+    await expect(edit('fu-reminder-2', { remindAt: at })).rejects.toMatchObject({ statusCode: 400 });
+    expect(assistantBriefRepository.editFollowUpDecision).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -188,7 +196,9 @@ describe('follow-up decision routes', () => {
       'brief-1',
       'user-1',
       'fu-email',
-      'approved'
+      'approved',
+      expect.any(Date),
+      { to: 'sam@example.com' }
     );
     expect(userRepository.pullNextBriefAtForward).not.toHaveBeenCalled();
   });
@@ -200,7 +210,9 @@ describe('follow-up decision routes', () => {
       'brief-1',
       'user-1',
       'fu-reminder-2',
-      'dismissed'
+      'dismissed',
+      expect.any(Date),
+      {}
     );
     expect(userRepository.pullNextBriefAtForward).not.toHaveBeenCalled();
   });
@@ -208,6 +220,7 @@ describe('follow-up decision routes', () => {
   it('approving a reminder pulls the next scheduled brief forward to it', async () => {
     await resolve('fu-reminder-1', 'approve');
     expect(userRepository.pullNextBriefAtForward).toHaveBeenCalledWith('user-1', REMIND_AT);
+    expect(assistantBriefRepository.resolveFollowUpDecision.mock.calls[0][5]).toEqual({ remindAt: REMIND_AT });
   });
 
   it('keeps the approval when the pull-forward fails', async () => {

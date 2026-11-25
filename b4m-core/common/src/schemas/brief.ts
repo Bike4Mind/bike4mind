@@ -28,6 +28,9 @@ export const BRIEF_LIMITS = {
   followUpTranscript: 6000,
 } as const;
 
+/** How far ahead a follow-up reminder may be set (ms); the worker and the edit route share this bound. */
+export const BRIEF_REMIND_AHEAD_MAX_MS = 366 * 24 * 60 * 60 * 1000;
+
 export const BriefSourceRefSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('email'),

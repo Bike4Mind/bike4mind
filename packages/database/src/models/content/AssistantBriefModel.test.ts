@@ -5,6 +5,7 @@ import {
   AssistantBriefModel,
   assistantBriefRepository,
   BRIEF_COMPOSING_STALE_MS,
+  FOLLOW_UP_COMPOSING_TTL_MS,
   type AssistantBriefContent,
 } from './AssistantBriefModel';
 
@@ -379,5 +380,67 @@ describe('assistant brief follow-ups', () => {
     await assistantBriefRepository.markRemindersSurfaced('owner', due, after);
     expect(await assistantBriefRepository.findDueReminders('owner', after, 12)).toEqual([]);
     expect(await assistantBriefRepository.findEarliestPendingReminderAt('owner')).toBeNull();
+  });
+
+  it('finds the next reminder strictly after a given instant', async () => {
+    const id = await createFollowUpBrief();
+    await assistantBriefRepository.resolveFollowUpDecision(id, 'owner', 'fu-reminder-1', 'approved', NOW);
+    expect(await assistantBriefRepository.findEarliestPendingReminderAt('owner', NOW)).toEqual(REMIND_AT);
+    expect(await assistantBriefRepository.findEarliestPendingReminderAt('owner', REMIND_AT)).toBeNull();
+  });
+
+  it('approves only while the validated recipient and time are unchanged', async () => {
+    const id = await createFollowUpBrief();
+    const approve = (decisionId: string, expected: { to?: string; remindAt?: Date }) =>
+      assistantBriefRepository.resolveFollowUpDecision(id, 'owner', decisionId, 'approved', NOW, expected);
+
+    expect(await approve('fu-email', { to: 'sam@example.com' })).toBe(false);
+    expect(await approve('fu-reminder-1', { remindAt: new Date(REMIND_AT.getTime() + 60_000) })).toBe(false);
+    expect(await approve('fu-email', { to: 'Sam' })).toBe(true);
+    expect(await approve('fu-reminder-1', { remindAt: REMIND_AT })).toBe(true);
+  });
+
+  it('lists activity briefs only, so a memo never becomes the latest brief', async () => {
+    const memoId = await createFollowUpBrief();
+    const activity = await assistantBriefRepository.createComposing({
+      userId: 'owner',
+      periodStart: NOW,
+      periodEnd: NOW,
+    });
+
+    const listed = await assistantBriefRepository.listByUser('owner', 20);
+    expect(listed.map(brief => String(brief._id))).toEqual([String(activity._id)]);
+    expect(listed.map(brief => String(brief._id))).not.toContain(memoId);
+  });
+
+  it('expires an unsettled memo row through a TTL index and drops the expiry on settle', async () => {
+    const before = Date.now();
+    const composing = await assistantBriefRepository.createComposing({
+      userId: 'owner',
+      periodStart: NOW,
+      periodEnd: NOW,
+      origin: 'followUp',
+      followUpInput: { transcript: 'memo' },
+    });
+    const expiresAt = (await assistantBriefRepository.findById(String(composing._id)))?.followUpInput?.expiresAt;
+    expect(expiresAt?.getTime()).toBeGreaterThanOrEqual(before + FOLLOW_UP_COMPOSING_TTL_MS);
+    expect(AssistantBriefModel.schema.indexes()).toContainEqual([
+      { 'followUpInput.expiresAt': 1 },
+      expect.objectContaining({ expireAfterSeconds: 0 }),
+    ]);
+
+    await assistantBriefRepository.markFailed(String(composing._id), 'composition_failed');
+    expect((await assistantBriefRepository.findById(String(composing._id)))?.followUpInput).toBeUndefined();
+  });
+
+  it('stores a narrowed window when settled with periodEnd', async () => {
+    const start = new Date(NOW.getTime() - 60_000);
+    const brief = await assistantBriefRepository.createComposing({
+      userId: 'owner',
+      periodStart: start,
+      periodEnd: NOW,
+    });
+    await assistantBriefRepository.markReady(String(brief._id), followUpContent, NOW, { periodEnd: start });
+    expect((await assistantBriefRepository.findById(String(brief._id)))?.periodEnd).toEqual(start);
   });
 });

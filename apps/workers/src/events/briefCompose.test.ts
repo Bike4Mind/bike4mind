@@ -267,6 +267,22 @@ describe('composeBrief', () => {
     }
   );
 
+  it('surfaces due reminders of a gated scheduled brief without a model call, keeping the activity window open', async () => {
+    const reminders = [{ briefId: 'b0', decisionId: 'fu-reminder-1', text: 'Remind me: call the vendor' }];
+    const deps = makeDeps({
+      canCompose: vi.fn().mockResolvedValue('insufficient_credits'),
+      loadActivity: vi.fn().mockResolvedValue({ ...activeActivity, reminders }),
+    });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+    expect(deps.complete).not.toHaveBeenCalled();
+    expect(deps.briefs.discardComposing).not.toHaveBeenCalled();
+    const [, composed, , options] = deps.briefs.markReady.mock.calls[0];
+    expect(composed.happened.map((item: { text: string }) => item.text)).toEqual(['Reminder: call the vendor']);
+    expect(options).toEqual({ periodEnd: new Date('2026-11-16T00:00:00Z') });
+    expect(deps.briefs.markRemindersSurfaced).toHaveBeenCalledOnce();
+  });
+
   it('fails the brief on a malformed model reply', async () => {
     const deps = makeDeps({ complete: vi.fn().mockResolvedValue('not json') });
     await composeBrief(deps, { briefId: 'b1', userId: 'u1' });

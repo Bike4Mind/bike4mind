@@ -27,7 +27,7 @@ export type IAssistantBrief = {
   /** `followUp` for a brief composed from a dictated memo; absent for an activity brief. */
   origin?: 'followUp';
   /** The memo a follow-up brief is composed from; cleared once the brief settles. */
-  followUpInput?: { transcript: string; timeZone?: string };
+  followUpInput?: { transcript: string; timeZone?: string; expiresAt?: Date };
   createdAt: Date;
   updatedAt: Date;
 };
@@ -131,6 +131,8 @@ const schema = new Schema<IAssistantBrief>(
         {
           transcript: { type: String, required: true },
           timeZone: { type: String, required: false },
+          // TTL: settling unsets followUpInput, so only a row whose compose event never landed is deleted.
+          expiresAt: { type: Date, required: false },
         },
         { _id: false }
       ),
@@ -141,6 +143,7 @@ const schema = new Schema<IAssistantBrief>(
 );
 
 schema.index({ userId: 1, createdAt: -1 });
+schema.index({ 'followUpInput.expiresAt': 1 }, { expireAfterSeconds: 0 });
 
 export const AssistantBriefModel =
   (mongoose.models.AssistantBrief as mongoose.Model<IAssistantBrief> | undefined) ??
@@ -148,6 +151,9 @@ export const AssistantBriefModel =
 
 /** A brief still composing after this long is treated as abandoned, so a lost event cannot block composing for good. */
 export const BRIEF_COMPOSING_STALE_MS = 5 * 60 * 1000;
+
+/** How long a follow-up brief may stay unsettled before its row (and the stored memo) is deleted (ms). */
+export const FOLLOW_UP_COMPOSING_TTL_MS = 60 * 60 * 1000;
 
 /** Activity briefs only: a follow-up brief neither blocks nor shifts the activity window. */
 const ACTIVITY_BRIEF = { origin: { $ne: 'followUp' } } as const;
@@ -168,7 +174,11 @@ export const assistantBriefRepository = {
     origin?: 'followUp';
     followUpInput?: { transcript: string; timeZone?: string };
   }): Promise<IAssistantBrief> {
-    const created = await AssistantBriefModel.create({ ...input, status: 'composing' });
+    const followUpInput = input.followUpInput && {
+      ...input.followUpInput,
+      expiresAt: new Date(Date.now() + FOLLOW_UP_COMPOSING_TTL_MS),
+    };
+    const created = await AssistantBriefModel.create({ ...input, followUpInput, status: 'composing' });
     return created.toObject();
   },
 
@@ -190,8 +200,12 @@ export const assistantBriefRepository = {
     return AssistantBriefModel.findOne({ _id: id, userId }).lean();
   },
 
+  /** Activity briefs only: clients open the newest ready one as "the" brief; a memo opens by id. */
   async listByUser(userId: string, limit: number): Promise<IAssistantBrief[]> {
-    return AssistantBriefModel.find({ userId }).sort({ createdAt: -1 }).limit(limit).lean();
+    return AssistantBriefModel.find({ userId, ...ACTIVITY_BRIEF })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
   },
 
   /** The end of the previous brief's window, which the next brief starts from. */
@@ -213,10 +227,19 @@ export const assistantBriefRepository = {
   },
 
   /** Only a `composing` brief can be settled, so a redelivered event never overwrites a finished one. */
-  async markReady(id: string, content: AssistantBriefContent, composedAt: Date): Promise<boolean> {
+  /** `periodEnd` narrows the stored window, so activity it would have covered stays in the next brief's. */
+  async markReady(
+    id: string,
+    content: AssistantBriefContent,
+    composedAt: Date,
+    options: { periodEnd?: Date } = {}
+  ): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(
       { _id: id, status: 'composing' },
-      { $set: { ...content, status: 'ready', composedAt }, $unset: { followUpInput: 1 } },
+      {
+        $set: { ...content, status: 'ready', composedAt, ...(options.periodEnd && { periodEnd: options.periodEnd }) },
+        $unset: { followUpInput: 1 },
+      },
       { runValidators: true }
     );
     return result.modifiedCount === 1;
@@ -286,17 +309,24 @@ export const assistantBriefRepository = {
     return result.matchedCount === 1;
   },
 
-  /** Approves or dismisses a pending follow-up decision, once: only the first caller gets `true`. */
+  /**
+   * Approves or dismisses a pending follow-up decision, once: only the first caller gets `true`. `expected`
+   * pins the values the caller validated, so a concurrent edit makes the claim miss instead of approving them.
+   */
   async resolveFollowUpDecision(
     id: string,
     userId: string,
     decisionId: string,
     state: 'approved' | 'dismissed',
-    at: Date = new Date()
+    at: Date = new Date(),
+    expected: { to?: string; remindAt?: Date } = {}
   ): Promise<boolean> {
     if (!mongoose.isValidObjectId(id)) return false;
+    const match: Record<string, unknown> = { id: decisionId, 'followUp.state': 'pending' };
+    if (expected.to !== undefined) match['draftReply.to'] = expected.to;
+    if (expected.remindAt !== undefined) match['followUp.remindAt'] = expected.remindAt;
     const result = await AssistantBriefModel.updateOne(
-      { _id: id, userId, decisions: { $elemMatch: { id: decisionId, 'followUp.state': 'pending' } } },
+      { _id: id, userId, decisions: { $elemMatch: match } },
       { $set: { 'decisions.$.followUp.state': state, 'decisions.$.followUp.decidedAt': at } },
       { runValidators: true }
     );
@@ -346,8 +376,11 @@ export const assistantBriefRepository = {
     }
   },
 
-  /** The earliest approved reminder not yet listed in a brief, so a schedule save keeps a pulled-forward slot. */
-  async findEarliestPendingReminderAt(userId: string): Promise<Date | null> {
+  /**
+   * The earliest approved reminder not yet listed in a brief (due strictly after `after` when given), so a
+   * schedule save or a fired slot keeps a pulled-forward slot.
+   */
+  async findEarliestPendingReminderAt(userId: string, after?: Date): Promise<Date | null> {
     const [row] = await AssistantBriefModel.aggregate<{ remindAt: Date }>([
       { $match: { userId, 'decisions.followUp.kind': 'reminder' } },
       { $unwind: '$decisions' },
@@ -355,7 +388,7 @@ export const assistantBriefRepository = {
         $match: {
           'decisions.followUp.kind': 'reminder',
           'decisions.followUp.state': 'approved',
-          'decisions.followUp.remindAt': { $ne: null },
+          'decisions.followUp.remindAt': after ? { $gt: after } : { $ne: null },
           'decisions.followUp.surfacedAt': null,
         },
       },

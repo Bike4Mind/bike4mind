@@ -82,6 +82,14 @@ describe('due reminders', () => {
     expect(brief.decisions).toEqual([]);
   });
 
+  it('do not repeat the "Remind me:" prefix the follow-up decision text carries', () => {
+    const brief = reminderBrief({
+      ...baseActivity(),
+      reminders: [{ ...reminder(1), text: 'Remind me: Call vendor 1' }],
+    });
+    expect(brief.happened).toEqual([{ id: 'h1', text: 'Reminder: Call vendor 1' }]);
+  });
+
   it('lead the happened section of a composed brief, ahead of model text', () => {
     const reply = JSON.stringify({ headline: 'Busy day.', happened: ['Model note'] });
     const brief = assembleBrief(reply, { ...baseActivity(), reminders: [reminder(1)] });

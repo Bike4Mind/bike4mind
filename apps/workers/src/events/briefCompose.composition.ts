@@ -115,7 +115,7 @@ export const emptyBrief = (): ComposedBrief => ({
 });
 
 const reminderItems = (activity: BriefActivity): UnnumberedItem[] =>
-  activity.reminders.map(reminder => ({ text: `Reminder: ${reminder.text}` }));
+  activity.reminders.map(reminder => ({ text: `Reminder: ${reminder.text.replace(/^remind me:\s*/i, '')}` }));
 
 /** A brief whose only news is due reminders. */
 export const reminderBrief = (activity: BriefActivity): ComposedBrief => ({

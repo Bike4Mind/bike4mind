@@ -30,7 +30,18 @@ const route = nextRouteForContract(resolveBriefDecisionContract, {
   }
 
   const state = outcome === 'approve' ? 'approved' : 'dismissed';
-  if (!(await assistantBriefRepository.resolveFollowUpDecision(briefId, userId, decisionId, state))) {
+  // Pins the recipient and time validated above, so an edit racing this approval cannot slip past them.
+  const expected =
+    state !== 'approved'
+      ? {}
+      : followUp.kind === 'followUpEmail'
+        ? { to: decision.draftReply?.to }
+        : followUp.kind === 'reminder'
+          ? { remindAt: followUp.remindAt ?? undefined }
+          : {};
+  if (
+    !(await assistantBriefRepository.resolveFollowUpDecision(briefId, userId, decisionId, state, new Date(), expected))
+  ) {
     throw decisionClosed();
   }
 

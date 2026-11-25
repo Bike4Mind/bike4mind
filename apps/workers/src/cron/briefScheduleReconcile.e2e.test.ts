@@ -23,6 +23,7 @@ import { composeBrief } from '../events/briefCompose';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { RETRY_WINDOW_MS, runBriefScheduleReconcile } from './briefScheduleReconcile';
+import { computeNextBriefAt, SCHEDULED_BRIEF_MIN_GAP_MS } from '@bike4mind/server-utils/briefs/briefSchedule';
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test', name: 'test' }, AppEventBus: { name: 'test' } } }));
@@ -88,6 +89,7 @@ const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =
   runBriefScheduleReconcile(
     {
       users: userRepository,
+      reminders: assistantBriefRepository,
       startScheduledBrief: userId =>
         startScheduledBrief(userId, {
           briefs: assistantBriefRepository,
@@ -170,6 +172,54 @@ describe('runBriefScheduleReconcile', () => {
     expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
     expect(publishCompose).not.toHaveBeenCalled();
     expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  const insertApprovedReminder = async (userId: string, remindAt: Date) => {
+    const brief = await assistantBriefRepository.createComposing({
+      userId,
+      periodStart: now,
+      periodEnd: now,
+      origin: 'followUp',
+      followUpInput: { transcript: 'memo' },
+    });
+    await assistantBriefRepository.markReady(
+      String(brief._id),
+      {
+        headline: 'Follow-ups',
+        happened: [],
+        handled: [],
+        decisions: [
+          { id: 'fu-reminder-1', text: 'Remind me: call', followUp: { kind: 'reminder', state: 'approved', remindAt } },
+        ],
+      },
+      now
+    );
+  };
+
+  it('re-arms a fired slot at the next approved reminder when it comes before the regular slot', async () => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    const regular = computeNextBriefAt(schedule, now)!;
+    const later = new Date(now.getTime() + Math.floor((regular.getTime() - now.getTime()) / 2));
+    await insertApprovedReminder(userId, later);
+
+    await run();
+    expect(await nextBriefAtOf(userId)).toEqual(later);
+  });
+
+  it('retries a debounced slot after the gap when a reminder is already due', async () => {
+    const userId = await insertUser({
+      preferences: { briefSchedule: schedule },
+      nextBriefAt: minutesAgo(2),
+      lastBriefStartedAt: minutesAgo(5),
+    });
+    await insertApprovedReminder(userId, minutesAgo(1));
+
+    const result = await run();
+    expect(result.debounced).toBe(1);
+    const regular = computeNextBriefAt(schedule, now)!.getTime();
+    expect(await nextBriefAtOf(userId)).toEqual(
+      new Date(Math.min(regular, now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS))
+    );
   });
 
   it('leaves a user whose slot is still ahead untouched', async () => {
@@ -336,6 +386,7 @@ describe('runBriefScheduleReconcile', () => {
     const result = await runBriefScheduleReconcile(
       {
         users: userRepository,
+        reminders: assistantBriefRepository,
         startScheduledBrief: async () => {
           throw new Error('event bus unavailable');
         },

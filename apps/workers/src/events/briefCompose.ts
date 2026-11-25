@@ -122,19 +122,28 @@ export async function composeBrief(
     const activity = await deps.loadActivity(brief, now);
 
     let composed: ComposedBrief;
-    if (hasModelActivity(activity)) {
-      const gate = await deps.canCompose(input.userId);
-      if (gate !== 'ok') {
-        // A scheduled start the user cannot pay for is dropped like an empty one, so a held account or an
-        // empty balance does not leave a failed row in the brief list every scheduled day.
-        if (input.scheduled) {
-          logger.info('[Brief] scheduled brief skipped; composition not allowed', { briefId: input.briefId, gate });
-          await briefs.discardComposing(input.briefId);
-        } else {
-          await briefs.markFailed(input.briefId, gate);
-        }
-        return;
+    let periodEnd: Date | undefined;
+    const gate = hasModelActivity(activity) ? await deps.canCompose(input.userId) : 'ok';
+    if (gate !== 'ok' && input.scheduled && activity.reminders.length > 0) {
+      // Due reminders need no model call, so they still surface; the unbriefed activity stays in the next
+      // brief's window because this one is stored as covering none of it.
+      logger.info('[Brief] scheduled brief limited to reminders; composition not allowed', {
+        briefId: input.briefId,
+        gate,
+      });
+      composed = reminderBrief(activity);
+      periodEnd = brief.periodStart;
+    } else if (gate !== 'ok') {
+      // A scheduled start the user cannot pay for is dropped like an empty one, so a held account or an
+      // empty balance does not leave a failed row in the brief list every scheduled day.
+      if (input.scheduled) {
+        logger.info('[Brief] scheduled brief skipped; composition not allowed', { briefId: input.briefId, gate });
+        await briefs.discardComposing(input.briefId);
+      } else {
+        await briefs.markFailed(input.briefId, gate);
       }
+      return;
+    } else if (hasModelActivity(activity)) {
       const instructions = await loadInstructionsSafely(deps, input.userId);
       const reply = await deps.complete(input.userId, input.briefId, buildBriefPrompt(activity, instructions));
       composed = assembleBrief(reply, activity);
@@ -149,7 +158,7 @@ export async function composeBrief(
     }
 
     const composedAt = deps.now();
-    const settled = await briefs.markReady(input.briefId, composed, composedAt);
+    const settled = await briefs.markReady(input.briefId, composed, composedAt, { periodEnd });
     if (!settled) return;
 
     await settleBriefedEmails(deps, input.userId, briefedEmailIds(composed), composedAt);
