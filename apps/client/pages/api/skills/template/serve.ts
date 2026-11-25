@@ -9,13 +9,13 @@ import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
 import { renderNotFoundPage } from '@server/services/publish/renderNotFoundPage';
 import { isPublicTemplatePage, templateImageDeps, templatePageImageFile } from '@server/skillMarket/templateImage';
 import { freeRunPageState } from '@server/skillMarket/templateFreeRun';
+import { isCrawlerUserAgent } from '@server/utils/crawlerUserAgent';
 import {
   MERMAID_SCRIPT_SRC,
   TEMPLATE_FREE_RUN_SCRIPT_HASH,
   TEMPLATE_LOADER_SCRIPT_HASH,
   TURNSTILE_ORIGIN,
   findServableTemplate,
-  isLinkPreviewFetcher,
   recordTemplateView,
   renderTemplateLoaderShell,
   renderTemplatePage,
@@ -137,7 +137,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
       freeRun,
     });
 
-    if (!isLinkPreviewFetcher(req.headers['user-agent'])) {
+    if (!isCrawlerUserAgent(req.headers['user-agent'])) {
       await recordTemplateView(template).catch(error =>
         req.logger?.warn('template page: view count update failed', error)
       );

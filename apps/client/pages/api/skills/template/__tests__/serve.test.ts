@@ -291,6 +291,22 @@ describe('GET /t/[slug]', () => {
       expect(h.credits).not.toHaveBeenCalled();
       expect(h.record).toHaveBeenCalledTimes(1);
     });
+
+    it('does not count a link-preview fetch on the member render', async () => {
+      h.audience.mockResolvedValue({ orgIds: ['org-1'], spaceIds: [] });
+      const { res, run } = call(
+        { slug: 'article-bullets', raw: '1' },
+        {
+          accept: '*/*',
+          host: 'localhost:3000',
+          authorization: 'Bearer member',
+          'user-agent': 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
+        }
+      );
+      await run();
+      expect(res.statusCode).toBe(200);
+      expect(h.record).not.toHaveBeenCalled();
+    });
   });
 
   it('escapes every author-supplied string', async () => {

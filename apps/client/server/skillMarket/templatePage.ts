@@ -419,11 +419,3 @@ export function renderTemplateLoaderShell(slug: string): string {
 </body>
 </html>`;
 }
-
-const LINK_PREVIEW_FETCHER =
-  /facebookexternalhit|Facebot|Twitterbot|Slackbot|Slack-ImgProxy|LinkedInBot|Discordbot|WhatsApp|TelegramBot|SkypeUriPreview|Iframely|Embedly|redditbot|Pinterestbot|Applebot|Googlebot|bingbot|Mastodon|Cardyb|Bluesky|vkShare|Viber|Snapchat|Google-PageRenderer/i;
-
-/** True for link-unfurl and search crawlers, whose fetches should not count as page views. */
-export function isLinkPreviewFetcher(userAgent: string | undefined): boolean {
-  return !!userAgent && LINK_PREVIEW_FETCHER.test(userAgent);
-}
