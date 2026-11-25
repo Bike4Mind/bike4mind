@@ -32,6 +32,8 @@ import {
   summarizeCallableFunctionCalls,
 } from './registry';
 import { buildCallableFunctionStamp } from './dispatch';
+import { callableFunctionDataPrefix } from './dataKeys';
+import type { CallableFunctionDataStorage } from './dataPins';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -546,6 +548,18 @@ describe('ownership', () => {
     expect(await CallableFunction.countDocuments({})).toBe(0);
     expect(await artifactRepository.findOne({ id: 'artifact-1' })).toMatchObject({ version: 1 });
     await expect(deleteCallableFunction(OWNER, view.id)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("delete removes the function's data files with the record", async () => {
+    const view = await save();
+    const owner = { ownerType: 'user' as const, ownerKey: OWNER.id };
+    const fn = await callableFunctionRepository.findByIdForOwner(view.id, owner);
+    const pin = { name: 'points.csv', sha256: 'a'.repeat(64), bytes: 8, sourceFileId: 'file-1', pinnedAt: new Date() };
+    await callableFunctionRepository.setDataPins(view.id, owner, { updatedAt: fn!.updatedAt }, [pin]);
+    const deletePrefix = vi.fn(async () => 1);
+    await deleteCallableFunction(OWNER, view.id, { deletePrefix } as unknown as CallableFunctionDataStorage);
+    expect(deletePrefix).toHaveBeenCalledWith(callableFunctionDataPrefix(view.id));
+    expect(await CallableFunction.countDocuments({})).toBe(0);
   });
 });
 

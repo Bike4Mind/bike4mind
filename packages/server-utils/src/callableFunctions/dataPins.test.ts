@@ -17,7 +17,9 @@ vi.mock('@bike4mind/database', () => ({
   artifactRepository: { findOne: vi.fn(async () => ({ version: 1, deletedAt: null })) },
   fabFileRepository: {},
   callableFunctionRepository: {
-    findByIdForOwner: vi.fn(async () => h.fn),
+    findByIdForOwner: vi.fn(async (_id: string, owner: { ownerKey: string }) =>
+      h.fn && owner.ownerKey === h.fn.userId ? h.fn : null
+    ),
     setDataPins: h.setDataPins,
     listForOwner: h.listForOwner,
   },
@@ -186,6 +188,19 @@ describe('pinCallableFunctionData', () => {
     withPins([pinOf('b.csv', 8, shared)]);
     await unpinCallableFunctionData(OWNER, FN_ID, 'b.csv', { storage });
     expect(objects.size).toBe(0);
+  });
+});
+
+describe('readCallableFunctionData', () => {
+  it("reads the owner's pinned bytes and answers anyone else as if the function did not exist", async () => {
+    const { objects, storage } = memoryStorage();
+    objects.set(`data/${FN_ID}/${sha(CSV)}`, CSV);
+    withPins([pinOf('points.csv', CSV.length, sha(CSV))]);
+    expect((await readCallableFunctionData(OWNER, FN_ID, 'points.csv', { storage })).bytes).toEqual(CSV);
+    await expect(readCallableFunctionData({ id: 'e'.repeat(24) }, FN_ID, 'points.csv', { storage })).rejects.toThrow(
+      'Tool not found'
+    );
+    expect(storage.download).toHaveBeenCalledTimes(1);
   });
 });
 
