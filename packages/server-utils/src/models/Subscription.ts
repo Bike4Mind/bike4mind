@@ -95,6 +95,10 @@ const SubscriptionSchema = new mongoose.Schema<ISubscription>(
       type: Date,
       required: false,
     },
+    billingNoticeKeys: {
+      type: [String],
+      default: undefined,
+    },
     acquisition: {
       type: new mongoose.Schema(
         {
@@ -382,6 +386,21 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
   async releaseNonPaymentCancelNotice(subscriptionId: string): Promise<void> {
     if (!subscriptionId) return;
     await this.model.updateOne({ subscriptionId }, { $unset: { nonPaymentCancelNotifiedAt: '' } });
+  }
+
+  async claimBillingNotice(subscriptionId: string, key: string): Promise<boolean> {
+    if (!subscriptionId) return false;
+    const { modifiedCount } = await this.model.updateOne(
+      { subscriptionId, billingNoticeKeys: { $ne: key } },
+      { $push: { billingNoticeKeys: { $each: [key], $slice: -PAYMENT_FAILURE_NOTICE_HISTORY } } },
+      { runValidators: true }
+    );
+    return modifiedCount === 1;
+  }
+
+  async releaseBillingNotice(subscriptionId: string, key: string): Promise<void> {
+    if (!subscriptionId) return;
+    await this.model.updateOne({ subscriptionId }, { $pull: { billingNoticeKeys: key } }, { runValidators: true });
   }
 
   /**

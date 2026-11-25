@@ -9,7 +9,9 @@ import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   buildCanceledForNonPaymentEmail,
+  buildPaymentActionRequiredEmail,
   buildPaymentFailedEmail,
+  buildUnpaidEmail,
   type EmailContent,
 } from '@server/utils/mailer/paymentFailedEmail';
 
@@ -73,7 +75,7 @@ export async function getInvoiceFailureReason(invoiceId: string, logger: Logger)
   }
 }
 
-type NoticeKind = 'payment_failed' | 'canceled_for_non_payment';
+type NoticeKind = 'payment_failed' | 'canceled_for_non_payment' | 'payment_action_required' | 'unpaid';
 
 /**
  * Send one notice under a claim, best effort: nothing here throws. The webhook must not answer
@@ -174,6 +176,65 @@ export async function notifyCanceledForNonPayment(subscription: ISubscription, l
       const recipient = await resolveOwnerRecipient(subscription);
       if (!recipient) return null;
       const content = buildCanceledForNonPaymentEmail({
+        billingUrl: recipient.billingUrl,
+        organizationName: recipient.organizationName,
+      });
+      return { to: recipient.email, ...content };
+    },
+    logger
+  );
+}
+
+/** Email the owner, once per invoice, that the bank needs them to confirm the payment. Resolves true only when this call sent it. */
+export async function notifyPaymentActionRequired(
+  subscription: ISubscription,
+  invoice: Pick<Stripe.Invoice, 'id'>,
+  logger: Logger
+): Promise<boolean> {
+  const subscriptionId = subscription.subscriptionId;
+  if (!subscriptionId || !invoice.id) return false;
+  const key = `payment_action_required:${invoice.id}`;
+
+  return sendOnce(
+    'payment_action_required',
+    subscriptionId,
+    () => subscriptionRepository.claimBillingNotice(subscriptionId, key),
+    () => subscriptionRepository.releaseBillingNotice(subscriptionId, key),
+    async () => {
+      const recipient = await resolveOwnerRecipient(subscription);
+      if (!recipient) return null;
+      const content = buildPaymentActionRequiredEmail({
+        billingUrl: recipient.billingUrl,
+        organizationName: recipient.organizationName,
+      });
+      return { to: recipient.email, ...content };
+    },
+    logger
+  );
+}
+
+/**
+ * Email the owner, once per unpaid invoice, that dunning ended by marking the subscription
+ * unpaid. Keyed by the invoice that went unpaid (the subscription id when Stripe sends none).
+ */
+export async function notifyUnpaid(
+  subscription: ISubscription,
+  latestInvoiceId: string | null,
+  logger: Logger
+): Promise<boolean> {
+  const subscriptionId = subscription.subscriptionId;
+  if (!subscriptionId) return false;
+  const key = `unpaid:${latestInvoiceId ?? subscriptionId}`;
+
+  return sendOnce(
+    'unpaid',
+    subscriptionId,
+    () => subscriptionRepository.claimBillingNotice(subscriptionId, key),
+    () => subscriptionRepository.releaseBillingNotice(subscriptionId, key),
+    async () => {
+      const recipient = await resolveOwnerRecipient(subscription);
+      if (!recipient) return null;
+      const content = buildUnpaidEmail({
         billingUrl: recipient.billingUrl,
         organizationName: recipient.organizationName,
       });

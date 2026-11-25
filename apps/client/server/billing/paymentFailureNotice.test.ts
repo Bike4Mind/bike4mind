@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   releaseFailure: vi.fn(),
   claimCancel: vi.fn(),
   releaseCancel: vi.fn(),
+  claimNotice: vi.fn(),
+  releaseNotice: vi.fn(),
   emitMetric: vi.fn(),
 }));
 
@@ -29,13 +31,17 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
     releasePaymentFailureNotice: mocks.releaseFailure,
     claimNonPaymentCancelNotice: mocks.claimCancel,
     releaseNonPaymentCancelNotice: mocks.releaseCancel,
+    claimBillingNotice: mocks.claimNotice,
+    releaseBillingNotice: mocks.releaseNotice,
   },
 }));
 
 import {
   getInvoiceFailureReason,
   notifyCanceledForNonPayment,
+  notifyPaymentActionRequired,
   notifyPaymentFailed,
+  notifyUnpaid,
   resolveOwnerRecipient,
 } from './paymentFailureNotice';
 
@@ -74,6 +80,7 @@ beforeEach(() => {
   mocks.retrieveInvoice.mockResolvedValue(invoiceWithPayments([]));
   mocks.claimFailure.mockResolvedValue(true);
   mocks.claimCancel.mockResolvedValue(true);
+  mocks.claimNotice.mockResolvedValue(true);
   mocks.publish.mockResolvedValue(undefined);
 });
 
@@ -221,5 +228,86 @@ describe('notifyCanceledForNonPayment', () => {
 
     await expect(notifyCanceledForNonPayment(orgSub, logger)).resolves.toBeUndefined();
     expect(mocks.releaseCancel).toHaveBeenCalledWith('sub_org');
+  });
+});
+
+describe('notifyPaymentActionRequired', () => {
+  it('claims the invoice and publishes one email linking the billing page', async () => {
+    await expect(notifyPaymentActionRequired(userSub, { id: 'in_1' }, logger)).resolves.toBe(true);
+
+    expect(mocks.claimNotice).toHaveBeenCalledWith('sub_1', 'payment_action_required:in_1');
+    expect(mocks.publish).toHaveBeenCalledTimes(1);
+    const sent = mocks.publish.mock.calls[0][0];
+    expect(sent.to).toBe('user_1@example.com');
+    expect(sent.subject).toContain('confirm the payment');
+    expect(sent.body).toContain('https://app.example.com/billing/plans');
+  });
+
+  it('sends nothing on a redelivery whose invoice is already claimed', async () => {
+    mocks.claimNotice.mockResolvedValue(false);
+
+    await expect(notifyPaymentActionRequired(userSub, { id: 'in_1' }, logger)).resolves.toBe(false);
+
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim when publishing fails, so a retry can send', async () => {
+    mocks.publish.mockRejectedValue(new Error('bus down'));
+
+    await expect(notifyPaymentActionRequired(userSub, { id: 'in_1' }, logger)).resolves.toBe(false);
+
+    expect(mocks.releaseNotice).toHaveBeenCalledWith('sub_1', 'payment_action_required:in_1');
+  });
+
+  it('emails the org owner, linking the org Billing tab, for an org subscription', async () => {
+    await notifyPaymentActionRequired(orgSub, { id: 'in_9' }, logger);
+
+    const sent = mocks.publish.mock.calls[0][0];
+    expect(sent.to).toBe('owner_1@example.com');
+    expect(sent.subject).toContain('the Team subscription');
+    expect(sent.body).toContain('organizations/org_1?tab=billing');
+  });
+});
+
+describe('notifyUnpaid', () => {
+  it('claims the unpaid invoice and publishes one email', async () => {
+    await expect(notifyUnpaid(userSub, 'in_1', logger)).resolves.toBe(true);
+
+    expect(mocks.claimNotice).toHaveBeenCalledWith('sub_1', 'unpaid:in_1');
+    expect(mocks.publish).toHaveBeenCalledTimes(1);
+    const sent = mocks.publish.mock.calls[0][0];
+    expect(sent.to).toBe('user_1@example.com');
+    expect(sent.subject).toContain('unpaid');
+    expect(sent.body).toContain('https://app.example.com/billing/plans');
+  });
+
+  it('keys on the subscription when Stripe names no invoice', async () => {
+    await notifyUnpaid(userSub, null, logger);
+
+    expect(mocks.claimNotice).toHaveBeenCalledWith('sub_1', 'unpaid:sub_1');
+  });
+
+  it('sends nothing on a redelivery whose claim is already taken', async () => {
+    mocks.claimNotice.mockResolvedValue(false);
+
+    await expect(notifyUnpaid(userSub, 'in_1', logger)).resolves.toBe(false);
+
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim when publishing fails, so a retry can send', async () => {
+    mocks.publish.mockRejectedValue(new Error('bus down'));
+
+    await expect(notifyUnpaid(userSub, 'in_1', logger)).resolves.toBe(false);
+
+    expect(mocks.releaseNotice).toHaveBeenCalledWith('sub_1', 'unpaid:in_1');
+  });
+
+  it('emails the org owner for an org subscription', async () => {
+    await notifyUnpaid(orgSub, 'in_1', logger);
+
+    const sent = mocks.publish.mock.calls[0][0];
+    expect(sent.to).toBe('owner_1@example.com');
+    expect(sent.subject).toContain('Team');
   });
 });
