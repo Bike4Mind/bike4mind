@@ -174,6 +174,39 @@ describe('CompletionRunModel', () => {
       });
     });
 
+    it('caps a claim at its share of what is left, never below its minimum', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 251 });
+
+      // A parent sized to its full output budget no longer takes the whole run, so a worker still fits.
+      await expect(completionRunRepository.claimBudget(runId, 251, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 126,
+      });
+      await expect(completionRunRepository.claimBudget(runId, 200, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 63,
+      });
+      // A claim smaller than the share is taken whole.
+      await expect(completionRunRepository.claimBudget(runId, 30, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 30,
+      });
+      // 32 left: half is 16, below the minimum, so the minimum is claimed.
+      await expect(completionRunRepository.claimBudget(runId, 100, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 20,
+      });
+      await expect(completionRunRepository.findById(runId)).resolves.toMatchObject({ committedCredits: 239 });
+    });
+
+    it('rejects a share outside (0, 1]', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 100 });
+
+      await expect(completionRunRepository.claimBudget(runId, 50, 10, 0)).rejects.toThrow('maxShareOfRemaining');
+      await expect(completionRunRepository.claimBudget(runId, 50, 10, 1.5)).rejects.toThrow('maxShareOfRemaining');
+      await expect(completionRunRepository.findById(runId)).resolves.toMatchObject({ committedCredits: 0 });
+    });
+
     it('releases the unused part of a claim on settlement and the whole claim on a refund', async () => {
       const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 100 });
       await completionRunRepository.claimBudget(runId, 60, 10);

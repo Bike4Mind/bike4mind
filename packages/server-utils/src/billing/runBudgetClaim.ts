@@ -3,8 +3,9 @@ import { completionRunRepository } from '@bike4mind/database';
 
 /**
  * The deterministic refusal a client shows when a run has no headroom left; no model call writes it.
- * `neededCredits` is a paid call's whole hold: such a call is refused while the run still has room, so
- * the message names the shortfall instead of calling the budget used up.
+ * `neededCredits` is what the refused call needed (a paid call's whole hold, a completion's minimum):
+ * such a call can be refused while the run still has room, so the message names the shortfall instead
+ * of calling the budget used up.
  */
 export function runBudgetExhaustedMessage(
   budgetCredits: number,
@@ -34,10 +35,17 @@ export async function claimRunBudget(claim: {
   runId: string;
   wantedCredits: number;
   minimumCredits: number;
-  /** Named in the refusal: set by an all-or-nothing claim (runBudgetExhaustedMessage). */
+  /** Named in the refusal as the credits the call needs (runBudgetExhaustedMessage). */
   neededCredits?: number;
+  /** Caps the claim at this share of what the run has left (CompletionRunRepository.claimBudget). */
+  maxShareOfRemaining?: number;
 }): Promise<number | undefined> {
-  const outcome = await completionRunRepository.claimBudget(claim.runId, claim.wantedCredits, claim.minimumCredits);
+  const outcome = await completionRunRepository.claimBudget(
+    claim.runId,
+    claim.wantedCredits,
+    claim.minimumCredits,
+    claim.maxShareOfRemaining
+  );
   if (outcome.kind === 'exhausted') {
     throw new UnprocessableEntityError(
       runBudgetExhaustedMessage(outcome.budgetCredits, outcome.committedCredits, claim.neededCredits),

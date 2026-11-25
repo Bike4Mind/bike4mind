@@ -174,6 +174,22 @@ describe('durable platform completion holds', () => {
       return { committed, reserveWith };
     }
 
+    it('leaves a concurrent worker room to start after a full-output claim', async () => {
+      const { lifecycle, ownerId } = await fixture();
+      const { committed, reserveWith } = await budgetedRun(ownerId);
+      const debit = async () => {
+        const user = await userRepository.incrementCredits(ownerId, -30);
+        if (!user) throw new Error('User missing');
+        return user;
+      };
+
+      await expect(reserveWith(lifecycle, debit)).resolves.toBe(25);
+      await expect(
+        reserveWith(createCompletionCreditHolds(new Logger({ metadata: { test: 'worker' } })), debit)
+      ).resolves.toBe(13);
+      expect(await committed()).toBe(38);
+    });
+
     it('rolls the run claim back when the balance debit fails after the claim', async () => {
       const { lifecycle, ownerId } = await fixture();
       const { committed, reserveWith } = await budgetedRun(ownerId);
