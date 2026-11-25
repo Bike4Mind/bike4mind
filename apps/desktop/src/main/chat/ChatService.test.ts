@@ -3,7 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatAutomaticOrigin, ChatSessionSummary, ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import type {
+  ChatAutomaticOrigin,
+  ChatSession,
+  ChatSessionSummary,
+  ChatStreamEvent,
+  ChatToolCall,
+  EventCursor,
+} from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -25,6 +32,11 @@ vi.mock('../git/hostGitArgs', async importOriginal =>
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
+}
+
+function cursorOf(session: ChatSession | null): EventCursor {
+  if (!session?.eventCursor) throw new Error('getSession returned no cursor');
+  return session.eventCursor;
 }
 
 /** Waits for the next event of a given type, so tests never sleep on a fixed timeout. */
@@ -361,6 +373,113 @@ describe('ChatService', () => {
       ['user', 'hello'],
       ['assistant', 'Hi there'],
     ]);
+  });
+
+  describe('snapshot cursor', () => {
+    it('numbers each event of a session in order and resumes from a mid-turn snapshot', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'hello');
+      await waitFor(events, 'start');
+      stream.write(frame({ type: 'content', text: 'Hi ' }));
+      await vi.waitUntil(() => events.some(event => event.type === 'delta'), { timeout: 2000, interval: 5 });
+
+      const midTurn = await service.getSession(id);
+      const cursor = midTurn?.eventCursor;
+      expect(cursor).toEqual({ epoch: expect.any(String), seq: events.at(-1)?.seq });
+
+      stream.write(frame({ type: 'content', text: 'there', stopReason: 'end_turn' }));
+      stream.write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const mine = events.filter(event => event.sessionId === id);
+      expect(mine.map(event => event.seq)).toEqual(mine.map((_, index) => index + 1));
+      const resumed = cursor && service.eventsSince(id, cursor);
+      expect(resumed).toEqual({ ok: true, events: mine.filter(event => (event.seq ?? 0) > (cursor?.seq ?? 0)) });
+      // The rest of the reply arrives exactly once on top of the snapshot.
+      const text =
+        midTurn?.messages.at(-1)?.content +
+        (resumed?.ok ? resumed.events : []).map(event => (event.type === 'delta' ? event.text : '')).join('');
+      expect(text).toBe('Hi there');
+
+      const settled = await service.getSession(id);
+      const last = events.filter(event => event.sessionId === id).at(-1);
+      expect(settled?.eventCursor).toEqual({ epoch: cursor?.epoch, seq: last?.seq });
+      expect(service.eventsSince(id, cursorOf(settled))).toEqual({ ok: true, events: [] });
+    });
+
+    it('starts the sequence over when the conversation is deleted', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'hello');
+      await waitFor(events, 'start');
+      const cursor = (await service.getSession(id))?.eventCursor;
+      expect(cursor?.seq).toBeGreaterThan(0);
+      await service.deleteSession(id);
+      expect(service.eventsSince(id, cursor as EventCursor)).toEqual({ ok: false, reason: 'snapshot-required' });
+    });
+
+    it('hands out a cursor for a conversation with no turn yet', async () => {
+      const { id } = await service.createSession();
+      const opened = await service.getSession(id);
+      expect(opened?.eventCursor).toEqual({ epoch: expect.any(String), seq: 0 });
+    });
+
+    // settleReply drops the live copy before its write lands, so a read in that gap sees neither
+    // copy; the 'done' after the cursor must still hand the reply over, and only once.
+    it('shows the reply once when the snapshot lands between dropping the live copy and storing it', async () => {
+      const append = store.appendMessage.bind(store);
+      let releaseWrite: () => void = () => {};
+      const writeHeld = new Promise<void>(done => (releaseWrite = done));
+      let reachedWrite = false;
+      vi.spyOn(store, 'appendMessage').mockImplementation(async (sessionId, message) => {
+        if (message.role === 'assistant') {
+          reachedWrite = true;
+          await writeHeld;
+        }
+        return append(sessionId, message);
+      });
+      const { id } = await service.createSession();
+      await service.send(id, 'hello');
+      await waitFor(events, 'start');
+      stream.write(frame({ type: 'content', text: 'whole reply', stopReason: 'end_turn' }));
+      stream.write(frame('[DONE]'));
+      await vi.waitUntil(() => reachedWrite, { timeout: 2000, interval: 5 });
+
+      const inGap = await service.getSession(id);
+      expect(inGap?.replyInFlight).toBeUndefined();
+      expect(inGap?.messages.map(message => message.role)).toEqual(['user']);
+
+      releaseWrite();
+      await waitFor(events, 'done');
+      const resumed = service.eventsSince(id, cursorOf(inGap));
+      const replies = resumed.ok ? resumed.events.filter(event => event.type === 'done') : [];
+      expect(replies.map(event => event.type === 'done' && event.content)).toEqual(['whole reply']);
+      expect(resumed.ok && resumed.events.filter(event => event.type === 'delta').map(event => event.seq)).toEqual([]);
+    });
+
+    // The settle write is queued when the read starts; the snapshot must include it, since its
+    // cursor already counts the 'done' that follows.
+    it('holds the settled reply in a snapshot read while its write is still queued', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'hello');
+      await waitFor(events, 'start');
+      stream.write(frame({ type: 'content', text: 'whole reply', stopReason: 'end_turn' }));
+      stream.write(frame('[DONE]'));
+      await waitFor(events, 'done');
+      const done = events.filter(event => event.sessionId === id).at(-1);
+
+      const write = store.appendMessage(id, {
+        id: 'queued-reply',
+        role: 'assistant',
+        content: 'queued reply',
+        createdAt: new Date().toISOString(),
+      });
+      const snapshot = service.getSession(id);
+      await write;
+
+      const read = await snapshot;
+      expect(read?.messages.map(message => message.id)).toContain('queued-reply');
+      expect(read?.eventCursor?.seq).toBe(done?.seq);
+    });
   });
 
   // Opus 5 reasons on every turn, and the server inlines that into the text between markers.

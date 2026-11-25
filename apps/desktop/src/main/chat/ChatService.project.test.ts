@@ -659,9 +659,9 @@ describe('the worktree status a first turn reports', () => {
 
     const branch = (await service.getSession(id))?.project?.workspaceBranch;
     expect(workspaceEvents()).toEqual([
-      { type: 'workspace', sessionId: id, running: true, base: 'main' },
-      { type: 'workspace', sessionId: id, running: true, base: 'main', branch },
-      { type: 'workspace', sessionId: id, running: false, base: 'main' },
+      { type: 'workspace', sessionId: id, seq: expect.any(Number), running: true, base: 'main' },
+      { type: 'workspace', sessionId: id, seq: expect.any(Number), running: true, base: 'main', branch },
+      { type: 'workspace', sessionId: id, seq: expect.any(Number), running: false, base: 'main' },
     ]);
     const closed = events.findIndex(event => event.type === 'workspace' && !event.running);
     expect(events.findIndex(event => event.type === 'start')).toBeGreaterThan(closed);

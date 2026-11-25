@@ -94,6 +94,7 @@ import type {
   WorkspacePreparation,
   ContextNoticeKind,
   ChatChildReport,
+  EventCursor,
 } from '@shared/chat';
 import {
   awaitsWorktree,
@@ -122,7 +123,8 @@ import { carriedNotes, isTypedPrompt, regenerableReply } from '@shared/threadRew
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { requestGeneration, type GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
-import { applyLiveEvent, startReply } from '@shared/liveReply';
+import { applyLiveEvent, mergeDelta, startReply } from '@shared/liveReply';
+import { SessionEventLog, type EventsSinceResult } from './SessionEventLog';
 import { serverIdOfRuntime } from '@shared/modelServers';
 import { findSessionMentions, mentionTitle } from '@shared/sessionMention';
 import { NO_SKILLS, type SkillsScope, type SkillsState } from '@shared/skills';
@@ -753,7 +755,13 @@ export interface ChatServiceDeps {
   isDeviceLocal?(): boolean;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
   getEnvironmentUrl(): string;
+  /** Every event `emit` receives is already stamped with its `seq` from this log. */
   emit(event: ChatStreamEvent): void;
+  /**
+   * Shared with emitters outside the service (background processes, video jobs) so one session
+   * has one sequence. The service creates its own when absent.
+   */
+  eventLog?: SessionEventLog;
   loopChanged?(sessionId: string, state: LoopState | null): void;
   /**
    * A session's stored summary changed outside any reply, such as its title or worktree binding.
@@ -1199,7 +1207,10 @@ export class ChatService {
   /** Background commands that ended on their own, waiting to be told to their conversation. */
   private readonly wake?: BackgroundWake;
 
+  private readonly eventLog: SessionEventLog;
+
   constructor(private readonly deps: ChatServiceDeps) {
+    this.eventLog = deps.eventLog ?? new SessionEventLog();
     this.wake = deps.background
       ? new BackgroundWake(
           deps.background,
@@ -2314,11 +2325,7 @@ export class ChatService {
    * as history, and a refusal that still names the old shortfall reads as final (seen on Haiku and
    * Sonnet), so the result says the budget is now higher and the call should be made again.
    */
-  private async reofferBudgetRefusedTools(
-    sessionId: string,
-    reply: ChatMessage,
-    budgetCredits: number
-  ): Promise<void> {
+  private async reofferBudgetRefusedTools(sessionId: string, reply: ChatMessage, budgetCredits: number): Promise<void> {
     const refused = (call: ChatToolCall) => call.status === 'error' && call.error?.endsWith(RUN_BUDGET_REFUSAL_NOTE);
     if (!reply.toolCalls?.some(refused)) return;
     const note =
@@ -3032,7 +3039,9 @@ export class ChatService {
    */
   async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
     if (viewed) this.deps.activity?.viewed(sessionId);
-    let session = await this.deps.store.get(sessionId);
+    // Ordered behind any write already queued, so a reply that settles during the read is in it
+    // when the cursor below says the 'done' is reflected.
+    let session = await this.deps.store.getAfterWrites(sessionId);
     const task = session?.workerTask;
     if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
       const updated = await this.deps.store.updateWorkerTask(sessionId, current => {
@@ -3040,12 +3049,16 @@ export class ChatService {
         return { ...current, attentionViewed: true };
       });
       if (updated) this.emitSummary(updated);
-      session = await this.deps.store.get(sessionId);
+      session = await this.deps.store.getAfterWrites(sessionId);
     }
+    // From here to each return there is no await: the cursor must name exactly the events the
+    // live fold below reflects, or a client resuming from it would lose or repeat one.
+    if (!session) return null;
+    const eventCursor = this.eventLog.cursor(sessionId);
     const preparing = this.preparing.get(sessionId);
-    if (session && preparing) return { ...session, preparingWorkspace: { ...preparing } };
+    if (preparing) return { ...session, preparingWorkspace: { ...preparing }, eventCursor };
     const live = this.live.get(sessionId);
-    if (!session || !live) return session;
+    if (!live) return { ...session, eventCursor };
     let messages = session.messages;
     for (const event of live.events) {
       messages =
@@ -3053,7 +3066,20 @@ export class ChatService {
           ? startReply(messages, event.messageId)
           : messages.map(message => applyLiveEvent(message, event));
     }
-    return { ...session, messages, replyInFlight: { messageId: live.messageId, startedAt: live.startedAt } };
+    return {
+      ...session,
+      messages,
+      replyInFlight: { messageId: live.messageId, startedAt: live.startedAt },
+      eventCursor,
+    };
+  }
+
+  /**
+   * The events after `after` for a client resuming from a snapshot cursor, or 'snapshot-required'
+   * when they are no longer all held and the client must read the session again.
+   */
+  eventsSince(sessionId: string, after: EventCursor): EventsSinceResult {
+    return this.eventLog.since(sessionId, after);
   }
 
   private withLivePlan(summary: ChatSessionSummary): ChatSessionSummary {
@@ -3099,8 +3125,9 @@ export class ChatService {
   }
 
   private emit(event: ChatStreamEvent): void {
-    this.trackLive(event);
-    this.deps.emit(event);
+    const stamped = this.eventLog.append(event);
+    this.trackLive(stamped);
+    this.deps.emit(stamped);
   }
 
   private trackLive(event: ChatStreamEvent): void {
@@ -3124,7 +3151,8 @@ export class ChatService {
       // Merged, so a long reply is a handful of entries rather than one per token.
       const last = events[events.length - 1];
       if (last?.type === 'delta' && last.messageId === event.messageId) {
-        events[events.length - 1] = { ...last, text: last.text + event.text };
+        // The merged entry stands for every delta up to this one, so it takes the newer seq.
+        events[events.length - 1] = mergeDelta(last, event);
         return;
       }
     }
@@ -3352,6 +3380,7 @@ export class ChatService {
     // Once the serialized delete has finished, no later append can resurrect the session.
     this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
+    this.eventLog.forget(sessionId);
     this.waitingTasks.delete(sessionId);
     if (this.decisionIndex.delete(sessionId)) this.announceTaskDecisions();
     this.deps.queue?.forget(sessionId);
@@ -6301,10 +6330,7 @@ export class ChatService {
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
           if (err instanceof RunBudgetExhaustedError && scope.budgetStop) scope.budgetStop.error ??= err;
           // The model reads this after a raise resumes the turn; without it, it takes the refusal as final.
-          const stored =
-            err instanceof RunBudgetExhaustedError
-              ? `${message} ${RUN_BUDGET_REFUSAL_NOTE}`
-              : message;
+          const stored = err instanceof RunBudgetExhaustedError ? `${message} ${RUN_BUDGET_REFUSAL_NOTE}` : message;
           settled = decorate({
             ...call,
             // A refusal is its own state: the UI says "denied", not "something broke".
