@@ -191,10 +191,12 @@ async function settleBriefedDelegations(deps: BriefComposeDeps, userId: string, 
   }
 }
 
-async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity> {
+export async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity> {
+  // A busy-block brief covers only the block: runs end at its end, emails and questions start at its start.
+  const block = brief.trigger === 'busy_block' ? brief.busyBlock : null;
   const { items } = await agentExecutionRepository.findByUserIdPaginated(
     brief.userId,
-    { fromDate: brief.periodStart },
+    { fromDate: brief.periodStart, ...(block && { toDate: brief.periodEnd }) },
     { limit: MAX_RUNS }
   );
   const sessionIds = [...new Set(items.map(item => item.sessionId))];
@@ -203,9 +205,14 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
     now.getTime() - PENDING_ACTION_TTL_MS,
     MAX_APPROVALS
   );
-  const questions = await questRepository.findOpenQuestionsBySessionIds(sessionIds, brief.periodStart, MAX_QUESTIONS);
+  const questions = await questRepository.findOpenQuestionsBySessionIds(
+    sessionIds,
+    block?.start ?? brief.periodStart,
+    MAX_QUESTIONS
+  );
   // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
-  const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd);
+  // A block brief takes only the block's arrivals; earlier pending items wait for the next regular brief.
+  const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd, block?.start);
   const delegations = await loadPendingBriefDelegations(brief.userId, brief.periodEnd, now);
 
   return {
