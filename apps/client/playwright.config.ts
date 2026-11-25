@@ -1,10 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
-import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import path from 'path';
 import { TIMEOUTS } from './e2e/constants';
 import { prEligibleConfigProjects } from './e2e/project-selection.mjs';
 
-dotenv.config({ path: path.resolve(__dirname, '.env.e2e') });
+const envFile = path.resolve(__dirname, '.env.e2e');
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const adminAuthFile = './e2e/.auth/admin.json';
 

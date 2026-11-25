@@ -397,9 +397,6 @@ importers:
       dompurify:
         specifier: ^3.4.17
         version: 3.4.17
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
       emoji-picker-react:
         specifier: ^4.22.2
         version: 4.22.2(react@19.3.0)
@@ -1450,9 +1447,6 @@ importers:
       '@types/lodash':
         specifier: ^4.17.24
         version: 4.17.24
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
@@ -2361,9 +2355,6 @@ importers:
       dayjs:
         specifier: ^1.11.23
         version: 1.11.23
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
       glob:
         specifier: ^14.0.2
         version: 14.0.6
@@ -8251,10 +8242,6 @@ packages:
 
   dotenv@16.6.1:
     resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
-    engines: {node: '>=12'}
-
-  dotenv@17.4.2:
-    resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
     engines: {node: '>=12'}
 
   dotenv@8.6.0:
@@ -20096,8 +20083,6 @@ snapshots:
       dotenv: 16.6.1
 
   dotenv@16.6.1: {}
-
-  dotenv@17.4.2: {}
 
   dotenv@8.6.0: {}
 
