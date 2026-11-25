@@ -19,8 +19,8 @@ export const SWITCHING_MODELS_STEPS: TutorialStep[] = [
     anchorScope: '[data-testid="session-bottom-container"]',
     placement: 'above',
     title: 'Switch the model',
-    body: 'Press the model button and pick any other model, even one from another provider. The conversation stays in this notebook.',
-    doneBody: 'Pick any model in the list. Any one will do.',
+    body: 'Press the model button and pick another chat model, even one from another provider. The conversation stays in this notebook.',
+    doneBody: 'Pick a different chat model from the list.',
   },
   {
     id: 'switching-models-follow-up',
@@ -39,7 +39,7 @@ export const SWITCHING_MODELS_STEPS: TutorialStep[] = [
     // Keeps the card off the second answer, which shows the context carried across the switch.
     avoid: '[data-testid="virtuoso-item-list"] > :last-child [data-testid="ai-response"]',
     title: 'Pick the model for the job',
-    body: 'Use a fast model for quick, everyday asks and a stronger one for hard problems or long documents. Next, try the tutorial on answers from your own files.',
+    body: 'Use a fast model for quick, everyday asks and a stronger one for hard problems or long documents.',
     action: 'Done',
   },
 ];

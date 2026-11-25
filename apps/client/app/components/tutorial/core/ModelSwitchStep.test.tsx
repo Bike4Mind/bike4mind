@@ -1,9 +1,9 @@
 import { act, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TutorialStep } from '@bike4mind/common';
+import { ImageModels, type TutorialStep } from '@bike4mind/common';
 import type { TutorialStepProps } from '../types';
 
-const { llm } = vi.hoisted(() => {
+const { llm, picker } = vi.hoisted(() => {
   type State = { model: string; hasExplicitSessionModelSelection: boolean };
   type Listener = (state: State, prior: State) => void;
   let state: State = { model: 'model-a', hasExplicitSessionModelSelection: false };
@@ -25,12 +25,26 @@ const { llm } = vi.hoisted(() => {
         listeners.clear();
       },
     },
+    picker: { open: false, listeners: new Set<() => void>() },
   };
 });
 
 vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: llm }));
+vi.mock('@client/app/components/Session/AISettings/useAdvancedAISettingsStore', async () => {
+  const { useSyncExternalStore } = await import('react');
+  return {
+    useAdvancedAISettings: (selector: (state: { showAdvancedSettings: boolean }) => boolean) =>
+      useSyncExternalStore(
+        listener => {
+          picker.listeners.add(listener);
+          return () => picker.listeners.delete(listener);
+        },
+        () => selector({ showAdvancedSettings: picker.open })
+      ),
+  };
+});
 
-import { MODEL_PICKER_MODAL, ModelSwitchStep } from './ModelSwitchStep';
+import { ModelSwitchStep } from './ModelSwitchStep';
 
 const STEP: TutorialStep = {
   id: 'switch',
@@ -54,16 +68,15 @@ function renderStep() {
   return { ...props, ...view };
 }
 
-function openPicker() {
-  const modal = document.createElement('div');
-  modal.dataset.testid = MODEL_PICKER_MODAL;
-  document.body.appendChild(modal);
-  return modal;
+function setPicker(open: boolean) {
+  picker.open = open;
+  picker.listeners.forEach(listener => listener());
 }
 
 afterEach(() => {
   llm.reset();
-  document.body.innerHTML = '';
+  picker.open = false;
+  picker.listeners.clear();
 });
 
 describe('ModelSwitchStep', () => {
@@ -91,16 +104,42 @@ describe('ModelSwitchStep', () => {
     expect(setAnchor).toHaveBeenLastCalledWith(undefined);
     expect(markDone).toHaveBeenLastCalledWith(false);
 
-    let modal: HTMLElement | undefined;
-    await act(async () => {
-      modal = openPicker();
-    });
+    act(() => setPicker(true));
     expect(setAnchor).toHaveBeenLastCalledWith('');
     expect(markDone).toHaveBeenLastCalledWith(true);
 
-    await act(async () => modal?.remove());
+    act(() => setPicker(false));
     expect(setAnchor).toHaveBeenLastCalledWith(undefined);
     expect(markDone).toHaveBeenLastCalledWith(false);
+  });
+
+  it('docks at once when the picker is already open', () => {
+    picker.open = true;
+    const { setAnchor, markDone } = renderStep();
+    expect(setAnchor).toHaveBeenLastCalledWith('');
+    expect(markDone).toHaveBeenLastCalledWith(true);
+  });
+
+  it('ignores an image model pick, which would send the follow-up to image generation', () => {
+    const { complete } = renderStep();
+    act(() => llm.setState({ model: ImageModels.GPT_IMAGE_1, hasExplicitSessionModelSelection: true }));
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('completes on a pick when the explicit flag was already up', () => {
+    llm.setState({ hasExplicitSessionModelSelection: true });
+    const { complete } = renderStep();
+    act(() => llm.setState({ model: 'model-b' }));
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls the latest complete after a rerender', () => {
+    const first = renderStep();
+    const next = vi.fn();
+    first.rerender(<ModelSwitchStep {...first} complete={next} />);
+    act(() => llm.setState({ model: 'model-b', hasExplicitSessionModelSelection: true }));
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(first.complete).not.toHaveBeenCalled();
   });
 
   it('stops listening once the step is gone', () => {
