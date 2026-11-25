@@ -510,23 +510,37 @@ describe('callableFunctionDataBucketPolicy', () => {
     }
   });
 
-  it("exempts the account-erasure worker's role from the header-signed write and delete refusals, and no one else", () => {
+  it("exempts the account-erasure worker's and the deletion sweep's roles from the header-signed write and delete refusals, and no one else", () => {
     const ERASER = 'eraser-role-arn';
+    const SWEEP = 'deletion-sweep-role-arn';
     const withEraser = callableFunctionDataBucketPolicy({
       bucketArn: BUCKET_ARN,
       dispatcherRoleArn: DISPATCHER,
-      eraserRoleArn: ERASER,
+      eraserRoleArns: [ERASER, SWEEP],
       endpointId: 'vpce-0data',
     });
     expect(FUNCTION_DATA_ERASER_ACTIONS).toEqual(['s3:DeleteObject']);
-    for (const principalArn of [DISPATCHER, ERASER]) {
+    for (const principalArn of [DISPATCHER, ERASER, SWEEP]) {
       expect(denied(withEraser, { action: 's3:DeleteObject', resource: OBJECT, principalArn })).toBe(false);
       expect(denied(withEraser, { action: 's3:ListBucket', resource: BUCKET_ARN, principalArn })).toBe(false);
     }
     expect(denied(withEraser, { action: 's3:DeleteObject', resource: OBJECT, principalArn: OTHER })).toBe(true);
-    expect(denied(withEndpoint, { action: 's3:DeleteObject', resource: OBJECT, principalArn: ERASER })).toBe(true);
-    const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING', principalArn: ERASER };
-    expect(denied(withEraser, link)).toBe(true);
+    for (const principalArn of [ERASER, SWEEP]) {
+      expect(denied(withEndpoint, { action: 's3:DeleteObject', resource: OBJECT, principalArn })).toBe(true);
+      const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING', principalArn };
+      expect(denied(withEraser, link)).toBe(true);
+    }
+  });
+
+  it('exempts no eraser for an empty role name, as on a stage without the deletion sweep', () => {
+    const noSweep = callableFunctionDataBucketPolicy({
+      bucketArn: BUCKET_ARN,
+      dispatcherRoleArn: DISPATCHER,
+      eraserRoleArns: ['eraser-role-arn', ''],
+      endpointId: 'vpce-0data',
+    });
+    expect(denied(noSweep, { action: 's3:DeleteObject', resource: OBJECT, principalArn: '' })).toBe(true);
+    expect(JSON.stringify(noSweep)).not.toMatch(/""/);
   });
 
   it('refuses every request without TLS, the dispatcher included', () => {

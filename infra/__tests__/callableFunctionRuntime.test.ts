@@ -358,13 +358,14 @@ describe('callable function data bucket', () => {
   it('takes the policy that refuses reads outside the endpoint and writes by all but the dispatcher', () => {
     expect(policyModule.match(/new aws\.s3\.BucketPolicy\(/g)).toHaveLength(1);
     expect(policyModule).toMatch(
-      /if \(web\.nodes\.server && callableFunctionDataBucket && callableFunctionDataPublicAccessBlock\) \{\s*const names = \$util\.all\(\[\s*callableFunctionDataBucket\.arn,\s*web\.nodes\.server\.nodes\.role\.arn,\s*accountErasureQueueSubscription\.nodes\.function\.nodes\.role\.arn,\s*callableFunctionDataEndpointId \?\? '',\s*\]\);\s*new aws\.s3\.BucketPolicy\(\s*'CallableFunctionDataPolicy',/
+      /if \(web\.nodes\.server && callableFunctionDataBucket && callableFunctionDataPublicAccessBlock\) \{\s*const names = \$util\.all\(\[\s*callableFunctionDataBucket\.arn,\s*web\.nodes\.server\.nodes\.role\.arn,\s*\$util\.all\(\[\s*accountErasureQueueSubscription\.nodes\.function\.nodes\.role\.arn,\s*accountDeletionSweep\?\.nodes\.function\.nodes\.role\.arn \?\? '',\s*\]\),\s*callableFunctionDataEndpointId \?\? '',\s*\]\);\s*new aws\.s3\.BucketPolicy\(\s*'CallableFunctionDataPolicy',/
     );
     expect(policyModule).toMatch(/bucket: callableFunctionDataBucket\.bucket,/);
     expect(policyModule).toMatch(
-      /policy: names\.apply\(\(\[bucketArn, dispatcherRoleArn, eraserRoleArn, endpointId\]\) =>\s*JSON\.stringify\(callableFunctionDataBucketPolicy\(\{ bucketArn, dispatcherRoleArn, eraserRoleArn, endpointId \}\)\)\s*\),/
+      /policy: names\.apply\(\(\[bucketArn, dispatcherRoleArn, eraserRoleArns, endpointId\]\) =>\s*JSON\.stringify\(callableFunctionDataBucketPolicy\(\{ bucketArn, dispatcherRoleArn, eraserRoleArns, endpointId \}\)\)\s*\),/
     );
     expect(policyModule).toMatch(/import \{ accountErasureQueueSubscription \} from '\.\/queues';/);
+    expect(policyModule).toMatch(/import \{ accountDeletionSweep \} from '\.\/cron';/);
     expect(policyModule).toMatch(/\{ dependsOn: \[callableFunctionDataPublicAccessBlock\] \}/);
     expect(policyModule).toMatch(/import \{ callableFunctionDataEndpointId \} from '\.\/callableFunctionRuntime';/);
     const index = stripComments(read('infra/index.ts'));
@@ -390,6 +391,16 @@ describe('callable function data bucket', () => {
     expect(erasure.slice(0, erasure.indexOf('SINGLE_RECORD_BATCH'))).toMatch(
       /\.\.\.callableFunctionDataForEraser\.permissions,[\s\S]*\.\.\.callableFunctionDataForEraser\.environment,/
     );
+    const cron = stripComments(read('infra/cron.ts'));
+    const sweep = cron.slice(cron.indexOf('const accountDeletionSweep ='));
+    const sweepFunction = sweep.slice(0, sweep.indexOf('transform: accountDeletionSweepDeadLetter.functionTarget'));
+    expect(sweepFunction).toMatch(/environment: \{[^}]*\.\.\.callableFunctionDataForEraser\.environment,\s*\}/);
+    expect(sweepFunction).toMatch(/permissions: \[[\s\S]*\.\.\.callableFunctionDataForEraser\.permissions,\s*\],/);
+    expect(cron.match(/callableFunctionDataFor\w*/g)?.sort()).toEqual([
+      'callableFunctionDataForEraser',
+      'callableFunctionDataForEraser',
+      'callableFunctionDataForEraser',
+    ]);
     expect(web).toMatch(/\.\.\.callableFunctionDataForWeb\.permissions,/);
     expect(web).toMatch(/\.\.\.callableFunctionDataForWeb\.environment,/);
     expect(balanced(web, web.indexOf('link: ['), '[', ']')).not.toMatch(/callableFunctionData/);

@@ -304,7 +304,7 @@ export function callableFunctionDataEndpointPolicy(bucketArn: string) {
 /** What the web API function's role may do to the function-data bucket's `data/` objects. */
 export const FUNCTION_DATA_DISPATCHER_ACTIONS = ['s3:PutObject', 's3:GetObject', 's3:DeleteObject'];
 
-/** What the account-erasure worker's role may do to the same objects, beside listing their keys. */
+/** What the account-erasure worker's and the account-deletion sweep's roles may do, beside listing the keys. */
 export const FUNCTION_DATA_ERASER_ACTIONS = ['s3:DeleteObject'];
 
 export const FUNCTION_DATA_READ_ACTIONS = ['s3:GetObject*', 's3:ListBucket*'];
@@ -313,21 +313,23 @@ export const FUNCTION_DATA_WRITE_ACTIONS = ['s3:PutObject*', 's3:DeleteObject*',
 /**
  * The function-data bucket's policy: HTTPS only; reads, object writes, and deletes by the dispatcher's role only,
  * from anywhere when signed in the header; its signed links only through `endpointId`, and none without one. The
- * account-erasure worker's role is exempt beside it, and its own grant lets it only list and delete.
+ * eraser roles (account erasure and the deletion sweep) are exempt beside it; their own grant lets them only list
+ * and delete.
  */
 export function callableFunctionDataBucketPolicy({
   bucketArn,
   dispatcherRoleArn,
-  eraserRoleArn,
+  eraserRoleArns = [],
   endpointId,
 }: {
   bucketArn: string;
   dispatcherRoleArn: string;
-  eraserRoleArn?: string;
+  eraserRoleArns?: string[];
   endpointId?: string;
 }) {
+  const erasers = eraserRoleArns.filter(Boolean);
   const notDispatcher = {
-    ArnNotEquals: { 'aws:PrincipalArn': eraserRoleArn ? [dispatcherRoleArn, eraserRoleArn] : dispatcherRoleArn },
+    ArnNotEquals: { 'aws:PrincipalArn': erasers.length ? [dispatcherRoleArn, ...erasers] : dispatcherRoleArn },
   };
   const notThroughEndpoint = endpointId ? { StringNotEquals: { 'aws:SourceVpce': endpointId } } : {};
   const signedLink = { StringEquals: { 's3:authType': 'REST-QUERY-STRING' } };
