@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ModelMetric } from '../types';
@@ -64,6 +64,16 @@ describe('ModelMetrics RawDataTab', () => {
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByTestId('model-metrics-raw-row-details')).toHaveTextContent('Request ID: metric-1');
+  });
+
+  it('keeps a row open when its details are clicked, and closes it from the rest of the row', () => {
+    renderTab(1);
+    const row = screen.getByTestId('admin-table-row-metric-1');
+    fireEvent.click(row);
+    fireEvent.click(within(screen.getByTestId('model-metrics-raw-row-details')).getByText('metric-1'));
+    expect(screen.getByTestId('model-metrics-raw-row-details')).toBeInTheDocument();
+    fireEvent.click(row);
+    expect(screen.queryByTestId('model-metrics-raw-row-details')).not.toBeInTheDocument();
   });
 
   it('toggles a row with Enter', () => {

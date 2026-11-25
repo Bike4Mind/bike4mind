@@ -68,6 +68,7 @@ describe('IntegrationDetailPanel recent errors', () => {
     expect(rows[0]).toHaveTextContent('ETIMEDOUT');
     expect(rows[1]).toHaveTextContent('Audit');
     expect(rows[1]).toHaveTextContent('Token revoked');
+    expect(within(rows[1]).getByText('Token revoked').closest('td')).toHaveAttribute('data-cell-wrap');
     expect(rows[1]).toHaveTextContent('disconnect');
   });
 

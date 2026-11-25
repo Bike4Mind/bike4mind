@@ -68,16 +68,19 @@ describe('DataTable', () => {
   });
 
   it('stripes alternate rows only when asked', () => {
-    // jsdom does not resolve the stripe's CSS variable, so check for Joy's stripe rule in the injected styles.
-    const stripeRuleInjected = () =>
-      Array.from(document.querySelectorAll('style')).some(style =>
-        style.textContent?.includes('--TableRow-stripeBackground')
-      );
-    const { unmount } = renderTable();
-    expect(stripeRuleInjected()).toBe(false);
+    // jsdom does not resolve the stripe's CSS variable, so look for Joy's stripe rule under this table's
+    // own Emotion class. Injected <style> tags outlive unmount, so a global scan would see an earlier render.
+    const hasStripeRule = () => {
+      const css = Array.from(document.querySelectorAll('style'), style => style.textContent ?? '').join('');
+      return Array.from(screen.getByTestId('admin-data-table').classList)
+        .filter(cls => cls.startsWith('css-'))
+        .some(cls => new RegExp(`\\.${cls}(?![\\w-])[^{}]*\\{[^}]*--TableRow-stripeBackground`).test(css));
+    };
+    const { unmount } = renderTable({ stripe: 'odd' });
+    expect(hasStripeRule()).toBe(true);
     unmount();
-    renderTable({ stripe: 'odd' });
-    expect(stripeRuleInjected()).toBe(true);
+    renderTable();
+    expect(hasStripeRule()).toBe(false);
   });
 
   it('offers a way back from an empty server page past the end', () => {

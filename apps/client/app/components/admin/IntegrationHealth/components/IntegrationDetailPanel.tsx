@@ -91,7 +91,7 @@ const recentErrorColumns: DataColumn<RecentErrorRow>[] = [
       </Chip>
     ),
   },
-  { id: 'message', label: 'Message', width: '18rem', render: ({ err }) => err.message },
+  { id: 'message', label: 'Message', width: '18rem', wrap: true, render: ({ err }) => err.message },
   {
     id: 'code',
     label: 'Code',

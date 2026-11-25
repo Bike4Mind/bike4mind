@@ -49,9 +49,11 @@ const MetricDetails = ({ metric }: { metric: ModelMetric }) => {
   const streaming = performance?.streamingPerformance;
   const hasStreaming = !!streaming && ((streaming.chunkCount ?? 0) > 0 || (streaming.totalStreamTime ?? 0) > 0);
   return (
+    // The row toggles on click; keep clicks here (selecting an id to copy) from collapsing it.
     <Box
       sx={{ mt: 1, display: 'grid', gridTemplateColumns: '1fr', gap: 1 }}
       data-testid="model-metrics-raw-row-details"
+      onClick={event => event.stopPropagation()}
     >
       <DetailSection title="Core timing">
         <DetailRow label="Context retrieval">{formatDuration(performance?.contextRetrievalTime)}</DetailRow>

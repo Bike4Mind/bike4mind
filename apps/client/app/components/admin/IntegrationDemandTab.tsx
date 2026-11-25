@@ -195,6 +195,7 @@ const RequestersPanel: React.FC<{ integration: IntegrationDemand }> = ({ integra
             testId="admin-integration-demand-requesters-table"
             rowTestId={row => `admin-integration-demand-requester-${row.userId}`}
             pagination={false}
+            framed={false}
             minWidth="48rem"
           />
           {requesters.hasNextPage ? (
