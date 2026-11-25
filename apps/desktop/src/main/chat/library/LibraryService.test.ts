@@ -174,6 +174,15 @@ describe('LibraryService', () => {
     expect(client.getImageJob).toHaveBeenCalledExactlyOnceWith('a');
   });
 
+  it('still downloads when clearing the cache fails', async () => {
+    const { media } = setup();
+    media.clearReusableBucket.mockRejectedValue(new Error('EBUSY'));
+    const { service, switchAccount } = setup({ media });
+    await expect(service.media({ medium: 'image', id: 'a' })).resolves.toMatchObject({ mimeType: 'image/png' });
+    switchAccount('account-2');
+    await expect(service.media({ medium: 'image', id: 'a' })).resolves.toMatchObject({ mimeType: 'image/png' });
+  });
+
   it('finds the session a Studio Create saved an item into, studio sessions first', async () => {
     const job = { kind: 'image', providerJobIds: ['x', 'a'], originatingSessionId: 'studio-1' } as StudioJob;
     const listJobs = vi.fn(async (sessionId: string, cursor?: string) =>

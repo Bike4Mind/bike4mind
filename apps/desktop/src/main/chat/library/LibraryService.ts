@@ -78,7 +78,12 @@ export class LibraryService {
 
   constructor(private readonly deps: LibraryDeps) {
     // Files from an earlier run are unreachable (nothing maps a job to them any more).
-    this.clearing = deps.media.clearReusableBucket(LIBRARY_BUCKET);
+    this.clearing = this.clearBucket();
+  }
+
+  /** Every download awaits the clear, so a failed one only leaves stale files rather than blocking them all. */
+  private clearBucket(): Promise<void> {
+    return this.deps.media.clearReusableBucket(LIBRARY_BUCKET).catch(() => {});
   }
 
   async page(request: LibraryPageRequest): Promise<LibraryPage> {
@@ -149,8 +154,7 @@ export class LibraryService {
     const connection = this.deps.connection();
     if (!connection) throw new Error('Sign in to see your Library.');
     if (connection.scope !== this.scope) {
-      if (this.scope !== null)
-        this.clearing = this.clearing.then(() => this.deps.media.clearReusableBucket(LIBRARY_BUCKET));
+      if (this.scope !== null) this.clearing = this.clearing.then(() => this.clearBucket());
       this.scope = connection.scope;
       this.urls.clear();
       this.stored.clear();
