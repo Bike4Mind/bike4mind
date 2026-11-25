@@ -1292,7 +1292,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/briefScheduleReconcile.ts',
       symbol: 'registerBriefScheduleReconcile',
-      fingerprint: 'eada53842f33d377a7e112aff6efadab634a2fc34ad01fb3acf5813a0dd31b50',
+      fingerprint: '7a058ed11d90fd8636741435068a7e00b17da2f32f7c9176fbd1b73b0df1d97c',
     }
   ),
   wired(

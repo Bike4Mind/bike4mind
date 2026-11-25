@@ -84,6 +84,7 @@ async function composeNextBrief(complete: BriefComposeDeps['complete'] = async (
         approvals: [],
         questions: [],
         emails: [],
+        reminders: [],
         delegations: (await loadPendingBriefDelegations(userId, end, now)).map(item => ({
           delegationId: item._id.toString(),
           intent: item.intent,

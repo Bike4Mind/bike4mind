@@ -19,8 +19,10 @@ beforeEach(async () => {
 const schedule = { enabled: true, timeOfDay: '08:00', days: [1, 2, 3, 4, 5], timeZone: 'America/New_York' };
 const DUE = new Date('2026-11-19T13:00:00.000Z');
 
+let userSeq = 0;
 const insertUser = async (preferences: Record<string, unknown> | null) => {
-  const { insertedId } = await User.collection.insertOne({ username: 'u', email: 'u@example.com', preferences });
+  const username = `u${++userSeq}`;
+  const { insertedId } = await User.collection.insertOne({ username, email: `${username}@example.com`, preferences });
   return insertedId.toString();
 };
 
