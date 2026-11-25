@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminTab } from './adminSidebarConfig';
@@ -164,6 +164,14 @@ describe('AdminDashboardTab', () => {
 
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith(tab);
     expect(screen.getByTestId(`admin-dashboard-open-${tab}`)).toHaveAccessibleName(`Open ${label}`);
+  });
+
+  it('frames each shortcut as a section card titled by an h3', () => {
+    render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
+
+    const card = screen.getByTestId(`admin-dashboard-open-${AdminTab.Users}`).closest('section');
+    expect(card).toHaveAttribute('data-testid', 'admin-section-card');
+    expect(within(card as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('Users');
   });
 
   it('keeps client usage and shortcuts available while activity loads', () => {

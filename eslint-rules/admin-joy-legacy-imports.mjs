@@ -1,5 +1,4 @@
 export default {
-  'AdminDashboardTab.tsx': [[3, '230f0025f26e9c84']],
   'AdminModalTab.tsx': [
     [2, '43dca498ff9a0de5'],
     [22, '68e1a4506bbca636'],
