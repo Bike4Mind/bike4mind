@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
+import { chatBackedHostBridge, chatStubs } from '../../__fixtures__/chatBackedHostBridge';
+import type { ChatSession } from '@shared/chat';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
@@ -10,6 +11,9 @@ import { TavernView } from './tavern/TavernView';
 import { Aquarium } from './aquarium/Aquarium';
 import { snapshotView } from './snapshotView';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
+
+const sessionReads = () =>
+  chatStubs().getSession as (sessionId: string, viewed?: boolean) => Promise<ChatSession | null>;
 
 const FIXTURE = [
   agentFixture('n', 'needs-you', { credits: 10 }),
@@ -332,11 +336,11 @@ describe('OrchestratorStage', () => {
 
   it('opens the agent conversation when a table row is clicked, with a fresh reply box per agent', async () => {
     // By id: the Needs-you strip reads the waiting agents' sessions too.
-    vi.mocked(window.b4m.chat.getSession).mockImplementation(async id =>
+    vi.mocked(sessionReads()).mockImplementation(async id =>
       id === 'w2'
         ? ({
             messages: [{ id: 'reply-w2', role: 'assistant', content: 'Working on the second task.' }],
-          } as Awaited<ReturnType<typeof window.b4m.chat.getSession>>)
+          } as ChatSession)
         : null
     );
     await renderStage(FIXTURE);
@@ -346,7 +350,7 @@ describe('OrchestratorStage', () => {
     expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
     expect(el('orchestrator-peek-conversation').contains(el('chat-message-assistant'))).toBe(true);
     expect(el('chat-message-assistant').textContent).toContain('Working on the second task.');
-    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2');
+    expect(sessionReads()).toHaveBeenCalledWith('w2');
     expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value, 'draft is per agent').toBe('');
   });
 

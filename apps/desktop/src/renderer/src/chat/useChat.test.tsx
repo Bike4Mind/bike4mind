@@ -20,7 +20,7 @@ import type { CreatedSession } from '@shared/ipc';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { groupSessions } from './grouping';
 import { useSidebarSections } from './useSidebarSections';
-import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
+import { chatBackedHostBridge, chatStubs } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -644,7 +644,7 @@ describe('per-chat setters', () => {
     const before = sessionFor('s1');
     let answerFirstRead: (session: ChatSession) => void = () => {};
     const counted = { reads: 0 };
-    window.b4m.chat.getSession = async (id: string) => {
+    chatStubs().getSession = async (id: string) => {
       if (id !== 's1') return sessionFor(id);
       counted.reads++;
       return counted.reads === 1
@@ -1015,7 +1015,7 @@ describe('generation settings', () => {
       });
       expect(conversation.session?.generation).toEqual({ temperature: 0.4 });
 
-      window.b4m.chat.getSession = async () => ({ ...session, generation: { topK: 20 } });
+      chatStubs().getSession = async () => ({ ...session, generation: { topK: 20 } });
       let saved: boolean | undefined;
       await act(async () => {
         failSecond(new Error('disk full'));
@@ -1028,7 +1028,7 @@ describe('generation settings', () => {
 
     it('does not put a save that lands after a switch on the conversation now open', async () => {
       const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
-      window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+      chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
       await act(async () => root.render(<Harness />));
       let answer: (summary: ChatSessionSummary) => void = () => {};
       setSessionGeneration.mockImplementationOnce(() => new Promise<ChatSessionSummary>(resolve => (answer = resolve)));
@@ -1053,7 +1053,7 @@ describe('generation settings', () => {
       setSessionGeneration.mockImplementationOnce(
         () => new Promise<ChatSessionSummary>((_resolve, reject) => (failFirst = reject))
       );
-      window.b4m.chat.getSession = () => new Promise<ChatSession>(resolve => (read = resolve));
+      chatStubs().getSession = () => new Promise<ChatSession>(resolve => (read = resolve));
       let first: Promise<boolean> | undefined;
       await act(async () => {
         first = conversation.setGeneration({ topK: 20 });
@@ -1073,7 +1073,7 @@ describe('generation settings', () => {
 
       it('shows a save that lands while its chat is being reopened, whose first read predates it', async () => {
         const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
-        window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+        chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
         await act(async () => root.render(<Harness />));
         let answer: (summary: ChatSessionSummary) => void = () => {};
         setSessionGeneration.mockImplementationOnce(
@@ -1086,7 +1086,7 @@ describe('generation settings', () => {
         await act(async () => root.render(<Harness id="s2" />));
         let answerFirstRead: (value: ChatSession) => void = () => {};
         let reads = 0;
-        window.b4m.chat.getSession = async (id: string) => {
+        chatStubs().getSession = async (id: string) => {
           if (id === 's2') return other;
           reads++;
           return reads === 1
@@ -1106,7 +1106,7 @@ describe('generation settings', () => {
 
       it('tells only the chat it failed in, and leaves the open one as it was', async () => {
         const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
-        window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+        chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
         await act(async () => root.render(<Harness />));
         let fail: (error: Error) => void = () => {};
         setSessionGeneration.mockImplementationOnce(
@@ -1128,7 +1128,7 @@ describe('generation settings', () => {
 
       it("applies a chat's save that lands after a save in another chat", async () => {
         const other: ChatSession = { ...session, id: 's2', generation: undefined };
-        window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+        chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
         await act(async () => root.render(<Harness />));
         let answer: (summary: ChatSessionSummary) => void = () => {};
         setSessionGeneration.mockImplementationOnce(
@@ -1151,7 +1151,7 @@ describe('generation settings', () => {
 
       it("reports a chat's failed save once it is open again, after a save in another chat", async () => {
         const other: ChatSession = { ...session, id: 's2', generation: undefined };
-        window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+        chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
         await act(async () => root.render(<Harness />));
         let fail: (error: Error) => void = () => {};
         setSessionGeneration.mockImplementationOnce(
@@ -1176,7 +1176,7 @@ describe('generation settings', () => {
 
     it('saves nothing before the conversation has loaded', async () => {
       let finish: (value: ChatSession) => void = () => {};
-      window.b4m.chat.getSession = () => new Promise<ChatSession>(resolve => (finish = resolve));
+      chatStubs().getSession = () => new Promise<ChatSession>(resolve => (finish = resolve));
       await act(async () => root.render(<Harness />));
       expect(await conversation.setGeneration({ topK: 20 })).toBe(false);
       expect(setSessionGeneration).not.toHaveBeenCalled();

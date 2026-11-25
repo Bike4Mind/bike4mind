@@ -14,10 +14,11 @@ type ChatStubs = Partial<{
   onSessionStatus(listener: (event: ChatSessionStatusEvent) => void): unknown;
 }>;
 
-type ChatStub = (...args: unknown[]) => unknown;
+type ChatStub = (...args: never[]) => unknown;
 type ChatMethodStubs = Partial<Record<string, ChatStub>>;
 
-const chatStubs = (): ChatStubs & ChatMethodStubs =>
+/** The `window.b4m.chat` stubs the bridge answers from, for a test that swaps one after mounting. */
+export const chatStubs = (): ChatStubs & ChatMethodStubs =>
   (window as unknown as { b4m: { chat?: ChatStubs & ChatMethodStubs } }).b4m.chat ?? {};
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -182,7 +183,13 @@ export function chatBackedHostBridge(): HostBridgeApi {
         return { ok: false, error: { code: HOST_ERROR_CODES.methodNotFound, message: `Not faked: ${method}` } };
       }
       try {
-        return { ok: true, result: matched.result(await stub(...matched.args(asRecord(params))), asRecord(params)) };
+        return {
+          ok: true,
+          result: matched.result(
+            await Reflect.apply(stub, undefined, matched.args(asRecord(params))),
+            asRecord(params)
+          ),
+        };
       } catch (caught) {
         const message = caught instanceof Error ? caught.message : String(caught);
         return { ok: false, error: { code: HOST_ERROR_CODES.internalError, message } };
