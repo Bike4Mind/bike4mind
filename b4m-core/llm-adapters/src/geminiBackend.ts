@@ -37,8 +37,6 @@ import {
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { appendCacheInclusiveTurn, splitCacheInclusiveInput } from './cacheInclusiveUsage';
-import pick from 'lodash/pick.js';
-import { v4 as uuidv4 } from 'uuid';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
@@ -139,7 +137,7 @@ export class GeminiBackend implements ICompletionBackend {
       this.logger.warn('[Gemini] Missing thought_signature for tool call:', { toolName });
     }
 
-    const toolId = uuidv4();
+    const toolId = crypto.randomUUID();
     toolCalls.push({
       id: toolId,
       name: toolName,
@@ -199,6 +197,7 @@ export class GeminiBackend implements ICompletionBackend {
         supportsTools: true,
         logoFile: 'Google_logo.png',
         rank: 3,
+        releaseDate: '2026-11-18',
         description:
           "Google's Gemini 4 Neon, a thinking model for agentic and coding work with text, image, audio, video and PDF input.",
       },
@@ -717,14 +716,14 @@ export class GeminiBackend implements ICompletionBackend {
       : ([
           {
             functionDeclarations: options.tools!.map(tool => {
-              const params = pick(tool.toolSchema.parameters, 'type', 'properties', 'required');
+              const params = tool.toolSchema.parameters;
               return {
                 name: tool.toolSchema.name,
                 description: tool.toolSchema.description,
                 parameters: {
-                  ...params,
                   type: params.type.toUpperCase(), // "object" -> "OBJECT"
                   properties: params.properties ? this.sanitizeProperties(params.properties) : params.properties,
+                  ...('required' in params && { required: params.required }),
                 },
               };
             }),

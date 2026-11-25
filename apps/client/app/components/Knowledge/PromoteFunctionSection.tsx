@@ -14,8 +14,10 @@ import {
   useCallableFunctionCalls,
   usePromoteCallableFunction,
   useSetCallableFunctionExamples,
+  useStopSharingCallableFunction,
 } from '@client/app/hooks/data/callableFunctions';
 import ProblemList, { dangerAlertSx } from './FunctionProblemList';
+import ShareFunctionDialog from './ShareFunctionDialog';
 
 const OUTCOME_LABELS: Record<CallableFunctionCallOutcome, string> = {
   ok: 'Returned',
@@ -351,6 +353,82 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
   );
 }
 
+/** A private share whose named people were all erased reaches nobody, so it reads as not shared. */
+function isShared(tool: ICallableFunctionPublic): boolean {
+  const grants = tool.grants;
+  return !!grants && (grants.visibility !== 'private' || grants.userIds.length > 0);
+}
+
+function shareSummary(tool: ICallableFunctionPublic): string {
+  const grants = tool.grants;
+  if (!grants || !isShared(tool)) return 'Not shared.';
+  const parts = [
+    ...(grants.userIds.length > 0
+      ? [`${grants.userIds.length} ${grants.userIds.length === 1 ? 'person' : 'people'}`]
+      : []),
+    ...(grants.visibility === 'project' ? ['the members of a project'] : []),
+    ...(grants.visibility === 'organization' ? ['the members of an organization'] : []),
+  ];
+  return `Shared with ${parts.join(' and ')}.`;
+}
+
+// Fails typecheck once the public record gains `dataPins`: pass those and its sources to the dialog instead.
+const NO_DATA_PINS: 'dataPins' extends keyof ICallableFunctionPublic ? never : string[] = [];
+
+function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
+  const stop = useStopSharingCallableFunction();
+  return (
+    <Stack spacing={1} data-testid="python-function-share-section">
+      <Typography level="title-sm">Sharing</Typography>
+      <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-share-status">
+        {live
+          ? shareSummary(tool)
+          : isShared(tool)
+            ? 'Paused until the next promotion, which shares it again.'
+            : 'Promote the tool to share it. A share covers the live version.'}
+      </Typography>
+      <Stack direction="row" spacing={1}>
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          disabled={!live}
+          onClick={() => setOpen(true)}
+          data-testid="python-function-share-btn"
+        >
+          {isShared(tool) ? 'Edit share' : 'Share'}
+        </Button>
+        {isShared(tool) && (
+          <Button
+            size="sm"
+            variant="plain"
+            color="danger"
+            loading={stop.isPending}
+            onClick={() => {
+              setStopError(null);
+              stop.mutate(tool.id, {
+                onError: failure =>
+                  setStopError(callableFunctionErrorMessage(failure, 'The tool could not stop being shared.')),
+              });
+            }}
+            data-testid="python-function-share-stop-btn"
+          >
+            Stop sharing
+          </Button>
+        )}
+      </Stack>
+      {stopError && (
+        <Alert color="danger" variant="soft" sx={dangerAlertSx} data-testid="python-function-share-stop-error">
+          {stopError}
+        </Alert>
+      )}
+      {open && <ShareFunctionDialog tool={tool} dataPins={NO_DATA_PINS} sources={[]} onClose={() => setOpen(false)} />}
+    </Stack>
+  );
+}
+
 /**
  * Promote, the trust label once live, the worked examples, and the owner's recent calls for one saved tool.
  * `blocked` says why promotion cannot run now, such as an artifact version newer than the pin.
@@ -441,6 +519,7 @@ export default function PromoteFunctionSection({
           </Alert>
         )}
       </Stack>
+      <ShareBlock tool={tool} live={live} />
       <ExamplesBlock tool={tool} contract={contract} />
       <CallsBlock tool={tool} />
     </Stack>

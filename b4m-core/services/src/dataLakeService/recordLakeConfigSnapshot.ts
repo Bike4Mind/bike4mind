@@ -4,6 +4,7 @@ import {
   type ILakeConfigSnapshotRepository,
 } from '@bike4mind/common';
 import type { LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
+import { Logger } from '@bike4mind/observability';
 
 export interface LakeConfigSnapshotAdapters {
   db: { lakeConfigSnapshots: Pick<ILakeConfigSnapshotRepository, 'record'> };
@@ -33,6 +34,6 @@ export async function recordLakeConfigSnapshot(
     const meta = { dataLakeId: snapshot.dataLakeId, eventId, kind: snapshot.kind, err };
     const msg = '[dataLakes] lake config changed but its undo snapshot did not persist';
     if (logger?.warn) logger.warn(msg, meta);
-    else console.warn(msg, meta);
+    else Logger.warn(msg, meta);
   }
 }

@@ -24,7 +24,9 @@ import {
   deleteCallableFunction,
   getCallableFunction,
   listCallableFunctions,
+  listOfferedCallableFunctions,
   repinCallableFunction,
+  setCallableFunctionApproval,
   setCallableFunctionEnabled,
   setCallableFunctionExamples,
   summarizeCallableFunctionCalls,
@@ -909,5 +911,78 @@ describe('summarizeCallableFunctionCalls', () => {
   it("answers 404 for another owner's function", async () => {
     const view = await save();
     await expect(summarizeCallableFunctionCalls(STRANGER, view.id, NOW)).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('listOfferedCallableFunctions', () => {
+  const saveNamed = async (artifactId: string, name: string) => {
+    await seedArtifact(artifactId, { content: code().replace('beam_midspan_deflection', name) });
+    return save(artifactId, { contract: contract({ name }) });
+  };
+
+  it('offers live, turned-on functions with their contract and no pinned code; never a draft, disabled, or source_deleted one', async () => {
+    const live = await save();
+    await promoteDirectly(live.id);
+    await saveNamed('artifact-2', 'draft_tool');
+    const off = await saveNamed('artifact-3', 'off_tool');
+    await promoteDirectly(off.id);
+    await setCallableFunctionEnabled(OWNER, off.id, false);
+    const gone = await saveNamed('artifact-4', 'gone_tool');
+    await promoteDirectly(gone.id);
+    await artifactRepository.softDelete('artifact-4');
+
+    const liveAndOn = await callableFunctionRepository.listLiveForOwner(OWNER_KEY);
+    expect(liveAndOn.map(fn => fn.slug)).toEqual(['beam_midspan_deflection', 'gone_tool']);
+
+    const offered = await listOfferedCallableFunctions(OWNER);
+    expect(offered.map(fn => fn.slug)).toEqual(['beam_midspan_deflection']);
+    expect(offered[0]!.contract).toMatchObject({ name: 'beam_midspan_deflection' });
+    expect(offered[0]!.pin).not.toHaveProperty('source');
+    expect(await listOfferedCallableFunctions(STRANGER)).toEqual([]);
+  });
+
+  it('reads at most the limit, oldest first, and can leave always-ask functions out before the limit', async () => {
+    const first = await save();
+    await promoteDirectly(first.id);
+    await setCallableFunctionApproval(OWNER, first.id, 'always_ask');
+    for (const [artifactId, name] of [
+      ['artifact-2', 'second_tool'],
+      ['artifact-3', 'third_tool'],
+    ]) {
+      await promoteDirectly((await saveNamed(artifactId, name)).id);
+    }
+
+    const slugs = async (options: { limit?: number; excludeAlwaysAsk?: boolean }) =>
+      (await listOfferedCallableFunctions(OWNER, options)).map(fn => fn.slug);
+    expect(await slugs({ limit: 2 })).toEqual(['beam_midspan_deflection', 'second_tool']);
+    expect(await slugs({ limit: 2, excludeAlwaysAsk: true })).toEqual(['second_tool', 'third_tool']);
+  });
+
+  it('counts the limit over functions whose artifact is still in place', async () => {
+    const gone = await save();
+    await promoteDirectly(gone.id);
+    await artifactRepository.softDelete('artifact-1');
+    for (const [artifactId, name] of [
+      ['artifact-2', 'second_tool'],
+      ['artifact-3', 'third_tool'],
+      ['artifact-4', 'fourth_tool'],
+    ]) {
+      await promoteDirectly((await saveNamed(artifactId, name)).id);
+    }
+
+    const offered = await listOfferedCallableFunctions(OWNER, { limit: 2 });
+
+    expect(offered.map(fn => fn.slug)).toEqual(['second_tool', 'third_tool']);
+  });
+});
+
+describe('setCallableFunctionApproval', () => {
+  it('reads as default until set, stores the mode, and refuses another owner', async () => {
+    const view = await save();
+    expect(view.approval).toBe('default');
+    expect(await setCallableFunctionApproval(OWNER, view.id, 'always_ask')).toMatchObject({ approval: 'always_ask' });
+    expect((await stored(view.id))?.approval).toBe('always_ask');
+    await expect(setCallableFunctionApproval(STRANGER, view.id, 'default')).rejects.toMatchObject({ statusCode: 404 });
+    expect((await stored(view.id))?.approval).toBe('always_ask');
   });
 });

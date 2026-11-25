@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import type { Message, Session } from '../storage/types.js';
 import { COMPACTION_SUMMARY_MARKER } from '../config/constants.js';
 import { buildHandoffSystemMessage } from './handoff.js';
@@ -107,7 +106,7 @@ export function createCompactedSession(
   // Stored as a `user` role (not `system`) so it survives the
   // user/assistant filter applied to `previousMessages` before each agent run.
   const summaryMessage: Message = {
-    id: uuidv4(),
+    id: crypto.randomUUID(),
     role: 'user',
     content: `${COMPACTION_SUMMARY_MARKER}\n\n${summary}`,
     timestamp: new Date().toISOString(),
@@ -118,7 +117,7 @@ export function createCompactedSession(
   const handoff = originalSession.metadata.workflow?.handoff;
   const handoffMessage: Message | null = handoff
     ? {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         role: 'user',
         content: buildHandoffSystemMessage(handoff),
         timestamp: new Date().toISOString(),
@@ -130,7 +129,7 @@ export function createCompactedSession(
     : [summaryMessage, ...preservedMessages];
 
   return {
-    id: preserveId ? originalSession.id : uuidv4(),
+    id: preserveId ? originalSession.id : crypto.randomUUID(),
     name: `${originalSession.name} (compacted)`,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

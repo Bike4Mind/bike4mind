@@ -82,7 +82,7 @@ private struct TurnIntoFlow: ViewModifier {
       }
       .fullScreenCover(item: $editing) { frame in
         if let context {
-          RegionEditView(item: frame, api: context.api, media: context.media, tracker: context.tracker)
+          RegionEditView(item: frame, api: context.api, tracker: context.tracker)
         }
       }
   }

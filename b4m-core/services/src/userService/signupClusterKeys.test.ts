@@ -8,6 +8,7 @@ import {
   signupRegistrableDomain,
   toSignupRecord,
 } from './signupClusterKeys';
+import { Logger } from '@bike4mind/observability';
 
 const kindsOf = (keys: { kind: string }[]) => keys.map(key => key.kind);
 
@@ -132,17 +133,17 @@ describe('cachedFailOpenLookup', () => {
   });
 
   it('reports asynchronous lookup failures by default and retries the failed domain', async () => {
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warning = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     const error = new Error('DNS unavailable');
     const facts = { mxHosts: ['mx.mail.example'] };
     const lookup = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(facts);
     const cached = cachedFailOpenLookup(lookup);
 
     expect(await cached('a.example')).toBeNull();
-    expect(warning).toHaveBeenCalledExactlyOnceWith(
-      '[signup-cluster-keys] Domain facts lookup failed for a.example:',
-      error
-    );
+    expect(warning).toHaveBeenCalledExactlyOnceWith('[signup-cluster-keys] Domain facts lookup failed', {
+      domain: 'a.example',
+      error,
+    });
     expect(await cached('a.example')).toEqual(facts);
     expect(lookup).toHaveBeenCalledTimes(2);
   });

@@ -49,7 +49,7 @@ function CostSurfaces({ composer = false }: { composer?: boolean }) {
   if (!composer) {
     return (
       <>
-        <SettingsScreen auth={null} onClose={() => undefined} />
+        <SettingsScreen auth={null} section="advanced" onClose={() => undefined} />
         <TurnStatus
           turn={{ startedAt: Date.now(), tokens: 1200, usage }}
           activity={{ kind: 'thinking', label: 'Thinking...' }}
@@ -101,7 +101,7 @@ describe('developer dollar cost preference', () => {
       addListener: () => undefined,
       removeListener: () => undefined,
     }));
-    // SettingsScreen's menu-bar switch and notify scope read their preferences from main.
+    // The Advanced page (dollar costs, worktrees) and the rest of the screen read their state from main.
     vi.stubGlobal('b4m', {
       watch: {
         getPreferences: async () => DEFAULT_WATCH_PREFERENCES,
@@ -119,6 +119,7 @@ describe('developer dollar cost preference', () => {
         onSpawnLocation: () => () => undefined,
         getTurnExtensions: async () => 3,
         setTurnExtensions: async (extensions: number) => extensions,
+        listRecentFolders: async () => [],
       },
     });
   };

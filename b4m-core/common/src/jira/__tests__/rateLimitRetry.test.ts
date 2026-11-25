@@ -7,10 +7,16 @@ describe('JiraApi Rate Limit Retry', () => {
   let jiraApi: JiraApi;
   let consoleSpy: ReturnType<typeof vi.spyOn>;
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const loggedCalls = () =>
+    [logger.info, logger.warn, logger.error]
+      .flatMap(fn => fn.mock.calls)
+      .map(c => `${c[0]} ${JSON.stringify(c[1] ?? '')}`);
   let mathRandomSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
+    for (const fn of Object.values(logger)) fn.mockClear();
     // Deterministic jitter for predictable delay assertions
     mathRandomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
 
@@ -23,7 +29,7 @@ describe('JiraApi Rate Limit Retry', () => {
       agileApiBaseUrl: 'https://api.atlassian.com/ex/jira/test-cloud-id/rest/agile/1.0',
       authHeader: 'Bearer test-token',
     };
-    jiraApi = new JiraApi(mockConfig);
+    jiraApi = new JiraApi(mockConfig, { logger });
     global.fetch = vi.fn();
     consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -74,8 +80,9 @@ describe('JiraApi Rate Limit Retry', () => {
     expect(result).toBeDefined();
     expect(result.key).toBe('PROJ-123');
 
-    // Verify rate limit error was logged
-    const logCalls = consoleSpy.mock.calls.map(c => String(c[0]));
+    // The injected logger receives the lines; nothing falls through to console
+    expect(consoleSpy).not.toHaveBeenCalled();
+    const logCalls = loggedCalls();
     const rateLimitErrorLog = logCalls.find(c => c.includes('RATE_LIMIT_ERROR'));
     expect(rateLimitErrorLog).toBeDefined();
     const retryLog = logCalls.find(c => c.includes('retrying after'));
@@ -135,7 +142,7 @@ describe('JiraApi Rate Limit Retry', () => {
     await promise;
 
     // Verify the retry log mentions capping at 10s, not 60s
-    const logCalls = consoleSpy.mock.calls.map(c => String(c[0]));
+    const logCalls = loggedCalls();
     const retryLog = logCalls.find(c => c.includes('retrying after'));
     expect(retryLog).toContain('10000ms');
   });
@@ -163,7 +170,7 @@ describe('JiraApi Rate Limit Retry', () => {
     await vi.advanceTimersByTimeAsync(5000);
     await promise;
 
-    const logCalls = consoleSpy.mock.calls.map(c => String(c[0]));
+    const logCalls = loggedCalls();
     const retryLog = logCalls.find(c => c.includes('retrying after'));
     expect(retryLog).toContain('5000ms');
   });
@@ -183,11 +190,11 @@ describe('JiraApi Rate Limit Retry', () => {
 
     await jiraApi.getIssue({ issueKey: 'PROJ-123' });
 
-    const logCalls = consoleSpy.mock.calls.map(c => String(c[0]));
+    const logCalls = loggedCalls();
     const rateLimitLog = logCalls.find(c => c.includes('"type":"RATE_LIMIT"'));
     expect(rateLimitLog).toBeDefined();
 
-    const parsed = JSON.parse(rateLimitLog!);
+    const parsed = JSON.parse(rateLimitLog!.slice(rateLimitLog!.indexOf('{')));
     expect(parsed.integration).toBe('jira');
     expect(parsed.limit).toBe(400);
     expect(parsed.remaining).toBe(350);
@@ -210,7 +217,7 @@ describe('JiraApi Rate Limit Retry', () => {
 
     await jiraApi.getIssue({ issueKey: 'PROJ-123' });
 
-    const logCalls = consoleSpy.mock.calls.map(c => String(c[0]));
+    const logCalls = loggedCalls();
     const warningLog = logCalls.find(c => c.includes('Rate limit warning'));
     expect(warningLog).toBeDefined();
     expect(warningLog).toContain('88%');

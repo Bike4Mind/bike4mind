@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import pLimit from 'p-limit';
 import { Types } from 'mongoose';
 import {
   FAB_FILE_CONTENT_REWRITE_PATCH,
@@ -10,6 +9,7 @@ import {
   type IQuestGraph,
   type IQuestMasterPlanDocument,
   type IQuestNode,
+  limitConcurrency,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -163,7 +163,7 @@ export async function convertLegacyQuestPlans(deps: {
   const db = connectedDb();
 
   const exportedOn = now.toISOString().slice(0, 10);
-  const limit = pLimit(CONCURRENCY);
+  const limit = limitConcurrency(CONCURRENCY);
 
   const fabDb = {
     fabFiles: fabFileRepository,

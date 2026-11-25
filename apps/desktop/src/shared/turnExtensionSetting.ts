@@ -1,6 +1,6 @@
 /**
  * How many times a turn that hit its round or time budget while still making progress is carried
- * on automatically, from Settings ("Long-running agents"). Zero always stops at the budget.
+ * on automatically, from Settings ("Extra turns for long tasks"). Zero always stops at the budget.
  *
  * Three by default: each extension is another full budget of rounds or wall clock spent on the
  * user's credits, so the cap is modest. A stalled turn (see TurnLimits.stalledRounds) is never

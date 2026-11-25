@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AuditActor, StoredAuditContext, AuditEntry, AuditTarget, NewAdminAuditEntry } from '@bike4mind/common';
 import { recordAdminAction, type RecordAdminActionInput } from './recordAdminAction';
+import { Logger } from '@bike4mind/observability';
 
 const actor: AuditActor = { kind: 'user', scope: 'platform', userId: 'u1', name: 'Admin', wasAdmin: true };
 const context: StoredAuditContext = { source: 'admin_ui' };
@@ -81,10 +82,10 @@ describe('recordAdminAction', () => {
     });
   });
 
-  it('falls back to console.error without a logger', async () => {
+  it('falls back to the global Logger without a logger', async () => {
     const { append } = setup();
     append.mockRejectedValueOnce(new Error('x'));
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const spy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
     const result = await recordAdminAction(baseInput({ action: 'org.seats.changed' }), {
       db: { adminAuditLog: { append } },
     });

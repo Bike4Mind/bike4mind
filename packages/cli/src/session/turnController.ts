@@ -10,7 +10,6 @@
  * keeps only a thin wrapper that builds the context from its render state.
  */
 import { randomBytes } from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
 import { ReActAgent } from '@bike4mind/agents';
 import { isEarlyStop } from '@bike4mind/common';
 import type { ModelInfo } from '@bike4mind/common';
@@ -308,8 +307,8 @@ async function runHeldTurn(message: string, ctx: TurnContext, peer?: PeerTurnPro
         ...activeSession,
         messages: [
           ...activeSession.messages,
-          { id: uuidv4(), role: 'user', content: message, timestamp, metadata: { peer } },
-          { id: uuidv4(), role: 'assistant', content: error, timestamp, metadata: { peer } },
+          { id: crypto.randomUUID(), role: 'user', content: message, timestamp, metadata: { peer } },
+          { id: crypto.randomUUID(), role: 'assistant', content: error, timestamp, metadata: { peer } },
         ],
         updatedAt: timestamp,
       };
@@ -389,7 +388,7 @@ async function runHeldTurn(message: string, ctx: TurnContext, peer?: PeerTurnPro
 
     // Create user message
     const userMessage: Message = {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       role: 'user',
       content: userMessageContent,
       timestamp: new Date().toISOString(),
@@ -398,7 +397,7 @@ async function runHeldTurn(message: string, ctx: TurnContext, peer?: PeerTurnPro
 
     // Create a pending assistant message to show steps as they come in
     const pendingAssistantMessage: Message = {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       role: 'assistant',
       content: PENDING_ASSISTANT_CONTENT,
       timestamp: new Date().toISOString(),
@@ -603,7 +602,7 @@ async function runHeldTurn(message: string, ctx: TurnContext, peer?: PeerTurnPro
       const currentSession = useCliStore.getState().session;
       if (currentSession && !replaced()) {
         const cancelMessage: Message = {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           role: 'assistant',
           content: '⚠️ Operation cancelled by user',
           timestamp: new Date().toISOString(),
@@ -637,7 +636,7 @@ async function runHeldTurn(message: string, ctx: TurnContext, peer?: PeerTurnPro
       const currentSession = useCliStore.getState().session;
       if (currentSession) {
         const failedMessage: Message = {
-          id: pendingAssistantId ?? uuidv4(),
+          id: pendingAssistantId ?? crypto.randomUUID(),
           role: 'assistant',
           content: `Peer turn failed: ${rawMessage}`,
           timestamp: new Date().toISOString(),

@@ -20,6 +20,7 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   useArtifactCallableFunction: () => ({ isLoading: false, data: { saved: h.saved, others: [] } }),
   useRepinCallableFunction: () => ({ mutate: vi.fn(), isPending: false }),
   useSetCallableFunctionEnabled: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetCallableFunctionApproval: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteCallableFunction: () => ({ mutate: vi.fn(), isPending: false }),
   useRunCallableFunctionTests: () => ({ mutate: h.runTests, isPending: h.pending }),
   useCallableFunctionsServerRuntime: () => h.runtime,

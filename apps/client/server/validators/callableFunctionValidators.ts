@@ -1,4 +1,11 @@
-import { CALLABLE_FUNCTION_EXAMPLE_LIMITS, FUNCTION_CONTRACT_LIMITS } from '@bike4mind/common';
+import {
+  CALLABLE_FUNCTION_APPROVAL_MODES,
+  CALLABLE_FUNCTION_EXAMPLE_LIMITS,
+  CALLABLE_FUNCTION_GRANT_LIMITS,
+  CallableFunctionGrantVisibilitySchema,
+  FUNCTION_CONTRACT_LIMITS,
+  MCP_TOOL_APPROVAL_MODES,
+} from '@bike4mind/common';
 import { z } from 'zod';
 
 // Bodies of pages/api/callable-functions/**. `.strict()` everywhere: the hash, the pin, the name, the state, and
@@ -23,7 +30,11 @@ export const callableFunctionPinBodySchema = z
   })
   .strict();
 
-export const callableFunctionPatchBodySchema = z.object({ enabled: z.boolean() }).strict();
+/** One setting per request: turn the tool on or off, or set when chat asks before a call. */
+export const callableFunctionPatchBodySchema = z.union([
+  z.object({ enabled: z.boolean() }).strict(),
+  z.object({ approval: z.enum(MCP_TOOL_APPROVAL_MODES) }).strict(),
+]);
 
 /**
  * At most the names of the declared tests to run (the ones a budget left not run); the tests themselves and the
@@ -65,6 +76,35 @@ export const callableFunctionExamplesBodySchema = z
       .max(CALLABLE_FUNCTION_EXAMPLE_LIMITS.maxExamples),
   })
   .strict();
+
+/** The whole share, replaced at once; the registry checks the owner belongs to the project or organization named. */
+export const callableFunctionGrantsBodySchema = z
+  .object({
+    visibility: CallableFunctionGrantVisibilitySchema,
+    projectId: z.string().trim().min(1).max(64).optional(),
+    organizationId: z.string().trim().min(1).max(64).optional(),
+    userIds: z.array(z.string().trim().min(1).max(64)).max(CALLABLE_FUNCTION_GRANT_LIMITS.maxUserIds),
+  })
+  .strict();
+
+/** A recipient's review: the interface hash they were shown, and when to ask before a call. */
+export const callableFunctionReviewBodySchema = z
+  .object({
+    reviewHash: z.string().regex(/^[0-9a-f]{64}$/),
+    approval: z.enum(CALLABLE_FUNCTION_APPROVAL_MODES),
+  })
+  .strict();
+
+/** A reviewed recipient's settings: the approval mode, or turning the function off or on. */
+export const callableFunctionReviewSettingsBodySchema = z
+  .object({
+    approval: z.enum(CALLABLE_FUNCTION_APPROVAL_MODES).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .refine(body => body.approval !== undefined || body.enabled !== undefined, {
+    message: 'Name the approval mode or whether the tool is on.',
+  });
 
 // The same 400 `invalid_body` envelope as the connection routes.
 export { parseMcpConnectionBody as parseCallableFunctionBody } from './mcpConnectionValidators';

@@ -207,12 +207,12 @@ export class ChatCompletionInvoke {
     this.prefetchedSession = session;
     this.prefetchedOrganization = organization;
 
-    // Check session early to fail fast if not found
+    // sessionId is caller-supplied, so a deleted notebook or stale id is a client condition: warn,
+    // and throw so every caller answers 404 rather than guessing what an undefined return means.
+    // Nothing has been created or admitted yet, so there is no quest or credit state to unwind.
     if (!session) {
-      this.logger.error(
-        `Session for sessionId: ${sessionId} not found. The session may have been deleted before the quest was started.`
-      );
-      return;
+      this.logger.warn('Chat completion refused: session not found (it may have been deleted before the turn started)');
+      throw new NotFoundError('Session not found');
     }
 
     // sessionId is caller-supplied (the public POST /api/chat contract accepts any string), and

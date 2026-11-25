@@ -55,6 +55,7 @@ import {
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage, type ClientSession } from 'mongoose';
 import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
@@ -1172,7 +1173,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async incrementCredits(userId: string, credits: number, options?: { updateLastCreditsPurchasedAt?: boolean }) {
-    console.log(`Incrementing credits for user ${userId} by ${credits}`);
+    Logger.debug('Incrementing credits', { userId, credits });
     const result = await this.model.findOneAndUpdate(
       { _id: userId },
       {

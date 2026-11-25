@@ -2,7 +2,7 @@ import { StorageBreakdownBucket, isLakeIngestSource } from '@bike4mind/common';
 import { useGetStorageBreakdown } from '@client/app/hooks/data/storageBreakdown';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { Box, Button, CircularProgress, LinearProgress, Link, Stack, Typography } from '@mui/joy';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from '@client/app/utils/prettyBytes';
 import { FC, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
