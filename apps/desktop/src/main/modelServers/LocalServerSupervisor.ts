@@ -6,7 +6,8 @@ import {
   startOllamaServe,
 } from '@bike4mind/local-models';
 import type { LaunchRuntime, ModelServerLaunchSettings } from '@shared/modelServers';
-import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import { findOnPath, resolveUserPath } from '../chat/tools/userPath';
 import {
   adoptedHandle,

@@ -1,27 +1,8 @@
 import { z } from 'zod';
 import { normalizeEnvKey, type AuthLogger, type AuthTokens, type TokenStore } from '@bike4mind/client-auth';
 import type { EnvironmentSelection, TokenStorageStatus } from '@shared/auth';
+import type { SecretCipher } from '../../host/ports';
 import { resealed } from '../secrets/reseal';
-
-/**
- * The slice of Electron's `safeStorage` this module needs. Narrowed to a port so the vault
- * can be tested without an Electron app, and so the "must be called after the app `ready`
- * event" rule stays a construction-order concern of the caller rather than an import-time
- * landmine here.
- */
-export interface SecretCipher {
-  isEncryptionAvailable(): boolean;
-  encryptString(plainText: string): Buffer;
-  decryptString(encrypted: Buffer): string;
-  /** True for a blob in an older format that the vault should re-save (see secrets/appSecretCipher.ts). */
-  needsReencrypt?(encrypted: Buffer): boolean;
-  /**
-   * Declared only by a cipher that does not encrypt and relies on the vault file's owner-only
-   * permissions instead (see host/auth/permissionProtectedCipher.ts). Without it, a cipher that
-   * cannot encrypt keeps tokens in memory only.
-   */
-  readonly atRestProtection?: 'file-permissions';
-}
 
 /** Persistence port for the vault document. Backed by a JSON file under `userData`. */
 export interface VaultFile {

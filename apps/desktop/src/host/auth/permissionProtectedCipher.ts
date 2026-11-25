@@ -1,4 +1,4 @@
-import type { SecretCipher } from '../../main/auth/tokenVault';
+import type { SecretCipher } from '../ports';
 
 /**
  * Threat model: a headless host reached over SSH has no OS keychain, and a key stored beside the
