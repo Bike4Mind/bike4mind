@@ -1,4 +1,3 @@
-import { hostChat } from '../host/hostChat';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -32,6 +31,7 @@ import {
   type PermissionScope,
   type PermissionsState,
 } from '@shared/permissions';
+import { hostChat } from '../host/hostChat';
 import { ChevronIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 

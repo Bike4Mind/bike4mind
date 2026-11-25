@@ -1,4 +1,3 @@
-import { hostChat } from '../host/hostChat';
 import { useEffect, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
@@ -6,6 +5,7 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { PendingDecision, PendingTaskDecision, TaskDecisionAnswer } from '@shared/orchestration';
+import { hostChat } from '../host/hostChat';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { QuestionCard } from './QuestionCard';
 import { SessionLink } from './SessionLink';

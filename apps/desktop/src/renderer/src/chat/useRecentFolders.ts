@@ -1,6 +1,6 @@
-import { hostChat } from '../host/hostChat';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RecentFolder } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 
 export interface RecentFolders {
   folders: readonly RecentFolder[];

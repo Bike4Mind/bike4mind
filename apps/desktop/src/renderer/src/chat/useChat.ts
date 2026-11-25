@@ -1,4 +1,3 @@
-import { hostChat } from '../host/hostChat';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
@@ -25,6 +24,7 @@ import type {
 import { carriedNotes, regenerableReply } from '@shared/threadRewind';
 import { summarizeSession } from '@shared/agentOutcome';
 import { normalizeSessionTitle } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import { isUntouchedImport } from './grouping';
 import type { GenerationSettings } from '@shared/generation';
 import type { CreatedSession } from '@shared/ipc';

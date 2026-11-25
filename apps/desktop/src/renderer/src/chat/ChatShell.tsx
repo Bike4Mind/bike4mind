@@ -1,4 +1,3 @@
-import { hostChat } from '../host/hostChat';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
@@ -25,6 +24,7 @@ import {
   modelSupportsTools,
   SESSION_TITLE_MAX_LENGTH,
 } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';

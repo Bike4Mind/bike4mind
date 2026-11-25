@@ -1,4 +1,3 @@
-import { hostChat } from '../../host/hostChat';
 import {
   VIEW_SNAPSHOT_CONTRACT,
   type ViewAction,
@@ -6,6 +5,7 @@ import {
   type ViewApproval,
   type ViewSnapshot,
 } from '@shared/viewSnapshot';
+import { hostChat } from '../../host/hostChat';
 import { agentNowText } from './activity';
 import type { AgentView, ParentView } from './roster';
 import { isOneClickDecision } from './tavern/bubbleAnswer';

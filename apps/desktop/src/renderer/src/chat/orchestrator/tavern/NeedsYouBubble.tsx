@@ -1,9 +1,9 @@
-import { hostChat } from '../../../host/hostChat';
 import { useState } from 'react';
 import Box from '@mui/joy/Box';
 import type { ChatApprovalAnswer } from '@shared/chat';
 import { pendingCallsIn } from '@shared/needsYou';
 import type { TaskDecisionAnswer } from '@shared/orchestration';
+import { hostChat } from '../../../host/hostChat';
 import { refreshKeyOf, useSessionMessages } from '../AgentPeekDrawer';
 import type { AgentView } from '../roster';
 import { type BubblePlan, planForCall, planForQuestion } from './bubbleAnswer';

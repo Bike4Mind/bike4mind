@@ -1,7 +1,7 @@
-import { hostChat } from '../host/hostChat';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { newSessionDefaultsSchema, type NewSessionDefaults } from '@shared/sessionDefaults';
 import type { ChatAttachment, ChatSession, ChatSessionMode, CreateCodeSessionRequest } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import type { ConversationController, SessionPlacement } from './useChat';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 

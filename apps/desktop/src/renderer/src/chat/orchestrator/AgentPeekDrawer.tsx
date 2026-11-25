@@ -1,4 +1,3 @@
-import { hostChat } from '../../host/hostChat';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import ButtonGroup from '@mui/joy/ButtonGroup';
@@ -13,6 +12,7 @@ import { useTheme } from '@mui/joy/styles';
 import { isStoppableState } from '@shared/agentState';
 import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall, SendMessageResult } from '@shared/chat';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { hostChat } from '../../host/hostChat';
 import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { MessageThread } from '../MessageThread';

@@ -1,9 +1,9 @@
-import { hostChat } from '../../host/hostChat';
 import { useEffect, useMemo, useState } from 'react';
 import type { ChatMessage } from '@shared/chat';
 import { pendingCallsIn } from '@shared/needsYou';
 import type { ViewApproval } from '@shared/viewSnapshot';
 import { approvalSummary, isQuickApproval } from '@shared/watch';
+import { hostChat } from '../../host/hostChat';
 import { activityLabel } from './activity';
 import { refreshKeyOf } from './AgentPeekDrawer';
 import type { AgentView, ParentView } from './roster';

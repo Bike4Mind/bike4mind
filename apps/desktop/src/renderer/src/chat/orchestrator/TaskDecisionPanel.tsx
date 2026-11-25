@@ -1,4 +1,3 @@
-import { hostChat } from '../../host/hostChat';
 import { useEffect, useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Stack from '@mui/joy/Stack';
@@ -9,6 +8,7 @@ import Select from '@mui/joy/Select';
 import Option from '@mui/joy/Option';
 import type { TaskAction } from '@shared/orchestration';
 import type { ChatModelOption } from '@shared/chat';
+import { hostChat } from '../../host/hostChat';
 import type { AgentView } from './roster';
 
 function TaskDetails({ compact, children }: { compact: boolean; children: ReactNode }) {

@@ -1,7 +1,7 @@
-import { hostChat } from '../../host/hostChat';
 import { useEffect, useRef, useState } from 'react';
 import type { AttentionOpenEvent } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import { hostChat } from '../../host/hostChat';
 import { useNotifyScope } from '../notifyScopeSetting';
 import { playChime } from './chime';
 import { readPresenter } from './orchestratorPrefs';

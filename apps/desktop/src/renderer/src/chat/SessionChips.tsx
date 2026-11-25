@@ -1,4 +1,3 @@
-import { hostChat } from '../host/hostChat';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
@@ -26,6 +25,7 @@ import {
   type ChatProject,
   type RecentFolder,
 } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import { describeChipRow, displayPath, type ChipRowState } from './chipState';
 import { useHomeDirectory } from './homeDirectory';
 import { BranchIcon, CheckIcon, CloseIcon, FolderIcon, FolderPlusIcon } from './icons';

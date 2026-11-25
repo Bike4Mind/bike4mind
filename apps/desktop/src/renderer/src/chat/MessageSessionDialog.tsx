@@ -1,4 +1,3 @@
-import { hostChat } from '../host/hostChat';
 import { useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
@@ -9,6 +8,7 @@ import Modal from '@mui/joy/Modal';
 import ModalDialog from '@mui/joy/ModalDialog';
 import Textarea from '@mui/joy/Textarea';
 import type { ChatSessionSummary } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 
 /**
  * Sends the user's own message into a conversation that is not the open one. It goes through the

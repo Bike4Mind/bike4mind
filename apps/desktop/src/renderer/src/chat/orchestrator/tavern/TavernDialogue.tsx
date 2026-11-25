@@ -1,8 +1,8 @@
-import { hostChat } from '../../../host/hostChat';
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react';
 import Box from '@mui/joy/Box';
 import type { ChatApprovalAnswer } from '@shared/chat';
 import type { PendingDecision } from '@shared/pendingDecisions';
+import { hostChat } from '../../../host/hostChat';
 import { DecisionBody } from '../DecisionCard';
 import type { AgentView } from '../roster';
 import { useTreeDecisions } from '../useTreeDecisions';

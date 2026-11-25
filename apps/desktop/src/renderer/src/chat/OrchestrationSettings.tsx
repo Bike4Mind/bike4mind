@@ -1,4 +1,3 @@
-import { hostChat } from '../host/hostChat';
 import { useEffect, useState } from 'react';
 import Stack from '@mui/joy/Stack';
 import Select from '@mui/joy/Select';
@@ -7,6 +6,7 @@ import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { modelSupportsTools, type ChatModelOption } from '@shared/chat';
 import { inheritancePolicy, resolveModelAlias, WORKER_ROLES, type RolePolicy } from '@shared/orchestration';
+import { hostChat } from '../host/hostChat';
 
 export function economicalWorkerPreset(models: readonly ChatModelOption[]): RolePolicy | null {
   const worker = models

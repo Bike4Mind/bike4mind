@@ -1,7 +1,7 @@
-import { hostChat } from '../../host/hostChat';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatHeldRelay, ChatMessage } from '@shared/chat';
 import { pendingDecisionsOf, type PendingDecision } from '@shared/pendingDecisions';
+import { hostChat } from '../../host/hostChat';
 import { refreshKeyOf } from './AgentPeekDrawer';
 import type { AgentState, AgentView } from './roster';
 
