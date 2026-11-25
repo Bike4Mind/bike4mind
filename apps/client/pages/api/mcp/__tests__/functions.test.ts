@@ -95,7 +95,8 @@ vi.mock('@bike4mind/server-utils/callableFunctions/runtimeRunner', () => ({
 type Owner = { ownerType: string; ownerKey: string };
 const owned = (owner: Owner) => (fn: Record<string, unknown>) => fn.ownerKey === owner.ownerKey;
 
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
+  mongoose: (await import('mongoose')).default,
   adminSettingsRepository: {},
   artifactContentRepository: {},
   callableFunctionRepository: {
