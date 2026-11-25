@@ -12,7 +12,7 @@ interface AnalyticsErrorCardProps {
 /**
  * A failed analytics request must not look like an empty one: the User Activity endpoint
  * returned 502 for weeks while the UI showed "No data found", because the fetch helper
- * turned every error into an empty array. ErrorState's role="alert" announces the swap.
+ * turned errors into an empty array. ErrorState's role="alert" announces the swap.
  */
 export const AnalyticsErrorCard: React.FC<AnalyticsErrorCardProps> = ({
   error,
