@@ -350,19 +350,21 @@ describe('callable function data bucket', () => {
     expect(data).toMatch(
       /if \(onNamedSubnets\) \{\s*console\.warn\(\s*'Function data is not available on this stage: [^']*'\s*\);/
     );
-    expect(data).toMatch(/export const callableFunctionDataForWeb: \{[^=]*\} = callableFunctionDataBucket\s*\?/);
-    expect(data).toMatch(/: \{ environment: \{\}, permissions: \[\] \};/);
+    expect(data).toMatch(/export const callableFunctionDataForWeb: DataGrant = callableFunctionDataBucket\s*\?/);
+    expect(data).toMatch(/export const callableFunctionDataForEraser: DataGrant = callableFunctionDataBucket\s*\?/);
+    expect(data.match(/: \{ environment: \{\}, permissions: \[\] \};/g)).toHaveLength(2);
   });
 
   it('takes the policy that refuses reads outside the endpoint and writes by all but the dispatcher', () => {
     expect(policyModule.match(/new aws\.s3\.BucketPolicy\(/g)).toHaveLength(1);
     expect(policyModule).toMatch(
-      /if \(web\.nodes\.server && callableFunctionDataBucket && callableFunctionDataPublicAccessBlock\) \{\s*const names = \$util\.all\(\[\s*callableFunctionDataBucket\.arn,\s*web\.nodes\.server\.nodes\.role\.arn,\s*callableFunctionDataEndpointId \?\? '',\s*\]\);\s*new aws\.s3\.BucketPolicy\(\s*'CallableFunctionDataPolicy',/
+      /if \(web\.nodes\.server && callableFunctionDataBucket && callableFunctionDataPublicAccessBlock\) \{\s*const names = \$util\.all\(\[\s*callableFunctionDataBucket\.arn,\s*web\.nodes\.server\.nodes\.role\.arn,\s*accountErasureQueueSubscription\.nodes\.function\.nodes\.role\.arn,\s*callableFunctionDataEndpointId \?\? '',\s*\]\);\s*new aws\.s3\.BucketPolicy\(\s*'CallableFunctionDataPolicy',/
     );
     expect(policyModule).toMatch(/bucket: callableFunctionDataBucket\.bucket,/);
     expect(policyModule).toMatch(
-      /policy: names\.apply\(\(\[bucketArn, dispatcherRoleArn, endpointId\]\) =>\s*JSON\.stringify\(callableFunctionDataBucketPolicy\(\{ bucketArn, dispatcherRoleArn, endpointId \}\)\)\s*\),/
+      /policy: names\.apply\(\(\[bucketArn, dispatcherRoleArn, eraserRoleArn, endpointId\]\) =>\s*JSON\.stringify\(callableFunctionDataBucketPolicy\(\{ bucketArn, dispatcherRoleArn, eraserRoleArn, endpointId \}\)\)\s*\),/
     );
+    expect(policyModule).toMatch(/import \{ accountErasureQueueSubscription \} from '\.\/queues';/);
     expect(policyModule).toMatch(/\{ dependsOn: \[callableFunctionDataPublicAccessBlock\] \}/);
     expect(policyModule).toMatch(/import \{ callableFunctionDataEndpointId \} from '\.\/callableFunctionRuntime';/);
     const index = stripComments(read('infra/index.ts'));
@@ -375,7 +377,18 @@ describe('callable function data bucket', () => {
   it("gives the web API function the bucket's name and its data/ object permissions by statement, not by link", () => {
     expect(data).toMatch(/environment: \{ CALLABLE_FUNCTION_DATA_BUCKET: callableFunctionDataBucket\.bucket \},/);
     expect(data).toMatch(
-      /permissions: \[\s*\{\s*actions: FUNCTION_DATA_DISPATCHER_ACTIONS,\s*resources: \[\$interpolate`\$\{callableFunctionDataBucket\.arn\}\/\$\{FUNCTION_DATA_KEY_PREFIX\}\*`\],\s*\},\s*\],/
+      /permissions: \[\s*\{\s*actions: FUNCTION_DATA_DISPATCHER_ACTIONS,\s*resources: \[\$interpolate`\$\{callableFunctionDataBucket\.arn\}\/\$\{FUNCTION_DATA_KEY_PREFIX\}\*`\],\s*\},\s*listDataKeys\(callableFunctionDataBucket\),\s*\],/
+    );
+    expect(data).toMatch(
+      /permissions: \[\s*\{\s*actions: FUNCTION_DATA_ERASER_ACTIONS,\s*resources: \[\$interpolate`\$\{callableFunctionDataBucket\.arn\}\/\$\{FUNCTION_DATA_KEY_PREFIX\}\*`\],\s*\},\s*listDataKeys\(callableFunctionDataBucket\),\s*\],/
+    );
+    expect(data).toMatch(
+      /actions: \['s3:ListBucket'\],\s*resources: \[bucket\.arn\],\s*conditions: \[\{ test: 'StringLike', variable: 's3:prefix', values: \[`\$\{FUNCTION_DATA_KEY_PREFIX\}\*`\] \}\],/
+    );
+    const queues = stripComments(read('infra/queues.ts'));
+    const erasure = queues.slice(queues.indexOf('const accountErasureQueueSubscription'));
+    expect(erasure.slice(0, erasure.indexOf('SINGLE_RECORD_BATCH'))).toMatch(
+      /\.\.\.callableFunctionDataForEraser\.permissions,[\s\S]*\.\.\.callableFunctionDataForEraser\.environment,/
     );
     expect(web).toMatch(/\.\.\.callableFunctionDataForWeb\.permissions,/);
     expect(web).toMatch(/\.\.\.callableFunctionDataForWeb\.environment,/);

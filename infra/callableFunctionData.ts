@@ -1,6 +1,7 @@
 import { BLOCK_ALL_PUBLIC_ACCESS } from './bucketSecurity';
 import {
   FUNCTION_DATA_DISPATCHER_ACTIONS,
+  FUNCTION_DATA_ERASER_ACTIONS,
   FUNCTION_DATA_KEY_PREFIX,
   namedSubnetIdsOf,
 } from './callableFunctionNetwork';
@@ -38,11 +39,24 @@ export const callableFunctionDataPublicAccessBlock = callableFunctionDataBucket
   ? secureDataBucket(callableFunctionDataBucket)
   : undefined;
 
-/** The web API function's bucket variable and object grant; neither on a stage without function data. */
-export const callableFunctionDataForWeb: {
+type DataGrant = {
   environment: Record<string, $util.Output<string>>;
-  permissions: Array<{ actions: string[]; resources: $util.Output<string>[] }>;
-} = callableFunctionDataBucket
+  permissions: Array<{
+    actions: string[];
+    resources: $util.Output<string>[];
+    conditions?: { test: string; variable: string; values: string[] }[];
+  }>;
+};
+
+/** A key listing under `data/` only, which a delete by prefix needs. */
+const listDataKeys = (bucket: aws.s3.Bucket) => ({
+  actions: ['s3:ListBucket'],
+  resources: [bucket.arn],
+  conditions: [{ test: 'StringLike', variable: 's3:prefix', values: [`${FUNCTION_DATA_KEY_PREFIX}*`] }],
+});
+
+/** The web API function's bucket variable and object grant; neither on a stage without function data. */
+export const callableFunctionDataForWeb: DataGrant = callableFunctionDataBucket
   ? {
       environment: { CALLABLE_FUNCTION_DATA_BUCKET: callableFunctionDataBucket.bucket },
       permissions: [
@@ -50,6 +64,21 @@ export const callableFunctionDataForWeb: {
           actions: FUNCTION_DATA_DISPATCHER_ACTIONS,
           resources: [$interpolate`${callableFunctionDataBucket.arn}/${FUNCTION_DATA_KEY_PREFIX}*`],
         },
+        listDataKeys(callableFunctionDataBucket),
+      ],
+    }
+  : { environment: {}, permissions: [] };
+
+/** The account-erasure worker's: list and delete under `data/`, never read or write. */
+export const callableFunctionDataForEraser: DataGrant = callableFunctionDataBucket
+  ? {
+      environment: { CALLABLE_FUNCTION_DATA_BUCKET: callableFunctionDataBucket.bucket },
+      permissions: [
+        {
+          actions: FUNCTION_DATA_ERASER_ACTIONS,
+          resources: [$interpolate`${callableFunctionDataBucket.arn}/${FUNCTION_DATA_KEY_PREFIX}*`],
+        },
+        listDataKeys(callableFunctionDataBucket),
       ],
     }
   : { environment: {}, permissions: [] };

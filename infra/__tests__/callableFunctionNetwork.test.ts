@@ -9,6 +9,7 @@ import {
   DEDICATED_SUBNET_CIDRS,
   distinctZones,
   FUNCTION_DATA_DISPATCHER_ACTIONS,
+  FUNCTION_DATA_ERASER_ACTIONS,
   FUNCTION_DATA_KEY_PREFIX,
   isGetObjectOnlyPolicy,
   LAMBDA_NETWORK_INTERFACE_ACTIONS,
@@ -413,7 +414,8 @@ describe('callableFunctionDataBucketPolicy', () => {
       .some(pattern => new RegExp(`^${pattern.replace(/[.]/g, '\\.').replace(/\*/g, '.*')}$`).test(value));
 
   // Each condition key compares one value; a missing key fails the equality and passes the negated test.
-  const conditionHolds = (condition: Record<string, Record<string, string>> | undefined, request: Request) =>
+  // A negated test over several values holds when the key matches none of them.
+  const conditionHolds = (condition: Record<string, Record<string, string | string[]>> | undefined, request: Request) =>
     Object.entries(condition ?? {}).every(([test, pair]) =>
       Object.entries(pair).every(([key, value]) => {
         const actual = {
@@ -422,8 +424,9 @@ describe('callableFunctionDataBucketPolicy', () => {
           'aws:SecureTransport': String(request.secure ?? true),
           's3:authType': request.authType ?? 'REST-HEADER',
         }[key];
-        if (test === 'Bool' || test === 'StringEquals') return actual === value;
-        if (test === 'ArnNotEquals' || test === 'StringNotEquals') return actual !== value;
+        const values = [value].flat();
+        if (test === 'Bool' || test === 'StringEquals') return values.some(one => actual === one);
+        if (test === 'ArnNotEquals' || test === 'StringNotEquals') return values.every(one => actual !== one);
         throw new Error(`untested condition ${test}`);
       })
     );
@@ -434,7 +437,7 @@ describe('callableFunctionDataBucketPolicy', () => {
         statement.Effect === 'Deny' &&
         wildcard(statement.Action, request.action) &&
         wildcard(statement.Resource, request.resource) &&
-        conditionHolds(statement.Condition as Record<string, Record<string, string>>, request)
+        conditionHolds(statement.Condition as Record<string, Record<string, string | string[]>>, request)
     );
 
   const withEndpoint = callableFunctionDataBucketPolicy({
@@ -505,6 +508,25 @@ describe('callableFunctionDataBucketPolicy', () => {
         expect(denied(policy, { action, resource: OBJECT, principalArn: OTHER })).toBe(true);
       }
     }
+  });
+
+  it("exempts the account-erasure worker's role from the header-signed write and delete refusals, and no one else", () => {
+    const ERASER = 'eraser-role-arn';
+    const withEraser = callableFunctionDataBucketPolicy({
+      bucketArn: BUCKET_ARN,
+      dispatcherRoleArn: DISPATCHER,
+      eraserRoleArn: ERASER,
+      endpointId: 'vpce-0data',
+    });
+    expect(FUNCTION_DATA_ERASER_ACTIONS).toEqual(['s3:DeleteObject']);
+    for (const principalArn of [DISPATCHER, ERASER]) {
+      expect(denied(withEraser, { action: 's3:DeleteObject', resource: OBJECT, principalArn })).toBe(false);
+      expect(denied(withEraser, { action: 's3:ListBucket', resource: BUCKET_ARN, principalArn })).toBe(false);
+    }
+    expect(denied(withEraser, { action: 's3:DeleteObject', resource: OBJECT, principalArn: OTHER })).toBe(true);
+    expect(denied(withEndpoint, { action: 's3:DeleteObject', resource: OBJECT, principalArn: ERASER })).toBe(true);
+    const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING', principalArn: ERASER };
+    expect(denied(withEraser, link)).toBe(true);
   });
 
   it('refuses every request without TLS, the dispatcher included', () => {
