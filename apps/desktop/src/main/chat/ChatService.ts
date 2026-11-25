@@ -95,8 +95,11 @@ import type {
   WorkspacePreparation,
   ContextNoticeKind,
   ChatChildReport,
+  ChatChildWaiting,
   EventCursor,
 } from '@shared/chat';
+import { pendingCallsIn } from '@shared/needsYou';
+import { approvalSummary } from '@shared/watch';
 import {
   awaitsWorktree,
   branchHolder,
@@ -8219,21 +8222,39 @@ export class ChatService {
     const parent = await this.deps.store.get(parentId);
     if (!parent || parent.archived || !stillWaiting() || this.waitNoticed.get(childId) !== parentId) return;
 
-    const what = waitingReasonText(this.deps.activity?.waitingReason(childId));
+    const reason = this.deps.activity?.waitingReason(childId);
+    const what = waitingReasonText(reason);
     // A device-local child's title is its model's words too; a hosted parent gets neither.
-    const named =
-      isLocalModel(child.model) && !isLocalModel(parent.model)
-        ? `A device-local session you started (${childId})`
-        : `The session you started, ${JSON.stringify(mentionTitle(child.title))} (${childId}),`;
+    const withheld = isLocalModel(child.model) && !isLocalModel(parent.model);
+    const named = withheld
+      ? `A device-local session you started (${childId})`
+      : `The session you started, ${JSON.stringify(mentionTitle(child.title))} (${childId}),`;
+    const call = reason === 'approval' ? this.parkedCallOf(childId, child.messages) : undefined;
+    const summary = call && !withheld ? approvalSummary(call) : undefined;
     await this.deliverChildReport(parentId, {
       localOnly: false,
       childId,
       kind: 'waiting',
+      waiting: { sessionId: childId, ...(reason ? { reason } : {}), ...(summary ? { summary } : {}) },
       content:
         `[App notice: ${named} is waiting on the user for ${what}. It carries on once they answer in ` +
         'that conversation, and its report comes here when it finishes. Do not answer for the user.]',
       display: `A session you started is waiting for you: ${what}.`,
     });
+  }
+
+  /**
+   * The call a session is parked on now, the latest if several. A turn in flight has not stored its
+   * calls yet, so its live events are read first; the stored messages cover a turn already settled.
+   */
+  private parkedCallOf(sessionId: string, stored: readonly ChatMessage[]): ChatToolCall | undefined {
+    const parked = new Map<string, ChatToolCall>();
+    for (const event of this.live.get(sessionId)?.events ?? []) {
+      if (event.type !== 'tool-start' && event.type !== 'tool-end') continue;
+      if (event.call.status === 'awaiting-approval' && event.call.approvalId) parked.set(event.call.id, event.call);
+      else parked.delete(event.call.id);
+    }
+    return [...parked.values()].at(-1) ?? pendingCallsIn(stored).at(-1);
   }
 
   /** Remove a child's waiting notice from its parent's queue, if it has not been delivered yet. */
@@ -8265,6 +8286,7 @@ export class ChatService {
         ...(report.structured && !withheld ? { childReport: report.structured } : {}),
         // Not sensitive, so kept when the report is withheld: it is how the strip knows this child has reported.
         ...(report.structured ? { reportedChildId: report.structured.sessionId } : {}),
+        ...(report.waiting ? { childWaiting: report.waiting } : {}),
       };
       const updated = await this.deps.store.appendMessage(sessionId, message);
       // The parent can have been deleted while its child was still running. The child keeps its
@@ -10340,6 +10362,8 @@ type ChildReport = {
   display: string;
   /** The thread card's data; becomes ChatMessage.childReport unless the report is withheld. */
   structured?: ChatChildReport;
+  /** Set on a 'waiting' notice; becomes ChatMessage.childWaiting. */
+  waiting?: ChatChildWaiting;
 };
 
 /**

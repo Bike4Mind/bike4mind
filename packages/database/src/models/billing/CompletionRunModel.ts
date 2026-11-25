@@ -180,25 +180,38 @@ export class CompletionRunRepository {
    * nothing. One atomic update sizes and takes the claim from the stored remainder, so concurrent
    * completions of one run never claim the same credits. Inside a transaction, concurrent claims on one
    * run conflict on its document and `withTransaction` retries them, as it already does for the balance.
+   *
+   * `maxShareOfRemaining` (0-1] caps what one claim takes above its `minimumCredits` at that share of
+   * the rest, so a claim that can shrink (a completion) leaves room for the run's concurrent work.
+   * The share applies past the minimum, not to the whole remainder: a completion's minimum carries its
+   * input cost, and halving the whole remainder would squeeze a long-context round to a short answer.
+   * Must stay in sync with `claimableCredits`, which sizes the same claim on the read side.
    */
   async claimBudget(
     runId: string,
     wantedCredits: number,
-    minimumCredits: number
+    minimumCredits: number,
+    maxShareOfRemaining = 1
   ): Promise<CompletionRunBudgetClaimOutcome> {
+    if (!(maxShareOfRemaining > 0 && maxShareOfRemaining <= 1)) {
+      throw new Error(`maxShareOfRemaining must be in (0, 1], got ${maxShareOfRemaining}`);
+    }
     const remaining = { $subtract: ['$budgetCredits', '$committedCredits'] };
+    const aboveMinimum = { $max: [0, { $subtract: [remaining, minimumCredits] }] };
+    const shareCap = { $add: [minimumCredits, { $ceil: { $multiply: [aboveMinimum, maxShareOfRemaining] } }] };
     const before = await CompletionRunModel.findOneAndUpdate(
       {
         _id: runId,
         budgetCredits: { $exists: true },
         $expr: { $gte: [remaining, Math.max(1, minimumCredits)] },
       },
-      [{ $set: { committedCredits: { $add: ['$committedCredits', { $min: [wantedCredits, remaining] }] } } }],
+      [{ $set: { committedCredits: { $add: ['$committedCredits', { $min: [wantedCredits, remaining, shareCap] }] } } }],
       // update-validators-off: an aggregation pipeline update, which Mongoose cannot validate
       { new: false }
     ).lean<CompletionRunRecord>();
     if (before?.budgetCredits !== undefined) {
-      const credits = Math.min(wantedCredits, before.budgetCredits - (before.committedCredits ?? 0));
+      const remainingCredits = before.budgetCredits - (before.committedCredits ?? 0);
+      const credits = claimableCredits(remainingCredits, wantedCredits, minimumCredits, maxShareOfRemaining);
       return { kind: 'claimed', credits };
     }
 
@@ -246,6 +259,18 @@ export class CompletionRunRepository {
       ? { kind: 'unbudgeted' }
       : { kind: 'not_higher', budgetCredits: current.budgetCredits };
   }
+}
+
+/** The read-side mirror of the claim `claimBudget` takes in its update pipeline. */
+function claimableCredits(
+  remainingCredits: number,
+  wantedCredits: number,
+  minimumCredits: number,
+  maxShareOfRemaining: number
+): number {
+  const aboveMinimum = Math.max(0, remainingCredits - minimumCredits);
+  const shareCap = minimumCredits + Math.ceil(aboveMinimum * maxShareOfRemaining);
+  return Math.min(wantedCredits, remainingCredits, shareCap);
 }
 
 export const completionRunRepository = new CompletionRunRepository();

@@ -1,5 +1,11 @@
 import type { PipelineStage } from 'mongoose';
 import {
+  attributedUsageMatch,
+  effectiveUsageDate,
+  platformUsageExpression,
+  usageTimeMatch,
+} from './platformUsageReporting';
+import {
   UNCLASSIFIED_SOURCE,
   type SpendBreakdownParams,
   SPEND_EXPLORER_MAX_PAYERS,
@@ -26,11 +32,11 @@ export const EXECUTED_MODEL_GROUP_KEY = {
 // Providers invoice the model that ran, so key on the executed provider.
 const EXECUTED_PROVIDER = EXECUTED_MODEL_GROUP_KEY.executedProvider;
 
-/** internal / partner / customer for one event: the acting user's tag wins, then the payer's. */
 export function segmentExpression(ids: SpendSegmentIds): Record<string, unknown> {
   return {
     $switch: {
       branches: [
+        { case: platformUsageExpression, then: 'platform' },
         { case: { $in: ['$userId', ids.internal] }, then: 'internal' },
         { case: { $in: ['$userId', ids.partner] }, then: 'partner' },
         { case: { $in: ['$ownerId', ids.internal] }, then: 'internal' },
@@ -58,7 +64,7 @@ function splitKeyExpression(splitBy: Exclude<SpendSplitDimension, 'funding'>, id
 
 function matchStage(params: { from: Date; to: Date; actorUserId?: string }): PipelineStage.Match {
   // Half-open [from, to), like spendSummary, so adjacent windows never double count.
-  const match: Record<string, unknown> = { createdAt: { $gte: params.from, $lt: params.to } };
+  const match = usageTimeMatch(params.from, params.to);
   if (params.actorUserId) match.userId = params.actorUserId;
   return { $match: match };
 }
@@ -66,7 +72,7 @@ function matchStage(params: { from: Date; to: Date; actorUserId?: string }): Pip
 /**
  * Funding split: each event's cost apportioned by the credits its fundingBreakdown
  * drew from each source. Granted is free credit; purchased and subscription are
- * paid. Events with no breakdown, or a zero one, land wholly in `unknown`.
+ * paid. Attributed events with no breakdown, or a zero one, land wholly in `unknown`.
  */
 function fundingPipeline(bucketExpr: unknown): PipelineStage[] {
   const part = (field: string) => ({ $ifNull: [`$fundingBreakdown.${field}`, 0] });
@@ -83,21 +89,27 @@ function fundingPipeline(bucketExpr: unknown): PipelineStage[] {
         parts: {
           $let: {
             vars: { fundedTotal },
-            in: [
-              { key: 'granted', costUsd: shareOf(part('granted')), requests: 1 },
-              {
-                key: 'paid',
-                costUsd: shareOf({ $add: [part('purchased'), part('subscription')] }),
-                requests: 0,
-              },
-              {
-                key: 'unknown',
-                costUsd: {
-                  $cond: [{ $gt: ['$$fundedTotal', 0] }, shareOf(part('unknown')), '$costUsd'],
-                },
-                requests: 0,
-              },
-            ],
+            in: {
+              $cond: [
+                platformUsageExpression,
+                [{ key: 'platform', costUsd: '$costUsd', requests: 1 }],
+                [
+                  { key: 'granted', costUsd: shareOf(part('granted')), requests: 1 },
+                  {
+                    key: 'paid',
+                    costUsd: shareOf({ $add: [part('purchased'), part('subscription')] }),
+                    requests: 0,
+                  },
+                  {
+                    key: 'unknown',
+                    costUsd: {
+                      $cond: [{ $gt: ['$$fundedTotal', 0] }, shareOf(part('unknown')), '$costUsd'],
+                    },
+                    requests: 0,
+                  },
+                ],
+              ],
+            },
           },
         },
       },
@@ -118,7 +130,9 @@ function fundingPipeline(bucketExpr: unknown): PipelineStage[] {
  * the caller fills empty buckets and folds small series.
  */
 export function spendTimelinePipeline(params: SpendTimelineParams): PipelineStage[] {
-  const bucketExpr = { $dateToString: { format: BUCKET_FORMAT[params.bucket], date: '$createdAt', timezone: 'UTC' } };
+  const bucketExpr = {
+    $dateToString: { format: BUCKET_FORMAT[params.bucket], date: effectiveUsageDate, timezone: 'UTC' },
+  };
   const grouped: PipelineStage[] =
     params.splitBy === 'funding'
       ? fundingPipeline(bucketExpr)
@@ -159,6 +173,7 @@ export function spendBreakdownPipeline(params: SpendBreakdownParams): PipelineSt
         // Keyed on the acting user, not the owner: team-plan spend bills to the org, and the
         // person who ran the calls must still show up. Payers ride along, largest first.
         topActors: [
+          { $match: { ...attributedUsageMatch, userId: { $type: 'string' }, ownerId: { $type: 'string' } } },
           {
             $group: {
               _id: { userId: '$userId', ownerId: '$ownerId', ownerType: '$ownerType' },
