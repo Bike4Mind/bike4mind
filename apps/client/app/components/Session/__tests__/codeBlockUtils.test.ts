@@ -160,29 +160,6 @@ describe('codeBlockUtils', () => {
       const result = shouldHandleArrowCommand(mockEvent, mockSelection, mockElement);
       expect(result).toBe(false);
     });
-
-    // Skipping the positive case: it requires mocking Lexical's $isCodeNode type
-    // guard, which checks instanceof CodeNode, not just getType() === 'code'.
-    // The negative tests above cover the safety checks.
-    it.skip('should return true when all conditions are met (valid code block navigation)', () => {
-      const mockEvent = {
-        isComposing: false,
-        shiftKey: false,
-        ctrlKey: false,
-        metaKey: false,
-        altKey: false,
-      } as KeyboardEvent;
-      const mockSelection = {
-        isCollapsed: () => true,
-      } as unknown as RangeSelection;
-      // Mock a code node using the $isCodeNode check
-      const mockElement = {
-        getType: () => 'code',
-      } as unknown as ElementNode;
-
-      const result = shouldHandleArrowCommand(mockEvent, mockSelection, mockElement);
-      expect(result).toBe(true);
-    });
   });
 
   describe('calculateAbsoluteOffset', () => {
@@ -409,27 +386,6 @@ describe('codeBlockUtils', () => {
   });
 
   describe('createArrowExitHandler', () => {
-    // Skipping tests that call the handler: handler() invokes $getSelection(),
-    // which needs active Lexical editor state that cannot be mocked in unit tests.
-    // The handler would need integration tests with a full Lexical editor setup.
-    it.skip('should create a handler function that returns boolean', () => {
-      const mockEditor = {} as any;
-
-      const handler = createArrowExitHandler(mockEditor, 'down');
-
-      expect(typeof handler).toBe('function');
-      expect(typeof handler(null)).toBe('boolean');
-    });
-
-    it.skip('should return false when selection is not range selection', () => {
-      const mockEditor = {} as any;
-
-      const handler = createArrowExitHandler(mockEditor, 'down');
-      const result = handler(null);
-
-      expect(result).toBe(false);
-    });
-
     it('should handle both up and down directions', () => {
       const mockEditor = {} as any;
 
