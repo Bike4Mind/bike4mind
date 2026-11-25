@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { registerOrchestrationIpc } from './orchestrationIpc';
 import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
+import { homedir } from 'node:os';
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
@@ -146,6 +147,7 @@ import {
 import { SkillCatalog } from './skills/SkillCatalog';
 import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
 import { RecentFolderStore } from './project/RecentFolderStore';
+import { detectLaunchSignals } from './launchSignals';
 import { appWorktreeMainCheckout, SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
@@ -971,6 +973,9 @@ export function registerChat(
 
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
   ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => recentFolders.list());
+  ipcMain.handle(IPC_CHANNELS.chatLaunchSignals, () =>
+    detectLaunchSignals({ home: homedir(), recentFolders: () => recentFolders.list() })
+  );
   ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, async (_event, directory: unknown) => {
     if (typeof directory === 'string') {
       await recentFolders.remove(directory);

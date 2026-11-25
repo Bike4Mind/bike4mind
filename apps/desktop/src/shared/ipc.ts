@@ -148,6 +148,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LaunchSignals } from './launchSignals';
 import type {
   ModelBuildReport,
   ModelCaptureRequestEvent,
@@ -266,6 +267,7 @@ export const IPC_CHANNELS = {
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
   chatListRecentFolders: 'chat:list-recent-folders',
+  chatLaunchSignals: 'chat:launch-signals',
   chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
   chatWorkspaceChanges: 'chat:workspace-changes',
@@ -1079,6 +1081,8 @@ export interface DesktopApi {
     pickProjectDirectory(): Promise<string | null>;
     /** Recently used project folders that still exist, most recent first. */
     listRecentFolders(): Promise<RecentFolder[]>;
+    /** Local hints for which place a first launch opens on; see shared/launchSignals.ts. */
+    launchSignals(): Promise<LaunchSignals>;
     /** Forget one; the folder itself is untouched. Resolves to the list that is left. */
     removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
