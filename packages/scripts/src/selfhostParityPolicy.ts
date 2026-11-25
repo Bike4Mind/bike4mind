@@ -329,7 +329,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'function:infra/imageProcessor.ts:ImageProcessor',
     'f7bbbefdca6ac5807469cafe56cb856206b6ffdfe08dcb2ba2bd16bb4937ea15'
   ),
-  gap('function:infra/mcp.ts:mcpHandler', '8f95aa9d3422dccc02308adb7da5500afa9582d09351477574a7e4f2331b814f'),
+  gap('function:infra/mcp.ts:mcpHandler', 'b106329f68d1d3225ec735b12aff58943f1bdf1ae1b87d2c21fb8b2ac57d921e'),
   hostedOnly(
     'function:infra/remoteMcp.ts:remoteMcpHandler',
     '69d7d937077e31281f43012e903c58d74513036fd50296b764855fc6c90e1b70',
