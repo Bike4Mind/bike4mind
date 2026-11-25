@@ -45,4 +45,18 @@ describe('LedgerFilterBar date range', () => {
     fireEvent.click(screen.getByTestId('user-credits-from-clear-btn'));
     expect(onChange).toHaveBeenLastCalledWith({ ...EMPTY_LEDGER_FILTER, from: '' });
   });
+
+  it('outlines both days as errored only while the range is inverted', () => {
+    const errored = (testId: string) => screen.getByTestId(testId).closest('.MuiInput-root');
+    renderBar({ ...EMPTY_LEDGER_FILTER, from: '2026-10-05', to: '2026-10-01' });
+    expect(errored('user-credits-from')).toHaveClass('Mui-error');
+    expect(errored('user-credits-to')).toHaveClass('Mui-error');
+    expect(screen.getByText('The start date is after the end date.')).toBeInTheDocument();
+  });
+
+  it('does not outline a range in order', () => {
+    renderBar({ ...EMPTY_LEDGER_FILTER, from: '2026-10-01', to: '2026-10-05' });
+    expect(screen.getByTestId('user-credits-from').closest('.MuiInput-root')).not.toHaveClass('Mui-error');
+    expect(screen.getByTestId('user-credits-to').closest('.MuiInput-root')).not.toHaveClass('Mui-error');
+  });
 });
