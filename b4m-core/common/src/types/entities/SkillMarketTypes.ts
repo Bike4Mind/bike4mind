@@ -471,6 +471,10 @@ export const skillTemplateFreeRunInputKey = (slug: string): string => `b4m.skill
 export const skillTemplatePreviewImagePath = (slug: string, fabFileId: string): string =>
   `/api/skills/template/image/${encodeURIComponent(slug)}?v=${encodeURIComponent(fabFileId)}`;
 
+/** The author's preview of their template page, drafts included (owner only, Bearer token). */
+export const skillTemplatePreviewPath = (listingId: string): string =>
+  `/api/skills/market/${encodeURIComponent(listingId)}/template/preview`;
+
 /** What GET /api/skills/market/mine shows of a listing's template. */
 export type SkillListingTemplateSummary = Pick<ISkillListingTemplate, 'slug' | 'status'>;
 
