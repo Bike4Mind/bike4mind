@@ -97,7 +97,12 @@ const withPins = (dataPins: ICallableFunctionDataPin[]) => {
 beforeEach(() => {
   vi.clearAllMocks();
   withPins([]);
-  h.access.mockResolvedValue({ id: 'file1', filePath: 'files/u/points.csv', fileSize: CSV.length });
+  h.access.mockResolvedValue({
+    id: 'file1',
+    filePath: 'files/u/points.csv',
+    fileSize: CSV.length,
+    moderationStatus: 'clean',
+  });
   h.sourceDownload.mockResolvedValue(CSV);
 });
 
@@ -120,6 +125,20 @@ describe('pinCallableFunctionData', () => {
     expect(storage.upload).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['blocked', 404],
+    ['pending', 409],
+    [undefined, 409],
+  ])('refuses a file whose moderation status is %s without reading it', async (moderationStatus, statusCode) => {
+    h.access.mockResolvedValue({ id: 'file1', filePath: 'files/u/points.csv', fileSize: 8, moderationStatus });
+    const { storage } = memoryStorage();
+    await expect(
+      pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits: LIMITS })
+    ).rejects.toMatchObject({ statusCode });
+    expect(h.sourceDownload).not.toHaveBeenCalled();
+    expect(storage.upload).not.toHaveBeenCalled();
+  });
+
   const UNSAFE_NAMES = ['../points.csv', '.hidden', 'a/b.csv', 'x'.repeat(65), 'has space.csv'];
   it.each(UNSAFE_NAMES)('refuses the name %j', async name => {
     const { storage } = memoryStorage();
@@ -139,7 +158,12 @@ describe('pinCallableFunctionData', () => {
   });
 
   it('refuses a file over the per-file limit, by its recorded size before reading it', async () => {
-    h.access.mockResolvedValue({ id: 'file1', filePath: 'files/u/big.csv', fileSize: 100 * MIB + 1 });
+    h.access.mockResolvedValue({
+      id: 'file1',
+      filePath: 'files/u/big.csv',
+      fileSize: 100 * MIB + 1,
+      moderationStatus: 'clean',
+    });
     const { storage } = memoryStorage();
     await expect(
       pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'big.csv' }, { storage, limits: LIMITS })

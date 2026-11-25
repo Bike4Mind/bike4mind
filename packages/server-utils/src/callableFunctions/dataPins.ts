@@ -6,6 +6,7 @@ import {
   ConflictError,
   NotFoundError,
   canonicalJson,
+  isImageServeable,
   toCallableFunctionPublic,
   type CallableFunctionStampData,
   type ICallableFunctionDataPin,
@@ -153,6 +154,10 @@ export async function pinCallableFunctionData(
     throw new BadRequestError('This file has no stored bytes to pin.', { code: 'data_file_empty' });
   }
   if (file.moderationStatus === 'blocked') throw new NotFoundError('File not found');
+  // A pending file has not been scanned yet; its bytes are copied only once moderation clears it.
+  if (!isImageServeable(file)) {
+    throw new ConflictError('This file is still being scanned. Try again shortly.', { code: 'data_file_pending' });
+  }
 
   const limits = deps.limits ?? (await resolveCallableFunctionDataLimits(actor));
   const pinnedBytes = pins.reduce((sum, pin) => sum + pin.bytes, 0);

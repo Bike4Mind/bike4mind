@@ -95,6 +95,8 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/publishThumbnail.ts',
   // Parks an outbound mail body under queued-mail/ for the email-send worker; it writes no FabFile bytes.
   'packages/server-utils/src/utils/mailer/mailBodyStore.ts',
+  // Copies a file's bytes into the function-data store under a hash key; the source FabFile is never rewritten.
+  'packages/server-utils/src/callableFunctions/dataPins.ts',
 ]);
 
 /**

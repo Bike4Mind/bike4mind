@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { chmod, link, mkdir, open, rename, rmdir, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { CALLABLE_FUNCTION_DATA_LIMITS, CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN } from '@bike4mind/common';
 
 /**
@@ -47,7 +46,9 @@ export function validRunData(raw: unknown): raw is CallableFunctionRunData[] {
 }
 
 /** Where downloaded files are kept between warm calls; under /tmp, which is the runtime Lambda's ephemeral storage. */
-export const defaultCallableFunctionDataDir = () => path.join(tmpdir(), 'callable-function-data');
+// Template literals, not path.join, in every path here: a join onto a runtime-only root makes the client's file
+// tracer glob the app directory into the build (see apps/client/server/utils/spoolRequestToFile.ts).
+export const defaultCallableFunctionDataDir = () => `${tmpdir()}/callable-function-data`;
 
 /** Download time at most; the parent counts what it takes against the call's ceiling (`runTimeoutAfterDownload`). */
 export const CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS = 120_000;
@@ -152,7 +153,8 @@ export async function prepareRunData(
   const now = options.now ?? Date.now;
   const capBytes = options.capBytes ?? CALLABLE_FUNCTION_DATA_CACHE_BYTES;
   const signal = AbortSignal.timeout(options.budgetMs ?? CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS);
-  const cachePath = (entry: CallableFunctionRunData) => path.join(root, 'cache', entry.prefix, entry.sha256);
+  const cacheDir = (entry: CallableFunctionRunData) => `${root}/cache/${entry.prefix}`;
+  const cachePath = (entry: CallableFunctionRunData) => `${cacheDir(entry)}/${entry.sha256}`;
   const keep = new Set(data.map(cachePath));
 
   for (const entry of data) {
@@ -172,7 +174,7 @@ export async function prepareRunData(
       await forget(file);
     }
     await makeRoom(entry.bytes, keep, capBytes);
-    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await mkdir(cacheDir(entry), { recursive: true, mode: 0o700 });
     let matched: boolean;
     try {
       matched = await download(entry, file, fetchData, signal);
@@ -184,7 +186,7 @@ export async function prepareRunData(
   }
 
   // A fresh directory per call, holding only this call's files, read-only once linked.
-  const dir = path.join(root, 'calls', randomUUID());
+  const dir = `${root}/calls/${randomUUID()}`;
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const linked: string[] = [];
   const release = async () => {
@@ -194,7 +196,7 @@ export async function prepareRunData(
   };
   try {
     for (const entry of data) {
-      const target = path.join(dir, entry.name);
+      const target = `${dir}/${entry.name}`;
       await link(cachePath(entry), target);
       linked.push(target);
     }
