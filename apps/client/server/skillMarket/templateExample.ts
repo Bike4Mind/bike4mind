@@ -43,7 +43,7 @@ import {
   type TemplateScanDeps,
 } from './template';
 import { releaseExampleRun, reserveExampleRun } from './templateExampleCap';
-import { renderFreeRunResult } from './templateFreeRun';
+import { FREE_RUN_HTML_OPTIONS, renderFreeRunResult } from './templateFreeRun';
 
 /**
  * A template's example run: the platform runs the skill once on the example prompt and the public
@@ -268,6 +268,11 @@ const ARTIFACT_HTML_OPTIONS: sanitizeHtml.IOptions = {
   allowedSchemes: [],
   disallowedTagsMode: 'discard',
 };
+
+/** Re-applies the allowlist renderExampleArtifact stored `html` under, for the render-time pass. */
+export function sanitizeStoredExampleArtifactHtml(type: string, html: string): string {
+  return sanitizeHtml(html, type === 'html' ? ARTIFACT_HTML_OPTIONS : FREE_RUN_HTML_OPTIONS);
+}
 
 const PROSE_LANGUAGES = new Set(['text', 'markdown', 'md']);
 

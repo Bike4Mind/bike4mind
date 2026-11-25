@@ -14,6 +14,7 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 import { getBrandName } from '@client/config/general';
 import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
+import { sanitizeStoredExampleArtifactHtml } from './templateExample';
 import { approvedSnapshotOf, requireOwnListing } from './template';
 import { freeRunPageState, renderFreeRunResult } from './templateFreeRun';
 import { isPublicTemplatePage, templateImageDeps, templatePageImageFile } from './templateImage';
@@ -68,8 +69,10 @@ export async function templatePageExampleOf(
     typeof example.replyTrimmedTo === 'number'
       ? example.reply.slice(0, example.replyTrimmedTo).trimEnd()
       : example.reply;
-  // Sanitized when the run was harvested (templateExample.ts renderExampleArtifact); never author-written.
-  const artifactHtml = example.artifact?.html ?? '';
+  // Sanitized at harvest too (renderExampleArtifact); re-applied so a stored payload never reaches the page.
+  const artifactHtml = example.artifact
+    ? sanitizeStoredExampleArtifactHtml(example.artifact.type, example.artifact.html)
+    : '';
   const mediaItems = example.media?.items.length ? example.media.items : [];
   const signed = await Promise.all(mediaItems.map(item => sign(item).catch(() => null)));
   const items = mediaItems.flatMap((item, i) => {

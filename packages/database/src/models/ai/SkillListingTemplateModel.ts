@@ -311,33 +311,6 @@ export async function startSkillTemplateExampleRun(listingId: string, runAt: Dat
   );
 }
 
-/** Store a finished run, only if `runAt` is still the run in flight. Returns whether it landed. */
-export async function writeSkillTemplateExampleResult(
-  listingId: string,
-  runAt: Date,
-  result: SkillTemplateExampleResult
-): Promise<boolean> {
-  const res = await SkillListingTemplate.updateOne(
-    { listingId, 'example.status': 'running', 'example.runAt': runAt },
-    {
-      $set: {
-        'example.status': 'ready',
-        'example.prompt': result.prompt,
-        'example.reply': result.reply,
-        'example.replyTrimmedTo': null,
-        'example.artifact': result.artifact ?? null,
-        'example.media': result.media ?? null,
-        'example.sampleFile': result.sampleFile ?? null,
-        'example.steps': result.steps,
-        'example.generatedFromVersionId': result.generatedFromVersionId ?? null,
-      },
-      $unset: { 'example.error': 1 },
-    },
-    { runValidators: true }
-  );
-  return res.modifiedCount > 0;
-}
-
 /** Mark the run in flight at `runAt` failed; the previous example's content is kept. */
 export async function failSkillTemplateExampleRun(listingId: string, runAt: Date, error: string): Promise<boolean> {
   const res = await SkillListingTemplate.updateOne(

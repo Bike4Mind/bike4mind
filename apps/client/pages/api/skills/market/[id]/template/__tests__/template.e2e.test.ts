@@ -319,7 +319,7 @@ describe('draft', () => {
 
     const res = await call(draftHandler, 'POST', listingId);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ draft: copy, generatedFromVersionId: approvedId });
+    expect(res.body).toEqual({ draft: { ...copy, takesFile: false }, generatedFromVersionId: approvedId });
     expect(llm.calls).toHaveLength(1);
     expect(llm.calls[0].user).toContain('APPROVED BODY');
     expect(llm.calls[0].user).not.toContain('PENDING BODY');

@@ -182,6 +182,15 @@ describe('templatePageExampleOf', () => {
     expect(view?.media?.items).toHaveLength(1);
   });
 
+  it('re-sanitizes a stored artifact so a script or handler payload never reaches the page', async () => {
+    const payload = '<p>ok</p><script>alert(1)</script><img src=x onerror="alert(2)"><div onclick="x()">hi</div>';
+    for (const type of ['html', 'markdown']) {
+      const view = await templatePageExampleOf(example({ artifact: { type, title: 'T', html: payload } }));
+      expect(view?.artifact?.html).toContain('<p>ok</p>');
+      expect(view?.artifact?.html).not.toMatch(/script|onerror|onclick|alert/);
+    }
+  });
+
   it('keeps the artifact, steps and sample file metadata', async () => {
     const view = await templatePageExampleOf(
       example({

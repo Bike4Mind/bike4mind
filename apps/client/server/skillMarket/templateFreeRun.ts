@@ -327,45 +327,47 @@ export async function recordTemplateFreeRun(templateId: unknown): Promise<void> 
 // Case-sensitive like the page script's `code.language-mermaid` selector, so a fence it cannot draw loads nothing.
 const MERMAID_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*mermaid\b/m;
 
+export const FREE_RUN_HTML_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: [
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'p',
+    'br',
+    'hr',
+    'ul',
+    'ol',
+    'li',
+    'strong',
+    'em',
+    'del',
+    'code',
+    'pre',
+    'blockquote',
+    'table',
+    'thead',
+    'tbody',
+    'tr',
+    'th',
+    'td',
+    'input',
+  ],
+  allowedAttributes: { input: ['type', 'checked'], ol: ['start'], th: ['align'], td: ['align'] },
+  allowedClasses: { code: ['language-*'] },
+  allowedSchemes: [],
+  exclusiveFilter: frame => frame.tag === 'input' && frame.attribs.type !== 'checkbox',
+  disallowedTagsMode: 'discard',
+};
+
 /**
  * Model output as safe HTML. marked passes raw HTML through, so sanitize-html is the boundary: no
  * links, images, scripts or attributes beyond a task-list checkbox and a code block's language.
  */
 export function renderFreeRunResult(markdown: string): { html: string; hasDiagram: boolean } {
   const parsed = marked.parse(markdown, { async: false, gfm: true }) as string;
-  const html = sanitizeHtml(parsed, {
-    allowedTags: [
-      'h1',
-      'h2',
-      'h3',
-      'h4',
-      'h5',
-      'h6',
-      'p',
-      'br',
-      'hr',
-      'ul',
-      'ol',
-      'li',
-      'strong',
-      'em',
-      'del',
-      'code',
-      'pre',
-      'blockquote',
-      'table',
-      'thead',
-      'tbody',
-      'tr',
-      'th',
-      'td',
-      'input',
-    ],
-    allowedAttributes: { input: ['type', 'checked'], ol: ['start'], th: ['align'], td: ['align'] },
-    allowedClasses: { code: ['language-*'] },
-    allowedSchemes: [],
-    exclusiveFilter: frame => frame.tag === 'input' && frame.attribs.type !== 'checkbox',
-    disallowedTagsMode: 'discard',
-  });
+  const html = sanitizeHtml(parsed, FREE_RUN_HTML_OPTIONS);
   return { html, hasDiagram: MERMAID_FENCE.test(markdown) };
 }

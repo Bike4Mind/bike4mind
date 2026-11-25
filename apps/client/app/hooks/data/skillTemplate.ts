@@ -8,6 +8,7 @@ import type {
   SkillTemplateExampleUpdate,
   SkillTemplateUpdate,
 } from '@bike4mind/common';
+import { skillTemplatePreviewPath } from '@bike4mind/common';
 
 /** The listing author's template editor (pages/api/skills/market/[id]/template/*). */
 
@@ -169,7 +170,7 @@ export const useSkillTemplatePreviewHtml = (listingId: string, stamp: string, en
     queryKey: [...skillTemplateKey(listingId), 'preview', stamp],
     queryFn: async () =>
       (
-        await api.get<string>(`/api/skills/market/${encodeURIComponent(listingId)}/template/preview`, {
+        await api.get<string>(skillTemplatePreviewPath(listingId), {
           responseType: 'text',
         })
       ).data,

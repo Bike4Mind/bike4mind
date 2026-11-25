@@ -11,7 +11,6 @@ import {
   startSkillTemplateExampleRun,
   unpublishListingTemplate,
   unpublishSkillTemplate,
-  writeSkillTemplateExampleResult,
   writeSkillTemplateScanVerdict,
 } from './SkillListingTemplateModel';
 
@@ -280,6 +279,19 @@ describe('example runs', () => {
     steps: [{ label: 'Searched issues in example-org/app', simulated: true }],
     generatedFromVersionId: 'v1',
   };
+  const storeResult = async (runAt: Date) => {
+    const res = await SkillListingTemplate.updateOne(
+      { listingId: 'listing-1', 'example.status': 'running', 'example.runAt': runAt },
+      {
+        $set: {
+          'example.status': 'ready',
+          'example.replyTrimmedTo': null,
+          ...Object.fromEntries(Object.entries(result).map(([k, v]) => [`example.${k}`, v])),
+        },
+      }
+    );
+    return res.modifiedCount > 0;
+  };
 
   it('starts a first run, refuses a second while it is in flight and stores the result', async () => {
     await create();
@@ -289,14 +301,14 @@ describe('example runs', () => {
       reply: '',
     });
     expect(await startSkillTemplateExampleRun('listing-1', t1, stale(t1))).toBeNull();
-    expect(await writeSkillTemplateExampleResult('listing-1', t0, result)).toBe(true);
+    expect(await storeResult(t0)).toBe(true);
     expect((await find()).example).toMatchObject({ ...result, status: 'ready', enabled: true, replyTrimmedTo: null });
   });
 
   it('keeps the previous example while a re-run is in flight and after it fails', async () => {
     await create();
     await startSkillTemplateExampleRun('listing-1', t0, stale(t0));
-    await writeSkillTemplateExampleResult('listing-1', t0, result);
+    await storeResult(t0);
     await editSkillTemplateExample('listing-1', { enabled: false, replyTrimmedTo: 4 });
     expect(await startSkillTemplateExampleRun('listing-1', t1, stale(t1))).not.toBeNull();
     expect(await failSkillTemplateExampleRun('listing-1', t1, 'provider down')).toBe(true);
@@ -314,7 +326,7 @@ describe('example runs', () => {
     await startSkillTemplateExampleRun('listing-1', t0, stale(t0));
     const later = new Date(t0.getTime() + 20 * 60_000);
     expect(await startSkillTemplateExampleRun('listing-1', later, stale(later))).not.toBeNull();
-    expect(await writeSkillTemplateExampleResult('listing-1', t0, result)).toBe(false);
+    expect(await storeResult(t0)).toBe(false);
     expect(await failSkillTemplateExampleRun('listing-1', t0, 'late')).toBe(false);
     expect((await find()).example?.status).toBe('running');
   });
