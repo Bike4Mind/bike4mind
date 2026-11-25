@@ -8,23 +8,12 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
-const effects = vi.hoisted(() => ({ deleteGenerated: vi.fn(), cdnSend: vi.fn(), enqueue: vi.fn() }));
+const effects = vi.hoisted(() => ({ deleteGenerated: vi.fn(), enqueue: vi.fn() }));
 
 vi.mock('../utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated }),
 }));
 vi.mock('./generatedMediaPurgeQueue', () => ({ enqueueGeneratedMediaPurge: effects.enqueue }));
-vi.mock('@aws-sdk/client-cloudfront', () => ({
-  CloudFrontClient: class {
-    send = effects.cdnSend;
-  },
-  CreateInvalidationCommand: class {
-    constructor(public input: { InvalidationBatch: { Paths: { Items: string[] } } }) {}
-  },
-}));
-vi.mock('../security/wafSharedHelpers', () => ({
-  resolveRouterDistributionId: () => 'E1A2B3C4D5E6F',
-}));
 
 import {
   MAX_DELETES_PER_RUN,
@@ -57,8 +46,6 @@ async function notebook(media: { images?: string[] | null; videos?: string[] | n
 }
 
 const deletedKeys = () => effects.deleteGenerated.mock.calls.map(([key]) => key).sort();
-const invalidatedPaths = () =>
-  effects.cdnSend.mock.calls.map(([cmd]) => [...cmd.input.InvalidationBatch.Paths.Items].sort());
 
 beforeAll(async () => {
   database = await createMongoReplSet();
@@ -72,20 +59,36 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   effects.deleteGenerated.mockResolvedValue(undefined);
-  effects.cdnSend.mockResolvedValue({});
   effects.enqueue.mockResolvedValue(true);
   for (const modelName of mongoose.modelNames()) await collection(modelName).deleteMany({});
 });
 
 describe('purgeDeletedNotebookMedia', () => {
-  it('deletes images and videos only the deleted notebook used, in one invalidation', async () => {
+  it('deletes images and videos only the deleted notebook used', async () => {
     const id = await notebook({ images: [gk('a.png'), gk('b.png')], videos: [gk('c.mp4')] });
     await purgeDeletedNotebookMedia([id], { logger });
     expect(logger.warn).not.toHaveBeenCalled();
     expect(deletedKeys()).toEqual([gk('a.png'), gk('b.png'), gk('c.mp4')]);
-    expect(invalidatedPaths()).toEqual([
-      [`/generated/${gk('a.png')}`, `/generated/${gk('b.png')}`, `/generated/${gk('c.mp4')}`],
-    ]);
+  });
+
+  it('deletes non-UUID generated keys: a spreadsheet and an ObjectId-keyed audio file', async () => {
+    const sheet = 'quarterly-report-1a2b3c4d.xlsx';
+    const audio = `${new mongoose.Types.ObjectId().toString()}.mp3`;
+    const id = await notebook({ images: [sheet, audio] });
+    await purgeDeletedNotebookMedia([id], { logger });
+    expect(deletedKeys()).toEqual([audio, sheet].sort());
+  });
+
+  it('deletes spreadsheet keys named with spaces, punctuation and non-ASCII characters', async () => {
+    const sheets = [
+      'Q3 Sales Report-1a2b3c4d.xlsx',
+      'P&L Statement (2026)-1a2b3c4d.xlsx',
+      'Caf\u00e9 Budget-1a2b3c4d.xlsx',
+      '_draft_-1a2b3c4d.xlsx',
+    ];
+    const id = await notebook({ images: sheets });
+    await purgeDeletedNotebookMedia([id], { logger });
+    expect(deletedKeys()).toEqual([...sheets].sort());
   });
 
   it('keeps a key a live fork still shows, but not one only a deleted fork shows', async () => {
@@ -112,10 +115,9 @@ describe('purgeDeletedNotebookMedia', () => {
     const second = await notebook({ images: [gk('both.png')] });
     await purgeDeletedNotebookMedia([first, second], { logger });
     expect(deletedKeys()).toEqual([gk('both.png')]);
-    expect(invalidatedPaths()).toEqual([[`/generated/${gk('both.png')}`]]);
   });
 
-  it('stops starting deletes once the time budget is spent and still invalidates what it deleted', async () => {
+  it('stops starting deletes once the time budget is spent', async () => {
     const id = await notebook({ images: Array.from({ length: 40 }, (_, i) => gk(`k${i}.png`)) });
     const start = Date.now();
     const now = vi.spyOn(Date, 'now').mockReturnValue(start);
@@ -130,7 +132,6 @@ describe('purgeDeletedNotebookMedia', () => {
     const deleted = deletedKeys();
     expect(deleted.length).toBeLessThan(40);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('time budget spent'));
-    expect(invalidatedPaths()).toEqual([deleted.map(key => `/generated/${key}`).sort()]);
     expect(effects.enqueue).toHaveBeenCalledTimes(1);
     const [handoff] = effects.enqueue.mock.calls[0];
     expect(handoff.sessionIds).toEqual([]);
@@ -142,9 +143,6 @@ describe('purgeDeletedNotebookMedia', () => {
     const id = await notebook({ images });
     await purgeDeletedNotebookMedia([id], { logger });
     expect(effects.deleteGenerated).toHaveBeenCalledTimes(MAX_DELETES_PER_RUN);
-    const sent = invalidatedPaths();
-    expect(sent.map(paths => paths.length)).toEqual([MAX_DELETES_PER_RUN]);
-    expect(sent.flat()).not.toContain('/generated/*');
     const [handoff] = effects.enqueue.mock.calls[0];
     expect(handoff.ownerIds).toEqual(['u1']);
     expect([...deletedKeys(), ...handoff.keys].sort()).toEqual([...images].sort());
@@ -158,7 +156,6 @@ describe('purgeDeletedNotebookMedia', () => {
     }
     await purgeDeletedNotebookMedia(ids, { logger });
     expect(effects.deleteGenerated).toHaveBeenCalledTimes(MAX_DELETES_PER_RUN);
-    expect(invalidatedPaths().map(paths => paths.length)).toEqual([MAX_DELETES_PER_RUN]);
     const [handoff] = effects.enqueue.mock.calls[0];
     expect(handoff.sessionIds).toHaveLength(5);
   });
@@ -169,20 +166,19 @@ describe('purgeDeletedNotebookMedia', () => {
     const copy = await notebook({ images: [foreign, gk('own.png')] });
     await purgeDeletedNotebookMedia([copy], { logger });
     expect(deletedKeys()).toEqual([gk('own.png')]);
-    expect(invalidatedPaths()).toEqual([[`/generated/${gk('own.png')}`]]);
   });
 
-  it('never deletes or invalidates a key outside the generated-content shape', async () => {
+  it('never deletes a key outside the generated-content shape', async () => {
     const junk = [
       '../other/object.png',
       'avatars/u2.png',
-      'not-a-uuid.png',
-      ...Array.from({ length: 3001 }, (_, i) => `x${i}.png`),
+      'avatars/nested/u2.png',
+      'line\nbreak.png',
+      ...Array.from({ length: 3001 }, (_, i) => `junk/x${i}.png`),
     ];
     const id = await notebook({ images: junk });
     await purgeDeletedNotebookMedia([id], { logger });
     expect(effects.deleteGenerated).not.toHaveBeenCalled();
-    expect(effects.cdnSend).not.toHaveBeenCalled();
     expect(effects.enqueue).toHaveBeenCalledWith({ sessionIds: [], keys: [], ownerIds: ['u1'] }, logger);
   });
 
@@ -191,19 +187,15 @@ describe('purgeDeletedNotebookMedia', () => {
     await purgeDeletedNotebookMedia([id], { logger });
     await purgeDeletedNotebookMedia([], { logger });
     expect(effects.deleteGenerated).not.toHaveBeenCalled();
-    expect(effects.cdnSend).not.toHaveBeenCalled();
   });
 
-  it('logs a storage or CloudFront failure and still purges the other keys', async () => {
+  it('logs a storage failure and still purges the other keys', async () => {
     const id = await notebook({ images: [gk('fails.png'), gk('ok.png')] });
     effects.deleteGenerated.mockImplementation(async (key: string) => {
       if (key === gk('fails.png')) throw new Error('s3 down');
     });
-    effects.cdnSend.mockRejectedValue(new Error('throttled'));
     await expect(purgeDeletedNotebookMedia([id], { logger })).resolves.toBeUndefined();
-    expect(invalidatedPaths()).toEqual([[`/generated/${gk('ok.png')}`]]);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('s3 down'));
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('throttled'));
     expect(effects.enqueue.mock.calls[0][0].keys).toEqual([gk('fails.png')]);
   });
 
@@ -258,7 +250,6 @@ describe('runGeneratedMediaPurge', () => {
     }
     expect(deletedKeys()).toHaveLength(ids.length + 1);
     expect(effects.deleteGenerated.mock.calls.filter(([key]) => key === gk('shared.png'))).toHaveLength(1);
-    expect(invalidatedPaths()).toHaveLength(1);
   });
 
   it('stops looking up once the budget expires mid-lookup and returns the unscanned notebooks', async () => {
@@ -355,7 +346,6 @@ describe('runGeneratedMediaPurge', () => {
     const deleted = deletedKeys();
     expect([...deleted, ...leftovers.leftoverKeys].sort()).toEqual([...keys].sort());
     expect(leftovers.leftoverKeys.length).toBeGreaterThan(0);
-    expect(invalidatedPaths()).toEqual([deleted.map(key => `/generated/${key}`).sort()]);
   });
 
   it('returns every direct key when the deadline passed before any was looked up', async () => {
@@ -382,7 +372,7 @@ describe('runGeneratedMediaPurge', () => {
     expect(leftovers.leftoverKeys).toEqual([]);
   });
 
-  it('returns a key whose storage delete failed as a leftover and does not invalidate it', async () => {
+  it('returns a key whose storage delete failed as a leftover', async () => {
     const [fails, ok] = [gk('fails.png'), gk('ok.png')];
     await notebook({ images: [fails, ok] });
     effects.deleteGenerated.mockImplementation(async (key: string) => {
@@ -393,7 +383,6 @@ describe('runGeneratedMediaPurge', () => {
       { deadline: Date.now() + PURGE_BUDGET_MS, deletedSessionIds: new Set<string>(), logger }
     );
     expect(leftovers.leftoverKeys).toEqual([fails]);
-    expect(invalidatedPaths()).toEqual([[`/generated/${ok}`]]);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('1 storage deletes failed'));
   });
 

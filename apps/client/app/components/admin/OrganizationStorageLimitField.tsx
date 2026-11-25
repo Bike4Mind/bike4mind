@@ -1,6 +1,6 @@
 import { FC } from 'react';
 import { FormControl, FormHelperText, FormLabel, Input, Typography } from '@mui/joy';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from '@client/app/utils/prettyBytes';
 import { DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { useOrgStorageUsage } from '@client/app/hooks/data/useOrgStorageUsage';
 

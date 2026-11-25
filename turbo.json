@@ -126,7 +126,7 @@
     // mcpRegistryEntry.test.ts checks the published registry entry at the repo root.
     "@bike4mind/cli#test": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/mcp-registry/**"]
+      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/mcp-registry/**", "$TURBO_ROOT$/b4m-core/*/src/**"]
     },
     // The hook tests run the CLI's bin/hearth-hook.mjs, which is outside cli's build inputs.
     "@bike4mind/hearth#test": {
@@ -240,6 +240,7 @@
         "$TURBO_ROOT$/infra/cliToolHandler.ts",
         "$TURBO_ROOT$/infra/database.ts",
         "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/infra/authAbuseMetric.ts",
         "$TURBO_ROOT$/elasticmq.conf",
         "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
         "$TURBO_ROOT$/packages/scripts/index.ts",
@@ -270,6 +271,7 @@
         "$TURBO_ROOT$/infra/cliToolHandler.ts",
         "$TURBO_ROOT$/infra/database.ts",
         "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/infra/authAbuseMetric.ts",
         "$TURBO_ROOT$/elasticmq.conf",
         "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
         "$TURBO_ROOT$/packages/scripts/index.ts",
@@ -342,7 +344,10 @@
         "$TURBO_ROOT$/packages/scripts/index.ts",
         "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
         "$TURBO_ROOT$/docs-site/docs/**",
-        "$TURBO_ROOT$/apps/workers/src/dataLakes/runLakeResearch.ts",
+        "$TURBO_ROOT$/apps/workers/src/**",
+        "$TURBO_ROOT$/b4m-core/services/src/**",
+        "$TURBO_ROOT$/scripts/unmetered-provider-call-allowlist.txt",
+        "$TURBO_ROOT$/scripts/unmetered-llm-route-allowlist.txt",
         "$TURBO_ROOT$/catalog/model-hub/**"
       ]
     },
@@ -369,7 +374,10 @@
         "$TURBO_ROOT$/packages/scripts/index.ts",
         "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
         "$TURBO_ROOT$/docs-site/docs/**",
-        "$TURBO_ROOT$/apps/workers/src/dataLakes/runLakeResearch.ts",
+        "$TURBO_ROOT$/apps/workers/src/**",
+        "$TURBO_ROOT$/b4m-core/services/src/**",
+        "$TURBO_ROOT$/scripts/unmetered-provider-call-allowlist.txt",
+        "$TURBO_ROOT$/scripts/unmetered-llm-route-allowlist.txt",
         "$TURBO_ROOT$/catalog/model-hub/**"
       ]
     },

@@ -1,6 +1,5 @@
 import { FabFile, Quest, Session, questRepository, sessionRepository } from '@bike4mind/database';
 import { getGeneratedImageStorage } from '../utils/storage/index';
-import { MAX_PATHS_PER_BATCH, createCdnInvalidationBatch, generatedCdnPath } from '../services/cdn/invalidateRouterCdn';
 import { enqueueGeneratedMediaPurge } from './generatedMediaPurgeQueue';
 import type { MinimalLogger } from '../services/publish/minimalLogger';
 
@@ -15,20 +14,21 @@ const DELETE_CONCURRENCY = 16;
 export const SESSION_PAGE = 50;
 export const KEY_CHUNK = 500;
 
-// Stop starting lookups and deletes after this (ms) so the CDN flush still runs before the request
-// times out (60s); what is left goes to the purge queue.
+// Stop starting lookups and deletes after this (ms) so the request finishes inside its 60s timeout;
+// what is left goes to the purge queue.
 export const PURGE_BUDGET_MS = 20_000;
 
-// Deletes per run, so its CDN flush is one exact-path request; the rest goes to the purge queue.
-// Half a request so the purge worker at its concurrency cap (infra/queues.ts) holds at most a third of
-// the distribution's in-flight path quota, which publish takedowns share.
-export const MAX_DELETES_PER_RUN = MAX_PATHS_PER_BATCH / 2;
+// Deletes per run, bounding one request's or worker invocation's work; the rest goes to the purge queue.
+export const MAX_DELETES_PER_RUN = 500;
 
 const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 
-// Only the bare `<uuid>.<ext>` keys the generation tools mint are ever purged. Wider than
-// GENERATED_CONTENT_KEY_RE (@bike4mind/common) only in admitting digits in the extension (.mp4).
-export const GENERATED_MEDIA_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]+$/i;
+// A bare generated-bucket filename (no folder): `<uuid>.<ext>`, `<objectId>.mp3`, or a model-named
+// spreadsheet such as `Q3 Sales Report-1a2b3c4d.xlsx`. The shape only rejects paths and control
+// characters (same bound as the generated-media API); what makes a delete safe is findOwnedKeys plus
+// the live-reference check.
+// eslint-disable-next-line no-control-regex
+export const GENERATED_MEDIA_KEY_RE = /^[^/\\\x00-\x1f\x7f]{1,256}$/;
 export const isGeneratedContentKey = (key: unknown): key is string =>
   typeof key === 'string' && GENERATED_MEDIA_KEY_RE.test(key);
 
@@ -157,14 +157,14 @@ export interface GeneratedMediaPurgeLeftovers {
 }
 
 /**
- * Delete generated media no live notebook or file references and invalidate its CDN paths, stopping
+ * Delete generated media no live notebook or file references, stopping
  * at `deadline` (epoch ms) or after MAX_DELETES_PER_RUN deletes and returning what it did not reach.
  * Only keys of the generated-content shape that findOwnedKeys proves are the owners' are deleted.
  * `sessionIds` are deleted notebooks to look up, in pages of SESSION_PAGE, owned by their notebooks'
  * owners; `keys` are re-checked against live references and against `ownerIds`.
  * `deletedSessionIds` are notebooks whose references do not retain a key. A failed page lookup is
  * logged and the page forwarded; a missing storage binding throws before any delete. A failed storage
- * delete is logged and its key returned as a leftover; CDN failures are logged, not returned.
+ * delete is logged and its key returned as a leftover.
  */
 export async function runGeneratedMediaPurge(
   input: { sessionIds?: string[]; keys?: string[]; ownerIds?: string[] },
@@ -177,7 +177,6 @@ export async function runGeneratedMediaPurge(
   const seen = new Set<string>();
   let deletesLeft = MAX_DELETES_PER_RUN;
   let failedDeletes = 0;
-  const batch = createCdnInvalidationBatch('notebook-media', logger);
   let storage: ReturnType<typeof getGeneratedImageStorage> | undefined;
 
   // Returns the keys not deleted: those whose delete failed and those no delete was started for.
@@ -195,7 +194,6 @@ export async function runGeneratedMediaPurge(
           // A plain delete, not deletePermanently: the bucket is versioned, so ops keep a recovery window.
           await target.delete(key);
           deleted.add(key);
-          batch.add(generatedCdnPath(key));
         } catch (err) {
           failedDeletes++;
           logger.warn(`[NOTEBOOK_MEDIA] Could not purge generated media ${key}: ${errorMessage(err)}`);
@@ -207,38 +205,34 @@ export async function runGeneratedMediaPurge(
     return keys.filter(key => !deleted.has(key));
   };
 
+  const directKeys = [...new Set(input.keys ?? [])].filter(isGeneratedContentKey);
+  for (const key of directKeys) seen.add(key);
+  let direct: Awaited<ReturnType<typeof resolveDirectDoomedKeys>>;
   try {
-    const directKeys = [...new Set(input.keys ?? [])].filter(isGeneratedContentKey);
-    for (const key of directKeys) seen.add(key);
-    let direct: Awaited<ReturnType<typeof resolveDirectDoomedKeys>>;
-    try {
-      direct = await resolveDirectDoomedKeys(directKeys, owners, deadline);
-    } catch (err) {
-      logger.warn(`[NOTEBOOK_MEDIA] Could not resolve generated media keys: ${errorMessage(err)}`);
-      direct = { doomed: [], unchecked: directKeys };
-    }
-    leftoverKeys.push(...direct.unchecked, ...(await deleteKeys(direct.doomed)));
+    direct = await resolveDirectDoomedKeys(directKeys, owners, deadline);
+  } catch (err) {
+    logger.warn(`[NOTEBOOK_MEDIA] Could not resolve generated media keys: ${errorMessage(err)}`);
+    direct = { doomed: [], unchecked: directKeys };
+  }
+  leftoverKeys.push(...direct.unchecked, ...(await deleteKeys(direct.doomed)));
 
-    for (let p = 0; p < sessionIds.length; p += SESSION_PAGE) {
-      const page = sessionIds.slice(p, p + SESSION_PAGE);
-      let doomed: string[] | null = null;
-      if (Date.now() < deadline && deletesLeft > 0) {
-        try {
-          doomed = await resolvePageDoomedKeys(page, seen, { deadline, deletedSessionIds, owners });
-        } catch (err) {
-          logger.warn(`[NOTEBOOK_MEDIA] Could not resolve generated media for deleted notebooks: ${errorMessage(err)}`);
-          leftoverSessionIds.push(...page);
-          continue;
-        }
+  for (let p = 0; p < sessionIds.length; p += SESSION_PAGE) {
+    const page = sessionIds.slice(p, p + SESSION_PAGE);
+    let doomed: string[] | null = null;
+    if (Date.now() < deadline && deletesLeft > 0) {
+      try {
+        doomed = await resolvePageDoomedKeys(page, seen, { deadline, deletedSessionIds, owners });
+      } catch (err) {
+        logger.warn(`[NOTEBOOK_MEDIA] Could not resolve generated media for deleted notebooks: ${errorMessage(err)}`);
+        leftoverSessionIds.push(...page);
+        continue;
       }
-      if (doomed === null) {
-        leftoverSessionIds.push(...sessionIds.slice(p));
-        break;
-      }
-      leftoverKeys.push(...(await deleteKeys(doomed)));
     }
-  } finally {
-    await batch.flush();
+    if (doomed === null) {
+      leftoverSessionIds.push(...sessionIds.slice(p));
+      break;
+    }
+    leftoverKeys.push(...(await deleteKeys(doomed)));
   }
   if (leftoverKeys.length > 0 || leftoverSessionIds.length > 0) {
     const reasons = [
@@ -255,8 +249,8 @@ export async function runGeneratedMediaPurge(
 }
 
 /**
- * After notebooks are deleted, remove the generated images and videos only they referenced and
- * invalidate their `/generated/<key>` CDN paths. Call only once the deletes have committed.
+ * After notebooks are deleted, remove the generated media only they referenced. Call only once the
+ * deletes have committed.
  *
  * Only keys the deleted notebooks' owners provably produced are purged (findOwnedKeys). A key is kept
  * while a LIVE notebook (forks, clones and snips copy keys verbatim) or a LIVE file

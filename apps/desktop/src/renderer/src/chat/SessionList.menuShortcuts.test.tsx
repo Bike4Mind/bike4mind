@@ -45,6 +45,7 @@ interface Handlers {
   onToggleArchived: (s: ChatSessionSummary) => void;
   onDelete: (id: string) => void;
   onDownload: (s: ChatSessionSummary) => void;
+  downloadError: string;
 }
 
 let host: HTMLDivElement | null = null;
@@ -60,7 +61,6 @@ async function mount(sessions: ChatSessionSummary[], handlers: Partial<Handlers>
         <SessionList
           sessions={sessions}
           mode="chat"
-          onModeChange={() => {}}
           loading={false}
           activeId={null}
           statuses={new Map()}
@@ -77,6 +77,7 @@ async function mount(sessions: ChatSessionSummary[], handlers: Partial<Handlers>
           onToggleArchived={handlers.onToggleArchived ?? (() => {})}
           onRename={() => {}}
           onDownload={handlers.onDownload ?? (() => {})}
+          downloadError={handlers.downloadError}
           userSections={EMPTY_SIDEBAR_SECTIONS}
           sectionActions={{ create: () => {}, rename: () => {}, remove: () => {}, move: () => {} }}
         />
@@ -127,14 +128,17 @@ describe('SessionList row menu shortcuts', () => {
     expect(query('chat-move-session-btn')?.textContent).toBe('Move to section');
   });
 
-  it('runs Pin on P', async () => {
+  it('runs Pin on P, but not with a modifier held', async () => {
     const onTogglePin = vi.fn();
     const session = summary('a', 'Alpha');
     await mount([session], { onTogglePin });
     await openMenu();
 
-    await press('p');
+    await press('p', { metaKey: true });
+    await press('p', { ctrlKey: true });
+    expect(onTogglePin).not.toHaveBeenCalled();
 
+    await press('p');
     expect(onTogglePin).toHaveBeenCalledWith(session);
   });
 
@@ -153,7 +157,7 @@ describe('SessionList row menu shortcuts', () => {
     expect(onDelete).toHaveBeenCalledWith('a');
   });
 
-  it('leaves no focus ring on the row once a rename from the menu is cancelled', async () => {
+  it('leaves no focus ring on the row once a rename from the menu is cancelled, and R reopens it', async () => {
     await mount([summary('a', 'Alpha')]);
     await openMenu();
     await click(query('chat-rename-session-btn') as HTMLElement);
@@ -168,14 +172,9 @@ describe('SessionList row menu shortcuts', () => {
     expect(query('chat-session-rename-input')).toBeNull();
     expect(query('chat-session-item')?.className).not.toContain('Mui-focusVisible');
     expect(query('chat-session-menu-btn')).not.toBeNull();
-  });
 
-  it('opens the rename input on R', async () => {
-    await mount([summary('a', 'Alpha')]);
     await openMenu();
-
     await press('r');
-
     expect(query('chat-session-rename-input')).not.toBeNull();
   });
 
@@ -193,24 +192,32 @@ describe('SessionList row menu shortcuts', () => {
     expect(query('message-session-dialog')).not.toBeNull();
   });
 
-  it('ignores a letter with a modifier held', async () => {
-    const onTogglePin = vi.fn();
-    await mount([summary('a', 'Alpha')], { onTogglePin });
-    await openMenu();
-
-    await press('p', { metaKey: true });
-    await press('p', { ctrlKey: true });
-
-    expect(onTogglePin).not.toHaveBeenCalled();
-  });
-
-  it('does not run a disabled item', async () => {
+  it('offers Download on an archived session, and does not run a disabled item', async () => {
     await mount([summary('a', 'Alpha', { archived: true })]);
     await click(query('sidebar-archived-btn') as HTMLElement);
     await openMenu();
+    expect(query('chat-download-session-btn')).not.toBeNull();
 
     await press('m');
 
     expect(query('message-session-dialog')).toBeNull();
+  });
+});
+
+describe('SessionList Download', () => {
+  it('passes the session to the action from the row menu', async () => {
+    const onDownload = vi.fn();
+    const session = summary('a', 'Alpha');
+    await mount([session], { onDownload });
+
+    await openMenu();
+    await click(query('chat-download-session-btn') as HTMLElement);
+
+    expect(onDownload).toHaveBeenCalledWith(session);
+  });
+
+  it('shows a download failure', async () => {
+    await mount([summary('a', 'Alpha')], { downloadError: 'Could not download "Alpha".' });
+    expect(query('chat-download-error')?.textContent).toBe('Could not download "Alpha".');
   });
 });

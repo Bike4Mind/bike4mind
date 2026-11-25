@@ -10,6 +10,7 @@ import {
   USER_ACCOUNT_SEGMENTS,
   type UserAccountSegment,
   type BriefSchedule,
+  ConflictError,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -23,8 +24,13 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  IUserModeration,
+  MODERATION_REVIEW_STATUSES,
+  MODERATION_SEVERE_CATEGORIES,
+  ModerationReviewUser,
   ISignupRiskAutoApproval,
   ISignupRiskScore,
+  type InterventionHold,
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
@@ -47,12 +53,14 @@ import {
   PaginatedResponse,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
-import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
+import mongoose, { Document, Model, model, Schema, Query, type PipelineStage, type ClientSession } from 'mongoose';
 import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
+import { AutoContainmentDecisionModel } from '../infra/security/AutoContainmentDecisionModel';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
@@ -292,6 +300,22 @@ const KeywordRoutingRuleSchema = new Schema(
 
 /** Newest-first cap on the retained per-user moderation-hit log. */
 export const MODERATION_HITS_RETAINED = 50;
+
+const InterventionHoldSchema = new Schema(
+  {
+    decisionId: { type: String, required: true },
+    detectionId: { type: String, required: true },
+    tier: { type: String, enum: ['limit', 'verify', 'holdGrant', 'review'], required: true },
+    policyVersion: { type: Number, required: true },
+    reason: { type: String, required: true },
+    appliedAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true },
+    releasedAt: { type: Date, default: null },
+    releasedBy: { type: String, default: null },
+    creditsPerHour: { type: Number },
+  },
+  { _id: false }
+);
 
 const ModerationHitSchema = new Schema(
   {
@@ -1145,7 +1169,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async incrementCredits(userId: string, credits: number, options?: { updateLastCreditsPurchasedAt?: boolean }) {
-    console.log(`Incrementing credits for user ${userId} by ${credits}`);
+    Logger.debug('Incrementing credits', { userId, credits });
     const result = await this.model.findOneAndUpdate(
       { _id: userId },
       {
@@ -1227,36 +1251,63 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, planStorageLimitMb);
+  }
+
+  /**
+   * Drops the plan allowance once the subscription that granted it has ended, so the enforced
+   * `storageLimit` falls back to the manual override, or to DEFAULT_STORAGE_LIMIT_MB without one.
+   * Files already stored are untouched: a user left over the new limit can still read and delete,
+   * and the upload checks refuse anything that would add to the usage.
+   */
+  async clearPlanStorageLimit(userId: string): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, null);
+  }
+
+  private async writePlanStorageLimit(userId: string, planStorageLimitMb: number | null): Promise<boolean> {
     if (!mongoose.isValidObjectId(userId)) return false;
-    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
-    const res = await this.model.updateOne({ _id: userId }, [
-      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
-      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
-      {
-        $set: {
-          storageLimitOverride: {
-            $cond: [
-              fieldMissing('$storageLimitOverride'),
-              {
-                $cond: [
-                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
-                  null,
-                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
-                ],
-              },
-              '$storageLimitOverride',
-            ],
+    type StorageSnapshot = {
+      storageLimitOverride?: number | null;
+      planStorageLimit?: number | null;
+      storageLimit?: number | null;
+      __v?: number;
+    };
+    const fields = ['storageLimitOverride', 'planStorageLimit', 'storageLimit', '__v'] as const;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snapshot = await this.model
+        .findById(userId, { storageLimitOverride: 1, planStorageLimit: 1, storageLimit: 1, __v: 1 })
+        .lean<StorageSnapshot>();
+      if (!snapshot) return false;
+      // Preserve a legacy custom limit before retiring the missing-override fallback. Field
+      // presence matters: an explicit null means use the plan, and zero is a manual override.
+      const override = Object.hasOwn(snapshot, 'storageLimitOverride')
+        ? (snapshot.storageLimitOverride ?? null)
+        : snapshot.storageLimit == null || snapshot.storageLimit === DEFAULT_STORAGE_LIMIT_MB
+          ? null
+          : snapshot.storageLimit;
+      const result = await this.model.updateOne(
+        {
+          _id: userId,
+          $and: fields.map(field => ({
+            [field]: Object.hasOwn(snapshot, field) ? { $eq: snapshot[field], $exists: true } : { $exists: false },
+          })),
+        },
+        {
+          $set: {
+            storageLimitOverride: override,
+            planStorageLimit: planStorageLimitMb,
+            storageLimit: override ?? planStorageLimitMb ?? DEFAULT_STORAGE_LIMIT_MB,
           },
+          // Even an equal-quantity grant must write: this fences a concurrent release's
+          // subscription snapshot. Timestamp changes alone can be elided in the same millisecond.
+          $inc: { __v: 1 },
         },
-      },
-      {
-        $set: {
-          planStorageLimit: planStorageLimitMb,
-          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
-        },
-      },
-    ]);
-    return res.matchedCount === 1;
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return true;
+      // Native transaction errors deliberately propagate so the entire transaction can retry.
+    }
+    throw new ConflictError('Storage allowance changed concurrently; retry the operation');
   }
 
   async findCurrentStorageSize(userId: string): Promise<number | null> {
@@ -1372,19 +1423,159 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async setModerationStatus(
     userId: string,
     status: UserModerationStatus,
-    options?: { throttledUntil?: Date | null }
+    options?: { throttledUntil?: Date | null; automatic?: boolean }
   ): Promise<IUserDocument | null> {
     return this.model.findOneAndUpdate(
       { _id: userId },
       {
         $set: {
           'moderation.status': status,
-          'moderation.statusChangedAt': new Date(),
+          ...(options?.automatic ? {} : { 'moderation.statusChangedAt': new Date() }),
           'moderation.throttledUntil': status === 'throttled' ? (options?.throttledUntil ?? null) : null,
         },
       },
       { new: true }
     );
+  }
+
+  /**
+   * Adds a graduated hold unless one from the same decision is already there, so a retried decision
+   * never applies twice. True when this call added it.
+   */
+  async addInterventionHold(userId: string, hold: InterventionHold, session?: ClientSession): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        isAdmin: { $ne: true },
+        isBanned: { $ne: true },
+        'interventionHolds.decisionId': { $ne: hold.decisionId },
+      },
+      { $push: { interventionHolds: hold } },
+      { runValidators: true, session }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Serializes a hold write with release and claim replacement on the original decision. */
+  async addClaimedInterventionHold(userId: string, hold: InterventionHold, startedAt: Date): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(hold.decisionId)) return false;
+    return withTransaction(async session => {
+      const claim = await AutoContainmentDecisionModel.updateOne(
+        {
+          _id: new mongoose.Types.ObjectId(hold.decisionId),
+          tier: hold.tier,
+          outcome: 'pending',
+          decidedAt: startedAt,
+          releasedAt: null,
+          containedUserIds: { $ne: userId },
+          userIds: userId,
+        },
+        { $inc: { holdWriteVersion: 1 } },
+        { session, runValidators: true }
+      );
+      if (claim.modifiedCount !== 1) return false;
+      return this.addInterventionHold(userId, hold, session);
+    });
+  }
+
+  /** Keeps a durable per-account Contain receipt and lifts only the original decision's holds. */
+  async releaseContainedInterventionHolds(
+    decisionId: string,
+    committedUserIds: string[],
+    release: { by: string; now: Date }
+  ): Promise<void> {
+    if (!mongoose.Types.ObjectId.isValid(decisionId) || committedUserIds.length === 0) return;
+    await withTransaction(async session => {
+      const decision = await AutoContainmentDecisionModel.findOne({
+        _id: new mongoose.Types.ObjectId(decisionId),
+        tier: { $ne: 'contain' },
+        outcome: { $in: ['pending', 'intervened', 'failed', 'capped'] },
+        releasedAt: null,
+      }).session(session);
+      if (!decision) return;
+      const selected = [...new Set(committedUserIds)].filter(userId => decision.userIds.includes(userId));
+      if (selected.length === 0) return;
+      // Both writers change this row in their transaction, so neither can commit from a stale snapshot.
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        { $inc: { holdWriteVersion: 1 }, $addToSet: { containedUserIds: { $each: selected } } },
+        { session, runValidators: true }
+      );
+      for (const userId of selected) await this.releaseInterventionHold(userId, decisionId, release, session);
+      const contained = new Set([...(decision.containedUserIds ?? []), ...selected]);
+      if (!decision.userIds.every(userId => contained.has(userId))) return;
+      const remaining = await this.model
+        .exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } })
+        .session(session);
+      if (remaining) return;
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        {
+          $set: {
+            outcome: 'released',
+            releasedAt: release.now,
+            releasedBy: release.by,
+            releaseReason: 'Graduated holds replaced by committed account containment',
+            releaseCondition: 'contained',
+          },
+        },
+        { session, runValidators: true }
+      );
+    });
+  }
+
+  /**
+   * Releases only the hold that decision applied. Never touches moderation, riskScore.reviewState,
+   * signupGrantHeldReason or any other decision's hold. True when an unreleased hold was released.
+   */
+  async releaseInterventionHold(
+    userId: string,
+    decisionId: string,
+    { by, now }: { by: string; now: Date },
+    session?: ClientSession
+  ): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        interventionHolds: { $elemMatch: { decisionId, releasedAt: null } },
+      },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': by } },
+      { arrayFilters: [{ 'hold.decisionId': decisionId, 'hold.releasedAt': null }], runValidators: true, session }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** True while any account still carries an unreleased hold from this decision (expired or not). */
+  async hasUnreleasedInterventionHold(decisionId: string): Promise<boolean> {
+    const found = await this.model.exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } });
+    return found !== null;
+  }
+
+  /**
+   * Stamps released every unreleased hold past its expiry, for audit only: the gates already ignore an
+   * expired hold. Returns the deciding decision ids so their records can be marked expired too.
+   */
+  async expireInterventionHolds(now: Date, limit = 500): Promise<string[]> {
+    const due = { releasedAt: null, expiresAt: { $lte: now } };
+    const docs = await this.model
+      .find({ interventionHolds: { $elemMatch: due } }, { interventionHolds: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId; interventionHolds?: InterventionHold[] }>>();
+    if (docs.length === 0) return [];
+    await this.model.updateMany(
+      { _id: { $in: docs.map(doc => doc._id) } },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': 'expiry' } },
+      { arrayFilters: [{ 'hold.releasedAt': null, 'hold.expiresAt': { $lte: now } }], runValidators: true }
+    );
+    const ids = new Set<string>();
+    for (const doc of docs) {
+      for (const hold of doc.interventionHolds ?? []) {
+        if (hold.releasedAt == null && hold.expiresAt.getTime() <= now.getTime()) ids.add(hold.decisionId);
+      }
+    }
+    return [...ids];
   }
 
   async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
@@ -1658,6 +1849,67 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  /** The review list's membership: an escalated status, or a severe hit newer than the last admin decision. */
+  private moderationReviewFilter() {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
+    // The newest retained severe hit is after the last status change, so no admin has acted on it yet.
+    const latestSevereHitAt = {
+      $max: {
+        $map: {
+          input: {
+            $filter: {
+              input: { $ifNull: ['$moderation.hits', []] },
+              as: 'hit',
+              cond: { $gt: [{ $size: { $setIntersection: [{ $ifNull: ['$$hit.categories', []] }, severe] } }, 0] },
+            },
+          },
+          as: 'hit',
+          in: '$$hit.at',
+        },
+      },
+    };
+    const lastStatusChange = { $ifNull: ['$moderation.statusChangedAt', new Date(0)] };
+    return {
+      $or: [
+        { 'moderation.status': { $in: [...MODERATION_REVIEW_STATUSES] } },
+        {
+          'moderation.hits.categories': { $in: severe },
+          $expr: { $gt: [latestSevereHitAt, lastStatusChange] },
+        },
+      ],
+    };
+  }
+
+  async countModerationReviewQueue(options: { limit?: number } = {}): Promise<number> {
+    return this.model.countDocuments(this.moderationReviewFilter(), { limit: options.limit }).maxTimeMS(5000).exec();
+  }
+
+  async findModerationReviewQueue(limit: number): Promise<ModerationReviewUser[]> {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
+    const docs = await this.model
+      .find(this.moderationReviewFilter())
+      .select('name email createdAt moderation')
+      .sort({ 'moderation.lastHitAt': -1, _id: -1 })
+      .limit(limit)
+      .maxTimeMS(5000)
+      .lean();
+    return docs.map(doc => {
+      const moderation = doc.moderation as IUserModeration;
+      const statusChangedAt = moderation.statusChangedAt ? new Date(moderation.statusChangedAt).getTime() : 0;
+      return {
+        id: String(doc._id),
+        name: doc.name ?? null,
+        email: doc.email ?? null,
+        createdAt: doc.createdAt ?? null,
+        moderation,
+        hasUnreviewedSevereHit: (moderation.hits ?? []).some(
+          hit =>
+            new Date(hit.at).getTime() > statusChangedAt && hit.categories?.some(category => severe.includes(category))
+        ),
+      };
+    });
+  }
+
   /**
    * Replaces the brief schedule and its due time together. A null `nextBriefAt` (schedule off) removes the field and drops the user from the
    * reconciler's index.
@@ -1896,6 +2148,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
     // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
     signupGrantHeldAt: { type: Date },
+    interventionHolds: { type: [InterventionHoldSchema], default: undefined },
     signupGrant: {
       type: new Schema(
         {
@@ -2455,6 +2708,15 @@ UserSchema.index(
   { 'signupMeta.ip': 1 },
   { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
 );
+// Expiry stamping of graduated holds (apps/workers/src/cron/abuseAssessmentSweep.ts). Only accounts that
+// carry a hold: a null-equality filter would also match every account with no holds field.
+UserSchema.index(
+  { 'interventionHolds.expiresAt': 1 },
+  {
+    name: 'user_interventionHolds_expiresAt_held',
+    partialFilterExpression: { 'interventionHolds.expiresAt': { $exists: true } },
+  }
+);
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
@@ -2468,6 +2730,11 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// Serve findModerationReviewQueue, one per $or branch. Not partial: a partial index is only chosen when
+// the query provably implies its filter, which an $in does not; sparse keeps users with no moderation
+// state out. Built by the ensure-user-moderation-review-indexes migration.
+UserSchema.index({ 'moderation.status': 1 }, { sparse: true, name: 'user_moderation_status' });
+UserSchema.index({ 'moderation.hits.categories': 1 }, { sparse: true, name: 'user_moderation_hit_categories' });
 // The persona caps and expiry sweep read only persona accounts, a handful among all users.
 UserSchema.index(
   { isPersona: 1, personaExpiresAt: 1 },

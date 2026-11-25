@@ -5,7 +5,6 @@ import {
   isBflImageModel,
   isGeminiImageModel,
   parseSizeEdges,
-  rejectsTransparentBackground,
   resolveLegacyImageModel,
   validateImageRequest,
   type GenerateImageToolCall,
@@ -193,13 +192,6 @@ function buildDraft(
   return dropUnsupportedFields(draft, sources);
 }
 
-const wantsTransparent = (selection: GenerateImageToolCall | undefined, args: ImageJobToolArgs) =>
-  (args.background ?? selection?.background) === 'transparent';
-
-/** gpt-image-2 refuses a transparent background outright, so such a request steps down to gpt-image-1.5. */
-const stepDownForTransparency = (model: string, transparent: boolean): string =>
-  transparent && rejectsTransparentBackground(model) ? ImageModels.GPT_IMAGE_1_5 : model;
-
 export function buildGenerateJobRequest(
   selection: GenerateImageToolCall | undefined,
   prompt: string,
@@ -207,8 +199,7 @@ export function buildGenerateJobRequest(
 ): ImageJobRequestDraft {
   // The tool takes no model argument: the selection is authoritative, with retired ids remapped.
   const selected = resolveLegacyImageModel(selection?.model || ImageModels.GPT_IMAGE_2);
-  const model = stepDownForTransparency(selected, wantsTransparent(selection, args));
-  return buildDraft({ model, mode: 'generate', prompt }, selection, args);
+  return buildDraft({ model: selected, mode: 'generate', prompt }, selection, args);
 }
 
 const editModeRequiresMask = (model: string): boolean =>
@@ -237,10 +228,7 @@ export function buildEditJobRequest(
   files: { image: string; mask?: string },
   args: ImageJobToolArgs
 ): ImageJobRequestDraft {
-  const model = stepDownForTransparency(
-    resolveEditJobModel(selection, files.mask !== undefined),
-    wantsTransparent(selection, args)
-  );
+  const model = resolveEditJobModel(selection, files.mask !== undefined);
   const inputs: ImageJobInput[] = [
     { role: 'edit_source', fileId: files.image.toLowerCase() },
     ...(files.mask ? [{ role: 'mask' as const, fileId: files.mask.toLowerCase() }] : []),

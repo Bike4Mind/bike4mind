@@ -34,6 +34,7 @@ export const REWARD_KEYS = {
     'ReferralFirstAnswerCredits',
     'ReferralFirstPaymentCredits',
     'ReferralSecondPaymentCredits',
+    'ReferralMilestones',
     'ReferralHoldDays',
     'ReferralInvitesPerUser',
     'ReferralLinkSignupsPerMonth',

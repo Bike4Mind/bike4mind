@@ -127,6 +127,8 @@ interface AgentExecuteStart {
    * Server-capped at `PROMPT_TEXT_MAX`.
    */
   systemContext?: string;
+  /** The Studio production a Direct launch directs; the server marks the session with it (see startAgentExecution). */
+  productionCompositionId?: string;
 }
 
 interface AgentExecuteAbort {

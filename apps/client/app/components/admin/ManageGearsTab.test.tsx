@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
   error: vi.fn(),
   useBlocker: vi.fn<(options: BlockerOptions) => { status: string }>(() => ({ status: 'idle' })),
 }));
-
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, put: mocks.put, delete: mocks.del } }));
 vi.mock('sonner', () => ({ toast: { success: mocks.success, error: mocks.error } }));
 vi.mock('@tanstack/react-router', () => ({
@@ -255,16 +254,16 @@ describe('ManageGearsTab', () => {
     expect(mocks.put).not.toHaveBeenCalled();
   });
 
-  it.each(['', ' ', '-1', '1.5', '1000001', 'Infinity', 'bad'])(
-    'blocks invalid credits %j without writing',
-    async credits => {
-      renderTab();
-      await screen.findByTestId('manage-gear-row-websearch');
-      fireEvent.change(await startEditing('websearch'), { target: { value: credits } });
-      expect(screen.getByTestId('admin-save-confirm-btn')).toBeDisabled();
-      expect(mocks.put).not.toHaveBeenCalled();
+  it('blocks each invalid credits value without writing', async () => {
+    renderTab();
+    await screen.findByTestId('manage-gear-row-websearch');
+    const field = await startEditing('websearch');
+    for (const credits of ['', ' ', '-1', '1.5', '1000001', 'Infinity', 'bad']) {
+      fireEvent.change(field, { target: { value: credits } });
+      expect(screen.getByTestId('admin-save-confirm-btn'), JSON.stringify(credits)).toBeDisabled();
     }
-  );
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
 
   it.each(['0', '1000000'])('saves valid boundary credits %s', async credits => {
     renderTab();

@@ -89,6 +89,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/decisions',
   },
+  createDelegation: {
+    method: 'POST',
+    path: '/api/v1/delegations',
+  },
   createEmbeddings: {
     method: 'POST',
     path: '/api/v1/embeddings',
@@ -273,6 +277,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/client-config',
   },
+  getCompletionRunEvaluation: {
+    method: 'GET',
+    path: '/api/v1/completion-runs/{runId}/evaluation',
+  },
   getCompletionRunUsage: {
     method: 'GET',
     path: '/api/v1/completion-runs/{runId}/usage',
@@ -305,6 +313,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/data-lakes/{id}/research/runs/{run_id}',
   },
+  getDelegation: {
+    method: 'GET',
+    path: '/api/v1/delegations/{id}',
+  },
   getFile: {
     method: 'GET',
     path: '/api/v1/files/{id}',
@@ -316,6 +328,14 @@ export const operations = {
   getFilesByIds: {
     method: 'GET',
     path: '/api/v1/files/by-ids',
+  },
+  getFunction: {
+    method: 'GET',
+    path: '/api/v1/functions/{id}',
+  },
+  getFunctionCall: {
+    method: 'GET',
+    path: '/api/v1/functions/calls/{call_id}',
   },
   getImageJob: {
     method: 'GET',
@@ -381,6 +401,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/skills/market/listings/{id}/import',
   },
+  invokeFunction: {
+    method: 'POST',
+    path: '/api/v1/functions/{id}/invoke',
+  },
   listAgents: {
     method: 'GET',
     path: '/api/v1/agents',
@@ -436,6 +460,10 @@ export const operations = {
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',
+  },
+  listFunctions: {
+    method: 'GET',
+    path: '/api/v1/functions',
   },
   listHandoffDevices: {
     method: 'GET',
@@ -640,6 +668,10 @@ export const operations = {
   transferAgentCredits: {
     method: 'POST',
     path: '/api/v1/agents/{id}/transfer-credits',
+  },
+  undoDataLakeConfigChange: {
+    method: 'POST',
+    path: '/api/v1/data-lakes/{id}/config-history/{event_id}/undo',
   },
   unpublishArtifact: {
     method: 'DELETE',

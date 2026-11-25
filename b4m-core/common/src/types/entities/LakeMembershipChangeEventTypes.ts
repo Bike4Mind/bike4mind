@@ -88,6 +88,8 @@ export interface RecordLakeMembershipChangeInput {
   origin: LakeMembershipChangeOrigin;
   undoesEventId?: string;
   causedByEventId?: string;
+  /** A pre-minted id for the row, for a writer that must name it before the row is written. */
+  eventId?: string;
 }
 
 /**

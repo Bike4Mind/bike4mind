@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { cleanup, render } from 'ink-testing-library';
-import jwt from 'jsonwebtoken';
 import open from 'open';
 import { isBrowserOpenableUrl, isOnApiOrigin, LoginFlow } from './LoginFlow';
 import type { ConfigStore } from '../storage/ConfigStore';
@@ -66,7 +65,10 @@ describe('isOnApiOrigin', () => {
 
 describe('LoginFlow', () => {
   const tokens = {
-    access_token: jwt.sign({ id: 'u1' }, 'k'),
+    access_token: ['{"alg":"HS256","typ":"JWT"}', '{"id":"u1"}']
+      .map(part => Buffer.from(part).toString('base64url'))
+      .concat('sig')
+      .join('.'),
     refresh_token: 'r',
     expires_in: 3600,
   };

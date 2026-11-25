@@ -431,6 +431,27 @@ describe('GitHubConnectionTab destructive dialogs', () => {
 });
 
 describe('GitHubConnectionTab service account PAT and repositories', () => {
+  it('connects a PAT without an expiry while the date is unset', async () => {
+    routeGets(null);
+    mocks.post.mockResolvedValue({ data: {} });
+    renderTab();
+    fireEvent.click(within(await screen.findByTestId('admin-empty-state')).getByTestId('github-connect-pat-btn'));
+    await screen.findByTestId('github-connect-pat-dialog');
+    expect(screen.getByTestId('github-pat-expiry-input-empty')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('github-pat-input'), { target: { value: 'github_pat_abc' } });
+    routeGets(PAT_CONNECTION);
+    fireEvent.click(screen.getByTestId('github-connect-pat-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenCalledWith(
+        '/api/admin/github/connection',
+        { connectionType: 'service_account', accessToken: 'github_pat_abc', patExpiresAt: undefined },
+        { signal: expect.any(AbortSignal) }
+      )
+    );
+  });
+
   it('connects a PAT from the empty state with the same payload', async () => {
     routeGets(null);
     mocks.post.mockResolvedValue({ data: {} });
@@ -441,6 +462,7 @@ describe('GitHubConnectionTab service account PAT and repositories', () => {
     expect(screen.getByTestId('github-connect-pat-confirm-btn')).toBeDisabled();
 
     fireEvent.change(screen.getByTestId('github-pat-input'), { target: { value: 'github_pat_abc' } });
+    fireEvent.click(screen.getByTestId('github-pat-expiry-input-set-btn'));
     fireEvent.change(screen.getByTestId('github-pat-expiry-input'), { target: { value: '2027-01-31' } });
     routeGets(PAT_CONNECTION);
     fireEvent.click(screen.getByTestId('github-connect-pat-confirm-btn'));

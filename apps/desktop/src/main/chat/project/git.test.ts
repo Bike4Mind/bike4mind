@@ -14,17 +14,20 @@ import {
   uncommittedChanges,
   worktreeRecordsFrom,
 } from './git';
+import { gitFixture } from './gitFixture.testHelper';
 
-async function repository(): Promise<string> {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'b4m-git-')));
-  await git(directory, ['init', '--initial-branch=main', '--quiet']);
-  await git(directory, ['config', 'user.email', 'test@example.com']);
-  await git(directory, ['config', 'user.name', 'Test']);
-  await writeFile(join(directory, 'README.md'), 'first\n', 'utf8');
-  await git(directory, ['add', '.']);
-  await git(directory, ['commit', '--quiet', '-m', 'first']);
-  return directory;
-}
+const repository = gitFixture(
+  'b4m-git-',
+  async directory => {
+    await git(directory, ['init', '--initial-branch=main', '--quiet']);
+    await git(directory, ['config', 'user.email', 'test@example.com']);
+    await git(directory, ['config', 'user.name', 'Test']);
+    await writeFile(join(directory, 'README.md'), 'first\n', 'utf8');
+    await git(directory, ['add', '.']);
+    await git(directory, ['commit', '--quiet', '-m', 'first']);
+  },
+  []
+);
 
 describe('uncommittedChanges', () => {
   it('is empty for a clean tree, even with an untracked file in it', async () => {

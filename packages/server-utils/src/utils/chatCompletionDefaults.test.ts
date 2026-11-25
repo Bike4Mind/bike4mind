@@ -10,6 +10,15 @@ const { getEffectiveLLMApiKeysMock, getAvailableModelsMock, getLlmByModelMock } 
   getLlmByModelMock: vi.fn(),
 }));
 
+const escalationPublishMock = vi.hoisted(() => vi.fn());
+vi.mock('./eventBus', async importOriginal => {
+  const actual = await importOriginal<typeof import('./eventBus')>();
+  return {
+    ...actual,
+    ModerationEvents: { ...actual.ModerationEvents, Escalation: { publish: escalationPublishMock } },
+  };
+});
+
 const runDecisionToolMock = vi.hoisted(() => vi.fn());
 vi.mock('../decisions/runDecisionTool', () => ({ runDecisionTool: runDecisionToolMock }));
 
@@ -415,5 +424,22 @@ describe('getDefaultChatCompletionOptions', () => {
     const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
 
     expect(getDefaultChatCompletionOptions().workspaceDeniedTools).toBe(workspaceDeniedToolsSentinel);
+  }, 20000);
+
+  it('publishes a moderation escalation to the event bus and wires it into the options', async () => {
+    const { getDefaultChatCompletionOptions, publishModerationEscalation } = await import('./chatCompletionDefaults');
+    const alert = {
+      userId: 'user-1',
+      reason: 'suspend_pending',
+      categories: ['violence'],
+      hitCount: 3,
+      status: 'suspend_pending',
+    };
+    escalationPublishMock.mockResolvedValue(undefined);
+
+    await publishModerationEscalation(alert as never);
+
+    expect(escalationPublishMock).toHaveBeenCalledWith(alert);
+    expect(getDefaultChatCompletionOptions().notifyModerationEscalation).toBe(publishModerationEscalation);
   }, 20000);
 });

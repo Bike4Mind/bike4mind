@@ -1,6 +1,6 @@
 import { ICachingAdapter } from './base';
 import { ICacheStrategy, CacheUsageStats, ModelBackend } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Anthropic's hard ceiling on `cache_control` markers per request. Exceeding it fails the
@@ -194,8 +194,7 @@ export function capCacheControlMarkers(params: Record<string, unknown>, logger?:
     dropped: dropped.map(describeSite),
     limit: MAX_CACHE_CONTROL_BLOCKS,
   };
-  if (logger) logger.warn(message, detail);
-  else console.warn(message, JSON.stringify(detail));
+  (logger ?? Logger.globalInstance).warn(message, detail);
 
   return capped;
 }
@@ -340,16 +339,15 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     // the ceiling is the interesting one, so that logs at `info`; quieter requests stay at
     // `debug` rather than adding a line to every LLM call in the platform.
     //
-    // The at-ceiling line falls back to `console` like the two branches below, because the
-    // Bedrock call site passes no logger (`bedrockBackend/anthropic.ts`, see its TODO) and Bedrock
+    // The at-ceiling line falls back to the global Logger like the two branches below, because the
+    // Bedrock call site passes no logger (`bedrockBackend/anthropic.ts`) and Bedrock
     // is the backend this cap exists for - gating it on `logger` would emit the census only on the
     // path that does not reproduce. The `debug` half stays logger-only: it is the high-volume one.
     const census = { inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
     const nearCap = outbound.total >= MAX_CACHE_CONTROL_BLOCKS;
     if (nearCap) {
       const message = '[PromptCache] cache_control census at the ceiling';
-      if (logger) logger.info(message, census);
-      else console.info(message, JSON.stringify(census));
+      (logger ?? Logger.globalInstance).info(message, census);
     } else if (logger) {
       logger.debug('[PromptCache] cache_control census', census);
     }
@@ -357,13 +355,11 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     if (outbound.total > MAX_CACHE_CONTROL_BLOCKS) {
       const message = `[PromptCache] request exceeds the ${MAX_CACHE_CONTROL_BLOCKS}-block cache_control limit on arrival (${outbound.total}); capCacheControlMarkers will strip the excess before send`;
       const detail = { inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
-      if (logger) logger.warn(message, detail);
-      else console.warn(message, JSON.stringify(detail));
+      (logger ?? Logger.globalInstance).warn(message, detail);
     } else if (dropped.length > 0) {
       const message = `[PromptCache] cache_control budget exhausted (limit ${MAX_CACHE_CONTROL_BLOCKS}); skipped breakpoints: ${dropped.join(', ')}`;
       const detail = { dropped, inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
-      if (logger) logger.warn(message, detail);
-      else console.warn(message, JSON.stringify(detail));
+      (logger ?? Logger.globalInstance).warn(message, detail);
     }
 
     return modifiedParams;

@@ -15,6 +15,9 @@ import {
 } from '@bike4mind/common';
 import { toSkillMd } from '@bike4mind/common/utils/skillMd';
 import { marketVisibilityFilter, type MarketAudience } from '@bike4mind/server-utils/skillMarket/market';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'claudeMarketplace' } });
 
 /**
  * Claude Code plugin feed for an org's or Space's Skill Market listings and bundles, served by
@@ -187,7 +190,7 @@ export async function buildClaudeMarketplace(
       listing.claudePluginName = (await SkillListing.findById(listing.id).select('claudePluginName'))?.claudePluginName;
     } catch (err) {
       // Omit just this listing; one unnamable listing must not take down the whole org feed.
-      console.error('[claudeMarketplace] assigning claudePluginName failed', listing.id, err);
+      logger.error('assigning claudePluginName failed', { listingId: listing.id, error: err });
     }
   }
 

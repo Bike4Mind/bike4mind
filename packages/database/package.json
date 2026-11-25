@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/database",
-  "version": "0.4.29",
+  "version": "0.4.30",
   "private": true,
   "type": "module",
   "main": "dist/index.mjs",
@@ -29,6 +29,10 @@
     "./billing": {
       "types": "./dist/models/billing/index.d.mts",
       "default": "./dist/models/billing/index.mjs"
+    },
+    "./zero-credit-operational-usage": {
+      "types": "./dist/utils/zeroCreditOperationalUsage.d.mts",
+      "default": "./dist/utils/zeroCreditOperationalUsage.mjs"
     },
     "./ai": {
       "types": "./dist/models/ai/index.d.mts",
@@ -64,6 +68,7 @@
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/hearth": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
     "@bike4mind/resource": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@casl/ability": "^6.8.1",
@@ -73,7 +78,7 @@
     "mongoose": "^8.24.7",
     "mongoose-lean-virtuals": "^2.1.0",
     "sst": "4.17.1",
-    "typescript": "^5.9.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.12",
@@ -81,8 +86,7 @@
     "mongodb-memory-server": "^11.3.0",
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
-    "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.12",
-    "zod": "^4.6.6"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   }
 }

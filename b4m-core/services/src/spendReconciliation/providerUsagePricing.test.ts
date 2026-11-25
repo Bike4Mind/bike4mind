@@ -24,6 +24,7 @@ const row = (modelId: string, tokens: Partial<ProviderHourlyUsage> = {}): Provid
   outputTokens: 0,
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
+  inScope: true,
   ...tokens,
 });
 

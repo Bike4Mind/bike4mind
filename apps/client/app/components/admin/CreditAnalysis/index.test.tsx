@@ -7,7 +7,7 @@ import { useCreditAnalysisStore } from './store';
 
 const { stub, search, navigate } = vi.hoisted(() => ({
   stub: (id: string) => () => <div data-testid={id} />,
-  search: { creditView: undefined as string | undefined },
+  search: { creditView: undefined as string | undefined, creditTab: undefined as string | undefined },
   navigate: vi.fn(),
 }));
 vi.mock('./components/UserCreditsManager', () => ({ UserCreditsManager: stub('stub-user-credits') }));
@@ -15,6 +15,7 @@ vi.mock('./components/MarginDashboard', () => ({ MarginDashboard: stub('stub-mar
 vi.mock('./components/UsageDashboard', () => ({ UsageDashboard: stub('stub-org-usage') }));
 vi.mock('./components/PlatformUsageDashboard', () => ({ PlatformUsageDashboard: stub('stub-api-usage') }));
 vi.mock('./components/SideAppsDashboard', () => ({ SideAppsDashboard: stub('stub-side-apps') }));
+vi.mock('./components/ElevenLabsDashboard', () => ({ ElevenLabsDashboard: stub('stub-elevenlabs') }));
 vi.mock('./components/TransactionLedger', () => ({ TransactionLedger: stub('stub-ledger') }));
 vi.mock('./components/CreditAdjustmentsAuditLink', () => ({ CreditAdjustmentsAuditLink: stub('stub-adjustments') }));
 vi.mock('./components/CreditEconomy', () => ({ CreditEconomy: stub('stub-economy') }));
@@ -44,6 +45,7 @@ describe('CreditAnalyticsTab', () => {
       'org-usage': 'Org usage',
       'api-usage': 'API usage',
       'side-apps': 'Side apps',
+      elevenlabs: 'ElevenLabs',
       ledger: 'Ledger',
       adjustments: 'Adjustments',
     })) {
@@ -82,5 +84,64 @@ describe('CreditAnalyticsTab', () => {
     expect(screen.getByTestId('stub-economy')).toBeInTheDocument();
     unmount();
     search.creditView = undefined;
+  });
+
+  it('opens the Side apps sub-tab from its deep link and drops an unknown value', () => {
+    search.creditTab = 'side-apps';
+    useCreditAnalysisStore.getState().setActiveTab('users');
+    const { unmount } = render(
+      <CssVarsProvider theme={appTheme}>
+        <CreditAnalyticsTab />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('stub-side-apps')).toBeInTheDocument();
+    unmount();
+
+    search.creditTab = 'nope';
+    useCreditAnalysisStore.getState().setActiveTab('users');
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <CreditAnalyticsTab />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('stub-user-credits')).toBeInTheDocument();
+    search.creditTab = undefined;
+  });
+
+  it('renders the linked sub-tab first, before the effect syncs the store', () => {
+    const { setActiveTab } = useCreditAnalysisStore.getState();
+    useCreditAnalysisStore.setState({ activeTab: 'users', setActiveTab: () => {} });
+    search.creditTab = 'side-apps';
+    try {
+      render(
+        <CssVarsProvider theme={appTheme}>
+          <CreditAnalyticsTab />
+        </CssVarsProvider>
+      );
+      expect(useCreditAnalysisStore.getState().activeTab).toBe('users');
+      expect(screen.getByTestId('credit-analysis-side-apps-tab')).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByTestId('credit-analysis-users-tab')).toHaveAttribute('aria-selected', 'false');
+      expect(screen.queryByTestId('stub-user-credits')).toBeNull();
+      expect(screen.getByTestId('stub-side-apps')).toBeInTheDocument();
+    } finally {
+      search.creditTab = undefined;
+      useCreditAnalysisStore.setState({ setActiveTab });
+    }
+  });
+
+  it('writes the sub-tab to the URL on selection and leaves the default out', () => {
+    navigate.mockClear();
+    useCreditAnalysisStore.getState().setActiveTab('users');
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <CreditAnalyticsTab />
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByTestId('credit-analysis-side-apps-tab'));
+    const update = navigate.mock.calls.at(-1)?.[0].search as (previous: object) => Record<string, unknown>;
+    expect(update({})).toMatchObject({ creditTab: 'side-apps' });
+    fireEvent.click(screen.getByTestId('credit-analysis-users-tab'));
+    const reset = navigate.mock.calls.at(-1)?.[0].search as (previous: object) => Record<string, unknown>;
+    expect(reset({ creditTab: 'side-apps' }).creditTab).toBeUndefined();
   });
 });

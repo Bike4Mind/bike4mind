@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import type {
   IMessage,
   MessageContent,
@@ -174,7 +173,7 @@ export class ConversationContext {
 
   private buildUserMessage(input: UserInput): Message {
     const base = {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       role: 'user' as const,
       timestamp: new Date().toISOString(),
     };
@@ -192,7 +191,7 @@ export class ConversationContext {
   private buildAssistantMessage(result: AgentResult): Message {
     const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
     return {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       role: 'assistant',
       content: result.finalAnswer,
       timestamp: new Date().toISOString(),

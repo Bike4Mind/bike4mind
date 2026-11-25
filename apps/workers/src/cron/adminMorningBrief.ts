@@ -1,7 +1,7 @@
 import { connectDB } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { morningBriefDeps, runMorningBrief } from '@server/admin/morningBrief';
+import { morningBriefDeps, runMorningBrief } from '@workers/admin/morningBrief';
 
 export async function handler(event: { time?: string }) {
   if (process.env.ADMIN_MORNING_BRIEF_ENABLED !== 'true') return { status: 'disabled' };

@@ -36,6 +36,7 @@ export const FUNCTION_CONTRACT_LIMITS = {
   maxContractBytes: 32 * 1024,
   maxResultBytes: 256 * 1024,
   maxProblems: 50,
+  maxTests: 20,
 } as const;
 
 interface FunctionFieldBase {
@@ -76,11 +77,27 @@ export interface FunctionObjectField extends FunctionFieldBase {
 export type FunctionField =
   FunctionNumberField | FunctionStringField | FunctionBooleanField | FunctionArrayField | FunctionObjectField;
 
+/** A number in `expected` matches when it is within `abs` or within `rel` times the expected value; exact by default. */
+export interface FunctionTestTolerance {
+  abs?: number;
+  rel?: number;
+}
+
+/** A declared case: a full set of inputs and some of the outputs `run` should return for them. */
+export interface FunctionTestCase {
+  name: string;
+  input: Record<string, unknown>;
+  expected: Record<string, unknown>;
+  tolerance?: FunctionTestTolerance;
+}
+
 export interface FunctionContract {
   name: string;
   description: string;
   inputs: FunctionObjectField;
   outputs: FunctionObjectField;
+  /** Present only when FUNCTION declares it. Outside the projections and the review hash. */
+  tests?: FunctionTestCase[];
 }
 
 export interface FunctionContractProblem {
@@ -103,7 +120,9 @@ const ALLOWED_KEYS: Record<(typeof FIELD_TYPES)[number], readonly string[]> = {
   object: ['properties', 'required', 'additionalProperties'],
 };
 const COMMON_KEYS = ['type', 'description'];
-const CONTRACT_KEYS = ['name', 'description', 'inputs', 'outputs'];
+const CONTRACT_KEYS = ['name', 'description', 'inputs', 'outputs', 'tests'];
+const TEST_CASE_KEYS = ['name', 'input', 'expected', 'tolerance'];
+const TOLERANCE_KEYS = ['abs', 'rel'] as const;
 
 /** Every keyword a contract field may use, across all field types. */
 export const FUNCTION_FIELD_KEYWORDS: readonly string[] = [
@@ -464,6 +483,8 @@ export function parseFunctionContract(raw: unknown): FunctionContractParse {
     checkField(field, side, 1, problems);
     if (problems.length === before && !isFull(problems)) sides[side] = field as unknown as FunctionObjectField;
   }
+  const tests = own(raw, 'tests');
+  if (tests !== undefined) checkTests(tests, sides.inputs, sides.outputs, problems);
 
   if (problems.length > 0 || !sides.inputs || !sides.outputs) {
     return { ok: false, problems: capFunctionProblems(problems) };
@@ -475,8 +496,70 @@ export function parseFunctionContract(raw: unknown): FunctionContractParse {
       description: description as string,
       inputs: sides.inputs,
       outputs: sides.outputs,
+      ...(tests === undefined ? {} : { tests: tests as FunctionTestCase[] }),
     },
   };
+}
+
+/** Inputs are checked as a whole call; `expected` may name any of the outputs, each checked against its field. */
+function checkTests(
+  raw: unknown,
+  inputs: FunctionObjectField | null,
+  outputs: FunctionObjectField | null,
+  problems: FunctionContractProblem[]
+): void {
+  const { maxTests, maxDescriptionLength } = FUNCTION_CONTRACT_LIMITS;
+  if (!Array.isArray(raw)) return report(problems, 'tests', 'must be a list of test cases');
+  if (raw.length > maxTests) {
+    return report(problems, 'tests', `has ${raw.length} test cases; at most ${maxTests} are allowed`);
+  }
+  const names = new Set<string>();
+  for (let index = 0; index < raw.length && !isFull(problems); index++) {
+    const testCase: unknown = raw[index];
+    const path = join('tests', index);
+    if (!isPlainObject(testCase)) {
+      report(problems, path, 'must be an object with name, input, and expected');
+      continue;
+    }
+    refuseUnknownKeys(testCase, TEST_CASE_KEYS, path, problems);
+    const name = own(testCase, 'name');
+    if (typeof name !== 'string' || !name.trim() || name.length > maxDescriptionLength) {
+      report(problems, join(path, 'name'), `must be non-empty text of at most ${maxDescriptionLength} characters`);
+    } else if (names.has(name)) {
+      report(problems, join(path, 'name'), `repeats the test name "${name}"; each test needs its own`);
+    } else {
+      names.add(name);
+    }
+    const input = own(testCase, 'input');
+    if (!isPlainObject(input)) report(problems, join(path, 'input'), 'must be an object of input values');
+    else if (inputs) checkObjectValue(inputs, input, join(path, 'input'), problems);
+
+    const expected = own(testCase, 'expected');
+    if (!isPlainObject(expected) || Object.keys(expected).length === 0) {
+      report(problems, join(path, 'expected'), 'must be an object naming at least one output');
+    } else if (outputs) {
+      for (const key of Object.keys(expected)) {
+        const field = own(outputs.properties, key) as FunctionField | undefined;
+        const fieldPath = join(join(path, 'expected'), key);
+        if (field) checkValue(field, expected[key], fieldPath, problems);
+        else report(problems, fieldPath, 'is not an output of the contract');
+      }
+    }
+
+    const tolerance = own(testCase, 'tolerance');
+    if (tolerance === undefined) continue;
+    if (!isPlainObject(tolerance)) {
+      report(problems, join(path, 'tolerance'), 'must be an object with abs, rel, or both');
+      continue;
+    }
+    refuseUnknownKeys(tolerance, TOLERANCE_KEYS, join(path, 'tolerance'), problems);
+    for (const key of TOLERANCE_KEYS) {
+      const value = own(tolerance, key);
+      if (value !== undefined && !(isFiniteNumber(value) && value >= 0)) {
+        report(problems, join(join(path, 'tolerance'), key), 'must be a number of 0 or more');
+      }
+    }
+  }
 }
 
 function checkValue(field: FunctionField, value: unknown, path: string, problems: FunctionContractProblem[]): void {
@@ -558,6 +641,59 @@ export function validateFunctionValue(schema: FunctionObjectField, value: unknow
   const problems: FunctionContractProblem[] = [];
   checkObjectValue(schema, value, '', problems);
   return capFunctionProblems(problems);
+}
+
+export interface FunctionOutputMismatch {
+  /** Path in the output, such as `deflection` or `supports.1.moment`. */
+  path: string;
+  expected: unknown;
+  /** Undefined when `run` left the field out. */
+  actual: unknown;
+}
+
+/**
+ * The first place `actual` differs from `expected`, or null when they match. Only the fields `expected` names are
+ * compared: numbers within `tolerance`, text and true or false exactly, lists item by item; NaN or an infinity never
+ * matches.
+ */
+export function compareFunctionOutput(
+  expected: Record<string, unknown>,
+  actual: unknown,
+  tolerance: FunctionTestTolerance = {}
+): FunctionOutputMismatch | null {
+  return compareValue(expected, actual, '', tolerance);
+}
+
+function compareValue(
+  expected: unknown,
+  actual: unknown,
+  path: string,
+  tolerance: FunctionTestTolerance
+): FunctionOutputMismatch | null {
+  const mismatch = { path, expected, actual };
+  if (typeof expected === 'number') {
+    if (typeof actual !== 'number' || !Number.isFinite(expected) || !Number.isFinite(actual)) return mismatch;
+    const difference = Math.abs(actual - expected);
+    const within = difference <= (tolerance.abs ?? 0) || difference <= (tolerance.rel ?? 0) * Math.abs(expected);
+    return within ? null : mismatch;
+  }
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual) || actual.length !== expected.length) return mismatch;
+    for (let index = 0; index < expected.length; index++) {
+      const found = compareValue(expected[index], actual[index], join(path, index), tolerance);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (isPlainObject(expected)) {
+    if (!isPlainObject(actual)) return mismatch;
+    for (const key of Object.keys(expected)) {
+      const found = compareValue(expected[key], own(actual, key), join(path, key), tolerance);
+      if (found) return found;
+    }
+    return null;
+  }
+  return expected === actual ? null : mismatch;
 }
 
 export type FunctionContractChangeKind =

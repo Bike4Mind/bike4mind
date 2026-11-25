@@ -24,7 +24,13 @@ import {
 } from './sessionScripts';
 import { commandEnv, launchCommand, spawnFailure, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
-import { protectionFor, secretPaths, type SandboxedCommand } from './sandbox';
+import {
+  guardSpellingsForDecision,
+  protectionFor,
+  secretPaths,
+  type GuardSpellings,
+  type SandboxedCommand,
+} from './sandbox';
 import { folderReaches, namesRuleFile, shellReachesProtected } from '../permissions/rules';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
@@ -45,7 +51,7 @@ const MAX_TIMEOUT_MS = 300_000;
 const MIN_STREAMS_BUDGET = 2_000;
 
 /** Grace between asking the process group to stop and killing it outright. */
-const SIGKILL_DELAY_MS = 3_000;
+export const SIGKILL_DELAY_MS = 3_000;
 
 /** Long enough for the runner's final summary lines to land after the idle marker. */
 const WATCH_GRACE_MS = 1_500;
@@ -429,7 +435,8 @@ function reachesProtected(
   command: string,
   scan: ShellScan,
   protectedPaths: readonly string[],
-  permissionPaths: readonly string[]
+  permissionPaths: readonly string[],
+  spellings: GuardSpellings
 ): boolean {
   const named = [...(scan.paths ?? []), ...scan.writes].filter(
     path => !scan.readOnly || !CLAUDE_SETTINGS_NAME.test(path)
@@ -438,7 +445,7 @@ function reachesProtected(
   // The scan names a `.claude` folder itself when a write reaches it whole (`cp x .claude`, `find . -delete`).
   const replaced = [...scan.writes, ...scan.writtenTrees, ...(scan.readOnly ? [] : (scan.paths ?? []))];
   return (
-    named.some(path => withinGuarded(guarded, [path]) || protectionFor([path], 'write') !== undefined) ||
+    named.some(path => withinGuarded(guarded, [path]) || protectionFor([path], 'write', spellings) !== undefined) ||
     replaced.some(path => CLAUDE_FOLDER.test(path)) ||
     foldersReach(scan, guarded) ||
     shellReachesProtected({ script: command, ...scan, paths: named }, guarded)
@@ -446,11 +453,12 @@ function reachesProtected(
 }
 
 /** Whether a command may read what no tool reads in any mode: the app's own data or a secret store (sandbox.ts). */
-function readsSecret(scan: ShellScan, protectedPaths: readonly string[]): boolean {
+function readsSecret(scan: ShellScan, protectedPaths: readonly string[], spellings: GuardSpellings): boolean {
   const named = [...(scan.paths ?? []), ...scan.writes];
   return (
-    named.some(path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'read') !== undefined) ||
-    foldersReach(scan, [...protectedPaths, ...secretPaths()])
+    named.some(
+      path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'read', spellings) !== undefined
+    ) || foldersReach(scan, [...protectedPaths, ...secretPaths()])
   );
 }
 
@@ -524,7 +532,8 @@ export async function shellApproval(
   });
   const gitProgram = gitRunsConfiguredProgram(scan.commands) ?? scan.gitProgram ?? null;
   const protectedPaths = context.protectedPaths ?? [];
-  const touchesProtected = reachesProtected(command, scan, protectedPaths, context.uncoverablePaths ?? []);
+  const spellings = guardSpellingsForDecision();
+  const touchesProtected = reachesProtected(command, scan, protectedPaths, context.uncoverablePaths ?? [], spellings);
   const written = [...(scan.writtenPlaces ?? scan.paths ?? []), ...scan.writes, ...scan.writtenTrees];
   // Reading a protected location stops a mode only for a secret (`secret`); what a command may write there stops it.
   const writesProtected =
@@ -534,9 +543,10 @@ export async function shellApproval(
         command,
         { ...scan, paths: scan.writtenPlaces },
         protectedPaths,
-        context.uncoverablePaths ?? []
+        context.uncoverablePaths ?? [],
+        spellings
       ));
-  const secret = readsSecret(scan, protectedPaths);
+  const secret = readsSecret(scan, protectedPaths, spellings);
   const writesWhileUnresolved = (context.unresolvedProtectedPaths?.length ?? 0) > 0 && !scan.readOnly;
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
   const named = unreachable.filter(

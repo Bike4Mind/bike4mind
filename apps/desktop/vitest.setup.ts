@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll } from 'vitest';
-import { RUN_ROOT_ENV, redirectHomedir, redirectTmpdir, removeRoot } from './vitest.tempRoot';
+import { RUN_ROOT_ENV, redirectHomedir, redirectTmpdir, removeRoot, sandboxedHome } from './vitest.tempRoot';
 
 // The app reads ~/.claude/CLAUDE.md into every session's prompt, so each file gets its own HOME.
 // Parent is the run root, not tmpdir(): under --no-isolate tmpdir() is the previous file's deleted root.
@@ -11,5 +11,7 @@ const home = join(root, 'home');
 mkdirSync(home);
 redirectTmpdir(root);
 redirectHomedir(home);
+// Throws before any test runs when the redirect did not take.
+sandboxedHome();
 
 afterAll(() => removeRoot(root));

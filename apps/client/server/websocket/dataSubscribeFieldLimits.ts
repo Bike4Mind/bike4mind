@@ -103,6 +103,7 @@ export function resolveFieldLimits(
       throttle: false,
       riskSignals: false,
       signupLanding: false,
+      interventionHolds: false,
     };
   }
   if (collectionName === questCollectionName) {

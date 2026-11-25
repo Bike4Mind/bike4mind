@@ -87,7 +87,7 @@ export const routePrefix = $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? `/${
 // itself lives in routerFunctionCode.ts). routePrefix is baked in so the prefixes are the
 // literal URIs the viewer requests on EVERY stage that owns its router - '' on deployed
 // stages, '/<stage>' on `sst dev --stage shared-dev` (routeBucket registers
-// `${routePrefix}/generated`, etc.), where a bare '/generated/' would never match.
+// `${routePrefix}/org-files`, etc.), where a bare '/org-files/' would never match.
 const userFileCdnPrefixes = bareUserFileCdnPrefixes.map(prefix => `${routePrefix}${prefix}`);
 
 // Defense-in-depth CSP backstop for hosted/CDN-served user files. A user-supplied file
@@ -96,9 +96,9 @@ const userFileCdnPrefixes = bareUserFileCdnPrefixes.map(prefix => `${routePrefix
 // Function (viewer-request) plus ONE viewer-response function, with no per-route cache
 // behaviors or ResponseHeadersPolicy to attach to. The catch: SST rewrites event.request.uri
 // INSIDE the viewer-request function (verified against the SST 4.17.1 Router source), so by
-// the viewer-response stage the URI is the rewritten S3 key (e.g. /generated/x -> /x), not
+// the viewer-response stage the URI is the rewritten S3 key (e.g. /org-files/x -> /organizations/x), not
 // the public prefix. Matching prefixes at response time would therefore silently miss the
-// three rewritten prefixes (/generated, /admin-logos, /org-files) - the very case
+// rewritten prefixes (/admin-logos, /org-files) - the very case
 // this backstop exists to cover. So we stamp a marker in the viewer-REQUEST injection, which
 // SST emits as the FIRST statement of the routing function (before its own rewrite), where
 // the URI is still the original prefix; the viewer-response function then keys off that
@@ -123,12 +123,21 @@ const userFileMarkerInjection = `
 // Shared secret proving a request came through this distribution: the server function URL and the
 // ChatCompletion ALB are public, so apps/client/proxy.ts and
 // apps/client/server/chatCompletion/originVerify.ts 403 any request without it (deployed stages
-// only, via ORIGIN_VERIFY_SECRET in infra/web.ts and infra/chatCompletion.ts). The assignment
+// only, via ORIGIN_VERIFY_SECRET in infra/web.ts and infra/chatCompletion.ts), and the ALB's
+// listener rules in infra/chatCompletion.ts forward only requests carrying it. The assignment
 // replaces any inbound value (CloudFront lowercases viewer header names), so a forged header is
 // never trusted. The header name must stay in sync with both of those files.
 export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
-export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
+// Rotate by deploying with a new ORIGIN_VERIFY_SECRET_GENERATION (and DISABLE_ORIGIN_VERIFY='true'
+// until the edges have the new value, as on a first deploy). Keep it set afterwards: unsetting it
+// is a rotation too.
+const originVerifySecretGeneration = process.env.ORIGIN_VERIFY_SECRET_GENERATION || undefined;
+export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', {
+  length: 48,
+  special: false,
+  ...(originVerifySecretGeneration ? { keepers: { generation: originVerifySecretGeneration } } : {}),
+});
 const originVerifyInjection = $interpolate`
   ${authNetworkJa4Injection}
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };

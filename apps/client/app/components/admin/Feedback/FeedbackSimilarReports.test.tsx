@@ -75,6 +75,19 @@ describe('FeedbackSimilarReports', () => {
       })
     );
   });
+  it('truncates long excerpts to one line with the full text on hover and a sized status column', async () => {
+    renderSection();
+    const link = await screen.findByTestId(`feedback-similar-link-${open}`);
+    expect(link).toHaveAttribute('title', link.textContent);
+    const style = getComputedStyle(link);
+    expect([style.display, style.whiteSpace, style.textOverflow, style.overflow]).toEqual([
+      'block',
+      'nowrap',
+      'ellipsis',
+      'hidden',
+    ]);
+    expect(screen.getByRole('columnheader', { name: 'Status' }).closest('th')).toHaveStyle({ width: '7.5rem' });
+  });
   it('keeps failed apply visible and requires a new preview for changed reports', async () => {
     renderSection();
     await userEvent.click(await screen.findByTestId('feedback-similar-close-btn'));

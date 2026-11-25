@@ -6,7 +6,7 @@ import { createPublicKey, verify, type KeyObject } from 'node:crypto';
  * The signed message is this context line, the manifest's file name and then the manifest bytes exactly
  * as published, so a signature made for one platform's manifest never verifies as another's.
  * Must stay in sync with scripts/sign-update-manifests.mjs, which writes the `.sig` files in CI;
- * signUpdateManifests.test.ts signs with that script and verifies here.
+ * update.test.ts signs with that script and verifies here.
  */
 export const MANIFEST_SIGNATURE_CONTEXT = 'b4m-desktop-update-manifest-v1';
 

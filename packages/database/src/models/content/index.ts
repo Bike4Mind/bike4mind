@@ -5,6 +5,7 @@ export * from './ArtifactModel';
 export * from './ArtifactVersionModel';
 export * from './AssistantBriefModel';
 export * from './AssistantInstructionModel';
+export * from './DelegatedItemModel';
 export * from './BriefcasePromptModel';
 export * from './OrganizationLibraryModel';
 export * from './FabFileModel';

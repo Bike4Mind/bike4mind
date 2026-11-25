@@ -24,7 +24,6 @@ import {
 } from '@bike4mind/utils';
 import { GENERATED_AUDIO_OFFLOAD_PREFIX, type GeneratedAssetLineageEntry } from '@bike4mind/common';
 import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
@@ -249,7 +248,7 @@ export const prepareFabFile = async (
   }
 
   let filePath = params.prefix ? `${params.prefix}/` : '';
-  filePath += `${uuidv4()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
+  filePath += `${crypto.randomUUID()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
 
   if (objectKey) filePath = objectKey;
 

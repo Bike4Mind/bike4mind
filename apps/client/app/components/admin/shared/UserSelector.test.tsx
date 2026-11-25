@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -140,8 +140,19 @@ describe('UserSelector', () => {
 
   it('updates the search as the user types', async () => {
     renderSelector();
-    await userEvent.type(input(), 'gra');
-    expect(input().value).toBe('gra');
+    // Fake the clock lodash debounce reads so its 300ms wait is advanced, not waited out. Testing
+    // Library drains each userEvent action with a setTimeout(0) it only advances through a global
+    // `jest`, so lend it vitest's clock for the fake window.
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.stubGlobal('jest', { advanceTimersByTime: vi.advanceTimersByTime });
+    try {
+      await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).type(input(), 'gra');
+      expect(input().value).toBe('gra');
+      await act(() => vi.advanceTimersByTimeAsync(300));
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
     await waitFor(() =>
       expect(mockUseGetUsers).toHaveBeenLastCalledWith({
         search: 'gra',

@@ -44,13 +44,11 @@ describe('generatedMediaPurgeQueue', () => {
     expect(Number(budget?.[1])).toBeLessThan(minutes(subscription(), 'timeout'));
   });
 
-  it('subscribes the handler with the VPC, bucket, distribution id and its own queue, one record at a time', () => {
+  it('subscribes the handler with the VPC, bucket and its own queue, one record at a time', () => {
     const sub = subscription();
     expect(sub).toMatch(/handler:\s*'apps\/workers\/src\/queueHandlers\/generatedMediaPurge\.dispatch'/);
     expect(sub).toMatch(/vpc:\s*lambdaVpc/);
-    expect(sub).toMatch(
-      /link:\s*\[\.\.\.allSecrets,\s*generatedImagesBucket,\s*routerDistributionId,\s*generatedMediaPurgeQueue\]/
-    );
+    expect(sub).toMatch(/link:\s*\[\.\.\.allSecrets,\s*generatedImagesBucket,\s*generatedMediaPurgeQueue\]/);
     expect(sub).toMatch(/\.\.\.SINGLE_RECORD_BATCH,/);
   });
 
@@ -62,10 +60,8 @@ describe('generatedMediaPurgeQueue', () => {
     expect(sub).not.toMatch(/reserved/);
   });
 
-  it('grants CreateInvalidation on the router distribution only', () => {
-    expect(subscription()).toMatch(
-      /actions:\s*\['cloudfront:CreateInvalidation'\],\s*resources:\s*\[router\.nodes\.cdn\.apply\(cdn => cdn\.nodes\.distribution\.arn\)\]/
-    );
+  it('holds no CloudFront permission', () => {
+    expect(subscription()).not.toMatch(/cloudfront/i);
   });
 
   it('exposes the queue to API Lambdas, alarms on its DLQ and registers it for redrive', () => {

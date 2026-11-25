@@ -7,3 +7,4 @@ export * from './render';
 export * from './ffmpeg';
 export * from './voiceCaptions';
 export * from './productReferences';
+export * from './director';

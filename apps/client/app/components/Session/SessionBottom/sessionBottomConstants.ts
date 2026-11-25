@@ -2,10 +2,6 @@ import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { handleModelsCommand } from '@client/app/components/commands/ModelsCommand';
 import { handleRollCommand } from '@client/app/components/commands/RollCommand';
 import { handleSetKeyCommand } from '@client/app/components/commands/SetKeyCommand';
-import {
-  handleImageEditCommand,
-  handleImageGenerationCommand,
-} from '@client/app/components/commands/ImageGenerationCommand';
 import { handleCreateAgentCommand } from '@client/app/components/commands/CreateAgentCommand';
 import { handleFeedbackCommand } from '@client/app/components/commands/FeedbackCommand';
 import { CommandHandlers } from '@client/app/utils/commands';
@@ -24,8 +20,6 @@ export const commandHandlers: CommandHandlers = {
   '/roll': handleRollCommand,
   '/models': handleModelsCommand,
   '/key': handleSetKeyCommand,
-  '/gen_image': handleImageGenerationCommand,
-  '/edit_image': handleImageEditCommand,
   '/create_agent': handleCreateAgentCommand,
   '/feedback': handleFeedbackCommand,
 };

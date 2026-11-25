@@ -797,6 +797,14 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
 }
 
 // The confirm route executes only allowlisted write tools, so any other pending action gets no card.
+const formatConfirmedOutput = (output: string) => {
+  try {
+    return JSON.stringify(JSON.parse(output), null, 2);
+  } catch {
+    return output;
+  }
+};
+
 export const PendingActionButtons: FC<PendingActionButtonsProps> = props =>
   isConfirmableMcpTool(props.pendingAction.tool) || isCustomConnectorAction(props.pendingAction) ? (
     <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
@@ -811,7 +819,7 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
   const [isConfirmed, setIsConfirmed] = useState(() => parsedData?.status === 'confirmed');
   const [isCancelled, setIsCancelled] = useState(() => parsedData?.status === 'cancelled');
   const [isReplaced, setIsReplaced] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; message: string; url?: string } | null>(
+  const [result, setResult] = useState<{ success: boolean; message: string; url?: string; output?: string } | null>(
     () => parsedData?.result || null
   );
 
@@ -899,6 +907,15 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
               {result.url}
             </a>
           </Typography>
+        )}
+        {typeof result?.output === 'string' && (
+          <Box
+            component="pre"
+            data-testid="mcp-confirm-output"
+            sx={{ m: 0, mt: 1, p: 1, maxHeight: 300, overflow: 'auto', fontSize: 'xs', whiteSpace: 'pre-wrap' }}
+          >
+            {formatConfirmedOutput(result.output)}
+          </Box>
         )}
       </Box>
     );

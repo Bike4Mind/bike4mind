@@ -6,6 +6,7 @@ import { createMongoReplSet, MONGO_TEST_TIMEOUT_MS, settleAutoIndexBuilds } from
 import { UserApiKey } from '../auth/UserApiKeyModel';
 import { CreditTransaction, creditTransactionRepository } from './CreditTransactionModel';
 import { clearExchangeAttributionCache, warmExchangeAttribution } from './exchangeAttribution';
+import { Logger } from '@bike4mind/observability';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -100,7 +101,7 @@ describe('createTransaction exchange attribution', () => {
     vi.spyOn(UserApiKey, 'findById').mockImplementation(() => {
       throw new Error('db down');
     });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const tx = await charge(key, CreditHolderType.User, USER);
     expect(tx).not.toBeNull();
     expect(tx?.oauthClientId).toBeUndefined();
@@ -110,7 +111,7 @@ describe('createTransaction exchange attribution', () => {
 
   it('never reads inside a transaction on a cold cache', async () => {
     const key = await exchangeKey('paid');
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const spy = vi.spyOn(UserApiKey, 'findById');
     await withTransaction(async () => {
       await charge(key, CreditHolderType.User, USER);

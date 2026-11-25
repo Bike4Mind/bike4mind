@@ -80,16 +80,22 @@ beforeEach(() => {
 });
 
 describe('AdminFilesTab', () => {
-  it('lists files under a page header with the upload drop zone', async () => {
+  it('lists files under a page header with the upload drop zone, with one stable subscription callback', async () => {
     renderTab();
     const row = await screen.findByTestId('admin-files-row-f1');
-    expect(screen.getByRole('heading', { level: 1, name: /Files/ })).toHaveTextContent('(3)');
+    const heading = within(screen.getByTestId('admin-page-header')).getByRole('heading', { level: 1 });
+    expect(heading).toHaveTextContent('Files');
+    expect(heading).toHaveTextContent('(3)');
     expect(screen.getByTestId('admin-files-dropzone')).toBeInTheDocument();
     expect(row).toHaveTextContent('files/f1.pdf');
     expect(row).toHaveTextContent('Quarterly Reports');
     expect(within(row).getByTestId('admin-files-status-f1')).toHaveTextContent('Complete');
     expect(screen.getByTestId('admin-files-status-f2')).toHaveTextContent('Pending');
     expect(screen.getByTestId('admin-files-row-f3')).toHaveTextContent('Deleted user');
+
+    const callbacks = mocks.subscribe.mock.calls.map(call => call[2]);
+    expect(callbacks.length).toBeGreaterThan(1);
+    expect(new Set(callbacks).size).toBe(1);
   });
 
   it('offers delete only on files the signed-in admin uploaded', async () => {
@@ -188,14 +194,6 @@ describe('AdminFilesTab', () => {
       }
     }
   );
-
-  it('keeps the subscription callback stable once the list loads', async () => {
-    renderTab();
-    await screen.findByTestId('admin-files-row-f1');
-    const callbacks = mocks.subscribe.mock.calls.map(call => call[2]);
-    expect(callbacks.length).toBeGreaterThan(1);
-    expect(new Set(callbacks).size).toBe(1);
-  });
 
   it('tells FilePond when an in-flight upload is cancelled', async () => {
     mocks.upload.mockReturnValue(new Promise(() => undefined));

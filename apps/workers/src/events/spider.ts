@@ -18,7 +18,6 @@ import { sessionRepository } from '@bike4mind/database/auth';
 import { Quest } from '@bike4mind/database/content';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -299,7 +298,7 @@ export async function processSession(
 
     // 2. Curation - trigger if never curated
     if (operations.curation) {
-      const curationJobId = uuidv4();
+      const curationJobId = crypto.randomUUID();
       const payload = {
         sessionId: session.id,
         userId: config.userId,

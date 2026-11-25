@@ -1,11 +1,10 @@
 import React from 'react';
-import { Button, Card, Stack, Typography } from '@mui/joy';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import RefreshIcon from '@mui/icons-material/Refresh';
+import { Box } from '@mui/joy';
+import { ErrorState } from '../../shared';
 
 interface AnalyticsErrorCardProps {
   error: unknown;
-  onRetry?: () => void;
+  onRetry: () => void;
   title?: string;
   testId?: string;
 }
@@ -13,7 +12,7 @@ interface AnalyticsErrorCardProps {
 /**
  * A failed analytics request must not look like an empty one: the User Activity endpoint
  * returned 502 for weeks while the UI showed "No data found", because the fetch helper
- * turned every error into an empty array.
+ * turned errors into an empty array. ErrorState's role="alert" announces the swap.
  */
 export const AnalyticsErrorCard: React.FC<AnalyticsErrorCardProps> = ({
   error,
@@ -21,26 +20,10 @@ export const AnalyticsErrorCard: React.FC<AnalyticsErrorCardProps> = ({
   title = 'Could not load analytics',
   testId = 'analytics-error',
 }) => (
-  <Card
-    variant="outlined"
-    // The whole point of this card is that a failure does not read as an empty result. A screen
-    // reader gets that only from the live region: the tab swaps content in place, no focus move.
-    role="alert"
-    aria-live="assertive"
-    sx={{ p: 4, textAlign: 'center' }}
-    data-testid={testId}
-  >
-    <Stack alignItems="center" spacing={2}>
-      <ErrorOutlineIcon sx={{ fontSize: 48, color: 'danger.500' }} />
-      <Typography level="body-lg">{title}</Typography>
-      <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-        {error instanceof Error ? error.message : 'The request failed.'}
-      </Typography>
-      {onRetry && (
-        <Button size="sm" startDecorator={<RefreshIcon />} onClick={onRetry}>
-          Try again
-        </Button>
-      )}
-    </Stack>
-  </Card>
+  <Box data-testid={testId}>
+    <ErrorState
+      message={`${title}: ${error instanceof Error ? error.message : 'The request failed.'}`}
+      onRetry={onRetry}
+    />
+  </Box>
 );

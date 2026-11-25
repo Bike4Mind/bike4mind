@@ -20,6 +20,7 @@ export type HealthRow =
       endpoint: string;
       statusClass: StatusClass;
       completionOutcome?: string | null;
+      completionFailureCode?: string | null;
     })
   | (RowBase & {
       source: 'quest';
@@ -48,11 +49,13 @@ export function classifyHealthRow(row: HealthRow): HealthEvent | null {
       });
       if (outcome === 'completed') return { kind: 'success' };
       if (!outcome) return null;
-      return {
-        kind: 'failure',
-        ourFault: true,
-        reason: row.completionOutcome === outcome ? `completion_${outcome}` : `http_5xx ${row.endpoint}`,
-      };
+      const reason =
+        row.completionOutcome === outcome
+          ? outcome === 'failed' && row.completionFailureCode
+            ? `completion_failed ${row.completionFailureCode}`
+            : `completion_${outcome}`
+          : `http_5xx ${row.endpoint}`;
+      return { kind: 'failure', ourFault: true, reason };
     }
     case 'quest': {
       const outcome = classifyQuestOutcome(row);

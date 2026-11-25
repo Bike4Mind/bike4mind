@@ -147,7 +147,7 @@ const ListingRow: FC<{ listing: MyListing }> = ({ listing }) => {
             <Chip size="sm" color={status.color} variant="solid">
               {status.label}
             </Chip>
-            <VisibilityChip visibility={listing.visibility} />
+            <VisibilityChip visibility={listing.visibility} spaceId={listing.spaceId} />
             {listing.currentVersion ? (
               <Chip size="sm" variant="outlined">
                 live: v{listing.currentVersion}

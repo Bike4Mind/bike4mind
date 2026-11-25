@@ -74,6 +74,11 @@ class ComposerAttachments(
         state.value.map { it.id }.forEach(::remove)
     }
 
+    /** After a turn carrying [fileIds] went out: lets go of just those files, so attachments added since stay. */
+    fun clear(fileIds: Collection<String>) {
+        state.value.filter { (it.phase as? ComposerAttachment.Phase.Ready)?.fileId in fileIds }.forEach { remove(it.id) }
+    }
+
     private fun start(id: String) {
         val source = sources[id] ?: return
         uploads[id] = scope.launch {

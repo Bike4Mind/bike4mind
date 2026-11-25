@@ -24,6 +24,7 @@ import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.g
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
+import { useSpacesEnabled } from '@client/app/hooks/useSpacesEnabled';
 import { useUser } from '@client/app/contexts/UserContext';
 import { userIsDeveloper } from '@client/app/utils/user';
 import { useOptiVisible } from '@client/app/hooks/data/opti';
@@ -118,6 +119,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const [moreOpen, setMoreOpen] = useState(false);
 
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
+  // Hidden until the authenticated settings land: EnableSpaces is not in the public projection.
+  const { enabled: isSpacesEnabled } = useSpacesEnabled();
   // Mirror the footer gating: entitlement-aware opti access (admin/developer/OptiHashi Pro, plus
   // email-domain grantees) sees OptiHashi without flipping the feature flag, unless the user hid
   // the workspace in Settings (display only; /opti itself stays reachable).
@@ -211,6 +214,25 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               closeOnMobile();
               // @ts-expect-error - /opti is a premium route, not in static route tree
               navigate({ to: '/opti' });
+            },
+          },
+        ]
+      : []),
+    ...(isSpacesEnabled
+      ? [
+          {
+            key: 'spaces',
+            priority: 2,
+            label: t('sidenav.spaces', 'Spaces'),
+            icon: (
+              <NavIcon>
+                <Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
+            isActive: location.pathname.startsWith('/spaces'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/spaces' });
             },
           },
         ]

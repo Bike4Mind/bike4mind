@@ -1,6 +1,5 @@
 import { createHashHistory, createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/react-router';
-import { isImportKind, type ClaudeImportKind } from '@shared/claudeImport';
-import { isSettingsSection, type SettingsSection } from './chat/SettingsPanel';
+import { resolveSettingsLink, type SettingsLink } from './chat/settingsNavigation';
 import { AppMenuBridge } from './appMenu/AppMenuBridge';
 import { DevLogsWindow } from './devlog/DevLogsWindow';
 import { AppErrorFallback } from './errors/AppErrorFallback';
@@ -9,6 +8,7 @@ import { Home } from './routes/Home';
 import { Profile } from './routes/Profile';
 import { Billing } from './routes/Billing';
 import { Settings } from './routes/Settings';
+import { OrchestrateMini } from './orchestrateMini/OrchestrateMini';
 import { MiniTavern } from './watch/MiniTavern';
 
 const rootRoute = createRootRoute({
@@ -43,13 +43,11 @@ const billingRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  validateSearch: (search: Record<string, unknown>): { section?: SettingsSection; focus?: ClaudeImportKind } => ({
-    ...(isSettingsSection(search.section) ? { section: search.section } : {}),
-    ...(isImportKind(search.focus) ? { focus: search.focus } : {}),
-  }),
+  // Old `section` values (servers, import, worktrees) still land on the row that replaced them.
+  validateSearch: (search: Record<string, unknown>): SettingsLink => resolveSettingsLink(search),
   component: function SettingsRoute() {
-    const { section, focus } = settingsRoute.useSearch();
-    return <Settings section={section ?? 'general'} importFocus={focus} />;
+    const { section, setting, focus } = settingsRoute.useSearch();
+    return <Settings section={section ?? 'general'} setting={setting} importFocus={focus} />;
   },
 });
 
@@ -72,6 +70,16 @@ const miniTavernRoute = createRoute({
   },
 });
 
+// The always-on-top Orchestrate mini window (main/orchestrateMini). Its preload exposes only
+// window.b4mOrchestrateMini, so nothing on this route may reach for window.b4m.
+const orchestrateMiniRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/orchestrate-mini',
+  component: function OrchestrateMiniRoute() {
+    return <OrchestrateMini />;
+  },
+});
+
 // A packaged build loads the renderer over file://, which has no origin for the History
 // API to push against. Hash history is the one mode that behaves the same there as it
 // does against the dev server.
@@ -83,6 +91,7 @@ export const router = createRouter({
     settingsRoute,
     devLogsRoute,
     miniTavernRoute,
+    orchestrateMiniRoute,
   ]),
   history: createHashHistory(),
   // Every route's render errors land here; main.tsx's AppErrorBoundary covers what sits outside.

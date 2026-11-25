@@ -5,6 +5,8 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const ORG = { id: 'org1', name: 'Acme Labs' };
+const ORG_OWNER = { kind: 'organization', ...ORG };
+const SPACE = { id: 'sp1', name: 'Platform' };
 const approvedListing = {
   id: 'l1',
   sourceSkillId: 's1',
@@ -20,6 +22,7 @@ const h = vi.hoisted(() => ({
   skill: {} as Record<string, unknown>,
   listings: [] as Array<Record<string, unknown>>,
   orgs: [] as Array<{ id: string; name: string }>,
+  spaces: [] as Array<{ id: string; name: string }>,
   listingsEnabled: [] as Array<boolean | undefined>,
   meEnabled: [] as Array<boolean | undefined>,
   listingsPending: false,
@@ -41,7 +44,7 @@ vi.mock('@client/app/hooks/data/skillMarket', () => ({
   },
   useMarketMe: (opts: { enabled?: boolean }) => {
     h.meEnabled.push(opts.enabled);
-    return { data: { organizations: h.orgs }, isPending: h.mePending };
+    return { data: { organizations: h.orgs, spaces: h.spaces }, isPending: h.mePending };
   },
 }));
 vi.mock('@client/app/components/SkillsManagement/SkillShareDialog', () => ({ default: () => null }));
@@ -73,6 +76,7 @@ describe('SkillDetailPage team marketplace', () => {
     h.skill = { id: 's1', userId: 'u1', name: 'hello-team', description: 'd', body: 'b' };
     h.listings = [approvedListing];
     h.orgs = [ORG];
+    h.spaces = [];
     h.listingsEnabled = [];
     h.meEnabled = [];
     h.listingsPending = false;
@@ -80,7 +84,17 @@ describe('SkillDetailPage team marketplace', () => {
   });
 
   it('passes the approved org listing to the dialog for the owner', () => {
-    expect(openDialog()).toEqual({ org: ORG, pluginName: 'hello-team-abc123', skillName: 'Hello Team' });
+    expect(openDialog()).toEqual({ owner: ORG_OWNER, pluginName: 'hello-team-abc123', skillName: 'Hello Team' });
+  });
+
+  it('passes an approved Space listing to the dialog with the Space as owner', () => {
+    h.spaces = [SPACE];
+    h.listings = [{ ...approvedListing, visibility: 'space', organizationId: undefined, spaceId: SPACE.id }];
+    expect(openDialog()).toEqual({
+      owner: { kind: 'space', ...SPACE },
+      pluginName: 'hello-team-abc123',
+      skillName: 'Hello Team',
+    });
   });
 
   it('fetches listings only once the dialog opens', () => {
@@ -108,7 +122,7 @@ describe('SkillDetailPage team marketplace', () => {
 
   it('still offers the tab when the listing has no plugin name yet', () => {
     h.listings = [{ ...approvedListing, claudePluginName: undefined }];
-    expect(openDialog()).toEqual({ org: ORG, skillName: 'Hello Team' });
+    expect(openDialog()).toEqual({ owner: ORG_OWNER, skillName: 'Hello Team' });
   });
 
   it.each([

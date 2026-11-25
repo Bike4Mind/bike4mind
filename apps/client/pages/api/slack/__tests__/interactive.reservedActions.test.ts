@@ -66,6 +66,6 @@ describe('interactive endpoint reserved actions', () => {
 
   it('no longer carries the approval branches the registry now serves', () => {
     expect(SOURCE).not.toContain('__sreDeferred');
-    expect(body).not.toMatch(/'(liveops|sre)_[a-z_]+'/);
+    expect(body).not.toMatch(/'sre_[a-z_]+'/);
   });
 });

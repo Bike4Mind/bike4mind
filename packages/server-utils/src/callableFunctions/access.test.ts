@@ -9,8 +9,11 @@ const state = vi.hoisted(() => ({
   orgIds: [] as string[],
   platformValue: false,
   orgOverrides: {} as Record<string, boolean>,
+  mcpPlatformValue: false,
+  mcpOrgOverrides: {} as Record<string, boolean>,
   readError: null as Error | null,
   scopes: [] as Scope[],
+  mcpScopes: [] as Scope[],
   options: [] as unknown[],
 }));
 
@@ -29,6 +32,14 @@ vi.mock('@bike4mind/services', () => ({
         ? { organizationId: caller.organizationId, owner: { id: caller.organizationId, type: 'Organization' } }
         : { owner: { id: caller.userId, type: 'User' } },
     resolveScopedSetting: vi.fn(async (key: string, scope: Scope, _db: unknown, options: unknown) => {
+      if (key === 'EnableCallableFunctionsMcp') {
+        state.mcpScopes.push(scope);
+        const override = scope.organizationId ? state.mcpOrgOverrides[scope.organizationId] : undefined;
+        return {
+          value: override ?? state.mcpPlatformValue,
+          source: override === undefined ? 'platform' : 'organization',
+        };
+      }
       expect(key).toBe('EnableCallableFunctions');
       state.scopes.push(scope);
       state.options.push(options);
@@ -43,7 +54,8 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-const { assertCallableFunctionsEnabled, resolveCallableFunctionsEnabled } = await import('./access');
+const { assertCallableFunctionsEnabled, resolveCallableFunctionsEnabled, resolveCallableFunctionsMcpEnabled } =
+  await import('./access');
 const { resolveAgentArtifactEmissionPrompt } = await import('../utils/artifactGate');
 
 const user = { id: 'user-1' };
@@ -53,8 +65,11 @@ beforeEach(() => {
   state.orgIds = [];
   state.platformValue = false;
   state.orgOverrides = {};
+  state.mcpPlatformValue = false;
+  state.mcpOrgOverrides = {};
   state.readError = null;
   state.scopes = [];
+  state.mcpScopes = [];
   state.options = [];
 });
 
@@ -130,6 +145,41 @@ describe('resolveCallableFunctionsEnabled', () => {
     state.platformValue = true;
     state.readError = new Error('overlay unavailable');
     await expect(resolveCallableFunctionsEnabled(user)).rejects.toThrow('overlay unavailable');
+  });
+});
+
+describe('resolveCallableFunctionsMcpEnabled', () => {
+  it('is off by default while callable functions are on', async () => {
+    state.platformValue = true;
+    await expect(resolveCallableFunctionsMcpEnabled(user)).resolves.toBe(false);
+  });
+
+  it('is off when callable functions are off, without reading the MCP setting', async () => {
+    state.mcpPlatformValue = true;
+    await expect(resolveCallableFunctionsMcpEnabled(user)).resolves.toBe(false);
+    expect(state.mcpScopes).toEqual([]);
+  });
+
+  it('is on when both resolve on for every organization of the person', async () => {
+    state.orgIds = ['org-a', 'org-b'];
+    state.orgOverrides = { 'org-a': true, 'org-b': true };
+    state.mcpOrgOverrides = { 'org-a': true, 'org-b': true };
+    await expect(resolveCallableFunctionsMcpEnabled(user)).resolves.toBe(true);
+    expect(state.mcpScopes.map(scope => scope.organizationId)).toEqual(['org-a', 'org-b']);
+  });
+
+  it('is off when one organization leaves the MCP setting off', async () => {
+    state.orgIds = ['org-a', 'org-b'];
+    state.platformValue = true;
+    state.mcpOrgOverrides = { 'org-a': true };
+    await expect(resolveCallableFunctionsMcpEnabled(user)).resolves.toBe(false);
+  });
+
+  it('uses the value at the person scope when they belong to no organization', async () => {
+    state.platformValue = true;
+    state.mcpPlatformValue = true;
+    await expect(resolveCallableFunctionsMcpEnabled(user)).resolves.toBe(true);
+    expect(state.mcpScopes).toEqual([{ owner: { id: 'user-1', type: 'User' } }]);
   });
 });
 

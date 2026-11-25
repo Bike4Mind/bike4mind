@@ -5,7 +5,14 @@
  * and the repository are mocked: their behaviour is covered in services and database.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope, CreditHolderType, type IGenerationJobDocument } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  ForbiddenError,
+  NotFoundError,
+  UnprocessableEntityError,
+  type IGenerationJobDocument,
+} from '@bike4mind/common';
 import { asUser, fire, h, JOB_ID, resetHarness, validateWithScopes } from '@server/generations/__test__/routeHarness';
 
 vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
@@ -41,6 +48,13 @@ vi.mock('@bike4mind/server-utils/generations/signOutputUrl', async () =>
   (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
 vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
+
+const paidCallRun = vi.hoisted(() => ({
+  resolve: vi.fn(async (_req: unknown, run: { runId: string } | undefined, _organizationId?: string | null) =>
+    run ? { attribution: { ...run, purpose: 'tool' as const }, billingOrganizationId: null } : undefined
+  ),
+}));
+vi.mock('@server/completionRuns/paidCallRun', () => ({ resolvePaidCallRun: paidCallRun.resolve }));
 
 const { createImageJobs } = vi.hoisted(() => ({ createImageJobs: vi.fn() }));
 vi.mock('@bike4mind/services/imageJobs', async orig => ({
@@ -430,5 +444,68 @@ describe('GET /api/v1/image-jobs', () => {
     await handler(req, res);
     expect(h.listByRequester).toHaveBeenCalledWith(expect.objectContaining({ requestedBy: 'member-a' }));
     expect(h.listByRequester.mock.calls[0][0]).not.toHaveProperty('ownerId');
+  });
+});
+
+describe('POST /api/v1/image-jobs with a completion run', () => {
+  beforeEach(resetHarness);
+  const RUN_ID = '0b6f3c1e-8a52-4c4e-9d55-3f0a6f2c7d11';
+  const runBody = { runId: RUN_ID, role: 'worker' as const, taskId: 'task-1' };
+  const attribution = { ...runBody, purpose: 'tool' as const };
+
+  it("bills the run's account and hands the run attribution to the domain", async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    paidCallRun.resolve.mockResolvedValueOnce({ attribution, billingOrganizationId: 'run-org' });
+    createImageJobs.mockResolvedValue(okResult());
+    const { req, res } = post({ ...base, run: runBody });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(paidCallRun.resolve).toHaveBeenCalledWith(expect.anything(), runBody, undefined);
+    expect(h.resolveBillingOrgId).not.toHaveBeenCalled();
+    const input = createImageJobs.mock.calls[0][0];
+    expect(input.user).toMatchObject({ id: 'user-1', organizationId: 'run-org' });
+    expect(input.run).toEqual(attribution);
+  });
+
+  it('passes organization_id to the run check, which refuses a different account (403)', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    paidCallRun.resolve.mockRejectedValueOnce(
+      new ForbiddenError('This run bills a different account', { errorCode: 'billing_organization_mismatch' })
+    );
+    const { req, res } = post({ ...base, run: runBody, organization_id: null });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(paidCallRun.resolve).toHaveBeenCalledWith(expect.anything(), runBody, null);
+    expect(createImageJobs).not.toHaveBeenCalled();
+  });
+
+  it("refuses another caller's run (404) before creating a job", async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    paidCallRun.resolve.mockRejectedValueOnce(new NotFoundError('Run not found', { errorCode: 'run_not_found' }));
+    const { req, res } = post({ ...base, run: runBody });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'run_not_found' });
+    expect(createImageJobs).not.toHaveBeenCalled();
+  });
+
+  it('answers 422 run_budget_exhausted when the jobs do not fit the run', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    createImageJobs.mockRejectedValue(
+      new UnprocessableEntityError('run budget used up', { errorCode: 'run_budget_exhausted' })
+    );
+    const { req, res } = post({ ...base, run: runBody });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'run_budget_exhausted' });
+  });
+
+  it('sends no run to the domain when none is given', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    createImageJobs.mockResolvedValue(okResult());
+    const { req, res } = post(base);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(createImageJobs.mock.calls[0][0]).not.toHaveProperty('run');
   });
 });

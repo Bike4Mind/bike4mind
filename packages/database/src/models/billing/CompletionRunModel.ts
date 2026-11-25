@@ -1,6 +1,6 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import mongoose, { Schema } from 'mongoose';
-import { CreditHolderType } from '@bike4mind/common';
+import { BadRequestError, CompletionEvaluationStateSchema, CreditHolderType, HTTPError } from '@bike4mind/common';
 
 /** Who a completion run's spend is billed to: the user, or the organization an org-billed key draws on. */
 export type CompletionRunOwnerType = CreditHolderType.User | CreditHolderType.Organization;
@@ -17,6 +17,7 @@ export type CompletionRunOwnerType = CreditHolderType.User | CreditHolderType.Or
  * (apps/client/server/billing/completionCreditHolds.ts, apps/workers/src/cron/creditHoldSweep.ts).
  */
 export type ICompletionRun = {
+  evaluation?: import('@bike4mind/common').CompletionEvaluationState;
   runId: string;
   userId: string;
   ownerType: CompletionRunOwnerType;
@@ -60,6 +61,7 @@ const CompletionRunSchema = new Schema<CompletionRunRecord>(
     rootSessionId: { type: String, required: false, immutable: true },
     budgetCredits: { type: Number, required: false, min: 1 },
     committedCredits: { type: Number, required: false },
+    evaluation: { type: Schema.Types.Mixed, required: false },
   },
   { timestamps: true, versionKey: false, strict: 'throw' }
 );
@@ -85,26 +87,92 @@ function toCompletionRun(record: CompletionRunRecord): ICompletionRun {
       committedCredits: record.committedCredits ?? 0,
     }),
     createdAt: record.createdAt,
+    ...(record.evaluation && { evaluation: record.evaluation }),
   };
 }
 
 export class CompletionRunRepository {
   async create(input: CreateCompletionRunInput): Promise<ICompletionRun> {
-    const created = await CompletionRunModel.create({
-      _id: randomUUID(),
-      userId: input.userId,
-      ownerType: input.ownerType,
-      ownerId: input.ownerId,
-      apiKeyId: input.apiKeyId,
-      rootSessionId: input.rootSessionId,
-      ...(input.budgetCredits !== undefined && { budgetCredits: input.budgetCredits, committedCredits: 0 }),
-    });
-    return toCompletionRun(created.toObject());
+    if (input.evaluation && !input.rootSessionId)
+      throw new BadRequestError('Evaluation requires a stable rootSessionId.');
+    const identity = input.evaluation
+      ? createHash('sha256')
+          .update(JSON.stringify(['evaluation-v1', input.userId, input.ownerType, input.ownerId, input.rootSessionId]))
+          .digest('hex')
+      : undefined;
+    // Reuse the unique _id index so mint retries are safe before any new index deploys.
+    const runId = identity
+      ? `${identity.slice(0, 8)}-${identity.slice(8, 12)}-4${identity.slice(13, 16)}-8${identity.slice(17, 20)}-${identity.slice(20, 32)}`
+      : randomUUID();
+    try {
+      const created = await CompletionRunModel.create(
+        [
+          {
+            _id: runId,
+            userId: input.userId,
+            ownerType: input.ownerType,
+            ownerId: input.ownerId,
+            apiKeyId: input.apiKeyId,
+            rootSessionId: input.rootSessionId,
+            ...(input.evaluation && { evaluation: input.evaluation }),
+            ...(input.budgetCredits !== undefined && { budgetCredits: input.budgetCredits, committedCredits: 0 }),
+          },
+        ],
+        { writeConcern: { w: 'majority' } }
+      );
+      return toCompletionRun(created[0].toObject());
+    } catch (error) {
+      if (!input.evaluation || !(error instanceof Error) || !('code' in error) || error.code !== 11000) throw error;
+      const existing = await this.findById(runId);
+      const policy = (limits: import('@bike4mind/common').CompletionEvaluationLimits) =>
+        JSON.stringify({
+          version: limits.version,
+          maxProviderUsd: limits.maxProviderUsd,
+          maxTokens: limits.maxTokens,
+          maxRequests: limits.maxRequests,
+          modelIds: [...limits.modelIds].sort(),
+        });
+      if (
+        !existing?.evaluation ||
+        existing.userId !== input.userId ||
+        existing.ownerId !== input.ownerId ||
+        existing.ownerType !== input.ownerType ||
+        existing.rootSessionId !== input.rootSessionId ||
+        existing.budgetCredits !== input.budgetCredits ||
+        policy(existing.evaluation.limits) !== policy(input.evaluation.limits)
+      )
+        throw new HTTPError(409, 'Evaluation identity already exists with a different policy.', {
+          errorCode: 'evaluation_identity_conflict',
+        });
+      return existing;
+    }
   }
 
   async findById(runId: string): Promise<ICompletionRun | null> {
     const record = await CompletionRunModel.findById(runId).lean<CompletionRunRecord>();
     return record ? toCompletionRun(record) : null;
+  }
+
+  async updateEvaluation(
+    runId: string,
+    change: (
+      state: import('@bike4mind/common').CompletionEvaluationState
+    ) => import('@bike4mind/common').CompletionEvaluationState
+  ): Promise<import('@bike4mind/common').CompletionEvaluationState> {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const run = await this.findById(runId);
+      if (!run?.evaluation) throw new Error('Evaluation run not found');
+      const changed = change(structuredClone(run.evaluation));
+      // `evaluation` is Mixed, so Mongoose validates nothing on it; the schema is the only guard.
+      const next = CompletionEvaluationStateSchema.parse({ ...changed, revision: run.evaluation.revision + 1 });
+      const result = await CompletionRunModel.updateOne(
+        { _id: runId, 'evaluation.revision': run.evaluation.revision },
+        { $set: { evaluation: next } },
+        { runValidators: true, writeConcern: { w: 'majority' } }
+      );
+      if (result.modifiedCount === 1) return next;
+    }
+    throw new Error('Evaluation contention; retry receipt lookup');
   }
 
   /**

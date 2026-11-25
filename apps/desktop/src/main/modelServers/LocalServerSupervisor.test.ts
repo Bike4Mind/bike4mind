@@ -1,10 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { SecretCipher } from '../chat/mcp/McpServerStore';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import { openedAs, sealedAs, versionedCipher } from '../secrets/versionedCipher.testHelper';
 import { adoptedHandle, hostProcessProbe, readOwnedRecords, sameStartTime, type ProcessProbe } from './adoptedServers';
 import { hostLaunchers, LocalServerSupervisor, type Launchers, type ServerHandle } from './LocalServerSupervisor';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 import { inertLaunchers } from './testLaunchers';
+import { credentialInput } from './ipc';
+import { LocalModels, optionCatalogSampling } from './LocalModels';
+import { credentialHeaders } from './ModelServerStore';
+import { createServer, type Server } from 'node:net';
+import { loopbackLaunchPort, loopbackPortFree, loopbackPortListening } from './loopbackPort';
+import type { SecretCipher } from '../chat/mcp/McpServerStore';
+import type { LocalChat } from '../chat/localChat';
+import type { OllamaLocal } from '../chat/OllamaLocal';
+
+// Conditions here hold a few promise turns in; vi.waitFor's default 50ms poll would wait each one out.
+const waitFor = <T>(check: () => T | Promise<T>) => vi.waitFor(check, { interval: 1 });
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stopped: boolean };
 
@@ -83,7 +93,7 @@ describe('LocalServerSupervisor', () => {
     await instance.start('r', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
     expect(instance.headers('r')).toEqual({ authorization: 'Bearer k-zz' });
     child.exit({ code: 1, signal: null, stopped: false });
-    await vi.waitFor(() => expect(instance.headers('r')).toBeNull());
+    await waitFor(() => expect(instance.headers('r')).toBeNull());
   });
 
   it('does not count a server that is no longer running as its own', async () => {
@@ -101,7 +111,7 @@ describe('LocalServerSupervisor', () => {
     await instance.start('a', OLLAMA);
     changed.mockClear();
     child.exit({ code: 1, signal: null, stopped: false });
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith('a'));
+    await waitFor(() => expect(changed).toHaveBeenCalledWith('a'));
     expect(instance.owned('a')).toBeNull();
     expect(instance.problem('a')).toBe(
       'Ollama stopped (code 1): Error: listen tcp 127.0.0.1:11500: bind: address already in use'
@@ -138,7 +148,7 @@ describe('LocalServerSupervisor', () => {
     );
     const { instance } = supervisor(start);
     const starting = instance.start('a', OLLAMA);
-    await vi.waitFor(() => expect(signal).toBeDefined());
+    await waitFor(() => expect(signal).toBeDefined());
     expect(instance.busy('a')).toBe('starting');
     expect(instance.runningCount()).toBe(1);
     await instance.stop('a');
@@ -161,7 +171,7 @@ describe('LocalServerSupervisor', () => {
     );
     const { instance } = supervisor(start);
     const starting = instance.start('a', OLLAMA);
-    await vi.waitFor(() => expect(signal).toBeDefined());
+    await waitFor(() => expect(signal).toBeDefined());
     await instance.stop('a');
     await expect(starting).rejects.toThrow('Stopped before it was ready.');
     expect(child.stop).toHaveBeenCalledTimes(1);
@@ -427,7 +437,7 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
       if (how === 'stop') fake.stop = vi.fn(async () => undefined);
       const { instance } = adopter(file, slow, { handle: fake });
       const starting = instance.start('a', OLLAMA);
-      await vi.waitFor(() => expect(instance.owned('a')).not.toBeNull());
+      await waitFor(() => expect(instance.owned('a')).not.toBeNull());
       if (how === 'stop') await instance.stop('a');
       else fake.running = false;
       release(RECORD.startTime);
@@ -678,9 +688,9 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     const { instance } = adopter(file, probe);
     await instance.adopt(() => true);
     running.delete(4321);
-    await vi.waitFor(() => expect(instance.owned('a')).toBeNull());
+    await waitFor(() => expect(instance.owned('a')).toBeNull());
     expect(instance.problem('a')).toBe('Ollama stopped.');
-    await vi.waitFor(() => expect(listed(file)).toEqual([]));
+    await waitFor(() => expect(listed(file)).toEqual([]));
   });
 });
 
@@ -911,5 +921,171 @@ describe('observed Ollama settings', () => {
     expect(observedFlashAttention({ OLLAMA_FLASH_ATTENTION: 'false' })).toBe('off');
     expect(observedFlashAttention({ OLLAMA_FLASH_ATTENTION: '' })).toBeUndefined();
     expect(observedFlashAttention({})).toBeUndefined();
+  });
+});
+
+describe('LocalModels', () => {
+  function chatStub(): LocalChat {
+    return {
+      stream: vi.fn(async () => undefined),
+      contextTokens: vi.fn(async () => 4096),
+      growFor: vi.fn(async () => undefined),
+    };
+  }
+
+  describe('LocalModels', () => {
+    const computer = { ...chatStub(), models: vi.fn(async () => [{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    const server = chatStub();
+    const registry = {
+      models: vi.fn(async () => [
+        { id: 'local:srv-abc123:qwen', name: 'qwen', server: { id: 'abc123', name: 'gpu box' } },
+      ]),
+      chatFor: vi.fn((runtimeId: string) => (runtimeId.startsWith('srv-') ? server : null)),
+    };
+    const local = new LocalModels(computer as unknown as OllamaLocal, registry);
+
+    it("sends a saved server's model to that server and every other local model to this computer", async () => {
+      await local.stream({ model: 'local:srv-abc123:qwen', messages: [] }, () => undefined);
+      expect(server.stream).toHaveBeenCalledTimes(1);
+      expect(computer.stream).not.toHaveBeenCalled();
+
+      await local.stream({ model: 'local:ollama:qwen', messages: [] }, () => undefined);
+      expect(computer.stream).toHaveBeenCalledTimes(1);
+      expect(registry.chatFor).toHaveBeenLastCalledWith('ollama');
+    });
+
+    it("lists this computer's models first, and still lists them when the servers fail", async () => {
+      expect((await local.models()).map(model => model.id)).toEqual(['local:ollama:qwen', 'local:srv-abc123:qwen']);
+      registry.models.mockRejectedValueOnce(new Error('boom'));
+      expect((await local.models()).map(model => model.id)).toEqual(['local:ollama:qwen']);
+    });
+
+    it("asks the sampling hook with a model's name, weights blob and Modelfile parameters", () => {
+      const hook = vi.fn(() => undefined);
+      optionCatalogSampling(hook)({
+        id: 'local:ollama:x',
+        name: 'x',
+        modelBlob: 'b'.repeat(64),
+        modelParameters: 'top_k 1',
+        hasAdapter: true,
+      });
+      expect(hook).toHaveBeenCalledWith({
+        name: 'x',
+        modelBlob: 'b'.repeat(64),
+        parameters: 'top_k 1',
+        hasAdapter: true,
+      });
+      expect(() => optionCatalogSampling(undefined)({ id: 'local:ollama:x', name: 'x' })).not.toThrow();
+    });
+
+    it('attaches the catalog sampling it is given for a listed model, and nothing when there is none', async () => {
+      const seeded = new LocalModels(computer as unknown as OllamaLocal, registry, option =>
+        option.server ? undefined : { thinking: { temperature: 1 } }
+      );
+      const [own, remote] = await seeded.models();
+      expect(own?.catalogSampling).toEqual({ thinking: { temperature: 1 } });
+      expect(remote).not.toHaveProperty('catalogSampling');
+    });
+  });
+
+  describe('credentialInput', () => {
+    it('keeps an over-long token whole so the store can reject it instead of saving it truncated', () => {
+      const token = 'a'.repeat(5_000);
+      const input = credentialInput({ type: 'bearer', token });
+      expect(input.type === 'bearer' && input.token.length).toBeGreaterThan(4_096);
+      expect(() => credentialHeaders(input)).toThrow(/longer than 4096/);
+      const header = credentialInput({ type: 'header', name: 'X-Key', value: token });
+      expect(() => credentialHeaders(header)).toThrow(/longer than 4096/);
+      expect(() => credentialHeaders(credentialInput({ type: 'header', name: 'x'.repeat(100), value: 'v' }))).toThrow(
+        /header name/
+      );
+    });
+
+    it('trims a pasted token before measuring it, so leading whitespace cannot hide truncation', () => {
+      const token = 'a'.repeat(4_096);
+      const input = credentialInput({ type: 'bearer', token: `\n\n${token}` });
+      expect(input.type === 'bearer' && input.token).toBe(token);
+      expect(() => credentialHeaders(credentialInput({ type: 'bearer', token: `\n\n${token}b` }))).toThrow(
+        /longer than 4096/
+      );
+    });
+
+    it('turns anything malformed from the renderer into no credential', () => {
+      expect(credentialInput(undefined)).toEqual({ type: 'none' });
+      expect(credentialInput({ type: 'basic', token: 'x' })).toEqual({ type: 'none' });
+      expect(credentialInput({ type: 'bearer', token: 42 })).toEqual({ type: 'bearer', token: '' });
+      expect(credentialInput({ type: 'header', name: 'X-Key', value: 'v', extra: true })).toEqual({
+        type: 'header',
+        name: 'X-Key',
+        value: 'v',
+      });
+    });
+  });
+});
+
+describe('loopbackPort', () => {
+  let held: Server | null = null;
+
+  afterEach(async () => {
+    const server = held;
+    held = null;
+    if (server) await new Promise(resolve => server.close(resolve));
+  });
+
+  describe('loopbackPortFree', () => {
+    it('is false while something listens on the port, even if it never answers, and true once it stops', async () => {
+      const server = createServer(() => undefined);
+      held = server;
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('no port');
+
+      expect(await loopbackPortFree(address.port)).toBe(false);
+      held = null;
+      await new Promise(resolve => server.close(resolve));
+      expect(await loopbackPortFree(address.port)).toBe(true);
+    });
+
+    it('on Windows also counts a listener a connect reaches, without binding the wildcard address', async () => {
+      const server = createServer(() => undefined);
+      held = server;
+      await new Promise<void>(resolve => server.listen(0, '0.0.0.0', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('no port');
+
+      expect(await loopbackPortFree(address.port, 'win32')).toBe(false);
+      held = null;
+      await new Promise(resolve => server.close(resolve));
+      expect(await loopbackPortFree(address.port, 'win32')).toBe(true);
+      expect(await loopbackPortFree(address.port, 'win32')).toBe(true);
+    });
+  });
+
+  describe('loopbackPortListening', () => {
+    it('is true while something listens on 127.0.0.1 or the wildcard address, false once it stops', async () => {
+      for (const host of ['127.0.0.1', '0.0.0.0']) {
+        const server = createServer(() => undefined);
+        held = server;
+        await new Promise<void>(resolve => server.listen(0, host, resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('no port');
+
+        expect(await loopbackPortListening(address.port)).toBe(true);
+        held = null;
+        await new Promise(resolve => server.close(resolve));
+        expect(await loopbackPortListening(address.port)).toBe(false);
+      }
+    });
+  });
+
+  describe('loopbackLaunchPort', () => {
+    it('takes plain http on 127.0.0.1 or localhost with a port, at the root or /v1', () => {
+      expect(loopbackLaunchPort('http://127.0.0.1:11500')).toBe(11500);
+      expect(loopbackLaunchPort('http://localhost:8090/v1')).toBe(8090);
+      expect(loopbackLaunchPort('http://10.0.0.5:11434')).toBeNull();
+      expect(loopbackLaunchPort('https://127.0.0.1:11500')).toBeNull();
+      expect(loopbackLaunchPort('http://127.0.0.1:8090/api')).toBeNull();
+      expect(loopbackLaunchPort('not a url')).toBeNull();
+    });
   });
 });

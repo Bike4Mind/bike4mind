@@ -1,10 +1,10 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatStreamEvent } from '@shared/chat';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChatModelOption, ChatStreamEvent } from '@shared/chat';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
@@ -13,6 +13,13 @@ import type { OllamaLocal } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+import { EMPTY_MODEL_STATE, type ModelViewState } from '@shared/model3d';
+import { SessionActivity } from './SessionActivity';
+import type { ModelViewPort } from './tools/types';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -118,6 +125,24 @@ describe('ChatService generation tools', () => {
     vi.clearAllMocks();
   });
 
+  /**
+   * Lets the image tool run to its result with the gap before its first poll skipped rather than
+   * waited out. Only timers set from here on are fake, so the turn's own I/O still runs for real.
+   */
+  async function skipPollWaits(until: () => boolean): Promise<void> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const deadline = Date.now() + 5000;
+      while (!until()) {
+        if (Date.now() > deadline) throw new Error('The image tool never settled.');
+        if (vi.getTimerCount() > 0) await vi.advanceTimersToNextTimerAsync();
+        else await new Promise(resolve => setImmediate(resolve));
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
   // The generation tools touch no file the user owns, so a folder grant is the wrong gate for
   // them; a signed-in session is the only thing they need.
   it('offers the generation tools with no folder granted, and no others', async () => {
@@ -196,8 +221,13 @@ describe('ChatService generation tools', () => {
 
       const { id } = await service.createSession();
       await service.renameSession(id, 'User chosen title');
-      await service.send(id, 'draw me a bicycle');
-      if (!useLocal) {
+      const toolEnded = () => events.some(event => event.type === 'tool-end');
+      if (useLocal) {
+        const sent = service.send(id, 'draw me a bicycle');
+        await skipPollWaits(toolEnded);
+        await sent;
+      } else {
+        await service.send(id, 'draw me a bicycle');
         await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
         streams[0].write(
@@ -207,6 +237,7 @@ describe('ChatService generation tools', () => {
           })
         );
         streams[0].write(frame('[DONE]'));
+        await skipPollWaits(toolEnded);
 
         await vi.waitUntil(() => streams.length === 2, { timeout: 10_000, interval: 20 });
         streams[1].write(frame({ type: 'content', text: 'Here it is.' }));
@@ -280,7 +311,7 @@ describe('ChatService generation tools', () => {
     const { id } = await service.createSession();
     apiGet.mockClear();
     await service.send(id, 'hi');
-    await vi.waitUntil(() => events.some(event => event.type === 'done'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { interval: 5 });
     const request = local.mock.calls.find(([request]) => request.tools?.length)?.[0];
     expect(request?.tools?.map(entry => (entry.toolSchema as { name: string }).name)).toEqual([
       'todo_write',
@@ -310,7 +341,7 @@ describe('ChatService generation tools', () => {
     await build({ media: true, roots: [], local, ...options });
     const { id } = await service.createSession();
     await service.send(id, 'hi');
-    await vi.waitUntil(() => events.some(event => event.type === 'done'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { interval: 5 });
     expect(local).toHaveBeenCalled();
     const names = local.mock.calls.flatMap(
       ([request]) => request.tools?.map(entry => (entry.toolSchema as { name: string }).name) ?? []
@@ -338,7 +369,7 @@ describe('ChatService generation tools', () => {
     await service.renameSession(id, 'User chosen title');
     apiGet.mockClear();
     await service.send(id, 'private conversation text');
-    await vi.waitUntil(() => events.some(event => event.type === 'done'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { interval: 5 });
     expect(apiPost).toHaveBeenCalledWith(path, input, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(JSON.stringify(apiPost.mock.calls)).not.toContain('private conversation text');
     expect(local).toHaveBeenCalledTimes(2);
@@ -406,14 +437,291 @@ describe('ChatService generation tools', () => {
     await service.renameSession(id, 'User chosen title');
     await service.setApprovalMode(id, 'ask');
     await service.send(id, 'use the hosted tool');
-    const card = await vi.waitUntil(() =>
-      events.find(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval')
+    const card = await vi.waitUntil(
+      () => events.find(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'),
+      { interval: 5 }
     );
     expect(apiPost).not.toHaveBeenCalled();
     if (card.type !== 'tool-start' || !card.call.approvalId) throw new Error('Missing approval');
     approvals.resolve(card.call.approvalId, { decision: 'deny' });
-    await vi.waitUntil(() => events.some(event => event.type === 'done'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { interval: 5 });
     expect(apiPost).not.toHaveBeenCalled();
     expect(axiosPost).not.toHaveBeenCalled();
+  });
+});
+
+describe('modelPane', () => {
+  function frame(payload: unknown): string {
+    return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
+  }
+
+  type FakeView = ModelViewPort & { opened: string[] };
+
+  function fakeView(): FakeView {
+    let state: ModelViewState = EMPTY_MODEL_STATE;
+    const opened: string[] = [];
+    return {
+      opened,
+      current: () => state,
+      open: async path => {
+        opened.push(path);
+        state = { path, kind: 'model', generation: 1, source: '', missing: false };
+        return state;
+      },
+      waitForBuild: async () => ({
+        generation: 1,
+        ok: true,
+        summary: { parts: ['body'], size: [10, 10, 10], units: 'mm', triangles: 12, params: {} },
+      }),
+      capture: async () => new Uint8Array([137, 80, 78, 71]),
+      versions: async () => [],
+      recordTurntable: async () => new Uint8Array([26, 69, 223, 163]),
+      glbPath: () => null,
+    };
+  }
+
+  describe('ChatService model pane', () => {
+    let service: ChatService;
+    let events: ChatStreamEvent[];
+    let post: ReturnType<typeof vi.fn>;
+    let streams: PassThrough[];
+    let root: string;
+    let views: Map<string, FakeView>;
+    let forgetModel: Mock<(sessionId: string) => void>;
+    let forModel: Mock<(sessionId: string) => ModelViewPort>;
+
+    beforeEach(async () => {
+      root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-modelpane-')));
+      views = new Map();
+      forgetModel = vi.fn();
+      forModel = vi.fn((sessionId: string) => {
+        const existing = views.get(sessionId);
+        if (existing) return existing;
+        const created = fakeView();
+        views.set(sessionId, created);
+        return created;
+      });
+      const emitted: ChatStreamEvent[] = [];
+      events = emitted;
+      const opened: PassThrough[] = [];
+      streams = opened;
+      const boundPost = vi.fn().mockImplementation(() => {
+        const stream = new PassThrough();
+        opened.push(stream);
+        return Promise.resolve({ data: stream, status: 200 });
+      });
+      post = boundPost;
+      const models: ChatModelOption[] = [{ id: 'test-model', name: 'Test', backend: 'openai' }];
+      service = new ChatService({
+        store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-modelpane-sessions-')), 'test-model'),
+        approvals: new ApprovalGate(),
+        activity: new SessionActivity(() => undefined),
+        access: { list: async () => [root] } as unknown as AccessStore,
+        media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-modelpane-media-'))),
+        models: { list: async () => ({ models }), cached: () => [] } as unknown as ModelCatalog,
+        model: { for: forModel, forget: forgetModel },
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () =>
+          ({
+            get: vi.fn().mockResolvedValue({}),
+            getAxiosInstance: () => ({ post: boundPost }),
+          }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => 'http://localhost:3000',
+        emit: event => emitted.push(event),
+      });
+    });
+
+    afterEach(() => {
+      service.dispose();
+      for (const stream of streams) stream.end();
+    });
+
+    async function codeSession(): Promise<string> {
+      const created = await service.createCodeSession({ directory: root, branch: '', workspace: false });
+      if (!created.ok) throw new Error(created.error);
+      return created.session.id;
+    }
+
+    it('forgets the model view when deleting a session', async () => {
+      const sessionId = await codeSession();
+      await service.deleteSession(sessionId);
+      expect(forgetModel).toHaveBeenCalledExactlyOnceWith(sessionId);
+    });
+
+    it('runs a turn model tools against the calling conversation view only', async () => {
+      const sessionA = await codeSession();
+      const sessionB = await codeSession();
+      const modelPath = join(root, 'chest.model.js');
+      await writeFile(modelPath, 'export default {};\n');
+
+      await service.send(sessionA, 'show the chest');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+      streams[0].write(
+        frame({
+          type: 'tool_use',
+          tools: [{ id: 'view_1', name: 'model_view', arguments: JSON.stringify({ path: modelPath }) }],
+        })
+      );
+      streams[0].write(frame('[DONE]'));
+      await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await vi.waitUntil(() => events.find(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+
+      const forCalls = forModel.mock.calls.map(call => call[0]);
+      expect(forCalls.length).toBeGreaterThan(0);
+      expect(forCalls).toContain(sessionA);
+      expect(forCalls).not.toContain(sessionB);
+      expect(views.get(sessionA)?.opened).toEqual([modelPath]);
+      expect(views.get(sessionB)?.opened ?? []).toEqual([]);
+
+      const end = events.find(event => event.type === 'tool-end');
+      expect(end && 'call' in end ? end.call.status : undefined).toBe('done');
+    });
+  });
+});
+
+describe('generatedImageReplay', () => {
+  function frame(payload: unknown): string {
+    return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
+  }
+
+  type WireMessage = { role: string; content: unknown };
+
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('lantern')]);
+  const IMAGE_BLOCK = {
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: PNG.toString('base64') },
+  };
+
+  describe('ChatService re-shows images generate_image made in the previous reply', () => {
+    let service: ChatService;
+    let events: ChatStreamEvent[];
+    let post: ReturnType<typeof vi.fn>;
+    let streams: PassThrough[];
+    let store: SessionStore;
+    let media: MediaStore;
+    let supportsVision: boolean;
+
+    beforeEach(async () => {
+      supportsVision = true;
+      const emitted: ChatStreamEvent[] = [];
+      events = emitted;
+      const opened: PassThrough[] = [];
+      streams = opened;
+      post = vi.fn().mockImplementation(() => {
+        const stream = new PassThrough();
+        opened.push(stream);
+        return Promise.resolve({ data: stream, status: 200 });
+      });
+      const boundPost = post;
+      store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-replay-sessions-')), 'test-model');
+      media = new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-replay-media-')));
+      service = new ChatService({
+        store,
+        access: { list: async () => [] } as unknown as AccessStore,
+        media,
+        models: {
+          list: async () => ({ models: [{ id: 'test-model', name: 'Test', backend: 'anthropic', supportsVision }] }),
+          cached: () => [],
+        } as unknown as ModelCatalog,
+        prepareImage: (bytes, mediaType) => ({
+          bytes,
+          mediaType,
+          width: 10,
+          height: 10,
+          sourceWidth: 10,
+          sourceHeight: 10,
+        }),
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () =>
+          ({
+            get: vi.fn().mockResolvedValue({}),
+            getAxiosInstance: () => ({ post: boundPost }),
+          }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => 'http://localhost:3000',
+        emit: event => emitted.push(event),
+      });
+    });
+
+    afterEach(() => {
+      service.dispose();
+      for (const stream of streams) stream.end();
+    });
+
+    /** A conversation whose last reply ran generate_image, as a reloaded one stores it. */
+    async function afterGeneratedImage(): Promise<string> {
+      const { id } = await service.createSession();
+      const saved = await media.save(id, PNG, 'image/png');
+      const createdAt = new Date().toISOString();
+      await store.appendMessage(id, { id: 'u1', role: 'user', content: 'Generate an image of a lantern', createdAt });
+      await store.appendMessage(id, {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Here is your lantern.',
+        createdAt,
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'generate_image',
+            input: { prompt: 'a lantern' },
+            status: 'done',
+            preview: 'Generated 1 image(s).',
+            media: [
+              { kind: 'image', url: saved.url, mimeType: saved.mimeType, byteLength: PNG.length, caption: 'a lantern' },
+            ],
+          },
+        ],
+      });
+      return id;
+    }
+
+    /** Send one prompt, answer it in plain text, and return the messages its request carried. */
+    async function turn(sessionId: string, prompt: string): Promise<WireMessage[]> {
+      const before = post.mock.calls.length;
+      const done = events.filter(event => event.type === 'done').length;
+      await service.send(sessionId, prompt);
+      await vi.waitUntil(() => streams.length === before + 1, { timeout: 3000, interval: 5 });
+      streams[before].write(frame({ type: 'content', text: 'OK.' }));
+      streams[before].write(frame('[DONE]'));
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length > done, {
+        timeout: 3000,
+        interval: 5,
+      });
+      return post.mock.calls[before][1].messages as WireMessage[];
+    }
+
+    it('shows the generated image again with the next user message', async () => {
+      const id = await afterGeneratedImage();
+      const messages = await turn(id, 'Turn this into a 3D model');
+
+      expect(messages.at(-1)).toMatchObject({
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'Image generate_image made in the previous reply, shown again because the user may be referring to it.',
+          },
+          IMAGE_BLOCK,
+          { type: 'text', text: 'Turn this into a 3D model' },
+        ],
+      });
+    });
+
+    it('does not show it to a model that reads no images', async () => {
+      supportsVision = false;
+      const id = await afterGeneratedImage();
+      const messages = await turn(id, 'Turn this into a 3D model');
+
+      expect(JSON.stringify(messages)).not.toContain('"type":"image"');
+    });
+
+    it('does not show it two turns later', async () => {
+      const id = await afterGeneratedImage();
+      await turn(id, 'Turn this into a 3D model');
+      const messages = await turn(id, 'Make it taller');
+
+      expect(JSON.stringify(messages)).not.toContain('"type":"image"');
+    });
   });
 });

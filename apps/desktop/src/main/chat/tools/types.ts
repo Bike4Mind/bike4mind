@@ -459,6 +459,12 @@ export interface ToolContext {
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**
+   * Stops the turn's time budget while a call blocks on something that is not the agent working
+   * (bash_output waiting on a background process), until the returned function is called. Absent
+   * outside the chat loop. See TurnClock in ../turnClock.
+   */
+  pauseTurnClock?: () => () => void;
+  /**
    * The approval key this call was let through under, whether the user answered the card, a
    * standing answer covered it, or the mode did. Absent for a call that was never gated. Set by
    * ChatService only, so a tool can tell what the user agreed to from what it merely ended up
@@ -528,9 +534,24 @@ export interface HostSessionView {
   spawnedBy?: string;
   /** Present-tense state, the same one the sidebar row draws. */
   status: 'processing' | 'needs-action' | 'done';
+  /** What a 'needs-action' session waits on; absent otherwise. */
+  waitingOn?: 'approval' | 'decision' | 'message';
   /** The project folder's name; absent for a conversation with no project. */
   project?: string;
+  /** The branch of a session in a worktree of its own. */
+  branch?: string;
+  /** How its last assistant turn ended, and a one-line excerpt of it; see summarizeSession. */
+  lastOutcome?: string;
+  lastSnippet?: string;
 }
+
+/**
+ * What session_rename got back. 'out-of-scope' covers a session outside this project as well as
+ * one in it that is neither the caller nor a child of it, so the model cannot probe either.
+ */
+export type HostRenameOutcome =
+  | { ok: true; session: HostSessionView }
+  | { ok: false; reason: 'out-of-scope' | 'user-title' };
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
 export interface SpawnRejected {
@@ -628,7 +649,12 @@ export interface HostContext {
    * Sessions newest first, flagging archived ones. 'project' is this one's project; 'all' is every
    * conversation of the signed-in account, which is as far as the session store reaches.
    */
-  listSessions(options: { includeArchived: boolean; scope: 'project' | 'all' }): Promise<HostSessionView[]>;
+  listSessions(options: {
+    includeArchived: boolean;
+    scope: 'project' | 'all';
+    /** Only the sessions the calling conversation started, in any project. */
+    childrenOnly?: boolean;
+  }): Promise<HostSessionView[]>;
   /**
    * One session's transcript as plain text. `ref` is an id, a unique id prefix or an exact title.
    * Outside this project only for a session the user mentioned here or that messaged this one:
@@ -638,6 +664,11 @@ export interface HostContext {
   readSession(ref: string): Promise<string>;
   /** Reversible; the row moves to the sidebar's Archived section. Null when not addressable. */
   setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
+  /**
+   * Retitle this conversation or one it started, and lock the title against the generator.
+   * Refused for any other session, and for a title the user chose by hand; see agentMayRetitle.
+   */
+  renameSession(sessionId: string, title: string): Promise<HostRenameOutcome>;
   /** Irreversible. False when the id names nothing this session may address. */
   deleteSession(sessionId: string): Promise<boolean>;
   /**

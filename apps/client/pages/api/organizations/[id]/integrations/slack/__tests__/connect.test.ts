@@ -92,7 +92,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockOrgFindById.mockResolvedValue(org);
   mockFindByOrganizationId.mockResolvedValue(null);
-  mockGetCredentials.mockResolvedValue({ clientId: 'client_1' });
+  mockGetCredentials.mockResolvedValue({ workspaceId: 'ws_app', clientId: 'client_1' });
   mockGenerateStateToken.mockReturnValue('state_token');
   mockBuildOAuthUrl.mockReturnValue('https://slack.com/oauth/v2/authorize?state=state_token');
   mockIssueStateNonce.mockReturnValue('nonce_hash');
@@ -107,6 +107,16 @@ describe('POST /api/organizations/[id]/integrations/slack/connect', () => {
     expect(mockOrgFindById).toHaveBeenCalledWith(ORG);
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toEqual({ url: 'https://slack.com/oauth/v2/authorize?state=state_token' });
+  });
+
+  it('resolves credentials from the Slack app the request names', async () => {
+    const { req, res } = makeReq(owner);
+    (req as Record<string, unknown>).query = { id: ORG, workspaceId: 'ws_named' };
+
+    await routeHandlers.POST(req, res);
+
+    expect(mockGetCredentials).toHaveBeenCalledWith('ws_named');
+    expect(res.statusCode).toBe(200);
   });
 
   it('returns an OAuth url to a platform admin', async () => {
@@ -125,7 +135,7 @@ describe('POST /api/organizations/[id]/integrations/slack/connect', () => {
     await routeHandlers.POST(req, res);
 
     expect(mockIssueStateNonce).toHaveBeenCalledWith(res, 'org-slack-connect');
-    expect(mockGenerateStateToken).toHaveBeenCalledWith(ORG, OWNER, 'nonce_hash');
+    expect(mockGenerateStateToken).toHaveBeenCalledWith(ORG, OWNER, 'nonce_hash', 'ws_app');
     expect(mockBuildOAuthUrl).toHaveBeenCalledWith(
       'client_1',
       expect.stringContaining('/api/slack/oauth/org-connect/callback'),
@@ -246,7 +256,7 @@ describe('POST /api/organizations/[id]/integrations/slack/connect', () => {
     await routeHandlers.POST(req, res);
 
     expect(mockFindByOrganizationId).toHaveBeenCalledWith(ORG);
-    expect(mockGenerateStateToken).toHaveBeenCalledWith(ORG, OWNER, 'nonce_hash');
+    expect(mockGenerateStateToken).toHaveBeenCalledWith(ORG, OWNER, 'nonce_hash', 'ws_app');
     expect(res.statusCode).toBe(200);
   });
 });

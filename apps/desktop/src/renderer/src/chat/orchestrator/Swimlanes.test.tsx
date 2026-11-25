@@ -12,8 +12,10 @@ const STATES: readonly AgentState[] = ['needs-you', 'working', 'done', 'failed',
 const COLORS: Record<AgentState, string> = {
   'needs-you': 'warning',
   working: 'primary',
+  waiting: 'primary',
   done: 'success',
   failed: 'danger',
+  paused: 'neutral',
   stopped: 'neutral',
   idle: 'neutral',
 };

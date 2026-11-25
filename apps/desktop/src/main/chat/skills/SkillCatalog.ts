@@ -143,14 +143,17 @@ export class SkillCatalog {
 
   /**
    * Record a trust decision and drop the cached scans, so the next read reflects it rather than
-   * whichever posture happened to be cached seconds ago.
+   * whichever posture happened to be cached seconds ago. Resolves to the folder the decision was
+   * recorded against: the main checkout for an app worktree (see ProjectTrustStore.recordedPath).
    */
-  async setTrusted(projectRoot: string, trusted: boolean): Promise<void> {
+  async setTrusted(projectRoot: string, trusted: boolean): Promise<string> {
     const root = resolve(projectRoot);
+    const recorded = await this.trust.recordedPath(root);
     if (trusted) await this.trust.trust(root);
     else await this.trust.revoke(root);
     this.invalidate();
     this.changes++;
+    return recorded;
   }
 
   /**

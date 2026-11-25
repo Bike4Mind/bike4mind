@@ -105,6 +105,8 @@ describe('API_ERROR_CODES', () => {
     // RUN_BUDGET_EXHAUSTED_ERROR_CODE likewise; proven by apps/client/server/billing/completionCreditHolds.test.ts.
     // RUN_BUDGET_NOT_RAISED_ERROR_CODE likewise; proven by apps/client/pages/api/v1/completion-runs/[runId]/__tests__/budget.test.ts.
     // 'input_file_not_found' likewise; proven by services/src/sceneJobs/sceneJobHandler.test.ts.
+    // The evaluation_* codes likewise; proven by apps/client/server/completionRuns/evaluation.test.ts
+    // ('evaluation_identity_conflict' by packages/database/src/models/billing/CompletionRunModel.test.ts).
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
@@ -130,6 +132,11 @@ describe('API_ERROR_CODES', () => {
       RUN_BUDGET_EXHAUSTED_ERROR_CODE,
       RUN_BUDGET_NOT_RAISED_ERROR_CODE,
       'input_file_not_found',
+      'evaluation_not_enabled',
+      'evaluation_identity_conflict',
+      'evaluation_request_exists',
+      'evaluation_receipt_outstanding',
+      'evaluation_budget_exhausted',
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

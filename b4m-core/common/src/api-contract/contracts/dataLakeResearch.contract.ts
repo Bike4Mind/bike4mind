@@ -2,6 +2,7 @@ import { defineEndpoint } from '../defineEndpoint';
 import { DATA_LAKE_READ_API_KEY_SCOPES, DATA_LAKE_WRITE_API_KEY_SCOPES } from '../../constants/dataLakeApiKeyScopes';
 import { DataLakeIdParamSchema } from '../../schemas/dataLakePublic';
 import {
+  ConfigHistoryEventParamSchema,
   ConfigHistoryQuerySchema,
   ConfigHistoryResponseSchema,
   CreateResearchConfigRequestSchema,
@@ -17,6 +18,7 @@ import {
   ResearchRunParamSchema,
   ResearchRunResponseSchema,
   StartResearchRunRequestSchema,
+  UndoConfigChangeResponseSchema,
   UpdateResearchConfigRequestSchema,
 } from '../../schemas/dataLakeResearchPublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
@@ -411,6 +413,43 @@ export const getDataLakeConfigHistoryContract = defineEndpoint({
     403: { description: READ_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: NOT_VISIBLE_LAKE, schema: ApiErrorSchema },
     422: { description: '`limit` is not an integer from 1 to 500.', schema: ApiErrorSchema },
+    429: { description: RATE_LIMITED, schema: ApiErrorSchema },
+  },
+  codeSample: { ...codeSample, body: {} },
+});
+
+export const undoDataLakeConfigChangeContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/data-lakes/{id}/config-history/{event_id}/undo',
+  operationId: 'undoDataLakeConfigChange',
+  summary: 'Undo a config change',
+  description:
+    'Reverses one config-history row through the ordinary service for the inverse change: a lever ' +
+    'edit, a config create or delete, a proposal approval, decline or restore, or a file add or ' +
+    'remove. Take `event_id` from the config-history route, and only rows with `undoable: true` ' +
+    'apply. A change can be undone once. Returns the row the undo wrote, which may itself be ' +
+    'undoable, and `notes` for consequences such as a schedule put on hold. The refusal is a 409 ' +
+    'when the row was already undone, a later change touched the same item, the old value no longer ' +
+    'passes the current checks (the message names the field), the config no longer exists, or the ' +
+    'stored copy needed to restore it has expired.',
+  tags: ['Data Lake Research'],
+  auth: 'apiKeyOrJwt',
+  scopes: DATA_LAKE_WRITE_API_KEY_SCOPES,
+  pathParams: ConfigHistoryEventParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The undo was applied.', schema: UndoConfigChangeResponseSchema },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: {
+      description: `${NOT_VISIBLE_LAKE} The same 404 answers a history row that does not exist in this lake.`,
+      schema: ApiErrorSchema,
+    },
+    409: {
+      description:
+        'Already undone, a later change touched the same item, the old value is no longer valid, the ' +
+        'config no longer exists, or the stored copy to restore from has expired.',
+      schema: ApiErrorSchema,
+    },
     429: { description: RATE_LIMITED, schema: ApiErrorSchema },
   },
   codeSample: { ...codeSample, body: {} },

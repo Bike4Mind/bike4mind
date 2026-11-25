@@ -458,6 +458,73 @@ describe('UsageEventRepository', () => {
     });
   });
 
+  describe('providerUnitsBreakdown', () => {
+    const at = async (doc: { id: string } | null, iso: string) => {
+      await UsageEvent.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(doc!.id) },
+        { $set: { createdAt: new Date(iso) } }
+      );
+    };
+    const window = {
+      provider: 'elevenlabs',
+      from: new Date('2026-03-01T00:00:00Z'),
+      to: new Date('2026-04-01T00:00:00Z'),
+    };
+    const tts = { feature: 'text_to_speech' as const, provider: 'elevenlabs', model: 'eleven_multilingual_v2' };
+
+    it('sums units and requests per day, feature, model, user, key source and status', async () => {
+      await at(await record({ ...tts, units: 100, keySource: 'platform' }), '2026-03-02T01:00:00Z');
+      await at(await record({ ...tts, units: 50, keySource: 'platform' }), '2026-03-02T23:00:00Z');
+      await at(await record({ ...tts, units: 7, keySource: 'user' }), '2026-03-02T05:00:00Z');
+      await at(await record({ ...tts, units: 30, status: 'error' }), '2026-03-03T05:00:00Z');
+
+      const rows = await usageEventRepository.providerUnitsBreakdown(window);
+
+      expect(rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ day: '2026-03-02', keySource: 'platform', status: 'ok', requests: 2, units: 150 }),
+          expect.objectContaining({ day: '2026-03-02', keySource: 'user', requests: 1, units: 7 }),
+          expect.objectContaining({ day: '2026-03-03', keySource: null, status: 'error', requests: 1, units: 30 }),
+        ])
+      );
+      expect(rows).toHaveLength(3);
+      expect(rows.at(-1)!.day).toBe('2026-03-03');
+      expect(rows[0]).toMatchObject({ feature: 'text_to_speech', model: 'eleven_multilingual_v2', userId: 'user-1' });
+    });
+
+    it('excludes other providers and rows outside [from, to)', async () => {
+      await at(await record({ ...tts, units: 1 }), '2026-02-28T23:59:59Z');
+      await at(await record({ ...tts, units: 2 }), '2026-04-01T00:00:00Z');
+      await at(await record({ units: 3 }), '2026-03-10T00:00:00Z');
+      await at(await record({ ...tts, units: 4 }), '2026-03-01T00:00:00Z');
+
+      const rows = await usageEventRepository.providerUnitsBreakdown(window);
+
+      expect(rows.map(r => r.units)).toEqual([4]);
+    });
+
+    it('buckets rows at the flat-priced default units apart', async () => {
+      const sound = { feature: 'sound_effects' as const, provider: 'elevenlabs', model: 'elevenlabs' };
+      await at(await record({ ...sound, units: 200 / 11 }), '2026-03-05T01:00:00Z');
+      await at(await record({ ...sound, units: 200 / 11 }), '2026-03-05T02:00:00Z');
+      await at(await record({ ...sound, units: 5 }), '2026-03-05T03:00:00Z');
+
+      const rows = await usageEventRepository.providerUnitsBreakdown({ ...window, defaultUnits: 200 / 11 });
+
+      expect(rows).toHaveLength(2);
+      expect(rows.find(r => r.atDefaultUnits)).toMatchObject({ requests: 2 });
+      expect(rows.find(r => !r.atDefaultUnits)).toMatchObject({ requests: 1, units: 5 });
+    });
+
+    it('counts a row without units as zero units', async () => {
+      await at(await record({ ...tts }), '2026-03-05T00:00:00Z');
+
+      const [row] = await usageEventRepository.providerUnitsBreakdown(window);
+
+      expect(row).toMatchObject({ requests: 1, units: 0 });
+    });
+  });
+
   describe('settlementBreakdown', () => {
     it('keeps timeout requests without treating quota sentinels as local token estimates', async () => {
       await record({

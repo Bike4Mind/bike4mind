@@ -40,6 +40,12 @@ export const PushNotificationEventSchema = z.object({
    */
   pendingActionTs: z.number().int().positive().optional(),
   /**
+   * `approval_needed` only: marks this event as the clearing push for an approval that has been handled
+   * (the value is how it ended). It reuses the original collapse id so it replaces the delivered approval
+   * on the lock screen, and carries no action buttons and no sound.
+   */
+  approvalResolved: z.enum(['approved', 'denied', 'lapsed']).optional(),
+  /**
    * `brief_ready` only, set when the brief holds exactly one decision: its kind, so the push selects a
    * notification category with approve/deny or reply actions. The client re-fetches the brief before acting.
    */

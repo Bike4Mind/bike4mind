@@ -5,7 +5,7 @@ import type { WatchDecision, WatchSnapshot } from '@shared/watch';
 /**
  * This preload is a second rollup entry beside index.ts, and a sandboxed preload cannot load a
  * shared chunk. So it imports nothing at runtime but electron, and spells its channels out;
- * mini.test.ts holds them equal to IPC_CHANNELS.
+ * bridges.test.ts holds them equal to IPC_CHANNELS.
  */
 export const MINI_CHANNELS = {
   watchGetSnapshot: 'watch:get-snapshot',

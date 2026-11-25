@@ -62,6 +62,8 @@ export interface ResearchConfigAdapters extends LakeConfigAuditAdapters {
     lakeConfigSnapshots: LakeConfigSnapshotAdapters['db']['lakeConfigSnapshots'];
   };
   now?: () => Date;
+  /** Links the History row this call writes to an Undo: the row it reverses, and its pre-minted id. */
+  audit?: { undoesEventId?: string; eventId?: string };
 }
 
 /** The schedule half of a create or update request. */
@@ -94,14 +96,17 @@ const resolveCadence = (
   current: ResearchScheduleCadence
 ): ResearchScheduleCadence => {
   if (trigger === 'scheduled') {
-    throw new BadRequestError('One-off scheduled research runs are not supported; set a cadence instead');
+    throw new BadRequestError('One-off scheduled research runs are not supported; set a cadence instead', {
+      field: 'cadence',
+    });
   }
   const resolved = cadence ?? current;
   if (trigger && trigger !== triggerFor(resolved)) {
     throw new BadRequestError(
       resolved === 'off'
         ? 'A periodic research configuration needs a cadence'
-        : 'An on-demand research configuration cannot have a cadence'
+        : 'An on-demand research configuration cannot have a cadence',
+      { field: 'cadence' }
     );
   }
   return resolved;
@@ -118,7 +123,8 @@ const resolveSchedulePaused = (
   cadence: ResearchScheduleCadence,
   current: boolean
 ): boolean => {
-  if (requested === true && cadence === 'off') throw new BadRequestError(PAUSED_WITHOUT_CADENCE_MESSAGE);
+  if (requested === true && cadence === 'off')
+    throw new BadRequestError(PAUSED_WITHOUT_CADENCE_MESSAGE, { field: 'schedulePaused' });
   return cadence === 'off' ? false : (requested ?? current);
 };
 
@@ -143,7 +149,9 @@ const resumedNextRunAt = (
  */
 const assertSourcesReachable = (levers: ResearchRunLevers): void => {
   if (levers.unlistedSources === 'drop' && levers.trustedDomains.length + levers.reviewDomains.length === 0) {
-    throw new BadRequestError('List at least one site to review, or send other sites to review');
+    throw new BadRequestError('List at least one site to review, or send other sites to review', {
+      field: 'unlistedSources',
+    });
   }
 };
 
@@ -155,21 +163,25 @@ const assertSourcesReachable = (levers: ResearchRunLevers): void => {
 const assertFeedSource = (draft: ResearchLeversDraft): void => {
   if ((draft.source as unknown) !== 'feed') return;
   const raw = typeof draft.feedUrl === 'string' ? draft.feedUrl.trim() : '';
-  if (!raw) throw new BadRequestError('A feed source needs a feed address');
+  if (!raw) throw new BadRequestError('A feed source needs a feed address', { field: 'feedUrl' });
   if (raw.length > RESEARCH_FEED_URL_MAX_CHARS) {
-    throw new BadRequestError(`The feed address is longer than ${RESEARCH_FEED_URL_MAX_CHARS} characters`);
+    throw new BadRequestError(`The feed address is longer than ${RESEARCH_FEED_URL_MAX_CHARS} characters`, {
+      field: 'feedUrl',
+    });
   }
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw new BadRequestError('The feed address is not a valid web address');
+    throw new BadRequestError('The feed address is not a valid web address', { field: 'feedUrl' });
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new BadRequestError('The feed address must start with http:// or https://');
+    throw new BadRequestError('The feed address must start with http:// or https://', { field: 'feedUrl' });
   }
   if (url.username || url.password) {
-    throw new BadRequestError('The feed address must not contain a username or password');
+    throw new BadRequestError('The feed address must not contain a username or password', {
+      field: 'feedUrl',
+    });
   }
 };
 
@@ -181,11 +193,14 @@ const assertFeedSource = (draft: ResearchLeversDraft): void => {
 const assertItemRulesWithinLimits = (draft: ResearchLeversDraft): void => {
   const rules = canonicalItemRules(draft.itemRules);
   if (rules.length > RESEARCH_ITEM_RULES_MAX) {
-    throw new BadRequestError(`A research configuration can have at most ${RESEARCH_ITEM_RULES_MAX} item rules`);
+    throw new BadRequestError(`A research configuration can have at most ${RESEARCH_ITEM_RULES_MAX} item rules`, {
+      field: 'itemRules',
+    });
   }
   if (rules.some(rule => rule.condition.length > RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS)) {
     throw new BadRequestError(
-      `An item rule condition can be at most ${RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS} characters`
+      `An item rule condition can be at most ${RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS} characters`,
+      { field: 'itemRules' }
     );
   }
 };
@@ -200,7 +215,8 @@ const assertAutoAdmitEntriesSafe = (levers: ResearchRunLevers): void => {
   const unsafe = levers.trustedDomains.find(isPublicSuffixEntry);
   if (unsafe) {
     throw new BadRequestError(
-      `"${unsafe}" covers every site under it, so it cannot be a trusted site while trusted results are added automatically. List a specific site instead.`
+      `"${unsafe}" covers every site under it, so it cannot be a trusted site while trusted results are added automatically. List a specific site instead.`,
+      { field: 'trustedDomains' }
     );
   }
 };
@@ -232,7 +248,7 @@ export async function createResearchConfig(
   actor: ManageActor,
   grants: readonly LakeGrant[],
   input: { name: string } & ResearchScheduleDraft & ResearchLeversDraft,
-  { db, logger, now = () => new Date() }: ResearchConfigAdapters
+  { db, logger, now = () => new Date(), audit }: ResearchConfigAdapters
 ): Promise<IDataLakeResearchConfigDocument> {
   const existing = await db.dataLakeResearchConfigs.listByLake(lake.id);
   if (existing.length >= RESEARCH_CONFIGS_PER_LAKE_MAX) {
@@ -272,12 +288,23 @@ export async function createResearchConfig(
       lake,
       grants,
       action: 'create-research-config',
+      ...audit,
       target: { kind: 'researchConfig', id: created.id },
       changes: [
         researchConfigChange(name, 'created'),
         ...(levers.autoAdmitTrusted ? [researchAutoAdmitChange(name, true)] : []),
         ...itemRuleChanges(name, [], levers.itemRules),
       ],
+      // A recreate from Undo records what it restored; an ordinary create has never carried levers.
+      ...(audit?.undoesEventId
+        ? {
+            leverChanges: snapshotLeverChanges(researchConfigStateOf(created)).map(({ lever, before }) => ({
+              lever,
+              before: null,
+              after: before,
+            })),
+          }
+        : {}),
     },
     { db, logger }
   );
@@ -299,7 +326,7 @@ export async function updateResearchConfig(
   actor: ManageActor,
   grants: readonly LakeGrant[],
   input: { name?: string } & ResearchScheduleDraft & ResearchLeversDraft,
-  { db, logger, now = () => new Date() }: ResearchConfigAdapters
+  { db, logger, now = () => new Date(), audit }: ResearchConfigAdapters
 ): Promise<IDataLakeResearchConfigDocument> {
   const existing = await db.dataLakeResearchConfigs.findByIdInLake(configId, lake.id);
   if (!existing) throw new NotFoundError('Research configuration not found');
@@ -395,6 +422,7 @@ export async function updateResearchConfig(
         lake,
         grants,
         action: 'update-research-config',
+        ...audit,
         target: { kind: 'researchConfig', id: configId },
         changes: scheduleLines,
         leverChanges,
@@ -408,6 +436,7 @@ export async function updateResearchConfig(
         lake,
         grants,
         action: 'update-research-config',
+        ...audit,
         target: { kind: 'researchConfig', id: configId },
         changes: [researchConfigChange(updated.name, 'updated'), ...scheduleLines, ...leverLines],
         leverChanges,
@@ -444,7 +473,7 @@ export async function setResearchSchedulePaused(
   paused: boolean,
   actor: ManageActor,
   grants: readonly LakeGrant[],
-  { db, logger, now = () => new Date() }: ResearchConfigAdapters
+  { db, logger, now = () => new Date(), audit }: ResearchConfigAdapters
 ): Promise<IDataLakeResearchConfigDocument> {
   const existing = await db.dataLakeResearchConfigs.findByIdInLake(configId, lake.id);
   if (!existing) throw new NotFoundError('Research configuration not found');
@@ -477,6 +506,7 @@ export async function setResearchSchedulePaused(
       lake,
       grants,
       action: 'update-research-config',
+      ...audit,
       target: { kind: 'researchConfig', id: configId },
       changes: [researchSchedulePausedChange(updated.name, paused)],
       leverChanges: [{ lever: 'schedulePaused', before: existing.schedulePaused === true, after: paused }],
@@ -491,7 +521,7 @@ export async function deleteResearchConfig(
   lake: LakeConfigAuditLakeRef,
   actor: ManageActor,
   grants: readonly LakeGrant[],
-  { db, logger, now = () => new Date() }: ResearchConfigAdapters
+  { db, logger, now = () => new Date(), audit }: ResearchConfigAdapters
 ): Promise<void> {
   const existing = await db.dataLakeResearchConfigs.findByIdInLake(configId, lake.id);
   if (!existing) throw new NotFoundError('Research configuration not found');
@@ -507,6 +537,7 @@ export async function deleteResearchConfig(
       lake,
       grants,
       action: 'delete-research-config',
+      ...audit,
       target: { kind: 'researchConfig', id: configId },
       changes: [researchConfigChange(existing.name, 'deleted')],
       leverChanges: snapshotLeverChanges(researchConfigStateOf(existing)),

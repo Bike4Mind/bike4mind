@@ -5,7 +5,7 @@
  * for the SRE Agent Trio's confidence-based gate logic.
  *
  * Uses the OAuth-installed Slack workspace (bot token) rather than incoming webhooks,
- * matching the pattern used by Context Telemetry Alerts and LiveOps Triage.
+ * matching the pattern used by Context Telemetry Alerts.
  */
 
 import { Logger } from '@bike4mind/observability';

@@ -5,10 +5,30 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Composer } from './Composer';
-import { composerDrafts } from './composerDrafts';
+import { composerDrafts, createComposerDraftsStore } from './composerDrafts';
 import { ContextRing } from './ContextRing';
 import type { ComposerUsage } from './statusLine';
 import type { AttachmentDraft } from './useAttachments';
+import { addDirPath, matchCommands, parseCommandInvocation } from './commands';
+import {
+  appendToDraft,
+  attachShortcut,
+  COMPOSER_BUTTON_LABELS,
+  composerButtonAction,
+  composerEscapeAction,
+  composerKeyAction,
+  composerMenuAction,
+  composerPlaceholder,
+  composerSubmitAction,
+  recallPromptAction,
+  isAttachChord,
+  shownSuggestion,
+} from './composerInput';
+import { skillQuery } from './skillMenu';
+import { caretInCode, codeRanges, fenceKeyAction, type ComposerEdit } from './composerMarkdown';
+import type { ComposerDrafts } from '@shared/composerDrafts';
+import type { ChatAttachment } from '@shared/chat';
+import { AttachmentRow } from './Attachments';
 
 /**
  * Two kinds of test in one file. The indicator is answerable from static markup, so it is
@@ -125,6 +145,10 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's popups (menus, selects, tooltips, modals) read every ancestor's computed style on each update,
+// and jsdom resolves that against every emotion sheet with no layout to find; the inline style will do.
+window.getComputedStyle = ((element: Element) => (element as HTMLElement).style) as typeof getComputedStyle;
 
 // jsdom implements no layout, so the picker's scroll-the-highlight-into-view has nothing to call.
 Element.prototype.scrollIntoView ??= () => {};
@@ -347,6 +371,116 @@ describe('IME composition', () => {
     pressComposing('Escape');
 
     expect(stop).not.toHaveBeenCalled();
+  });
+});
+
+describe('markdown code in the composer', () => {
+  function pressWith(key: string, init: KeyboardEventInit): void {
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }));
+    });
+  }
+
+  it('breaks the line instead of sending inside an open fenced block', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```ts\nconst a = 1');
+    press('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('```ts\nconst a = 1\n');
+  });
+
+  it('closes a freshly opened fence on Enter', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```');
+    press('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('```\n\n```');
+  });
+
+  it('sends the raw markdown on Cmd+Enter from inside a block', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```\nfoo');
+    pressWith('Enter', { metaKey: true });
+
+    expect(send).toHaveBeenCalledWith('```\nfoo');
+  });
+
+  it('still sends on Enter once the block is closed', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```\nfoo\n```');
+    press('Enter');
+
+    expect(send).toHaveBeenCalledWith('```\nfoo\n```');
+  });
+
+  it('shows the way-out hint only while the caret is in a block', () => {
+    mount();
+    type('plain');
+    expect(host?.querySelector('[data-testid="composer-code-hint"]')).toBeNull();
+    type('```\nfoo');
+    expect(host?.querySelector('[data-testid="composer-code-hint"]')).not.toBeNull();
+  });
+
+  it('paints a code background behind an inline span', () => {
+    mount();
+    type('run `ls` now');
+    expect(host?.querySelector('[data-code-kind="inline"]')?.textContent).toBe('`ls`');
+  });
+
+  it('indents on Tab inside a block and outdents on Shift+Tab', () => {
+    mount();
+    type('```\nfoo');
+    pressWith('Tab', {});
+    expect(input().value).toBe('```\nfoo  ');
+    type('```\n  foo');
+    pressWith('Tab', { shiftKey: true });
+    expect(input().value).toBe('```\nfoo');
+  });
+
+  it('leaves the block on Escape then Shift+Tab, even with the Shift keydown between', () => {
+    mount();
+    type('```\n  foo');
+    pressWith('Escape', {});
+    pressWith('Shift', { shiftKey: true });
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      input().dispatchEvent(tab);
+    });
+
+    expect(tab.defaultPrevented).toBe(false);
+    expect(input().value).toBe('```\n  foo');
+  });
+
+  it('does not swallow Tab outside a block', () => {
+    mount();
+    type('plain');
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    act(() => {
+      input().dispatchEvent(tab);
+    });
+
+    expect(tab.defaultPrevented).toBe(false);
+  });
+
+  it('does not send on Alt+Enter inside an open block', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```\nfoo');
+    pressWith('Enter', { altKey: true });
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('keeps the command menu shut for a slash inside code', () => {
+    mount({ onRunCommand: () => {} });
+    type('```\n/');
+    expect(rows()).toHaveLength(0);
   });
 });
 
@@ -847,5 +981,697 @@ describe('the "+" menu', () => {
     expect(isDisabled(item('composer-add-folder-item'))).toBe(true);
     act(() => item('composer-add-folder-item')?.click());
     expect(onClick).not.toHaveBeenCalled();
+  });
+});
+
+const KEYS: [string, boolean][] = [
+  ['Tab', false],
+  ['Tab', true],
+  ['Enter', false],
+  ['Enter', true],
+  ['Escape', false],
+  ['a', false],
+  ['ArrowUp', false],
+];
+
+describe('composerKeyAction', () => {
+  it('takes the suggestion on Tab while one is showing', () => {
+    expect(composerKeyAction('Tab', false, true)).toBe('accept-suggestion');
+  });
+
+  // Tab is how the keyboard leaves the input. Claiming it with no hint up would trap focus.
+  it('leaves Tab alone when no suggestion is showing', () => {
+    expect(composerKeyAction('Tab', false, false)).toBe('default');
+  });
+
+  it('sends on Enter', () => {
+    expect(composerKeyAction('Enter', false, false)).toBe('submit');
+  });
+
+  // The hard requirement: a suggestion on screen must not change what Enter means. It still
+  // sends what is in the box - which, with the hint merely drawn as a placeholder, is nothing.
+  it('still means "send what is in the box" on Enter with a suggestion showing', () => {
+    expect(composerKeyAction('Enter', false, true)).toBe('submit');
+  });
+
+  it('breaks the line on Shift+Enter', () => {
+    expect(composerKeyAction('Enter', true, true)).toBe('default');
+  });
+
+  /**
+   * The invariant the feature rests on: accepting and sending are outcomes of one switch, so no
+   * key can do both. A suggestion is model output sitting in the user's input box, and a single
+   * keystroke that filled it AND sent it would let that output choose the next turn.
+   */
+  it.each(KEYS)('never both accepts and submits on %s (shift: %s)', (key, shift) => {
+    for (const hasSuggestion of [true, false]) {
+      const action = composerKeyAction(key, shift, hasSuggestion);
+      expect(['accept-suggestion', 'submit', 'default']).toContain(action);
+      if (action === 'accept-suggestion') expect(action).not.toBe('submit');
+    }
+  });
+
+  it('only ever accepts a suggestion via Tab', () => {
+    const accepting = KEYS.filter(([key, shift]) => composerKeyAction(key, shift, true) === 'accept-suggestion');
+    expect(accepting).toEqual([['Tab', false]]);
+  });
+});
+
+describe('composerButtonAction', () => {
+  it('offers Send with no reply running, whether or not anything is typed', () => {
+    expect(composerButtonAction({ streaming: false, hasContent: false })).toBe('send');
+    expect(composerButtonAction({ streaming: false, hasContent: true })).toBe('send');
+  });
+
+  it('offers Stop while a reply runs into an empty box', () => {
+    expect(composerButtonAction({ streaming: true, hasContent: false })).toBe('stop');
+  });
+
+  it('becomes Queue the moment the user types ahead of the running reply', () => {
+    expect(composerButtonAction({ streaming: true, hasContent: true })).toBe('queue');
+  });
+
+  // The rule the icons rest on: exactly one control is on screen, whatever the state.
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])('names exactly one control for streaming=%s hasContent=%s', (streaming, hasContent) => {
+    const action = composerButtonAction({ streaming, hasContent });
+    expect(['send', 'stop', 'queue']).toContain(action);
+    expect(COMPOSER_BUTTON_LABELS[action]).toBeTruthy();
+  });
+
+  // An icon-only button's label IS its name. Pinned because a wrong one is invisible on screen.
+  it('labels each state for what the click does', () => {
+    expect(COMPOSER_BUTTON_LABELS).toEqual({
+      send: 'Send message',
+      stop: 'Stop generating',
+      queue: 'Queue message',
+    });
+  });
+});
+
+describe('composerEscapeAction', () => {
+  /**
+   * The load-bearing case. Queue takes the button away from Stop exactly when the user has typed
+   * ahead, so if Escape did not stop the turn here the only way to stop it would be to delete
+   * the draft first. This test is the reason one button is allowed at all.
+   */
+  it('stops the running turn even with a draft typed ahead of it', () => {
+    expect(composerEscapeAction({ pickerOpen: false, streaming: true })).toBe('stop');
+  });
+
+  // The skill menu keeps Escape while it is up: it is the only way to refuse a mis-typed `/`.
+  it('closes the skill menu instead, while that is showing', () => {
+    expect(composerEscapeAction({ pickerOpen: true, streaming: true })).toBe('dismiss-picker');
+    expect(composerEscapeAction({ pickerOpen: true, streaming: false })).toBe('dismiss-picker');
+  });
+
+  it('never stops a turn while the menu owns the key', () => {
+    for (const streaming of [true, false]) {
+      expect(composerEscapeAction({ pickerOpen: true, streaming })).not.toBe('stop');
+    }
+  });
+
+  it('is left to the browser when nothing is running and no menu is up', () => {
+    expect(composerEscapeAction({ pickerOpen: false, streaming: false })).toBe('default');
+  });
+});
+
+describe('shownSuggestion', () => {
+  it('offers the suggestion while the draft is empty', () => {
+    expect(shownSuggestion({ disabled: false, text: '', suggestion: 'Add a test' })).toBe('Add a test');
+  });
+
+  it('stops offering it the moment the user types', () => {
+    expect(shownSuggestion({ disabled: false, text: 'K', suggestion: 'Add a test' })).toBeNull();
+  });
+
+  // A draft of nothing but spaces is still something the user typed.
+  it('treats whitespace as typed text rather than as an empty box', () => {
+    expect(shownSuggestion({ disabled: false, text: '   ', suggestion: 'Add a test' })).toBeNull();
+  });
+
+  it('offers nothing in a composer with no conversation behind it', () => {
+    expect(shownSuggestion({ disabled: true, text: '', suggestion: 'Add a test' })).toBeNull();
+  });
+});
+
+describe('composerPlaceholder', () => {
+  const base = { disabled: false, text: '', placeholder: 'Send a message...' };
+
+  it('draws the suggestion in place of the ordinary prompt', () => {
+    expect(composerPlaceholder({ ...base, suggestion: 'Add a test' })).toBe('Add a test');
+  });
+
+  it('falls back to the ordinary prompt when there is no suggestion', () => {
+    expect(composerPlaceholder({ ...base, suggestion: null })).toBe('Send a message...');
+  });
+
+  it('keeps a Code session its own prompt', () => {
+    const code = { ...base, placeholder: 'Describe a task or ask a question', suggestion: null };
+    expect(composerPlaceholder(code)).toBe('Describe a task or ask a question');
+  });
+
+  // The disabled message answers the question the user is about to ask; a hint about a
+  // conversation they cannot type in does not.
+  it('never lets a suggestion replace the disabled message', () => {
+    expect(composerPlaceholder({ ...base, disabled: true, suggestion: 'Add a test' })).toBe(
+      'Start a conversation to type here'
+    );
+  });
+
+  // Only the owner knows WHY the box is shut - no session yet, or one being made - and the old
+  // fixed copy told a user with no sessions at all to pick one.
+  it('lets the owner name the step the disabled composer is waiting on', () => {
+    expect(
+      composerPlaceholder({ ...base, disabled: true, suggestion: null, disabledPlaceholder: 'Starting a session...' })
+    ).toBe('Starting a session...');
+  });
+
+  it('goes back to the ordinary prompt once the draft has content', () => {
+    expect(composerPlaceholder({ ...base, text: 'Keep', suggestion: 'Add a test' })).toBe('Send a message...');
+  });
+});
+
+describe('the `/` menu', () => {
+  it('opens on a slash typed into an empty composer', () => {
+    expect(skillQuery('/')?.query).toBe('');
+    expect(matchCommands('', 'code').map(command => command.name)).toEqual([
+      'clear',
+      'compact',
+      'pr',
+      'add-dir',
+      'loop',
+    ]);
+  });
+
+  // A path is a path, and a command only runs as the whole draft: one picked mid-sentence would
+  // throw the sentence away. A skill mid-sentence is fine, so the token is found, just not offered
+  // commands.
+  it('offers commands only for a token that is the whole draft', () => {
+    expect(skillQuery('fix /clear')?.wholeDraft).toBe(false);
+    expect(skillQuery('/clear')?.wholeDraft).toBe(true);
+    expect(skillQuery('see src/clear.ts')).toBeNull();
+  });
+
+  it('offers /pr only in a Code session, and treats it as text elsewhere', () => {
+    expect(matchCommands('', 'chat').map(command => command.name)).toEqual(['clear', 'compact', 'add-dir', 'loop']);
+    expect(composerSubmitAction('/pr https://github.com/example-org/widgets/pull/611', 'chat')).toEqual({
+      kind: 'send',
+    });
+    expect(composerSubmitAction('/pr https://github.com/example-org/widgets/pull/611', 'code')).toMatchObject({
+      kind: 'command',
+      invocation: { command: { name: 'pr' } },
+    });
+  });
+
+  it('filters as the name is typed, and empties when nothing matches', () => {
+    expect(matchCommands('com', 'code').map(command => command.name)).toEqual(['compact']);
+    expect(matchCommands('cle', 'code').map(command => command.name)).toEqual(['clear']);
+    expect(matchCommands('zz', 'code')).toEqual([]);
+    expect(matchCommands('add', 'chat').map(command => command.name)).toEqual(['add-dir']);
+  });
+
+  it('runs the highlighted row on Enter and on Tab, and walks it with the arrows', () => {
+    const open = { open: true, count: 2 };
+    expect(composerMenuAction('Enter', false, open)).toBe('run');
+    expect(composerMenuAction('Tab', false, open)).toBe('run');
+    expect(composerMenuAction('ArrowDown', false, open)).toBe('next');
+    expect(composerMenuAction('ArrowUp', false, open)).toBe('previous');
+  });
+
+  it('claims nothing while it is closed, or open over no rows', () => {
+    // The empty case is what keeps "a slash naming nothing is an ordinary message" true at the
+    // keyboard: Enter has to reach the send path rather than being swallowed by a menu.
+    expect(composerMenuAction('Enter', false, { open: true, count: 0 })).toBe('default');
+    expect(composerMenuAction('Enter', false, { open: false, count: 2 })).toBe('default');
+    expect(composerMenuAction('Enter', true, { open: true, count: 2 })).toBe('default');
+    expect(composerMenuAction('a', false, { open: true, count: 2 })).toBe('default');
+  });
+
+  // Escape refuses this one menu and leaves the text where it is - the composer remembers the
+  // draft that was dismissed, so nothing typed is lost and nothing is sent.
+  it('closes on Escape without touching the turn', () => {
+    expect(composerEscapeAction({ pickerOpen: true, streaming: false })).toBe('dismiss-picker');
+    expect(composerEscapeAction({ pickerOpen: true, streaming: true })).toBe('dismiss-picker');
+  });
+});
+
+describe('composerSubmitAction', () => {
+  it('runs a command, with whatever followed its name', () => {
+    const action = composerSubmitAction('/compact focus on the auth work', 'chat');
+    expect(action.kind).toBe('command');
+    if (action.kind !== 'command') throw new Error('expected a command');
+    expect(action.invocation.command.name).toBe('compact');
+    expect(action.invocation.args).toBe('focus on the auth work');
+  });
+
+  it('runs a bare command with no argument', () => {
+    const action = composerSubmitAction('/clear', 'chat');
+    expect(action.kind).toBe('command');
+    if (action.kind !== 'command') throw new Error('expected a command');
+    expect(action.invocation.args).toBe('');
+  });
+
+  /**
+   * The rule the whole surface rests on: a slash this app does not recognise is the user's own
+   * text. Swallowing `/foo` would make a path, a skill and a typo all vanish into a command
+   * menu that has no entry for them.
+   */
+  it.each(['/foo', '/etc/hosts', '/review src/x.ts', 'clear', '/ clear', 'tell me about /compact'])(
+    'sends %s as an ordinary message',
+    text => {
+      expect(composerSubmitAction(text, 'code')).toEqual({ kind: 'send' });
+      expect(parseCommandInvocation(text, 'code')).toBeNull();
+    }
+  );
+});
+
+describe('the attach shortcut', () => {
+  const chord = (key: string, held: Partial<Record<'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey', boolean>> = {}) =>
+    isAttachChord({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...held });
+
+  it('matches the modifier plus U and nothing else', () => {
+    expect(chord('u', { metaKey: true })).toBe(true);
+    expect(chord('u', { ctrlKey: true })).toBe(true);
+    expect(chord('U', { metaKey: true })).toBe(true);
+    expect(chord('u')).toBe(false);
+    expect(chord('U', { metaKey: true, shiftKey: true })).toBe(false);
+    expect(chord('u', { metaKey: true, altKey: true })).toBe(false);
+    expect(chord('i', { metaKey: true })).toBe(false);
+  });
+
+  it('names the chord the way each platform does', () => {
+    expect(attachShortcut(true)).toEqual({ label: '\u2318U', aria: 'Meta+U' });
+    expect(attachShortcut(false)).toEqual({ label: 'Ctrl+U', aria: 'Control+U' });
+  });
+});
+
+describe('/add-dir', () => {
+  it.each(['code', 'chat'] as const)('is offered in a %s session, with its optional argument hint', mode => {
+    const command = matchCommands('add', mode)[0];
+    expect(command?.name).toBe('add-dir');
+    expect(command?.argumentHint).toBe('[path]');
+    // Picking it from the menu runs it bare, which opens the picker.
+    expect(command?.requiresArgument).toBeUndefined();
+  });
+
+  it('carries a path with spaces whole, and runs bare with none', () => {
+    expect(parseCommandInvocation('/add-dir ~/My Projects/notes', 'code')).toMatchObject({
+      command: { name: 'add-dir' },
+      args: '~/My Projects/notes',
+    });
+    expect(parseCommandInvocation('/ADD-DIR', 'chat')).toMatchObject({ command: { name: 'add-dir' }, args: '' });
+  });
+
+  it('reads the path out of the argument, or nothing for the picker', () => {
+    expect(addDirPath('')).toBeUndefined();
+    expect(addDirPath('   ')).toBeUndefined();
+    expect(addDirPath('../shared')).toBe('../shared');
+    expect(addDirPath('"/Users/me/My Folder"')).toBe('/Users/me/My Folder');
+    expect(addDirPath("'~/notes'")).toBe('~/notes');
+    expect(addDirPath('""')).toBeUndefined();
+    // Only a matching pair is a quote; a lone one is part of the name.
+    expect(addDirPath('"half')).toBe('"half');
+  });
+
+  it('is not a path starting with /add-dir', () => {
+    expect(parseCommandInvocation('/add-dirs', 'code')).toBeNull();
+    expect(composerSubmitAction('/add-dir/x', 'code')).toEqual({ kind: 'send' });
+  });
+});
+
+describe('appendToDraft', () => {
+  it('adds the text after the draft with one space between', () => {
+    expect(appendToDraft('', 'the `lid` part ')).toBe('the `lid` part ');
+    expect(appendToDraft('make', 'the `lid` part ')).toBe('make the `lid` part ');
+    expect(appendToDraft('make ', 'the `lid` part ')).toBe('make the `lid` part ');
+  });
+});
+
+describe('recallPromptAction', () => {
+  const history = ['newest', 'older', 'oldest'];
+  const key = (
+    name: string,
+    extra: Partial<{ shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean }> = {}
+  ) => ({
+    key: name,
+    shiftKey: false,
+    altKey: false,
+    metaKey: false,
+    ctrlKey: false,
+    ...extra,
+  });
+  const at = (text: string, caret = 0, end = caret) => ({ text, selectionStart: caret, selectionEnd: end });
+
+  it('fills an empty draft with the last prompt, and goes further back on each Up', () => {
+    const first = recallPromptAction(key('ArrowUp'), at(''), history, null);
+    expect(first).toEqual({ text: 'newest', recall: { index: 0, text: 'newest' } });
+    const second = recallPromptAction(key('ArrowUp'), at('newest'), history, first!.recall);
+    expect(second).toEqual({ text: 'older', recall: { index: 1, text: 'older' } });
+    const third = recallPromptAction(key('ArrowUp'), at('older'), history, second!.recall);
+    expect(third?.text).toBe('oldest');
+    // Past the oldest the key is left alone.
+    expect(recallPromptAction(key('ArrowUp'), at('oldest'), history, third!.recall)).toBeNull();
+  });
+
+  it('moves forward on Down, and past the newest back to an empty box', () => {
+    const older = { index: 1, text: 'older' };
+    expect(recallPromptAction(key('ArrowDown'), at('older'), history, older)).toEqual({
+      text: 'newest',
+      recall: { index: 0, text: 'newest' },
+    });
+    expect(recallPromptAction(key('ArrowDown'), at('newest'), history, { index: 0, text: 'newest' })).toEqual({
+      text: '',
+      recall: null,
+    });
+  });
+
+  it('never overwrites a draft the user typed, or a recalled one they edited', () => {
+    expect(recallPromptAction(key('ArrowUp'), at('my draft'), history, null)).toBeNull();
+    expect(recallPromptAction(key('ArrowUp'), at('newest, changed'), history, { index: 0, text: 'newest' })).toBeNull();
+    expect(recallPromptAction(key('ArrowDown'), at('my draft', 8), history, null)).toBeNull();
+    // Down with nothing recalled has nowhere to go.
+    expect(recallPromptAction(key('ArrowDown'), at(''), history, null)).toBeNull();
+  });
+
+  it('restarts from the newest when the draft was emptied after a recall', () => {
+    expect(recallPromptAction(key('ArrowUp'), at(''), history, { index: 2, text: 'oldest' })?.text).toBe('newest');
+  });
+
+  it('only acts with the caret at the start for Up, and on the last line for Down', () => {
+    const recalled = { index: 0, text: 'line one\nline two' };
+    const lines = ['line one\nline two', 'older'];
+    expect(recallPromptAction(key('ArrowUp'), at('line one\nline two', 3), lines, recalled)).toBeNull();
+    expect(recallPromptAction(key('ArrowUp'), at('line one\nline two', 0, 4), lines, recalled)).toBeNull();
+    expect(recallPromptAction(key('ArrowDown'), at('line one\nline two', 0), lines, recalled)).toBeNull();
+    expect(recallPromptAction(key('ArrowDown'), at('line one\nline two', 12), lines, recalled)).toEqual({
+      text: '',
+      recall: null,
+    });
+  });
+
+  it('leaves modified arrows and other keys alone, and does nothing with no history', () => {
+    for (const modifier of ['shiftKey', 'altKey', 'metaKey', 'ctrlKey'] as const) {
+      expect(recallPromptAction(key('ArrowUp', { [modifier]: true }), at(''), history, null)).toBeNull();
+    }
+    expect(recallPromptAction(key('Enter'), at(''), history, null)).toBeNull();
+    expect(recallPromptAction(key('ArrowUp'), at(''), [], null)).toBeNull();
+  });
+});
+
+const key = (
+  name: string,
+  mods: Partial<{ shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean }> = {}
+) => ({
+  key: name,
+  shiftKey: false,
+  metaKey: false,
+  ctrlKey: false,
+  altKey: false,
+  ...mods,
+});
+
+const at = (text: string, selectionStart: number, selectionEnd = selectionStart) => ({
+  text,
+  selectionStart,
+  selectionEnd,
+});
+
+/** Apply an edit the way Composer does, returning the new text and selection. */
+function apply(text: string, edit: ComposerEdit) {
+  return {
+    text: text.slice(0, edit.start) + edit.insert + text.slice(edit.end),
+    selection: [edit.selectionStart, edit.selectionEnd],
+  };
+}
+
+function editFor(...args: Parameters<typeof fenceKeyAction>) {
+  const action = fenceKeyAction(...args);
+  if (action.kind !== 'edit') throw new Error(`expected an edit, got ${action.kind}`);
+  return apply(args[1].text, action.edit);
+}
+
+describe('codeRanges', () => {
+  it('finds an inline span, backticks included', () => {
+    expect(codeRanges('use `x` here')).toEqual([{ kind: 'inline', start: 4, end: 7 }]);
+  });
+
+  it('matches a double-backtick span that contains a single backtick', () => {
+    expect(codeRanges('a ``b`c`` d')).toEqual([{ kind: 'inline', start: 2, end: 9 }]);
+  });
+
+  it('leaves an unmatched backtick unpainted', () => {
+    expect(codeRanges('it`s fine')).toEqual([]);
+  });
+
+  it('finds a closed fenced block from its opening line to its closing one', () => {
+    const text = 'look:\n```ts\nconst a = 1\n```\nafter `b`';
+    expect(codeRanges(text)).toEqual([
+      { kind: 'block', start: 6, end: 27 },
+      { kind: 'inline', start: 34, end: 37 },
+    ]);
+  });
+
+  it('runs a block still being typed to the end of the draft', () => {
+    expect(codeRanges('```\nfoo')).toEqual([{ kind: 'block', start: 0, end: 7 }]);
+  });
+
+  it('does not paint backticks inside a block as inline spans', () => {
+    expect(codeRanges('```\n`x`\n```')).toEqual([{ kind: 'block', start: 0, end: 11 }]);
+  });
+
+  it('needs a closing fence at least as long as the opening one', () => {
+    expect(codeRanges('````\nx\n```')).toEqual([{ kind: 'block', start: 0, end: 10 }]);
+    expect(codeRanges('```\nx\n````')).toEqual([{ kind: 'block', start: 0, end: 10 }]);
+  });
+
+  it('does not treat a four-space-indented fence or a tilde fence as a block', () => {
+    expect(codeRanges('    ```\nx')).toEqual([]);
+    expect(codeRanges('~~~\nx\n~~~')).toEqual([]);
+  });
+});
+
+describe('caretInCode', () => {
+  it('is true between the backticks of a span and false on its edges', () => {
+    expect(caretInCode('see `/path` x', 6)).toBe(true);
+    expect(caretInCode('see `/path` x', 4)).toBe(false);
+    expect(caretInCode('see `/path` x', 11)).toBe(false);
+  });
+
+  it('is true inside an open block and false after it closes', () => {
+    expect(caretInCode('```\n/', 5)).toBe(true);
+    expect(caretInCode('```\nx\n```\n/', 11)).toBe(false);
+  });
+});
+
+describe('fenceKeyAction', () => {
+  it('leaves every key alone outside a block', () => {
+    expect(fenceKeyAction(key('Enter'), at('hello', 5), false)).toEqual({ kind: 'default' });
+    expect(fenceKeyAction(key('Tab'), at('hello', 5), false)).toEqual({ kind: 'default' });
+    expect(fenceKeyAction(key('Enter', { metaKey: true }), at('hello', 5), false)).toEqual({ kind: 'default' });
+  });
+
+  it('leaves Enter alone just after a typed closing fence', () => {
+    expect(fenceKeyAction(key('Enter'), at('```\nfoo\n```', 11), false)).toEqual({ kind: 'default' });
+  });
+
+  it('auto-closes a fresh fence on Enter, caret on the empty line between', () => {
+    expect(editFor(key('Enter'), at('```ts', 5), false)).toEqual({ text: '```ts\n\n```', selection: [6, 6] });
+  });
+
+  it('closes with as many backticks as the fence opened with', () => {
+    expect(editFor(key('Enter'), at('````', 4), false).text).toBe('````\n\n````');
+  });
+
+  it('does not add a second closing fence when the block is already closed', () => {
+    expect(editFor(key('Enter'), at('```\n\n```', 3), false)).toEqual({ text: '```\n\n\n```', selection: [4, 4] });
+  });
+
+  it('breaks the line instead of sending inside a block, keeping its indent', () => {
+    expect(editFor(key('Enter'), at('```\nfoo\n```', 7), false)).toEqual({
+      text: '```\nfoo\n\n```',
+      selection: [8, 8],
+    });
+    expect(editFor(key('Enter'), at('```\n  foo', 9), false)).toEqual({ text: '```\n  foo\n  ', selection: [12, 12] });
+  });
+
+  it('sends on Cmd or Ctrl+Enter inside a block', () => {
+    expect(fenceKeyAction(key('Enter', { metaKey: true }), at('```\nfoo', 7), false)).toEqual({ kind: 'submit' });
+    expect(fenceKeyAction(key('Enter', { ctrlKey: true }), at('```\nfoo', 7), false)).toEqual({ kind: 'submit' });
+  });
+
+  it('leaves Shift+Enter to the textarea inside a block', () => {
+    expect(fenceKeyAction(key('Enter', { shiftKey: true }), at('```\nfoo', 7), false)).toEqual({ kind: 'default' });
+  });
+
+  it('indents at the caret on Tab', () => {
+    expect(editFor(key('Tab'), at('```\nfoo', 4), false)).toEqual({ text: '```\n  foo', selection: [6, 6] });
+  });
+
+  it('indents every selected line on Tab', () => {
+    expect(editFor(key('Tab'), at('```\na\nb', 4, 7), false)).toEqual({ text: '```\n  a\n  b', selection: [6, 11] });
+  });
+
+  it('outdents the line on Shift+Tab', () => {
+    expect(editFor(key('Tab', { shiftKey: true }), at('```\n  foo', 9), false)).toEqual({
+      text: '```\nfoo',
+      selection: [7, 7],
+    });
+  });
+
+  it('swallows Shift+Tab on a line with nothing to outdent, so focus does not jump', () => {
+    expect(fenceKeyAction(key('Tab', { shiftKey: true }), at('```\nfoo', 7), false)).toEqual({ kind: 'consume' });
+  });
+
+  // Escape then Tab is the way out of a block; without it Tab would be a keyboard trap.
+  it('hands Tab back to focus navigation right after Escape', () => {
+    expect(fenceKeyAction(key('Tab'), at('```\nfoo', 7), true)).toEqual({ kind: 'default' });
+    expect(fenceKeyAction(key('Tab', { shiftKey: true }), at('```\n  foo', 9), true)).toEqual({ kind: 'default' });
+  });
+});
+
+function bridge(saved: ComposerDrafts = {}) {
+  return {
+    list: vi.fn(async () => saved),
+    save: vi.fn(async (_sessionId: string, _text: string) => undefined),
+  };
+}
+
+describe('createComposerDraftsStore', () => {
+  it('restores saved drafts on hydrate', async () => {
+    const api = bridge({ s1: 'from last launch' });
+    const drafts = createComposerDraftsStore(() => api);
+    await drafts.hydrate();
+    expect(drafts.state.getState()).toEqual({ drafts: { s1: 'from last launch' }, hydrated: true });
+  });
+
+  it('keeps text typed before hydrate over the saved copy', async () => {
+    const api = bridge({ s1: 'old', s2: 'cleared since' });
+    const drafts = createComposerDraftsStore(() => api);
+    drafts.update('s1', 'new');
+    drafts.update('s2', 'x');
+    drafts.update('s2', '');
+    await drafts.hydrate();
+    expect(drafts.state.getState().drafts).toEqual({ s1: 'new' });
+  });
+
+  it('sends every change to main at once, with no delay a quit could cut short', () => {
+    const api = bridge();
+    const drafts = createComposerDraftsStore(() => api);
+    drafts.update('s1', 'h');
+    drafts.update('s1', 'he');
+    drafts.update('s2', 'two');
+    expect(api.save.mock.calls).toEqual([
+      ['s1', 'h'],
+      ['s1', 'he'],
+      ['s2', 'two'],
+    ]);
+  });
+
+  it('clears when the composer is emptied or sent', () => {
+    const api = bridge();
+    const drafts = createComposerDraftsStore(() => api);
+    drafts.update('s1', 'about to send');
+    drafts.update('s1', '');
+    expect(api.save.mock.calls).toEqual([
+      ['s1', 'about to send'],
+      ['s1', ''],
+    ]);
+    expect(drafts.state.getState().drafts).toEqual({});
+  });
+
+  it('treats blank text as no draft and does not save an unchanged one', () => {
+    const api = bridge();
+    const drafts = createComposerDraftsStore(() => api);
+    drafts.update('s1', '   ');
+    drafts.update('s1', '');
+    expect(api.save).not.toHaveBeenCalled();
+    expect(drafts.state.getState().drafts).toEqual({});
+  });
+
+  it('keeps drafts in memory when there is no bridge', async () => {
+    const drafts = createComposerDraftsStore(() => undefined);
+    drafts.update('s1', 'only here');
+    await drafts.hydrate();
+    expect(drafts.state.getState()).toEqual({ drafts: { s1: 'only here' }, hydrated: true });
+  });
+
+  it('keeps the text of a conversation that does not exist yet in memory without sending it to main', () => {
+    const api = bridge();
+    const drafts = createComposerDraftsStore(() => api);
+    drafts.update('draft-123', 'not a session yet');
+    expect(drafts.state.getState().drafts).toEqual({ 'draft-123': 'not a session yet' });
+    expect(api.save).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Rendered to a string, like ApprovalChoice's tests and for the same reason: this package's
+ * vitest runs on `node`.
+ *
+ * So what is asked here is the CLOSED row - that an image is wrapped in a real button and a text
+ * file is not. The viewer is a portal that mounts only once opened, so it is absent from this
+ * markup by design, which is itself worth asserting.
+ */
+const IMAGE: ChatAttachment = {
+  id: 'a1',
+  kind: 'image',
+  name: 'wide-screenshot.png',
+  mediaType: 'image/png',
+  sourceBytes: 2048,
+  byteSize: 2048,
+  truncated: false,
+};
+
+const TEXT: ChatAttachment = { ...IMAGE, id: 'a2', kind: 'text', name: 'server.log', mediaType: 'text/plain' };
+
+const PDF: ChatAttachment = {
+  ...IMAGE,
+  id: 'a3',
+  kind: 'pdf',
+  name: 'report.pdf',
+  mediaType: 'application/pdf',
+  pages: 3,
+};
+
+/**
+ * readAttachment is what the tile awaits for its bytes. Static rendering never runs the effect,
+ * so the stub only has to exist; the markup under test is the pre-bytes tile either way.
+ */
+function markup(attachments: readonly ChatAttachment[]): string {
+  vi.stubGlobal('window', { b4m: { chat: { readAttachment: () => Promise.resolve(null) } } });
+  return renderToStaticMarkup(<AttachmentRow sessionId="s1" attachments={attachments} />);
+}
+
+describe('AttachmentRow', () => {
+  it('keeps a text attachment inert - there is nothing cropped to reveal', () => {
+    const html = markup([TEXT]);
+    expect(html).toContain('server.log');
+    expect(html).not.toContain('data-testid="attachment-view-btn"');
+  });
+
+  it('shows a PDF as a document tile with its page count, never as an image or viewer', () => {
+    const html = renderToStaticMarkup(<AttachmentRow sessionId="s1" attachments={[PDF]} onRemove={() => {}} />);
+    expect(html).toContain('report.pdf');
+    expect(html).toContain('data-testid="attachment-pdf-icon"');
+    expect(html).toContain('3 pages');
+    expect(html).toContain('data-testid="attachment-remove-btn"');
+    expect(html).not.toContain('data-testid="attachment-view-btn"');
+    expect(html).not.toContain('data-testid="attachment-thumbnail"');
+  });
+
+  it('does not mount the viewer until the tile is clicked', () => {
+    expect(markup([IMAGE])).not.toContain('data-testid="attachment-viewer-image"');
+  });
+
+  it('leaves the remove control a separate button, so removing cannot also open the viewer', () => {
+    const html = renderToStaticMarkup(<AttachmentRow sessionId="s1" attachments={[IMAGE]} onRemove={() => {}} />);
+    expect(html).toContain('data-testid="attachment-remove-btn"');
+    // Siblings inside the tile, never nested - a click on one is never a click on the other.
+    expect(html).not.toMatch(/attachment-view-btn[\s\S]*?attachment-remove-btn[\s\S]*?<\/button>\s*<\/button>/);
   });
 });

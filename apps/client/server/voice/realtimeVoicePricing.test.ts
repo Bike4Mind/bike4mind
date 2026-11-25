@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { IModelPrice } from '@bike4mind/common';
 import { REALTIME_VOICE_PRICING, DEFAULT_REALTIME_VOICE_MODEL } from '@bike4mind/llm-adapters';
@@ -49,12 +50,12 @@ describe('pickRealtimeVoiceTier', () => {
   });
 
   it('alarms and settles at default rates for a model unknown to catalog and literal alike', () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     const picked = pickRealtimeVoiceTier('gpt-realtime-99-mystery', [], NOW);
     expect(picked.source).toBe('fallback-default');
     expect(picked.tier).toEqual(REALTIME_VOICE_PRICING[DEFAULT_REALTIME_VOICE_MODEL]);
     expect(error).toHaveBeenCalledTimes(1);
     expect(error.mock.calls[0][0]).toContain('[UNPRICED_MODEL]');
-    expect(error.mock.calls[0][0]).toContain('gpt-realtime-99-mystery');
+    expect(error.mock.calls[0][1]).toMatchObject({ model: 'gpt-realtime-99-mystery' });
   });
 });

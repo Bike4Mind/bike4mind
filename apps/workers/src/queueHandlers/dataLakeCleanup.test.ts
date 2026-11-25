@@ -40,6 +40,7 @@ vi.mock('@bike4mind/database', () => ({
   lakeMembershipDecisionRepository: {},
   lakeSkippedFileRepository: {},
   lakeConfigSnapshotRepository: {},
+  lakeConfigUndoClaimRepository: {},
   fabFileRepository: {
     hardDeleteWithChunks: h.hardDeleteWithChunks,
     setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true),

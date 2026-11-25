@@ -14,10 +14,13 @@ type ColumnId = 'needs-you' | 'working' | 'done' | 'failed';
 
 const COLUMNS: ReadonlyArray<{ id: ColumnId; label: string; states: readonly AgentState[] }> = [
   { id: 'needs-you', label: 'Needs you', states: ['needs-you'] },
-  { id: 'working', label: 'Working', states: ['working'] },
-  { id: 'done', label: 'Done', states: ['done', 'stopped', 'idle'] },
+  { id: 'working', label: 'Working', states: ['working', 'waiting'] },
+  { id: 'done', label: 'Done', states: ['done', 'paused', 'stopped', 'idle'] },
   { id: 'failed', label: 'Failed', states: ['failed'] },
 ];
+
+/** Settled states that share the Done column with finished agents, so their card names which one it is. */
+const QUIET_CHIP: ReadonlySet<AgentState> = new Set(['paused', 'stopped', 'idle']);
 
 const FLIP_MS = 250;
 // Columns with cards share their row's width and shrink to this before the board wraps them into
@@ -216,15 +219,17 @@ function BoardCard({
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
         {agent.decision ? (
           <AgentStateChip state={agent.state} deciding />
+        ) : agent.state === 'waiting' ? (
+          <AgentStateChip state="waiting" backgroundJobs={agent.background?.running} />
         ) : (
-          (agent.state === 'stopped' || agent.state === 'idle') && <AgentStateChip state={agent.state} muted />
+          QUIET_CHIP.has(agent.state) && <AgentStateChip state={agent.state} muted />
         )}
         {costKnown && (
           <Typography level="body-xs" textColor="text.tertiary">
             {formatAgentCost(agent.usdCost, agent.credits)}
           </Typography>
         )}
-        <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} />
+        <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} />
       </Box>
     </Box>
   );

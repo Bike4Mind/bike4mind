@@ -27,7 +27,6 @@ import { type ILogger } from '@bike4mind/observability';
 import { GatewayTimeoutError, usdToCreditsStochastic, type IUserDocument } from '@bike4mind/common';
 import { usageEventRepository } from '@bike4mind/database';
 import type { PreflightCreditHold } from '@server/utils/creditPreflight';
-import { v4 as uuidv4 } from 'uuid';
 
 export type TranscribeRejection =
   'insufficient_credits' | 'invalid_key' | 'not_found' | 'unsupported_type' | 'size_out_of_range' | 'not_configured';
@@ -89,7 +88,7 @@ export async function createTranscribeUpload({
     assertTranscriptionCredits(userId, estimateTranscriptionCost(fileSize, MIN_TRANSCRIPTION_USD_PER_MINUTE).credits)
   );
 
-  const fileKey = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/${uuidv4()}.${MIME_TO_EXTENSION[mimeType]}`;
+  const fileKey = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/${crypto.randomUUID()}.${MIME_TO_EXTENSION[mimeType]}`;
 
   const { url, fields } = await createPresignedPost(getPresignS3Client(), {
     Bucket: bucketName,

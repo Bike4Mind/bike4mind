@@ -44,7 +44,6 @@ export type AlarmLinkKey =
   | 'signup-activity'
   | 'waf-block-list'
   | 'dlq-replay'
-  | 'live-ops-triage'
   | 'agent-executions'
   | 'integration-health'
   | 'system-secrets'
@@ -103,7 +102,6 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'signup-activity': { label: 'Signup activity', path: '/admin?tab=users&signedUp=hour' },
   'waf-block-list': { label: 'WAF block list', path: '/admin?tab=security-dashboard' },
   'dlq-replay': { label: 'DLQ replay', path: adminDlqReplayPath() },
-  'live-ops-triage': { label: 'LiveOps triage', path: '/admin?tab=live-ops-triage' },
   'agent-executions': { label: 'Agent executions', path: '/admin?tab=agent-executions' },
   'integration-health': { label: 'Integration health', path: '/admin?tab=integration-health' },
   'system-secrets': { label: 'System secrets', path: '/admin?tab=system-secrets' },
@@ -238,33 +236,6 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     meaning: 'An agent hit the hard limit on self-handoffs and was stopped.',
     action: 'Review the session to see why it never finished.',
     links: ['agent-executions'],
-  },
-  'liveops-p0-issues': {
-    title: 'LiveOps found a blocker issue',
-    level: 'page',
-    category: 'infra',
-    unit: 'issues',
-    meaning: 'The automated triage created a P0 issue from production errors.',
-    action: 'Open the newest P0 issue in the tracker and respond.',
-    links: ['live-ops-triage'],
-  },
-  'liveops-p1-issues': {
-    title: 'LiveOps found a critical issue',
-    level: 'warn',
-    category: 'infra',
-    unit: 'issues',
-    meaning: 'The automated triage created a P1 issue from production errors.',
-    action: 'Open the newest P1 issue in the tracker.',
-    links: ['live-ops-triage'],
-  },
-  'liveops-high-error-volume': {
-    title: 'Production error volume is high',
-    level: 'page',
-    category: 'infra',
-    unit: 'errors',
-    meaning: 'Far more errors than usual were logged. Something may be broken for many users.',
-    action: 'Check the latest deploy and the error log for a common cause.',
-    links: ['live-ops-triage'],
   },
   'ecs-task-failed-to-start': {
     title: 'A background service cannot start',

@@ -218,6 +218,25 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
     }
   };
 
+  // A failure after the provider call started (the call outcome is unknown, or the song was generated but could not
+  // be kept) may still be billed by the provider although the user is charged nothing. Recorded at zero cost so the
+  // vendor-plan view can show it as possibly billed; a failure that never reached the provider writes nothing.
+  const recordPossiblyBilledFailure = async (job: MusicJob) => {
+    const code = job.error?.code;
+    if (code !== 'orphaned_submit' && code !== 'output_too_large') return;
+    try {
+      await deps.recordUsage({
+        job,
+        creditsCharged: 0,
+        costUsd: 0,
+        durationSeconds: job.payload.request.durationSeconds,
+        status: job.error?.cutOffByStepDeadline ? 'timeout' : 'error',
+      });
+    } catch (error) {
+      deps.logger.error('music_job_record_usage_failed', { jobId: job.id, creditsCharged: 0, error });
+    }
+  };
+
   const unreachable = (job: MusicJob, step: string): MusicStepResult => {
     deps.logger.error('music_job_unexpected_step', { jobId: job.id, state: job.state, step });
     return fail('provider_error', `music jobs finish in submit; ${step} is never reached`);
@@ -275,8 +294,12 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
     // Reads only the committed job, so the sweep's recovery of an unhandled terminal job settles or releases alike.
     async onTerminal(job) {
       const charged = job.state === 'succeeded' || (job.state === 'blocked' && job.payload.billedBlock === true);
-      if (charged) await settle(job);
-      else await releaseJobHold(job, deps);
+      if (charged) {
+        await settle(job);
+        return;
+      }
+      await releaseJobHold(job, deps);
+      await recordPossiblyBilledFailure(job);
     },
   };
 }

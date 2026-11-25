@@ -137,7 +137,7 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
             />
           )}
           {level && <StatusChip tone="info" label={level} data-testid="user-profile-level-chip" />}
-          {org && <StatusChip tone="neutral" label={org} data-testid="user-profile-org-chip" />}
+          {org && <StatusChip tone="neutral" label={`Home org: ${org}`} data-testid="user-profile-org-chip" />}
         </>
       }
       times={[

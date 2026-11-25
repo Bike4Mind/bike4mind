@@ -56,6 +56,21 @@ export function isValidSessionId(id: string): boolean {
   return SESSION_ID_PATTERN.test(id);
 }
 
+export type AgentRenameOutcome =
+  { ok: true; summary: ChatSessionSummary } | { ok: false; reason: 'user-title' | 'missing' };
+
+/**
+ * Whether an agent may replace this session's title. Unlocked and agent-set titles are fair game.
+ * A hand rename ('user') never is. A locked title with no recorded source is read by where it
+ * came from: on a spawned session it was the spawning agent's choice at creation; on any other
+ * it predates `titleSource` and only a hand rename could have locked it, so it is the user's.
+ */
+export function agentMayRetitle(session: Pick<ChatSession, 'titleLocked' | 'titleSource' | 'origin'>): boolean {
+  if (!session.titleLocked || session.titleSource === 'agent') return true;
+  if (session.titleSource === 'user') return false;
+  return session.origin !== undefined;
+}
+
 /**
  * Derive a session title from its first user message, the way the sidebar wants to read:
  * one line, trimmed, ellipsized. Falls back to the placeholder for an empty or blank prompt.
@@ -130,7 +145,7 @@ export interface CreateOptions {
  */
 const SUMMARY_INDEX = '.summary-index';
 // Bump whenever summarizeSession derives a field differently, or cached summaries keep the old value.
-const SUMMARY_INDEX_VERSION = 6;
+const SUMMARY_INDEX_VERSION = 7;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
@@ -560,14 +575,23 @@ export class SessionStore implements SessionWritesStore {
     id: string,
     rootRunId: string,
     serverRunId: string,
-    expectedScope?: string | null
+    expectedScope?: string | null,
+    organizationId: string | null = null
   ): Promise<ChatSessionSummary | null> {
     return this.mutate(
       id,
       session => {
         const policy = session.orchestrationPolicy;
-        if (policy?.rootRunId !== rootRunId || policy.serverRunId === serverRunId) return null;
-        session.orchestrationPolicy = rootPolicySchema.parse({ ...policy, serverRunId });
+        if (policy?.rootRunId !== rootRunId) return null;
+        if (policy.serverRunId === serverRunId && (policy.serverRunOrganizationId ?? null) === organizationId) {
+          return null;
+        }
+        const { serverRunOrganizationId: _previous, ...rest } = policy;
+        session.orchestrationPolicy = rootPolicySchema.parse({
+          ...rest,
+          serverRunId,
+          ...(organizationId ? { serverRunOrganizationId: organizationId } : {}),
+        });
         return true;
       },
       expectedScope
@@ -589,8 +613,37 @@ export class SessionStore implements SessionWritesStore {
       session => {
         const policy = session.orchestrationPolicy;
         if (policy?.rootRunId !== rootRunId || policy.serverRunId !== refusedRunId) return null;
-        const { serverRunId: _refused, ...rest } = policy;
+        const { serverRunId: _refused, serverRunOrganizationId: _payer, ...rest } = policy;
         session.orchestrationPolicy = rootPolicySchema.parse(rest);
+        return true;
+      },
+      expectedScope
+    );
+  }
+
+  /**
+   * Update a run's budget fields on a session's orchestration policy. `undefined` in `patch` clears
+   * that field. A no-op unless the policy still belongs to `rootRunId`, as for setServerRunId, and,
+   * when `expectedBudget` is given, unless the budget is still that one.
+   */
+  setRunBudget(
+    id: string,
+    rootRunId: string,
+    patch: Partial<Pick<RootPolicy, 'budgetCredits' | 'budgetPaused' | 'budgetWarnedAt'>>,
+    expectedScope?: string | null,
+    expectedBudget?: number
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const policy = session.orchestrationPolicy;
+        if (policy?.rootRunId !== rootRunId) return null;
+        if (expectedBudget !== undefined && policy.budgetCredits !== expectedBudget) return null;
+        const next: Record<string, unknown> = { ...policy, ...patch };
+        for (const key of Object.keys(patch) as (keyof typeof patch)[]) {
+          if (patch[key] === undefined) delete next[key];
+        }
+        session.orchestrationPolicy = rootPolicySchema.parse(next);
         return true;
       },
       expectedScope
@@ -661,6 +714,11 @@ export class SessionStore implements SessionWritesStore {
   async get(id: string): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     return directory ? this.read(directory, id) : null;
+  }
+
+  /** `get`, ordered after the writes already queued for the session. */
+  getAfterWrites(id: string): Promise<ChatSession | null> {
+    return this.serialize(id, () => this.get(id));
   }
 
   async resolveStudioWorkspace(id: string, expectedScope = this.scopeKey()): Promise<StudioWorkspaceIdentity | null> {
@@ -990,9 +1048,32 @@ export class SessionStore implements SessionWritesStore {
     return this.mutate(id, session => {
       session.title = deriveTitle(title);
       session.titleLocked = true;
+      session.titleSource = 'user';
       session.updatedAt = new Date().toISOString();
       return true;
     });
+  }
+
+  /**
+   * Name a conversation on an agent's behalf (session_rename). Locks the title exactly as `rename`
+   * does, so the generator stops too, but refuses one the user chose - see agentMayRetitle.
+   * Checked inside the serialized write, so a hand rename that lands first always wins.
+   */
+  async renameByAgent(id: string, title: string): Promise<AgentRenameOutcome> {
+    let refused = false;
+    const summary = await this.mutate(id, session => {
+      if (!agentMayRetitle(session)) {
+        refused = true;
+        return null;
+      }
+      session.title = deriveTitle(title);
+      session.titleLocked = true;
+      session.titleSource = 'agent';
+      session.updatedAt = new Date().toISOString();
+      return true;
+    });
+    if (refused) return { ok: false, reason: 'user-title' };
+    return summary ? { ok: true, summary } : { ok: false, reason: 'missing' };
   }
 
   /**
@@ -1364,7 +1445,13 @@ export class SessionStore implements SessionWritesStore {
         // does not set (granted folders, a remote link) rides along, and these it does set lose.
         const kept: Partial<ChatSession> = existing
           ? {
-              ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
+              ...(existing.titleLocked
+                ? {
+                    title: existing.title,
+                    titleLocked: true,
+                    ...(existing.titleSource ? { titleSource: existing.titleSource } : {}),
+                  }
+                : {}),
               // Same repository only: a project the importer now derives differently is not the user's.
               ...(existing.project && existing.project.directory === session.project?.directory
                 ? { project: existing.project }
@@ -1632,9 +1719,13 @@ export class SessionStore implements SessionWritesStore {
       if (!result.success && parsed[field] !== undefined)
         console.warn(`Dropping unreadable ${field} from session ${parsed.id ?? id}.`);
     }
-    // A root's snapshot is only reused while its orchestrate flag is; workers keep theirs.
+    // A root's snapshot is only reused while its orchestrate flag is; workers keep theirs. A budgeted
+    // run's policy outlives the flag: it holds the run's identity, budget and pause, which a
+    // relaunch must not reset (only permission to spawn expires).
     const orchestrateExpired =
-      parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch !== this.launchId;
+      parsed.orchestrate === true &&
+      (parsed as StoredSession).orchestrateLaunch !== this.launchId &&
+      !(orchestrationPolicy.success && orchestrationPolicy.data.budgetCredits !== undefined);
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
       ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))
@@ -1650,7 +1741,7 @@ export class SessionStore implements SessionWritesStore {
       // project did not survive normalizeProject reads back as an UNBOUND Code session rather
       // than being downgraded: it keeps the chips that can re-point it, and it is safe only
       // because such a session is granted no roots at all - see ChatService.resolveToolScope.
-      mode: parsed.mode === 'code' ? 'code' : 'chat',
+      mode: parsed.mode === 'code' || parsed.mode === 'studio' ? parsed.mode : 'chat',
       approvalMode: normalizeApprovalMode(
         parsed.approvalMode,
         (parsed as StoredSession).approvalModeLaunch,
@@ -1664,6 +1755,9 @@ export class SessionStore implements SessionWritesStore {
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
+      ...(parsed.titleLocked && (parsed.titleSource === 'user' || parsed.titleSource === 'agent')
+        ? { titleSource: parsed.titleSource }
+        : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch === this.launchId
         ? { orchestrate: true }

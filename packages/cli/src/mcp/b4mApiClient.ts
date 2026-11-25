@@ -470,6 +470,22 @@ export class B4mApiClient {
     ).data;
   }
 
+  async undoConfigChange(lakeId: string, eventId: string) {
+    return this.sdk.call('undoDataLakeConfigChange', { params: { id: lakeId, event_id: eventId } });
+  }
+
+  async listFunctions(limit: number, cursor?: string) {
+    return this.sdk.call('listFunctions', { query: { limit, ...(cursor ? { cursor } : {}) }, redirect: 'manual' });
+  }
+
+  async getFunction(id: string) {
+    return (await this.sdk.call('getFunction', { params: { id }, redirect: 'manual' })).data;
+  }
+
+  async invokeFunction(id: string, input: Record<string, unknown>) {
+    return this.sdk.call('invokeFunction', { params: { id }, body: { input }, redirect: 'manual' });
+  }
+
   async sendChat(args: {
     notebookId?: string;
     message: string;

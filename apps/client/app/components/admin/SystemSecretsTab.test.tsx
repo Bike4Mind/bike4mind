@@ -182,9 +182,16 @@ describe('SystemSecretsTab', () => {
     renderTab();
 
     const chip = await screen.findByTestId('system-secrets-infra-status-SESSION_SECRET');
-    fireEvent.mouseOver(chip);
+    vi.useFakeTimers();
+    try {
+      fireEvent.mouseOver(chip);
+      // Joy's Tooltip opens after its 100ms enterDelay.
+      await act(() => vi.advanceTimersByTimeAsync(100));
+    } finally {
+      vi.useRealTimers();
+    }
 
-    const tooltip = await screen.findByRole('tooltip');
+    const tooltip = screen.getByRole('tooltip');
     expect(tooltip).toHaveTextContent('Still the example value');
     const hint = within(tooltip).getByTestId('system-secrets-infra-hint-SESSION_SECRET');
     expect(hint).toHaveTextContent('npx sst secret set SessionSecret <value>');
@@ -245,6 +252,22 @@ describe('SystemSecretsTab', () => {
     openRowMenu('SMTP_PASSWORD');
     expect(await screen.findByTestId('system-secrets-row-edit-SMTP_PASSWORD')).toHaveTextContent('Edit value');
     expect(screen.getByTestId('system-secrets-row-delete-SMTP_PASSWORD')).toHaveTextContent('Delete override');
+  });
+
+  it('marks a stored override the stage does not read as not used and offers only Delete', async () => {
+    const unused = {
+      ...SECRETS.secrets[1],
+      secretName: 'MAIL_PASSWORD',
+      isUnused: true,
+      dbRecord: { id: 'db-9', source: 'gui_configured' },
+    };
+    respondWith({ [SECRETS_URL]: () => Promise.resolve({ data: { ...SECRETS, secrets: [unused] } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-secrets-unused-MAIL_PASSWORD')).toHaveTextContent('Not used');
+    openRowMenu('MAIL_PASSWORD');
+    expect(await screen.findByTestId('system-secrets-row-delete-MAIL_PASSWORD')).toHaveTextContent('Delete override');
+    expect(screen.queryByTestId('system-secrets-row-edit-MAIL_PASSWORD')).toBeNull();
   });
 
   it('offers Delete override only on a secret with a database override', async () => {
@@ -441,7 +464,6 @@ describe('SystemSecretsTab', () => {
     expect(mocks.delete).not.toHaveBeenCalled();
     expect(callsTo(SECRETS_URL)).toBe(1);
   });
-
   it('keeps the header and shows skeleton rows while the lists load', async () => {
     mocks.get.mockReturnValue(new Promise(() => {}));
     renderTab();

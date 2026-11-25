@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/common';
 import AnthropicBedrockBackend from './anthropic';
 import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from '../backend';
+import { Logger } from '@bike4mind/observability';
 
 const MODEL = ChatModels.CLAUDE_5_5_SONNET_BEDROCK;
 
@@ -523,7 +524,7 @@ describe('AnthropicBedrockBackend tool search stream', () => {
   });
 
   it('emits the server block with an empty input when its input JSON is malformed', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const events = serverToolUseEvents(0);
     events.splice(1, 3, {
       type: 'content_block_delta',
