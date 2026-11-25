@@ -16,7 +16,7 @@ const handler = adminApi({
       const idps = await identityProviderRepository.findAllWithSecretPresence();
       return respond(res, identityProviderListResponseSchema, idps);
     } catch (error) {
-      console.error('Error fetching identity providers:', error);
+      req.logger.error('Error fetching identity providers', { error });
       return res.status(500).json({ error: 'Failed to fetch identity providers' });
     }
   })
@@ -69,7 +69,7 @@ const handler = adminApi({
 
       return respond(res, identityProviderResponseSchema, newIdp, 201);
     } catch (error) {
-      console.error('Error creating identity provider:', error);
+      req.logger.error('Error creating identity provider', { error });
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
       }

@@ -1,13 +1,5 @@
 import { Box, Sheet, Stack, Typography, useTheme } from '@mui/joy';
-import dynamic from 'next/dynamic';
-import type { ComponentProps } from 'react';
-import type { ResponsivePie } from '@nivo/pie';
-
-type ResponsivePieProps = ComponentProps<typeof ResponsivePie>;
-
-const ResponsivePieChart = dynamic(() => import('@nivo/pie').then(m => ({ default: m.ResponsivePie })), {
-  ssr: false,
-}) as React.ComponentType<ResponsivePieProps>;
+import { Pie, PieChart, ResponsiveContainer, Sector, type PieSectorShapeProps } from 'recharts';
 
 interface WafTrafficGaugeProps {
   allowed: number;
@@ -46,20 +38,25 @@ const MiniDonut = ({ value, total, fillColor, trackColor, label, labelColor, tes
   return (
     <Box sx={{ textAlign: 'center', flex: 1 }}>
       <Box sx={{ position: 'relative', height: 130 }} data-testid={`${testIdPrefix}-chart`}>
-        <ResponsivePieChart
-          data={data}
-          colors={d => (d.data as { color: string }).color}
-          innerRadius={0.72}
-          padAngle={total > 0 ? 2 : 0}
-          cornerRadius={3}
-          startAngle={-180}
-          endAngle={180}
-          enableArcLabels={false}
-          enableArcLinkLabels={false}
-          isInteractive={false}
-          animate={true}
-          motionConfig="gentle"
-        />
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
+            {/* Starts at 6 o'clock and runs clockwise. */}
+            <Pie
+              data={data}
+              dataKey="value"
+              innerRadius="72%"
+              outerRadius="100%"
+              startAngle={270}
+              endAngle={-90}
+              paddingAngle={total > 0 ? 2 : 0}
+              cornerRadius={3}
+              shape={(props: PieSectorShapeProps) => (
+                <Sector {...props} fill={data[props.index]?.color} stroke="none" />
+              )}
+              isAnimationActive={false}
+            />
+          </PieChart>
+        </ResponsiveContainer>
 
         {/* Center overlay */}
         <Box

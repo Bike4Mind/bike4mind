@@ -43,7 +43,7 @@ function mount(node: React.ReactNode) {
 const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
 describe('the place rail', () => {
-  it('shows Chat, Code, Studio and Agents, then the account slot, and no Library yet', () => {
+  it('shows Chat, Code, Studio, Agents and Library, then the account slot', () => {
     mount(<PlaceRail place="chat" onSelect={() => {}} account={<span data-testid="account-probe" />} />);
     const ids = [...document.querySelectorAll('[data-testid^="place-rail-"]')].map(node =>
       node.getAttribute('data-testid')
@@ -53,6 +53,7 @@ describe('the place rail', () => {
       'place-rail-code-btn',
       'place-rail-studio-btn',
       'place-rail-agents-btn',
+      'place-rail-library-btn',
     ]);
     expect(byTestId('place-rail')?.lastElementChild).toBe(byTestId('rail-foot'));
     expect(byTestId('rail-foot')?.lastElementChild).toBe(byTestId('account-probe'));

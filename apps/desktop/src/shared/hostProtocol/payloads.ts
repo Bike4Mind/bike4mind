@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type {
+  BackgroundProcessInfo,
   ChatApprovalAnswer,
   ChatModelCatalog,
   ChatQueueEvent,
@@ -8,10 +9,12 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionSummary,
   ChatStreamEvent,
+  CreateCodeSessionRequest,
+  CreateCodeSessionResult,
+  ProjectInspection,
   SendMessageRequest,
   SendMessageResult,
 } from '../chat';
-import type { CreateCodeSessionIpcRequest, CreateCodeSessionIpcResult } from '../ipc';
 import type { PendingTaskDecision, TaskDecisionAnswer } from '../orchestration';
 import type { NewSessionDefaults } from '../sessionDefaults';
 
@@ -68,8 +71,18 @@ export const sendMessageRequestPayloadSchema = structuralGuard<SendMessageReques
   text: 'string',
 });
 export const sendMessageResultPayloadSchema = structuralGuard<SendMessageResult>({ ok: 'boolean' });
-export const createCodeSessionRequestPayloadSchema = structuralGuard<CreateCodeSessionIpcRequest>({});
-export const createCodeSessionResultPayloadSchema = structuralGuard<CreateCodeSessionIpcResult>({ ok: 'boolean' });
+export const createCodeSessionRequestPayloadSchema = structuralGuard<CreateCodeSessionRequest>({});
+export const createCodeSessionResultPayloadSchema = structuralGuard<CreateCodeSessionResult>({ ok: 'boolean' });
+export const projectInspectionPayloadSchema = structuralGuard<ProjectInspection>({
+  directory: 'string',
+  isRepository: 'boolean',
+  branches: 'array',
+});
+export const backgroundProcessPayloadSchema = structuralGuard<BackgroundProcessInfo>({
+  id: 'string',
+  sessionId: 'string',
+  status: 'string',
+});
 export const chatModelCatalogPayloadSchema = structuralGuard<ChatModelCatalog>({ models: 'array' });
 export const newSessionDefaultsPayloadSchema = structuralGuard<NewSessionDefaults>({
   model: 'string',

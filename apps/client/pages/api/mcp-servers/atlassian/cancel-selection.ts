@@ -42,8 +42,6 @@ const handler = baseApi().post(async (req, res) => {
     atlassianConnect: null,
   });
 
-  console.log(`[Atlassian Cancel Selection] User ${userId} cancelled pending site selection`);
-
   res.status(200).json({
     success: true,
   });

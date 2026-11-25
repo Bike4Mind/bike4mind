@@ -20,7 +20,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       const result = await mfaService.cancelMFASetup(freshUser, userRepository);
       res.json(result);
     } catch (error: any) {
-      console.error('Error canceling MFA setup:', error);
+      req.logger.error('Error canceling MFA setup', { error });
       res.status(400).json({ error: error.message || 'Failed to cancel MFA setup' });
     }
   })

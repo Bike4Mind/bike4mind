@@ -102,7 +102,7 @@ const handler = adminApi({ adminPermissions: { POST: 'users:moderate' } }).post(
       resetBody = { success: result.success, user: redactUserSecretsForSelf(result.user) };
     } catch (error: unknown) {
       if (auditWriteStarted || error instanceof ForbiddenError) throw error;
-      console.error('Error force resetting MFA:', error);
+      req.logger.error('Error force resetting MFA', { error });
       return res
         .status(400)
         .json({ error: error instanceof Error && error.message ? error.message : 'Failed to reset MFA' });

@@ -72,7 +72,7 @@ public struct RemoteDestinationSource: DestinationSource {
     var cursor: String?
     for _ in 0..<maxPages {
       let page = try await capture.listLakes(cursor: cursor, limit: pageSize)
-      all += page.items.filter { !$0.isBuiltIn }
+      all += page.items.filter { !$0.isBuiltIn && $0.canManage }
       guard let next = page.nextCursor else { break }
       cursor = next
     }

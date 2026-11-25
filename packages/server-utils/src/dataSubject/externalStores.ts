@@ -199,7 +199,10 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     kind: 'logs',
     name: 'WAF request logs',
     holds: 'Client IP addresses and request headers',
-    erasure: { action: 'expires', after: '30 days (log group retention, `infra/waf.ts`)' },
+    erasure: {
+      action: 'expires',
+      after: '90 days on production, 30 days on stages whose log group `infra/waf.ts` creates',
+    },
   },
   {
     kind: 'logs',

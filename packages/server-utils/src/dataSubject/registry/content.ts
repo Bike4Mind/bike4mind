@@ -157,6 +157,12 @@ export const contentHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
+  Obligation: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The scan is the person's own FabFile; the lake is filed into by id and covered by its own entry.
+    unrelatedPaths: ['fileId', 'destinationLakeId'],
+  },
   OrganizationLibrary: {
     kind: 'noUserData',
     note: 'Organization-owned definition snapshots with no author identity or personal source reference.',

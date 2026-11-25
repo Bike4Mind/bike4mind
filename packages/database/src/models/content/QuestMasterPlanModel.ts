@@ -208,8 +208,7 @@ export const QuestMasterPlan: Model<IQuestMasterPlanDocument> =
  * Filter arms that keep a write to a plan the caller can still write: owner or sharedWith, and not
  * soft-deleted. ANDed into every sharee-reachable write so a revoke or delete landing after the
  * route's access check turns the write into a no-op. Public visibility is read-only, so it has no
- * arm. Must stay in sync with verifyQuestPlanWriteAccess (apps/client/server/utils/questMasterPlanAccess.ts)
- * and callerCanWritePlan (b4m-core/services/src/llm/ChatCompletionFeatures.ts).
+ * arm. Kept for the legacy plan conversion and drop migrations; no route or chat path writes plans anymore.
  */
 const writableBy = (userId: string) => ({ deletedAt: null, $or: [{ userId }, { sharedWith: userId }] });
 

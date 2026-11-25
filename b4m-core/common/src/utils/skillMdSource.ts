@@ -46,7 +46,7 @@ export function readSkillMdSourceUrl(frontmatter: string): string | undefined {
 
 /**
  * True when the file's frontmatter carries the source stamp. Reads the raw fence text because the
- * stamp is a YAML comment, which every YAML parser (gray-matter included) discards.
+ * stamp is a YAML comment, which every YAML parser discards.
  */
 export function frontmatterHasSourceStamp(text: string): boolean {
   const split = splitSkillMdFrontmatter(text);

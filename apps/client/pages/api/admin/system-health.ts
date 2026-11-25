@@ -8,7 +8,7 @@ const handler = adminApi({ adminPermissions: { GET: 'settings:manage' }, require
     try {
       return res.json(await getSystemHealthStatus());
     } catch (error) {
-      console.error('Error getting system health:', error);
+      req.logger.error('Error getting system health', { error });
       return res.status(500).json({
         error: 'Failed to get system health status',
       });

@@ -1,7 +1,7 @@
 /*
 Renders knowledge items by type: files (PDF, markdown, DOCX, CSV/JSON, text, code)
-and AI-reply artifacts (QuestMaster quest chains, Mermaid, Recharts, React/HTML/SVG,
-chess, lattice, Python). Each type has a dedicated viewer.
+and AI-reply artifacts (Mermaid, Recharts, React/HTML/SVG, chess, lattice, Python). Each type
+has a dedicated viewer; a retired in-chat QuestMaster plan tab shows the legacy plan note.
 */
 
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
@@ -41,8 +41,7 @@ import MarkdownViewer, { UnmarkedCitedPassage } from './MarkdownViewer';
 import { citedPassageForFile } from './citedPassage';
 import DocxViewer from './DOCXViewer';
 import CSVViewer from './CSVViewer';
-import QuestMasterReply from '../GenAI/QuestMasterReply';
-import { QuestMasterData } from '@bike4mind/common';
+import LegacyQuestMasterNote from '../GenAI/LegacyQuestMasterNote';
 import type { ArtifactType } from '@bike4mind/common';
 import PictureInPictureIcon from '@mui/icons-material/PictureInPicture';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
@@ -109,7 +108,6 @@ import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPrev
 import { useAdminTools } from '@client/app/hooks/useAdminTools';
 import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { useQuestExport } from '@client/app/hooks/data/useQuestExport';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
 import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
@@ -217,6 +215,7 @@ interface IFileKnowledgeItem extends IBaseKnowledgeItem {
   type: 'file';
   content: IFabFileDocument;
 }
+/** A retired in-chat QuestMaster plan; `content` is the legacy plan id and is never fetched. */
 interface IQuestMasterKnowledgeItem extends IBaseKnowledgeItem {
   type: 'questmaster';
   content: string;
@@ -504,7 +503,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
   const isMobile = useIsMobile();
   const { selectedTabIndex, showLineNumbers } = useKnowledgeViewer();
   const layout = useSessionLayout(s => s.layout);
-  const questExport = useQuestExport();
   const [markdownContent, setMarkdownContent] = useState<string | null>(null);
   const [migratedArtifactIds] = useState<Set<string>>(new Set());
 
@@ -780,8 +778,8 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
           items.push({
             id: artifact.id,
             type: 'questmaster',
-            content: artifact.content as string,
-            title: (artifact.content as QuestMasterData).title || 'Quest Plan',
+            content: typeof artifact.content === 'string' ? artifact.content : '',
+            title: 'Quest Plan',
             timestamp: artifactTimestamp,
           });
           break;
@@ -994,9 +992,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       const streamedMsg = msg as z.infer<typeof StreamedChatCompletionAction>;
       setIsLoading(!!streamedMsg.statusMessage);
 
-      // A questmaster item's content is its plan id, which QuestMasterReply fetches and
-      // subscribes by, so a streamed reply must never rewrite it.
-
       if (currentArtifactData.type === 'code' && currentArtifactData.id) {
         // Code artifacts need no update during streaming; a no-op here avoids a loop.
       }
@@ -1181,9 +1176,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       case 'svg':
         contentToPublish = currentItem.content.content;
         break;
-      case 'questmaster':
-        contentToPublish = currentItem.content;
-        break;
       case 'python':
         contentToPublish = `\`\`\`python\n${currentItem.content.content}\n\`\`\``;
         break;
@@ -1223,7 +1215,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     // publish wiring runs the elision detector, whose JS-bearing scans are gated on this value. A
     // widened `string` compiled fine and silently disabled those scans - narrow so a new unhandled
     // kind is a compile error here instead.
-    let type: ArtifactType = item.type;
+    const type: ArtifactType = item.type;
     let content = '';
     // ArtifactData is a union with no top-level `title`; each case below sets it
     // from the per-type content. Fall back to a generic title.
@@ -1247,10 +1239,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       case 'python':
         content = item.content.content;
         title = (item.content as { title?: string }).title || title;
-        break;
-      case 'questmaster':
-        type = 'code';
-        content = typeof item.content === 'string' ? item.content : '';
         break;
       default:
         toast.error("This artifact type can't be published yet");
@@ -1348,10 +1336,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             }
           }
           break;
-        case 'questmaster':
-          await copyToClipboard(currentItem.content);
-          toast.success('Content copied to clipboard');
-          break;
         case 'code':
           await copyToClipboard(currentItem.content.code);
           toast.success('Content copied to clipboard');
@@ -1445,9 +1429,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             if (isHtmlFile) setIsPreparingDownload(false);
           }
         }
-        break;
-      case 'questmaster':
-        questExport.startExport(currentItem.id);
         break;
       case 'code':
         downloadFile(
@@ -1776,7 +1757,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
               <Tooltip
                 title={
                   knowledgeItems[selectedTabIndex]?.type === 'questmaster'
-                    ? 'Use Export for Quest Plans'
+                    ? 'Nothing to copy'
                     : isCopying
                       ? 'Copied!'
                       : 'Copy Content'
@@ -1818,9 +1799,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                     isPreparingDownload
                       ? 'Preparing download...'
                       : knowledgeItems[selectedTabIndex]?.type === 'questmaster'
-                        ? questExport.isExporting
-                          ? `Exporting... ${questExport.progress}%`
-                          : 'Export Quest Plan'
+                        ? 'Nothing to download'
                         : 'Download Content'
                   }
                   disableInteractive
@@ -1828,13 +1807,13 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                   <IconButton
                     size="sm"
                     onClick={handleDownload}
-                    disabled={questExport.isExporting || questExport.isStarting || isPreparingDownload}
+                    disabled={isPreparingDownload || knowledgeItems[selectedTabIndex]?.type === 'questmaster'}
                     sx={(theme: Theme) => ({
                       borderColor: theme.palette.divider,
                     })}
                     data-testid="knowledgeviewer-download-btn"
                   >
-                    {questExport.isExporting || isPreparingDownload ? (
+                    {isPreparingDownload ? (
                       <CircularProgress size="sm" sx={{ '--CircularProgress-size': '16px' }} />
                     ) : (
                       <FileDownloadOutlinedIcon sx={{ fontSize: 16 }} />
@@ -1844,27 +1823,28 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
               )}
             </ButtonGroup>
 
-            {knowledgeItems[selectedTabIndex]?.type !== 'file' && (
-              <Button
-                size="sm"
-                variant="solid"
-                startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
-                onClick={handleShareArtifact}
-                data-testid="artifact-viewer-share"
-                sx={{
-                  backgroundColor: brand[800],
-                  color: '#fff',
-                  fontWeight: 600,
-                  // Colour alone on hover, matching the card's Share button.
-                  transition: 'background-color 0.15s ease',
-                  '&:hover': {
-                    backgroundColor: brand[900],
-                  },
-                }}
-              >
-                Share
-              </Button>
-            )}
+            {knowledgeItems[selectedTabIndex]?.type !== 'file' &&
+              knowledgeItems[selectedTabIndex]?.type !== 'questmaster' && (
+                <Button
+                  size="sm"
+                  variant="solid"
+                  startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
+                  onClick={handleShareArtifact}
+                  data-testid="artifact-viewer-share"
+                  sx={{
+                    backgroundColor: brand[800],
+                    color: '#fff',
+                    fontWeight: 600,
+                    // Colour alone on hover, matching the card's Share button.
+                    transition: 'background-color 0.15s ease',
+                    '&:hover': {
+                      backgroundColor: brand[900],
+                    },
+                  }}
+                >
+                  Share
+                </Button>
+              )}
             {artifactShareModal}
 
             <Tooltip title="Close Knowledge Preview" disableInteractive>
@@ -2233,25 +2213,8 @@ const KnowledgeContent: React.FC<{
           key={refreshKey}
         />
       );
-    case 'questmaster': {
-      const questMasterPlanId = item.content;
-      if (!currentSession) {
-        return (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-            <Typography level="body-lg">
-              Send a message to the AI to begin your session and view this content.
-            </Typography>
-          </Box>
-        );
-      }
-      return (
-        <QuestMasterReply
-          questMasterPlanId={questMasterPlanId}
-          isInKnowledgeViewer={true}
-          currentSession={currentSession}
-        />
-      );
-    }
+    case 'questmaster':
+      return <LegacyQuestMasterNote />;
     case 'code': {
       const codeData = item.content;
 

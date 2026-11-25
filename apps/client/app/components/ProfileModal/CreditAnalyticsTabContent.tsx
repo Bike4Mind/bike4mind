@@ -19,11 +19,6 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InsightsIcon from '@mui/icons-material/Insights';
 import PieChartIcon from '@mui/icons-material/PieChart';
-import { ResponsiveLine } from '@nivo/line';
-import { ResponsivePie } from '@nivo/pie';
-
-// Type assertions for Nivo components
-const ResponsiveLineChart = ResponsiveLine as any;
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
 import { useUser } from '@client/app/contexts/UserContext';
 import dayjs from 'dayjs';
@@ -45,10 +40,9 @@ import { TYPE } from './settingsStyles';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import { computeBurnStats, MIN_DAYS_FOR_PROJECTION } from './creditBurnRate';
-import { getCreditSeriesLabel } from './creditChartLabels';
+import { CreditUsageChart } from './CreditUsageChart';
+import { DonutChart } from '@client/app/components/Charts/DonutChart';
 import dynamic from 'next/dynamic';
-
-type SliceTooltipPoint = { id: string; seriesId: string | number; data: { x: string | number | Date; y: number } };
 
 const UsageDashboard = dynamic(
   () =>
@@ -496,16 +490,16 @@ const CreditAnalyticsTabContent: React.FC = () => {
   }, [timePeriod, observedDays, tooEarlyToProject]);
 
   // Calculate tick interval based on time period to avoid overcrowding
-  const tickInterval = useMemo(() => {
+  const tickEveryDays = useMemo(() => {
     const selectedDays = parseInt(timePeriod, 10);
     if (selectedDays <= 7) {
-      return 'every 1 day'; // Show every day for week view
+      return 1; // Show every day for week view
     } else if (selectedDays <= 30) {
-      return 'every 7 days'; // Show every week for month view
+      return 7; // Show every week for month view
     } else if (selectedDays <= 90) {
-      return 'every 14 days'; // Show every 2 weeks for quarter view
+      return 14; // Show every 2 weeks for quarter view
     } else {
-      return 'every 30 days'; // Show every month for half-year view
+      return 30; // Show every month for half-year view
     }
   }, [timePeriod]);
 
@@ -520,42 +514,6 @@ const CreditAnalyticsTabContent: React.FC = () => {
       return 0; // Hide points for 90+ days
     }
   }, [timePeriod]);
-
-  // Chart theme based on Joy UI colors
-  const chartTheme = {
-    axis: {
-      ticks: {
-        text: {
-          fill: theme.palette.text.tertiary,
-        },
-      },
-      legend: {
-        text: {
-          fill: theme.palette.text.primary,
-        },
-      },
-    },
-    grid: {
-      line: {
-        stroke: theme.palette.divider,
-      },
-    },
-    tooltip: {
-      container: {
-        background: theme.palette.background.surface,
-        color: theme.palette.text.primary,
-        boxShadow: theme.shadow.md,
-        borderRadius: theme.radius.md,
-      },
-    },
-    crosshair: {
-      line: {
-        stroke: theme.palette.primary.solidBg,
-        strokeWidth: 1,
-        strokeOpacity: 0.5,
-      },
-    },
-  };
 
   const { textModels, imageModels, textBedrockChips } = useMemo(() => {
     const byName = (a: ModelInfo, b: ModelInfo) => a.name.localeCompare(b.name);
@@ -886,74 +844,18 @@ const CreditAnalyticsTabContent: React.FC = () => {
               </Alert>
             </Box>
           ) : transactions && transactions.length > 0 ? (
-            <ResponsiveLineChart
-              data={chartData}
-              theme={chartTheme}
-              margin={{ top: 20, right: 30, bottom: 80, left: 60 }}
-              xScale={{
-                type: 'time',
-                format: '%Y-%m-%d',
-                useUTC: false,
-                precision: 'day',
-              }}
-              yScale={{
-                type: 'linear',
-                min: 'auto',
-                max: 'auto',
-              }}
-              xFormat="time:%Y-%m-%d"
-              yFormat=">-,.0f"
-              axisLeft={{
-                legend:
-                  viewMode === 'usage'
-                    ? t('credits.credits_used')
-                    : viewMode === 'credits_added'
-                      ? 'Credits Added'
-                      : t('credits.credits'),
-                legendOffset: -45,
-                legendPosition: 'middle',
-              }}
-              axisBottom={{
-                format: '%b %d',
-                tickValues: tickInterval,
-                legend: t('common.date'),
-                legendOffset: 32,
-                legendPosition: 'middle',
-              }}
+            <CreditUsageChart
+              series={chartData}
+              yLegend={
+                viewMode === 'usage'
+                  ? t('credits.credits_used')
+                  : viewMode === 'credits_added'
+                    ? 'Credits Added'
+                    : t('credits.credits')
+              }
+              xLegend={t('common.date')}
+              tickEveryDays={tickEveryDays}
               pointSize={pointSize}
-              pointColor={theme.palette.background.surface}
-              pointBorderWidth={pointSize > 0 ? 2 : 0}
-              pointBorderColor={{ from: 'serieColor' }}
-              enablePointLabel={false}
-              enableArea={true}
-              areaOpacity={0.15}
-              useMesh={true}
-              enableGridX={false}
-              enableSlices="x"
-              curve="monotoneX"
-              colors={chartData.map(d => d.color || theme.palette.primary[500])}
-              sliceTooltip={({ slice }: { slice: { points: SliceTooltipPoint[] } }) => (
-                <Box
-                  sx={{
-                    p: 1,
-                    bgcolor: 'background.surface',
-                    borderRadius: 'sm',
-                    boxShadow: 'sm',
-                    border: '1px solid',
-                    borderColor: 'divider',
-                  }}
-                >
-                  <Typography level="body-xs">
-                    <strong>{dayjs(slice.points[0]?.data.x).format('MMM D, YYYY')}</strong>
-                  </Typography>
-                  {slice.points.map(point => (
-                    <Typography key={point.id} level="body-xs">
-                      {getCreditSeriesLabel(String(point.seriesId), t)}:{' '}
-                      <strong>{point.data.y.toLocaleString()}</strong> {t('credits.credits')}
-                    </Typography>
-                  ))}
-                </Box>
-              )}
             />
           ) : (
             <Box
@@ -978,33 +880,16 @@ const CreditAnalyticsTabContent: React.FC = () => {
             </Typography>
 
             <Box sx={{ height: 340 }}>
-              <ResponsivePie
+              <DonutChart
+                testId="credit-analytics-model-pie"
                 data={pieChartData}
                 margin={{ top: 20, right: 80, bottom: 40, left: 80 }}
-                innerRadius={0.5}
-                padAngle={0.7}
-                cornerRadius={3}
-                activeOuterRadiusOffset={8}
-                borderWidth={1}
-                borderColor={{ from: 'color', modifiers: [['darker', 0.2]] }}
-                arcLinkLabelsSkipAngle={10}
-                arcLinkLabelsTextColor={theme.palette.text.primary}
-                arcLinkLabelsThickness={2}
-                arcLinkLabelsColor={{ from: 'color' }}
-                arcLabelsSkipAngle={10}
-                arcLabelsTextColor={{ from: 'color', modifiers: [['darker', 2]] }}
-                theme={chartTheme}
-                // @ts-ignore - The type definition for PieTooltipProps doesn't match with the actual API
-                tooltip={({ datum }) => {
-                  // Type assertion to handle the typing issue
-                  const label = String(datum.label);
-                  const value = Number(datum.value);
-                  const percentage = ((value / pieChartData.reduce((sum, item) => sum + item.value, 0)) * 100).toFixed(
-                    1
-                  );
-
+                renderTooltip={datum => {
+                  const total = pieChartData.reduce((sum, item) => sum + item.value, 0);
+                  const percentage = ((datum.value / total) * 100).toFixed(1);
                   return (
                     <Box
+                      data-testid="credit-analytics-model-pie-tooltip"
                       sx={{
                         p: 1,
                         bgcolor: 'background.surface',
@@ -1015,7 +900,8 @@ const CreditAnalyticsTabContent: React.FC = () => {
                       }}
                     >
                       <Typography level="body-xs">
-                        <strong>{label}</strong>: {value.toLocaleString()} {t('credits.credits')} ({percentage}%)
+                        <strong>{datum.label}</strong>: {datum.value.toLocaleString()} {t('credits.credits')} (
+                        {percentage}%)
                       </Typography>
                     </Box>
                   );

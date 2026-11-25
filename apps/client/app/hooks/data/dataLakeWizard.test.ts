@@ -210,7 +210,7 @@ describe('useBatchUpload onError', () => {
   });
 
   it('translates a 422 into a friendly validation message and never surfaces raw zod text', async () => {
-    // The server returns zod-validation-error text on a 422; it must not reach the UI.
+    // The server returns formatZodError text on a 422; it must not reach the UI.
     const rawZod = 'Validation error: String must contain at least 2 character(s) at "slug"';
     apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: rawZod } } });
     seedWizardFile();

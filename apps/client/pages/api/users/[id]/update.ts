@@ -54,6 +54,9 @@ import {
   requestAuditWriter,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { gradeDetectionsForStatusChange } from '@server/admin/shadowDetectionStatusVerdicts';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'userUpdate' } });
 
 const idParamSchema = z.object({ id: z.string() });
 
@@ -112,9 +115,7 @@ function logConsentToggle(
     outcome: 'success',
     durationMs: 0,
     metadata: { previousLevel, newLevel, source: 'user_preferences' },
-  }).catch(err =>
-    console.warn('[TelemetryAudit] Failed to log consent toggle:', err instanceof Error ? err.message : 'Unknown error')
-  );
+  }).catch(err => logger.warn('Failed to log consent toggle', { error: err }));
 }
 
 /**

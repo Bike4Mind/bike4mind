@@ -4,7 +4,6 @@ import {
   ACCOUNT_SUSPENDED_ERROR_CODE,
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
-  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
@@ -107,10 +106,14 @@ export const SimplifiedChatRequestSchema = z.object({
         '`effectiveTools` (the mode discarded it) without being unrecognized. Both reported lists ' +
         'are deduplicated, and `unrecognizedTools` names at most the first 10 distinct ids.'
     ),
+  // Deprecated and ignored: the in-chat QuestMaster plan is retired. Kept so published SDK and
+  // mobile clients that still set it keep compiling against the contract; the turn runs as usual.
+  enableQuestMaster: z
+    .boolean()
+    .optional()
+    .describe('Deprecated and ignored. The in-chat QuestMaster plan this used to start has been retired.'),
   // Explicit overrides - when enableTools is true, these default to true but can be
-  // individually disabled (e.g., voice agent_request disables QuestMaster so replies
-  // aren't cleared and replaced with a plan document)
-  enableQuestMaster: z.boolean().optional(),
+  // individually disabled.
   enableMementos: z.boolean().optional(),
   enableAgents: z.boolean().optional(),
   // How much of the system stack to place in front of the model. Unset keeps today's behaviour.
@@ -560,7 +563,6 @@ export const ChatForbiddenErrorSchema = MeteredForbiddenErrorSchema.extend({
     .enum([
       ACCOUNT_SUSPENDED_ERROR_CODE,
       MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
-      FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
       SPEND_FROZEN_ERROR_CODE,

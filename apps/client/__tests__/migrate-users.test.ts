@@ -125,6 +125,7 @@ describe('/api/reg-invites/migrate', () => {
     mockReq = {
       user: { id: 'admin-123', isAdmin: true },
       ability: {},
+      logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
     };
 
     // Dynamic import to apply mocks

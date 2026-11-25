@@ -119,7 +119,6 @@ import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { TabIntro } from './TabIntro';
 import { isImageModel } from '@client/app/utils/commands';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
-import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ImageTemplatePanel } from '../ImageTemplates/ImageTemplatePanel';
 
 /**
@@ -425,8 +424,6 @@ interface SelectedModelDetailsProps {
   setLiveAI: (enabled: boolean) => void;
   stream: boolean;
   setStream: (enabled: boolean) => void;
-  isQuestMasterFeatureEnabled: boolean;
-  isQuestMasterEnabled: boolean;
   voiceOver: boolean;
   imageSettings: ImageSettingItem[];
   prompt_upsampling: boolean;
@@ -655,8 +652,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   setLiveAI,
   stream,
   setStream,
-  isQuestMasterFeatureEnabled,
-  isQuestMasterEnabled,
   voiceOver,
   imageSettings,
   prompt_upsampling,
@@ -767,30 +762,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 variant="outlined"
                 sx={stream ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
               />
-            ),
-          },
-        ]
-      : []),
-    ...(isQuestMasterFeatureEnabled
-      ? [
-          {
-            key: 'quest-master',
-            label: 'Quest Master',
-            // Wraps the control alone. Around the whole pair it fired from the label too and centred
-            // itself across both, which read as belonging to neither. The native `title` came off the
-            // checkbox with it - it duplicated this one.
-            control: (
-              <Tooltip title="Enable Quest Master">
-                <Checkbox
-                  checked={isQuestMasterEnabled}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                    setLLM({ isQuestMasterEnabled: e.target.checked })
-                  }
-                  color="success"
-                  variant="outlined"
-                  sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
-                />
-              </Tooltip>
             ),
           },
         ]
@@ -1621,7 +1592,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
     size,
     quality,
     style,
-    isQuestMasterEnabled,
     safety_tolerance,
     prompt_upsampling,
     seed,
@@ -1638,7 +1608,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
       s.size,
       s.quality,
       s.style,
-      s.isQuestMasterEnabled,
       s.safety_tolerance,
       s.prompt_upsampling,
       s.seed,
@@ -1656,9 +1625,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   const safeTopP = top_p ?? 1;
   const safePromptUpsampling = prompt_upsampling ?? false;
   const safeSafetyTolerance = safety_tolerance ?? 0;
-
-  const { isFeatureEnabled } = useFeatureEnabled();
-  const isQuestMasterFeatureEnabled = isFeatureEnabled('enableQuestMaster');
 
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = useMemo(() => {
@@ -2356,8 +2322,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 setLiveAI={setLiveAI}
                 stream={stream}
                 setStream={setStream}
-                isQuestMasterFeatureEnabled={isQuestMasterFeatureEnabled}
-                isQuestMasterEnabled={isQuestMasterEnabled}
                 voiceOver={voiceOver}
                 imageSettings={imageSettings}
                 prompt_upsampling={safePromptUpsampling}

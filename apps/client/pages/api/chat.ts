@@ -43,8 +43,6 @@ import {
   BadGatewayError,
   chatContract,
   filterKnownTools,
-  ForbiddenError,
-  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   GatewayTimeoutError,
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
@@ -67,7 +65,6 @@ import { apiKeyBillingOrgId, resolveRequestBillingOrgId } from '@server/billing/
 import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
-import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
@@ -267,19 +264,6 @@ async function handleChat(
     gpcSignalDetected: req.headers['sec-gpc'] === '1',
     features: new Map<featureNames, ChatCompletionFeature>(),
     logger: req.logger,
-    createCompletionMeter: ({
-      organizationId,
-      featureLabel,
-    }: {
-      organizationId: string | null;
-      featureLabel: string;
-    }) =>
-      createCompletionMeter(req.user!, req.logger, featureLabel, {
-        sessionId,
-        organizationId,
-        apiKeyId: req.apiKeyInfo?.keyId,
-        apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
-      }),
     invokeLambda: async (params: any) => {
       if (simplifiedRequest.wait) {
         // wait=true: the quest is processed inline below (ChatCompletionProcess). Do NOT
@@ -302,8 +286,8 @@ async function handleChat(
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
   const turnAuth = requestTurnAuth(req);
   let quest: Awaited<ReturnType<ChatCompletionInvoke['invoke']>>;
-  const invokeTurn = () =>
-    invokeService.invoke({
+  try {
+    quest = await invokeService.invoke({
       body: internalRequest,
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
@@ -313,21 +297,6 @@ async function handleChat(
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
-    });
-  try {
-    quest = await invokeTurn().catch(error => {
-      if (
-        simplifiedRequest.enableQuestMaster === undefined &&
-        !simplifiedRequest.toolMode &&
-        simplifiedRequest.enableTools === true &&
-        error instanceof ForbiddenError &&
-        error.additionalInfo?.errorCode === FREE_QUEST_LIMIT_REACHED_ERROR_CODE
-      ) {
-        // Admission refuses before quest creation, so the legacy default can safely fall back.
-        internalRequest.enableQuestMaster = false;
-        return invokeTurn();
-      }
-      throw error;
     });
   } catch (error) {
     // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it
@@ -362,8 +331,6 @@ async function handleChat(
             body: {
               ...internalRequest,
               ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
-              questMasterStartId: invokeService.questMasterStartId,
-              questAdmittedAs: invokeService.questAdmittedAs,
               questId: quest.id,
               userId: req.user.id,
               // Mirrors invoke() above: process() reads the tool context's auth from this body only.
@@ -373,7 +340,6 @@ async function handleChat(
               queryComplexity: 'simple',
               // Optional schema fields - declared for QuestStartBodySchema type conformance
               dashboardParams: undefined,
-              questMaster: undefined,
               researchMode: undefined,
               imageConfig: undefined,
             },
@@ -691,7 +657,8 @@ function transformToInternalFormat(
         : !!request.enableTools || requestedTools.length > 0;
 
   // Determine capability defaults: legacy enableTools=true defaults to true,
-  // toolMode='smart' defaults to false (conservative - just tools, no QuestMaster etc.)
+  // toolMode='smart' defaults to false (conservative - just tools, no mementos or agents).
+  // `enableQuestMaster` on the request is deprecated and ignored.
   const isLegacyToolsPath = !request.toolMode && request.enableTools;
 
   return {
@@ -731,12 +698,11 @@ function transformToInternalFormat(
       ? {
           // Legacy enableTools=true callers expect full capabilities by default.
           // toolMode='smart' callers get conservative defaults (just tools).
-          enableQuestMaster: request.enableQuestMaster ?? (isLegacyToolsPath ? true : false),
           enableMementos: request.enableMementos ?? (isLegacyToolsPath ? true : false),
           enableAgents: request.enableAgents ?? (isLegacyToolsPath ? true : false),
           ...(effectiveTools && effectiveTools.length > 0 ? { tools: effectiveTools } : {}),
         }
-      : { enableQuestMaster: false, enableMementos: false, enableAgents: false, tools: [] }),
+      : { enableMementos: false, enableAgents: false, tools: [] }),
   };
 }
 

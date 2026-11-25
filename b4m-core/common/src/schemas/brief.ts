@@ -32,6 +32,10 @@ export const BriefSourceRefSchema = z.discriminatedUnion('kind', [
     kind: z.literal('delegation'),
     delegationId: z.string().min(1).describe('The item you delegated; read it with `GET /api/v1/delegations/{id}`.'),
   }),
+  z.object({
+    kind: z.literal('obligation'),
+    obligationId: z.string().min(1).describe('A confirmed obligation; read it with `GET /api/v1/obligations/{id}`.'),
+  }),
 ]);
 
 export const BriefItemSchema = z.object({

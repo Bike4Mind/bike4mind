@@ -14,7 +14,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     }
   } catch (error) {
     // Silently fail - don't break email display
-    console.error('Failed to track email open:', error);
+    req.logger.error('Failed to track email open', { error });
   }
 
   res.setHeader('Content-Type', 'image/gif');
