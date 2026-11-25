@@ -88,11 +88,17 @@ fun ObligationConfirmSheet(controller: ObligationHandoffController, scan: File, 
                         label = { Text(stringResource(R.string.obligation_amount, state.currency)) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         isError = amountProblem != null,
-                        supportingText = amountProblem?.let {
+                        supportingText = if (amountProblem == null) {
+                            null
+                        } else {
                             {
                                 Text(
                                     stringResource(
-                                        if (it == AmountProblem.NEGATIVE) R.string.obligation_amount_negative else R.string.obligation_amount_invalid,
+                                        if (amountProblem == AmountProblem.NEGATIVE) {
+                                            R.string.obligation_amount_negative
+                                        } else {
+                                            R.string.obligation_amount_invalid
+                                        },
                                     ),
                                 )
                             }

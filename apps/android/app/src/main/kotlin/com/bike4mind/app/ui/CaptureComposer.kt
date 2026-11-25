@@ -89,8 +89,8 @@ fun AttachMenu(
     }
     val scan = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
-        val scanned = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
-        val pdf = scanned?.pdf?.uri ?: return@rememberLauncherForActivityResult
+        val scanned = GmsDocumentScanningResult.fromActivityResultIntent(result.data) ?: return@rememberLauncherForActivityResult
+        val pdf = scanned.pdf?.uri ?: return@rememberLauncherForActivityResult
         val pages = scanned.pages.orEmpty().map { it.imageUri }
         scope.launch {
             val name = resources.getString(R.string.capture_scan_name, CaptureFiles.stamp())
