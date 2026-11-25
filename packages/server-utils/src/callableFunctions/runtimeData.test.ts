@@ -3,7 +3,14 @@ import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { prepareRunData, resetRunDataManifest, validRunData, type CallableFunctionRunData } from './runtimeData';
+import {
+  CALLABLE_FUNCTION_DATA_CACHE_BYTES,
+  prepareRunData,
+  resetRunDataManifest,
+  validRunData,
+  type CallableFunctionRunData,
+} from './runtimeData';
+import { CALLABLE_FUNCTION_LAMBDA_EPHEMERAL_STORAGE_MB } from './runtimeLimits';
 
 const CSV = Buffer.from('x,y\n1,2\n');
 const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
@@ -83,6 +90,26 @@ describe('prepareRunData', () => {
   it('reads an unreachable link as data_unavailable', async () => {
     const fetchData = vi.fn(async () => new Response('denied', { status: 403 }));
     expect(await prepareRunData([entry()], { cacheDir, fetchData })).toEqual({ ok: false, reason: 'data_unavailable' });
+  });
+
+  it('removes the partial file of a download that fails midway', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(CSV.subarray(0, 4)));
+        controller.error(new Error('connection reset'));
+      },
+    });
+    const fetchData = vi.fn(async () => new Response(body));
+    expect(await prepareRunData([entry()], { cacheDir, fetchData })).toEqual({ ok: false, reason: 'data_unavailable' });
+    expect(readdirSync(path.join(cacheDir, 'cache', 'fn1'))).toEqual([]);
+  });
+});
+
+describe('CALLABLE_FUNCTION_DATA_CACHE_BYTES', () => {
+  it('leaves the runtime 1 GB of its ephemeral storage', () => {
+    expect(CALLABLE_FUNCTION_DATA_CACHE_BYTES).toBe(
+      (CALLABLE_FUNCTION_LAMBDA_EPHEMERAL_STORAGE_MB - 1024) * 1024 * 1024
+    );
   });
 });
 

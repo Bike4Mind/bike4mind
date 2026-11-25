@@ -4,12 +4,10 @@ import { chmod, link, mkdir, open, rename, rmdir, stat, unlink } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CALLABLE_FUNCTION_DATA_LIMITS, CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN } from '@bike4mind/common';
-import { CALLABLE_FUNCTION_LAMBDA_EPHEMERAL_STORAGE_MB } from './runtimeLimits';
 
 /**
- * The runtime parent's side of pinned data: downloads each file from its per-call link into a cache keyed by the
- * function's prefix and the file's hash, checks the hash, and links the files into a fresh read-only directory the
- * child mounts at `/data`. The guest never sees a link.
+ * The runtime parent's side of pinned data: a cache keyed by function prefix and file hash, linked into a fresh
+ * read-only directory per call that the child mounts at `/data`. The guest never sees a link.
  */
 
 /** One data file as the dispatcher sends it: where to read it for this call and what it must hash to. */
@@ -55,7 +53,7 @@ export const defaultCallableFunctionDataDir = () => path.join(tmpdir(), 'callabl
 export const CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS = 120_000;
 
 /** The cache's share of the ephemeral storage; the rest is the runtime's own. */
-export const CALLABLE_FUNCTION_DATA_CACHE_BYTES = (CALLABLE_FUNCTION_LAMBDA_EPHEMERAL_STORAGE_MB - 1024) * 1024 * 1024;
+export const CALLABLE_FUNCTION_DATA_CACHE_BYTES = CALLABLE_FUNCTION_DATA_LIMITS.cacheMb * 1024 * 1024;
 
 interface CacheEntry {
   bytes: number;
@@ -118,9 +116,12 @@ async function download(entry: CallableFunctionRunData, target: string, fetchDat
       hash.update(chunk);
       await handle.write(chunk);
     }
-  } finally {
+  } catch (error) {
     await handle.close();
+    await unlink(partial).catch(() => {});
+    throw error;
   }
+  await handle.close();
   if (written !== entry.bytes || hash.digest('hex') !== entry.sha256) {
     await unlink(partial).catch(() => {});
     return false;
@@ -131,9 +132,8 @@ async function download(entry: CallableFunctionRunData, target: string, fetchDat
 }
 
 /**
- * Makes every file of one call readable at `<dir>/<name>`: from the cache when its manifest entry still matches,
- * downloaded otherwise. A hash or size mismatch refuses the call. `release` removes the call's directory, never the
- * cache.
+ * Makes every file of one call readable at `<dir>/<name>`, from the cache or a fresh download. A hash or size
+ * mismatch refuses the call. `release` removes the call's directory, never the cache.
  */
 export async function prepareRunData(
   data: CallableFunctionRunData[] | undefined,

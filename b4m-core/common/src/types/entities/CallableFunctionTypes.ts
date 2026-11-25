@@ -180,6 +180,8 @@ export const CALLABLE_FUNCTION_DATA_LIMITS = {
   /** Defaults of the `CallableFunctionDataFileMaxMb` and `CallableFunctionDataTotalMaxMb` settings. */
   defaultFileMb: 100,
   defaultTotalMb: 1024,
+  /** The runtime's data cache, and so the most `CallableFunctionDataTotalMaxMb` can allow. */
+  cacheMb: 9216,
 } as const;
 
 export interface ICallableFunction {

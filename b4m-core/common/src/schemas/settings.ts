@@ -64,6 +64,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema } from '../types/entities/SreTypes';
 import { DEFAULT_FEATURE_SPIKE_MULTIPLE } from '../types/entities/SpendExplorerTypes';
+import { CALLABLE_FUNCTION_DATA_LIMITS } from '../types/entities/CallableFunctionTypes';
 import {
   hasNestedSecretValue,
   isValidNestedSecretGroups,
@@ -3762,12 +3763,11 @@ export const settingsMap = {
   CallableFunctionDataTotalMaxMb: makeNumberSetting({
     key: 'CallableFunctionDataTotalMaxMb',
     name: 'Callable Functions: Data Per Function (MB)',
-    defaultValue: 1024,
+    defaultValue: CALLABLE_FUNCTION_DATA_LIMITS.defaultTotalMb,
     min: 1,
-    max: 10_240,
+    max: CALLABLE_FUNCTION_DATA_LIMITS.cacheMb,
     int: true,
-    description:
-      'The most data, in MB, all the files pinned to one saved function can add up to. Checked when a file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.',
+    description: `The most data, in MB, all the files pinned to one saved function can add up to (at most ${CALLABLE_FUNCTION_DATA_LIMITS.cacheMb}, the runtime's data cache). Checked when a file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.`,
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 24.8,
