@@ -227,6 +227,24 @@ describe('threadFind', () => {
       expect(segments.find(segment => segment.scope === roundScope('a1', 1))?.text).toContain('const needle');
     });
 
+    it("leaves out a child's notices, which fold into its card, and keeps one that names no child", () => {
+      const notice = (id: string, extra: Partial<ChatMessage>): ChatMessage => ({
+        id,
+        role: 'user',
+        system: true,
+        content: '[App notice]',
+        display: 'A session you started is waiting for you: an approval.',
+        createdAt: '2026-11-25T09:00:00.000Z',
+        ...extra,
+      });
+      const scopes = threadSegments([
+        notice('w1', { childWaiting: { sessionId: 'child', reason: 'approval' } }),
+        notice('rep1', { reportedChildId: 'child' }),
+        notice('legacy', {}),
+      ]).map(segment => segment.scope);
+      expect(scopes).toEqual([messageScope('legacy')]);
+    });
+
     it('leaves out a skill body and a /clear divider, which draw no searchable text', () => {
       const scopes = threadSegments(thread).map(segment => segment.scope);
       expect(scopes).not.toContain(messageScope('k1'));
