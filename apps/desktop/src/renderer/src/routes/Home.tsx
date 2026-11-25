@@ -51,8 +51,12 @@ export function Home() {
           key={chatScope.current}
           auth={state}
           updateNotice={<AppUpdateNotice controller={update} contained />}
-          onOpenModelServers={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
-          onOpenImportSettings={focus => void navigate({ to: '/settings', search: { section: 'import', focus } })}
+          onOpenModelServers={() =>
+            void navigate({ to: '/settings', search: { section: 'models', setting: 'model-servers' } })
+          }
+          onOpenImportSettings={focus =>
+            void navigate({ to: '/settings', search: { section: 'privacy', setting: 'claude-import', focus } })
+          }
           account={context =>
             state?.status === 'signed-in' || state?.reauthRequired ? (
               <SignedInRailAccount state={state} update={update} context={context} />

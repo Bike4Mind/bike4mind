@@ -1,6 +1,5 @@
 import { createHashHistory, createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/react-router';
-import { isImportKind, type ClaudeImportKind } from '@shared/claudeImport';
-import { isSettingsSection, type SettingsSection } from './chat/SettingsPanel';
+import { resolveSettingsLink, type SettingsLink } from './chat/settingsNavigation';
 import { AppMenuBridge } from './appMenu/AppMenuBridge';
 import { DevLogsWindow } from './devlog/DevLogsWindow';
 import { AppErrorFallback } from './errors/AppErrorFallback';
@@ -44,13 +43,11 @@ const billingRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  validateSearch: (search: Record<string, unknown>): { section?: SettingsSection; focus?: ClaudeImportKind } => ({
-    ...(isSettingsSection(search.section) ? { section: search.section } : {}),
-    ...(isImportKind(search.focus) ? { focus: search.focus } : {}),
-  }),
+  // Old `section` values (servers, import, worktrees) still land on the row that replaced them.
+  validateSearch: (search: Record<string, unknown>): SettingsLink => resolveSettingsLink(search),
   component: function SettingsRoute() {
-    const { section, focus } = settingsRoute.useSearch();
-    return <Settings section={section ?? 'general'} importFocus={focus} />;
+    const { section, setting, focus } = settingsRoute.useSearch();
+    return <Settings section={section ?? 'general'} setting={setting} importFocus={focus} />;
   },
 });
 
