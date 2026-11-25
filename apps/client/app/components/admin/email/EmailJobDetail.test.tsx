@@ -136,9 +136,10 @@ describe('EmailJobDetail', () => {
       'u04@example.com',
       'u05@example.com',
     ]);
-    expect(screen.getByText('32')).toBeInTheDocument();
-    expect(screen.getByText('30')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
+    const countFor = (label: string) => screen.getByText(label).previousElementSibling?.textContent;
+    expect(countFor('Total')).toBe('32');
+    expect(countFor('Eligible')).toBe('30');
+    expect(countFor('Excluded')).toBe('2');
     expect(screen.getByText('User 01')).toBeInTheDocument();
     expect(screen.getByTestId('email-job-recipients-inline-table-frame')).toHaveAttribute('data-framed', 'false');
   });
