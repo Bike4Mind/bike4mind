@@ -868,9 +868,17 @@ function isReplyTurn(message: ChatMessage): boolean {
  * How many grid rows the rail of the reply at `index` runs down: its own, and the one group of
  * turns after it in the same list, if any come before the next reply. See turnGridSx.
  */
-export function railRows(messages: readonly ChatMessage[], index: number, end: number): number {
-  const after = messages[index + 1];
-  return index + 1 < end && after && !isReplyTurn(after) ? 2 : 1;
+export function railRows(
+  messages: readonly ChatMessage[],
+  index: number,
+  end: number,
+  drawn: (index: number) => boolean = () => true
+): number {
+  // Skips what turn() draws nothing for (a notice folded into a card drawn elsewhere), so the rail never claims a row no group fills.
+  let next = index + 1;
+  while (next < end && !drawn(next)) next += 1;
+  const after = messages[next];
+  return next < end && after && !isReplyTurn(after) ? 2 : 1;
 }
 
 /** The turns between two replies, one grid item so that their gap is theirs and not the rows'. */
@@ -1086,6 +1094,10 @@ export function MessageThread({
   const budgetPaused = useMemo(() => budgetPausedReplyIndex(messages), [messages]);
   const regenerateWarns = useMemo(() => (regenerable ? turnsChangedThings([regenerable]) : false), [regenerable]);
   const childCards = useMemo(() => childCardLayout(messages, childSessions), [messages, childSessions]);
+  const drawnAt = (index: number) => {
+    const message = messages[index];
+    return !message || !childCards.folded.has(message.id) || index === childCards.anchor;
+  };
   // Through a ref so UserTurn's memo holds: the callback changes with every thread update.
   const editRef = useRef(onEditMessage);
   editRef.current = onEditMessage;
@@ -1126,7 +1138,7 @@ export function MessageThread({
           <ReplyStatsRail
             message={message}
             {...(message.id === liveReplyId ? { turn: liveTurn } : {})}
-            span={railRows(messages, index, end)}
+            span={railRows(messages, index, end, drawnAt)}
           />
         )}
         <AssistantTurn
