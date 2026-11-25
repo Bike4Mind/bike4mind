@@ -307,6 +307,24 @@ describe('assistant brief follow-ups', () => {
     return String(brief._id);
   };
 
+  it('keeps the activity brief as the pending-decisions source when a newer follow-up brief is ready', async () => {
+    const activity = await assistantBriefRepository.createComposing({
+      userId: 'owner',
+      periodStart: NOW,
+      periodEnd: NOW,
+    });
+    await assistantBriefRepository.markReady(
+      String(activity._id),
+      { ...content, decisions: [{ id: 'd1', text: 'Reply to the vendor' }] },
+      NOW
+    );
+    await createFollowUpBrief();
+
+    expect(String((await assistantBriefRepository.findLatestReadyDecisionRefs('owner'))?._id)).toBe(
+      String(activity._id)
+    );
+  });
+
   it('clears the memo on settle and never dedupes with or shifts the activity window', async () => {
     const composing = await assistantBriefRepository.createComposing({
       userId: 'owner',
@@ -330,7 +348,15 @@ describe('assistant brief follow-ups', () => {
 
     expect(await assistantBriefRepository.resolveFollowUpDecision(id, 'intruder', 'fu-email', 'approved')).toBe(false);
     await expect(resolve()).resolves.toBe(true);
-    await expect(resolve()).resolves.toBe(false);
+    await expect(
+      assistantBriefRepository.resolveFollowUpDecision(
+        id,
+        'owner',
+        'fu-email',
+        'dismissed',
+        new Date('2026-11-19T09:00:00.000Z')
+      )
+    ).resolves.toBe(false);
     await expect(
       assistantBriefRepository.editFollowUpDecision(id, 'owner', 'fu-email', { draftReply: { to: 'sam@example.com' } })
     ).resolves.toBe(false);

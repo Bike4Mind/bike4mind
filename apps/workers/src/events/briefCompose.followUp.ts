@@ -87,7 +87,8 @@ export function buildFollowUpPrompt(transcript: string, now: Date, timeZone: str
 }
 
 function parseRemindAt(value: string | null | undefined, now: Date): Date | null {
-  if (!value) return null;
+  // Without an offset, Date reads the time as UTC rather than in the user's zone.
+  if (!value || !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) return null;
   const at = new Date(value);
   const ms = at.getTime();
   if (Number.isNaN(ms) || ms <= now.getTime() || ms - now.getTime() > BRIEF_REMIND_AHEAD_MAX_MS) return null;

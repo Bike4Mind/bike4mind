@@ -145,8 +145,19 @@ export async function composeBrief(
       return;
     } else if (hasModelActivity(activity)) {
       const instructions = await loadInstructionsSafely(deps, input.userId);
-      const reply = await deps.complete(input.userId, input.briefId, buildBriefPrompt(activity, instructions));
-      composed = assembleBrief(reply, activity);
+      try {
+        const reply = await deps.complete(input.userId, input.briefId, buildBriefPrompt(activity, instructions));
+        composed = assembleBrief(reply, activity);
+      } catch (error) {
+        // Same fallback as the gate branch: the reconciler never re-arms a failed scheduled brief.
+        if (!input.scheduled || activity.reminders.length === 0) throw error;
+        logger.warn('[Brief] scheduled brief limited to reminders; composition failed', {
+          briefId: input.briefId,
+          error,
+        });
+        composed = reminderBrief(activity);
+        periodEnd = brief.periodStart;
+      }
     } else if (hasActivity(activity)) {
       composed = reminderBrief(activity);
     } else if (input.scheduled) {

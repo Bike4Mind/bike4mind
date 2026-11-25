@@ -57,11 +57,12 @@ describe('assembleFollowUpBrief', () => {
           { text: 'c', remindAt: '2026-11-17T14:59:00Z' },
           { text: 'd', remindAt: '2028-01-01T00:00:00Z' },
           { text: 'e' },
+          { text: 'f', remindAt: '2026-11-18T09:00:00' },
         ],
       }),
       NOW
     );
-    expect(brief.decisions.map(d => d.followUp?.remindAt)).toEqual([null, null, null, null, null]);
+    expect(brief.decisions.map(d => d.followUp?.remindAt)).toEqual([null, null, null, null, null, null]);
   });
 
   it('reads an empty reply as nothing to follow up on', () => {

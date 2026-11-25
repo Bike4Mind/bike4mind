@@ -135,7 +135,9 @@ private fun buildEdit(decision: BriefDecision, kind: FollowUpKind?, text: String
     BriefDecisionEdit(
         text = text.trim().takeIf { it != decision.text },
         // An email without a draft yet compares as blank fields, so untouched ones do not block a text-only save.
-        draftReply = draft.takeIf { kind == FollowUpKind.FOLLOW_UP_EMAIL && it != (decision.draftReply ?: BriefDraftReply("", "", "")) },
+        draftReply = draft.takeIf { kind == FollowUpKind.FOLLOW_UP_EMAIL && it != (decision.draftReply ?: BriefDraftReply("", "", "")).trimmed() },
         remindAt = remindAt.takeIf { kind == FollowUpKind.REMINDER && it != initialRemindAt },
     )
 
+// The form trims what it sends, so the server draft is compared trimmed too or an untouched email reads as edited.
+private fun BriefDraftReply.trimmed() = BriefDraftReply(to.trim(), subject.trim(), body.trim())

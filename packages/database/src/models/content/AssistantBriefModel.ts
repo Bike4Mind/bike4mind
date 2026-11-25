@@ -215,12 +215,12 @@ export const assistantBriefRepository = {
       .lean();
   },
 
-  /** The latest ready brief's id and each decision's approval ref and reply stamp: what the pending-decisions count reads. */
+  /** The latest ready activity brief's id and each decision's approval ref and reply stamp: what the pending-decisions count reads. */
   async findLatestReadyDecisionRefs(userId: string): Promise<{
     _id: mongoose.Types.ObjectId;
     decisions: Array<Pick<StoredBriefDecision, 'approval' | 'repliedAt' | 'followUp'>>;
   } | null> {
-    return AssistantBriefModel.findOne({ userId, status: 'ready' })
+    return AssistantBriefModel.findOne({ userId, status: 'ready', ...ACTIVITY_BRIEF })
       .sort({ createdAt: -1 })
       .select('_id decisions.approval decisions.repliedAt decisions.followUp.state')
       .lean();

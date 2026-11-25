@@ -179,10 +179,9 @@ public final class BriefViewModel {
     await reload(briefID: brief.id)
   }
 
-  /// Saves an edit to a pending follow-up. Returns whether it was saved, so an edit form can stay open with the
-  /// user's changes when it was not.
+  /// Saves an edit to a pending follow-up. Returns whether the edit form is done: saved, or the follow-up settled
+  /// elsewhere and can no longer be edited. When it is not, the form stays open with the user's changes.
   @discardableResult
-  /// Returns whether the edit form is done: saved, or the follow-up settled elsewhere and can no longer be edited.
   public func editFollowUp(_ decision: BriefDecision, _ edit: BriefDecisionEdit) async -> Bool {
     guard !edit.isEmpty else { return false }
     let saved =

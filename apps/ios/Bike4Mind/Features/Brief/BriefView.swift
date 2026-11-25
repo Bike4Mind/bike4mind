@@ -19,6 +19,7 @@ private struct BriefScreen: View {
   @Environment(AppServices.self) private var services
   @Environment(\.openURL) private var openURL
   @State private var editingFollowUp: BriefDecision?
+  @State private var noMailApp = false
 
   init(api: any BriefAPI, pendingActions: any PendingActionAPI, followUps: any BriefFollowUpAPI, briefID: String?) {
     _model = State(
@@ -40,6 +41,9 @@ private struct BriefScreen: View {
         FollowUpEditSheet(
           decision: decision, failure: { model.followUpFailure(for: decision) },
           save: { edit in await model.editFollowUp(decision, edit) })
+      }
+      .alert("No mail app is set up on this device to send the draft.", isPresented: $noMailApp) {
+        Button("OK", role: .cancel) {}
       }
       .refreshable {
         await model.refresh()
@@ -406,7 +410,9 @@ private struct BriefScreen: View {
     Task {
       guard model.brief?.id == briefID else { return }
       if let draft = await model.resolveFollowUp(decision, outcome), let url = draft.mailtoURL {
-        openURL(url)
+        openURL(url) { accepted in
+          if !accepted { noMailApp = true }
+        }
       }
     }
   }
