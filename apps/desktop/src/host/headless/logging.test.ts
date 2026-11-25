@@ -62,8 +62,8 @@ describe('createFileLogger', () => {
     const path = tempPath();
     const logger = createFileLogger({ path, verbose: true, maxBytes: 160, keep: 1 });
 
-    logger.warn('é'.repeat(30));
-    logger.warn('é'.repeat(30));
+    logger.warn('\u00e9'.repeat(30));
+    logger.warn('\u00e9'.repeat(30));
 
     expect(existsSync(`${path}.1`)).toBe(true);
   });

@@ -1,8 +1,18 @@
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadHostId } from './hostIdentity';
+
+const linkSpy = vi.hoisted(() => ({ reject: null as Error | null }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    link: (...args: Parameters<typeof actual.link>) =>
+      linkSpy.reject ? Promise.reject(linkSpy.reject) : actual.link(...args),
+  };
+});
 
 const directories: string[] = [];
 const dataDirectory = async () => {
@@ -12,10 +22,21 @@ const dataDirectory = async () => {
 };
 
 afterEach(async () => {
+  linkSpy.reject = null;
   await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
 
 describe('loadHostId', () => {
+  it('still makes the id where the filesystem has no hard links, leaving no temp file', async () => {
+    const directory = await dataDirectory();
+    linkSpy.reject = Object.assign(new Error('not supported'), { code: 'ENOTSUP' });
+
+    const id = await loadHostId(directory);
+
+    expect(await loadHostId(directory)).toBe(id);
+    expect(await readdir(directory)).toEqual(['host-id']);
+  });
+
   it('makes a random UUID once and returns the same one after a restart', async () => {
     const directory = await dataDirectory();
 
