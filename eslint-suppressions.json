@@ -4082,16 +4082,6 @@
       "count": 1
     }
   },
-  "b4m-core/services/src/llm/tools/implementation/knowledgeBaseRetrieve/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
-    }
-  },
-  "b4m-core/services/src/llm/tools/implementation/knowledgeBaseSearch/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 9
-    }
-  },
   "b4m-core/services/src/llm/tools/implementation/recharts/index.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
