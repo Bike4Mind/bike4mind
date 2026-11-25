@@ -85,6 +85,7 @@ class CreditsControllerTest {
         assertEquals("31,667", CreditsController.formatted(BigDecimal("31666.6"), Locale.US))
         assertEquals("31.667", CreditsController.formatted(BigDecimal("31666.6"), Locale.GERMANY))
         assertEquals("0", CreditsController.formatted(BigDecimal("0.5"), Locale.US))
+        assertEquals("0", CreditsController.formatted(BigDecimal("-0.4"), Locale.US))
         assertEquals("-1,200", CreditsController.formatted(BigDecimal("-1200"), Locale.US))
     }
 }

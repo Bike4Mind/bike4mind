@@ -52,6 +52,6 @@ class CreditsController(private val fetch: suspend () -> BigDecimal, private val
     companion object {
         /** Whole credits with grouping ("31,667"); fractions are noise at this scale. Same rounding as iOS. */
         fun formatted(credits: BigDecimal, locale: Locale = Locale.getDefault()): String =
-            NumberFormat.getIntegerInstance(locale).apply { roundingMode = RoundingMode.HALF_EVEN }.format(credits)
+            NumberFormat.getIntegerInstance(locale).format(credits.setScale(0, RoundingMode.HALF_EVEN))
     }
 }
