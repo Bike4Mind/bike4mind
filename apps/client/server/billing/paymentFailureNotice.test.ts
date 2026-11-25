@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   releaseFailure: vi.fn(),
   claimCancel: vi.fn(),
   releaseCancel: vi.fn(),
+  claimNotice: vi.fn(),
+  releaseNotice: vi.fn(),
   emitMetric: vi.fn(),
 }));
 
@@ -29,13 +31,18 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
     releasePaymentFailureNotice: mocks.releaseFailure,
     claimNonPaymentCancelNotice: mocks.claimCancel,
     releaseNonPaymentCancelNotice: mocks.releaseCancel,
+    claimBillingNotice: mocks.claimNotice,
+    releaseBillingNotice: mocks.releaseNotice,
   },
 }));
 
 import {
   getInvoiceFailureReason,
   notifyCanceledForNonPayment,
+  notifyPaymentActionRequired,
   notifyPaymentFailed,
+  clearUnpaidNotice,
+  notifyUnpaid,
   resolveOwnerRecipient,
 } from './paymentFailureNotice';
 
@@ -55,11 +62,18 @@ const orgSub = {
 
 const invoice = { id: 'in_1', next_payment_attempt: null, billing_reason: 'subscription_cycle' as const };
 
-const invoiceWithPayments = (payments: Array<{ created: number; message?: string }>) => ({
+const invoiceWithPayments = (
+  payments: Array<{ created: number; message?: string; status?: string; errorCode?: string }>
+) => ({
   payments: {
     data: payments.map(p => ({
       created: p.created,
-      payment: { payment_intent: { last_payment_error: p.message ? { message: p.message } : null } },
+      payment: {
+        payment_intent: {
+          status: p.status ?? 'requires_payment_method',
+          last_payment_error: p.message || p.errorCode ? { message: p.message, code: p.errorCode } : null,
+        },
+      },
     })),
   },
 });
@@ -74,6 +88,7 @@ beforeEach(() => {
   mocks.retrieveInvoice.mockResolvedValue(invoiceWithPayments([]));
   mocks.claimFailure.mockResolvedValue(true);
   mocks.claimCancel.mockResolvedValue(true);
+  mocks.claimNotice.mockResolvedValue(true);
   mocks.publish.mockResolvedValue(undefined);
 });
 
@@ -144,13 +159,38 @@ describe('notifyPaymentFailed', () => {
     }
   );
 
-  it('stops at the claim for an invoice already emailed, before any lookup', async () => {
+  it('sends an ordinary decline, with the issuer message', async () => {
+    mocks.retrieveInvoice.mockResolvedValue(invoiceWithPayments([{ created: 1, message: 'Card declined.' }]));
+
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBe(true);
+
+    expect(mocks.publish.mock.calls[0][0].body).toContain('Card declined.');
+  });
+
+  it.each([
+    ['a requires_action intent', { status: 'requires_action' }],
+    ['an authentication_required error', { errorCode: 'authentication_required' }],
+  ])('sends no payment-failed email when the failure is %s', async (_label, payment) => {
+    mocks.retrieveInvoice.mockResolvedValue(invoiceWithPayments([{ created: 1, ...payment }]));
+
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBe(false);
+
+    expect(mocks.claimFailure).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it('still sends when the intent cannot be read', async () => {
+    mocks.retrieveInvoice.mockRejectedValue(new Error('network'));
+
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBe(true);
+  });
+
+  it('stops at the claim for an invoice already emailed, before any owner lookup', async () => {
     mocks.claimFailure.mockResolvedValue(false);
 
     await notifyPaymentFailed(userSub, invoice, logger);
 
     expect(mocks.findUser).not.toHaveBeenCalled();
-    expect(mocks.retrieveInvoice).not.toHaveBeenCalled();
     expect(mocks.publish).not.toHaveBeenCalled();
   });
 
@@ -221,5 +261,117 @@ describe('notifyCanceledForNonPayment', () => {
 
     await expect(notifyCanceledForNonPayment(orgSub, logger)).resolves.toBeUndefined();
     expect(mocks.releaseCancel).toHaveBeenCalledWith('sub_org');
+  });
+});
+
+describe('notifyPaymentActionRequired', () => {
+  const renewal = { id: 'in_1', billing_reason: 'subscription_cycle' as const };
+
+  it('claims the invoice and publishes one email linking the billing page', async () => {
+    await expect(notifyPaymentActionRequired(userSub, renewal, logger)).resolves.toBe(true);
+
+    expect(mocks.claimNotice).toHaveBeenCalledWith('sub_1', 'payment_action_required:in_1');
+    expect(mocks.publish).toHaveBeenCalledTimes(1);
+    const sent = mocks.publish.mock.calls[0][0];
+    expect(sent.to).toBe('user_1@example.com');
+    expect(sent.subject).toContain('confirm the payment');
+    expect(sent.body).toContain('https://app.example.com/billing/plans');
+  });
+
+  it('sends nothing on a redelivery whose invoice is already claimed', async () => {
+    mocks.claimNotice.mockResolvedValue(false);
+
+    await expect(notifyPaymentActionRequired(userSub, renewal, logger)).resolves.toBe(false);
+
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim when publishing fails, so a retry can send', async () => {
+    mocks.publish.mockRejectedValue(new Error('bus down'));
+
+    await expect(notifyPaymentActionRequired(userSub, renewal, logger)).resolves.toBe(false);
+
+    expect(mocks.releaseNotice).toHaveBeenCalledWith('sub_1', 'payment_action_required:in_1');
+  });
+
+  it.each(['subscription_update', 'subscription_create', 'manual'] as const)(
+    'sends nothing and claims nothing for a %s invoice',
+    async billingReason => {
+      await expect(
+        notifyPaymentActionRequired(userSub, { ...renewal, billing_reason: billingReason }, logger)
+      ).resolves.toBe(false);
+
+      expect(mocks.claimNotice).not.toHaveBeenCalled();
+      expect(mocks.publish).not.toHaveBeenCalled();
+    }
+  );
+
+  it('emails the org owner, linking the org Billing tab, for an org subscription', async () => {
+    await notifyPaymentActionRequired(orgSub, { ...renewal, id: 'in_9' }, logger);
+
+    const sent = mocks.publish.mock.calls[0][0];
+    expect(sent.to).toBe('owner_1@example.com');
+    expect(sent.subject).toContain('the Team subscription');
+    expect(sent.body).toContain('organizations/org_1?tab=billing');
+  });
+});
+
+describe('notifyUnpaid', () => {
+  it('claims the subscription and publishes one email', async () => {
+    await expect(notifyUnpaid(userSub, logger)).resolves.toBe(true);
+
+    expect(mocks.claimNotice).toHaveBeenCalledWith('sub_1', 'unpaid:sub_1');
+    expect(mocks.publish).toHaveBeenCalledTimes(1);
+    const sent = mocks.publish.mock.calls[0][0];
+    expect(sent.to).toBe('user_1@example.com');
+    expect(sent.subject).toContain('unpaid');
+    expect(sent.body).toContain('https://app.example.com/billing/plans');
+  });
+
+  it('sends nothing for a later unpaid event once the spell is claimed', async () => {
+    mocks.claimNotice.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await expect(notifyUnpaid(userSub, logger)).resolves.toBe(true);
+    await expect(notifyUnpaid(userSub, logger)).resolves.toBe(false);
+
+    expect(mocks.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends nothing on a redelivery whose claim is already taken', async () => {
+    mocks.claimNotice.mockResolvedValue(false);
+
+    await expect(notifyUnpaid(userSub, logger)).resolves.toBe(false);
+
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim when publishing fails, so a retry can send', async () => {
+    mocks.publish.mockRejectedValue(new Error('bus down'));
+
+    await expect(notifyUnpaid(userSub, logger)).resolves.toBe(false);
+
+    expect(mocks.releaseNotice).toHaveBeenCalledWith('sub_1', 'unpaid:sub_1');
+  });
+
+  it('emails the org owner for an org subscription', async () => {
+    await notifyUnpaid(orgSub, logger);
+
+    const sent = mocks.publish.mock.calls[0][0];
+    expect(sent.to).toBe('owner_1@example.com');
+    expect(sent.subject).toContain('Team');
+  });
+});
+
+describe('clearUnpaidNotice', () => {
+  it('releases the unpaid claim so a later spell notifies again', async () => {
+    await clearUnpaidNotice('sub_1', logger);
+
+    expect(mocks.releaseNotice).toHaveBeenCalledWith('sub_1', 'unpaid:sub_1');
+  });
+
+  it('never throws when the release fails', async () => {
+    mocks.releaseNotice.mockRejectedValue(new Error('mongo down'));
+
+    await expect(clearUnpaidNotice('sub_1', logger)).resolves.toBeUndefined();
   });
 });
