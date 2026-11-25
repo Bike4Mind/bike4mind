@@ -1,4 +1,9 @@
-import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
+import {
+  assertMeasuredProviderUsage,
+  getAbortAwareRetrySignal,
+  reportUsageOnAbort,
+  retryAbortAware,
+} from './abortAwareRetry';
 import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
 import { providerFetchOptions } from './providerDispatcher';
 import { assertAnthropicEvaluationWire, anthropicEvaluationUsage } from './anthropicEvaluation';
@@ -993,7 +998,7 @@ export class AnthropicBackend implements ICompletionBackend {
     cb: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
-    const retrySignal = getAbortAwareRetrySignal(options);
+    const retrySignal = getAbortAwareRetrySignal(options, true);
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
@@ -2885,6 +2890,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     }),
                   retrySignal,
                   {
+                    ...(options.retryMode === 'single-attempt' ? { maxAttempts: 1 } : {}),
                     onRetry: ({ error, delayMs }) => {
                       this.logger.warn('Retrying Anthropic completion', { model, delayMs });
                       options._internal?.turnTelemetry?.onRetry({ error, delayMs, model });
@@ -2921,6 +2927,32 @@ export class AnthropicBackend implements ICompletionBackend {
           }
         } finally {
           release?.();
+        }
+        if (options.retryMode === 'single-attempt') {
+          if (!('model' in response) || response.model !== apiParams.model)
+            throw new Error('Provider response model identity is unverified');
+          const measured = 'usage' in response ? response.usage : undefined;
+          assertMeasuredProviderUsage({
+            inputTokens: measured?.input_tokens,
+            outputTokens: measured?.output_tokens,
+            ...(measured?.cache_read_input_tokens !== undefined
+              ? { cacheReadInputTokens: measured.cache_read_input_tokens }
+              : {}),
+            ...(measured?.cache_creation_input_tokens !== undefined
+              ? { cacheCreationInputTokens: measured.cache_creation_input_tokens }
+              : {}),
+            ...(measured?.cache_creation?.ephemeral_1h_input_tokens !== undefined
+              ? { cacheWrite1hInputTokens: measured.cache_creation.ephemeral_1h_input_tokens }
+              : {}),
+          });
+          if (!retrySignal?.aborted && measured) {
+            const turnUsage = appendAnthropicTurn(undefined, {
+              ...measured,
+              cache_read_input_tokens: measured.cache_read_input_tokens ?? undefined,
+              cache_creation_input_tokens: measured.cache_creation_input_tokens ?? undefined,
+            });
+            await cb([], { ...turnUsage[0], turnUsage });
+          }
         }
         if (retrySignal?.aborted) {
           const usage = 'usage' in response ? response.usage : undefined;

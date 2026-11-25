@@ -570,3 +570,289 @@ describe('opt-in dispatch boundaries', () => {
     expect(callback).toHaveBeenCalledExactlyOnceWith([], expect.objectContaining({ inputTokens: 13, outputTokens: 2 }));
   });
 });
+
+describe('single-attempt accounting transport', () => {
+  const direct = sdkBackends.filter(({ name }) => name === 'OpenAI' || name === 'Anthropic');
+
+  it.each(direct)('$name never hides a throttled or failed transport retry', async ({ make, model }) => {
+    vi.useFakeTimers();
+    for (const failure of ['throttle', 'transport'] as const) {
+      const fetch = vi.fn(async () => {
+        if (failure === 'transport') throw new TypeError('fetch failed');
+        return rateLimited();
+      });
+      vi.stubGlobal('fetch', fetch);
+      await expect(
+        make().complete(
+          model,
+          messages,
+          { ...opts(new AbortController().signal), retryMode: 'single-attempt' },
+          vi.fn()
+        )
+      ).rejects.toBeDefined();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(fetch).toHaveBeenCalledOnce();
+    }
+  });
+
+  it.each(direct)(
+    '$name rejects absent provider usage instead of fabricating zero tokens',
+    async ({ name, make, model }) => {
+      const fetch = vi.fn(async () =>
+        name === 'Anthropic'
+          ? json({
+              id: 'message',
+              type: 'message',
+              role: 'assistant',
+              model,
+              stop_reason: 'end_turn',
+              content: [{ type: 'text', text: 'answer' }],
+            })
+          : json({
+              id: 'response',
+              object: 'chat.completion',
+              created: 0,
+              model,
+              choices: [{ index: 0, message: { role: 'assistant', content: 'answer' }, finish_reason: 'stop' }],
+            })
+      );
+      vi.stubGlobal('fetch', fetch);
+      const callback = vi.fn();
+      await expect(
+        make().complete(
+          model,
+          messages,
+          { ...opts(new AbortController().signal), retryMode: 'single-attempt' },
+          callback
+        )
+      ).rejects.toThrow(/omitted measured usage/);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(callback).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(direct)(
+    '$name joins an aborted request and retains returned measured usage',
+    async ({ name, make, model }) => {
+      const transport = Promise.withResolvers<Response>();
+      const sent = Promise.withResolvers<AbortSignal | null | undefined>();
+      const fetch = vi.fn((_input: unknown, init: RequestInit) => {
+        sent.resolve(init.signal);
+        return transport.promise;
+      });
+      vi.stubGlobal('fetch', fetch);
+      const controller = new AbortController();
+      const callback = vi.fn();
+      const finished = vi.fn();
+      const pending = make()
+        .complete(model, messages, { ...opts(controller.signal), retryMode: 'single-attempt' }, callback)
+        .catch(finished);
+      const signal = await sent.promise;
+      controller.abort(new Error('deadline'));
+      await Promise.resolve();
+      expect(signal?.aborted).toBe(true);
+      expect(finished).not.toHaveBeenCalled();
+      transport.resolve(
+        name === 'Anthropic'
+          ? json({
+              id: 'message',
+              type: 'message',
+              role: 'assistant',
+              model,
+              stop_reason: 'end_turn',
+              content: [{ type: 'text', text: 'late' }],
+              usage: { input_tokens: 8, output_tokens: 2 },
+            })
+          : json({
+              id: 'response',
+              object: 'chat.completion',
+              created: 0,
+              model,
+              choices: [{ index: 0, message: { role: 'assistant', content: 'late' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 8, completion_tokens: 2 },
+            })
+      );
+      await pending;
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(callback).toHaveBeenCalledExactlyOnceWith(
+        [],
+        expect.objectContaining({ inputTokens: 8, outputTokens: 2 })
+      );
+      expect(finished).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('keeps reasoning models on a single non-streaming Chat request without native tool recursion', async () => {
+    const fetch = vi.fn(async () =>
+      json({
+        id: 'response',
+        object: 'chat.completion',
+        created: 0,
+        model: ChatModels.GPT5,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'answer' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 8, completion_tokens: 2 },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+    const callback = vi.fn();
+    await new OpenAIBackend('test', logger()).complete(
+      ChatModels.GPT5,
+      messages,
+      { ...opts(new AbortController().signal), retryMode: 'single-attempt' },
+      callback
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+    const [url, init] = fetch.mock.calls[0] as unknown as [unknown, RequestInit];
+    expect(new URL(String(url)).pathname).toBe('/v1/chat/completions');
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: ChatModels.GPT5, stream: false });
+    expect(callback).toHaveBeenCalledWith(['answer'], expect.objectContaining({ inputTokens: 8, outputTokens: 2 }));
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(direct)(
+    '$name latches known usage before malformed content processing fails',
+    async ({ name, make, model }) => {
+      const fetch = vi.fn(async () =>
+        name === 'Anthropic'
+          ? json({
+              id: 'message',
+              type: 'message',
+              role: 'assistant',
+              model,
+              stop_reason: 'end_turn',
+              content: [null],
+              usage: { input_tokens: 8, output_tokens: 2 },
+            })
+          : json({
+              id: 'response',
+              object: 'chat.completion',
+              created: 0,
+              model,
+              choices: [],
+              usage: { prompt_tokens: 8, completion_tokens: 2 },
+            })
+      );
+      vi.stubGlobal('fetch', fetch);
+      const callback = vi.fn();
+      await expect(
+        make().complete(
+          model,
+          messages,
+          { ...opts(new AbortController().signal), retryMode: 'single-attempt' },
+          callback
+        )
+      ).rejects.toBeDefined();
+      expect(callback).toHaveBeenCalledWith([], expect.objectContaining({ inputTokens: 8, outputTokens: 2 }));
+      expect(fetch).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(direct)(
+    '$name rejects invalid raw cache usage before normalization can hide it',
+    async ({ name, make, model }) => {
+      const fetch = vi.fn(async () =>
+        name === 'Anthropic'
+          ? json({
+              id: 'message',
+              type: 'message',
+              role: 'assistant',
+              model,
+              stop_reason: 'end_turn',
+              content: [{ type: 'text', text: 'answer' }],
+              usage: {
+                input_tokens: 8,
+                output_tokens: 2,
+                cache_creation_input_tokens: 1,
+                cache_creation: { ephemeral_1h_input_tokens: 2 },
+              },
+            })
+          : json({
+              id: 'response',
+              object: 'chat.completion',
+              created: 0,
+              model,
+              choices: [{ index: 0, message: { role: 'assistant', content: 'answer' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 8, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 9 } },
+            })
+      );
+      vi.stubGlobal('fetch', fetch);
+      const callback = vi.fn();
+      await expect(
+        make().complete(
+          model,
+          messages,
+          { ...opts(new AbortController().signal), retryMode: 'single-attempt' },
+          callback
+        )
+      ).rejects.toThrow(/invalid measured cache usage/);
+      expect(callback).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(direct)(
+    '$name rejects missing, mismatched, or unproven aliased model identity before usage capture',
+    async ({ name, make, model }) => {
+      for (const returnedModel of [undefined, 'different-model', model + '-20990101']) {
+        const fetch = vi.fn(async () =>
+          name === 'Anthropic'
+            ? json({
+                id: 'message',
+                type: 'message',
+                role: 'assistant',
+                model: returnedModel,
+                stop_reason: 'end_turn',
+                content: [{ type: 'text', text: 'answer' }],
+                usage: { input_tokens: 8, output_tokens: 2 },
+              })
+            : json({
+                id: 'response',
+                object: 'chat.completion',
+                created: 0,
+                model: returnedModel,
+                choices: [{ index: 0, message: { role: 'assistant', content: 'answer' }, finish_reason: 'stop' }],
+                usage: { prompt_tokens: 8, completion_tokens: 2 },
+              })
+        );
+        vi.stubGlobal('fetch', fetch);
+        const callback = vi.fn();
+        await expect(
+          make().complete(
+            model,
+            messages,
+            { ...opts(new AbortController().signal), retryMode: 'single-attempt' },
+            callback
+          )
+        ).rejects.toThrow('Provider response model identity is unverified');
+        expect(callback).not.toHaveBeenCalled();
+        expect(fetch).toHaveBeenCalledOnce();
+      }
+    }
+  );
+
+  it('accepts the exact default direct Anthropic identity before reporting measured usage', async () => {
+    const model = ChatModels.CLAUDE_4_6_SONNET;
+    const fetch = vi.fn(async () =>
+      json({
+        id: 'message',
+        type: 'message',
+        role: 'assistant',
+        model,
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'answer' }],
+        usage: { input_tokens: 8, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+    const callback = vi.fn();
+    await new AnthropicBackend('test', logger()).complete(
+      model,
+      messages,
+      { ...opts(new AbortController().signal), retryMode: 'single-attempt' },
+      callback
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(callback).toHaveBeenCalledWith([], expect.objectContaining({ inputTokens: 8, outputTokens: 2 }));
+    expect(callback).toHaveBeenCalledWith(['answer'], expect.objectContaining({ inputTokens: 8, outputTokens: 2 }));
+  });
+});
