@@ -187,8 +187,10 @@ describe('runTemplateExample', () => {
   });
 
   it('generates a sample file the author owns when the skill takes one', async () => {
-    const d = deps();
+    const complete = vi.fn(async () => '# Sample notes');
+    const d = deps({ textModel: vi.fn(async () => ({ modelId: 'ops-model', complete })) });
     await runTemplateExample(payload({ takesFile: true }), logger, d);
+    expect(complete).toHaveBeenCalledWith(expect.any(String), expect.any(String), { listingId: 'l1', logger });
     expect(d.storeSample).toHaveBeenCalledWith('author-1', '# Sample notes', sampleFileName('launch-plan'));
     expect(vi.mocked(d.processQuest).mock.calls[0][0]).toMatchObject({
       messageFileIds: ['sample-file-1'],

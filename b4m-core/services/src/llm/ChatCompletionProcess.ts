@@ -80,6 +80,7 @@ import {
   reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
+  type IUsageEventInput,
   readOrgModelPolicy,
   createMutex,
 } from '@bike4mind/common';
@@ -3089,6 +3090,9 @@ export class ChatCompletionProcess {
       if (adminSettingsEnforceCredits && !this.db.creditTransactions) {
         throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
       }
+      // An example run has credits off but still records its usage rows, re-owned to the platform.
+      const recordsChatUsage = adminSettingsEnforceCredits || example.recordsPlatformUsage;
+      const chatUsageEvents = example.usageEvents(this.db.usageEvents);
 
       // Context Telemetry: Initialize builder if telemetry is enabled
       // Fetch this setting fresh (bypass cache) to ensure immediate response to toggle changes
@@ -5791,10 +5795,10 @@ export class ChatCompletionProcess {
       // The set keeps an error rethrown after its hop was recorded from being booked twice.
       const recordedTimeouts = new WeakSet<Error>();
       const recordTimedOutAttempt = (error: unknown, attemptModel: typeof currentModel) => {
-        if (!adminSettingsEnforceCredits || !isLlmTimeoutError(error) || !error.usage) return;
+        if (!recordsChatUsage || !isLlmTimeoutError(error) || !error.usage) return;
         if (recordedTimeouts.has(error)) return;
         recordedTimeouts.add(error);
-        this.db.usageEvents
+        chatUsageEvents
           ?.record({
             requestId: quest.id,
             userId: this.user.id,
@@ -6326,10 +6330,10 @@ export class ChatCompletionProcess {
             // A refused call throws rather than settles, so record it here, whether or not a
             // fallback then answers. Same enforceCredits gate as the settlement row. Not charged (the
             // user got no answer); what the provider billed before the refusal, if any, is kept as COGS.
-            if (adminSettingsEnforceCredits && isSafetyRefusalError(lastError)) {
+            if (recordsChatUsage && isSafetyRefusalError(lastError)) {
               const refusalLedgerModel = this.ledgerModel(currentModel);
               const refusedUsage = refusedUsageOf(lastError);
-              this.db.usageEvents
+              chatUsageEvents
                 ?.record({
                   requestId: quest.id,
                   userId: this.user.id,
@@ -7337,6 +7341,67 @@ export class ChatCompletionProcess {
           void this.recordModerationHit('provider', [], quest.id, logger);
         }
         const earlyStopStamp = buildEarlyStopStamp(providerStopReason);
+        // Same turns / tier basis the estimatedCost branches above priced on.
+        const priceStamp = buildUsagePriceStamp(currentModel, {
+          turns: hasProviderUsage ? actualTokenUsage.turnUsage : undefined,
+          tierBasisTokens: hasProviderUsage
+            ? settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
+            : localInputTokens,
+          localEstimate: !hasProviderUsage,
+          cacheWrite1hTokens: cacheWrite1hInputTokens,
+        });
+        // The settlement usage event, built when recorded so latency and request meta read the same
+        // moment they always have. Ties frozen COGS to credits debited for margin reporting.
+        const settledLedgerModel = this.ledgerModel(currentModel);
+        const settledUsageEvent = (): IUsageEventInput => {
+          const settledReasoning = chatReasoningOptionsFor(currentModel, explicitReasoningEffort, chatThinking);
+          return {
+            requestId: quest.id,
+            userId: this.user.id,
+            ownerId: this.reservedCreditsOwnerId || this.user.id,
+            ownerType: this.reservedCreditsOwnerType,
+            sessionId: quest.sessionId,
+            projectId: this.turnProjectId,
+            feature: 'chat',
+            provider: settledLedgerModel.backend,
+            model: settledLedgerModel.id,
+            ...executedModelFields(settledLedgerModel, currentModel),
+            // 'web' covers all callers of ChatCompletionProcess today (matches
+            // the paired ledger writes below); no API-key auth on this path.
+            source: 'web',
+            // inputTokens/outputTokens are ALWAYS the local estimate and the
+            // provider* fields ALWAYS the provider counts, so drift and invoice
+            // reconciliation stay comparable across rows; settledBasis says
+            // which basis priced costUsd/creditsCharged.
+            inputTokens,
+            outputTokens,
+            settledBasis,
+            cachedInputTokens: cacheReadInputTokens,
+            cacheWriteTokens: actualTokenUsage?.cacheCreationInputTokens ?? 0,
+            providerInputTokens: actualTokenUsage?.inputTokens,
+            providerOutputTokens: actualTokenUsage?.outputTokens,
+            costUsd: estimatedCost,
+            creditsCharged: textCreditsUsed,
+            ...priceStamp,
+            // Not always 'ok': a turn we aborted as degenerate is priced like any other
+            // (the provider tokens were really spent) but has to be findable for a refund.
+            status: usageEventStatusForFinish(providerStopReason),
+            latencyMs: Date.now() - processStartTime,
+            requestMeta: buildChatRequestMeta({
+              stopReason: providerStopReason,
+              maxOutputTokens: safeMaxTokens,
+              limiter: this.turnCreditLimiter,
+              reasoningEffort:
+                settledReasoning.reasoningEffort ?? (queryComplexity ? `auto:${queryComplexity}` : undefined),
+              thinkingBudgetTokens:
+                settledReasoning.thinking?.enabled && currentModel.can_think
+                  ? settledReasoning.thinking.budget_tokens
+                  : undefined,
+              functionCalls: quest.promptMeta?.functionCalls,
+              attachedFiles: quest.promptMeta?.context?.attachedFiles,
+            }),
+          };
+        };
 
         // P6: Credits reconciliation - settle the pre-reserved credits against actual usage.
         // The balance was already adjusted atomically at pre-reservation time; this step
@@ -7392,72 +7457,16 @@ export class ChatCompletionProcess {
             });
           }
 
-          // Same turns / tier basis the estimatedCost branches above priced on.
-          const priceStamp = buildUsagePriceStamp(currentModel, {
-            turns: hasProviderUsage ? actualTokenUsage.turnUsage : undefined,
-            tierBasisTokens: hasProviderUsage
-              ? settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
-              : localInputTokens,
-            localEstimate: !hasProviderUsage,
-            cacheWrite1hTokens: cacheWrite1hInputTokens,
-          });
-
-          // Dual-write usage event: ties frozen COGS to credits debited
-          // for margin reporting. Fire-and-forget - must never affect billing.
-          const settledLedgerModel = this.ledgerModel(currentModel);
-          const settledReasoning = chatReasoningOptionsFor(currentModel, explicitReasoningEffort, chatThinking);
+          // Dual-write usage event. Fire-and-forget - must never affect billing.
           this.db.usageEvents
             ?.record({
-              requestId: quest.id,
-              userId: this.user.id,
-              ownerId: this.reservedCreditsOwnerId || this.user.id,
-              ownerType: this.reservedCreditsOwnerType,
-              sessionId: quest.sessionId,
-              projectId: this.turnProjectId,
-              feature: 'chat',
-              provider: settledLedgerModel.backend,
-              model: settledLedgerModel.id,
-              ...executedModelFields(settledLedgerModel, currentModel),
-              // 'web' covers all callers of ChatCompletionProcess today (matches
-              // the paired ledger writes below); no API-key auth on this path.
-              source: 'web',
-              // inputTokens/outputTokens are ALWAYS the local estimate and the
-              // provider* fields ALWAYS the provider counts, so drift and invoice
-              // reconciliation stay comparable across rows; settledBasis says
-              // which basis priced costUsd/creditsCharged.
-              inputTokens,
-              outputTokens,
-              settledBasis,
-              cachedInputTokens: cacheReadInputTokens,
-              cacheWriteTokens: actualTokenUsage?.cacheCreationInputTokens ?? 0,
-              providerInputTokens: actualTokenUsage?.inputTokens,
-              providerOutputTokens: actualTokenUsage?.outputTokens,
-              costUsd: estimatedCost,
-              creditsCharged: textCreditsUsed,
-              ...priceStamp,
+              ...settledUsageEvent(),
               // Quest-level write-off (uncollected part of the settlement; text only on a
               // credit-capped personal turn), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
               // The hold this turn reserved, so a settlement far above it is findable per account.
               reservedCredits: reservedAtSettlement > 0 ? reservedAtSettlement : undefined,
-              // Not always 'ok': a turn we aborted as degenerate is priced like any other
-              // (the provider tokens were really spent) but has to be findable for a refund.
-              status: usageEventStatusForFinish(providerStopReason),
-              latencyMs: Date.now() - processStartTime,
-              requestMeta: buildChatRequestMeta({
-                stopReason: providerStopReason,
-                maxOutputTokens: safeMaxTokens,
-                limiter: this.turnCreditLimiter,
-                reasoningEffort:
-                  settledReasoning.reasoningEffort ?? (queryComplexity ? `auto:${queryComplexity}` : undefined),
-                thinkingBudgetTokens:
-                  settledReasoning.thinking?.enabled && currentModel.can_think
-                    ? settledReasoning.thinking.budget_tokens
-                    : undefined,
-                functionCalls: quest.promptMeta?.functionCalls,
-                attachedFiles: quest.promptMeta?.context?.attachedFiles,
-              }),
             })
             .catch((usageEventError: unknown) => {
               logger.warn('Failed to record usage event', usageEventError);
@@ -7570,6 +7579,11 @@ export class ChatCompletionProcess {
             // Do not re-throw: balance already adjusted at reservation time
             // Audit trail failure is logged above; request has already been served
           }
+        } else if (recordsChatUsage) {
+          // Credits are off for an example run, so nothing above wrote its row; the platform pays.
+          chatUsageEvents?.record(settledUsageEvent()).catch((usageEventError: unknown) => {
+            logger.warn('Failed to record platform-paid usage event', usageEventError);
+          });
         }
 
         const totalResponseTime = Date.now() - processStartTime;
