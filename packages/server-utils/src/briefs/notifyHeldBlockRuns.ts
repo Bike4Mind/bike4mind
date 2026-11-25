@@ -1,16 +1,18 @@
-import type { PushNotificationEvent } from '@bike4mind/common';
-import { agentExecutionRepository, type BusyBlockInterval } from '@bike4mind/database';
+import { isPushCategoryEnabled, type PushNotificationEvent } from '@bike4mind/common';
+import { agentExecutionRepository, userRepository, type BusyBlockInterval } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 
 const logger = new Logger({ metadata: { service: 'notifyHeldBlockRuns' } });
 
 export type HeldBlockRunsDeps = {
+  users: Pick<typeof userRepository, 'findById'>;
   runs: Pick<typeof agentExecutionRepository, 'countRunsFinishedBetween'>;
   push(event: PushNotificationEvent): Promise<void>;
   logger: Pick<Logger, 'warn' | 'error'>;
 };
 
 const defaultDeps: HeldBlockRunsDeps = {
+  users: userRepository,
   runs: agentExecutionRepository,
   // Lazy: pushNotifications reads SST config at load, and startBriefComposition (imported by SST-less
   // tests) imports this module.
@@ -29,6 +31,9 @@ export async function notifyHeldBlockRuns(
   deps: HeldBlockRunsDeps = defaultDeps
 ): Promise<void> {
   try {
+    // Mirrors the hold in sendPush, which holds nothing while brief_ready pushes are off.
+    const user = await deps.users.findById(userId);
+    if (!user || !isPushCategoryEnabled(user.preferences?.pushNotifications, 'brief_ready')) return;
     const count = await deps.runs.countRunsFinishedBetween(userId, block.start, block.end);
     if (count === 0) return;
     await deps.push({

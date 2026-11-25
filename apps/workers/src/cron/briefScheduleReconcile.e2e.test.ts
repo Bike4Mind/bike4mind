@@ -63,6 +63,8 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   publishCompose.mockClear();
+  notifyHeldRuns.mockClear();
+  notifyStaleBlock.mockClear();
   network.events.mockReset().mockResolvedValue({ $metadata: {}, FailedEntryCount: 0, Entries: [{ EventId: 'e1' }] });
   network.queue.mockReset().mockResolvedValue({ $metadata: {}, MessageId: 'm1' });
   vi.stubEnv('B4M_SELF_HOST', 'false');
@@ -86,6 +88,9 @@ const insertRun = (userId: string) =>
     createdAt: minutesAgo(60),
   });
 const nextBriefAtOf = async (userId: string) => (await userRepository.getBriefSchedule(userId)).nextBriefAt;
+
+const notifyHeldRuns = vi.fn(async (_userId: string, _block: { start: Date; end: Date }) => {});
+const notifyStaleBlock = vi.fn(async (_userId: string, _block: { start: Date; end: Date }) => {});
 
 const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =>
   runBriefScheduleReconcile(
@@ -120,9 +125,11 @@ const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =
                 EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(id, end, 1, kind, start))
               )
             ).some(items => items.length > 0),
+          notifyHeldRuns,
           publishCompose: publisher,
           now: () => new Date(),
         }),
+      notifyHeldBlockRuns: notifyStaleBlock,
       outOfTime: () => false,
     },
     now
@@ -427,6 +434,7 @@ describe('runBriefScheduleReconcile block briefs', () => {
     expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
     expect(publishCompose).not.toHaveBeenCalled();
     expect(await blockState(userId)).toEqual({ next: laterBlock.end, last: block.end });
+    expect(notifyHeldRuns).toHaveBeenCalledWith(userId, block);
   });
 
   it('claims without starting when the opt-in was turned off', async () => {
@@ -435,6 +443,7 @@ describe('runBriefScheduleReconcile block briefs', () => {
 
     expect((await run()).blocks.busy_off).toBe(1);
     expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+    expect(notifyHeldRuns).not.toHaveBeenCalled();
   });
 
   it('does not re-arm a claimed block when the calendar re-syncs it', async () => {
@@ -487,6 +496,9 @@ describe('runBriefScheduleReconcile block briefs', () => {
     expect((await run()).blocks.stale).toBe(1);
     expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
     expect(await blockState(userId)).toEqual({ next: null, last: old.end });
+    expect(notifyStaleBlock).toHaveBeenCalledTimes(1);
+    expect(notifyStaleBlock).toHaveBeenCalledWith(userId, old);
+    expect(notifyHeldRuns).not.toHaveBeenCalled();
   });
 
   it('counts a due end with no stored block as unscheduled', async () => {

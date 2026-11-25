@@ -117,7 +117,12 @@ describe('brief.compose handler', () => {
   it('loads the activity, composes with the operations model and settles every carried record', async () => {
     await run();
 
-    expect(mocks.loadDelegations).toHaveBeenCalledWith('u1', new Date('2026-11-19T00:00:00Z'), expect.any(Date));
+    expect(mocks.loadDelegations).toHaveBeenCalledWith(
+      'u1',
+      new Date('2026-11-19T00:00:00Z'),
+      expect.any(Date),
+      undefined
+    );
     expect(mocks.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'b1', operation: 'assistant_brief', completionInfo: { outputTokens: 5 } })
     );

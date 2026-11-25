@@ -267,10 +267,8 @@ export async function startBlockBrief(
 ): Promise<BlockBriefOutcome> {
   const user = await deps.users.findById(userId);
   if (!user) return 'user_missing';
-  if (user.preferences?.busyBlockBrief?.enabled !== true) {
-    await deps.notifyHeldRuns(userId, block);
-    return 'busy_off';
-  }
+  // sendPush holds nothing while the opt-in is off, so there is nothing to summarize.
+  if (user.preferences?.busyBlockBrief?.enabled !== true) return 'busy_off';
   if (!isPushCategoryEnabled(user.preferences?.pushNotifications, 'brief_ready')) return 'push_off';
   if (await deps.briefs.findActiveComposing(userId, deps.now())) return 'in_flight';
 
