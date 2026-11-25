@@ -47,12 +47,16 @@ class AgentRunWire(private val environment: ServerEnvironment, private val http:
     private data class WireStep(val type: String? = null, @SerialName("tool_name") val toolName: String? = null)
 
     @Serializable
+    private data class WireStepProgress(val completed: Int? = null, val total: Int? = null)
+
+    @Serializable
     private data class StatusBody(
         val id: String? = null,
         val status: String? = null,
         val error: String? = null,
         val steps: List<WireStep>? = null,
         @SerialName("total_iterations") val totalIterations: Int? = null,
+        @SerialName("step_progress") val stepProgress: WireStepProgress? = null,
     )
 
     override suspend fun start(sessionId: String, message: String): AgentRunReceipt {
@@ -85,6 +89,7 @@ class AgentRunWire(private val environment: ServerEnvironment, private val http:
             steps = body.steps.orEmpty().map { AgentRunStatus.Step(stepKind(it.type), it.toolName) },
             error = body.error,
             iterations = body.totalIterations,
+            stepProgress = StepProgress.of(body.stepProgress?.completed, body.stepProgress?.total),
         )
     }
 

@@ -3,7 +3,7 @@
   "info": {
     "title": "Bike4Mind API",
     "version": "31.0.0",
-    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Getting started\n1. Create a key in the web app under **Profile > API Keys** (pick a scope preset).\n2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.\n3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.\n\nEndpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills**, **Functions** and **Account**.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The documented scopes are:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:decide`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `agents:read`\n- `agents:write`\n- `me:read`\n- `personas:mint`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `hearth:read`\n- `hearth:write`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n- `skills:read`\n- `skills:write`\n- `skills:review`\n- `bob:read`\n- `bob:run`\n- `slack:post`\n- `api-keys:manage`\n- `ai:end-user-id`\n- `artifacts:publish`\n- `functions:invoke`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## Rate limits\nEach API key has a per-minute and a per-day request ceiling, by default 60 requests/minute and 1000 requests/day (a key can be minted with its own ceilings). Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):\n- `X-RateLimit-Limit-Minute`\n- `X-RateLimit-Remaining-Minute`\n- `X-RateLimit-Reset-Minute`\n- `X-RateLimit-Limit-Day`\n- `X-RateLimit-Remaining-Day`\n- `X-RateLimit-Reset-Day`\n\nReset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/image-models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations`, `/api/v1/music-generations` and `/api/v1/image-jobs`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.\n\n## Credits\nGeneration endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: \"insufficient_credits\"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.\n\n## Errors\nError bodies use one envelope, the `ErrorResponse` schema: `{ \"error\": string, \"request_id\"?: string }`, plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, `spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and the body for each.\n\nThe shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: \"provider_rejected\"` means the upstream provider refused the provider key the request used - the platform key by default, or your own stored provider key when you configured one - so your API key itself was accepted.\n\n## Async jobs\nWork that is not provably fast is queued and polled rather than held open:\n- **Chat** (`POST /api/chat`) and the deprecated quest-based image routes (`POST /api/v1/image-generations`, `POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for failure before reading results: a job that ends `done` with `type: \"error\"` failed (the reason is in `reply`), and a job that ends `stopped` also failed even when `type` is not `\"error\"` (its `reply` carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until the reply is ready.\n- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.\n- **Image generation and editing** (`POST /api/v1/image-jobs`) returns `202` with one job per image. Poll `GET /api/v1/image-jobs/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Scene composition** (`POST /api/v1/scene-compositions`) returns `202`. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Briefs** (`POST /api/v1/briefs`) return `202`. Poll `GET /api/v1/briefs/{id}` until `status` is `ready` or `failed`.\n- **Brief replies** (`POST /api/v1/briefs/{id}/decisions/{decisionId}/reply`) return `202` with the `executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.\n- **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll `GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`.\n- **Delegations** (`POST /api/v1/delegations`) return `202`. Poll `GET /api/v1/delegations/{id}` until `status` is `handled`, `needs_decision` or `failed`.\n- **Function calls** (`POST /api/v1/functions/{id}/invoke` with `mode: \"async\"`) return `202` with a `call_id`. Poll `GET /api/v1/functions/calls/{call_id}` until `status` is `finished`, then check `outcome` before reading `output`. Results are kept 24 hours.\n- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.\n- **Audio** endpoints are synchronous and return the result directly. A text-to-speech (`POST /api/ai/tts`) or sound-effect (`POST /api/ai/sound-effects`) clip that outlasts the request answers `202` with its job resource instead; it cannot be polled yet, and unless `preview` was set the clip is saved to the file browser when it finishes.\n- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.\n\nPoll with a backoff of a few seconds: each poll counts against the per-minute limit.\n\n## Versioning\nNew endpoints live under `/api/v1`. Published endpoints are forward-only: a live URL is never renamed or removed, and a breaking change ships as a new path while the old one keeps working. Nothing published is removed silently - a deprecated field or endpoint is marked `deprecated` in this spec with a sunset date in its description, and keeps working until that date.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
+    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Getting started\n1. Create a key in the web app under **Profile > API Keys** (pick a scope preset).\n2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.\n3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.\n\nEndpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills**, **Functions** and **Account**.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The documented scopes are:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:decide`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `agents:read`\n- `agents:write`\n- `me:read`\n- `personas:mint`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `hearth:read`\n- `hearth:write`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n- `skills:read`\n- `skills:write`\n- `skills:review`\n- `bob:read`\n- `bob:run`\n- `slack:post`\n- `api-keys:manage`\n- `ai:end-user-id`\n- `artifacts:publish`\n- `functions:invoke`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## Rate limits\nEach API key has a per-minute and a per-day request ceiling, by default 60 requests/minute and 1000 requests/day (a key can be minted with its own ceilings). Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):\n- `X-RateLimit-Limit-Minute`\n- `X-RateLimit-Remaining-Minute`\n- `X-RateLimit-Reset-Minute`\n- `X-RateLimit-Limit-Day`\n- `X-RateLimit-Remaining-Day`\n- `X-RateLimit-Reset-Day`\n\nReset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/image-models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations`, `/api/v1/music-generations` and `/api/v1/image-jobs`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.\n\n## Credits\nGeneration endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: \"insufficient_credits\"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.\n\n## Errors\nError bodies use one envelope, the `ErrorResponse` schema: `{ \"error\": string, \"request_id\"?: string }`, plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, `spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and the body for each.\n\nThe shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: \"provider_rejected\"` means the upstream provider refused the provider key the request used - the platform key by default, or your own stored provider key when you configured one - so your API key itself was accepted.\n\n## Async jobs\nWork that is not provably fast is queued and polled rather than held open:\n- **Chat** (`POST /api/chat`) and the deprecated quest-based image routes (`POST /api/v1/image-generations`, `POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for failure before reading results: a job that ends `done` with `type: \"error\"` failed (the reason is in `reply`), and a job that ends `stopped` also failed even when `type` is not `\"error\"` (its `reply` carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until the reply is ready.\n- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.\n- **Image generation and editing** (`POST /api/v1/image-jobs`) returns `202` with one job per image. Poll `GET /api/v1/image-jobs/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Scene composition** (`POST /api/v1/scene-compositions`) returns `202`. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Briefs** (`POST /api/v1/briefs`) return `202`. Poll `GET /api/v1/briefs/{id}` until `status` is `ready` or `failed`.\n- **Follow-up briefs** (`POST /api/v1/briefs/follow-ups`) return `202` too and are polled the same way, at `GET /api/v1/briefs/{id}`.\n- **Brief replies** (`POST /api/v1/briefs/{id}/decisions/{decisionId}/reply`) return `202` with the `executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.\n- **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll `GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`.\n- **Delegations** (`POST /api/v1/delegations`) return `202`. Poll `GET /api/v1/delegations/{id}` until `status` is `handled`, `needs_decision` or `failed`.\n- **Function calls** (`POST /api/v1/functions/{id}/invoke` with `mode: \"async\"`) return `202` with a `call_id`. Poll `GET /api/v1/functions/calls/{call_id}` until `status` is `finished`, then check `outcome` before reading `output`. Results are kept 24 hours.\n- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.\n- **Audio** endpoints are synchronous and return the result directly. A text-to-speech (`POST /api/ai/tts`) or sound-effect (`POST /api/ai/sound-effects`) clip that outlasts the request answers `202` with its job resource instead; it cannot be polled yet, and unless `preview` was set the clip is saved to the file browser when it finishes.\n- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.\n\nPoll with a backoff of a few seconds: each poll counts against the per-minute limit.\n\n## Versioning\nNew endpoints live under `/api/v1`. Published endpoints are forward-only: a live URL is never renamed or removed, and a breaking change ships as a new path while the old one keeps working. Nothing published is removed silently - a deprecated field or endpoint is marked `deprecated` in this spec with a sunset date in its description, and keeps working until that date.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
     "contact": {
       "name": "Bike4Mind",
       "url": "https://your-deployment.example.com"
@@ -1575,6 +1575,27 @@
               "null"
             ]
           },
+          "step_progress": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "completed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "completed",
+              "total"
+            ],
+            "description": "Progress through a known number of steps, for a determinate progress display. `completed` and `total` count the same steps, which are not ReAct iterations, so do not pair `total` with `total_iterations`. The whole object is null when the executor cannot predict a total for this run, which is the common case: show indeterminate progress then. A run that has finished its last step can still be `running` while it writes its answer, so treat `status` as the source of truth for whether it is done."
+          },
           "created_at": {
             "type": "string"
           },
@@ -1590,6 +1611,7 @@
           "error",
           "steps",
           "total_iterations",
+          "step_progress",
           "created_at",
           "updated_at"
         ]
@@ -9594,7 +9616,43 @@
                     "options",
                     "state"
                   ],
-                  "description": "Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both."
+                  "description": "Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`."
+                },
+                "followUp": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "actionItem",
+                        "followUpEmail",
+                        "reminder"
+                      ],
+                      "description": "What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable."
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "approved",
+                        "dismissed"
+                      ],
+                      "description": "Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable."
+                    },
+                    "remindAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "state",
+                    "remindAt"
+                  ],
+                  "description": "Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`."
                 },
                 "draftReply": {
                   "type": "object",
@@ -9603,7 +9661,7 @@
                       "type": "string",
                       "minLength": 1,
                       "maxLength": 320,
-                      "description": "The source email's sender as received, unverified."
+                      "description": "The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it."
                     },
                     "subject": {
                       "type": "string",
@@ -9643,6 +9701,485 @@
           "happened",
           "handled",
           "decisions"
+        ]
+      },
+      "composeFollowUpBriefResponse202": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "composing",
+              "ready",
+              "failed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "ISO 8601 timestamp."
+          },
+          "composedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601 timestamp; null until the brief is ready."
+          },
+          "periodStart": {
+            "type": "string",
+            "description": "ISO 8601 start of the activity window the brief covers."
+          },
+          "periodEnd": {
+            "type": "string",
+            "description": "ISO 8601 end of the activity window the brief covers."
+          },
+          "headline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 160
+          },
+          "happened": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Stable within the brief."
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "source": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "email"
+                          ]
+                        },
+                        "emailId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The ingested email the item was triaged from."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "emailId"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "delegation"
+                          ]
+                        },
+                        "delegationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "delegationId"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "obligation"
+                          ]
+                        },
+                        "obligationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "obligationId"
+                      ]
+                    }
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
+                }
+              },
+              "required": [
+                "id",
+                "text"
+              ]
+            },
+            "maxItems": 12
+          },
+          "handled": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Stable within the brief."
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "source": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "email"
+                          ]
+                        },
+                        "emailId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The ingested email the item was triaged from."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "emailId"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "delegation"
+                          ]
+                        },
+                        "delegationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "delegationId"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "obligation"
+                          ]
+                        },
+                        "obligationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "obligationId"
+                      ]
+                    }
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
+                }
+              },
+              "required": [
+                "id",
+                "text"
+              ]
+            },
+            "maxItems": 12
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Stable within the brief."
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "source": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "email"
+                          ]
+                        },
+                        "emailId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The ingested email the item was triaged from."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "emailId"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "delegation"
+                          ]
+                        },
+                        "delegationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "delegationId"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "obligation"
+                          ]
+                        },
+                        "obligationId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "obligationId"
+                      ]
+                    }
+                  ],
+                  "description": "The record the item came from, when it was not agent activity."
+                },
+                "approval": {
+                  "type": "object",
+                  "properties": {
+                    "questId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The notebook holding the quest, where a client shows the approval card."
+                    },
+                    "pendingActionTs": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "approved",
+                        "denied",
+                        "replaced",
+                        "lapsed",
+                        "resolved"
+                      ],
+                      "description": "Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should treat an unknown value as not actionable."
+                    }
+                  },
+                  "required": [
+                    "questId",
+                    "sessionId",
+                    "pendingActionTs",
+                    "state"
+                  ],
+                  "description": "Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read."
+                },
+                "question": {
+                  "type": "object",
+                  "properties": {
+                    "questId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The agent turn that asked the question."
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The notebook the reply continues."
+                    },
+                    "options": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 4,
+                      "description": "Suggested answers, in order; `choiceIndex` on a reply refers to this list."
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "answered",
+                        "superseded"
+                      ],
+                      "description": "Live state of the question at fetch time. Only `open` can be replied to; a client should treat an unknown value as not actionable."
+                    }
+                  },
+                  "required": [
+                    "questId",
+                    "sessionId",
+                    "options",
+                    "state"
+                  ],
+                  "description": "Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`."
+                },
+                "followUp": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "actionItem",
+                        "followUpEmail",
+                        "reminder"
+                      ],
+                      "description": "What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable."
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "approved",
+                        "dismissed"
+                      ],
+                      "description": "Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable."
+                    },
+                    "remindAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "state",
+                    "remindAt"
+                  ],
+                  "description": "Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`."
+                },
+                "draftReply": {
+                  "type": "object",
+                  "properties": {
+                    "to": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 320,
+                      "description": "The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it."
+                    },
+                    "subject": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "body": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4000
+                    }
+                  },
+                  "required": [
+                    "to",
+                    "subject",
+                    "body"
+                  ],
+                  "description": "Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text."
+                }
+              },
+              "required": [
+                "id",
+                "text"
+              ]
+            },
+            "maxItems": 12
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "createdAt",
+          "composedAt",
+          "periodStart",
+          "periodEnd",
+          "headline",
+          "happened",
+          "handled",
+          "decisions"
+        ]
+      },
+      "composeFollowUpBriefRequest": {
+        "type": "object",
+        "properties": {
+          "transcript": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000,
+            "pattern": "\\S",
+            "description": "The dictated memo, as transcribed on the device."
+          },
+          "timeZone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "IANA zone used to read times like \"tomorrow at 9\" in the memo; defaults to the brief schedule zone."
+          }
+        },
+        "required": [
+          "transcript"
         ]
       },
       "listBriefsResponse200": {
@@ -10021,7 +10558,43 @@
                           "options",
                           "state"
                         ],
-                        "description": "Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both."
+                        "description": "Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`."
+                      },
+                      "followUp": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "actionItem",
+                              "followUpEmail",
+                              "reminder"
+                            ],
+                            "description": "What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable."
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "approved",
+                              "dismissed"
+                            ],
+                            "description": "Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable."
+                          },
+                          "remindAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds."
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "state",
+                          "remindAt"
+                        ],
+                        "description": "Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`."
                       },
                       "draftReply": {
                         "type": "object",
@@ -10030,7 +10603,7 @@
                             "type": "string",
                             "minLength": 1,
                             "maxLength": 320,
-                            "description": "The source email's sender as received, unverified."
+                            "description": "The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it."
                           },
                           "subject": {
                             "type": "string",
@@ -10450,7 +11023,43 @@
                     "options",
                     "state"
                   ],
-                  "description": "Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both."
+                  "description": "Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`."
+                },
+                "followUp": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "actionItem",
+                        "followUpEmail",
+                        "reminder"
+                      ],
+                      "description": "What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable."
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "approved",
+                        "dismissed"
+                      ],
+                      "description": "Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable."
+                    },
+                    "remindAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "state",
+                    "remindAt"
+                  ],
+                  "description": "Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`."
                 },
                 "draftReply": {
                   "type": "object",
@@ -10459,7 +11068,7 @@
                       "type": "string",
                       "minLength": 1,
                       "maxLength": 320,
-                      "description": "The source email's sender as received, unverified."
+                      "description": "The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it."
                     },
                     "subject": {
                       "type": "string",
@@ -10932,6 +11541,504 @@
         },
         "required": [
           "text"
+        ]
+      },
+      "editBriefDecisionResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stable within the brief."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "email"
+                    ]
+                  },
+                  "emailId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The ingested email the item was triaged from."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "emailId"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "delegation"
+                    ]
+                  },
+                  "delegationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "delegationId"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "obligation"
+                    ]
+                  },
+                  "obligationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "obligationId"
+                ]
+              }
+            ],
+            "description": "The record the item came from, when it was not agent activity."
+          },
+          "approval": {
+            "type": "object",
+            "properties": {
+              "questId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The notebook holding the quest, where a client shows the approval card."
+              },
+              "pendingActionTs": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "denied",
+                  "replaced",
+                  "lapsed",
+                  "resolved"
+                ],
+                "description": "Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should treat an unknown value as not actionable."
+              }
+            },
+            "required": [
+              "questId",
+              "sessionId",
+              "pendingActionTs",
+              "state"
+            ],
+            "description": "Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read."
+          },
+          "question": {
+            "type": "object",
+            "properties": {
+              "questId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The agent turn that asked the question."
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The notebook the reply continues."
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "description": "Suggested answers, in order; `choiceIndex` on a reply refers to this list."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "answered",
+                  "superseded"
+                ],
+                "description": "Live state of the question at fetch time. Only `open` can be replied to; a client should treat an unknown value as not actionable."
+              }
+            },
+            "required": [
+              "questId",
+              "sessionId",
+              "options",
+              "state"
+            ],
+            "description": "Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`."
+          },
+          "followUp": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "actionItem",
+                  "followUpEmail",
+                  "reminder"
+                ],
+                "description": "What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "dismissed"
+                ],
+                "description": "Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable."
+              },
+              "remindAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds."
+              }
+            },
+            "required": [
+              "kind",
+              "state",
+              "remindAt"
+            ],
+            "description": "Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`."
+          },
+          "draftReply": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 320,
+                "description": "The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it."
+              },
+              "subject": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "to",
+              "subject",
+              "body"
+            ],
+            "description": "Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text."
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ]
+      },
+      "editBriefDecisionRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400,
+            "pattern": "\\S"
+          },
+          "draftReply": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 320
+              },
+              "subject": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            },
+            "description": "Fields of a `followUpEmail` draft to replace."
+          },
+          "remindAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "New ISO 8601 due instant of a `reminder`."
+          }
+        }
+      },
+      "resolveBriefDecisionResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stable within the brief."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "email"
+                    ]
+                  },
+                  "emailId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The ingested email the item was triaged from."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "emailId"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "delegation"
+                    ]
+                  },
+                  "delegationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The item you delegated; read it with `GET /api/v1/delegations/{id}`."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "delegationId"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "obligation"
+                    ]
+                  },
+                  "obligationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A confirmed obligation; read it with `GET /api/v1/obligations/{id}`."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "obligationId"
+                ]
+              }
+            ],
+            "description": "The record the item came from, when it was not agent activity."
+          },
+          "approval": {
+            "type": "object",
+            "properties": {
+              "questId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The notebook holding the quest, where a client shows the approval card."
+              },
+              "pendingActionTs": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "denied",
+                  "replaced",
+                  "lapsed",
+                  "resolved"
+                ],
+                "description": "Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should treat an unknown value as not actionable."
+              }
+            },
+            "required": [
+              "questId",
+              "sessionId",
+              "pendingActionTs",
+              "state"
+            ],
+            "description": "Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read."
+          },
+          "question": {
+            "type": "object",
+            "properties": {
+              "questId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The agent turn that asked the question."
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The notebook the reply continues."
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "description": "Suggested answers, in order; `choiceIndex` on a reply refers to this list."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "answered",
+                  "superseded"
+                ],
+                "description": "Live state of the question at fetch time. Only `open` can be replied to; a client should treat an unknown value as not actionable."
+              }
+            },
+            "required": [
+              "questId",
+              "sessionId",
+              "options",
+              "state"
+            ],
+            "description": "Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`."
+          },
+          "followUp": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "actionItem",
+                  "followUpEmail",
+                  "reminder"
+                ],
+                "description": "What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "dismissed"
+                ],
+                "description": "Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable."
+              },
+              "remindAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds."
+              }
+            },
+            "required": [
+              "kind",
+              "state",
+              "remindAt"
+            ],
+            "description": "Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`."
+          },
+          "draftReply": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 320,
+                "description": "The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it."
+              },
+              "subject": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "to",
+              "subject",
+              "body"
+            ],
+            "description": "Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text."
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ]
+      },
+      "resolveBriefDecisionRequest": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "dismiss"
+            ]
+          }
+        },
+        "required": [
+          "outcome"
         ]
       },
       "getPendingDecisionCountResponse200": {
@@ -48082,7 +49189,7 @@
       "get": {
         "operationId": "listBriefs",
         "summary": "List briefs",
-        "description": "Lists your most recent briefs (up to 20), newest first. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
+        "description": "Lists your most recent briefs (up to 20), newest first. A brief composed from a dictated memo is not listed; read it by id. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
         "tags": [
           "AI"
         ],
@@ -48222,6 +49329,200 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/briefs\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/briefs/follow-ups": {
+      "post": {
+        "operationId": "composeFollowUpBrief",
+        "summary": "Compose follow-ups from a dictated memo",
+        "description": "Turns a dictated memo (the transcript of a voice note after a meeting or call) into a brief whose decisions propose follow-ups: action items, a follow-up email draft and reminders, each carrying `followUp` in `pending` state. Nothing is sent or scheduled until you approve a decision. Composition is asynchronous like `POST /api/v1/briefs`: the response is the brief in `composing` status, then a `brief_ready` push (or polling `GET /api/v1/briefs/{id}`) signals `ready` or `failed`. Every call starts a new brief, and a follow-up brief does not change the window the next activity brief covers. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/composeFollowUpBriefRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The follow-ups are being composed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/composeFollowUpBriefResponse202"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The transcript is empty, blank or too long, or the time zone is unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/briefs/follow-ups\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"transcript\": \"Email Sam the notes from today and remind me to call the vendor tomorrow at 9.\",\n  \"timeZone\": \"America/New_York\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/briefs/follow-ups\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"transcript\": \"Email Sam the notes from today and remind me to call the vendor tomorrow at 9.\",\n  \"timeZone\": \"America/New_York\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/briefs/follow-ups\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"transcript\": \"Email Sam the notes from today and remind me to call the vendor tomorrow at 9.\",\n        \"timeZone\": \"America/New_York\"\n    },\n)"
           }
         ]
       }
@@ -49901,6 +51202,514 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/briefs/<id>/decisions/<decisionId>/reply\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"text\": \"Go with the second option.\",\n        \"choiceIndex\": 1\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/briefs/{id}/decisions/{decisionId}": {
+      "patch": {
+        "operationId": "editBriefDecision",
+        "summary": "Edit a proposed follow-up",
+        "description": "Changes a follow-up decision (one carrying `followUp`) while it is still `pending`: `text` on any kind, `draftReply` fields only on a `followUpEmail`, `remindAt` only on a `reminder`. The response is the updated decision. Once the follow-up is approved or dismissed it cannot change; that is `409` with `errorCode: \"decision_closed\"`. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The brief id."
+            },
+            "required": true,
+            "description": "The brief id.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The decision item id within the brief."
+            },
+            "required": true,
+            "description": "The decision item id within the brief.",
+            "name": "decisionId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/editBriefDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/editBriefDecisionResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No field to change, or a field that does not apply to this kind of follow-up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such brief or decision, it is not yours, or the decision is not a follow-up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The follow-up was already approved or dismissed (`errorCode: \"decision_closed\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X PATCH \"https://your-deployment.example.com/api/v1/briefs/<id>/decisions/<decisionId>\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"draftReply\": {\n    \"to\": \"sam@example.com\"\n  }\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/briefs/<id>/decisions/<decisionId>\", {\n  method: \"PATCH\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"draftReply\": {\n    \"to\": \"sam@example.com\"\n  }\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.patch(\n    \"https://your-deployment.example.com/api/v1/briefs/<id>/decisions/<decisionId>\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"draftReply\": {\n            \"to\": \"sam@example.com\"\n        }\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/briefs/{id}/decisions/{decisionId}/resolve": {
+      "post": {
+        "operationId": "resolveBriefDecision",
+        "summary": "Approve or dismiss a proposed follow-up",
+        "description": "Approves or dismisses a `pending` follow-up decision, once; the response is the updated decision. Approving records your approval and nothing more: the server never sends a `followUpEmail` (hand the approved `draftReply` to the device mail app) and needs `draftReply.to` to be an email address first. An approved `reminder` needs a `remindAt` and is listed in the first brief composed at or after it; with a brief schedule on, the next scheduled brief is moved earlier to that time. A second approve or dismiss is `409` with `errorCode: \"decision_closed\"`. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The brief id."
+            },
+            "required": true,
+            "description": "The brief id.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The decision item id within the brief."
+            },
+            "required": true,
+            "description": "The decision item id within the brief.",
+            "name": "decisionId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/resolveBriefDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/resolveBriefDecisionResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Approving an email whose recipient is not an email address, or a reminder with no time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such brief or decision, it is not yours, or the decision is not a follow-up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The follow-up was already approved or dismissed (`errorCode: \"decision_closed\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/briefs/<id>/decisions/<decisionId>/resolve\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"outcome\": \"approve\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/briefs/<id>/decisions/<decisionId>/resolve\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"outcome\": \"approve\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/briefs/<id>/decisions/<decisionId>/resolve\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"outcome\": \"approve\"\n    },\n)"
           }
         ]
       }

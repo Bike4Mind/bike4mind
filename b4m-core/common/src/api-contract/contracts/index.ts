@@ -22,6 +22,7 @@ import { getClientConfigContract, getPublicClientConfigContract } from './client
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
 import {
   composeBriefContract,
+  composeFollowUpBriefContract,
   listBriefsContract,
   getBriefContract,
   getBriefScheduleContract,
@@ -29,6 +30,8 @@ import {
   getBusyBlocksContract,
   putBusyBlocksContract,
   replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './briefs.contract';
 import { createDelegationContract, getDelegationContract } from './delegations.contract';
@@ -238,6 +241,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   approvePendingActionContract,
   denyPendingActionContract,
   composeBriefContract,
+  composeFollowUpBriefContract,
   listBriefsContract,
   getBriefContract,
   getBriefScheduleContract,
@@ -248,6 +252,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
   replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
   getPendingDecisionCountContract,
   createDelegationContract,
   getDelegationContract,

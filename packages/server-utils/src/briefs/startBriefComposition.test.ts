@@ -5,6 +5,7 @@ import {
   startBriefComposition,
   startEventBrief,
   startBlockBrief,
+  startFollowUpComposition,
   startScheduledBrief,
   type BlockBriefDeps,
   type ScheduledBriefDeps,
@@ -116,12 +117,40 @@ describe('startBriefComposition', () => {
 });
 
 type GatedOver = {
+  hasReminders?: boolean;
   user?: object | null;
   inFlight?: IAssistantBrief | null;
   hasRuns?: boolean;
   claimed?: boolean;
   straddling?: Date | null;
 };
+
+describe('startFollowUpComposition', () => {
+  it('creates a follow-up row with the memo, never reusing an in-flight brief, and keeps the memo off the event', async () => {
+    const deps = makeDeps({ inFlight: stored({ status: 'composing' }) });
+    await startFollowUpComposition('u1', { transcript: 'Email Sam', timeZone: 'UTC' }, deps);
+    expect(deps.briefs.findActiveComposing).not.toHaveBeenCalled();
+    expect(deps.briefs.createComposing).toHaveBeenCalledWith({
+      userId: 'u1',
+      periodStart: now,
+      periodEnd: now,
+      origin: 'followUp',
+      followUpInput: { transcript: 'Email Sam', timeZone: 'UTC' },
+    });
+    expect(deps.publishCompose).toHaveBeenCalledWith({ briefId: 'b1', userId: 'u1' });
+  });
+
+  it('discards the row when the event is rejected', async () => {
+    const deps = makeDeps();
+    deps.publishCompose.mockRejectedValue(new BriefComposeRejectedError());
+    await expect(startFollowUpComposition('u1', { transcript: 'memo' }, deps)).rejects.toMatchObject({
+      name: BriefComposeStartError.name,
+      retrySafe: true,
+    });
+    expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
+    expect(deps.briefs.createComposing.mock.calls[0][0].followUpInput).toEqual({ transcript: 'memo' });
+  });
+});
 
 const PREVIOUS_START = new Date('2026-11-17T01:00:00Z');
 const enabledUser = { preferences: { briefSchedule: { enabled: true } } };
@@ -137,6 +166,7 @@ const makeGatedDeps = (over: GatedOver = {}) => {
     },
     hasRunsSince: vi.fn().mockResolvedValue(over.hasRuns ?? true),
     hasPendingEmails: vi.fn().mockResolvedValue(false),
+    hasDueReminders: vi.fn().mockResolvedValue(over.hasReminders ?? false),
   };
 };
 const asDeps = (deps: ReturnType<typeof makeGatedDeps>) => deps as unknown as ScheduledBriefDeps;
@@ -177,6 +207,12 @@ describe.each([
     expect(await start('u1', asDeps(deps))).toBe('in_flight');
     expect(deps.publishCompose).not.toHaveBeenCalled();
     expect(deps.users.releaseBriefStart).toHaveBeenCalledWith('u1', now, PREVIOUS_START);
+  });
+
+  it('counts a due reminder as activity when nothing else happened', async () => {
+    const deps = makeGatedDeps({ hasRuns: false, hasReminders: true });
+    expect(await start('u1', asDeps(deps))).toBe('enqueued');
+    expect(deps.hasDueReminders).toHaveBeenCalledWith('u1', now);
   });
 
   it('counts a run that finished after the last brief as activity', async () => {

@@ -20,6 +20,8 @@ data class AgentRunStatus(
     val error: String? = null,
     /** ReAct iterations so far (`total_iterations`); null before the first one. */
     val iterations: Int? = null,
+    /** `step_progress`: null when the server cannot predict a total for this run, which is the usual case. */
+    val stepProgress: StepProgress? = null,
 ) {
     /** The public status set (`PUBLIC_AGENT_EXECUTION_STATUSES`). */
     enum class State(val wire: String) {
@@ -45,6 +47,20 @@ data class AgentRunStatus(
 
     data class Step(val kind: Kind, val toolName: String? = null) {
         enum class Kind { THOUGHT, ACTION, OBSERVATION, FINAL_ANSWER, OTHER }
+    }
+}
+
+/**
+ * How far a run is through a known number of steps. These are not ReAct iterations, so never pair [total] with
+ * [AgentRunStatus.iterations].
+ */
+data class StepProgress(val completed: Int, val total: Int) {
+    companion object {
+        /** Null for a shape no display can draw (no total, negative count); a count past the total is capped. */
+        fun of(completed: Int?, total: Int?): StepProgress? {
+            if (completed == null || total == null || total <= 0 || completed < 0) return null
+            return StepProgress(minOf(completed, total), total)
+        }
     }
 }
 

@@ -2105,6 +2105,23 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Moves an enabled schedule's due time earlier to `at`, never later, so an approved reminder starts a brief
+   * when it falls due. A user with no enabled schedule is left alone; false when nothing moved.
+   */
+  async pullNextBriefAtForward(userId: string, at: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: userId,
+        'preferences.briefSchedule.enabled': true,
+        $or: [{ nextBriefAt: { $exists: false } }, { nextBriefAt: null }, { nextBriefAt: { $gt: at } }],
+      },
+      { $set: { nextBriefAt: at } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
    * Claims the shared brief-start debounce when no brief started within `minGapMs` of `now`, returning the
    * replaced value for releaseBriefStart; null when refused. A stored value in the future counts as recent.
    */

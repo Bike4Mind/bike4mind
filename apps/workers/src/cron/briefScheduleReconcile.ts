@@ -8,7 +8,9 @@
  * event; startScheduledBrief skips users whose schedule was turned off after the claim, users with brief
  * pushes off, windows with no agent runs and no pending triaged email, and starts within
  * SCHEDULED_BRIEF_MIN_GAP_MS of another brief start (`debounced`: a racing event brief covers the slot,
- * which stays advanced).
+ * which stays advanced). The next slot is the earlier of the schedule's next slot and the next approved
+ * reminder, and accepted, debounced or in-flight work with an unlisted due reminder is retried once the gap has passed,
+ * so a reminder the racing brief did not list never waits for the following regular slot.
  *
  * A second pass starts one brief per ended calendar busy block (startBlockBrief). The claim is the same
  * compare-and-set shape on `nextBlockBriefAt`, which also records the block end in `lastBlockBriefEnd` so a
@@ -19,9 +21,9 @@
  */
 import type { Context } from 'aws-lambda';
 import { BUSY_BLOCK_LIMITS } from '@bike4mind/common';
-import { connectDB, userRepository } from '@bike4mind/database';
+import { assistantBriefRepository, connectDB, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { computeNextBriefAt } from '@bike4mind/server-utils/briefs/briefSchedule';
+import { computeNextBriefAt, SCHEDULED_BRIEF_MIN_GAP_MS } from '@bike4mind/server-utils/briefs/briefSchedule';
 import {
   BriefComposeStartError,
   startBlockBrief,
@@ -48,10 +50,12 @@ export type BriefScheduleReconcileDeps = {
     typeof userRepository,
     | 'findDueBriefSchedules'
     | 'advanceNextBriefAt'
+    | 'pullNextBriefAtForward'
     | 'findDueBlockBriefs'
     | 'advanceNextBlockBriefAt'
     | 'releaseBlockBriefClaim'
   >;
+  reminders: Pick<typeof assistantBriefRepository, 'findEarliestPendingReminderAt' | 'findDueReminders'>;
   startScheduledBrief: (userId: string) => Promise<ScheduledBriefOutcome>;
   startBlockBrief: (userId: string, block: { start: Date; end: Date }) => Promise<BlockBriefOutcome>;
   /** Summary push for a block dropped as stale; defaults to notifyHeldBlockRuns. */
@@ -76,6 +80,48 @@ export type BlockBriefReconcileResult = Record<BlockBriefOutcome, number> & {
   stale: number;
   failed: number;
 };
+
+async function withNextReminder(
+  deps: BriefScheduleReconcileDeps,
+  userId: string,
+  now: Date,
+  next: Date
+): Promise<Date> {
+  try {
+    const reminderAt = await deps.reminders.findEarliestPendingReminderAt(userId, now);
+    return reminderAt && reminderAt < next ? reminderAt : next;
+  } catch (err) {
+    logger.warn('[briefScheduleReconcile] reading the next reminder failed; keeping the regular slot', { userId, err });
+    return next;
+  }
+}
+
+async function reconcileReminderWakeUp(
+  deps: BriefScheduleReconcileDeps,
+  userId: string,
+  now: Date,
+  outcome: ScheduledBriefOutcome
+): Promise<void> {
+  const retryOverdue = outcome === 'enqueued' || outcome === 'debounced' || outcome === 'in_flight';
+  if (!retryOverdue && outcome !== 'no_activity') return;
+  try {
+    // Accepted work may list only part of the backlog. Keep a bounded retry until it is surfaced.
+    const reminderAt = await deps.reminders.findEarliestPendingReminderAt(userId, retryOverdue ? undefined : now);
+    if (!reminderAt) return;
+    const wakeAt = reminderAt <= now ? new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS) : reminderAt;
+    await deps.users.pullNextBriefAtForward(userId, wakeAt);
+  } catch (err) {
+    // Never release an accepted composition because its post-claim reminder lookup failed.
+    logger.warn('[briefScheduleReconcile] failed to reconcile a reminder wake-up', { userId, err });
+    if (retryOverdue) {
+      try {
+        await deps.users.pullNextBriefAtForward(userId, new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS));
+      } catch (retryError) {
+        logger.warn('[briefScheduleReconcile] failed to retain a reminder retry', { userId, err: retryError });
+      }
+    }
+  }
+}
 
 export async function runBriefScheduleReconcile(
   deps: BriefScheduleReconcileDeps,
@@ -115,6 +161,7 @@ export async function runBriefScheduleReconcile(
     let invalidSchedule = false;
     try {
       next = user.schedule ? computeNextBriefAt(user.schedule, now) : null;
+      if (next && user.schedule?.enabled) next = await withNextReminder(deps, user.id, now, next);
     } catch (err) {
       // A stored schedule that cannot be computed (an unknown zone) is cleared rather than left at the
       // head of the earliest-first batch, where it would fail every run.
@@ -148,7 +195,9 @@ export async function runBriefScheduleReconcile(
     }
 
     try {
-      result[await deps.startScheduledBrief(user.id)]++;
+      const outcome = await deps.startScheduledBrief(user.id);
+      result[outcome]++;
+      await reconcileReminderWakeUp(deps, user.id, now, outcome);
     } catch (err) {
       result.failed++;
       // Only release submission failures when non-delivery and cleanup are established.
@@ -254,6 +303,7 @@ export async function handler(_event: unknown, context?: Pick<Context, 'getRemai
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
   const result = await runBriefScheduleReconcile({
     users: userRepository,
+    reminders: assistantBriefRepository,
     startScheduledBrief: userId => startScheduledBrief(userId),
     startBlockBrief: (userId, block) => startBlockBrief(userId, block),
     outOfTime: () => (context ? context.getRemainingTimeInMillis() < STOP_BEFORE_TIMEOUT_MS : false),

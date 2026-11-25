@@ -7,6 +7,7 @@ import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -191,6 +192,21 @@ class AgentRunProgressTest {
         assertEquals("Finished web_search", progress(State.RUNNING, using + Step(Step.Kind.OBSERVATION)).stageLabel)
         assertEquals(null, progress(State.RUNNING, listOf(Step(Step.Kind.OBSERVATION), Step(Step.Kind.ACTION, ""))).stageLabel)
         assertEquals("Using " + "t".repeat(51) + "...", progress(State.RUNNING, listOf(Step(Step.Kind.ACTION, "t".repeat(80)))).stageLabel)
+    }
+
+    @Test
+    fun aStepTotalIsCarriedOnlyWhenTheServerSendsOne() {
+        val known = AgentRunStatus("e1", State.RUNNING, iterations = 4, stepProgress = StepProgress(1, 3))
+        assertEquals(AgentRunProgress(AgentRunPhase.RUNNING, null, 4, StepProgress(1, 3)), AgentRunProgress.from(known))
+        assertNull(progress(State.RUNNING).steps)
+    }
+
+    @Test
+    fun aStepCountIsCappedAtItsTotalAndAnUndrawableOneIsDropped() {
+        assertEquals(StepProgress(3, 3), StepProgress.of(7, 3))
+        assertNull(StepProgress.of(1, 0))
+        assertNull(StepProgress.of(-1, 3))
+        assertNull(StepProgress.of(null, 3))
     }
 
     @Test

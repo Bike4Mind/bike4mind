@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { ChatMessage, ChatProject, ChatReplyStats, ChatSpawnSuggestion } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentMayRetitle, deriveTitle, SessionStore } from './SessionStore';
+import { STUDIO_BINDINGS_DIRECTORY } from './studio/StudioFamilyStore';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { inheritancePolicy } from '@shared/orchestration';
@@ -47,6 +48,13 @@ describe('SessionStore', () => {
     const loaded = await store.get(created.id);
     expect(loaded?.messages).toEqual([]);
     expect(loaded?.historyEnabled).toBeUndefined();
+  });
+
+  it('scans workspace owners past the Studio bindings folder a nested session writes', async () => {
+    const parent = await store.create();
+    await store.create(undefined, { origin: { parentSessionId: parent.id, depth: 1, seedPrompt: 'child' } });
+    expect((await readdir(directory)).filter(name => name.startsWith('.'))).toContain(STUDIO_BINDINGS_DIRECTORY);
+    await expect(store.workspaceOwnersExcept(parent.id)).resolves.toEqual(expect.any(Array));
   });
 
   it('persists per-session local history consent', async () => {

@@ -221,6 +221,28 @@ export function parentHints(
   return hints;
 }
 
+/**
+ * Every live session started from `sessionId`, at any depth, by origin rather than by sidebar
+ * placement: deleting a parent offers these whether or not they are drawn under it.
+ */
+export function nestedSessionsOf(sessions: readonly ChatSessionSummary[], sessionId: string): ChatSessionSummary[] {
+  const found: ChatSessionSummary[] = [];
+  const seen = new Set([sessionId]);
+  for (let frontier = [sessionId]; frontier.length > 0;) {
+    const next = sessions.filter(
+      session =>
+        !seen.has(session.id) &&
+        !session.archived &&
+        session.origin !== undefined &&
+        frontier.includes(session.origin.parentSessionId)
+    );
+    for (const session of next) seen.add(session.id);
+    found.push(...next);
+    frontier = next.map(session => session.id);
+  }
+  return found;
+}
+
 /** Every session nested under `sessionId`, at any depth, in drawn order. */
 export function descendantsOf(
   children: ReadonlyMap<string, readonly ChatSessionSummary[]>,
