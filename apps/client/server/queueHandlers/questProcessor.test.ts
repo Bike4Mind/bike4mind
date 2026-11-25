@@ -444,7 +444,7 @@ describe('processQuest', () => {
       );
     };
 
-    it('runs platform-paid: no free-tier cap, meter, generation jobs or first-value event, with the deadline signal', async () => {
+    it('runs platform-paid: no free-tier cap, generation jobs or first-value event, with the deadline signal', async () => {
       mockProcess.mockClear();
       processOptions.mockClear();
       mockCapCheck.mockClear();
@@ -456,7 +456,6 @@ describe('processQuest', () => {
 
       expect(mockCapCheck).not.toHaveBeenCalled();
       const options = processOptions.mock.lastCall?.[0] as Record<string, unknown>;
-      expect(options.createCompletionMeter).toBeUndefined();
       expect(options.audioToolJobs).toBeUndefined();
       expect(mockProcess).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -470,7 +469,7 @@ describe('processQuest', () => {
       expect(mockRecordFirstChatValue).not.toHaveBeenCalled();
     }, 120_000);
 
-    it('leaves a normal turn on the metered path', async () => {
+    it('leaves a normal turn on the paid path', async () => {
       processOptions.mockClear();
       mockProcess.mockClear();
       const { processQuest } = await import('./questProcessor');
@@ -480,7 +479,7 @@ describe('processQuest', () => {
         logger as never
       );
       const options = processOptions.mock.lastCall?.[0] as Record<string, unknown>;
-      expect(options.createCompletionMeter).toEqual(expect.any(Function));
+      expect(options.audioToolJobs).toBeDefined();
       expect(mockProcess.mock.lastCall?.[0]).toMatchObject({ exampleRun: undefined, abortSignal: undefined });
     }, 120_000);
 
