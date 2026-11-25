@@ -79,6 +79,11 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.hostNotification, handler);
     },
   },
+  library: {
+    page: request => ipcRenderer.invoke(IPC_CHANNELS.libraryPage, request),
+    media: ref => ipcRenderer.invoke(IPC_CHANNELS.libraryMedia, ref),
+    locate: ref => ipcRenderer.invoke(IPC_CHANNELS.libraryLocate, ref),
+  },
   studio: {
     get: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioGet, sessionId),
     page: request => ipcRenderer.invoke(IPC_CHANNELS.studioPage, request),

@@ -125,7 +125,8 @@ the [generated API docs](/api/v1/docs) (raw spec: \`/api/v1/openapi.json\`, whic
 use to build a typed client). They are deliberately not repeated here, so the two cannot disagree.
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
-  \`/api/v1/agent-executions[/{id}]\`, \`/api/v1/delegations[/{id}]\`
+  \`/api/v1/agent-executions[/{id}]\`, \`/api/v1/delegations[/{id}]\`,
+  \`/api/v1/obligations\` (hand off, list), \`/api/v1/obligations/{id}\` (get, correct + confirm)
 - Sessions: \`/api/v1/sessions\`, \`/api/v1/sessions/{id}\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
   \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
   \`/api/v1/sessions/{id}/messages/{messageId}\`

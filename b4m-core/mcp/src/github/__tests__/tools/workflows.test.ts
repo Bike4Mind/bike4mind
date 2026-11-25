@@ -18,13 +18,6 @@ vi.mock('../../client.js', () => ({
   },
 }));
 
-// Mock unzipper
-vi.mock('unzipper', () => ({
-  Open: {
-    buffer: vi.fn(),
-  },
-}));
-
 // Mock global fetch
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -37,8 +30,21 @@ import {
   TOOL_GET_WORKFLOW_RUN_LOGS,
   TOOL_GET_JOB_LOGS,
 } from '../../constants.js';
-import * as unzipper from 'unzipper';
+import JSZip from 'jszip';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
+
+/** A real ZIP shaped like GitHub's run logs: `job/step.txt`, with the folder entries a zip tool writes. */
+const logsZip = async (files: Record<string, string>): Promise<ArrayBuffer> => {
+  const zip = new JSZip();
+  for (const [path, text] of Object.entries(files)) zip.file(path, text);
+  const bytes = await zip.generateAsync({ type: 'uint8array' });
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+};
+
+const serveZip = async (files: Record<string, string>) => {
+  const body = await logsZip(files);
+  mockFetch.mockResolvedValueOnce({ ok: true, arrayBuffer: () => Promise.resolve(body) });
+};
 
 describe('Workflow Tools', () => {
   let registeredTools: Map<string, RegisteredTool>;
@@ -567,26 +573,12 @@ Checkout logs
         url: 'https://example.com/logs.zip',
       } as never);
 
-      // Mock fetch for ZIP download
-      const mockZipBuffer = Buffer.from('mock zip content');
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockZipBuffer),
+      await serveZip({
+        '0_test.txt': 'combined job log\n',
+        'build/1_Build.txt': 'error: not this job\n',
+        'test/1_Checkout.txt': 'Checkout logs\n',
+        'test/2_Test.txt': 'error: Test failed\nAssertionError: expected true\n',
       });
-
-      // Mock unzipper
-      vi.mocked(unzipper.Open.buffer).mockResolvedValueOnce({
-        files: [
-          {
-            path: 'test/1_Checkout.txt',
-            buffer: () => Promise.resolve(Buffer.from('Checkout logs\n')),
-          },
-          {
-            path: 'test/2_Test.txt',
-            buffer: () => Promise.resolve(Buffer.from('error: Test failed\nAssertionError: expected true\n')),
-          },
-        ],
-      } as never);
 
       const tool = registeredTools.get(TOOL_GET_WORKFLOW_RUN_LOGS);
       const result = await tool!.handler({ owner: 'owner', repo: 'repo', run_id: 12345 });
@@ -598,6 +590,52 @@ Checkout logs
       expect(parsed.conclusion).toBe('failure');
       expect(parsed.jobs_analyzed).toBe(1); // Only failed job
       expect(parsed.filtered_to_failed).toBe(true);
+      // The job's step files in archive order, each followed by a newline.
+      expect(parsed.job_logs).toEqual([
+        {
+          job: 'test',
+          job_id: 67891,
+          summary: [
+            '...',
+            '1: Checkout logs',
+            '2: ',
+            '3: error: Test failed',
+            '4: AssertionError: expected true',
+            '5: ',
+            '6: ',
+          ].join('\n'),
+        },
+      ]);
+    });
+
+    it('reports a job with no files in the archive', async () => {
+      vi.mocked(octokit.actions.getWorkflowRun).mockResolvedValueOnce(mockRun as never);
+      vi.mocked(octokit.actions.listJobsForWorkflowRun).mockResolvedValueOnce(mockJobs as never);
+      vi.mocked(octokit.actions.downloadWorkflowRunLogs).mockResolvedValueOnce({
+        url: 'https://example.com/logs.zip',
+      } as never);
+      await serveZip({ 'build/1_Build.txt': 'Build successful\n' });
+
+      const tool = registeredTools.get(TOOL_GET_WORKFLOW_RUN_LOGS);
+      const parsed = parseResponse(await tool!.handler({ owner: 'owner', repo: 'repo', run_id: 12345 }));
+
+      expect(parsed.job_logs).toEqual([{ job: 'test', job_id: 67891, summary: 'No logs found for this job.' }]);
+    });
+
+    it('fails the call when the download is not a ZIP archive', async () => {
+      vi.mocked(octokit.actions.getWorkflowRun).mockResolvedValueOnce(mockRun as never);
+      vi.mocked(octokit.actions.listJobsForWorkflowRun).mockResolvedValueOnce(mockJobs as never);
+      vi.mocked(octokit.actions.downloadWorkflowRunLogs).mockResolvedValueOnce({
+        url: 'https://example.com/logs.zip',
+      } as never);
+      const notZip = new TextEncoder().encode('<html>expired link</html>').buffer;
+      mockFetch.mockResolvedValueOnce({ ok: true, arrayBuffer: () => Promise.resolve(notZip) });
+
+      const tool = registeredTools.get(TOOL_GET_WORKFLOW_RUN_LOGS);
+      const result = await tool!.handler({ owner: 'owner', repo: 'repo', run_id: 12345 });
+
+      expect(result.isError).toBe(true);
+      expect(parseResponse(result).success).toBe(false);
     });
 
     it('should return message when no failed jobs found with failed_only true', async () => {
@@ -641,24 +679,10 @@ Checkout logs
         url: 'https://example.com/logs.zip',
       } as never);
 
-      const mockZipBuffer = Buffer.from('mock zip content');
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockZipBuffer),
+      await serveZip({
+        'build/1_Build.txt': 'Build successful\n',
+        'test/1_Test.txt': 'error: Test failed\n',
       });
-
-      vi.mocked(unzipper.Open.buffer).mockResolvedValueOnce({
-        files: [
-          {
-            path: 'build/1_Build.txt',
-            buffer: () => Promise.resolve(Buffer.from('Build successful\n')),
-          },
-          {
-            path: 'test/1_Test.txt',
-            buffer: () => Promise.resolve(Buffer.from('error: Test failed\n')),
-          },
-        ],
-      } as never);
 
       const tool = registeredTools.get(TOOL_GET_WORKFLOW_RUN_LOGS);
       const result = await tool!.handler({
@@ -672,6 +696,10 @@ Checkout logs
       expect(parsed.success).toBe(true);
       expect(parsed.jobs_analyzed).toBe(2); // Both jobs
       expect(parsed.filtered_to_failed).toBe(false);
+      expect(parsed.job_logs).toEqual([
+        { job: 'build', job_id: 67890, summary: ['Build successful', '', ''].join('\n') },
+        { job: 'test', job_id: 67891, summary: ['...', '1: error: Test failed', '2: ', '3: '].join('\n') },
+      ]);
     });
 
     it('should handle API errors', async () => {
@@ -727,26 +755,13 @@ Checkout logs
         url: 'https://example.com/logs.zip',
       } as never);
 
-      const mockZipBuffer = Buffer.from('mock zip content');
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockZipBuffer),
-      });
-
       // Create log content with many lines including errors
       const longLogContent =
         Array.from({ length: 200 }, (_, i) => `Line ${i + 1}`).join('\n') +
         '\nerror: Test failed\n' +
         Array.from({ length: 50 }, (_, i) => `After error ${i + 1}`).join('\n');
 
-      vi.mocked(unzipper.Open.buffer).mockResolvedValueOnce({
-        files: [
-          {
-            path: 'test/1_Test.txt',
-            buffer: () => Promise.resolve(Buffer.from(longLogContent)),
-          },
-        ],
-      } as never);
+      await serveZip({ 'test/1_Test.txt': longLogContent });
 
       const tool = registeredTools.get(TOOL_GET_WORKFLOW_RUN_LOGS);
       const result = await tool!.handler({

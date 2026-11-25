@@ -7,16 +7,15 @@ import {
   type CreateSessionRequest,
   type CreatedSession,
 } from '@shared/ipc';
-import { folderToRemember } from './project/recentFolderToRecord';
 import type { PlacementOutcome } from './sidebarIpc';
 
 /** What the create handlers need from main; kept apart from the IPC so they can be tested alone. */
 export interface SessionCreation {
   createSession: (mode: PlainSessionMode) => Promise<ChatSessionSummary>;
+  /** Also remembers the folder for the recent list; see HostRuntime.createCodeSession. */
   createCodeSession: (request: CreateCodeSessionRequest) => Promise<CreateCodeSessionResult>;
   /** Files a freshly minted session; see placeNewSession. */
   place: (sessionId: string, sectionId: unknown) => Promise<PlacementOutcome>;
-  rememberFolder: (directory: string | null) => void;
 }
 
 export type PlainSessionMode = NonNullable<CreateSessionRequest['mode']>;
@@ -44,7 +43,6 @@ export function registerSessionCreateIpc(ipc: Pick<IpcMain, 'handle'>, creation:
     IPC_CHANNELS.chatCreateCodeSession,
     async (_event, request: CreateCodeSessionIpcRequest): Promise<CreateCodeSessionIpcResult> => {
       const result = await creation.createCodeSession(request);
-      creation.rememberFolder(folderToRemember(request, result));
       if (!result.ok) return result;
       return { ...result, ...placement(await creation.place(result.session.id, request.sectionId)) };
     }

@@ -49,6 +49,16 @@
         "default": "./dist/utils/skillMd.cjs"
       }
     },
+    "./utils/frontmatter": {
+      "import": {
+        "types": "./dist/utils/frontmatter.d.mts",
+        "default": "./dist/utils/frontmatter.mjs"
+      },
+      "require": {
+        "types": "./dist/utils/frontmatter.d.cts",
+        "default": "./dist/utils/frontmatter.cjs"
+      }
+    },
     "./modelHub": {
       "import": {
         "types": "./dist/modelHub/index.d.mts",

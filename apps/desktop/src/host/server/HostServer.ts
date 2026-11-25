@@ -54,6 +54,8 @@ export type HostServerRuntime = Pick<
   | 'queuedMessages'
   | 'cancelQueued'
   | 'sendQueuedNow'
+  | 'forgetRecentFolder'
+  | 'inspectProject'
 > & {
   service: Pick<HostRuntime['service'], 'eventsSince'>;
   eventLog: Pick<HostRuntime['eventLog'], 'cursor'>;
@@ -208,6 +210,8 @@ export class HostServer {
         runtime.sendQueuedNow(sessionId, queuedId);
         return {};
       },
+      'project/forgetRecent': async ({ path }) => ({ folders: await runtime.forgetRecentFolder(path) }),
+      'project/inspect': async ({ directory }) => ({ inspection: await runtime.inspectProject(directory) }),
       'model/list': async ({ force }) => ({ models: await runtime.listModels(force ?? false) }),
       'draft/defaults': async () => ({ defaults: await runtime.draftDefaults() }),
     };

@@ -1,10 +1,7 @@
 /**
- * parseCommandFile must route frontmatter through parseFrontmatter (YAML-only),
- * never gray-matter's raw matter() whose `---js` engine eval()s the block at load
- * time. A command file lives in an untrusted clone, so this is the same eval
- * vector guarded in parseFrontmatter.test.ts, pinned at this call site: revert
- * commandParser.ts to `matter(content)` and the `---js` case below runs the
- * payload -> the test fails.
+ * parseCommandFile must route frontmatter through parseFrontmatter, which reads only YAML and
+ * never evaluates a `---js` fence. A command file lives in an untrusted clone, so the case
+ * guarded in parseFrontmatter.test.ts is pinned at this call site too.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';

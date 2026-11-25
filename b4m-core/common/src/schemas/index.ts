@@ -57,6 +57,7 @@ export * from './sessionHandoff';
 export * from './personas';
 export * from './pendingActions';
 export * from './brief';
+export * from './obligation';
 export * from './assistantInstruction';
 export * from './delegation';
 export * from './pushNotification';

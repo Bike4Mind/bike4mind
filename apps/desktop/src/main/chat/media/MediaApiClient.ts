@@ -7,6 +7,8 @@ import {
   CreateImageJobResponseSchema,
   FileResponseSchema,
   ImageJobSchema,
+  ListImageJobsResponseSchema,
+  ListVideoGenerationsResponseSchema,
   MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
@@ -181,6 +183,35 @@ export class MediaApiClient {
       return ImageJobSchema.parse(response);
     } catch (error) {
       throw toMediaError(error, 'Reading the image job');
+    }
+  }
+
+  /** One page of the caller's own finished image jobs, newest first (the Library place). */
+  async listImageJobs(query: { limit: number; cursor?: string }): Promise<z.infer<typeof ListImageJobsResponseSchema>> {
+    try {
+      const response = await this.api.get<unknown>('/api/v1/image-jobs', {
+        params: { limit: query.limit, state: 'succeeded', ...(query.cursor ? { cursor: query.cursor } : {}) },
+        timeout: TIMEOUT_MS.download,
+      });
+      return ListImageJobsResponseSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Listing your images');
+    }
+  }
+
+  /** One page of the caller's own finished video generations, newest first (the Library place). */
+  async listVideoGenerations(query: {
+    limit: number;
+    cursor?: string;
+  }): Promise<z.infer<typeof ListVideoGenerationsResponseSchema>> {
+    try {
+      const response = await this.api.get<unknown>('/api/v1/video-generations', {
+        params: { limit: query.limit, state: 'succeeded', ...(query.cursor ? { cursor: query.cursor } : {}) },
+        timeout: TIMEOUT_MS.download,
+      });
+      return ListVideoGenerationsResponseSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Listing your videos');
     }
   }
 

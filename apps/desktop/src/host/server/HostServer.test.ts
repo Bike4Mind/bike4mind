@@ -43,6 +43,8 @@ function fakeRuntime(eventLog = new SessionEventLog({ epoch: 'epoch-1' })) {
     queuedMessages: vi.fn(async (sessionId: string) => [{ id: 'q1', sessionId }]),
     cancelQueued: vi.fn(),
     sendQueuedNow: vi.fn(),
+    forgetRecentFolder: vi.fn(async () => []),
+    inspectProject: vi.fn(async (directory: string) => ({ directory, isRepository: false, branches: [] })),
     service: {
       eventsSince: (sessionId: string, after: { epoch: string; seq: number }) => eventLog.since(sessionId, after),
     },
@@ -128,6 +130,8 @@ describe('HostServer', () => {
     ['session/list', 'all'],
     ['session/statuses', 3],
     ['draft/defaults', []],
+    ['project/forgetRecent', {}],
+    ['project/inspect', { directory: 3 }],
   ];
   it.each(invalidParams)('rejects invalid params for %s without calling the runtime', async (method, params) => {
     const { client, runtime } = serve();
@@ -147,6 +151,16 @@ describe('HostServer', () => {
     const { call } = client();
     expect(resultOf(await call('session/list'))).toEqual({ sessions: [summary('s1'), summary('s2')] });
     expect(resultOf(await call('session/statuses', {}))).toEqual({ statuses: [status('s1')] });
+  });
+
+  it('serves the project methods from the runtime in the protocol shapes', async () => {
+    const { client, runtime } = serve();
+    const { call } = client();
+    expect(resultOf(await call('project/forgetRecent', { path: '/work' }))).toEqual({ folders: [] });
+    expect(runtime.forgetRecentFolder).toHaveBeenCalledWith('/work');
+    expect(resultOf(await call('project/inspect', { directory: '/work' }))).toEqual({
+      inspection: { directory: '/work', isRepository: false, branches: [] },
+    });
   });
 
   it('serves session/get without the persisted sent field and with its cursor', async () => {

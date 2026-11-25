@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
+import type { StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 
 const tokenDocumentSchema = z.object({ version: z.literal(1), token: z.string().optional() });
 type TokenCipher = SecretCipher & { getSelectedStorageBackend?: () => string };
