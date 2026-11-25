@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
 import type { ChatSessionStatusEvent } from '@shared/chat';
+import { hostErrorData, hostMethods, type HostResult } from '@shared/hostProtocol';
 import { HostRuntime, hostProtectedLocations, type HostEnvironment, type HostEventSink } from '.';
 
 // A headless host has no Electron to load: any import of it from src/host, direct or through a
@@ -249,6 +250,37 @@ describe('HostRuntime background processes without Electron', () => {
       ok: false,
       reason: 'notFound',
     });
+  });
+});
+
+describe('HostRuntime results on the host protocol', () => {
+  it('fit the protocol result of each method they back, with no reshaping beyond unwrapping', async () => {
+    const { runtime, dataDirectory } = await headlessRuntime();
+    const repository = await gitRepository(dataDirectory, 'app');
+    await mkdir(join(dataDirectory, 'home'));
+    const parent = await runtime.createSession();
+    await runtime.store.create(undefined, { origin: { parentSessionId: parent.id, depth: 1, seedPrompt: 'task' } });
+
+    const created: HostResult<'session/create'> = await runtime.createCodeSession({ directory: repository });
+    const archived: HostResult<'session/setArchived'> = await runtime.setSessionArchived(parent.id, true);
+    const inspection = await runtime.inspectProject(repository);
+    const inspected: HostResult<'project/inspect'> = { inspection };
+    const recent: HostResult<'project/recent'> = { folders: await runtime.listRecentFolders() };
+    const forgotten: HostResult<'project/forgetRecent'> = { folders: await runtime.forgetRecentFolder(repository) };
+    const browsed = await runtime.browseDirectory();
+    const missing = await runtime.browseDirectory('~/gone');
+    const stopped = await runtime.stopBackgroundProcess(parent.id, 'no-such-process');
+
+    expect(hostMethods['session/create'].result.safeParse(created).success).toBe(true);
+    expect(hostMethods['session/setArchived'].result.safeParse(archived).success).toBe(true);
+    expect(archived.confirmationRequired).toBeDefined();
+    expect(hostMethods['project/inspect'].result.safeParse(inspected).success).toBe(true);
+    expect(hostMethods['project/recent'].result.safeParse(recent).success).toBe(true);
+    expect(hostMethods['project/forgetRecent'].result.safeParse(forgotten).success).toBe(true);
+    if (!browsed.ok || missing.ok || stopped.ok) throw new Error('unexpected outcome');
+    const listing: HostResult<'fs/browse'> = browsed.listing;
+    expect(hostMethods['fs/browse'].result.safeParse(listing).success).toBe(true);
+    expect(hostErrorData.pathUnavailable.safeParse({ path: missing.path, reason: missing.reason }).success).toBe(true);
   });
 });
 

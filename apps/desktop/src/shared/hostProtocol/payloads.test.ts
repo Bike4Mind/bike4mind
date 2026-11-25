@@ -4,6 +4,18 @@ import * as payloads from './payloads';
 
 const cases: ReadonlyArray<{ name: string; schema: ZodType; valid: unknown; missingKey: unknown }> = [
   {
+    name: 'project inspection',
+    schema: payloads.projectInspectionPayloadSchema,
+    valid: { directory: '/w', name: 'w', isRepository: false, branches: [], currentBranch: null },
+    missingKey: { directory: '/w', isRepository: false },
+  },
+  {
+    name: 'background process',
+    schema: payloads.backgroundProcessPayloadSchema,
+    valid: { id: 'p1', sessionId: 's1', status: 'running', command: 'sleep 1' },
+    missingKey: { id: 'p1', sessionId: 's1' },
+  },
+  {
     name: 'session',
     schema: payloads.chatSessionPayloadSchema,
     valid: { id: 's1', messages: [] },
