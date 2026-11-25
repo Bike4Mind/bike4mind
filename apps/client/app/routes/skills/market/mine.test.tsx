@@ -90,6 +90,7 @@ describe('MyListingsPage template entry points', () => {
       listing('live', { status: 'approved', template: null }),
       listing('shared', { status: 'approved', template: { slug: 'shared-page', status: 'published' } }),
       listing('drafted', { status: 'approved', template: { slug: 'drafted-page', status: 'draft' } }),
+      listing('hidden', { status: 'approved', hiddenByReports: true }),
       listing('held', { status: 'in_review' }),
     ];
   });
@@ -100,6 +101,7 @@ describe('MyListingsPage template entry points', () => {
       expect(screen.getByTestId(`market-mine-template-${name}`)).toHaveTextContent('View as template');
     }
     expect(screen.queryByTestId('market-mine-template-held')).toBeNull();
+    expect(screen.queryByTestId('market-mine-template-hidden')).toBeNull();
 
     fireEvent.click(screen.getByTestId('market-mine-template-live'));
     expect(h.navigate).toHaveBeenCalledWith({

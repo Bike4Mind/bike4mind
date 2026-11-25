@@ -4218,7 +4218,7 @@ export const settingsMap = {
   SkillTemplateFreeRunFileMaxMb: makeNumberSetting({
     key: 'SkillTemplateFreeRunFileMaxMb',
     name: 'Skill Template Free Run File Size Cap (MB)',
-    defaultValue: 5,
+    defaultValue: 4,
     min: 0.1,
     description:
       'Largest file (PDF, image or plain text) a visitor may attach to a free run; larger files are refused. A hosted request body tops out near 6 MB, so files over 4 MB are refused whatever this says.',
@@ -6495,7 +6495,7 @@ export const settingsMap = {
     name: 'Turnstile Site Key',
     defaultValue: '',
     description:
-      'The public Cloudflare Turnstile site key shown to the sign-in form. With the toggle above off, a set key still challenges sign-in code requests past the send budgets (see Sign-in Code Limits). The secret key is never stored here.',
+      'The public Cloudflare Turnstile site key shown to the sign-in form. With the toggle above off, a set key still challenges sign-in code requests past the send budgets (see Sign-in Code Limits), and it is required for skill template free runs. The secret key is never stored here.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

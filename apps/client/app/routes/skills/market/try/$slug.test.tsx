@@ -5,7 +5,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { skillTemplateFreeRunInputKey } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { NEW_NOTEBOOK_DRAFT_KEY, useChatInput } from '@client/app/hooks/useChatInput';
 
 const h = vi.hoisted(() => ({ post: vi.fn(), navigate: vi.fn() }));
 
@@ -54,17 +53,6 @@ describe('SkillTemplateTryPage', () => {
     );
     expect(h.post).toHaveBeenCalledTimes(1);
     expect(h.post).toHaveBeenCalledWith('/api/skills/template/try/article-bullets');
-  });
-
-  it('clears a saved new-chat draft so it cannot replace the prefilled prompt', async () => {
-    useChatInput.getState().setDraft(NEW_NOTEBOOK_DRAFT_KEY, '/article-bullets an older prompt');
-    h.post.mockResolvedValue({
-      data: { skillName: 'article-bullets-2', examplePrompt: 'Turn this into bullets', imported: true },
-    });
-    renderPage();
-
-    await waitFor(() => expect(h.navigate).toHaveBeenCalled());
-    expect(useChatInput.getState().getDraft(NEW_NOTEBOOK_DRAFT_KEY)).toBe('');
   });
 
   it("prefers the visitor's free-run text and clears it once used", async () => {

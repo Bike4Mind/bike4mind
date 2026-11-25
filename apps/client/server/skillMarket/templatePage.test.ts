@@ -171,10 +171,14 @@ describe('renderTemplatePage', () => {
 
 describe('renderTemplateLoaderShell', () => {
   it('carries no template data and only the script its CSP hash admits', () => {
-    const html = renderTemplateLoaderShell();
+    const html = renderTemplateLoaderShell('article-bullets');
     const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1] ?? '';
     expect(`'sha256-${createHash('sha256').update(script).digest('base64')}'`).toBe(TEMPLATE_LOADER_SCRIPT_HASH);
     expect(html).toContain('<meta name="robots" content="noindex,nofollow">');
     expect(html).not.toMatch(/og:|twitter:/);
+  });
+
+  it('sends the no-script sign-in link back to the page after login', () => {
+    expect(renderTemplateLoaderShell('article-bullets')).toContain('href="/login?redirectTo=%2Ft%2Farticle-bullets"');
   });
 });

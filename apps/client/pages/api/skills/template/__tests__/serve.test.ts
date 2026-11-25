@@ -184,6 +184,31 @@ describe('GET /t/[slug]', () => {
     });
   });
 
+  it('does not count a link-preview fetch as a view, but counts a browser', async () => {
+    const bot = call(
+      { slug: 'article-bullets' },
+      {
+        accept: 'text/html',
+        host: 'localhost:3000',
+        'user-agent': 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
+      }
+    );
+    await bot.run();
+    expect(bot.res._getStatusCode()).toBe(200);
+    expect(h.record).not.toHaveBeenCalled();
+
+    const browser = call(
+      { slug: 'article-bullets' },
+      {
+        accept: 'text/html',
+        host: 'localhost:3000',
+        'user-agent': 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/126.0 Safari/537.36',
+      }
+    );
+    await browser.run();
+    expect(h.record).toHaveBeenCalledTimes(1);
+  });
+
   it('shows no starter-credit line when open registration grants nothing', async () => {
     h.credits.mockResolvedValue(0);
     const { res, run } = call({ slug: 'article-bullets' });
@@ -265,6 +290,22 @@ describe('GET /t/[slug]', () => {
       expect(html).not.toContain('template-page-starter-credits');
       expect(h.credits).not.toHaveBeenCalled();
       expect(h.record).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not count a link-preview fetch on the member render', async () => {
+      h.audience.mockResolvedValue({ orgIds: ['org-1'], spaceIds: [] });
+      const { res, run } = call(
+        { slug: 'article-bullets', raw: '1' },
+        {
+          accept: '*/*',
+          host: 'localhost:3000',
+          authorization: 'Bearer member',
+          'user-agent': 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
+        }
+      );
+      await run();
+      expect(res.statusCode).toBe(200);
+      expect(h.record).not.toHaveBeenCalled();
     });
   });
 

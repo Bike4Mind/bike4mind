@@ -177,7 +177,7 @@ export async function markListingTemplateStale(listingId: string): Promise<void>
   await SkillListingTemplate.updateOne({ listingId, stale: false }, { $set: { stale: true } }, { runValidators: true });
 }
 
-/** Lifecycle rule for a withdrawn or deleted listing: unpublish the template and switch its free run off. */
+/** Lifecycle rule for a withdrawn or delisted listing: unpublish the template and switch its free run off. */
 export async function unpublishListingTemplate(listingId: string): Promise<void> {
   await SkillListingTemplate.updateOne(
     { listingId },
@@ -185,6 +185,12 @@ export async function unpublishListingTemplate(listingId: string): Promise<void>
     { runValidators: true }
   );
   await settleVoidedScan(listingId);
+}
+
+/** Remove a listing's template row so its slug can be reused. Returns how many rows were removed. */
+export async function deleteListingTemplate(listingId: string): Promise<number> {
+  const res = await SkillListingTemplate.deleteMany({ listingId });
+  return res.deletedCount;
 }
 
 export default SkillListingTemplate;
