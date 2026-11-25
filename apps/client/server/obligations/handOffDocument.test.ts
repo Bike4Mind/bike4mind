@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
+import { getQuestErrorCode } from '@bike4mind/common';
 import type { IObligation } from '@bike4mind/database';
 import { handOffDocument, type HandOffDeps } from './handOffDocument';
 
@@ -102,10 +103,9 @@ describe('handOffDocument', () => {
 
   it('422s an unfunded payer as insufficient_credits before the model call', async () => {
     const { deps } = makeDeps({ canFund: vi.fn(async () => false) });
-    await expect(handOffDocument('user-me', { file_id: FILE_ID }, deps)).rejects.toMatchObject({
-      statusCode: 422,
-      errorCode: 'insufficient_credits',
-    });
+    const error = await handOffDocument('user-me', { file_id: FILE_ID }, deps).catch((err: unknown) => err);
+    expect(error).toMatchObject({ statusCode: 422 });
+    expect(getQuestErrorCode(error)).toBe('insufficient_credits');
     expect(deps.complete).not.toHaveBeenCalled();
   });
 

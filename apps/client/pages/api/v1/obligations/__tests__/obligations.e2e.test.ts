@@ -81,7 +81,14 @@ vi.mock('@server/dataLakes/lakeMembershipWrite', async () => {
       inTransaction(async () => {
         const lake = lakes[opts.lakeIdOrSlug];
         const fileId = opts.resolveFileId();
-        await mongoose.connection.collection('test_lake_files').insertOne({ lakeId: lake.id, fileId });
+        const LakeFile =
+          mongoose.models.TestLakeFile ??
+          mongoose.model(
+            'TestLakeFile',
+            new mongoose.Schema({ lakeId: String, fileId: String }, { versionKey: false }),
+            'test_lake_files'
+          );
+        await LakeFile.create([{ lakeId: lake.id, fileId }]);
         const extra = await opts.alsoInTransaction(lake);
         if (lakeFiling.failAfterWrite) throw new Error('membership write failed');
         return { lake, extra };
