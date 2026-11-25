@@ -90,10 +90,12 @@ public protocol CaptureAPI: FileUploading {
 /// - `POST  /api/chat`                               sendChatMessage with `fileIds` (chat.contract.ts)
 /// - `GET   /api/v1/sessions/{id}/quests`            listSessionQuests (oldest first)
 /// - `POST  /api/v1/delegations`                     createDelegation (`DelegationSubmitting`)
+/// - `POST  /api/v1/obligations`                     handOffObligation (obligations.contract.ts)
+/// - `PATCH /api/v1/obligations/{id}`                updateObligation (`ObligationHandingOff`)
 ///
 /// Keep in sync with those contracts. They move into `B4MClient` (and behind `B4MAPI`) when the generator's
 /// operation filter takes them.
-public struct CaptureClient: CaptureAPI, DelegationSubmitting {
+public struct CaptureClient: CaptureAPI, DelegationSubmitting, ObligationHandingOff {
   private let requester: AuthorizedRequester
 
   public init(baseURL: URL, tokens: any AccessTokenProviding, transport: any HTTPTransport = URLSessionTransport()) {
@@ -127,6 +129,11 @@ public struct CaptureClient: CaptureAPI, DelegationSubmitting {
     let url: String?
     let text: String?
     let fileIds: [String]?
+  }
+
+  private struct HandOffBody: Encodable {
+    let fileId: String
+    let text: String?
   }
 
   private struct LakeListReply: Decodable {
@@ -252,7 +259,36 @@ public struct CaptureClient: CaptureAPI, DelegationSubmitting {
     try Self.require(202, response)
   }
 
+  public func handOff(fileID: String, text: String?) async throws -> Obligation {
+    let body = try Self.encode(HandOffBody(fileId: fileID, text: text))
+    let response = try await requester.send(method: "POST", path: "api/v1/obligations", jsonBody: body)
+    if response.status == 409 { throw ObligationError.stillChecking }
+    return try Self.obligation(from: response, accepting: [200, 201])
+  }
+
+  public func update(id: String, patch: ObligationPatch) async throws -> Obligation {
+    let response = try await requester.send(
+      method: "PATCH", path: "api/v1/obligations/\(id)", jsonBody: try Self.encode(patch))
+    if response.status == 409 { throw ObligationError.dismissed }
+    return try Self.obligation(from: response, accepting: [200])
+  }
+
   // MARK: - Helpers
+
+  private static func obligation(from response: AuthorizedRequester.Response, accepting: Set<Int>) throws
+    -> Obligation
+  {
+    guard accepting.contains(response.status) else {
+      if [400, 422, 502].contains(response.status), case .rejected(let message) = rejection(response) {
+        throw ObligationError.rejected(message: message)
+      }
+      throw APIError(status: response.status)
+    }
+    guard let obligation = try? JSONDecoder().decode(Obligation.self, from: response.body) else {
+      throw APIError.malformedResponse
+    }
+    return obligation
+  }
 
   private static let logger = Logger(subsystem: "com.bike4mind.app", category: "capture")
 
