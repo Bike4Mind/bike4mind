@@ -3,7 +3,7 @@ import {
   SkillListing,
   SkillListingImport,
   SkillListingReport,
-  SkillListingTemplate,
+  deleteListingTemplate,
   SkillListingVersion,
   markListingTemplateStale,
   skillRepository,
@@ -263,7 +263,7 @@ export async function deleteOwnWithdrawnListing(userId: string, listingId: strin
     SkillListingImport.deleteMany({ listingId: id }),
     SkillListingReport.deleteMany({ listingId: id }),
     SkillBundle.updateMany({ listingIds: id }, { $pull: { listingIds: id } }),
-    SkillListingTemplate.deleteMany({ listingId: id }),
+    deleteListingTemplate(id),
   ]);
 }
 

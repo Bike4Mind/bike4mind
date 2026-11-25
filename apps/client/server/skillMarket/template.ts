@@ -2,6 +2,7 @@ import {
   SkillListingTemplate,
   SkillListingVersion,
   claimSkillTemplateScan,
+  deleteListingTemplate,
   releaseStaleSkillTemplateScan,
   unpublishSkillTemplate,
   writeSkillTemplateScanVerdict,
@@ -235,8 +236,8 @@ export async function saveOwnTemplate(
 
 export async function deleteOwnTemplate(user: MarketActor, listingId: string): Promise<void> {
   const listing = await requireOwnListing(user, listingId);
-  const res = await SkillListingTemplate.deleteOne({ listingId: String(listing.id) });
-  if (res.deletedCount === 0) throw new NotFoundError('Template not found');
+  const removed = await deleteListingTemplate(String(listing.id));
+  if (removed === 0) throw new NotFoundError('Template not found');
 }
 
 /** Scan the draft's copy and publish it on a pass. A failing scan leaves it a draft with the findings. */
