@@ -7,9 +7,11 @@ import type {
   ChatSessionMode,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
+  EventCursor,
   RecentFolder,
   SendMessageRequest,
 } from '@shared/chat';
+import type { TaskDecisionAnswer } from '@shared/orchestration';
 import { ApprovalModePreference } from '../main/chat/ApprovalModePreference';
 import { ChatService, type ChatServiceDeps, type ChatServiceLogger } from '../main/chat/ChatService';
 import { createCompletionRunMinter } from '../main/chat/completionRuns';
@@ -350,6 +352,15 @@ export class HostRuntime {
 
   stopReply(sessionId: string): void {
     this.service.stop(sessionId);
+  }
+
+  answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void> {
+    return this.service.answerTaskDecision(sessionId, decisionId, answer);
+  }
+
+  /** The events after `after` for a resubscribing client, or what it must reload when they are gone. */
+  eventsSince(sessionId: string, after: EventCursor) {
+    return this.service.eventsSince(sessionId, after);
   }
 
   /** The one path that answers a tool approval, whichever surface the answer came from. */
