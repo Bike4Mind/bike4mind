@@ -272,6 +272,40 @@ describe('composeBrief', () => {
       expect(deps.notifyHeldRuns).toHaveBeenCalledWith('u1', block);
     });
 
+    it.each(['gate', 'model'] as const)(
+      'preserves held-run delivery when a %s fallback only surfaces reminders',
+      async failure => {
+        const deps = makeDeps({
+          loadActivity: vi.fn().mockResolvedValue({ ...activeActivity, reminders }),
+          ...(failure === 'gate'
+            ? { canCompose: vi.fn().mockResolvedValue('insufficient_credits') }
+            : { complete: vi.fn().mockResolvedValue('not json') }),
+        });
+        deps.briefs.findById = vi.fn().mockResolvedValue(blockBrief());
+        await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+        expect(deps.briefs.markReady).toHaveBeenCalledWith('b1', expect.any(Object), expect.any(Date), {
+          periodEnd: blockBrief().periodStart,
+        });
+        expect(deps.briefs.markRemindersSurfaced).toHaveBeenCalledWith('u1', reminders, expect.any(Date));
+        expect(deps.notifyHeldRuns).toHaveBeenCalledExactlyOnceWith('u1', block);
+        expect(deps.briefs.markReady.mock.invocationCallOrder[0]).toBeLessThan(
+          deps.notifyHeldRuns.mock.invocationCallOrder[0]
+        );
+      }
+    );
+
+    it('does not release held runs when a reminder fallback loses its ready-state claim', async () => {
+      const deps = makeDeps({
+        loadActivity: vi.fn().mockResolvedValue({ ...activeActivity, reminders }),
+        canCompose: vi.fn().mockResolvedValue('insufficient_credits'),
+      });
+      deps.briefs.findById = vi.fn().mockResolvedValue(blockBrief());
+      deps.briefs.markReady.mockResolvedValue(false);
+      await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+      expect(deps.notifyHeldRuns).not.toHaveBeenCalled();
+      expect(deps.briefs.markRemindersSurfaced).not.toHaveBeenCalled();
+    });
+
     it('sends no summary when the block brief is delivered, or for a regular scheduled discard', async () => {
       const delivered = makeDeps();
       delivered.briefs.findById = vi.fn().mockResolvedValue(blockBrief());

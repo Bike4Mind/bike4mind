@@ -182,6 +182,7 @@ export async function composeBrief(
     await settleBriefedEmails(deps, input.userId, briefedEmailIds(composed), composedAt);
     await settleBriefedDelegations(deps, input.userId, briefedDelegationIds(composed, activity), composedAt);
     await settleSurfacedReminders(deps, input.userId, activity, composedAt);
+    if (periodEnd) await notifyIfBlockBrief(deps, brief);
 
     const { body, briefAction } = briefPushContent(composed, activity);
     await deps.push({
