@@ -29,6 +29,7 @@ test.describe('Admin - Tutorials tab', () => {
 
     const toggle = page.getByTestId('tutorials-switch');
     await expect(toggle).toBeAttached();
+    await expect(page.getByTestId('tutorials-switch-card').getByTestId('admin-loading-state')).toHaveCount(0);
     if (await toggle.isDisabled()) return;
     const before = await toggle.isChecked();
     try {
