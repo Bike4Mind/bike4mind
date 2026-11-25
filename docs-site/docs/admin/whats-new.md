@@ -67,7 +67,7 @@ Click a row, or choose **View modal** from its "..." menu, to open a preview dia
 
 ### Deleting a Modal
 
-Choose **Delete modal** from a row's "..." menu to open a confirmation dialog. Type the modal's title (or the word `delete` for an untitled modal) to enable the **Delete modal** button. You can pick an optional reason; it is not recorded, but the deletion itself appears in the Admin log. Deleting is permanent. If the delete fails, the dialog stays open so you can retry.
+Choose **Delete modal** from a row's "..." menu to open a confirmation dialog. Type the modal's title (or the word `delete` for an untitled modal) to enable the **Delete modal** button. Pick a reason or write a short note as well; the button stays disabled until you do. The reason is not recorded, but the deletion itself appears in the Admin log. Deleting is permanent. If the delete fails, the dialog stays open so you can retry.
 
 ### Toggling a Modal
 

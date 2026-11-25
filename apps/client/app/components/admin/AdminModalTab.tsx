@@ -31,10 +31,21 @@ import { ADMIN_REGION_GAP } from './shared/adminStyles';
 const modalRowId = (modal: IModalDocument) => modal._id?.toString() ?? '';
 
 const dateFormat = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-const formatDate = (value?: Date | string) => (value ? dateFormat.format(new Date(value)) : '-');
+const timeFormat = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit' });
 const toTime = (value?: Date | string) => (value ? new Date(value).getTime() : 0);
 
-const displayTitle = (modal: IModalDocument) => (modal.isBanner ? modal.textMessage : modal.title) || '';
+const renderDate = (value?: Date | string) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  return (
+    <>
+      <Typography level="body-sm">{dateFormat.format(date)}</Typography>
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+        {timeFormat.format(date)}
+      </Typography>
+    </>
+  );
+};
 
 const ellipsis = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
 
@@ -57,24 +68,31 @@ const columns: DataColumn<IModalDocument>[] = [
   {
     id: 'title',
     label: 'Title',
-    sortValue: modal => displayTitle(modal).toLowerCase(),
-    render: modal => (
-      <Typography level="body-sm" fontWeight="md" sx={ellipsis}>
-        {modal.title || '(No title)'}
-      </Typography>
-    ),
+    sortValue: modal => (modal.title || '').toLowerCase(),
+    render: modal => {
+      const secondary = (modal.isBanner ? modal.textMessage : modal.subtitle) || undefined;
+      return (
+        <>
+          <Typography level="body-sm" fontWeight="md" title={modal.title || undefined} sx={ellipsis}>
+            {modal.title || '(No title)'}
+          </Typography>
+          {secondary && (
+            <Typography level="body-xs" title={secondary} sx={{ ...ellipsis, color: 'admin.inkMuted' }}>
+              {secondary}
+            </Typography>
+          )}
+        </>
+      );
+    },
   },
   {
     id: 'description',
     label: 'Description',
-    render: modal => {
-      const text = (modal.isBanner ? modal.textMessage : modal.description) ?? undefined;
-      return (
-        <Typography level="body-sm" title={text} sx={{ ...ellipsis, color: 'admin.inkMuted' }}>
-          {text}
-        </Typography>
-      );
-    },
+    render: modal => (
+      <Typography level="body-sm" title={modal.description || undefined} sx={{ ...ellipsis, color: 'admin.inkMuted' }}>
+        {modal.description}
+      </Typography>
+    ),
   },
   {
     id: 'targeting',
@@ -99,14 +117,14 @@ const columns: DataColumn<IModalDocument>[] = [
     label: 'Created',
     width: '8rem',
     sortValue: modal => toTime(modal.createdAt),
-    render: modal => formatDate(modal.createdAt),
+    render: modal => renderDate(modal.createdAt),
   },
   {
     id: 'updatedAt',
     label: 'Updated',
     width: '8rem',
     sortValue: modal => toTime(modal.updatedAt),
-    render: modal => formatDate(modal.updatedAt),
+    render: modal => renderDate(modal.updatedAt),
   },
 ];
 
@@ -275,7 +293,7 @@ const ModalsAdminTab: React.FC = () => {
         onRetry={() => modals.refetch()}
         pageResetKey={searchQuery}
         onRowActivate={handleEditClick}
-        minWidth="64rem"
+        minWidth="72rem"
         empty={
           searchQuery.trim() ? (
             <EmptyState

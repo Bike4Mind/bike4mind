@@ -940,7 +940,10 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
     <>
       <AdminDialog
         open={isOpen}
-        onClose={onClose}
+        // A stray backdrop click must not discard the wizard's unsaved state.
+        onClose={reason => {
+          if (reason !== 'backdropClick') onClose();
+        }}
         width={1120}
         anchorTop
         title={`${isEditMode ? 'Edit' : 'Create'} ${noun}`}

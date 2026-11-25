@@ -98,6 +98,35 @@ describe('ModalsAdminTab', () => {
     expect(screen.getByText('No modals match this search')).toBeInTheDocument();
   });
 
+  it('shows the second title line, each row description and the time of day', () => {
+    mocks.modals.mockReturnValue(
+      listResult([
+        modal('a', { subtitle: 'Sub a' }),
+        modal('b', { isBanner: true, title: 'Banner b', textMessage: 'Message b', description: 'Notes b' }),
+      ])
+    );
+    renderTab();
+
+    const rowA = screen.getByTestId('admin-modals-row-a');
+    expect(within(rowA).getByText('Sub a')).toBeInTheDocument();
+    expect(within(rowA).getByText('About a')).toBeInTheDocument();
+    expect(within(rowA).getAllByText(/^\d{2}:\d{2}\s?[AP]M$/)).toHaveLength(2);
+    const rowB = screen.getByTestId('admin-modals-row-b');
+    expect(within(rowB).getByText('Banner b')).toBeInTheDocument();
+    expect(within(rowB).getByText('Message b')).toBeInTheDocument();
+    expect(within(rowB).getByText('Notes b')).toBeInTheDocument();
+  });
+
+  it('sorts banners by the title it shows, not the banner message', async () => {
+    mocks.modals.mockReturnValue(
+      listResult([modal('a', { isBanner: true, title: 'Zeta', textMessage: 'aaa' }), modal('b', { title: 'Alpha' })])
+    );
+    renderTab();
+
+    await userEvent.click(screen.getByRole('button', { name: /Title/ }));
+    expect(rowIds()).toEqual(['admin-modals-row-b', 'admin-modals-row-a']);
+  });
+
   it('sorts by priority', async () => {
     mocks.modals.mockReturnValue(listResult([modal('a', { priority: 5 }), modal('b', { priority: 1 })]));
     renderTab();

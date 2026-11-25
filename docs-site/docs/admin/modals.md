@@ -17,12 +17,12 @@ All modals (excluding What's New modals) are displayed in a sortable, searchable
 |--------|-------------|----------|
 | **Status** | "Active" when the modal is enabled, "Inactive" when it is disabled | No |
 | **Type** | "Modal" or "Banner" | Yes |
-| **Title** | The modal title (or text message for banners), with subtitle shown below | Yes |
-| **Description** | Description on one line, with the full text on hover | No |
+| **Title** | The title, with the subtitle (modals) or banner message (banners) on a second line. Sorts by title | Yes |
+| **Description** | The description on one line, with the full text on hover | No |
 | **Targeting** | User tags, comma separated. Shows "All users" if no tags are set. | No |
 | **Priority** | The priority number | Yes |
-| **Created** | Creation date | Yes |
-| **Updated** | Last update date | Yes |
+| **Created** | Creation date, with the time below | Yes |
+| **Updated** | Last update date, with the time below | Yes |
 
 Click a row to open it in the wizard. Each row also has a "..." actions menu with:
 
@@ -54,7 +54,7 @@ Pagination controls appear below the table. Choose 25, 50, or 100 rows per page 
 
 ## Creating a Modal
 
-Click "Create modal" to open the wizard in a dialog. A progress stepper at the top shows where you are, and the footer holds Back, Cancel, and Next. On the last step, Next becomes "Create modal" (or "Create banner"). Close the dialog with its close button, Cancel, or Esc.
+Click "Create modal" to open the wizard in a dialog. A progress stepper at the top shows where you are, and the footer holds Back, Cancel, and Next. On the last step, Next becomes "Create modal" (or "Create banner"). Close the dialog with its close button, Cancel, or Esc. Clicking outside the dialog does not close it, so a stray click never discards your entries.
 
 ### Wizard Steps
 
@@ -81,7 +81,6 @@ The wizard steps differ slightly depending on whether you are creating a modal o
 | 4 | Targeting | Same as modal |
 | 5 | Behavior | Same as modal |
 | 6 | Review | Same as modal |
-
 
 ### Display Frequency Presets
 
@@ -112,12 +111,11 @@ Choose **Preview modal** from a row's "..." menu to see how the modal will appea
 
 ## Deleting a Modal
 
-Choose **Delete modal** from a row's "..." menu to open a confirmation dialog. Type the modal's title (or the word `delete` for an untitled modal) to enable the **Delete modal** button. You can pick an optional reason; it is not recorded, but the deletion itself appears in the Admin log. Deleting removes the modal permanently. If the delete fails, the dialog stays open and an error toast explains why.
+Choose **Delete modal** from a row's "..." menu to open a confirmation dialog. Type the modal's title (or the word `delete` for an untitled modal) to enable the **Delete modal** button. Pick a reason or write a short note as well; the button stays disabled until you do. The reason is not recorded, but the deletion itself appears in the Admin log. Deleting removes the modal permanently. If the delete fails, the dialog stays open and an error toast explains why.
 
 ## Toggling Enabled/Disabled
 
 Choose **Enable modal** or **Disable modal** from a row's "..." menu to switch the modal on or off. A success toast confirms the change, and the Status column updates.
-
 
 ## Best Practices
 

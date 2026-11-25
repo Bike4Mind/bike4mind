@@ -136,4 +136,16 @@ describe('EditModalNew wizard', () => {
     fireEvent.click(screen.getByTestId('admin-modal-wizard-cancel-btn'));
     expect(onClose).toHaveBeenCalledTimes(2);
   });
+
+  it('ignores a backdrop click but closes on Escape', () => {
+    const onClose = vi.fn();
+    renderEditor(existing, vi.fn(), onClose);
+    const dialog = screen.getByTestId('admin-modal-wizard-dialog');
+    const backdrop = dialog.closest('.MuiModal-root')?.querySelector('.MuiModal-backdrop');
+    expect(backdrop).toBeTruthy();
+    fireEvent.click(backdrop as HTMLElement);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
