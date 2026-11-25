@@ -14,7 +14,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 const now = new Date();
 const hoursAgo = (h: number) => new Date(now.getTime() - h * 3_600_000);
-const userId = 'user-1';
+const userId = new mongoose.Types.ObjectId().toString();
 const block = { start: hoursAgo(2), end: hoursAgo(1) };
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 

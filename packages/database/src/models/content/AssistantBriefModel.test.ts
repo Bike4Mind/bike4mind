@@ -260,9 +260,18 @@ describe('AssistantBriefModel source refs', () => {
     expect(stored?.handled[0].source).toEqual({ kind: 'delegation', delegationId: 'g1' });
   });
 
+  it('stores an obligation source', async () => {
+    const created = await AssistantBriefModel.create(brief({ kind: 'obligation', obligationId: 'o1' }));
+    const stored = await AssistantBriefModel.findById(created._id).lean();
+    expect(stored?.handled[0].source).toEqual({ kind: 'obligation', obligationId: 'o1' });
+  });
+
   it('requires the id that matches the kind', async () => {
     await expect(AssistantBriefModel.create(brief({ kind: 'delegation', emailId: 'e1' }))).rejects.toThrow(
       /delegationId/
+    );
+    await expect(AssistantBriefModel.create(brief({ kind: 'obligation', delegationId: 'g1' }))).rejects.toThrow(
+      /obligationId/
     );
     await expect(AssistantBriefModel.create(brief({ kind: 'email', delegationId: 'g1' }))).rejects.toThrow(/emailId/);
   });

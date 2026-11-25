@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 7.3.0
+
+### Minor Changes
+
+- [#8377](https://github.com/Bike4Mind/bike4mind/pull/8377) [`518a275`](https://github.com/Bike4Mind/bike4mind/commit/518a275d35ab144d8d06d5aa34eeb1217f33ff0d) Thanks [@onoya](https://github.com/onoya)! - notebook image-model sends and in-chat edits create image jobs
+
 ## 7.2.0
 
 ### Minor Changes

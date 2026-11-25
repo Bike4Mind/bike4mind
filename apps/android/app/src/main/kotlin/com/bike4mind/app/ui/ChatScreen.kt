@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,6 +39,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.R
+import com.bike4mind.app.capture.PickedFile
 import com.bike4mind.kit.approvals.PendingActionDecision
 import com.bike4mind.kit.capture.readyFileIds
 import com.bike4mind.kit.chat.ChatError
@@ -68,6 +70,8 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
     val dictation by model.dictation.state.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
     var problem by remember { mutableStateOf<String?>(null) }
+    var offeredScan by remember { mutableStateOf<Pair<PickedFile, String>?>(null) }
+    var handoff by remember { mutableStateOf<Pair<PickedFile, String>?>(null) }
     val list = rememberLazyListState()
     val fileIds = attachments.readyFileIds()
     val attachedMessage = stringResource(R.string.capture_attached_message, attachments.joinToString(", ") { it.name })
@@ -148,6 +152,7 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                     },
                     onProblem = { problem = it },
                     enabled = !state.sending,
+                    onScanned = { picked, text -> offeredScan = picked to text },
                 )
                 // An agent run reports progress in its notification (push/AgentRunNotifications.kt), not here.
                 if (model.controller.canStartAgentRun(state)) {
@@ -176,6 +181,35 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                 }
             }
         }
+    }
+    offeredScan?.let { (picked, text) ->
+        AlertDialog(
+            onDismissRequest = { offeredScan = null },
+            title = { Text(stringResource(R.string.capture_handoff_title)) },
+            text = { Text(stringResource(R.string.capture_handoff_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        offeredScan = null
+                        handoff = picked to text
+                    },
+                    modifier = Modifier.testTag("capture-handoff-btn"),
+                ) { Text(stringResource(R.string.capture_handoff)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        offeredScan = null
+                        model.attachments.add(picked.file, picked.name, picked.mimeType)
+                    },
+                    modifier = Modifier.testTag("capture-scan-attach-btn"),
+                ) { Text(stringResource(R.string.capture_handoff_attach)) }
+            },
+        )
+    }
+    handoff?.let { (picked, text) ->
+        val controller = remember(picked) { graph.obligationHandoff() }
+        ObligationConfirmSheet(controller, picked.file, text, onClose = { handoff = null })
     }
 }
 

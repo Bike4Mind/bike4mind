@@ -224,7 +224,7 @@ export function summarizeElevenLabsPlanUsage(
     model.model = row.model;
     model.units += row.units;
     addRow(model, product, row);
-    addRow(users.get(row.userId), product, row);
+    if (row.userId) addRow(users.get(row.userId), product, row);
     addRow(days.get(row.day), product, row);
   }
 

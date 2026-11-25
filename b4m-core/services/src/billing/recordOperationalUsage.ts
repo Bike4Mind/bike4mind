@@ -7,7 +7,7 @@ import {
   ICreditTransactionRepository,
   IOrganizationDocument,
   IOrganizationRepository,
-  IUsageEventInput,
+  IAttributedUsageEventInput,
   IUsageEventRepository,
   IUserDocument,
   UsageEventFeature,
@@ -233,7 +233,7 @@ export async function recordOperationalUsage(
     logger.warn(`[recordOperationalUsage] credit deduction failed for ${feature}; recording as unbilled`, err);
   }
 
-  const event: IUsageEventInput = {
+  const event: IAttributedUsageEventInput = {
     requestId: params.requestId,
     userId: user.id,
     ownerId: organization ? organization.id : user.id,

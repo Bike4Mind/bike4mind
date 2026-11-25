@@ -1,5 +1,25 @@
 # @bike4mind/cli
 
+## 4.10.0
+
+### Minor Changes
+
+- [#8436](https://github.com/Bike4Mind/bike4mind/pull/8436) [`88f0eed`](https://github.com/Bike4Mind/bike4mind/commit/88f0eed44cc701cea5b1f08e58e43616b1e922b0) Thanks [@ken-b4m](https://github.com/ken-b4m)! - undo a lake change through the public API and MCP
+
+- [#8438](https://github.com/Bike4Mind/bike4mind/pull/8438) [`81e1f88`](https://github.com/Bike4Mind/bike4mind/commit/81e1f88cea26079d8beac4e7815b7a6a9132faa1) Thanks [@maconard](https://github.com/maconard)! - list and call functions from the CLI MCP server
+
+- [#8445](https://github.com/Bike4Mind/bike4mind/pull/8445) [`08b784e`](https://github.com/Bike4Mind/bike4mind/commit/08b784efb1f2dea09c41c4320d4e71753bdc9bc3) Thanks [@maconard](https://github.com/maconard)! - share a pinned function with a project, an organization, or named people
+
+- [#8446](https://github.com/Bike4Mind/bike4mind/pull/8446) [`61712ac`](https://github.com/Bike4Mind/bike4mind/commit/61712acbf344243576c5d8ee5b67845aaefe9b80) Thanks [@maconard](https://github.com/maconard)! - review a shared function before it runs, kept while its interface holds
+
+- [#8465](https://github.com/Bike4Mind/bike4mind/pull/8465) [`8ba6c23`](https://github.com/Bike4Mind/bike4mind/commit/8ba6c23d597ff8dfdf966418b1b1818dbe3592a3) Thanks [@maconard](https://github.com/maconard)! - asynchronous function calls for runs longer than a request can wait
+
+### Patch Changes
+
+- [#8435](https://github.com/Bike4Mind/bike4mind/pull/8435) [`70222af`](https://github.com/Bike4Mind/bike4mind/commit/70222afea4779554d914024b78c8bddc5b412774) Thanks [@ken-b4m](https://github.com/ken-b4m)! - apply research changes from MCP without approval forms
+
+- [#8477](https://github.com/Bike4Mind/bike4mind/pull/8477) [`fd108d7`](https://github.com/Bike4Mind/bike4mind/commit/fd108d78049ecf1fd8715eeb102d473a14ff1eb0) Thanks [@maconard](https://github.com/maconard)! - drop unused external imports from the bundle
+
 ## 4.9.0
 
 ### Minor Changes
