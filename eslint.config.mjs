@@ -834,6 +834,13 @@ export default defineConfig([
     rules: { 'no-console': 'error' },
   },
 
+  // The stdio MCP servers use stdout as the JSON-RPC channel, so log through shared/stderrLog instead.
+  {
+    files: ['b4m-core/mcp/src/**/*.{ts,mts,cts}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**', '**/__fixtures__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
   // #9627 — ban filesystem tree-walking in test files anywhere under apps/client/pages/**. Uses
   // no-restricted-syntax (a different rule id than no-restricted-imports), so the apps/client
   // Next.js block's import restrictions still apply to these files unchanged. See

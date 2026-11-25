@@ -24,7 +24,7 @@ export interface ErrorInfo {
  *   await octokit.issues.create(...);
  * } catch (error) {
  *   const { message, status } = getErrorInfo(error);
- *   console.error(`[${TOOL_NAME}] ERROR: ${message}`);
+ *   log.error('failed', { toolName: TOOL_NAME, detail: message });
  *   return createErrorResponse(error);
  * }
  */
@@ -66,7 +66,7 @@ export function getErrorInfo(error: unknown): ErrorInfo {
  * Convenience function when only the message is needed.
  *
  * @example
- * console.error(`[${TOOL_NAME}] ERROR: ${getErrorMessage(error)}`);
+ * log.error('failed', { toolName: TOOL_NAME, detail: getErrorMessage(error) });
  */
 export function getErrorMessage(error: unknown): string {
   return getErrorInfo(error).message;

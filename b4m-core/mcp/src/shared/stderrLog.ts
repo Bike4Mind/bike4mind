@@ -18,3 +18,20 @@ export function stderrLog(
   const line = redactLogValue({ severity: level, scope, msg: message, ...fields });
   process.stderr.write(`${JSON.stringify(line)}\n`);
 }
+
+export interface StderrLogger {
+  debug(message: string, fields?: Record<string, unknown>): void;
+  info(message: string, fields?: Record<string, unknown>): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
+  error(message: string, fields?: Record<string, unknown>): void;
+}
+
+/** Binds `stderrLog` to a scope so call sites read `log.error('create_issue failed', { tool, status })`. */
+export function createStderrLogger(scope: string): StderrLogger {
+  return {
+    debug: (message, fields) => stderrLog('debug', scope, message, fields),
+    info: (message, fields) => stderrLog('info', scope, message, fields),
+    warn: (message, fields) => stderrLog('warn', scope, message, fields),
+    error: (message, fields) => stderrLog('error', scope, message, fields),
+  };
+}

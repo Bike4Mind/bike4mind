@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { stderrLog } from './stderrLog.js';
+import { createStderrLogger, stderrLog } from './stderrLog.js';
 
 // Pins the line shape that packages/server-utils mcpCall sniffs for ('"type":"RATE_LIMIT') and
 // JSON.parses before posting rate-limit events to the ingest endpoint.
@@ -39,5 +39,33 @@ describe('stderrLog', () => {
       usagePercent: 100,
       wasThrottled: true,
     });
+  });
+
+  it('createStderrLogger writes one scoped JSON line per call and nothing to stdout or console', () => {
+    const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const log = createStderrLogger('github');
+
+    log.debug('d');
+    log.info('i');
+    log.warn('w');
+    log.error('e', { tool: 'create_issue', status: 500 });
+
+    const lines = write.mock.calls.map(([chunk]) => JSON.parse(chunk as string));
+    expect(lines.map(l => l.severity)).toEqual(['debug', 'info', 'warn', 'error']);
+    expect(lines[3]).toMatchObject({ scope: 'github', msg: 'e', tool: 'create_issue', status: 500 });
+    expect(stdout).not.toHaveBeenCalled();
+    expect(consoleLog).not.toHaveBeenCalled();
+  });
+
+  it('createStderrLogger redacts secret-named keys and serialises errors', () => {
+    const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    createStderrLogger('github').error('failed', { token: 'ghp_abcdefghijklmnop', error: new Error('boom') });
+
+    const line = JSON.parse(write.mock.calls[0][0] as string);
+    expect(line.token).toBe('[REDACTED]');
+    expect(JSON.stringify(line.error)).toContain('boom');
   });
 });

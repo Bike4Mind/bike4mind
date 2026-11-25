@@ -19,6 +19,25 @@ import path from 'path';
  *  - tools list over HTTP
  *  - a tool call round-trips over HTTP
  */
+/** Captures what the client writes to stderr, parsed as JSON log lines. */
+function spyStderr() {
+  const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+  const lines = () =>
+    write.mock.calls.flatMap(([chunk]) =>
+      String(chunk)
+        .split('\n')
+        .filter(Boolean)
+        .map(l => {
+          try {
+            return JSON.parse(l) as Record<string, unknown>;
+          } catch {
+            return { raw: l };
+          }
+        })
+    );
+  return { write, lines };
+}
+
 describe('MCPClient (streamable-HTTP transport)', () => {
   let httpServer: Server | undefined;
 
@@ -93,7 +112,7 @@ describe('MCPClient (streamable-HTTP transport)', () => {
   });
 
   it('keeps reporting transport failures after a stateless 404', async () => {
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const stderr = spyStderr();
     const toolCalls = { count: 0, failureStatus: undefined as number | undefined };
     const url = await startServer([], toolCalls);
     const client = new MCPClient({ envVariables: [], name: 'host', url });
@@ -101,13 +120,15 @@ describe('MCPClient (streamable-HTTP transport)', () => {
       await client.connectToServer();
       toolCalls.failureStatus = 404;
       await expect(client.callTool('echo', {})).rejects.toThrow(/tool request failed/);
-      errors.mockClear();
+      stderr.write.mockClear();
       toolCalls.failureStatus = 500;
       await expect(client.callTool('echo', {})).rejects.toThrow(/tool request failed/);
-      expect(errors).toHaveBeenCalledWith(expect.stringContaining('tool request failed'));
+      expect(stderr.lines()).toContainEqual(
+        expect.objectContaining({ severity: 'error', scope: 'mcp-client', msg: 'transport error' })
+      );
     } finally {
       await client.disconnect();
-      errors.mockRestore();
+      stderr.write.mockRestore();
     }
   });
 
@@ -282,7 +303,7 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
 
   it('starts a new session and retries the call once when the server has dropped the old one', async () => {
     const { url, state, expireSessions } = await startServer();
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const stderr = spyStderr();
     const mcp = await connect(url);
     expect(textOf(await mcp.callTool('echo', { msg: 'before' }))).toBe('echo:before');
 
@@ -296,7 +317,7 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
     // The failed POST plus its retry.
     expect(state.toolCallCount).toBe(3);
     expect(mcp.tools.map(t => t.name)).toEqual(['echo', 'slow']);
-    expect(errors).not.toHaveBeenCalled();
+    expect(stderr.lines().filter(l => l.severity === 'error')).toEqual([]);
 
     // The new session keeps working without another initialize.
     expect(textOf(await mcp.callTool('echo', { msg: 'again' }))).toBe('echo:again');
@@ -316,7 +337,7 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
 
   it('does not retry an error that is not an expired session', async () => {
     const { url, state } = await startServer();
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    spyStderr();
     const mcp = await connect(url);
     state.failToolCallsWith = 500;
 
