@@ -81,7 +81,7 @@ async function ensureUniqueIndex(label: string, model: { init(): Promise<unknown
   try {
     await model.init();
   } catch (error) {
-    Logger.warn('Unique index build failed; concurrent writers may duplicate rows', { label, error });
+    Logger.warn(`[${label}] unique index build failed; concurrent writers may duplicate rows`, { error });
   }
 }
 

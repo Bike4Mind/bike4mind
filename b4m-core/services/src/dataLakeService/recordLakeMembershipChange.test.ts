@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
 import { recordLakeMembershipChange } from './recordLakeMembershipChange';
 import type { ManageActor } from './manageRule';
+import { Logger } from '@bike4mind/observability';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}) =>
   ({ id: 'lake1', ...overrides }) as Pick<IDataLakeDocument, 'id' | 'organizationId'>;
@@ -114,7 +115,7 @@ describe('recordLakeMembershipChange', () => {
     });
 
     it('falls back to console.error when no logger is wired, so it cannot go fully silent', async () => {
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const spy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
       const { adapters: a } = adapters({ record: vi.fn().mockRejectedValue(new Error('mongo down')) });
       await recordLakeMembershipChange(
         { actor: actor(), lake: lake(), fabFileId: 'f1', action: 'added', origin: 'person' },
