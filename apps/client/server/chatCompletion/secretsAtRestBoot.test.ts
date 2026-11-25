@@ -24,13 +24,27 @@ describe('ensureSecretsAtRest', () => {
     const logger = { error: vi.fn() };
     expect(await ensureSecretsAtRest(logger, async () => configureSecretsAtRest(undefined))).toBe(false);
     expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('not loaded on the utils instance'));
   });
 
   it('logs and reports false when the loader rejects and nothing loaded', async () => {
     const logger = { error: vi.fn() };
     resetKeyringForTests();
     expect(await ensureSecretsAtRest(logger, () => Promise.reject(new Error('kms down')))).toBe(false);
+    expect(logger.error).toHaveBeenNthCalledWith(1, expect.stringContaining('will be retried'), expect.any(Error));
+    expect(logger.error).toHaveBeenNthCalledWith(2, expect.stringContaining('not loaded on the utils instance'));
     expect(logger.error).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports true with one retry log when legacy keys loaded and then the provider unwrap failed', async () => {
+    const logger = { error: vi.fn() };
+    const load = async () => {
+      configureSecretsAtRest(KEY);
+      throw new Error('kms down');
+    };
+    expect(await ensureSecretsAtRest(logger, load)).toBe(true);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('will be retried'), expect.any(Error));
   });
 });
 

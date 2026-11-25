@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  PROVIDER_RETRY_COOLDOWN_MS,
   decryptAtRest,
   encryptSecret,
   generateEncryptionKey,
@@ -9,6 +10,7 @@ import {
 
 const KEY = generateEncryptionKey();
 const DATA_KEY = Buffer.from(generateEncryptionKey(), 'hex');
+const WRAPPED = Buffer.from('blob').toString('base64');
 
 const resource = vi.hoisted(() => ({
   values: {} as Record<string, string | undefined>,
@@ -21,8 +23,7 @@ vi.mock('sst', () => ({
   Resource: new Proxy(
     { App: { stage: 'test' } },
     {
-      get: (target, name: string) =>
-        name in target ? target[name as 'App'] : { value: resource.values[name] },
+      get: (target, name: string) => (name in target ? target[name as 'App'] : { value: resource.values[name] }),
     }
   ),
 }));
@@ -35,8 +36,28 @@ vi.mock('@bike4mind/utils/security', async importOriginal => {
       actual.createAwsKmsKeyProvider({ ...opts, decrypt: kms.decrypt }),
   };
 });
+// connectDB collaborators: only the keyring wiring is under test.
+vi.mock('@bike4mind/db-core', () => ({ connectDB: vi.fn().mockResolvedValue('connection') }));
+vi.mock('@bike4mind/llm-adapters', () => ({
+  setModelPriceRowsProvider: vi.fn(),
+  setModelCatalogProvider: vi.fn(),
+  setModelListRevisionProvider: vi.fn(),
+}));
+vi.mock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn(), info: vi.fn() } }));
+vi.mock('./modelListRevision', () => ({ readModelListRevision: vi.fn() }));
+vi.mock('./models/billing/ModelPriceModel', () => ({ modelPriceRepository: { rowsInForce: vi.fn() } }));
+vi.mock('./models/ai/ModelCatalogModel', () => ({
+  modelCatalogRepository: { rowsInForce: vi.fn() },
+  ModelCatalog: { init: vi.fn().mockResolvedValue(undefined) },
+}));
+vi.mock('./models/ai/ModelDiscoveryStateModel', () => ({
+  ModelDiscoveryState: { init: vi.fn().mockResolvedValue(undefined) },
+}));
+vi.mock('./models/ai/DataLakeModel', () => ({ DataLakeModel: { init: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock('./seeds/seedModelPrices', () => ({ seedModelPrices: vi.fn().mockResolvedValue({ inserted: 0 }) }));
+vi.mock('./seeds/seedModelCatalog', () => ({ seedModelCatalog: vi.fn().mockResolvedValue({ inserted: 0 }) }));
 
-describe('loadKeyringFromResource', () => {
+describe('keyring loading from SST resources', () => {
   beforeEach(() => {
     resetKeyringForTests();
     kms.decrypt.mockReset();
@@ -44,26 +65,76 @@ describe('loadKeyringFromResource', () => {
   });
 
   it('self-host: no wrapped blob selects the static provider and decrypts v1/v2 values', async () => {
-    const { loadKeyringFromResource, selectKeyProvider } = await import('./security/loadKeyringFromResource');
+    const { ensureKeyringLoaded, selectKeyProvider } = await import('./security/loadKeyringFromResource');
     expect(selectKeyProvider(KEY, () => undefined).name).toBe('static');
-    await loadKeyringFromResource();
+    await ensureKeyringLoaded();
     expect(getStageDataKey()?.id).toBe('static');
     expect(decryptAtRest(encryptSecret('sk-secret-from-a-script', KEY))).toBe('sk-secret-from-a-script');
     expect(kms.decrypt).not.toHaveBeenCalled();
   });
 
-  it('a wrapped blob selects aws-kms; a failed unwrap is retried by the next load', async () => {
-    resource.values.SECRET_DATA_KEY_WRAPPED = Buffer.from('blob').toString('base64');
-    const { loadKeyringFromResource } = await import('./security/loadKeyringFromResource');
-    kms.decrypt.mockRejectedValueOnce(new Error('kms down')).mockResolvedValueOnce(new Uint8Array(DATA_KEY));
+  it('a placeholder wrapped blob keeps the stage on the static provider', async () => {
+    const { selectKeyProvider } = await import('./security/loadKeyringFromResource');
+    expect(selectKeyProvider(KEY, () => 'not-configured').name).toBe('static');
+  });
 
-    await expect(loadKeyringFromResource()).rejects.toThrow('kms down');
-    // Legacy keys still serve v1/v2 while the unwrap is down.
+  it('skips Resource reads once the keyring has settled', async () => {
+    const { ensureKeyringLoaded } = await import('./security/loadKeyringFromResource');
+    await ensureKeyringLoaded();
+    resource.values = { SECRET_DATA_KEY_WRAPPED: WRAPPED };
+    await ensureKeyringLoaded();
+    expect(kms.decrypt).not.toHaveBeenCalled();
+    expect(getStageDataKey()?.id).toBe('static');
+  });
+});
+
+describe('connectDB keyring wiring', () => {
+  const logger = { error: vi.fn() };
+
+  beforeEach(() => {
+    resetKeyringForTests();
+    kms.decrypt.mockReset();
+    logger.error.mockReset();
+    resource.values = { SECRET_ENCRYPTION_KEY: KEY, SECRET_DATA_KEY_WRAPPED: WRAPPED };
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('loads the keyring on connect, unwrapping with the stage encryption context', async () => {
+    kms.decrypt.mockResolvedValue(new Uint8Array(DATA_KEY));
+    const { connectDB } = await import('./priceCatalogBootstrap');
+    await connectDB('mongodb://x', logger as never);
+
+    expect(kms.decrypt).toHaveBeenCalledTimes(1);
+    expect(kms.decrypt).toHaveBeenCalledWith({
+      ciphertext: Buffer.from('blob'),
+      encryptionContext: { purpose: 'secrets-at-rest', stage: 'test' },
+    });
+    expect(getStageDataKey()?.key).toBe(DATA_KEY.toString('hex'));
+  });
+
+  it('a failed unwrap does not fail the connection, is not cached, and is retried after the cooldown', async () => {
+    kms.decrypt.mockRejectedValueOnce(new Error('kms down')).mockResolvedValueOnce(new Uint8Array(DATA_KEY));
+    const { connectDB } = await import('./priceCatalogBootstrap');
+
+    await expect(connectDB('mongodb://x', logger as never)).resolves.toBe('connection');
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('keyring load failed'), expect.any(Error));
+    expect(getStageDataKey()).toBeNull();
+    // v1/v2 keeps working on the static keys meanwhile.
     expect(decryptAtRest(encryptSecret('still-readable', KEY))).toBe('still-readable');
+
+    // Inside the cooldown a connect does not touch KMS again.
+    await connectDB('mongodb://x', logger as never);
+    expect(kms.decrypt).toHaveBeenCalledTimes(1);
     expect(getStageDataKey()).toBeNull();
 
-    await loadKeyringFromResource();
+    vi.setSystemTime(Date.now() + PROVIDER_RETRY_COOLDOWN_MS + 1);
+    await connectDB('mongodb://x', logger as never);
+    expect(kms.decrypt).toHaveBeenCalledTimes(2);
     expect(getStageDataKey()?.key).toBe(DATA_KEY.toString('hex'));
+
+    // Settled: later connects are no-ops.
+    await connectDB('mongodb://x', logger as never);
     expect(kms.decrypt).toHaveBeenCalledTimes(2);
   });
 });

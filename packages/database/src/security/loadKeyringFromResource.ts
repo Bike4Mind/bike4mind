@@ -3,6 +3,7 @@ import {
   createAwsKmsKeyProvider,
   createStaticKeyProvider,
   ensureKeyring,
+  isKeyringSettled,
   type KeyProvider,
 } from '@bike4mind/utils/security';
 
@@ -40,7 +41,8 @@ export function selectKeyProvider(
  * process that reaches Mongo is covered; a failed unwrap is retried on the next call. Non-DB entry
  * points that encrypt or decrypt without connecting first must await this themselves.
  */
-export async function loadKeyringFromResource(): Promise<void> {
+export async function ensureKeyringLoaded(): Promise<void> {
+  if (isKeyringSettled()) return;
   const legacyKey = readSecretFromResource('SECRET_ENCRYPTION_KEY');
   await ensureKeyring({
     provider: selectKeyProvider(legacyKey),
@@ -48,5 +50,3 @@ export async function loadKeyringFromResource(): Promise<void> {
     legacyPrevious: readSecretFromResource('SECRET_ENCRYPTION_KEY_PREVIOUS'),
   });
 }
-
-export const ensureKeyringLoaded = loadKeyringFromResource;

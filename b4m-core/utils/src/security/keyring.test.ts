@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateEncryptionKey, encryptSecret } from './secretEncryption';
 import {
   KeyringNotLoadedError,
+  PROVIDER_RETRY_COOLDOWN_MS,
   ensureKeyring,
   getAtRestKeys,
   getStageDataKey,
@@ -16,18 +17,21 @@ const LEGACY = generateEncryptionKey();
 const DATA_KEY = Buffer.from(generateEncryptionKey(), 'hex');
 const wrappedKey = Buffer.from('wrapped').toString('base64');
 
-afterEach(() => resetKeyringForTests());
+afterEach(() => {
+  resetKeyringForTests();
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 
 describe('keyring before load', () => {
   it('throws from every accessor and helper, even if a key exists elsewhere', () => {
-    process.env.SECRET_ENCRYPTION_KEY = LEGACY;
+    vi.stubEnv('SECRET_ENCRYPTION_KEY', LEGACY);
     expect(isKeyringLoaded()).toBe(false);
     expect(() => getAtRestKeys()).toThrow(KeyringNotLoadedError);
     expect(() => getStageDataKey()).toThrow(KeyringNotLoadedError);
     expect(() => encryptAtRest('x')).toThrow(KeyringNotLoadedError);
     expect(() => decryptAtRest(encryptSecret('x', LEGACY))).toThrow(KeyringNotLoadedError);
     expect(() => isSecretsAtRestConfigured()).toThrow(KeyringNotLoadedError);
-    delete process.env.SECRET_ENCRYPTION_KEY;
   });
 });
 
@@ -41,13 +45,17 @@ describe('aws-kms provider', () => {
     expect(getStageDataKey()?.key).toBe(DATA_KEY.toString('hex'));
     expect(getAtRestKeys().current).toBe(LEGACY);
     expect(decrypt).toHaveBeenCalledTimes(1);
-    expect(decrypt.mock.calls[0][0].encryptionContext).toEqual({ purpose: 'secrets-at-rest', stage: 'prod' });
+    expect(decrypt).toHaveBeenCalledWith({
+      ciphertext: Buffer.from('wrapped'),
+      encryptionContext: { purpose: 'secrets-at-rest', stage: 'prod' },
+    });
 
     await ensureKeyring({ provider: createStaticKeyProvider(LEGACY), legacyKey: LEGACY });
     expect(decrypt).toHaveBeenCalledTimes(1);
   });
 
-  it('does not cache a failed unwrap: legacy keys work now, the next call retries', async () => {
+  it('does not cache a failed unwrap: legacy keys work now, a call after the cooldown retries', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
     const decrypt = vi
       .fn()
       .mockRejectedValueOnce(new Error('kms down'))
@@ -58,6 +66,12 @@ describe('aws-kms provider', () => {
     expect(getStageDataKey()).toBeNull();
     expect(decryptAtRest(encryptAtRest('s'))).toBe('s');
 
+    // Inside the cooldown: no provider call, no rejection.
+    await expect(ensureKeyring(opts)).resolves.toBeUndefined();
+    expect(decrypt).toHaveBeenCalledTimes(1);
+    expect(getStageDataKey()).toBeNull();
+
+    vi.setSystemTime(Date.now() + PROVIDER_RETRY_COOLDOWN_MS + 1);
     await ensureKeyring(opts);
     expect(decrypt).toHaveBeenCalledTimes(2);
     expect(getStageDataKey()?.key).toBe(DATA_KEY.toString('hex'));

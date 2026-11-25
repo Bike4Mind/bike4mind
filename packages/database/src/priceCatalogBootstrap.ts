@@ -12,7 +12,7 @@ import { readModelListRevision } from './modelListRevision';
 import { seedModelCatalog } from './seeds/seedModelCatalog';
 import { seedModelPrices } from './seeds/seedModelPrices';
 import { Logger } from '@bike4mind/observability';
-import { loadKeyringFromResource } from './security/loadKeyringFromResource';
+import { ensureKeyringLoaded } from './security/loadKeyringFromResource';
 
 let catalogWired = false;
 let catalogSeedSettled: Promise<boolean> | null = null;
@@ -126,7 +126,7 @@ export const connectDB: typeof baseConnectDB = async (url, logger) => {
   const result = await baseConnectDB(url, logger);
   // Every call: a no-op once loaded, and it retries a failed KMS unwrap. A failure here must not
   // fail the connection (v1/v2 reads keep working on the static keys), so it is logged, not thrown.
-  await loadKeyringFromResource().catch((error: unknown) => {
+  await ensureKeyringLoaded().catch((error: unknown) => {
     logger?.error('[secrets-at-rest] keyring load failed; will retry on the next connect', error);
   });
   if (!catalogWired) {

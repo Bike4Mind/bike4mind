@@ -38,6 +38,8 @@ interface KeyringState {
   legacy: AtRestKeys | null;
   stageDataKey: StageDataKey | null;
   providerSettled: boolean;
+  /** Epoch ms of the last failed provider load; paces retries without caching the failure. */
+  lastFailureAt: number | null;
   inflight: Promise<void> | null;
 }
 
@@ -46,8 +48,17 @@ type GlobalWithKeyring = typeof globalThis & { [SLOT]?: KeyringState };
 
 function state(): KeyringState {
   const g = globalThis as GlobalWithKeyring;
-  return (g[SLOT] ??= { legacy: null, stageDataKey: null, providerSettled: false, inflight: null });
+  return (g[SLOT] ??= {
+    legacy: null,
+    stageDataKey: null,
+    providerSettled: false,
+    lastFailureAt: null,
+    inflight: null,
+  });
 }
+
+/** After a failed provider load, calls inside this window skip the provider instead of each waiting on it. */
+export const PROVIDER_RETRY_COOLDOWN_MS = 30_000;
 
 const usable = (key: string | undefined): string | undefined => (key && isValidEncryptionKey(key) ? key : undefined);
 
@@ -60,21 +71,28 @@ export interface EnsureKeyringOptions {
 
 /**
  * Loads the keyring. Legacy keys are available as soon as this is called, even if the provider
- * then fails. A failed provider load is never cached: the next call retries it. Concurrent calls
- * share one provider load; once a load has settled, later calls are no-ops.
+ * then fails. A failed provider load is never cached: it is retried once PROVIDER_RETRY_COOLDOWN_MS
+ * has passed (calls inside the window resolve without touching the provider, so an outage does not
+ * stall every request). Concurrent calls share one provider load; once a load has settled, later
+ * calls are no-ops.
  */
 export function ensureKeyring(opts: EnsureKeyringOptions): Promise<void> {
   const s = state();
   if (s.providerSettled) return Promise.resolve();
   if (s.inflight) return s.inflight;
+  if (s.legacy && s.lastFailureAt !== null && Date.now() - s.lastFailureAt < PROVIDER_RETRY_COOLDOWN_MS) {
+    return Promise.resolve();
+  }
   s.legacy = { current: usable(opts.legacyKey), previous: usable(opts.legacyPrevious) };
   const run = opts.provider.load().then(
     key => {
       s.stageDataKey = key;
       s.providerSettled = true;
+      s.lastFailureAt = null;
       s.inflight = null;
     },
     (error: unknown) => {
+      s.lastFailureAt = Date.now();
       s.inflight = null;
       throw error;
     }
@@ -90,7 +108,13 @@ export function loadStaticKeyring(key: string | undefined, previous?: string): v
   s.legacy = { current, previous: usable(previous) };
   s.stageDataKey = current ? { id: 'static', key: current } : null;
   s.providerSettled = true;
+  s.lastFailureAt = null;
   s.inflight = null;
+}
+
+/** True once the provider load has succeeded (or a static keyring was loaded). */
+export function isKeyringSettled(): boolean {
+  return state().providerSettled;
 }
 
 export function isKeyringLoaded(): boolean {
@@ -111,6 +135,7 @@ export function getStageDataKey(): StageDataKey | null {
   return s.stageDataKey;
 }
 
+/** @internal Test-only: wipes the process-wide key slot. Do not call from production code. */
 export function resetKeyringForTests(): void {
   delete (globalThis as GlobalWithKeyring)[SLOT];
 }
