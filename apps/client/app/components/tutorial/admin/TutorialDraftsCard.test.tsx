@@ -7,6 +7,7 @@ import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 const current = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const mockMutate = vi.fn();
 const download = vi.hoisted(() => vi.fn());
+const refetch = vi.fn();
 vi.mock('@client/app/hooks/tutorials/useTutorialDrafts', () => ({
   useTutorialDrafts: () => current.value,
   useTutorialDraftAction: () => ({ mutate: mockMutate, isPending: false }),
@@ -104,6 +105,28 @@ describe('TutorialDraftsCard', () => {
   beforeEach(() => {
     mockMutate.mockReset();
     download.mockReset();
+  });
+
+  it('shows a labelled loading state on first load', () => {
+    current.value = { data: undefined, isLoading: true, isError: false };
+    renderCard();
+    expect(screen.getByTestId('admin-loading-state')).toHaveTextContent('Loading made tutorials');
+  });
+
+  it('shows an error with a retry when the read fails', () => {
+    current.value = { data: undefined, isLoading: false, isError: true, isFetching: false, refetch };
+    renderCard();
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Could not read the tutorial drafts.');
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows an empty state whose action focuses the session id', () => {
+    setDrafts([]);
+    renderCard();
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No made tutorials yet');
+    fireEvent.click(screen.getByTestId('tutorial-drafts-empty-capture'));
+    expect(screen.getByTestId('tutorial-capture-session')).toHaveFocus();
   });
 
   it('captures a session with the id and title given', () => {

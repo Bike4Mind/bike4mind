@@ -1,5 +1,6 @@
 import { FC } from 'react';
-import { Box, Card, CircularProgress, Switch, Typography } from '@mui/joy';
+import { Box, Card, Switch, Typography } from '@mui/joy';
+import { ErrorState, LoadingState } from '@client/app/components/admin/shared';
 import { useSetTutorialsSwitch, useTutorialsSwitch } from '@client/app/hooks/tutorials/useTutorialsSwitch';
 
 export const DEFAULT_SWITCH_TITLE = 'Guided tutorials';
@@ -32,7 +33,7 @@ const TutorialsSwitchCard: FC<Props> = ({
           </Typography>
         </Box>
         {current.isLoading ? (
-          <CircularProgress size="sm" />
+          <LoadingState label="Loading the tutorials switch" />
         ) : (
           <Switch
             checked={enabled}
@@ -45,9 +46,11 @@ const TutorialsSwitchCard: FC<Props> = ({
         )}
       </Box>
       {current.isError && (
-        <Typography level="body-sm" color="danger">
-          Could not read the tutorials switch.
-        </Typography>
+        <ErrorState
+          message="Could not read the tutorials switch."
+          onRetry={() => void current.refetch()}
+          retrying={current.isFetching}
+        />
       )}
     </Card>
   );
