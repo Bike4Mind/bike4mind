@@ -4,7 +4,6 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { DATETIME_COLUMN_WIDTH } from '@client/app/components/admin/shared/DataTable';
 import ComplianceModal, { useComplianceModal } from './ComplianceModal';
 import type { UserComplianceResponse } from '@bike4mind/common';
 
@@ -190,7 +189,9 @@ describe('ComplianceModal', () => {
       ['compliance-auth-events', authAt],
     ] as const) {
       const table = screen.getByTestId(testId);
-      expect(within(table).getByRole('columnheader', { name: 'When' }).style.width).toBe(DATETIME_COLUMN_WIDTH);
+      const width = within(table).getByRole('columnheader', { name: 'When' }).style.width;
+      expect(width).toMatch(/^[\d.]+rem$/);
+      expect(parseFloat(width)).toBeGreaterThanOrEqual(13.5);
       expect(within(table).getByText(at.toLocaleString())).toBeInTheDocument();
     }
   });

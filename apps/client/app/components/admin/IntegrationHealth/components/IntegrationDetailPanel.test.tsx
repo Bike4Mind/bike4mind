@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { DATETIME_COLUMN_WIDTH } from '@client/app/components/admin/shared/DataTable';
 import { IntegrationDetailPanel } from './IntegrationDetailPanel';
 import type { IntegrationDashboardEntry, RecentError } from '../types';
 
@@ -77,7 +76,9 @@ describe('IntegrationDetailPanel recent errors', () => {
     const occurredAt = new Date(2026, 11, 28, 12, 58, 58);
     renderPanel([recentError({ occurredAt: occurredAt.toISOString() })]);
     const table = screen.getByTestId('integration-recent-errors-table');
-    expect(within(table).getByRole('columnheader', { name: 'Time' }).style.width).toBe(DATETIME_COLUMN_WIDTH);
+    const width = within(table).getByRole('columnheader', { name: 'Time' }).style.width;
+    expect(width).toMatch(/^[\d.]+rem$/);
+    expect(parseFloat(width)).toBeGreaterThanOrEqual(13.5);
     expect(within(table).getByText(occurredAt.toLocaleString())).toBeInTheDocument();
   });
 

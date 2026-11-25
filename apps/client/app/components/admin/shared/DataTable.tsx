@@ -105,7 +105,7 @@ export type DataTableProps<Row> = {
 };
 /** One `sm` icon button (32 px) plus the cell's 12 px padding on each side. */
 export const ROW_ACTIONS_WIDTH = '3.5rem';
-/** Fits the longest en-US `toLocaleString()` value (`12/28/2026, 12:58:58 PM`) plus the cell's 12 px padding on each side. */
+/** Sized for an en-US `toLocaleString()` value at its longest character count (`12/28/2026, 12:58:58 PM`) plus the cell's 12 px padding on each side. */
 export const DATETIME_COLUMN_WIDTH = '13.5rem';
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
 
