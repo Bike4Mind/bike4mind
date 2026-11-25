@@ -38,6 +38,7 @@ import type { SkillListingReportReason } from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import ClaudeCodeExportDialog from '@client/app/components/SkillsManagement/ClaudeCodeExportDialog';
+import type { MarketplaceOwner } from '@client/app/components/SkillsManagement/ClaudeCodeMarketplaceTab';
 import {
   conflictInfo,
   useImportListing,
@@ -429,8 +430,14 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
   const { listing, version, ratings, viewer, similar } = data;
   const live = listing.status === 'approved' && !listing.hiddenByReports;
   const shareUrl = listing.shareToken ? `${window.location.origin}/skills/market/u/${listing.shareToken}` : null;
-  const marketplaceOrg =
-    listing.visibility === 'organization' ? me?.organizations.find(o => o.id === listing.organizationId) : undefined;
+  const marketplaceOwner: MarketplaceOwner | undefined = (() => {
+    if (listing.visibility === 'organization') {
+      const org = me?.organizations.find(o => o.id === listing.organizationId);
+      return org && { kind: 'organization', ...org };
+    }
+    const space = listing.visibility === 'space' ? me?.spaces?.find(sp => sp.id === listing.spaceId) : undefined;
+    return space && { kind: 'space', ...space };
+  })();
 
   return (
     <Box sx={{ height: '100%', overflowY: 'auto', ...scrollbarStyles }} data-testid="market-listing-page">
@@ -474,7 +481,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
               <Typography level="body-sm" textColor="text.secondary">
                 by {listing.authorName || 'a Bike4Mind user'}
               </Typography>
-              <VisibilityChip visibility={listing.visibility} />
+              <VisibilityChip visibility={listing.visibility} spaceId={listing.spaceId} />
               {version ? (
                 <Chip size="sm" variant="outlined">
                   v{version.version}
@@ -707,8 +714,8 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
           thirdParty={!viewer.isAuthor}
           showImportHint={viewer.canImport && !data.myImport?.skill}
           marketplace={
-            marketplaceOrg
-              ? { org: marketplaceOrg, pluginName: listing.claudePluginName, skillName: listing.name }
+            marketplaceOwner
+              ? { owner: marketplaceOwner, pluginName: listing.claudePluginName, skillName: listing.name }
               : undefined
           }
         />

@@ -100,6 +100,8 @@ export type DataTableProps<Row> = {
    * (`body="custom"`): the card is then the one surface (DESIGN_GUIDE.md, Cards).
    */
   framed?: boolean;
+  /** Shades alternate body rows, for long uniform logs. */
+  stripe?: 'odd' | 'even';
 };
 /** One `sm` icon button (32 px) plus the cell's 12 px padding on each side. */
 export const ROW_ACTIONS_WIDTH = '3.5rem';
@@ -141,6 +143,7 @@ export function DataTable<Row>({
   maxHeight = '65vh',
   alwaysShowScrollbar = false,
   framed = true,
+  stripe,
 }: DataTableProps<Row>) {
   const [localSort, setLocalSort] = useState<DataTableSort>();
   const [localPage, setLocalPage] = useState(0);
@@ -342,6 +345,7 @@ export function DataTable<Row>({
         <Table
           stickyHeader
           hoverRow
+          stripe={stripe}
           size="sm"
           aria-label={label}
           aria-busy={loading || undefined}

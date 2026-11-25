@@ -125,7 +125,7 @@ def check_config(model):
     if (any(placeholder(env.get(key)) for key in ('JWT_SECRET', 'SESSION_SECRET'))
             or placeholder(env.get('MEMORY_KEY_SECRET'))
             or not re.fullmatch(r'[0-9a-fA-F]{64}', env.get('SECRET_ENCRYPTION_KEY') or '')
-            or (env.get('SECRET_ENCRYPTION_KEY_PREVIOUS')
+            or (env.get('SECRET_ENCRYPTION_KEY_PREVIOUS') not in (None, '', 'not-configured')
                 and not re.fullmatch(r'[0-9a-fA-F]{64}', env['SECRET_ENCRYPTION_KEY_PREVIOUS']))):
         failures.add('app.secrets')
 

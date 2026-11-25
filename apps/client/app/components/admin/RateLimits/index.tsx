@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
-import { Button, Typography, Tabs, TabList, Tab, TabPanel, Sheet, Stack, Table } from '@mui/joy';
+import { Button, Tabs, TabList, Tab, TabPanel, Stack } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { AdminPageHeader, EmptyState, LoadingState, StatStrip, StatTile } from '../shared';
+import { AdminPageHeader, DataTable, EmptyState, LoadingState, StatStrip, StatTile } from '../shared';
+import { snapshotColumns } from './snapshotColumns';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { useRateLimitMetrics } from './hooks/useRateLimitMetrics';
 import { useRateLimitMetricsState } from './hooks/useRateLimitMetricsState';
@@ -120,50 +121,18 @@ const RateLimitsTab: React.FC = () => {
           </TabPanel>
 
           <TabPanel value="raw" sx={{ px: 0, pt: 2 }}>
-            <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-              <Table size="sm" stripe="odd" stickyHeader>
-                <thead>
-                  <tr>
-                    <th>Timestamp</th>
-                    <th>Integration</th>
-                    <th>Endpoint</th>
-                    <th>Limit</th>
-                    <th>Remaining</th>
-                    <th>Usage %</th>
-                    <th>Throttled</th>
-                    <th>Retry After</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSnapshots.map(snap => (
-                    <tr key={snap._id}>
-                      <td>{new Date(snap.timestamp).toLocaleString()}</td>
-                      <td style={{ textTransform: 'capitalize' }}>{snap.integration}</td>
-                      <td>
-                        <Typography
-                          level="body-xs"
-                          sx={{ fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}
-                        >
-                          {snap.endpoint}
-                        </Typography>
-                      </td>
-                      <td>{snap.limit ?? '--'}</td>
-                      <td>{snap.remaining ?? '--'}</td>
-                      <td>{snap.usagePercent !== null ? `${snap.usagePercent}%` : '--'}</td>
-                      <td>{snap.wasThrottled ? 'Yes' : 'No'}</td>
-                      <td>{snap.retryAfterMs ? `${snap.retryAfterMs}ms` : '--'}</td>
-                    </tr>
-                  ))}
-                  {filteredSnapshots.length === 0 && (
-                    <tr>
-                      <td colSpan={8}>
-                        <EmptyState title="No rate limit data" action={clearFiltersAction} />
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </Table>
-            </Sheet>
+            <DataTable
+              rows={filteredSnapshots}
+              columns={snapshotColumns}
+              getRowId={snap => snap._id}
+              label="Rate limit snapshots"
+              onRetry={() => void forceRefresh()}
+              empty={<EmptyState title="No rate limit data" action={clearFiltersAction} />}
+              testId="rate-limit-raw-table"
+              stripe="odd"
+              pagination={false}
+              minWidth="63rem"
+            />
           </TabPanel>
         </Tabs>
       )}

@@ -26,6 +26,7 @@ import {
   LAYOUT_PRESETS,
   applyPreset,
   presetOf,
+  setPaneSession,
   setPaneView,
   singlePaneLayout,
   type LayoutPresetId,
@@ -35,6 +36,7 @@ import { AMBIENT_IDLE_MS } from './ambient';
 import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
 import { SoundPackMenuSection } from './SoundPackMenuSection';
+import { PaneSessionMenu, type PaneSessionChoices } from './PaneSessionMenu';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -229,6 +231,7 @@ export function ViewSwitcher({
   focus,
   presenter,
   miniWindow,
+  paneSessions,
 }: {
   layout: OrchestratorLayout;
   onLayoutChange(layout: OrchestratorLayout): void;
@@ -240,6 +243,8 @@ export function ViewSwitcher({
   presenter?: Toggle;
   /** The always-on-top Orchestrate mini window (orchestrateMini.ts); absent without the desktop bridge. */
   miniWindow?: Toggle;
+  /** Lets each pane in a split be pinned to another session (panePins.ts); without it every pane follows. */
+  paneSessions?: PaneSessionChoices;
 }) {
   const view = layout.panes[0].view;
   const current = ORCHESTRATOR_VIEW_INFO[view];
@@ -292,7 +297,7 @@ export function ViewSwitcher({
   }, []);
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.75, minWidth: 0 }}>
       <Dropdown>
         <MenuButton
           size="sm"
@@ -443,7 +448,17 @@ export function ViewSwitcher({
       </Dropdown>
       {split &&
         layout.panes.map((pane, index) => (
-          <PaneViewMenu key={index} index={index} view={pane.view} onPick={id => changePaneView(index, id)} />
+          <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 0.25, minWidth: 0 }}>
+            <PaneViewMenu index={index} view={pane.view} onPick={id => changePaneView(index, id)} />
+            {paneSessions && (
+              <PaneSessionMenu
+                index={index}
+                sessionId={pane.sessionId}
+                choices={paneSessions}
+                onPick={sessionId => onLayoutChange(setPaneSession(layout, index, sessionId))}
+              />
+            )}
+          </Box>
         ))}
     </Box>
   );

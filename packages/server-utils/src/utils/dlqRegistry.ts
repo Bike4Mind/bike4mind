@@ -309,6 +309,18 @@ const DLQ_REGISTRY = [
     describe: firstEntity(entityAt('Export job', 'exportJobId'), entityAt('Feedback summary job', 'summaryJobId')),
   },
   {
+    label: 'callable-function-call',
+    displayName: 'Callable Function Call',
+    application: 'CallableFunctionCall',
+    sourceQueue: 'callableFunctionCallQueue',
+    description: 'Runs one asynchronous call of a saved Python function.',
+    replay: 'safe',
+    replayNote:
+      'A job dead-lettered before its claim runs the call on replay. One already claimed is skipped, and ends the call as an error if its worker was lost.',
+    owner: 'Chat',
+    describe: entityAt('Call', 'callId'),
+  },
+  {
     label: 'account-data-export',
     displayName: 'Account Data Export',
     application: 'AccountDataExport',
@@ -354,18 +366,6 @@ const DLQ_REGISTRY = [
       'The worker skips a job that is no longer running and treats an already succeeded render as done, so a replay only re-encodes a job that never finished.',
     owner: 'Generation jobs',
     describe: entityAt('Job', 'jobId'),
-  },
-  {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    description: 'Triages recent Slack alerts into issue tracker tickets for a LiveOps config.',
-    replay: 'unsafe',
-    replayNote:
-      'A run within 5 minutes of the last one is skipped and duplicate issues are deduplicated, but a later replay runs a fresh triage and posts the Slack summary again.',
-    owner: 'Platform ops',
-    describe: entityAt('Triage config', 'configId'),
   },
   {
     label: 'sre-fix',

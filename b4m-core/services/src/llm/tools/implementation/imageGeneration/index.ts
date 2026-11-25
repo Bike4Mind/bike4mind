@@ -5,7 +5,6 @@ import { ToolContext, ToolDefinition } from '../../base/types';
 import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
 import {
   ApiKeyType,
-  ImageModels,
   BFL_SAFETY_TOLERANCE,
   TOOL_SELECTABLE_IMAGE_QUALITIES,
   XAI_IMAGE_MODELS,
@@ -14,7 +13,8 @@ import {
   isGeminiImageModel,
   resolveImageDimensions,
   BFL_DIMENSION_BOUNDS,
-  rejectsTransparentBackground,
+  supportsTransparentBackgroundByCatalog,
+  transparentBackgroundUnsupportedMessage,
   isGPTImage25Model,
   isExtendedGptImageQuality,
   toNonWebpOutputFormat,
@@ -41,7 +41,6 @@ import { ImageGenerateParams } from 'openai/resources/images';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
-import { v4 as uuidv4 } from 'uuid';
 import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
@@ -59,7 +58,11 @@ import {
 } from './imageJobTool';
 
 export {
+  buildEditJobRequest,
+  buildGenerateJobRequest,
+  clampImageCount,
   isImageJobToolConfig,
+  type ImageJobRequestDraft,
   type ImageLimitRefusal,
   type ImageToolConfig,
   type ImageToolJobsResult,
@@ -136,7 +139,7 @@ export async function processAndStoreImages(
 ): Promise<string[]> {
   await context.statusUpdate({}, 'Storing images...');
   // Unique file names for an n>1 batch, which would otherwise share the Date.now() suffix.
-  const batchId = uuidv4();
+  const batchId = crypto.randomUUID();
   return Promise.all(
     images.map(async (image, index) => {
       const buffer = await downloadImageAsBuffer(image);
@@ -146,7 +149,7 @@ export async function processAndStoreImages(
       // (rendering the image as a download chip instead of in the grid).
       const ext = fileType?.ext ?? 'png';
       const mimeType = fileType?.mime ?? 'image/png';
-      const filename = `${uuidv4()}.${ext}`;
+      const filename = `${crypto.randomUUID()}.${ext}`;
 
       // Block moderated content BEFORE upload - see moderateToolImage doc comment.
       await moderateToolImage(context, buffer, mimeType, model, provider);
@@ -278,14 +281,10 @@ export const imageGenerationTool: ToolDefinition = {
         quality: toolQuality,
       });
 
-      // Step any gpt-image-2 selection - default or explicit - down to gpt-image-1.5 when
-      // transparency is requested: gpt-image-2 rejects background: 'transparent' outright,
-      // so sending it there would silently turn a valid request into a 400.
-      // (OpenAIImageService.resolveGptImageOutputOptions is the last-resort backstop
-      // that strips 'transparent' if a gpt-image-2 request reaches it regardless.)
-      const wantsTransparent = background === 'transparent';
-      const model =
-        wantsTransparent && rejectsTransparentBackground(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
+      if (background === 'transparent' && !supportsTransparentBackgroundByCatalog(resolvedModel)) {
+        return `Error: ${transparentBackgroundUnsupportedMessage(resolvedModel)}`;
+      }
+      const model = resolvedModel;
       const refusal = await toolModelRefusal(
         context,
         await createToolModelAdmission(context),

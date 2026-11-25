@@ -63,6 +63,18 @@ describe('GET /api/slack/oauth/authorize', () => {
     expect(res._getJSONData()).toEqual({ authUrl: 'https://slack.com/oauth?state=s' });
   });
 
+  it('generates the install URL from the workspace install options', async () => {
+    const installOptions = { scopes: ['chat:write'], redirectUri: 'https://example.com/cb', metadata: 'ws-1' };
+    mockGetInstallUrlOptions.mockResolvedValue(installOptions);
+    const generateInstallUrl = vi.fn().mockResolvedValue('https://slack.com/oauth?state=s');
+    mockCreateInstallProvider.mockResolvedValue({ generateInstallUrl });
+
+    await call(true);
+
+    expect(mockGetInstallUrlOptions).toHaveBeenCalledWith('ws-1');
+    expect(generateInstallUrl).toHaveBeenCalledWith(installOptions);
+  });
+
   it('mints no nonce when the workspace cannot be resolved', async () => {
     mockGetInstallUrlOptions.mockRejectedValue(new Error('Workspace not found: ws-1'));
     const res = await call(true);

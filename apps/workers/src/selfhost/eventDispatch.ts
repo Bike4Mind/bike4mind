@@ -2,6 +2,7 @@ import type { EventBridgeEvent } from 'aws-lambda';
 import type { Logger } from '@bike4mind/observability';
 import { handler as createMementoHandler } from '@workers/events/createMemento';
 import { handler as briefComposeHandler } from '@workers/events/briefCompose';
+import { handler as delegationProcessHandler } from '@workers/events/delegationProcess';
 import { handler as sessionAutoNamingHandler } from '@workers/events/sessionAutoNaming';
 import { handler as sessionSummarizationHandler } from '@workers/events/sessionSummarization';
 import { handler as sessionContextSummarizationHandler } from '@workers/events/sessionContextSummarization';
@@ -42,6 +43,7 @@ const completionCompletedHandler: EventHandler = async event => {
 const HANDLERS: Record<string, EventHandler> = {
   'completion.completed': completionCompletedHandler,
   'brief.compose': briefComposeHandler,
+  'delegation.process': delegationProcessHandler,
   'session.auto_name': sessionAutoNamingHandler,
   'session.summarize': sessionSummarizationHandler,
   'session.context_summarize': sessionContextSummarizationHandler,

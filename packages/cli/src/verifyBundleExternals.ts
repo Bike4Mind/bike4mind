@@ -16,29 +16,35 @@ const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map(m => `no
 // @bike4mind/* packages are bundled inline (tsdown deps.neverBundle), never installed.
 const BUNDLED_SCOPES = ['@bike4mind/'];
 
-/** The slice of rolldown's plugin context this guard reads from the module graph. */
-export type ModuleGraph = {
-  getModuleIds(): Iterable<string>;
-  getModuleInfo(id: string): { importedIds: string[]; dynamicallyImportedIds: string[] } | null;
-};
+/** The slice of rolldown's output bundle (generateBundle's `bundle` argument) this guard reads. */
+export type EmittedBundle = Record<
+  string,
+  { type: string; code?: string; imports?: readonly string[]; dynamicImports?: readonly string[] }
+>;
 
 /**
- * Collect every module specifier the bundle imports (static + dynamic) by walking
- * rolldown's module graph. External packages keep their bare-specifier id; internal
- * modules are absolute paths (filtered out downstream by isExternalPackage).
+ * Collect every specifier the emitted chunks import (static + dynamic), minus the
+ * sibling chunks themselves: what the built binary loads, not the pre-tree-shake graph.
+ *
+ * A chunk's `imports` still lists an external whose import statement tree-shaking
+ * removed, so an entry counts only while the chunk's rendered code quotes it.
  *
  * Blind spot: this only sees import / dynamic-import edges the bundler tracks.
  * Runtime resolution via `require.resolve(...)` / `createRequire(...)` is invisible
  * both to the bundler and to this walk, so a dep reached only that way will NOT be
  * flagged here - it must be kept a real (bundler-visible) import or declared by hand.
  */
-export function collectGraphSpecifiers(graph: ModuleGraph): Set<string> {
+export function collectChunkImports(bundle: EmittedBundle): Set<string> {
+  const outputFiles = new Set(Object.keys(bundle));
   const specifiers = new Set<string>();
-  for (const id of graph.getModuleIds()) {
-    const info = graph.getModuleInfo(id);
-    if (!info) continue;
-    for (const dep of info.importedIds) specifiers.add(dep);
-    for (const dep of info.dynamicallyImportedIds) specifiers.add(dep);
+  for (const output of Object.values(bundle)) {
+    if (output.type !== 'chunk') continue;
+    const code = output.code ?? '';
+    for (const dep of [...(output.imports ?? []), ...(output.dynamicImports ?? [])]) {
+      if (outputFiles.has(dep)) continue;
+      // Backticks: rolldown renders dynamic imports as import(`dep`), always under minify.
+      if (['"', "'", '`'].some(q => code.includes(`${q}${dep}${q}`))) specifiers.add(dep);
+    }
   }
   return specifiers;
 }

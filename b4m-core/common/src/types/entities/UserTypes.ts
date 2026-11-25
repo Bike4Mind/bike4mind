@@ -10,6 +10,7 @@ import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
+import type { InterventionHold } from '../../schemas/autoContainment';
 import type { SuspensionReasonCategory } from '../../accountSuspensionCategories';
 import type { SignupRiskSignal } from '../../schemas/settings';
 import type { SignupRiskAutoApprovalPolicy } from '../../schemas/signupRiskReview';
@@ -535,6 +536,8 @@ export interface IUser extends ICreditHolder {
   signupGrantHeldReason?: 'budget_exhausted' | 'risk_review' | null;
   /** When the signup tranche was last held for an exhausted daily budget. */
   signupGrantHeldAt?: Date | null;
+  /** Graduated automated holds (apps/workers/src/security/autoContainment), one per deciding decision. */
+  interventionHolds?: InterventionHold[];
   level: UserLevelType;
   isBanned: boolean;
   /** Why the account is suspended, as told to the user; null when not suspended or suspended without one. */

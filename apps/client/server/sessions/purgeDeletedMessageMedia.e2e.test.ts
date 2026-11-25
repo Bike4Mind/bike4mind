@@ -8,24 +8,13 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
-const effects = vi.hoisted(() => ({ deleteGenerated: vi.fn(), cdnSend: vi.fn(), enqueue: vi.fn() }));
+const effects = vi.hoisted(() => ({ deleteGenerated: vi.fn(), enqueue: vi.fn() }));
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated }),
 }));
 vi.mock('@bike4mind/server-utils/sessions/generatedMediaPurgeQueue', () => ({
   enqueueGeneratedMediaPurge: effects.enqueue,
-}));
-vi.mock('@aws-sdk/client-cloudfront', () => ({
-  CloudFrontClient: class {
-    send = effects.cdnSend;
-  },
-  CreateInvalidationCommand: class {
-    constructor(public input: { InvalidationBatch: { Paths: { Items: string[] } } }) {}
-  },
-}));
-vi.mock('@bike4mind/server-utils/security/wafSharedHelpers', () => ({
-  resolveRouterDistributionId: () => 'E1A2B3C4D5E6F',
 }));
 
 import { purgeDeletedMessageMedia } from './purgeDeletedMessageMedia';
@@ -61,8 +50,6 @@ async function message(sessionId: string, media: { images?: string[]; videos?: s
 }
 
 const deletedKeys = () => effects.deleteGenerated.mock.calls.map(([key]) => key).sort();
-const invalidatedPaths = () =>
-  effects.cdnSend.mock.calls.map(([cmd]) => [...cmd.input.InvalidationBatch.Paths.Items].sort());
 
 beforeAll(async () => {
   database = await createMongoReplSet();
@@ -76,13 +63,12 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   effects.deleteGenerated.mockResolvedValue(undefined);
-  effects.cdnSend.mockResolvedValue({});
   effects.enqueue.mockResolvedValue(true);
   for (const modelName of mongoose.modelNames()) await collection(modelName).deleteMany({});
 });
 
 describe('purgeDeletedMessageMedia', () => {
-  it('deletes the media only the deleted message used and invalidates its /generated paths', async () => {
+  it('deletes the media only the deleted message used', async () => {
     const sessionId = await notebook();
     await message(sessionId, { images: [gk('other.png')] });
     const deleted = await message(sessionId, { images: [gk('a.png')], videos: [gk('b.mp4')] }, true);
@@ -91,7 +77,6 @@ describe('purgeDeletedMessageMedia', () => {
 
     expect(logger.warn).not.toHaveBeenCalled();
     expect(deletedKeys()).toEqual([gk('a.png'), gk('b.mp4')]);
-    expect(invalidatedPaths()).toEqual([[`/generated/${gk('a.png')}`, `/generated/${gk('b.mp4')}`]]);
     expect(effects.enqueue).toHaveBeenCalledWith({ keys: [], ownerIds: ['u1'] }, logger);
   });
 
@@ -153,7 +138,6 @@ describe('purgeDeletedMessageMedia', () => {
 
     expect(findSpy).not.toHaveBeenCalled();
     expect(effects.deleteGenerated).not.toHaveBeenCalled();
-    expect(effects.cdnSend).not.toHaveBeenCalled();
     findSpy.mockRestore();
   });
 
@@ -167,7 +151,6 @@ describe('purgeDeletedMessageMedia', () => {
     await expect(purgeDeletedMessageMedia(deleted, { logger })).resolves.toBeUndefined();
 
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(gk('bad.png')));
-    expect(invalidatedPaths()).toEqual([[`/generated/${gk('good.png')}`]]);
     expect(effects.enqueue.mock.calls[0][0].keys).toEqual([gk('bad.png')]);
     expect(logger.error).not.toHaveBeenCalled();
   });
@@ -209,20 +192,40 @@ describe('purgeDeletedMessageMedia', () => {
     await purgeDeletedMessageMedia(deleted, { logger });
 
     expect(deletedKeys()).toEqual([own]);
-    expect(invalidatedPaths()).toEqual([[`/generated/${own}`]]);
   });
 
-  it('never invalidates a /generated wildcard for a message holding thousands of keys', async () => {
+  it('deletes an ObjectId-keyed audio file', async () => {
     const sessionId = await notebook();
-    const junk = Array.from({ length: 3001 }, (_, i) => `x${i}.png`);
+    const audio = `${new mongoose.Types.ObjectId().toString()}.mp3`;
+    const deleted = await message(sessionId, { images: [audio] }, true);
+
+    await purgeDeletedMessageMedia(deleted, { logger });
+
+    expect(deletedKeys()).toEqual([audio]);
+  });
+
+  it('deletes spreadsheet keys named with spaces, punctuation and non-ASCII characters', async () => {
+    const sheets = [
+      'Q3 Sales Report-1a2b3c4d.xlsx',
+      'P&L Statement (2026)-1a2b3c4d.xlsx',
+      'Caf\u00e9 Budget-1a2b3c4d.xlsx',
+    ];
+    const sessionId = await notebook();
+    const deleted = await message(sessionId, { images: sheets }, true);
+
+    await purgeDeletedMessageMedia(deleted, { logger });
+
+    expect(deletedKeys()).toEqual([...sheets].sort());
+  });
+
+  it('deletes at most one run of keys for a message holding thousands of keys', async () => {
+    const sessionId = await notebook();
+    const junk = Array.from({ length: 3001 }, (_, i) => `junk/x${i}.png`);
     const imported = Array.from({ length: 1500 }, (_, i) => gk(`k${i}.png`));
     const deleted = await message(sessionId, { images: [...junk, ...imported] }, true);
 
     await purgeDeletedMessageMedia(deleted, { logger });
 
-    const sent = invalidatedPaths();
-    expect(sent.flat()).not.toContain('/generated/*');
-    expect(sent.map(paths => paths.length)).toEqual([MAX_DELETES_PER_RUN]);
     expect(effects.enqueue.mock.calls[0][0].keys).toHaveLength(1500 - MAX_DELETES_PER_RUN);
   });
 });

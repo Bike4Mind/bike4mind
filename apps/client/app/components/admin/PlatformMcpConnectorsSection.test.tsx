@@ -104,6 +104,12 @@ const httpError = (status: number, data: Record<string, unknown>) =>
 
 const RATE_LIMITED = { error: 'Rate limit exceeded. Try again in 120 seconds.' };
 
+// Per-keystroke input is not under test here; pasting fills a field in one change event.
+const fill = async (field: HTMLElement, text: string) => {
+  await userEvent.click(field);
+  await userEvent.paste(text);
+};
+
 const openMenu = async (id = 'p1') => {
   await userEvent.click(await screen.findByTestId(`platform-mcp-row-actions-${id}`));
   return screen.findByRole('menu');
@@ -366,9 +372,9 @@ describe('PlatformMcpConnectorsSection', () => {
   describe('adding a connector', () => {
     const fillForm = async () => {
       await userEvent.click(await screen.findByTestId('platform-mcp-add-btn'));
-      await userEvent.type(screen.getByTestId('custom-mcp-add-name-input'), 'Example connector');
-      await userEvent.type(screen.getByTestId('custom-mcp-add-url-input'), 'https://mcp.example.com/mcp');
-      await userEvent.type(screen.getByTestId('custom-mcp-add-api-key-input'), 'example-key-0123456789');
+      await fill(screen.getByTestId('custom-mcp-add-name-input'), 'Example connector');
+      await fill(screen.getByTestId('custom-mcp-add-url-input'), 'https://mcp.example.com/mcp');
+      await fill(screen.getByTestId('custom-mcp-add-api-key-input'), 'example-key-0123456789');
       await userEvent.click(screen.getByTestId('custom-mcp-add-submit-btn'));
     };
 
@@ -440,10 +446,10 @@ describe('PlatformMcpConnectorsSection', () => {
       expect(screen.getByTestId('platform-mcp-add')).toHaveTextContent(
         'Users offered this connector see it under the name in their Tools menu. One paragraph of plain text: line breaks and <tags> are removed. 0/300'
       );
-      await userEvent.type(screen.getByTestId('custom-mcp-add-description-input'), '  Searches the team handbook.  ');
-      await userEvent.type(screen.getByTestId('custom-mcp-add-name-input'), 'Example connector');
-      await userEvent.type(screen.getByTestId('custom-mcp-add-url-input'), 'https://mcp.example.com/mcp');
-      await userEvent.type(screen.getByTestId('custom-mcp-add-api-key-input'), 'example-key-0123456789');
+      await fill(screen.getByTestId('custom-mcp-add-description-input'), '  Searches the team handbook.  ');
+      await fill(screen.getByTestId('custom-mcp-add-name-input'), 'Example connector');
+      await fill(screen.getByTestId('custom-mcp-add-url-input'), 'https://mcp.example.com/mcp');
+      await fill(screen.getByTestId('custom-mcp-add-api-key-input'), 'example-key-0123456789');
       await userEvent.click(screen.getByTestId('custom-mcp-add-submit-btn'));
 
       expect(api.post).toHaveBeenCalledWith(
@@ -468,7 +474,7 @@ describe('PlatformMcpConnectorsSection', () => {
       expect(field).toHaveValue('Searches the team handbook.');
       expect(field).toHaveAttribute('maxlength', '300');
       await userEvent.clear(field);
-      await userEvent.type(field, 'Reads the handbook.');
+      await fill(field, 'Reads the handbook.');
       await userEvent.click(within(dialog).getByTestId('platform-mcp-details-save-btn'));
 
       expect(api.patch).toHaveBeenCalledWith(`${LIST_URL}/p1`, { description: 'Reads the handbook.' });
@@ -508,7 +514,7 @@ describe('PlatformMcpConnectorsSection', () => {
       await pick('edit');
       const field = await screen.findByTestId('platform-mcp-details-description-input');
       await userEvent.clear(field);
-      await userEvent.type(field, 'Reads the handbook.');
+      await fill(field, 'Reads the handbook.');
       await userEvent.click(screen.getByTestId('platform-mcp-details-save-btn'));
 
       const error = await screen.findByTestId('admin-error-state');
@@ -617,7 +623,7 @@ describe('PlatformMcpConnectorsSection', () => {
       );
       const input = within(dialog).getByTestId('platform-mcp-api-key-input');
       expect(input).toHaveAttribute('type', 'password');
-      await userEvent.type(input, 'rotated-key-0123456789');
+      await fill(input, 'rotated-key-0123456789');
       await userEvent.click(within(dialog).getByTestId('platform-mcp-api-key-save-btn'));
 
       expect(api.post).toHaveBeenCalledWith(`${LIST_URL}/p1/api-key`, { value: 'rotated-key-0123456789' });
@@ -632,7 +638,7 @@ describe('PlatformMcpConnectorsSection', () => {
       renderSection();
 
       await pick('api-key');
-      await userEvent.type(await screen.findByTestId('platform-mcp-api-key-input'), 'typed-key-0123456789');
+      await fill(await screen.findByTestId('platform-mcp-api-key-input'), 'typed-key-0123456789');
       await userEvent.click(screen.getByTestId('platform-mcp-api-key-cancel-btn'));
       await waitFor(() => expect(screen.queryByTestId('platform-mcp-api-key-dialog')).not.toBeInTheDocument());
       await waitFor(() => expect(screen.getByTestId('platform-mcp-row-actions-p1')).toHaveFocus());
@@ -648,7 +654,7 @@ describe('PlatformMcpConnectorsSection', () => {
       renderSection();
 
       await pick('api-key');
-      await userEvent.type(await screen.findByTestId('platform-mcp-api-key-input'), 'rotated-key-0123456789');
+      await fill(await screen.findByTestId('platform-mcp-api-key-input'), 'rotated-key-0123456789');
       await userEvent.click(screen.getByTestId('platform-mcp-api-key-save-btn'));
 
       await waitFor(() => expect(toast.error).toHaveBeenCalledWith(RATE_LIMITED.error));
@@ -688,7 +694,7 @@ describe('PlatformMcpConnectorsSection', () => {
       const confirm = within(dialog).getByTestId('platform-mcp-remove-dialog-confirm-btn');
       expect(confirm).toBeDisabled();
       await userEvent.click(within(dialog).getByTestId('platform-mcp-remove-dialog-reason-input-preset-0'));
-      await userEvent.type(within(dialog).getByTestId('platform-mcp-remove-dialog-typed-input'), 'Example connector');
+      await fill(within(dialog).getByTestId('platform-mcp-remove-dialog-typed-input'), 'Example connector');
       expect(api.delete).not.toHaveBeenCalled();
       await userEvent.click(confirm);
 
@@ -783,7 +789,7 @@ describe('the connector components without a scope', () => {
     wrap(<McpConnectionItem connection={connection({ ownerType: 'user', id: 'c1' })} />);
 
     await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-api-key-btn'));
-    await userEvent.type(screen.getByTestId('custom-mcp-connection-c1-api-key-input'), 'typed-key-0123456789');
+    await fill(screen.getByTestId('custom-mcp-connection-c1-api-key-input'), 'typed-key-0123456789');
     await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-api-key-btn'));
     expect(screen.queryByTestId('custom-mcp-connection-c1-api-key-input')).not.toBeInTheDocument();
     await userEvent.click(screen.getByTestId('custom-mcp-connection-c1-api-key-btn'));

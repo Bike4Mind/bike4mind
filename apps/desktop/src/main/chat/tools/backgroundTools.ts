@@ -17,7 +17,7 @@ import {
  * otherwise come back as a cheerful handle, and the model would only discover the failure a
  * turn later. Short enough that a server which starts fine is not being waited on.
  */
-const SETTLE_MS = 2_000;
+export const SETTLE_MS = 2_000;
 
 const DEFAULT_READ_CHARS = 8_000;
 const MAX_READ_CHARS = 20_000;
@@ -238,7 +238,15 @@ export const bashOutput: ToolDefinition = {
       );
     }
     const waited = waitSeconds > 0 && before.status === 'running';
-    if (waited) await waitForExit(registry, id, waitSeconds * 1000, context.signal);
+    if (waited) {
+      // Waiting on a process is not the agent working, so it does not spend the turn's time budget.
+      const resume = context.pauseTurnClock?.();
+      try {
+        await waitForExit(registry, id, waitSeconds * 1000, context.signal);
+      } finally {
+        resume?.();
+      }
+    }
 
     const read = registry.readForModel(id, sessionId, maxChars, input.from_start === true);
     if (!read) throw new Error(`Background process ${id} is gone: its conversation was cleared.`);

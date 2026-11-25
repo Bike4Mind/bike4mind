@@ -88,12 +88,6 @@ apps/client/pages/api/admin/integration-audit-logs/index.ts
 apps/client/pages/api/admin/integration-health-dashboard.ts
 apps/client/pages/api/admin/integrations/demand/[integrationId]/requesters.ts
 apps/client/pages/api/admin/integrations/demand/index.ts
-apps/client/pages/api/admin/liveops-triage-configs/[id].ts
-apps/client/pages/api/admin/liveops-triage-configs/[id]/health.ts
-apps/client/pages/api/admin/liveops-triage-configs/[id]/trigger.ts
-apps/client/pages/api/admin/liveops-triage-configs/index.ts
-apps/client/pages/api/admin/liveops-triage-configs/runs.ts
-apps/client/pages/api/admin/liveops-triage-env.ts
 apps/client/pages/api/admin/llm-models/configurations.ts
 apps/client/pages/api/admin/mementos/reembed-ledger.ts
 apps/client/pages/api/admin/mementos/reembed.ts
@@ -510,6 +504,7 @@ apps/client/pages/api/mcp-servers/notion/settings.ts
 apps/client/pages/api/mcp/confirm.ts
 apps/client/pages/api/mcp/delete-attachment.ts
 apps/client/pages/api/mcp/download-attachment.ts
+apps/client/pages/api/mcp/functions.ts  # deliberately accepts functions:invoke API keys: an MCP server (JSON-RPC over streamable HTTP) for the key owner's own live functions, not a REST operation, so kept out of the public OpenAPI; session callers refused in the handler, rate limited
 apps/client/pages/api/mcp/github/repositories.ts
 apps/client/pages/api/mcp/github/status.ts
 apps/client/pages/api/mementos/[id]/delete.ts

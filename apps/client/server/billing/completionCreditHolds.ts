@@ -17,6 +17,12 @@ import { claimRunBudget } from '@bike4mind/server-utils/billing/runBudgetClaim';
 // Completion holds become eligible for recovery after one hour, including requests still running.
 export const COMPLETION_CREDIT_HOLD_TTL_MS = 60 * 60_000;
 const SETTLEMENT_ATTEMPTS = 3;
+/**
+ * The most of a run's headroom past its minimum that one completion claim may take. A completion's
+ * claim is sized to its full output budget but it can be cut short to fit, so capping it leaves the run's concurrent
+ * workers room to start; the round gate shrinks the round's output to the claim it got.
+ */
+export const COMPLETION_CLAIM_SHARE_OF_REMAINING = 0.5;
 
 /**
  * One instance per completion; inference always runs outside the billing transactions. A completion
@@ -42,8 +48,19 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
         { ...hold, featureLabel: 'platform-key completion', lifecycle: 'completion' },
         () =>
           withTransaction(async () => {
-            const claimed = runClaim && (await claimRunBudget(runClaim));
+            const claimed =
+              runClaim &&
+              (await claimRunBudget({
+                ...runClaim,
+                neededCredits: runClaim.minimumCredits,
+                maxShareOfRemaining: COMPLETION_CLAIM_SHARE_OF_REMAINING,
+              }));
             const holder = await debit();
+            // Inside the transaction, so a refusal aborts the debit with it.
+            await creditService.assertInterventionSpendAllowed(
+              { userId: hold.userId, credits: hold.reservedCredits },
+              { users: userRepository, window: newAccountSpendCapAdaptersWithAlert.interventionSpendWindow }
+            );
             return pendingCreditHoldRepository.record(
               { ...hold, balanceAfterHold: holder.currentCredits },
               'platform-key completion',
@@ -117,7 +134,8 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
           const outcome = await completionRunRepository.claimBudget(
             runClaim.runId,
             claim.wantedCredits,
-            claim.minimumCredits
+            claim.minimumCredits,
+            COMPLETION_CLAIM_SHARE_OF_REMAINING
           );
           if (outcome.kind !== 'claimed') return 0;
           // A hold already settled, refunded or swept has released its claim, so a top-up must not outlive it.

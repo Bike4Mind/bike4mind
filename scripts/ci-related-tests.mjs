@@ -160,6 +160,13 @@ export async function runRelated({ plan, script, shard = '', root = repoRoot, cr
     if (!selected.length) return 0;
     process.chdir(cwd);
     await vitest.standalone();
+    // Selection transforms every module it walks, including externalized ones a normal run never
+    // transforms. With that copy on the server, vitest answers a reused worker's refetch of a module
+    // it last saw as a vi.mock stub with "cached", and the worker then runs the empty stub as the
+    // real module. Start the run from the module graph a normal run starts from.
+    for (const project of vitest.projects ?? []) {
+      for (const environment of Object.values(project.vite.environments)) environment.moduleGraph.invalidateAll();
+    }
     const result = await vitest.runTestSpecifications(selected, false);
     return result.unhandledErrors.length || result.testModules.some(test => !test.ok()) ? 1 : 0;
   } finally {

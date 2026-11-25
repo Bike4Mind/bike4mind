@@ -40,6 +40,7 @@ import {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
   accountErasureQueueDLQ,
@@ -57,7 +58,6 @@ import {
   githubLakeRevokeQueueDLQ,
   generationJobDLQ,
   renderJobDLQ,
-  liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
   sreFixQueueDLQ,
@@ -377,6 +377,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: slackExportQueueDLQ,
   },
   {
+    label: 'callable-function-call',
+    displayName: 'Callable Function Call',
+    application: 'CallableFunctionCall',
+    sourceQueue: 'callableFunctionCallQueue',
+    queue: callableFunctionCallQueueDLQ,
+  },
+  {
     label: 'quest-export',
     displayName: 'Quest Export',
     application: 'QuestExport',
@@ -494,13 +501,6 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'GenerationJob',
     sourceQueue: 'renderJobQueue',
     queue: renderJobDLQ,
-  },
-  {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    queue: liveOpsTriageQueueDLQ,
   },
   // SRE Agent DLQs
   {

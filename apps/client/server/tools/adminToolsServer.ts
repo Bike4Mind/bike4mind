@@ -1,5 +1,8 @@
 import { AdminToolService } from '@client/app/services/adminTools/AdminToolService';
 import { ModalManagementToolServer } from './ModalManagementToolServer';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'adminToolsServer' } });
 
 let initialized = false;
 
@@ -23,7 +26,7 @@ export function initializeServerAdminTools(): AdminToolService {
   // service.register(new UserManagementToolServer());
 
   initialized = true;
-  console.log('[AdminTools] Server admin tools initialized with tools:', Array.from(service.tools.keys()));
+  logger.info('Server admin tools initialized', { tools: Array.from(service.tools.keys()) });
   return service;
 }
 

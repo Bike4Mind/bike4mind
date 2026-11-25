@@ -45,6 +45,7 @@ vi.mock('../utils/errors', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {},
   creditTransactionRepository: {},
   organizationRepository: { findById: orgFindById, incrementCredits: orgIncrement },
   userRepository: { findById: userFindById, incrementCredits: userIncrement },
@@ -835,7 +836,7 @@ describe('reserveRequestCredits', () => {
 
       const reservation = await reserveForRun();
 
-      expect(claimBudget).toHaveBeenCalledExactlyOnceWith(RUN_ID, 3, 3);
+      expect(claimBudget).toHaveBeenCalledExactlyOnceWith(RUN_ID, 3, 3, undefined);
       expect(withTransaction).toHaveBeenCalledTimes(1);
       expect(recordHold).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'sound', expect.any(Date), {
         runId: RUN_ID,

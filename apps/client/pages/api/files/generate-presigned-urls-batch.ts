@@ -36,7 +36,6 @@ import {
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
@@ -265,7 +264,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
   const results = await Promise.all(
     resolvedFiles.map(async ({ item: fileItem, mimeType }) => {
       const ext = mime.extension(mimeType);
-      const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+      const fileKey = `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`;
 
       // Merge data lake meta-tag with file-specific tags, then guarantee the file also lands
       // under the lake's content prefix. Reconciling AFTER the injection is load-bearing: the

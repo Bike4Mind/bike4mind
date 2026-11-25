@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/desktop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Bike4Mind Electron desktop client",
   "author": "Bike4Mind",
@@ -40,8 +40,7 @@
     "gray-matter": "^4.0.3",
     "node-pty": "1.2.0-beta.15",
     "unpdf": "^1.6.2",
-    "zod": "^4.4.3",
-    "zustand": "^5.0.15"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@bike4mind/agents": "workspace:*",
@@ -81,6 +80,7 @@
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
     "vitest": "^4.1.12",
-    "web-tree-sitter": "0.25.10"
+    "web-tree-sitter": "0.25.10",
+    "zustand": "^5.0.15"
   }
 }

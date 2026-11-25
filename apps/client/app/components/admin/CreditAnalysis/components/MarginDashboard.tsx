@@ -519,7 +519,8 @@ export const MarginDashboard: React.FC = () => {
             <Typography level="body-xs" sx={{ mb: 1 }} color="neutral">
               Provider cost split by what funded the credits, grouped by the week each spender signed up. Unattributed
               is cost on zero-credit calls, on calls recorded before funding was stamped, and on calls whose funding
-              lookup failed; granted share leaves it out.
+              lookup failed; granted share leaves it out. Platform operations are shown separately and do not represent
+              a credit-holder charge.
             </Typography>
             {fundingCohortError ? (
               <ErrorState message={fundingCohortError} onRetry={() => void fetchFundingCohort()} />
@@ -550,6 +551,18 @@ export const MarginDashboard: React.FC = () => {
                     render: row => formatUsd(row.costUsd.subscription),
                   },
                   { id: 'unknown', label: 'Unknown $', numeric: true, render: row => formatUsd(row.costUsd.unknown) },
+                  {
+                    id: 'platform',
+                    label: 'Platform operations $',
+                    numeric: true,
+                    width: '10rem',
+                    wrapHeader: true,
+                    render: row => (
+                      <span data-testid={`margin-funding-cohort-platform-${formatCohortWeek(row.cohortWeek)}`}>
+                        {formatUsd(row.platformCostUsd ?? 0)}
+                      </span>
+                    ),
+                  },
                   {
                     id: 'unattributed',
                     label: 'Unattributed $',

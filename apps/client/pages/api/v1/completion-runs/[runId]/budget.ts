@@ -8,15 +8,19 @@ import { ConflictError, RUN_BUDGET_NOT_RAISED_ERROR_CODE, raiseCompletionRunBudg
 import { completionRunRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { findCallerCompletionRun, toCompletionRunBody } from '@server/completionRuns/callerCompletionRun';
+import {
+  findCallerCompletionRun,
+  resolveCompletionRunCaller,
+  toCompletionRunBody,
+} from '@server/completionRuns/callerCompletionRun';
 
 export default nextRouteForContract(raiseCompletionRunBudgetContract, {
   rateLimit: perUserRateLimit('POST /api/v1/completion-runs/[runId]/budget'),
 }).post(async (req, res) => {
-  const run = await findCallerCompletionRun(req.validatedParams.runId, {
-    userId: req.user.id,
-    billingOrganizationId: req.apiKeyInfo?.organizationId,
-  });
+  const run = await findCallerCompletionRun(
+    req.validatedParams.runId,
+    await resolveCompletionRunCaller({ userId: req.user.id, apiKeyInfo: req.apiKeyInfo }, req.validated.organization_id)
+  );
   const outcome = await completionRunRepository.raiseBudget(run.runId, req.validated.budgetCredits);
   if (outcome.kind === 'unbudgeted') {
     throw new ConflictError('This run was created without a budget, so it has none to raise.', {

@@ -115,8 +115,6 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/lakeConnectorOrphanReap.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `githubLakeRevokeQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/lakeHealthSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/lakeInconsistencySweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
-| `apps/workers/src/cron/liveopsTriageDispatcher.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `liveOpsTriageQueue` | Yes | Connects to MongoDB. |
-| `apps/workers/src/cron/liveopsTriageWorker.handler` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `eventBus`, `mcpHandler` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/modelDiscovery.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/modelDiscoveryStaleness.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/oauthAbuseAutoBlock.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
@@ -156,6 +154,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/emailIngestion/emailAnalyzer.dispatch` | `infra/emailIngestion.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileBucket`, `generatedImagesBucket` | Yes | Connects to MongoDB. |
 | `apps/workers/src/emailIngestion/emailParser.dispatch` | `infra/emailIngestion.ts` | MongoDB; linked: `allSecrets`, `emailIngestionBucket`, `emailIngestionQueue`, `emailAnalysisQueue`, `fabFileBucket`, `generatedImagesBucket`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/briefCompose.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `eventBus` | Yes | Connects to MongoDB. |
+| `apps/workers/src/events/delegationProcess.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/createMemento.handler` | `infra/llm.ts` | MongoDB; linked: `allSecrets`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/dlqAlarmToSlack.handler` | `infra/dlqAlarms.ts` | MongoDB, CloudWatch, SQS and Slack | Yes | Reads DLQ triage configuration and records delivery claims before forwarding alarms. |
 | `apps/workers/src/cron/dlqTriage.handler` | `infra/cron.ts` | MongoDB, CloudWatch, SQS and Slack | Yes | Reads DLQ triage configuration and records delivery claims for the scheduled sweep. |
@@ -186,6 +185,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/queueHandlers/accountErasure.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `eventBus`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `historyImportBucket`, `publishedArtifactsBucket`, `routerDistributionId` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/agentExecutor.handler` | `infra/agentExecutor.ts` | MongoDB; SearXNG (in-VPC, where deployed); linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `websocketApi`, `mcpHandler`, `remoteMcpHandler`, `eventBus`, `imageProcessor`, `agentContinuationQueue`, `generationJobQueue` | Yes | Connects to MongoDB and calls the in-VPC SearXNG service. |
 | `apps/workers/src/queueHandlers/agentProactiveMessage.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `eventBus` | Yes | Connects to MongoDB. |
+| `apps/workers/src/queueHandlers/callableFunctionCall.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/dataLakeCleanup.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `githubLakeRevokeQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/dataLakeResearchRun.dispatch` | `infra/queues.ts` | MongoDB; SearXNG (in-VPC, where deployed); linked: `allSecrets` | Yes | Connects to MongoDB and calls the in-VPC SearXNG service. |
 | `apps/workers/src/queueHandlers/dataLakeTaxonomyAnalysis.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |

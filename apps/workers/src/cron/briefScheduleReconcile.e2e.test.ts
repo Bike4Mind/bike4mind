@@ -283,6 +283,7 @@ describe('runBriefScheduleReconcile', () => {
           users: userRepository,
           briefs: assistantBriefRepository,
           emails: emailTriageItemRepository,
+          delegations: { markBriefed: async () => 0 },
           loadActivity: async brief => ({
             periodStart: brief.periodStart,
             periodEnd: brief.periodEnd,
@@ -290,6 +291,8 @@ describe('runBriefScheduleReconcile', () => {
             approvals: [],
             questions: [],
             emails: [],
+            delegations: [],
+            obligations: [],
           }),
           canCompose: async () => 'ok',
           loadInstructions: async () => [],

@@ -1,5 +1,4 @@
 import { WebSocketConnectionManager } from './WebSocketConnectionManager';
-import { v4 as uuidv4 } from 'uuid';
 
 interface ToolResult {
   success: boolean;
@@ -36,7 +35,7 @@ export class WebSocketToolExecutor {
       throw new Error('No access token available');
     }
 
-    const requestId = uuidv4();
+    const requestId = crypto.randomUUID();
 
     return new Promise<ToolResult>((resolve, reject) => {
       let settled = false;

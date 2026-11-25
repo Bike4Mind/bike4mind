@@ -106,6 +106,7 @@ Copy `.env.e2e.example` to `.env.e2e` and fill in the values:
 ```
 e2e/
 ├── core.setup.ts              # Creates core test users (admin/manager) and seeds auth state
+├── admin.setup.ts             # Signs the setup admin in again right before the admin project
 ├── global-setup.ts            # Pre-run cleanup of stale test data
 ├── global-teardown.ts         # Post-run cleanup
 ├── fixtures.ts                # Custom fixtures (page objects, helpers)
@@ -176,6 +177,10 @@ run before the tests:
 3. **Seeds auth** — `seedAuthStorageState` (in `helpers/auth-seed.ts`) plants the returned refresh token as the app's HttpOnly `b4m_rt` cookie and saves the browser's `storageState` to `.auth/`. The app's cold-load silent refresh exchanges it for an access token on the first navigation; nothing is written to localStorage.
 4. **Saves credentials** to `.auth/*-data.json` (including tokens) for API-based test setup and mid-test user switching
 5. **Creates invite code** for the signup spec
+
+An access token lasts 30 minutes and the `admin` project starts last, so `admin.setup.ts`
+(project `setup-admin`) signs the setup admin in again through OTC right before it and saves the
+new tokens over the old ones.
 
 For mid-test user switching, `seedAuthOnPage` swaps the same cookie on a live
 page's context and navigates to `/` to bootstrap the authenticated app. An agent

@@ -22,7 +22,6 @@ import {
   MAX_PATHS_PER_BATCH,
   appFileCdnPath,
   createCdnInvalidationBatch,
-  generatedCdnPath,
   invalidateRouterPaths,
 } from './invalidateRouterCdn';
 
@@ -43,8 +42,8 @@ beforeEach(() => {
 describe('invalidateRouterPaths', () => {
   it('gives same-label requests in the same millisecond distinct CallerReferences', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
-    await invalidateRouterPaths(['/generated/a.png'], { label: 'same' });
-    await invalidateRouterPaths(['/generated/b.png'], { label: 'same' });
+    await invalidateRouterPaths(['/profile-photos/a.png'], { label: 'same' });
+    await invalidateRouterPaths(['/profile-photos/b.png'], { label: 'same' });
     vi.restoreAllMocks();
     const refs = sendMock.mock.calls.map(
       ([cmd]) => (cmd as { input: SentInput }).input.InvalidationBatch.CallerReference
@@ -54,38 +53,41 @@ describe('invalidateRouterPaths', () => {
   });
 
   it('dedupes and drops wildcards and non-absolute paths', async () => {
-    await invalidateRouterPaths(['/generated/a.png', '/generated/a.png', '/generated/*', 'generated/b.png'], {
-      label: 't',
-    });
-    expect(sentPaths()).toEqual([['/generated/a.png']]);
+    await invalidateRouterPaths(
+      ['/profile-photos/a.png', '/profile-photos/a.png', '/profile-photos/*', 'generated/b.png'],
+      {
+        label: 't',
+      }
+    );
+    expect(sentPaths()).toEqual([['/profile-photos/a.png']]);
     expect((sendMock.mock.calls[0][0] as { input: SentInput }).input.DistributionId).toBe(DIST_ID);
   });
 
   it('sends up to MAX_PATHS_PER_BATCH exact paths in a single request', async () => {
-    const paths = Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/generated/${i}.png`);
+    const paths = Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/profile-photos/${i}.png`);
     await invalidateRouterPaths(paths, { label: 't' });
     expect(sentPaths()).toEqual([paths]);
   });
 
   it('coalesces a set past one request into one wildcard per prefix, with a warning', async () => {
     const paths = [
-      ...Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/generated/${i}.png`),
+      ...Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/profile-photos/${i}.png`),
       '/org-files/a/b.png',
     ];
     const log = logger();
     await invalidateRouterPaths(paths, { label: 't', logger: log });
-    expect(sentPaths()).toEqual([['/generated/*', '/org-files/*']]);
+    expect(sentPaths()).toEqual([['/profile-photos/*', '/org-files/*']]);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`${MAX_PATHS_PER_BATCH + 1} paths`));
   });
 
   it('dedupes before counting, so duplicates never push a set past one request', async () => {
-    const paths = Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/generated/${i}.png`);
+    const paths = Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/profile-photos/${i}.png`);
     await invalidateRouterPaths([...paths, paths[0]], { label: 't' });
     expect(sentPaths()).toEqual([paths]);
   });
 
   it('logs a count rather than every path for a large request', async () => {
-    const paths = Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/generated/${i}.png`);
+    const paths = Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/profile-photos/${i}.png`);
     const log = logger();
     await invalidateRouterPaths(paths, { label: 't', logger: log });
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining(`${MAX_PATHS_PER_BATCH} paths`));
@@ -102,7 +104,7 @@ describe('invalidateRouterPaths', () => {
       throw new Error('not linked');
     });
     const log = logger();
-    await invalidateRouterPaths(['/generated/a.png'], { label: 't', logger: log });
+    await invalidateRouterPaths(['/profile-photos/a.png'], { label: 't', logger: log });
     expect(sendMock).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('not linked'));
   });
@@ -110,7 +112,9 @@ describe('invalidateRouterPaths', () => {
   it('swallows and warns on a CloudFront failure', async () => {
     sendMock.mockRejectedValue(new Error('throttled'));
     const log = logger();
-    await expect(invalidateRouterPaths(['/generated/a.png'], { label: 't', logger: log })).resolves.toBeUndefined();
+    await expect(
+      invalidateRouterPaths(['/profile-photos/a.png'], { label: 't', logger: log })
+    ).resolves.toBeUndefined();
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('throttled'));
   });
 });
@@ -118,23 +122,18 @@ describe('invalidateRouterPaths', () => {
 describe('createCdnInvalidationBatch', () => {
   it('collects paths and sends one request on flush, ignoring null', async () => {
     const batch = createCdnInvalidationBatch('bulk');
-    batch.add('/generated/a.png');
+    batch.add('/profile-photos/a.png');
     batch.add(null);
-    batch.add('/generated/b.png');
+    batch.add('/profile-photos/b.png');
     expect(sendMock).not.toHaveBeenCalled();
     await batch.flush();
-    expect(sentPaths()).toEqual([['/generated/a.png', '/generated/b.png']]);
+    expect(sentPaths()).toEqual([['/profile-photos/a.png', '/profile-photos/b.png']]);
     await batch.flush();
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('CDN path mapping', () => {
-  it('maps generated keys under /generated/', () => {
-    expect(generatedCdnPath('abc.png')).toBe('/generated/abc.png');
-    expect(generatedCdnPath('a b.png')).toBe('/generated/a%20b.png');
-  });
-
   it('maps routed app-file keys and rejects unrouted ones', () => {
     expect(appFileCdnPath('organizations/o1/logo.png')).toBe('/org-files/o1/logo.png');
     expect(appFileCdnPath('admin/logos/site.png')).toBe('/admin-logos/site.png');

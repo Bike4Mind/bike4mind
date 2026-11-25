@@ -100,11 +100,12 @@ vi.mock('../utils/importHistoryProgress', () => ({
   markImportComplete: vi.fn(),
   markImportFailed: vi.fn(),
 }));
-vi.mock('uuid', () => ({ v4: () => 'test-uuid' }));
 
 import { dispatch, discardUploadedKnowledgeFiles } from './notebookImportComplete';
 import { moderateImportedKnowledgeFiles } from './moderateImportedKnowledgeFiles';
 import { markImportComplete } from '../utils/importHistoryProgress';
+
+vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue('00000000-0000-4000-8000-000000000000');
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const asLogger = logger as unknown as Logger;

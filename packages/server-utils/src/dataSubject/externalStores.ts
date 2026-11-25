@@ -171,6 +171,17 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     locatedBy: 'Not keyed by user',
     erasure: { action: 'noPersonalData', note: 'Recordings of test runs against test accounts' },
   },
+  {
+    kind: 's3',
+    bucket: 'callableFunctionDataBucket',
+    holds:
+      'Data files pinned to callable functions, written by the web API and read only by the function dispatcher through the runtime S3 endpoint',
+    locatedBy: 'The `data/<prefix>/` key segment, the prefix naming the tenant or function (`callableFunctionDataKey`)',
+    erasure: {
+      action: 'notErased',
+      gap: 'Account erasure does not delete the `data/<prefix>/` objects of the account or its functions, and no lifecycle rule ages them out',
+    },
+  },
 
   {
     kind: 'logs',
@@ -188,7 +199,10 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     kind: 'logs',
     name: 'WAF request logs',
     holds: 'Client IP addresses and request headers',
-    erasure: { action: 'expires', after: '30 days (log group retention, `infra/waf.ts`)' },
+    erasure: {
+      action: 'expires',
+      after: '90 days on production, 30 days on stages whose log group `infra/waf.ts` creates',
+    },
   },
   {
     kind: 'logs',

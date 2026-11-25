@@ -765,6 +765,14 @@ export interface ChatChildReport {
   replyTruncated?: boolean;
 }
 
+/** What a waiting child is blocked on, for its live card in the parent's thread. See ChatMessage.childWaiting. */
+export interface ChatChildWaiting {
+  sessionId: string;
+  reason?: 'approval' | 'decision' | 'message';
+  /** The parked call, e.g. "bash gh pr merge 12". Withheld when a device-local child reports to a hosted parent. */
+  summary?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -870,6 +878,12 @@ export interface ChatMessage {
   childReport?: ChatChildReport;
   /** The child this settled report is from. Set even when `childReport` is withheld from a hosted parent. */
   reportedChildId?: string;
+  /**
+   * Set with `system` on the notice a spawned session leaves when it starts waiting on the user,
+   * so the thread can fold every notice from one child into its live card (ChildSessionCards).
+   * Absent on notices stored before this field existed. See ChatService.noteChildWaiting.
+   */
+  childWaiting?: ChatChildWaiting;
   /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
@@ -1321,11 +1335,15 @@ export interface ChatReplyStats {
  * Chat is the default and is every conversation this client had before modes existed; Code
  * adds project grounding on top of it.
  *
- * Deliberately NOT a tool switch. Both modes carry the same tools - the difference is that a
- * Code session knows which directory it is about, so its tools run there and its conversations
- * group under that project in the sidebar.
+ * Chat and Code are deliberately NOT a tool switch. Both carry the same tools - the difference is
+ * that a Code session knows which directory it is about, so its tools run there and its
+ * conversations group under that project in the sidebar.
+ *
+ * Studio is the one mode that IS a tool switch: the Studio place's own conversation, offered only
+ * the generation tools, with no folder to run anything in. It is never listed in the Chat or Code
+ * sidebar. See tools/registry.ts toolsForRequest.
  */
-export type ChatSessionMode = 'chat' | 'code';
+export type ChatSessionMode = 'chat' | 'code' | 'studio';
 
 /**
  * How much the user has agreed to be asked before a tool that runs code or changes a file
@@ -1564,6 +1582,11 @@ export interface ChatSession extends ChatSessionMeta {
   replyInFlight?: { messageId: string; startedAt: number };
   /** The worktree being cut right now, added the same way; see the 'workspace' stream event. */
   preparingWorkspace?: WorkspacePreparation;
+  /**
+   * The last stream event this read already reflects, added by ChatService.getSession. A client
+   * applies only events with a higher `seq` on top of it, so none is lost or applied twice.
+   */
+  eventCursor?: EventCursor;
 }
 
 /** What exporting a conversation did; `saved` is false when the user dismissed the save dialog. */
@@ -1612,7 +1635,20 @@ export type ModelPhase =
 /** A newer context notice of the same kind replaces the older one for a conversation. */
 export type ContextNoticeKind = 'context-size' | 'no-tools' | 'run-budget';
 
-export type ChatStreamEvent =
+/**
+ * Where a client stands in one session's event stream. `epoch` names the host process lifetime
+ * that numbered the events, so a cursor from before a restart is recognisably stale; `seq` is
+ * the last event the client has. See main/chat/SessionEventLog.ts.
+ */
+export type EventCursor = { epoch: string; seq: number };
+
+/**
+ * A stream event as it leaves the host: `seq` numbers it within its session (SessionEventLog).
+ * Optional only so an event can be built before it is stamped.
+ */
+export type ChatStreamEvent = ChatStreamEventBody & { seq?: number };
+
+type ChatStreamEventBody =
   | {
       type: 'start';
       sessionId: string;
@@ -1741,6 +1777,27 @@ export interface ChatSessionStatusEvent {
   unreadReply?: boolean;
   /** A 'processing' session that is still being prepared, not yet replying: the step it is on. */
   preparing?: SessionSetupStep;
+  /**
+   * Background commands the agent started that are still running and will wake it when they end.
+   * Absent when there are none. Independent of `status`: a 'done' session can still be waiting on them.
+   */
+  background?: SessionBackgroundJobs;
+}
+
+/** A session's running wake-on-exit background commands, as the Tavern shows them. */
+export interface SessionBackgroundJobs {
+  running: number;
+  /** The newest one's command, cut short for a bubble. */
+  label: string;
+}
+
+export const BACKGROUND_LABEL_MAX = 40;
+
+/** One line of a background command for a bubble: whitespace collapsed, cut with a trailing '...'. */
+export function backgroundJobLabel(command: string): string {
+  const collapsed = command.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= BACKGROUND_LABEL_MAX) return collapsed;
+  return `${collapsed.slice(0, BACKGROUND_LABEL_MAX - 3)}...`;
 }
 
 /**

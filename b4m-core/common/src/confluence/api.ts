@@ -32,6 +32,7 @@ import type {
   FormattedComment,
   FormattedCommentList,
 } from './format';
+import { stderrLogger, type CommonLogger } from '../logging/stderrLogger';
 
 // ============================================================================
 // Shared Constants
@@ -289,7 +290,14 @@ type UploadedAttachment = Omit<ConfluenceAttachment, 'mediaType' | 'fileSize'> &
 // ============================================================================
 
 export class ConfluenceApi {
-  constructor(private readonly config: ConfluenceConfig) {}
+  private readonly logger: CommonLogger;
+
+  constructor(
+    private readonly config: ConfluenceConfig,
+    opts: { logger?: CommonLogger } = {}
+  ) {
+    this.logger = opts.logger ?? stderrLogger;
+  }
 
   /**
    * Build URL with query parameters
@@ -329,14 +337,13 @@ export class ConfluenceApi {
     });
 
     // Parse rate limit headers from every response.
-    // MUST use console.error (stderr): MCP uses stdout for JSON-RPC, so console.log
-    // would corrupt the transport channel.
+    // The default logger writes to stderr: MCP uses stdout for JSON-RPC, so stdout logging would corrupt the transport.
     const rateLimitInfo = parseRateLimitHeaders(response.headers);
     if (hasRateLimitInfo(rateLimitInfo)) {
       const logEntry = buildRateLimitLogEntry('confluence', path, rateLimitInfo);
-      console.error(JSON.stringify(logEntry));
+      this.logger.info('[Confluence] Rate limit info', logEntry);
       if (isNearLimit(rateLimitInfo)) {
-        console.error(
+        this.logger.warn(
           `[Confluence] Rate limit warning: ${rateLimitInfo.usagePercent}% used (${rateLimitInfo.remaining}/${rateLimitInfo.limit} remaining)`
         );
       }
@@ -353,8 +360,7 @@ export class ConfluenceApi {
       const jitterMs = Math.floor(Math.random() * 1000);
       const delayMs = Math.min(retryAfterMs + jitterMs, 10000); // Cap at 10s for Lambda budget
       const logEntry = buildRateLimitLogEntry('confluence', path, rateLimitInfo, true);
-      console.error(JSON.stringify(logEntry));
-      console.error(`[Confluence] Rate limited on ${path}, retrying after ${delayMs}ms`);
+      this.logger.warn(`[Confluence] Rate limited on ${path}, retrying after ${delayMs}ms`, logEntry);
       await new Promise(resolve => setTimeout(resolve, delayMs));
       return this.request<T>(method, path, {
         ...options,
@@ -779,7 +785,7 @@ export class ConfluenceApi {
       const payload = labels.map(label => ({ prefix: 'global', name: label }));
       await this.postV1(apiPath`/content/${pageId}/label`, payload);
     } catch (error) {
-      console.warn(`Failed to add labels to page ${pageId}:`, error);
+      this.logger.warn('Failed to add labels to page', { pageId, error });
     }
   }
 
@@ -896,7 +902,7 @@ export class ConfluenceApi {
       return formatCommentResponse(result, this.config.siteUrl);
     } catch (errorA: unknown) {
       const errorAMessage = getErrorMessage(errorA);
-      console.warn(`Confluence v2 footer-comments (Structure A) failed: ${errorAMessage}.`);
+      this.logger.warn('Confluence v2 footer-comments (Structure A) failed', { error: errorAMessage });
 
       // Try Structure B before giving up on v2
       try {
@@ -904,7 +910,9 @@ export class ConfluenceApi {
         return formatCommentResponse(result, this.config.siteUrl);
       } catch (errorB: unknown) {
         const errorBMessage = getErrorMessage(errorB);
-        console.warn(`Confluence v2 footer-comments (Structure B) failed: ${errorBMessage}. Attempting v1 fallback.`);
+        this.logger.warn('Confluence v2 footer-comments (Structure B) failed; attempting v1 fallback', {
+          error: errorBMessage,
+        });
 
         // Check Permissions
         if (errorAMessage.includes('403') || errorBMessage.includes('403')) {

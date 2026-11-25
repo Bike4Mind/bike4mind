@@ -34,7 +34,6 @@ import type {
 export function formatBoard(board: JiraBoard, siteUrl: string): FormattedBoard {
   // Defensive check for invalid/error responses
   if (!board || typeof board !== 'object' || 'error' in board || 'errors' in board || !board.id) {
-    console.warn('[formatBoard] Received invalid or error response:', JSON.stringify(board));
     throw new Error(`Invalid board data received: ${JSON.stringify(board)}`);
   }
 
@@ -69,7 +68,6 @@ export function formatBoard(board: JiraBoard, siteUrl: string): FormattedBoard {
 export function formatBoardList(response: JiraBoardListResponse, siteUrl: string): FormattedBoardList {
   // Defensive check for invalid/error responses
   if (!response || typeof response !== 'object' || 'error' in response || 'errors' in response) {
-    console.warn('[formatBoardList] Received invalid or error response:', JSON.stringify(response));
     throw new Error(`Invalid board list response received: ${JSON.stringify(response)}`);
   }
 
@@ -96,7 +94,6 @@ export function formatBoardList(response: JiraBoardListResponse, siteUrl: string
 export function formatSprint(sprint: JiraSprint, siteUrl: string, boardId?: number): FormattedSprint {
   // Defensive check for invalid/error responses
   if (!sprint || typeof sprint !== 'object' || 'error' in sprint || 'errors' in sprint || !sprint.id) {
-    console.warn('[formatSprint] Received invalid or error response:', JSON.stringify(sprint));
     throw new Error(`Invalid sprint data received: ${JSON.stringify(sprint)}`);
   }
 
@@ -135,7 +132,6 @@ export function formatSprintList(
 ): FormattedSprintList {
   // Defensive check for invalid/error responses
   if (!response || typeof response !== 'object' || 'error' in response || 'errors' in response) {
-    console.warn('[formatSprintList] Received invalid or error response:', JSON.stringify(response));
     throw new Error(`Invalid sprint list response received: ${JSON.stringify(response)}`);
   }
 
@@ -161,7 +157,6 @@ export function formatSprintList(
 export function formatSprintIssues(response: JiraSprintIssuesResponse, siteUrl: string): FormattedSprintIssues {
   // Defensive check for invalid/error responses
   if (!response || typeof response !== 'object' || 'error' in response || 'errors' in response) {
-    console.warn('[formatSprintIssues] Received invalid or error response:', JSON.stringify(response));
     throw new Error(`Invalid sprint issues response received: ${JSON.stringify(response)}`);
   }
 
@@ -188,7 +183,6 @@ export function formatSprintIssues(response: JiraSprintIssuesResponse, siteUrl: 
 export function formatBoardConfiguration(config: JiraBoardConfiguration, siteUrl: string): FormattedBoardConfiguration {
   // Defensive check for invalid/error responses
   if (!config || typeof config !== 'object' || 'error' in config || 'errors' in config || !config.id) {
-    console.warn('[formatBoardConfiguration] Received invalid or error response:', JSON.stringify(config));
     throw new Error(`Invalid board configuration data received: ${JSON.stringify(config)}`);
   }
 
@@ -244,7 +238,6 @@ export function formatBoardIssues(
 ): FormattedBoardIssues {
   // Defensive check for invalid/error responses
   if (!response || typeof response !== 'object' || 'error' in response || 'errors' in response) {
-    console.warn('[formatBoardIssues] Received invalid or error response:', JSON.stringify(response));
     throw new Error(`Invalid board issues response received: ${JSON.stringify(response)}`);
   }
 

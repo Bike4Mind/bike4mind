@@ -86,7 +86,7 @@ type LakeMemoryHealthMock =
       memberCount: number;
     }
   | undefined;
-const useGetLakeMemoryHealth = vi.fn<[], { data: LakeMemoryHealthMock }>(() => ({ data: undefined }));
+const useGetLakeMemoryHealth = vi.fn<() => { data: LakeMemoryHealthMock }>(() => ({ data: undefined }));
 
 // The rebuild door's two selectors share one mutation hook, so the panel's only record of WHICH
 // door an owner opened is the argument it passes - which is what these capture.
@@ -101,7 +101,7 @@ type RebuildStatusMock =
       embeddingSpaceResolved?: boolean | null;
     }
   | undefined;
-const useUnderChunkedCount = vi.fn<[], { data: RebuildStatusMock }>(() => ({ data: undefined }));
+const useUnderChunkedCount = vi.fn<() => { data: RebuildStatusMock }>(() => ({ data: undefined }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });

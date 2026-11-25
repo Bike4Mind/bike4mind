@@ -45,6 +45,10 @@ vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async import
   ...(await importOriginal<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   createCdnInvalidationBatch: () => ({ add: vi.fn(), flush: vi.fn() }),
 }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/storage/index')>()),
+  getGeneratedImageStorage: () => ({ deletePermanently: vi.fn(), deletePrefixPermanently: vi.fn() }),
+}));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return { ...actual, authSessionService: { ...actual.authSessionService, endRealtimeConnections: vi.fn() } };
@@ -176,6 +180,8 @@ async function seedAccount(source: 'self' | 'admin' = 'admin') {
   await insert('Friendship', { requester: userId, recipient: String(other) });
   await insert('McpConnection', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
   await insert('CallableFunction', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
+  await insert('CallableFunctionCall', { functionId: 'f1', callerUserId: userId, ownerUserId: userId, outcome: 'ok' });
+  await insert('CallableFunctionResult', { callId: 'c1', functionId: 'f1', callerUserId: userId, state: 'finished' });
   await insert('GenerationJob', { ownerType: 'User', ownerId: userId });
   await insert('Activity', { ownerType: 'User', ownerId: userId });
   await insert('TaskSchedule', { payload: { userId } });

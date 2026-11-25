@@ -6,7 +6,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { Logger } from '@bike4mind/observability';
 import { SLACK_API_POST_EVENT_TYPE } from '@bike4mind/common';
 
-const approvals = vi.hoisted(() => ({ liveops: vi.fn(), sre: vi.fn() }));
+const approvals = vi.hoisted(() => ({ sre: vi.fn() }));
 const audit = vi.hoisted(() => ({ success: vi.fn(), failure: vi.fn() }));
 const contributed = vi.hoisted(() => {
   const handlers = {
@@ -54,9 +54,6 @@ vi.mock('@bike4mind/database/infra', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database/infra')>('@bike4mind/database/infra');
   return { ...actual, SlackDevWorkspace: { findOne: vi.fn() } };
 });
-vi.mock('@bike4mind/server-utils/integrations/slack/liveopsTriageApproval', () => ({
-  handleLiveopsApprovalAction: approvals.liveops,
-}));
 vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   handleSreApprovalAction: approvals.sre,
 }));
@@ -124,17 +121,6 @@ function resultWithDeferred(response: Record<string, unknown>, events: string[])
 
 const FAMILIES = [
   {
-    family: 'liveops',
-    actionIds: ['liveops_approve_issue', 'liveops_reject_issue'],
-    mock: approvals.liveops,
-    expectedArgs: (actionId: string) => [
-      actionId,
-      'proposal-1',
-      SLACK_USER.id,
-      { workspaceId: 'workspace-1', channelId: 'C1', botToken: 'xoxb-test' },
-    ],
-  },
-  {
     family: 'sre',
     actionIds: ['sre_approve_fix', 'sre_reject_fix'],
     mock: approvals.sre,
@@ -197,7 +183,7 @@ describe('POST /api/slack/interactive registered actions', () => {
     );
   });
 
-  it.each(['liveops_approve_issue', 'sre_approve_fix'])(
+  it.each(['sre_approve_fix', 'sre_reject_fix'])(
     '%s on an API-posted message never reaches an approval handler',
     async actionId => {
       const res = await post(
@@ -206,7 +192,6 @@ describe('POST /api/slack/interactive registered actions', () => {
         })
       );
 
-      expect(approvals.liveops).not.toHaveBeenCalled();
       expect(approvals.sre).not.toHaveBeenCalled();
       expect(User.findOne).not.toHaveBeenCalled();
       expect(res._getJSONData()).toEqual({});

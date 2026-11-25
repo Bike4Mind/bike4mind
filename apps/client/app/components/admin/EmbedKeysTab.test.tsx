@@ -39,7 +39,7 @@ const modellessAgentKey = {
 };
 
 const h = vi.hoisted(() => ({
-  keys: [] as any[],
+  keys: [] as Record<string, unknown>[],
   updateMutate: vi.fn(),
   createMutate: vi.fn(),
   billingOrgs: [] as { id: string; name: string }[],
@@ -160,10 +160,11 @@ describe('EmbedKeysTab', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Agent One' }));
   };
 
-  it('lists embed:chat keys and filters out non-embed keys', () => {
+  it('lists embed:chat keys and filters out non-embed keys; no model indicator on an agent with a model', () => {
     renderTab();
     expect(screen.getByTestId('embed-key-row-key-1')).toBeInTheDocument();
     expect(screen.queryByTestId('embed-key-row-key-2')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('embed-key-row-model-warning-key-1')).not.toBeInTheDocument();
   });
 
   it('does not call update on a no-op Configure-save (cannot clobber hideBranding)', () => {
@@ -192,6 +193,7 @@ describe('EmbedKeysTab', () => {
   // Post-#891 the toggle is owner-scoped: Configure reads the key's
   // server-computed `ownerHasWhitelabel`; Create reads the current user's own
   // entitlements (no admin/developer bypass). Neither honors the viewer's admin.
+
   describe('hide-branding toggle - owner-scoped (#891)', () => {
     it('Configure: shows and round-trips the toggle when the key OWNER holds white-label', () => {
       h.keys = [{ ...embedKey, ownerHasWhitelabel: true, branding: { displayName: 'Acme' } }];
@@ -221,6 +223,7 @@ describe('EmbedKeysTab', () => {
     // would have bypassed the old viewer-scoped gate (admin/developer). Configure
     // reads only the server flag, so an unentitled owner's key never offers it.
     it('Configure: does not offer the toggle for an unentitled owner regardless of viewer role', () => {
+      h.isAdmin = true;
       h.keys = [{ ...embedKey, ownerHasWhitelabel: false }];
       renderTab();
       openConfigure('key-1');
@@ -264,6 +267,7 @@ describe('EmbedKeysTab', () => {
 
   // The list route now returns disabled keys (#776); before that this row could
   // never render and the Revoked branch was dead code.
+
   it('renders a revoked key as Revoked with its actions disabled', () => {
     h.keys = [{ ...embedKey, id: 'key-9', status: 'disabled' }];
     renderTab();
@@ -301,6 +305,9 @@ describe('EmbedKeysTab', () => {
     expect(screen.getByTestId('embed-key-create-btn')).not.toBeDisabled();
   });
 
+  // Embed keys must be org-owned, so the create payload has to carry organizationId -
+  // its absence is exactly the #876 bug (keys defaulted to user-owned and got rejected).
+
   it('warns in the configure modal for a key bound to a model-less agent', () => {
     renderTab();
     openConfigure('key-4');
@@ -308,14 +315,9 @@ describe('EmbedKeysTab', () => {
     expect(screen.getByTestId('embed-key-save-btn')).not.toBeDisabled();
   });
 
-  it('shows no warning in the configure modal when the bound agent has an explicit model', () => {
-    renderTab();
-    openConfigure('key-1');
-    expect(screen.queryByTestId('embed-key-model-warning')).not.toBeInTheDocument();
-  });
+  // Ownership is fixed at creation; Configure's PATCH never changes it, so the org
+  // picker must not appear there (nor drag in the shared form fields).
 
-  // Embed keys must be org-owned, so the create payload has to carry organizationId -
-  // its absence is exactly the #876 bug (keys defaulted to user-owned and got rejected).
   it('sends the chosen organizationId in the create payload (non-admin)', () => {
     renderTab();
     fireEvent.click(screen.getByTestId('embed-key-new-btn'));
@@ -373,6 +375,7 @@ describe('EmbedKeysTab', () => {
 
   // A platform admin picks from ALL orgs (not the billing-organizations set), so
   // they can mint for any tenant - the create route's isAdmin bypass allows it.
+
   it('lets a platform admin pick any org, flowing organizationId into the create payload', async () => {
     h.isAdmin = true;
     renderTab();
@@ -391,24 +394,13 @@ describe('EmbedKeysTab', () => {
     expect(h.createMutate.mock.calls[0][0]).toEqual(expect.objectContaining({ organizationId: 'org-admin' }));
   });
 
-  // Ownership is fixed at creation; Configure's PATCH never changes it, so the org
-  // picker must not appear there (nor drag in the shared form fields).
-  it('does not show an org picker in the Configure modal', () => {
+  it('does not show an org picker in the Configure modal, nor a model warning for an agent with a model', () => {
     renderTab();
     openConfigure('key-1');
+    expect(screen.queryByTestId('embed-key-model-warning')).not.toBeInTheDocument();
     expect(screen.queryByTestId('embed-key-org-select')).not.toBeInTheDocument();
     expect(screen.queryByTestId('embed-key-org-admin-select')).not.toBeInTheDocument();
     expect(screen.queryByTestId('embed-key-org-empty')).not.toBeInTheDocument();
-  });
-
-  it('marks rows bound to a model-less agent with a warning indicator', () => {
-    renderTab();
-    expect(screen.getByTestId('embed-key-row-model-warning-key-4')).toBeInTheDocument();
-  });
-
-  it('shows no row indicator for a key bound to an agent with an explicit model', () => {
-    renderTab();
-    expect(screen.queryByTestId('embed-key-row-model-warning-key-1')).not.toBeInTheDocument();
   });
 
   describe('page frame and toolkit', () => {

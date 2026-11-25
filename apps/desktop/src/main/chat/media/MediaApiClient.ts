@@ -10,9 +10,6 @@ import {
   MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
-  ImageJobRequestSchema,
-  GENERATION_JOB_STATES,
-  type ImageJobRequest,
   type CreateFileUploadResponse,
   type CreateImageJobBody,
   type CreateVideoGenerationBody,
@@ -27,7 +24,9 @@ import {
   type TtsBase64Response,
   type CompletionRunAttribution,
 } from '@bike4mind/common';
+import type { BillingPayer } from '@shared/account';
 import type { ChatToolNotice } from '@shared/chat';
+import { currentBillingPayer } from '../../account/billingPayer';
 import {
   isRunBudgetExhausted,
   isRunNotFound,
@@ -37,15 +36,6 @@ import {
 } from '../completions';
 import { parseMusicModels } from './musicModels';
 
-const studioImageJobSchema = z.object({
-  id: z.string(),
-  groupId: z.string().nullable(),
-  state: z.enum(GENERATION_JOB_STATES),
-  output: z.object({ fileId: z.string().nullable(), contentType: z.string(), bytes: z.number() }).nullable(),
-  error: z.object({ code: z.string(), message: z.string() }).nullable(),
-});
-export type StudioRemoteImageJob = z.infer<typeof studioImageJobSchema>;
-
 /**
  * The orchestration run a turn's paid calls are charged to. Read at call time: the turn drops a
  * run the server refused, and a call made after that must not send it again.
@@ -54,6 +44,8 @@ export interface MediaRun {
   current: () => CompletionRunAttribution | undefined;
   /** A budgeted run is never resent unattributed: that would spend outside the cap. */
   budgeted: boolean;
+  /** The payer the run was minted for. Every call this client makes for the run bills it, not the selection. */
+  payer?: BillingPayer;
   /** Runs when the server no longer knows the run, before any resend. See withRunFallback. */
   onRejected: () => Promise<void>;
 }
@@ -84,37 +76,6 @@ export class MediaToolError extends Error {
   }
 }
 
-// The quest-based image path below (GenerateImageRequest, QuestPoll, isTerminalQuest, generateImage,
-// getQuest) serves only StudioGenerationService's legacy branch (a request without `mode`, and jobs it
-// saved with a quest id). Chat image generation uses the /api/v1/image-jobs methods. Remove these when
-// Studio's legacy branch moves onto image jobs, before the quest routes' sunset (2027-02-17).
-
-/** POST /api/ai/generate-image, narrowed to what this client sends. */
-export interface GenerateImageRequest {
-  prompt: string;
-  model: string;
-  size?: string;
-  prompt_resolution?: 'auto' | 'literal';
-  /** Notebook to file the generation under; the server creates one when this is absent. */
-  sessionId?: string;
-  sessionName?: string;
-}
-
-/** The subset of the quest poll this client reads. Extra fields on the wire are ignored. */
-export interface QuestPoll {
-  id: string;
-  status?: string;
-  /** 'error' is the only reliable failure signal: a failed quest still polls 200 with status 'done'. */
-  type?: string;
-  errorCode?: string;
-  sessionId?: string;
-  reply?: string;
-  /** Bare generated-file basenames, e.g. `<uuid>.png`. */
-  images?: string[];
-  /** The same files with short-lived presigned URLs (about an hour); empty only on an older server. */
-  files?: { name: string; url: string; isImage: boolean; isAudio: boolean }[];
-}
-
 export interface FetchedBytes {
   bytes: Buffer;
   contentType: string;
@@ -138,12 +99,13 @@ const TIMEOUT_MS = {
   video: 300_000,
 };
 
-// Anything else - 'running', 'pending', an absent status on a freshly queued quest - is still in flight.
-const TERMINAL_STATUSES = new Set(['done', 'stopped']);
-
-export function isTerminalQuest(quest: QuestPoll): boolean {
-  return !!quest.status && TERMINAL_STATUSES.has(quest.status);
-}
+/**
+ * The payer each Idempotency-Key was first sent with. The server scopes a key to the billed account,
+ * so a retry that re-read a since-switched payer would start a second, differently billed job.
+ * Module-wide because callers build a fresh client per submit; bounded, oldest evicted first.
+ */
+const PAYER_BY_IDEMPOTENCY_KEY = new Map<string, BillingPayer>();
+const PAYER_BY_IDEMPOTENCY_KEY_LIMIT = 500;
 
 /**
  * The b4m generation endpoints this client calls, over the app's authenticated session.
@@ -154,9 +116,11 @@ export function isTerminalQuest(quest: QuestPoll): boolean {
  * the CLI's own ApiClient and config store; this one takes the desktop app's AuthenticatedApiClient.
  */
 export class MediaApiClient {
+  /** `getPayer` is read per submit (see `payer()`), so a switch applies to this client's next call. */
   constructor(
     private readonly api: AuthenticatedApiClient,
-    private readonly run?: MediaRun
+    private readonly run?: MediaRun,
+    private readonly getPayer: () => BillingPayer | Promise<BillingPayer> = currentBillingPayer
   ) {}
 
   /**
@@ -180,69 +144,32 @@ export class MediaApiClient {
     );
   }
 
-  async createStudioImages(request: ImageJobRequest, count: number, key: string) {
-    const body = { request: ImageJobRequestSchema.parse(request), count: z.number().int().min(1).max(4).parse(count) };
-    return z.object({ groupId: z.string(), jobs: z.array(studioImageJobSchema).min(1).max(4) }).parse(
-      await this.api.post<unknown>('/api/studio/image-jobs', body, {
-        timeout: TIMEOUT_MS.submit,
-        headers: { 'Idempotency-Key': key },
-      })
-    );
-  }
-
-  async listStudioImages(cursor?: string) {
-    const query = new URLSearchParams({ limit: '100', ...(cursor ? { cursor } : {}) });
-    return z
-      .object({ data: z.array(studioImageJobSchema), next_cursor: z.string().nullable() })
-      .parse(await this.api.get<unknown>(`/api/studio/image-jobs?${query}`, { timeout: TIMEOUT_MS.download }));
-  }
-
   /**
-   * Start an image job. Returns as soon as it is queued; the image renders server-side.
-   * `idempotencyKey` makes a retried submit of the same call return the same job, not a second bill.
+   * Start image jobs: `count` of them sharing a group id, one image each. Returns as soon as they are queued; the
+   * images render server-side. `idempotencyKey` makes a retried submit return the same jobs, not a second bill.
    */
-  async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
+  async createImageJobGroup(
+    body: CreateImageJobBody,
+    idempotencyKey: string
+  ): Promise<{ group_id: string; data: PublicImageJob[] }> {
     try {
+      const payer = await this.payer('/api/v1/image-jobs', idempotencyKey);
       const response = await this.withRun(run =>
         this.api.post<unknown>(
           '/api/v1/image-jobs',
-          { ...body, ...run },
+          { ...body, ...payer, ...run },
           { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
         )
       );
-      return CreateImageJobResponseSchema.parse(response).data;
+      return CreateImageJobResponseSchema.parse(response);
     } catch (error) {
       throw toPaidCallError(error, 'Image generation');
     }
   }
 
-  /**
-   * Queue a quest-based image generation (Studio's legacy branch only). Returns the quest to poll,
-   * not an image: the route hands the request to a worker and answers immediately.
-   */
-  async generateImage(request: GenerateImageRequest): Promise<{ questId: string; remoteSessionId?: string }> {
-    try {
-      const response = await this.withRun(run =>
-        this.api.post<{ quest?: { id?: string }; session?: { id?: string } }>(
-          '/api/ai/generate-image',
-          { ...request, ...run },
-          { timeout: TIMEOUT_MS.submit }
-        )
-      );
-      const questId = response?.quest?.id;
-      if (!questId) throw new MediaToolError('The server accepted the request but returned no job to follow.');
-      return { questId, remoteSessionId: response?.session?.id };
-    } catch (error) {
-      throw toPaidCallError(error, 'Image generation');
-    }
-  }
-
-  async getQuest(questId: string): Promise<QuestPoll> {
-    try {
-      return await this.api.get<QuestPoll>(`/api/quests/${encodeURIComponent(questId)}`);
-    } catch (error) {
-      throw toMediaError(error, 'Image generation');
-    }
+  /** createImageJobGroup for a caller that only follows the jobs. */
+  async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
+    return (await this.createImageJobGroup(body, idempotencyKey)).data;
   }
 
   async getImageJob(jobId: string, signal?: AbortSignal): Promise<PublicImageJob> {
@@ -301,10 +228,11 @@ export class MediaApiClient {
    */
   async createVideoGeneration(body: CreateVideoGenerationBody, idempotencyKey: string): Promise<VideoGeneration> {
     try {
+      const payer = await this.payer('/api/v1/video-generations', idempotencyKey);
       const response = await this.withRun(run =>
         this.api.post<unknown>(
           '/api/v1/video-generations',
-          { ...body, ...run },
+          { ...body, ...payer, ...run },
           { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
         )
       );
@@ -410,8 +338,13 @@ export class MediaApiClient {
    */
   async synthesizeSpeech(request: Omit<TTSRequest, 'encoding'>): Promise<TtsBase64Response> {
     try {
+      const payer = await this.payer();
       const body = await this.withRun(run =>
-        this.api.post<unknown>('/api/ai/tts', { ...request, ...run, encoding: 'base64' }, { timeout: TIMEOUT_MS.audio })
+        this.api.post<unknown>(
+          '/api/ai/tts',
+          { ...request, ...payer, ...run, encoding: 'base64' },
+          { timeout: TIMEOUT_MS.audio }
+        )
       );
       return ttsBase64ResponseSchema.parse(body);
     } catch (error) {
@@ -419,8 +352,12 @@ export class MediaApiClient {
     }
   }
 
-  generateSoundEffect(request: SoundEffectsRequest): Promise<GeneratedAudio> {
-    return this.postForAudio('/api/ai/sound-effects', request, 'Sound-effect generation');
+  async generateSoundEffect(request: SoundEffectsRequest): Promise<GeneratedAudio> {
+    return this.postForAudio(
+      '/api/ai/sound-effects',
+      { ...request, ...(await this.payer()) },
+      'Sound-effect generation'
+    );
   }
 
   /** Music models this caller can use right now, in the server's order. */
@@ -442,10 +379,11 @@ export class MediaApiClient {
    */
   async createMusicGeneration(body: CreateMusicGenerationBody, idempotencyKey: string): Promise<MusicGeneration> {
     try {
+      const payer = await this.payer('/api/v1/music-generations', idempotencyKey);
       const response = await this.withRun(run =>
         this.api.post<unknown>(
           '/api/v1/music-generations',
-          { ...body, ...run },
+          { ...body, ...payer, ...run },
           { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
         )
       );
@@ -478,6 +416,25 @@ export class MediaApiClient {
     } catch (error) {
       throw toMediaError(error, 'Cancelling the song');
     }
+  }
+
+  /**
+   * Null is stated, never omitted: an omitted payer bills the home organization on most media routes.
+   * With an Idempotency-Key, the payer the key was first sent with is reused for its retries.
+   */
+  private async payer(path?: string, idempotencyKey?: string): Promise<BillingPayer> {
+    const keyed = path && idempotencyKey ? `${path}|${idempotencyKey}` : null;
+    const remembered = keyed ? PAYER_BY_IDEMPOTENCY_KEY.get(keyed) : undefined;
+    if (remembered) return remembered;
+    const payer: BillingPayer = { organization_id: (this.run?.payer ?? (await this.getPayer())).organization_id };
+    if (keyed) {
+      PAYER_BY_IDEMPOTENCY_KEY.set(keyed, payer);
+      if (PAYER_BY_IDEMPOTENCY_KEY.size > PAYER_BY_IDEMPOTENCY_KEY_LIMIT) {
+        const oldest = PAYER_BY_IDEMPOTENCY_KEY.keys().next().value;
+        if (oldest !== undefined) PAYER_BY_IDEMPOTENCY_KEY.delete(oldest);
+      }
+    }
+    return payer;
   }
 
   /**

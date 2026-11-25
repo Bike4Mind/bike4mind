@@ -7,6 +7,7 @@ import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { requireConfiguredSecret } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { warnIfPlaintextSecretsOptOut } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
 import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
@@ -80,7 +81,7 @@ interface DrainLogger {
  * Wait for the tracked in-flight work to settle, bounded by `drainTimeoutMs`. Exported
  * so a test can drive the cut-off branch without booting the service. Returns whether the
  * work drained or the window won; on the cut-off branch it emits an error naming the count
- * so LiveOps triage sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
+ * so LiveOps sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
  * line this replaces was invisible to the ERROR-level log subscription).
  */
 export async function drainInFlight({
@@ -175,6 +176,7 @@ async function main() {
   registerProcessErrorHandlers(bootLogger, 'ChatCompletion');
 
   registerSecretsAtRest(bootLogger, Config.SECRET_ENCRYPTION_KEY, Config.SECRET_ENCRYPTION_KEY_PREVIOUS);
+  warnIfPlaintextSecretsOptOut(bootLogger);
 
   const app = createApp();
 

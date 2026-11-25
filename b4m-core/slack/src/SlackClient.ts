@@ -90,6 +90,8 @@ export interface SlackUser {
   id: string;
   name: string;
   real_name?: string;
+  /** Profile display name; for a bot user this is the name shown in mentions */
+  display_name?: string;
   email?: string;
   /** User's timezone as IANA string (e.g., "America/Los_Angeles") */
   tz?: string;
@@ -983,6 +985,7 @@ export class SlackClient {
         id: result.user.id || userId,
         name: result.user.name || userId,
         real_name: result.user.real_name,
+        display_name: result.user.profile?.display_name,
         email: result.user.profile?.email,
         tz: result.user.tz,
         is_admin: result.user.is_admin,
@@ -1097,16 +1100,14 @@ export class SlackClient {
         url: url.substring(0, 50) + '...',
       });
 
-      // Use axios to download file with Slack bot token authorization
-      const axios = await import('axios');
-      const response = await axios.default.get(url, {
+      const response = await fetch(url, {
         headers: {
           Authorization: `Bearer ${this.client.token}`,
         },
-        responseType: 'arraybuffer',
       });
+      if (!response.ok) throw new Error(`Slack file download failed with status ${response.status}`);
 
-      const buffer = Buffer.from(response.data);
+      const buffer = Buffer.from(await response.arrayBuffer());
       this.logger.info('File downloaded successfully', {
         fileName,
         sizeBytes: buffer.length,

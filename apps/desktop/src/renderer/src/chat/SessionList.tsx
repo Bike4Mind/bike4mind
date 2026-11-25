@@ -66,7 +66,7 @@ import {
   ArtifactIcon,
   CheckIcon,
   ChevronIcon,
-  ModelsIcon,
+  MissionControlIcon,
   MoreIcon,
   PanelLeftIcon,
   PlusIcon,
@@ -74,13 +74,14 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { foldedParents, toggleFolded, useFoldedParents, useNestedSessions } from './nestedSessions';
-import { ModeSwitcher } from './ModeSwitcher';
+import { matchSessionShortcut } from './rail/shortcuts';
 import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
 import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
 import { WORKING_COLOR_VAR } from './sessionStatus';
 import { PREPARING_WORKTREE } from './chipState';
+import { SESSION_DRAG_TYPE } from './sessionDrag';
 import {
   clampSidebarWidth,
   readSidebarWidth,
@@ -1091,9 +1092,6 @@ function CappedSessionRows({
   );
 }
 
-/** A type of our own, so a drag of text, a link or files (see useFileDrop) is never taken for a row. */
-const SESSION_DRAG_TYPE = 'application/x-b4m-session';
-
 /** Where a dragged row would land: a section by id, or the default groups, out of any section. */
 type DropTarget = { kind: 'section'; sectionId: string } | { kind: 'default' };
 
@@ -1101,18 +1099,15 @@ type DropTarget = { kind: 'section'; sectionId: string } | { kind: 'default' };
 const OWN_CONTEXT_TARGETS = '[data-testid="chat-session-item"], input, textarea, [role="menu"]';
 
 /**
- * The sidebar: primary nav, a pinned section, then the sessions for the current mode - Code
- * sessions under a header per project, Chat sessions in one flat list - and the account strip.
+ * The sidebar of the Chat and Code places: primary nav, a pinned section, then the sessions for
+ * the current mode - Code sessions under a header per project, Chat sessions in one flat list.
  *
- * Adapted from Claude Code desktop's layout, with its nav entries dropped rather than shipped
- * as dead links: "Customize" and "More" were removed on the user's instruction. "Artifacts"
- * came back once replies started producing them, and "Customize" once there was an app setting
- * to put in it. New behaves identically in both modes.
+ * Configuration (Customize, Models) and the account live in the rail's avatar menu, not here:
+ * this column lists where the user works. New behaves identically in both modes.
  */
 export function SessionList({
   sessions,
   mode,
-  onModeChange,
   loading,
   activeId,
   statuses,
@@ -1122,6 +1117,7 @@ export function SessionList({
   onSelect,
   onCreate,
   onOpenArtifacts,
+  onOpenMissionControl,
   onCreateInProject,
   onCreateInSection,
   onDelete,
@@ -1137,14 +1133,10 @@ export function SessionList({
   onDismissSectionError,
   userSections,
   sectionActions,
-  customize,
-  onOpenModels,
   syncHints,
-  footer,
 }: {
   sessions: ChatSessionSummary[];
   mode: ChatSessionMode;
-  onModeChange: (mode: ChatSessionMode) => void;
   loading: boolean;
   activeId: string | null;
   /** What each session is doing, pushed from main. Absent means idle. */
@@ -1156,6 +1148,8 @@ export function SessionList({
   onSelect: (sessionId: string) => void;
   onCreate: () => void;
   onOpenArtifacts: () => void;
+  /** Every orchestration at a glance (missionControl/MissionControl.tsx). */
+  onOpenMissionControl?: () => void;
   onCreateInProject: (directory: string) => void;
   /** New session that starts inside the user section with this id. */
   onCreateInSection: (sectionId: string) => void;
@@ -1175,16 +1169,12 @@ export function SessionList({
   /** The user's own sections and which sessions sit in them; see useSidebarSections. */
   userSections: SidebarSectionsState;
   sectionActions: SidebarSectionActions;
-  /** The Customize nav row, which carries its own attention badge. */
-  customize?: ReactNode;
-  onOpenModels?: () => void;
   /** The sidebar's sync hint; `fallback` is the plain empty-list line, for it to replace or keep. */
   syncHints?: (empty: boolean, fallback: ReactNode) => ReactNode;
-  footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
   const { results: historyResults, error: historyError } = useLocalHistory(query, sessions);
-  // Declared above the collapsed rail's early return, so collapsing and re-expanding comes back
+  // Declared above the collapsed early return, so collapsing and re-expanding comes back
   // to the width the user set rather than to the default.
   const [width, setWidth] = useState(readSidebarWidth);
   const [dragging, setDragging] = useState(false);
@@ -1370,14 +1360,23 @@ export function SessionList({
   );
 
   /**
-   * The modifier plus 1-9 opens the nth row, counted the way the sidebar draws them and
-   * filtered the way the search box currently has them. Nothing advertises this any more -
-   * the numbered badges were dropped and the More panel that documented it was removed - but
-   * the bindings themselves still work. Bound on the window rather than the sidebar, because
-   * a user reaching for it is almost always typing in the composer at the time.
+   * Ctrl+1-9 on macOS (Alt+1-9 elsewhere) opens the nth row, counted the way the sidebar draws
+   * them and filtered the way the search box currently has them; the primary modifier plus a
+   * digit picks a place on the rail (see rail/shortcuts.ts). Bound on the window rather than the
+   * sidebar, because a user reaching for it is almost always typing in the composer at the time.
+   * Mod+B is the shell's, since it must work in places that have no session list.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const nth = matchSessionShortcut(event);
+      if (nth !== null) {
+        const session = target.current.ordered[nth - 1];
+        if (!session) return;
+        event.preventDefault();
+        target.current.onSelect(session.id);
+        return;
+      }
+
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
 
       // Mod+Shift+F as well as Mod+K: it is where find-across-everything sits in an editor, and
@@ -1391,30 +1390,13 @@ export function SessionList({
         return;
       }
 
-      if (event.key === 'b' || event.key === 'B') {
-        event.preventDefault();
-        target.current.onToggleCollapsed();
-        return;
-      }
-
       // Focus the search, opening the sidebar first if it is collapsed; the effect below focuses
       // once the input exists.
       if (event.key === 'k' || event.key === 'K') {
         event.preventDefault();
         if (target.current.collapsed) target.current.onToggleCollapsed();
         setFocusRequest(request => request + 1);
-        return;
       }
-
-      // `event.code` rather than `event.key`: on several non-US layouts the digit row only
-      // produces a digit with a modifier already applied, and `key` is then a symbol.
-      const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
-      if (!digit) return;
-
-      const session = target.current.ordered[Number(digit) - 1];
-      if (!session) return;
-      event.preventDefault();
-      target.current.onSelect(session.id);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -1605,34 +1587,8 @@ export function SessionList({
     else sectionActions.rename(nameRequest.sectionId, name);
   };
 
-  if (collapsed) {
-    return (
-      <Stack
-        sx={{
-          width: 44,
-          flexShrink: 0,
-          alignItems: 'center',
-          borderRight: '1px solid',
-          borderColor: 'divider',
-          bgcolor: 'background.level1',
-          height: '100%',
-          pt: 1,
-        }}
-        data-testid="sidebar-rail"
-      >
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          aria-label="Show sidebar"
-          onClick={onToggleCollapsed}
-          data-testid="sidebar-toggle-btn"
-        >
-          <PanelLeftIcon />
-        </IconButton>
-      </Stack>
-    );
-  }
+  // Collapsed, the place rail beside this is all that shows; state above is kept for re-expanding.
+  if (collapsed) return null;
 
   return (
     <Stack
@@ -1664,8 +1620,9 @@ export function SessionList({
         sx={{ right: -2 }}
       />
       <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1.5, pt: 1.5, pb: 1 }}>
-        <ModeSwitcher mode={mode} onChange={onModeChange} />
-        <Box sx={{ flex: 1 }} />
+        <Typography level="title-sm" sx={{ flex: 1, pl: 0.5 }} data-testid="sidebar-place-title">
+          {mode === 'code' ? 'Code' : 'Chat'}
+        </Typography>
         <IconButton
           size="sm"
           variant="plain"
@@ -1685,9 +1642,13 @@ export function SessionList({
         {/* Not scoped to the open session: the list is the server's, so it spans machines and
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
-        {customize}
-        {onOpenModels && (
-          <NavItem icon={<ModelsIcon />} label="Models" onClick={onOpenModels} testId="chat-models-btn" />
+        {onOpenMissionControl && (
+          <NavItem
+            icon={<MissionControlIcon />}
+            label="Mission Control"
+            onClick={onOpenMissionControl}
+            testId="sidebar-mission-control-btn"
+          />
         )}
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
@@ -1972,8 +1933,6 @@ export function SessionList({
       )}
 
       {messageTarget && <MessageSessionDialog session={messageTarget} onClose={() => setMessageTarget(null)} />}
-
-      {footer}
     </Stack>
   );
 }

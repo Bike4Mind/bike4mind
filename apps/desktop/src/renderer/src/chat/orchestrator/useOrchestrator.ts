@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@shared/chat';
+import type { ChatSessionStatus, ChatSessionSummary, SessionBackgroundJobs, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { bufferUntrackedActivity, foldActivity, type AgentActivity } from './activity';
 import {
@@ -96,7 +96,8 @@ export function useOrchestratorRoster(
   sessions: readonly ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   prSummaries: ReadonlyMap<string, PrSummary>,
-  preparing?: ReadonlyMap<string, SessionSetupStep>
+  preparing?: ReadonlyMap<string, SessionSetupStep>,
+  background?: ReadonlyMap<string, SessionBackgroundJobs>
 ): OrchestratorScene {
   const trackedIds = useMemo(() => {
     const ids = descendantIds(sessions, rootId);
@@ -105,8 +106,9 @@ export function useOrchestratorRoster(
   }, [sessions, rootId]);
   const activity = useAgentActivity(trackedIds);
   const agents = useMemo(
-    () => (rootId === null ? [] : buildRoster({ sessions, statuses, preparing, activity, prSummaries, rootId })),
-    [rootId, sessions, statuses, preparing, activity, prSummaries]
+    () =>
+      rootId === null ? [] : buildRoster({ sessions, statuses, preparing, background, activity, prSummaries, rootId }),
+    [rootId, sessions, statuses, preparing, background, activity, prSummaries]
   );
   const status = rootId === null ? undefined : statuses.get(rootId);
   const rootActivity = rootId === null ? undefined : activity.get(rootId);

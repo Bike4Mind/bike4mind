@@ -26,9 +26,14 @@ const mocks = vi.hoisted(() => ({
   logEvent: vi.fn(),
   findProject: vi.fn(),
   sendToClient: vi.fn().mockResolvedValue(undefined),
+  resolveAddressedInvite: vi.fn(),
 }));
 vi.mock('@bike4mind/services', () => ({
-  sharingService: { acceptInvite: mocks.acceptInvite, refuseWholeInvite: mocks.refuseWholeInvite },
+  sharingService: {
+    acceptInvite: mocks.acceptInvite,
+    refuseWholeInvite: mocks.refuseWholeInvite,
+    resolveAddressedInvite: mocks.resolveAddressedInvite,
+  },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => false) }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -90,6 +95,7 @@ const call = async (body: unknown) => {
 describe('POST /api/invites/bulk', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveAddressedInvite.mockResolvedValue(null);
     mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) => accepted(invite(id)));
     mocks.refuseWholeInvite.mockImplementation(async (_user: unknown, { id }: { id: string }) => invite(id));
   });
@@ -170,6 +176,20 @@ describe('POST /api/invites/bulk', () => {
     expect(mocks.refuseWholeInvite.mock.calls[0][0]).toMatchObject({ id: 'u1' });
     expect(body.results[1]).toEqual({ id: ID_B, ok: false, error: 'Invite not found' });
     expect(body.okCount).toBe(1);
+  });
+
+  it.each(['accept', 'refuse'])('reports a flag-off Space key as a not-found item error on %s', async action => {
+    mocks.resolveAddressedInvite.mockImplementation(async (key: string) =>
+      key === ID_A ? { id: ID_A, type: 'Space' } : null
+    );
+
+    const body = (await call({ action, ids: [ID_A, ID_B] }))._getJSONData();
+
+    expect(body.results[0]).toEqual({ id: ID_A, ok: false, error: 'Invite not found' });
+    expect(body.results[1]).toMatchObject({ id: ID_B, ok: true });
+    expect(mocks.acceptInvite).not.toHaveBeenCalledWith('u1', { id: ID_A }, expect.anything());
+    expect(mocks.refuseWholeInvite).not.toHaveBeenCalledWith(expect.anything(), { id: ID_A }, expect.anything());
+    expect(reserveInviteAccept).toHaveBeenCalledTimes(action === 'accept' ? 1 : 0);
   });
 
   it('still returns the committed results when the refetch notification throws', async () => {

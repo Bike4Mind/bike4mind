@@ -120,6 +120,7 @@ describe('PrReportDialog send-state machine', () => {
     // In flight: nothing that could race the continuation or abandon it is usable.
     await waitFor(() => expect(screen.getByTestId('pr-report-regenerate-btn')).toBeDisabled());
     expect(screen.getByTestId('pr-report-close-btn')).toBeDisabled();
+    expect(screen.getByTestId('pr-report-dialog-close-btn')).toBeDisabled();
     expect(screen.getByTestId('pr-report-send-btn')).toBeDisabled();
 
     await act(async () => {
@@ -131,6 +132,7 @@ describe('PrReportDialog send-state machine', () => {
     expect(await screen.findByTestId('pr-report-confirm-resend-btn')).toBeInTheDocument();
     expect(screen.getByTestId('pr-report-regenerate-btn')).toBeDisabled();
     expect(screen.getByTestId('pr-report-close-btn')).toBeDisabled();
+    expect(screen.getByTestId('pr-report-dialog-close-btn')).toBeDisabled();
   });
 
   it('IS dismissable via Escape when idle (control - proves the gated cases are real)', async () => {

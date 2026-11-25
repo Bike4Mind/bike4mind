@@ -318,6 +318,53 @@ describe('DataLakeProposalRepository', () => {
     expect((await DataLakeProposalModel.findById(declined.id))?.status).toBe('declined');
   });
 
+  it('unapproves an approved proposal back to pending, clearing the file and auto-admission', async () => {
+    const created = await create();
+    await repo.claimForReview(created.id, review());
+    await repo.recordAdmission(created.id, 'file-1', 'example.com');
+
+    const result = await repo.unapprove(created.id);
+
+    expect(result.unapproved).toBe(true);
+    const stored = await DataLakeProposalModel.findById(created.id);
+    expect(stored?.status).toBe('pending');
+    expect(stored?.priorDisposition).toBe('approved');
+    expect(stored?.reviewedByUserId).toBeNull();
+    expect(stored?.admittedFabFileId).toBeNull();
+    expect(stored?.autoAdmission ?? null).toBeNull();
+    if (result.unapproved) expect(result.previous.admittedFabFileId).toBe('file-1');
+  });
+
+  it('unapproves only an approved proposal', async () => {
+    const created = await create();
+
+    expect(await repo.unapprove(created.id)).toEqual({ unapproved: false, reason: 'not_approved' });
+  });
+
+  it('refuses to unapprove when a pending row for the same source appeared meanwhile', async () => {
+    const approved = await create();
+    await repo.claimForReview(approved.id, review());
+    await create({ textHash: 'hash-b' });
+
+    expect(await repo.unapprove(approved.id)).toEqual({ unapproved: false, reason: 'pending_exists' });
+    expect((await DataLakeProposalModel.findById(approved.id))?.status).toBe('approved');
+  });
+
+  it('rolls an unapprove back to the approved row it came from', async () => {
+    const created = await create();
+    await repo.claimForReview(created.id, review());
+    await repo.recordAdmission(created.id, 'file-1');
+    const result = await repo.unapprove(created.id);
+    if (!result.unapproved) throw new Error('expected unapprove to apply');
+
+    await repo.rollbackUnapprove(result.previous);
+
+    const stored = await DataLakeProposalModel.findById(created.id);
+    expect(stored?.status).toBe('approved');
+    expect(stored?.admittedFabFileId).toBe('file-1');
+    expect(stored?.reviewedByUserId).toBe('reviewer-1');
+  });
+
   it('lists a lake queue newest first, and narrows by status', async () => {
     // Explicit, distinct createdAt values: two back-to-back inserts can land in the same millisecond,
     // which leaves `sort({ createdAt: -1 })` free to order them either way and the assertion below

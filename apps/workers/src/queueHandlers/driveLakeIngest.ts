@@ -75,7 +75,6 @@ import { finalizeBatchIfComplete } from '@bike4mind/server-utils/dataLakes/dataL
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { z, ZodError } from 'zod';
 import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
@@ -1335,7 +1334,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
 
         const ext = mime.extension(mimeType);
-        const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+        const fileKey = `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`;
         const tags = await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
 
         const fabFile = await ingestLakeFile({

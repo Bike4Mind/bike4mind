@@ -24,6 +24,10 @@ import { redeemDesktopWebSessionCode } from '@server/auth/desktopWebSession';
 const RedeemBodySchema = z.strictObject({ code: z.string().min(1).max(64) });
 const DESKTOP_WEB_SESSION_LANDING_PATH = '/notebooks';
 
+// Next.js API requests carry no Express helpers such as req.is(), so read the media type directly.
+const hasJsonBody = (req: Request): boolean =>
+  req.headers['content-type']?.split(';')[0]?.trim().toLowerCase() === 'application/json';
+
 /**
  * True when this browser already holds a live web session for `userId`, so no new one is needed.
  * Any origin qualifies: the window's storage partition is Desktop-only, and it is the same user.
@@ -46,7 +50,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
       // (login CSRF). Desktop's own navigation reports `none` and posts JSON, which a plain cross-site
       // form cannot send, so a missing Fetch Metadata header or any other body type is refused too.
       const fetchSite = req.headers['sec-fetch-site'];
-      if ((fetchSite !== 'none' && fetchSite !== 'same-origin') || !req.is('application/json')) {
+      if ((fetchSite !== 'none' && fetchSite !== 'same-origin') || !hasJsonBody(req)) {
         return res.status(403).json({ error: 'Cross-site sign-in is not allowed' });
       }
       const land = () => res.redirect(303, DESKTOP_WEB_SESSION_LANDING_PATH);

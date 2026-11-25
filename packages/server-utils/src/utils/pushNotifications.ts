@@ -46,6 +46,33 @@ export async function publishPushNotification(
   }
 }
 
+/**
+ * The clearing push for an approval that was handled (approved, denied or lapsed) on any surface. It
+ * reuses the original push's collapse id (`approval:<questId>`), so it replaces the delivered
+ * notification on the lock screen instead of leaving buttons that can only fail.
+ */
+export async function publishApprovalResolvedPush(
+  target: { userId: string; sessionId: string; questId: string; pendingActionTs: number },
+  outcome: NonNullable<PushNotificationEvent['approvalResolved']>,
+  logger: Pick<Logger, 'warn'>
+): Promise<void> {
+  await publishPushNotification(
+    {
+      userId: target.userId,
+      category: 'approval_needed',
+      title: 'Approval handled',
+      body: 'This request has been handled.',
+      deepLink: sessionDeepLink(target.sessionId),
+      collapseId: `approval:${target.questId}`,
+      questId: target.questId,
+      sessionId: target.sessionId,
+      pendingActionTs: target.pendingActionTs,
+      approvalResolved: outcome,
+    },
+    logger
+  );
+}
+
 /** The Connection row fields that decide whether a socket means "the user is watching". */
 export type WatchedConnectionRow = {
   source?: string;

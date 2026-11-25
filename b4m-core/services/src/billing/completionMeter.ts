@@ -11,6 +11,8 @@ import {
 } from '@bike4mind/llm-adapters';
 import { BadRequestError, DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
 
+export { priceCompletionUsage, timedOutCompletionUsageFields } from './priceCompletionUsage';
+
 export type CompletionUsage = Pick<
   CompletionInfo,
   'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens' | 'turnUsage'

@@ -14,7 +14,8 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  rejectsTransparentBackground,
+  supportsTransparentBackgroundByCatalog,
+  transparentBackgroundUnsupportedMessage,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
   IMAGES_PER_EDIT_REQUEST,
@@ -36,7 +37,6 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
-import { v4 as uuidv4 } from 'uuid';
 import { ExpectedImageGenerationError, NotFoundError, logImageGenerationFailure } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
@@ -246,7 +246,7 @@ export async function processAndStoreImage(
   const buffer = await downloadImageAsBuffer(imageUrl);
   const fileType = await fileTypeFromBuffer(buffer);
   // Same fallback as the image_generation tool: never store a `${uuid}.undefined` key.
-  const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
+  const filename = `${crypto.randomUUID()}.${fileType?.ext ?? 'png'}`;
   const mimeType = fileType?.mime ?? 'image/png';
 
   // Block moderated content BEFORE upload - see moderateToolImage doc comment.
@@ -258,7 +258,14 @@ export async function processAndStoreImage(
   await saveGeneratedAssetFromTool(context, {
     bytes: buffer,
     contentType: mimeType,
-    generation: { generator: 'image', provider, modelId, jobId: uuidv4(), prompt, ...(request && { request }) },
+    generation: {
+      generator: 'image',
+      provider,
+      modelId,
+      jobId: crypto.randomUUID(),
+      prompt,
+      ...(request && { request }),
+    },
     ...(derivedFrom?.length && { derivedFrom }),
     generatedOutputKey: path,
   });
@@ -413,11 +420,8 @@ Please select a supported edit model in your image settings modal.`;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const output_format = toolOutputFormat ?? imageConfig?.output_format ?? 'png';
       const background = toolBackground ?? imageConfig?.background;
-      // Step any gpt-image-2 edit model down to gpt-image-1.5 when transparency is
-      // requested: gpt-image-2 rejects background: 'transparent' outright, and the
-      // client's own default edit model is gpt-image-2, so this is reachable by default.
-      if (background === 'transparent' && rejectsTransparentBackground(editModel)) {
-        editModel = ImageModels.GPT_IMAGE_1_5;
+      if (background === 'transparent' && !supportsTransparentBackgroundByCatalog(editModel)) {
+        return `Error: ${transparentBackgroundUnsupportedMessage(editModel)}`;
       }
       const refusal = await toolModelRefusal(context, await createToolModelAdmission(context), editModel, 'edit_image');
       if (refusal) return refusal;

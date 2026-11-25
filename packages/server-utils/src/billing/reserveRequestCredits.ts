@@ -1,3 +1,4 @@
+import type { ClientSession } from 'mongoose';
 import {
   CreditHolderType,
   IUserDocument,
@@ -83,6 +84,8 @@ export const holdAdapters = {
 };
 
 type ReserveRequestCreditsParams = {
+  /** Runs inside the paid reservation transaction before any balance or budget movement; no session on free paths. */
+  admit?: (session?: ClientSession) => Promise<void>;
   req: BillingRequest;
   requiredCredits: number;
   /** The enforceCredits admin setting; unset reads as off, as it always has on these routes. */
@@ -130,6 +133,7 @@ type ReserveRequestCreditsParams = {
  */
 export async function reserveRequestCredits({
   req,
+  admit,
   requiredCredits,
   enforceCredits,
   featureLabel,
@@ -166,13 +170,15 @@ export async function reserveRequestCredits({
   });
 
   if (!enforceCredits || requiredCredits <= 0) {
+    await admit?.();
     return { ownerId, ownerType, reservedCredits: 0, hold: null, refund: async () => {}, settle: async () => 0 };
   }
 
   // One transaction, so the balance never moves without a pending row the sweep can find, and a row
   // never exists for a balance that did not move.
   const { hold, pending } = await observeCreditHold({ ownerId, ownerType, featureLabel, lifecycle: 'request' }, () =>
-    withTransaction(async () => {
+    withTransaction(async session => {
+      await admit?.(session);
       // First, so a refused claim moves no balance; rolled back with the hold if anything below fails.
       const runClaim = run ? await claimPaidCallRunBudget(run.runId, requiredCredits) : undefined;
       const hold = await creditService.holdCredits(

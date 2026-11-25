@@ -319,6 +319,8 @@ export const authHolders = {
       { path: 'throttle.changedBy', matchBy: 'userId', action: 'anonymize' },
       // The notebook owner whose shared page this account signed up from.
       { path: 'signupLanding.notebookOwnerId', matchBy: 'userId', action: 'anonymize' },
+      // The admin who released an automated hold.
+      { path: 'interventionHolds.releasedBy', matchBy: 'userId', action: 'anonymize' },
     ],
     // Declared `ref: 'User'`, but `recordReferrals` stores the ids of the invites this user created.
     unrelatedPaths: ['regInvites'],
@@ -353,6 +355,7 @@ export const authHolders = {
       'riskScore',
       'riskSignals',
       'riskEvidence',
+      'interventionHolds.reason',
       'signupMeta',
       // The admin who wrote a note about this person; `AdminUserNote` withholds `author.name` the same way.
       'userNotes.userName',

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
@@ -14,6 +14,7 @@ const fns = vi.hoisted(() => ({
   query: vi.fn(),
   repin: { mutate: vi.fn(), isPending: false },
   setEnabled: { mutate: vi.fn(), isPending: false },
+  setApproval: { mutate: vi.fn(), isPending: false },
   remove: { mutate: vi.fn(), isPending: false },
   dialog: vi.fn(),
   toastError: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   },
   useRepinCallableFunction: () => fns.repin,
   useSetCallableFunctionEnabled: () => fns.setEnabled,
+  useSetCallableFunctionApproval: () => fns.setApproval,
   useDeleteCallableFunction: () => fns.remove,
 }));
 vi.mock('../SaveFunctionDialog', () => ({
@@ -37,6 +39,12 @@ vi.mock('../SaveFunctionDialog', () => ({
   },
 }));
 vi.mock('sonner', () => ({ toast: { error: fns.toastError } }));
+// Its own behavior is in PromoteFunctionSection.test.tsx; here only where it mounts and why it is blocked.
+vi.mock('../PromoteFunctionSection', () => ({
+  default: ({ blocked }: { blocked: string | null }) => (
+    <div data-testid="promote-section-stub">{blocked ?? 'ready'}</div>
+  ),
+}));
 
 import PythonFunctionPanel, { type PythonFunctionSave } from '../PythonFunctionPanel';
 
@@ -472,8 +480,8 @@ describe('PythonFunctionPanel tests', () => {
     expect(callFunction).toHaveBeenNthCalledWith(2, CODE, STEEL_INPUT, []);
     expect(callFunction).toHaveBeenNthCalledWith(3, CODE, { ...STEEL_INPUT, span: 2 }, []);
     expect(screen.getAllByTestId('python-function-test-row').map(row => row.textContent)).toEqual([
-      '4 m steel beamPassed',
-      '2 m steel beamPassed',
+      '4 m steel beamPassed (2 ms)',
+      '2 m steel beamPassed (2 ms)',
     ]);
     expect(screen.queryByTestId('python-function-test-failure')).toBeNull();
   });
@@ -611,6 +619,7 @@ describe('PythonFunctionPanel save controls', () => {
     fns.query.mockReset();
     fns.repin = { mutate: vi.fn(), isPending: false };
     fns.setEnabled = { mutate: vi.fn(), isPending: false };
+    fns.setApproval = { mutate: vi.fn(), isPending: false };
     fns.remove = { mutate: vi.fn(), isPending: false };
     fns.dialog.mockReset();
     fns.toastError.mockReset();
@@ -706,6 +715,39 @@ describe('PythonFunctionPanel save controls', () => {
     expect(screen.getByTestId('python-function-delete-btn').textContent).toBe('Delete');
   });
 
+  it('mounts promotion under a saved tool, blocked while the tool is off or pinned to another version', async () => {
+    fns.saved = { data: savedView(), isLoading: false };
+    await renderReady(TARGET);
+    expect(screen.getByTestId('promote-section-stub').textContent).toBe('ready');
+    cleanup();
+
+    fns.saved = { data: savedView({ enabled: false, status: 'disabled' }), isLoading: false };
+    await renderReady(TARGET);
+    expect(screen.getByTestId('promote-section-stub').textContent).toBe('Turn the tool on to promote it.');
+    cleanup();
+
+    fns.saved = { data: newerVersion(), isLoading: false };
+    await renderReady({ artifactId: 'artifact-1', version: 4, blocked: null });
+    expect(screen.getByTestId('promote-section-stub').textContent).toBe(
+      'Promotion runs the saved version 3. Update the tool to promote this version.'
+    );
+  });
+
+  it('live: says so in the status, and shows no promotion once the artifact is deleted', async () => {
+    fns.saved = { data: savedView({ state: 'live', status: 'live' }), isLoading: false };
+    await renderReady(TARGET);
+    expect(statusText()).toBe('Live tool, pinned to version 3.');
+    expect(screen.getByTestId('python-function-offer-cap').textContent).toBe(
+      'Chat and agent runs offer up to 20 of your live tools, oldest first.'
+    );
+    cleanup();
+
+    fns.saved = { data: savedView({ status: 'source_deleted' }), isLoading: false };
+    await renderReady(TARGET);
+    expect(screen.queryByTestId('promote-section-stub')).toBeNull();
+    expect(screen.queryByTestId('python-function-offer-cap')).toBeNull();
+  });
+
   it('a newer version is available: says so and Update repins to the version shown with the contract read', async () => {
     fns.saved = { data: newerVersion(), isLoading: false };
     await renderReady({ artifactId: 'artifact-1', version: 4, blocked: null });
@@ -753,6 +795,18 @@ describe('PythonFunctionPanel save controls', () => {
     fireEvent.click(screen.getByTestId('python-function-enable-btn'));
 
     expect(fns.setEnabled.mutate).toHaveBeenCalledWith({ id: 'fn-1', enabled: false }, expect.anything());
+  });
+
+  it('shows when chat runs the tool and sets Always ask', async () => {
+    fns.saved = { data: savedView(), isLoading: false };
+    await renderReady(TARGET);
+
+    const select = screen.getByTestId('python-function-approval');
+    expect(select.textContent).toBe('Run without asking');
+    fireEvent.click(select);
+    fireEvent.click(await screen.findByTestId('python-function-approval-always_ask'));
+
+    expect(fns.setApproval.mutate).toHaveBeenCalledWith({ id: 'fn-1', approval: 'always_ask' }, expect.anything());
   });
 
   it.each([
@@ -961,6 +1015,21 @@ describe('PythonFunctionPanel save controls', () => {
       expect(statusText()).toBe(
         'A newer version is available. This tool is pinned to version 3, and the artifact is at version 4.'
       );
+    });
+
+    it('for a promoted tool, names the promotion and updates anyway to a draft only when confirmed', async () => {
+      const promotedRefusal = refusal();
+      Object.assign(promotedRefusal.response.data, { promotedSeq: 2 });
+      await refuseUpdate(promotedRefusal);
+
+      const dialog = await screen.findByTestId('breaking-change-dialog');
+      expect(within(dialog).getByTestId('breaking-change-dialog-promoted').textContent).toBe(
+        'Version 4 changes the contract of beam_midspan_deflection since promotion 2 in ways that could break its callers. Updating anyway returns the tool to a draft, and promotion will refuse this version.'
+      );
+      expect(fns.repin.mutate).toHaveBeenCalledTimes(1);
+      fireEvent.click(within(dialog).getByTestId('breaking-change-dialog-accept-btn'));
+      expect(fns.repin.mutate).toHaveBeenCalledTimes(2);
+      expect(fns.repin.mutate.mock.calls[1]![0]).toMatchObject({ expectedVersion: 4, acceptBreaking: true });
     });
 
     it('any other refusal stays a toast', async () => {

@@ -32,6 +32,13 @@ export {
   replyToBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './contracts/briefs.contract';
+export { createDelegationContract, getDelegationContract } from './contracts/delegations.contract';
+export {
+  getObligationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  updateObligationContract,
+} from './contracts/obligations.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { listHandoffDevicesContract, sendSessionHandoffContract } from './contracts/sessionHandoff.contract';
 export {
@@ -116,6 +123,7 @@ export {
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 } from './contracts/dataLakeResearch.contract';
 export { listImageModelsContract } from './contracts/imageModels.contract';
 export {
@@ -200,4 +208,10 @@ export {
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
 } from './contracts/skillMarketReview.contract';
+export {
+  listFunctionsContract,
+  getFunctionContract,
+  invokeFunctionContract,
+  getFunctionCallContract,
+} from './contracts/functions.contract';
 export { CONTRACTS } from './contracts';

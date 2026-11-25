@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
 import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
 import { providerFetchOptions } from './providerDispatcher';
 import { assertAnthropicEvaluationWire, anthropicEvaluationUsage } from './anthropicEvaluation';
@@ -32,6 +33,7 @@ import { federatedAnthropicCredentials } from './anthropicFederation';
 import { closeThinkMarker } from './thinkMarkers';
 import { selectedWifTokenSource } from './wifTokenSource';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { replayableText } from './replayPreToolText';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -254,11 +256,15 @@ export class AnthropicBackend implements ICompletionBackend {
   private logger: Logger;
   public currentModel: string = '';
   private lastAssistantContent: ContentBlock[] = []; // Store the complete assistant message content for tool use
+  // Text emitted ahead of the first tool call, for pushToolMessages to replay on the first
+  // tool_use message. Text after that call stays out so replay never reorders it.
+  private pendingPreToolText: string | undefined;
   private isThinkingEnabled: boolean = false; // Track if thinking is enabled for current request
   // Opaque, non-PII end-user identifier forwarded as `metadata.user_id` so
   // Anthropic can attribute abuse to an individual user and scope enforcement
   // to them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
+  private readonly usesFederatedCredentials: boolean;
   // Fairness bucket for the shared Anthropic semaphore: the account behind the request. Differs from
   // _endUserId only for a platform key's end user, whose requests still queue as the key owner's.
   private readonly _tenantKey?: string;
@@ -268,6 +274,12 @@ export class AnthropicBackend implements ICompletionBackend {
   setDispatchModel(info: ModelInfo): void {
     this._dispatch.set(info);
   }
+
+  private readonly fetchOnce: typeof fetch = async (input, init) => {
+    const response = await fetch(input, init);
+    await logAnthropicLimitResponse(this.logger, response, init);
+    return response;
+  };
 
   constructor(
     apiKey: string | typeof ANTHROPIC_FEDERATED_KEY,
@@ -284,9 +296,7 @@ export class AnthropicBackend implements ICompletionBackend {
       const MAX_TRANSPORT_RETRIES = 2;
       for (let attempt = 0; attempt <= MAX_TRANSPORT_RETRIES; attempt++) {
         try {
-          const response = await fetch(input, init);
-          await logAnthropicLimitResponse(this.logger, response, init);
-          return response;
+          return await this.fetchOnce(input, init);
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
           if (!isTransportError(err) || attempt === MAX_TRANSPORT_RETRIES) throw err;
@@ -299,6 +309,7 @@ export class AnthropicBackend implements ICompletionBackend {
       throw new TypeError('terminated');
     };
     const federated = apiKey === ANTHROPIC_FEDERATED_KEY;
+    this.usesFederatedCredentials = federated;
     this._api = new Anthropic({
       // null, not undefined, so an ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in the env cannot win.
       ...(federated && selectedWifTokenSource() === 'aws-sts'
@@ -982,6 +993,10 @@ export class AnthropicBackend implements ICompletionBackend {
     cb: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
+    if (retrySignal && this.usesFederatedCredentials) {
+      throw new Error('Abort-aware completion retries do not support federated credentials');
+    }
     this.currentModel = model;
     if (options._internal?.evaluation) {
       if (options.executeTools !== false)
@@ -2294,6 +2309,13 @@ export class AnthropicBackend implements ICompletionBackend {
                   c => c != null && !(c.type === 'text' && !c.text)
                 ) as unknown as ContentBlock[];
               }
+              const firstToolUseIndex = collectedContent.findIndex(c => c?.type === 'tool_use');
+              this.pendingPreToolText =
+                options.executeTools === false
+                  ? undefined
+                  : (firstToolUseIndex === -1 ? collectedContent : collectedContent.slice(0, firstToolUseIndex))
+                      .flatMap(c => (c?.type === 'text' && typeof c.text === 'string' ? [c.text] : []))
+                      .join('');
 
               // Extract cache stats if caching was enabled and usage info is available
               let cacheStats;
@@ -2851,24 +2873,43 @@ export class AnthropicBackend implements ICompletionBackend {
             assertAnthropicEvaluationWire(apiParams, info.contextWindow);
             await evaluation.admit(info, apiParams.model, apiParams.max_tokens);
           }
-          response = await withRetry(
-            () =>
-              this._api.messages.create(apiParams, {
-                signal: options.abortSignal,
-                ...(evaluation ? { maxRetries: 0 } : {}),
-                ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
-              }),
-            {
-              maxRetries: evaluation ? 0 : 3,
-              initialDelayMs: 500,
-              maxDelayMs: 10000,
-              jitterFactor: 0.25,
-              isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
-              logger: this.logger,
-              abortSignal: options.abortSignal,
-              onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
-            }
-          ).then(r => r.result);
+          const singleAttempt = retrySignal ? this._api.withOptions({ fetch: this.fetchOnce }) : undefined;
+          response =
+            retrySignal && singleAttempt
+              ? await retryAbortAware(
+                  () =>
+                    singleAttempt.messages.create(apiParams, {
+                      signal: retrySignal,
+                      maxRetries: 0,
+                      ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
+                    }),
+                  retrySignal,
+                  {
+                    onRetry: ({ error, delayMs }) => {
+                      this.logger.warn('Retrying Anthropic completion', { model, delayMs });
+                      options._internal?.turnTelemetry?.onRetry({ error, delayMs, model });
+                    },
+                  }
+                )
+              : await withRetry(
+                  () =>
+                    this._api.messages.create(apiParams, {
+                      signal: options.abortSignal,
+                      ...(evaluation ? { maxRetries: 0 } : {}),
+                      ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
+                    }),
+                  {
+                    maxRetries: evaluation ? 0 : 3,
+                    initialDelayMs: 500,
+                    maxDelayMs: 10000,
+                    jitterFactor: 0.25,
+                    isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
+                    logger: this.logger,
+                    abortSignal: options.abortSignal,
+                    onRetry: ({ error, delayMs }) =>
+                      options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
+                  }
+                ).then(r => r.result);
           requestAccepted = true;
           if (evaluation) {
             const answered = response;
@@ -2881,16 +2922,47 @@ export class AnthropicBackend implements ICompletionBackend {
         } finally {
           release?.();
         }
+        if (retrySignal?.aborted) {
+          const usage = 'usage' in response ? response.usage : undefined;
+          const stopReason = 'stop_reason' in response ? response.stop_reason : undefined;
+          await reportUsageOnAbort(
+            retrySignal,
+            cb,
+            usage
+              ? {
+                  inputTokens: usage.input_tokens,
+                  outputTokens: usage.output_tokens,
+                  cacheReadInputTokens: usage.cache_read_input_tokens ?? undefined,
+                  cacheCreationInputTokens: usage.cache_creation_input_tokens ?? undefined,
+                  turnUsage: appendAnthropicTurn(undefined, {
+                    ...usage,
+                    cache_read_input_tokens: usage.cache_read_input_tokens ?? undefined,
+                    cache_creation_input_tokens: usage.cache_creation_input_tokens ?? undefined,
+                  }),
+                  ...reasoningSoFar(usage),
+                  ...(stopReason ? { stopReason } : {}),
+                }
+              : undefined
+          );
+        }
         const modelDoneAt = Date.now();
         const streamedText: string[] = [];
 
         if ('content' in response && Array.isArray(response.content)) {
           this.lastAssistantContent = response.content as ContentBlock[];
+          const firstToolUseIndex = this.lastAssistantContent.findIndex(content => content.type === 'tool_use');
+          this.pendingPreToolText =
+            options.executeTools === false
+              ? undefined
+              : this.lastAssistantContent
+                  .slice(0, firstToolUseIndex === -1 ? undefined : firstToolUseIndex)
+                  .flatMap(content => (content.type === 'text' ? [content.text] : []))
+                  .join('');
           let responseFormatToolEmitted = false;
 
           for (let i = 0; i < response.content.length; i++) {
             const content = response.content[i] as ContentBlock;
-            if (isProviderBlock(content)) {
+            if (!retrySignal && isProviderBlock(content)) {
               // Flush the text so far first, so the caller sees blocks and text in response order.
               if (streamedText.length > 0) await cb(streamedText.splice(0), { toolsUsed });
               await cb([], { providerBlock: { provider: 'anthropic', block: { ...content } } });
@@ -2902,7 +2974,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 textLength: content.text.length,
               });
             } else if ('type' in content) {
-              if (content.type === 'tool_use') {
+              if (!retrySignal && content.type === 'tool_use') {
                 // response_format=json_schema: the synthesized tool's
                 // input IS the structured response - emit it as text instead of
                 // tracking it as a tool call.
@@ -3009,6 +3081,7 @@ export class AnthropicBackend implements ICompletionBackend {
           ...(isTerminalTurn && usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
           ...(isTerminalTurn && usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
         });
+        retrySignal?.throwIfAborted();
 
         // If there are tool calls, execute them and continue the conversation
         if (func.some(f => f && f.name)) {
@@ -3334,6 +3407,7 @@ export class AnthropicBackend implements ICompletionBackend {
       if (
         toolCallCount === 0 &&
         !options._internal?.evaluation &&
+        !retrySignal &&
         !requestAccepted &&
         !options._internal?.strictSchemaRetried &&
         sentStrictSchema &&
@@ -3534,9 +3608,13 @@ export class AnthropicBackend implements ICompletionBackend {
         });
         parsedInput = {};
       }
+      // Only the first tool_use of a round carries the text: later ones are parallel siblings.
+      const preToolText = replayableText(this.pendingPreToolText);
+      this.pendingPreToolText = undefined;
       messages.push({
         role: 'assistant',
         content: [
+          ...(preToolText ? [{ type: 'text' as const, text: preToolText }] : []),
           {
             type: 'tool_use',
             id: tool.id,

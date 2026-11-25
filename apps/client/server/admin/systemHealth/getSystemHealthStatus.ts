@@ -1,4 +1,5 @@
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { isPlaintextSecretsOptOutActive } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
 import mongoose from 'mongoose';
 import { getMailConfigStatus, type EmailConfigStatus } from '@bike4mind/server-utils/utils/mailer/configStatus';
 import { getOktaConfigStatus } from '@server/auth/oktaOidcClient';
@@ -33,6 +34,8 @@ export interface SystemHealthResponse {
   oauth: OAuthConfigStatus;
   /** True on a B4M_SELF_HOST deploy, where config comes from env/chart values rather than SST secrets. */
   selfHost: boolean;
+  /** True when B4M_ALLOW_PLAINTEXT_SECRETS runs a self-host install without a valid encryption key. */
+  plaintextSecretsOptOut: boolean;
 }
 
 /**
@@ -170,5 +173,6 @@ export async function getSystemHealthStatus(): Promise<SystemHealthResponse> {
     },
     oauth: await getOAuthConfigStatus(),
     selfHost: process.env.B4M_SELF_HOST === 'true',
+    plaintextSecretsOptOut: isPlaintextSecretsOptOutActive(),
   };
 }

@@ -79,14 +79,39 @@ describe('ImageContainer edit flow', () => {
     );
   });
 
-  it('still dispatches when the scan reports pending, leaving the server gate to wait and decide', async () => {
+  it('passes the file behind the shown image along with the edit', async () => {
+    const onSendMessage = vi.fn(async () => {});
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <ImageContainer
+          id="file-behind"
+          index={0}
+          totalImages={1}
+          images={['https://example.com/image.png']}
+          src="https://example.com/image.png"
+          onSendMessage={onSendMessage}
+        />
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getAllByTestId('image-edit-btn')[0]);
+    fireEvent.click(await screen.findByTestId('stub-masker-save'));
+
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalled());
+    expect(onSendMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ isImageEdit: true, imageFileId: 'file-behind' })
+    );
+  });
+
+  // An image job refuses an input that is not 'clean', so a still-pending mask is not sent (uploadEditMask).
+  it('stops, and removes the mask, when the scan reports pending', async () => {
     h.moderateFabFileNow.mockResolvedValue('pending');
     const onSendMessage = vi.fn(async () => {});
     await renderAndSave(onSendMessage);
 
-    await waitFor(() => expect(onSendMessage).toHaveBeenCalledTimes(1));
-    expect(h.toastError).not.toHaveBeenCalled();
-    expect(h.deleteFileUtility).not.toHaveBeenCalled();
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith(expect.stringContaining('could not be checked')));
+    expect(onSendMessage).not.toHaveBeenCalled();
+    expect(h.deleteFileUtility).toHaveBeenCalledWith('mask1');
   });
 
   it('stops with an error toast, without dispatching, when the scan reports blocked', async () => {
@@ -110,7 +135,7 @@ describe('ImageContainer edit flow', () => {
 
     beforeEach(() => {
       h.studioImageEnabled = true;
-      h.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'file1', fileName: 'image_1.png' });
+      h.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'file1', fileName: 'image_1.png', created: true });
     });
 
     it('saves a generated image to Files, scans it, and opens it in Studio edit mode', async () => {
@@ -130,6 +155,16 @@ describe('ImageContainer edit flow', () => {
       fireEvent.click(screen.getAllByTestId('image-edit-btn')[0]);
       await waitFor(() => expect(h.toastError).toHaveBeenCalled());
       expect(h.openStudioImageEdit).not.toHaveBeenCalled();
+      expect(h.deleteFileUtility).toHaveBeenCalledWith('file1');
+    });
+
+    it('keeps the caller earlier copy when it scans blocked', async () => {
+      h.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'file1', fileName: 'image_1.png', created: false });
+      h.moderateFabFileNow.mockResolvedValue('blocked');
+      renderImage(GENERATED);
+      fireEvent.click(screen.getAllByTestId('image-edit-btn')[0]);
+      await waitFor(() => expect(h.toastError).toHaveBeenCalled());
+      expect(h.deleteFileUtility).not.toHaveBeenCalled();
     });
 
     it('keeps the in-chat masker for an image that is not a generated one', async () => {

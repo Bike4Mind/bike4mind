@@ -59,6 +59,27 @@ describe('generateExecutiveSummaryMarkdown - consolidated single call', () => {
     expect(tokenUsage.totalTokens).toBe(tokenUsage.inputTokens + tokenUsage.outputTokens);
   });
 
+  it('skips the LLM and returns a minimal summary for an empty notebook', async () => {
+    const { llm, prompts } = makeRecordingLLM(delimitedResponse);
+
+    const { markdown, tokenUsage } = await generateExecutiveSummaryMarkdown(session, [], [], llm, 'gpt-test');
+
+    expect(prompts).toHaveLength(0);
+    expect(markdown).toContain('## Executive Summary');
+    expect(markdown).toContain('This notebook has no messages.');
+    expect(tokenUsage.totalTokens).toBe(0);
+  });
+
+  it('samples a single-message notebook once', async () => {
+    const { llm, prompts } = makeRecordingLLM(delimitedResponse);
+    const one = [{ timestamp: new Date(0), prompt: 'How do I cache?', reply: 'Use a hash.' }];
+
+    await generateExecutiveSummaryMarkdown(session, one, [], llm, 'gpt-test');
+
+    expect(prompts[0].split('How do I cache?')).toHaveLength(2);
+    expect(prompts[0]).not.toContain('\n---\n');
+  });
+
   it('adds exactly one more call for artifact descriptions when artifacts exist', async () => {
     const { llm, prompts } = makeRecordingLLM(delimitedResponse);
     const artifacts = [

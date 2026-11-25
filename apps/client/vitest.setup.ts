@@ -61,6 +61,23 @@ if (typeof window !== 'undefined') {
   });
 }
 
+// Joy's Textarea re-measures itself through getComputedStyle on every render. jsdom has no layout,
+// so the answer is always a height of 0, but computing it walks every injected style rule: up to a
+// fifth of the run time of a form-heavy suite. Reporting zero width takes the component's own
+// "not visible, skip the sync" exit. Matched on the caller so every other style read stays real.
+if (typeof window !== 'undefined') {
+  // Kept on the window: with reused workers this file runs again on the same one, and wrapping
+  // the wrapper would add a call per test file to every style read.
+  const REAL = Symbol.for('b4m.test.realGetComputedStyle');
+  const scope = window as unknown as Record<symbol, typeof window.getComputedStyle | undefined>;
+  const realGetComputedStyle = (scope[REAL] ??= window.getComputedStyle.bind(window));
+  const unmeasured = { width: '0px' } as CSSStyleDeclaration;
+  window.getComputedStyle = (element: Element, pseudoElement?: string | null) => {
+    if (element.tagName === 'TEXTAREA' && new Error().stack?.includes('TextareaAutosize')) return unmeasured;
+    return realGetComputedStyle(element, pseudoElement);
+  };
+}
+
 // Mock SST Resources to avoid deployment state dependency
 vi.mock('sst', () => ({
   Resource: {

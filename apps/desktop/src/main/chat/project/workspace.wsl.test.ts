@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { posix } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ChatProject } from '@shared/chat';
 
 // A WSL project as Windows sees it, emulated on this host: Windows path rules, a share whose
@@ -79,17 +79,24 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
+let template: Promise<string> | undefined;
+
+/** A repository built once and copied per test, which saves each test the git calls that built it. */
 async function repository(): Promise<{ root: string; repo: string }> {
+  template ??= (async () => {
+    const built = await realpath(await mkdtemp(posix.join(tmpdir(), 'b4m-wsl-template-')));
+    await git(built, ['init', '-q', '--initial-branch=main']);
+    await git(built, ['config', 'user.email', 'test@example.com']);
+    await git(built, ['config', 'user.name', 'Test']);
+    await writeFile(posix.join(built, '.gitignore'), '.b4m/\n');
+    await git(built, ['add', '.gitignore']);
+    await git(built, ['commit', '-qm', 'initial']);
+    return built;
+  })();
   const root = await realpath(await mkdtemp(posix.join(tmpdir(), 'b4m-wsl-')));
   roots.push(root);
   const repo = posix.join(root, 'data', 'proj');
-  await mkdir(repo, { recursive: true });
-  await git(repo, ['init', '-q', '--initial-branch=main']);
-  await git(repo, ['config', 'user.email', 'test@example.com']);
-  await git(repo, ['config', 'user.name', 'Test']);
-  await writeFile(posix.join(repo, '.gitignore'), '.b4m/\n');
-  await git(repo, ['add', '.gitignore']);
-  await git(repo, ['commit', '-qm', 'initial']);
+  await cp(await template, repo, { recursive: true });
   return { root, repo };
 }
 
@@ -104,41 +111,51 @@ const projectFor = (directory: string, workingDirectory: string, workspaceBranch
 });
 
 describe.skipIf(process.platform === 'win32')('worktrees of a WSL project', () => {
-  it('gives Linux git Linux paths and reads its answers back onto the share', async () => {
+  beforeAll(async () => {
+    await repository();
+  });
+
+  it('fills and hands over a spare with Linux paths for git, answering on the share', async () => {
     const { repo } = await repository();
     const project = share(repo);
-    const worktrees = posix.join(repo, '.b4m', 'worktrees');
-    const spareReady = async () => {
-      const link = await readFile(posix.join(repo, '.b4m', 'spare', '.git'), 'utf8').catch(() => '');
-      const gitDirectory = link.replace(/^gitdir: /, '').trim();
-      expect(gitDirectory && (await exists(posix.join(gitDirectory, 'b4m-spare')))).toBe(true);
-    };
     const spares = new SpareWorktrees(0);
+    try {
+      spares.refill(project, await projectGit.containerDirectory(project), 'HEAD');
+      await vi.waitFor(
+        async () => {
+          const link = await readFile(posix.join(repo, '.b4m', 'spare', '.git'), 'utf8').catch(() => '');
+          const gitDirectory = link.replace(/^gitdir: /, '').trim();
+          expect(gitDirectory && (await exists(posix.join(gitDirectory, 'b4m-spare')))).toBe(true);
+        },
+        { timeout: 10_000, interval: 5 }
+      );
+      vi.spyOn(spares, 'refill').mockImplementation(() => undefined);
 
-    const first = await resolveWorkspace(project, { base: 'main', name: 'first', spares });
-    const firstLinux = posix.join(worktrees, worktreeFolderName(first.branch));
-    expect(first.workingDirectory).toBe(share(firstLinux));
-    expect(await exists(firstLinux)).toBe(true);
+      const taken = await resolveWorkspace(project, { base: 'main', name: 'second', spares });
+      const takenLinux = posix.join(repo, '.b4m', 'worktrees', worktreeFolderName(taken.branch));
+      expect(taken.workingDirectory).toBe(share(takenLinux));
+      expect(await readFile(posix.join(takenLinux, '.git'), 'utf8')).toContain('/worktrees/spare');
+    } finally {
+      await spares.dispose();
+    }
+  });
 
-    await vi.waitFor(spareReady, { timeout: 10_000 });
-    const second = await resolveWorkspace(project, { base: 'main', name: 'second', spares });
-    const secondLinux = posix.join(worktrees, worktreeFolderName(second.branch));
-    expect(second.workingDirectory).toBe(share(secondLinux));
-    expect(await readFile(posix.join(secondLinux, '.git'), 'utf8')).toContain('/worktrees/spare');
-
-    await vi.waitFor(spareReady, { timeout: 10_000 });
-    await spares.dispose();
-    expect(await exists(posix.join(repo, '.b4m', 'spare'))).toBe(false);
-
+  it('checks out an existing branch and removes it again with Linux paths for git', async () => {
+    const { repo } = await repository();
+    const project = share(repo);
     await git(repo, ['branch', 'b4m/existing']);
-    const third = await resolveWorkspace(project, { branch: 'b4m/existing' });
-    expect(await exists(posix.join(worktrees, 'b4m+existing'))).toBe(true);
-    expect(third.outcome).toBe('created');
+    const linuxPath = posix.join(repo, '.b4m', 'worktrees', 'b4m+existing');
 
-    await removeSessionWorktree(projectFor(project, first.workingDirectory, first.branch), []);
-    expect(await exists(firstLinux)).toBe(false);
+    const resolved = await resolveWorkspace(project, { branch: 'b4m/existing' });
+    expect(resolved).toMatchObject({ workingDirectory: share(linuxPath), outcome: 'created' });
+    expect(await exists(linuxPath)).toBe(true);
 
-    expect((await readdir(repo)).filter(name => name.includes('\\'))).toEqual([]);
+    await removeSessionWorktree(projectFor(project, resolved.workingDirectory, resolved.branch), []);
+    expect(await exists(linuxPath)).toBe(false);
+    expect(
+      (await readdir(repo)).filter(name => name.includes('\\')),
+      'no Windows path became a Linux name'
+    ).toEqual([]);
   });
 
   it('cleans up a failed worktree add with Linux paths for git and the share path for the folder', async () => {

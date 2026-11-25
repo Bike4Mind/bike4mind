@@ -76,7 +76,7 @@ async function prepareOAuthReferral(code: string, verifiedEmail: string): Promis
     // An admin reopens a stranded claim by setting the invite back to open (/api/reg-invites/update).
     const claim = await userService.claimRegistrationInvite(resolved, registrationInviteRepository);
     if (!claim) {
-      console.warn('[oauth signup] invite already redeemed; signing up uninvited');
+      Logger.globalInstance.warn('[oauth signup] invite already redeemed; signing up uninvited');
       return null;
     }
     return { resolved, claim };
@@ -343,7 +343,7 @@ const authenticateUser = async (
         });
       } catch (e) {
         await referral?.claim.release().catch(() => {
-          console.warn('[oauth signup] invite claim release failed; the code may remain claimed');
+          Logger.globalInstance.warn('[oauth signup] invite claim release failed; the code may remain claimed');
         });
         throw e;
       }
@@ -353,7 +353,7 @@ const authenticateUser = async (
           await userService.redeemRegistrationInvite(referral.resolved, newUserId, registrationInviteRepository);
         } catch (e) {
           // The code is already closed by the claim; this only loses its usedbyId/history entry.
-          console.error('[oauth signup] invite redeem failed:', e);
+          Logger.globalInstance.error('[oauth signup] invite redeem failed', { error: e });
         }
       }
       let creditsGranted = 0;
@@ -390,7 +390,7 @@ const authenticateUser = async (
     // attach a canonical, data-free `code` the callback can safely record -
     // the raw `message` rides along only for the callback's console.error
     // (CloudWatch), never for the audit reason or redirect.
-    console.error('[verifyCallback] authenticateUser threw:', e);
+    Logger.globalInstance.error('[verifyCallback] authenticateUser threw', { error: e });
     const code: OAuthFailureReason = isDuplicateKeyError(e)
       ? 'duplicate_account'
       : e instanceof ForbiddenError

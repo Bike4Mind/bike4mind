@@ -55,13 +55,10 @@ async function run(input: { body?: unknown; headers?: Record<string, string> } =
   const { req, res } = createMocks({
     method: 'POST',
     body: (input.body ?? { code: 'the-code' }) as Record<string, unknown>,
-    // req.is() treats a request with no content-length as bodiless, so every case declares one.
-    headers: {
-      'content-length': '20',
-      ...(input.headers ?? { 'sec-fetch-site': 'none', 'content-type': 'application/json' }),
-    },
+    headers: input.headers ?? { 'sec-fetch-site': 'none', 'content-type': 'application/json' },
   });
-  Object.assign(req, { logger });
+  // The route runs on a Next.js request, which has none of the Express helpers node-mocks-http adds.
+  Object.assign(req, { logger, is: undefined });
   await h.route!(req, res);
   return res;
 }
@@ -106,12 +103,20 @@ describe('POST /api/auth/desktop-web-session/redeem', () => {
     ['a same-site', { 'sec-fetch-site': 'same-site', 'content-type': 'application/json' }],
     ['a Fetch-Metadata-less', { 'content-type': 'application/json' }],
     ['a form-encoded', { 'sec-fetch-site': 'none', 'content-type': 'application/x-www-form-urlencoded' }],
+    ['a content-type-less', { 'sec-fetch-site': 'none' }],
   ])('refuses %s POST before spending the code (login CSRF)', async (_label, headers) => {
     const res = await run({ headers });
 
     expect(res.statusCode).toBe(403);
     expect(h.redeemDesktopWebSessionCode).not.toHaveBeenCalled();
     expect(h.issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('accepts a JSON body whose content type carries parameters', async () => {
+    const res = await run({ headers: { 'sec-fetch-site': 'none', 'content-type': 'Application/JSON; charset=utf-8' } });
+
+    expectLanding(res);
+    expect(h.issueBrowserSession).toHaveBeenCalledOnce();
   });
 
   it('lands without a session when the code is rejected', async () => {

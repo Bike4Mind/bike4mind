@@ -57,7 +57,6 @@ import {
   ClipboardCheck,
   Settings,
   ShieldCheck,
-  Siren,
   Sparkles,
   SquareTerminal,
   Tag,
@@ -78,7 +77,7 @@ export enum AdminTab {
   AdminSettings = 1,
   Feedback = 2,
   Analytics = 3,
-  // 4, 11, 16 and 17 were tabs that no longer exist; never reuse them.
+  // 4, 11, 16, 17 and 35 were tabs that no longer exist; never reuse them.
   /** Retired page; keep the persisted value and URL redirect. */
   RegistrationInvites = 5,
   Migrate = 6,
@@ -107,7 +106,6 @@ export enum AdminTab {
   WhatsNewModals = 32,
   SlackMetrics = 33,
   SystemSecrets = 34,
-  LiveOpsTriage = 35,
   EmailMarketing = 36,
   WebhookAuditLogs = 37,
   GitHubConnection = 38,
@@ -165,7 +163,7 @@ export enum AdminTab {
  * Conditional-visibility gate keys. An item with a `gate` only renders when the
  * matching boolean (derived from SidebarNav props) is true.
  */
-export type SidebarGate = 'userMigration' | 'liveOpsTriage';
+export type SidebarGate = 'userMigration';
 
 /**
  * An item's end marker: the count of its queue (an AdminActionCountKey), or the Subscriptions
@@ -393,7 +391,6 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Workflow,
     label: 'Platform',
     items: [
-      { Icon: Siren, tab: AdminTab.LiveOpsTriage, label: 'LiveOps triage', gate: 'liveOpsTriage' },
       { Icon: Radar, tab: AdminTab.SreAgent, label: 'SRE agent', testid: 'admin-sre-agent-btn', badge: 'sreAgent' },
       { Icon: Plug, tab: AdminTab.IntegrationHealth, label: 'Integrations', testid: 'admin-integration-health-btn' },
       {

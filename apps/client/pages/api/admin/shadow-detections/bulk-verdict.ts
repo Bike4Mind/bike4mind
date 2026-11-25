@@ -11,6 +11,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
+import { releaseHoldsAfterVerdict } from '@server/security/interventionRelease';
 
 const ONE_MINUTE_MS = 60_000;
 export const SHADOW_DETECTION_BULK_VERDICT_RATE_LIMIT = 10;
@@ -76,6 +77,7 @@ const handler = adminApi({
           req.logger.error(`Audit entry failed for shadow detection verdict ${item.id}`, error);
         }
       }
+      for (const item of result.graded) await releaseHoldsAfterVerdict(req, item.id, verdict, reason);
       respond(res, shadowDetectionBulkVerdictResponseSchema, result);
     })
   );

@@ -1,9 +1,12 @@
 import React from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { BodyDiff, SupportingFiles } from './parts';
+import { BodyDiff, SupportingFiles, VisibilityChip } from './parts';
+
+const me = vi.hoisted(() => ({ spaces: [{ id: 'sp1', name: 'Platform' }] as Array<{ id: string; name: string }> }));
+vi.mock('@client/app/hooks/data/skillMarket', () => ({ useMarketMe: () => ({ data: { spaces: me.spaces } }) }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -52,5 +55,29 @@ describe('BodyDiff', () => {
     expect(diff).toHaveTextContent('- last');
     expect(diff).toHaveTextContent('+ last edited');
     expect(screen.queryByText('No changes to the body.')).not.toBeInTheDocument();
+  });
+});
+
+describe('VisibilityChip', () => {
+  const chip = (props: React.ComponentProps<typeof VisibilityChip>) =>
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <VisibilityChip {...props} />
+      </CssVarsProvider>
+    );
+
+  it("shows the Space's name when the viewer is a member", () => {
+    chip({ visibility: 'space', spaceId: 'sp1' });
+    expect(screen.getByText('Platform')).toBeInTheDocument();
+  });
+
+  it('says plain "Space" when the name is unknown', () => {
+    chip({ visibility: 'space', spaceId: 'other' });
+    expect(screen.getByText('Space')).toBeInTheDocument();
+  });
+
+  it('is unchanged for other visibilities', () => {
+    chip({ visibility: 'organization', spaceId: 'sp1' });
+    expect(screen.getByText('Organization')).toBeInTheDocument();
   });
 });

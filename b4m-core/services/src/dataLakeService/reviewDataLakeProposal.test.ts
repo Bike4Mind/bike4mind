@@ -7,9 +7,11 @@ import {
   autoApproveDataLakeProposal,
   declineDataLakeProposal,
   restoreDataLakeProposal,
+  unapproveDataLakeProposal,
   type AutoApprovalRule,
 } from './reviewDataLakeProposal';
 import { assertCanWriteDataLakeTags } from './authorizeLakeWrite';
+import { FILE_NOT_IN_LAKE_MESSAGE } from './lakeMembership';
 
 const OWNER = 'owner-1';
 
@@ -921,5 +923,119 @@ describe('autoApproveDataLakeProposal', () => {
     await autoApproveDataLakeProposal('prop-1', rule(), deps);
 
     expect(order).toEqual(['enter', 'claim', 'exit', 'admit']);
+  });
+});
+
+describe('unapproveDataLakeProposal', () => {
+  const approved = proposal({ status: 'approved', admittedFabFileId: 'file-9' });
+  const unapproveDeps = (
+    over: {
+      latest?: IDataLakeProposalDocument | null;
+      unapprove?: ReturnType<typeof vi.fn>;
+      removeAdmittedFile?: ReturnType<typeof vi.fn>;
+    } = {}
+  ) => {
+    const base = adapters({ proposal: approved });
+    const unapprove =
+      over.unapprove ??
+      vi.fn(async () => ({
+        unapproved: true,
+        previous: approved,
+        proposal: { ...approved, status: 'pending', admittedFabFileId: undefined },
+      }));
+    const rollbackUnapprove = vi.fn(async () => undefined);
+    const removeAdmittedFile = over.removeAdmittedFile ?? vi.fn(async () => undefined);
+    return {
+      deps: {
+        ...base.deps,
+        db: {
+          ...base.deps.db,
+          dataLakeProposals: {
+            ...base.deps.db.dataLakeProposals,
+            findLatestBySourceKey: vi.fn(async () => (over.latest === undefined ? approved : over.latest)),
+            unapprove,
+            rollbackUnapprove,
+          },
+        },
+        removeAdmittedFile,
+      } as never,
+      unapprove,
+      rollbackUnapprove,
+      removeAdmittedFile,
+      record: base.record,
+    };
+  };
+
+  it('returns the proposal to pending, removes the file and records one linked row', async () => {
+    const { deps, removeAdmittedFile, record } = unapproveDeps();
+
+    const result = await unapproveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(result.removedFabFileId).toBe('file-9');
+    expect(removeAdmittedFile).toHaveBeenCalledWith(expect.anything(), 'lake-1', 'file-9', {
+      causedByEventId: result.eventId,
+    });
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0][0]).toMatchObject({
+      eventId: result.eventId,
+      action: 'restore-proposal',
+      admittedFabFileId: 'file-9',
+    });
+  });
+
+  it('takes the file id from the approval event when the proposal row lost it', async () => {
+    const bare = proposal({ status: 'approved', admittedFabFileId: undefined });
+    const { deps, removeAdmittedFile, record } = unapproveDeps({
+      unapprove: vi.fn(async () => ({
+        unapproved: true,
+        previous: bare,
+        proposal: { ...bare, status: 'pending' },
+      })),
+    });
+
+    const result = await unapproveDataLakeProposal('prop-1', ctx(), deps, { admittedFabFileId: 'file-7' });
+
+    expect(result.removedFabFileId).toBe('file-7');
+    expect(removeAdmittedFile).toHaveBeenCalledWith(expect.anything(), 'lake-1', 'file-7', expect.anything());
+    expect(record.mock.calls[0][0]).toMatchObject({ admittedFabFileId: 'file-7' });
+  });
+
+  it('counts a file already out of the lake as done', async () => {
+    const { deps, rollbackUnapprove } = unapproveDeps({
+      removeAdmittedFile: vi.fn(async () => {
+        throw new NotFoundError(FILE_NOT_IN_LAKE_MESSAGE);
+      }),
+    });
+
+    await expect(unapproveDataLakeProposal('prop-1', ctx(), deps)).resolves.toBeDefined();
+    expect(rollbackUnapprove).not.toHaveBeenCalled();
+  });
+
+  it('rolls the proposal back when the removal fails', async () => {
+    const { deps, rollbackUnapprove, record } = unapproveDeps({
+      removeAdmittedFile: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    });
+
+    await expect(unapproveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow('boom');
+    expect(rollbackUnapprove).toHaveBeenCalledTimes(1);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('refuses when a newer row exists for the same source', async () => {
+    const { deps, unapprove } = unapproveDeps({ latest: proposal({ id: 'prop-2', status: 'pending' }) });
+
+    await expect(unapproveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(/waiting for review again/);
+    expect(unapprove).not.toHaveBeenCalled();
+  });
+
+  it('leaves the file alone when a pending row appears first', async () => {
+    const { deps, removeAdmittedFile } = unapproveDeps({
+      unapprove: vi.fn(async () => ({ unapproved: false, reason: 'pending_exists' })),
+    });
+
+    await expect(unapproveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(/already waiting for review/);
+    expect(removeAdmittedFile).not.toHaveBeenCalled();
   });
 });
