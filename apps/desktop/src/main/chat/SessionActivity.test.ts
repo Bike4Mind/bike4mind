@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatSessionStatusEvent } from '@shared/chat';
-import { SessionActivity } from './SessionActivity';
+import { SessionActivity, endsUnread } from './SessionActivity';
 
 function track(): { activity: SessionActivity; events: ChatSessionStatusEvent[] } {
   const events: ChatSessionStatusEvent[] = [];
@@ -304,5 +304,18 @@ describe('SessionActivity', () => {
     activity.forget('b');
     expect(activity.snapshot()).toEqual([]);
     expect(events.map(event => event.status)).toEqual(['needs-action', 'done', 'needs-action']);
+  });
+});
+
+describe('endsUnread', () => {
+  it('leaves a finished answer with text, or a failed turn, unread', () => {
+    expect(endsUnread('completed', 'Here it is')).toBe(true);
+    expect(endsUnread('failed', '')).toBe(true);
+  });
+
+  it('leaves nothing for an empty answer, a stop, or an expired session', () => {
+    expect(endsUnread('completed', '  ')).toBe(false);
+    expect(endsUnread('aborted', 'partial')).toBe(false);
+    expect(endsUnread('expired', '')).toBe(false);
   });
 });

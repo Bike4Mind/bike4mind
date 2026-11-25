@@ -3,7 +3,7 @@ import type { ChatSessionStatus } from '@shared/chat';
 import { needsYouBadgeCount } from '@shared/needsYou';
 import type { WorkerTask } from '@shared/orchestration';
 import { sessionFixture } from '../orchestrator/sessionFixture';
-import { WAITING_FALLBACK_DETAIL, agentsBoard } from './agentsBoard';
+import { FAILED_FALLBACK_DETAIL, WAITING_FALLBACK_DETAIL, agentsBoard } from './agentsBoard';
 
 const at = (minute: number) => `2026-11-25T10:${String(minute).padStart(2, '0')}:00.000Z`;
 
@@ -105,6 +105,12 @@ describe('agentsBoard', () => {
     expect(entry('read')?.detail).toBe('All done.');
     expect(entry('broke')?.detail).toBe('Exit 1');
     expect(entry('older')).not.toHaveProperty('detail');
+  });
+
+  it('says a failed turn errored when it left no text to quote', () => {
+    const silent = SESSIONS.map(session => (session.id === 'broke' ? { ...session, lastSnippet: undefined } : session));
+    const failed = agentsBoard(silent, STATUSES, UNREAD).find(group => group.key === 'failed');
+    expect(failed?.entries[0]?.detail).toBe(FAILED_FALLBACK_DETAIL);
   });
 
   it('names the conversation an agent or side chat belongs to', () => {

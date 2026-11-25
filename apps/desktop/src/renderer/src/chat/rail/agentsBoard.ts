@@ -21,6 +21,7 @@ export const BOARD_GROUP_LABEL: Record<BoardGroupKey, string> = {
 const GROUP_ORDER: readonly BoardGroupKey[] = ['waiting', 'failed', 'finished'];
 
 export const WAITING_FALLBACK_DETAIL = 'Waiting for your approval or answer';
+export const FAILED_FALLBACK_DETAIL = 'The last turn ended with an error';
 
 export interface BoardEntry {
   id: string;
@@ -52,7 +53,9 @@ function groupOf(session: BoardSession, unread: boolean): BoardGroupKey {
 
 function detailOf(session: BoardSession, group: BoardGroupKey): string | undefined {
   if (group === 'waiting') return pendingDecisionOf(session.workerTask)?.question.question ?? WAITING_FALLBACK_DETAIL;
-  return session.lastSnippet?.trim() || undefined;
+  const snippet = session.lastSnippet?.trim();
+  if (snippet) return snippet;
+  return group === 'failed' ? FAILED_FALLBACK_DETAIL : undefined;
 }
 
 function contextOf(session: BoardSession, sessions: readonly ChatSessionSummary[]): string | undefined {
