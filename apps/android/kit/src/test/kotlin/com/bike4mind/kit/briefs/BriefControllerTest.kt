@@ -26,6 +26,25 @@ class BriefControllerTest {
         var neverRespond = false
         var cancelledReads = 0
         val fetchedIds = mutableListOf<String>()
+        var followUpStarted: Brief? = null
+        val followUpTranscripts = mutableListOf<String>()
+        var resolveResult: () -> BriefDecision = { error("no resolve result") }
+        var editResult: () -> BriefDecision = { error("no edit result") }
+        val resolveCalls = mutableListOf<BriefDecisionOutcome>()
+        var resolveDelayMillis = 0L
+
+        override suspend fun followUp(transcript: String, timeZone: String?): Brief {
+            followUpTranscripts += transcript
+            return followUpStarted!!
+        }
+
+        override suspend fun editDecision(briefId: String, decisionId: String, edit: BriefDecisionEdit): BriefDecision = editResult()
+
+        override suspend fun resolveDecision(briefId: String, decisionId: String, outcome: BriefDecisionOutcome): BriefDecision {
+            resolveCalls += outcome
+            delay(resolveDelayMillis)
+            return resolveResult()
+        }
 
         override suspend fun compose(): Brief {
             composeCalls++
@@ -274,4 +293,107 @@ class BriefControllerTest {
         assertEquals(1, api.composeCalls)
     }
 
+
+    private val draft = BriefDraftReply("sam@example.com", "Notes", "Here they are.")
+
+    private fun email(state: FollowUpState) =
+        BriefDecision("fu-email", "Send follow-up to Sam", followUp = BriefFollowUp(FollowUpKind.FOLLOW_UP_EMAIL, state), draftReply = draft)
+
+    private fun followUpBrief(vararg decisions: BriefDecision) =
+        Brief(id = "b2", status = BriefStatus.READY, createdAt = null, periodStart = null, periodEnd = null, headline = "Follow-ups", decisions = decisions.toList())
+
+    @Test
+    fun startFollowUpShowsTheComposingBriefAndPollsItToReady() = runTest {
+        val api = FakeApi()
+        api.followUpStarted = brief("b2", BriefStatus.COMPOSING)
+        api.byId["b2"] = ArrayDeque(listOf(followUpBrief(email(FollowUpState.PENDING))))
+        val controller = controller(api, briefId = "b2")
+        controller.startFollowUp("  Email Sam the notes  ")
+        advanceTimeBy(2_001)
+        runCurrent()
+        assertEquals(listOf("Email Sam the notes"), api.followUpTranscripts)
+        assertEquals(BriefStatus.READY, controller.state.value.brief?.status)
+        assertFalse(controller.state.value.composing)
+    }
+
+    @Test
+    fun aRefreshAfterAMemoKeepsTheMemoBriefOverTheOpenedOrListedOne() = runTest {
+        for (openedId in listOf("b1", null)) {
+            val api = FakeApi()
+            api.listed = listOf(brief("b1", BriefStatus.READY))
+            api.byId["b1"] = ArrayDeque(listOf(brief("b1", BriefStatus.READY)))
+            api.followUpStarted = brief("b2", BriefStatus.COMPOSING)
+            api.byId["b2"] = ArrayDeque(listOf(followUpBrief(email(FollowUpState.PENDING))))
+            val controller = controller(api, briefId = openedId)
+            controller.load()
+            runCurrent()
+            controller.startFollowUp("Email Sam the notes")
+            advanceTimeBy(2_001)
+            runCurrent()
+            controller.load()
+            runCurrent()
+            assertEquals("b2", controller.state.value.brief?.id)
+        }
+    }
+
+    @Test
+    fun approvingAnEmailIsSingleFlightAndHandsOffTheDraft() = runTest {
+        val api = FakeApi()
+        api.byId["b2"] = ArrayDeque(listOf(followUpBrief(email(FollowUpState.PENDING))))
+        api.resolveResult = { email(FollowUpState.APPROVED) }
+        api.resolveDelayMillis = 1_000
+        val controller = controller(api, briefId = "b2")
+        controller.load()
+        runCurrent()
+        val handed = mutableListOf<BriefDraftReply>()
+        controller.resolveFollowUp(email(FollowUpState.PENDING), BriefDecisionOutcome.APPROVE) { handed += it }
+        runCurrent()
+        assertTrue("fu-email" in controller.state.value.followUpBusy)
+        controller.resolveFollowUp(email(FollowUpState.PENDING), BriefDecisionOutcome.APPROVE) { handed += it }
+        advanceTimeBy(1_001)
+        runCurrent()
+        assertEquals(listOf(BriefDecisionOutcome.APPROVE), api.resolveCalls)
+        assertEquals(listOf(draft), handed)
+        assertEquals(FollowUpState.APPROVED, controller.state.value.brief?.decisions?.single()?.followUp?.state)
+        assertTrue(controller.state.value.followUpBusy.isEmpty())
+    }
+
+    @Test
+    fun aClosedDecisionRefetchesWithoutAnError() = runTest {
+        val api = FakeApi()
+        api.byId["b2"] = ArrayDeque(listOf(followUpBrief(email(FollowUpState.PENDING)), followUpBrief(email(FollowUpState.DISMISSED))))
+        api.resolveResult = { throw DecisionClosedException() }
+        val controller = controller(api, briefId = "b2")
+        controller.load()
+        runCurrent()
+        controller.resolveFollowUp(email(FollowUpState.PENDING), BriefDecisionOutcome.APPROVE)
+        runCurrent()
+        assertEquals(FollowUpState.DISMISSED, controller.state.value.brief?.decisions?.single()?.followUp?.state)
+        assertTrue(controller.state.value.followUpErrors.isEmpty())
+    }
+
+    @Test
+    fun dismissAndAFailedEditKeepTheirOwnOutcomes() = runTest {
+        val api = FakeApi()
+        api.byId["b2"] = ArrayDeque(listOf(followUpBrief(email(FollowUpState.PENDING))))
+        api.editResult = { throw InvalidDecisionException("Edit the recipient to an email address first") }
+        api.resolveResult = { email(FollowUpState.DISMISSED) }
+        val controller = controller(api, briefId = "b2")
+        controller.load()
+        runCurrent()
+        var saved = false
+        controller.editFollowUp(email(FollowUpState.PENDING), BriefDecisionEdit(text = "New text")) { saved = true }
+        runCurrent()
+        assertFalse(saved)
+        assertEquals("Edit the recipient to an email address first", controller.state.value.followUpErrors["fu-email"])
+        assertEquals(email(FollowUpState.PENDING), controller.state.value.brief?.decisions?.single())
+        val handed = mutableListOf<BriefDraftReply>()
+        controller.resolveFollowUp(email(FollowUpState.PENDING), BriefDecisionOutcome.DISMISS) { handed += it }
+        runCurrent()
+        assertTrue(handed.isEmpty())
+        assertEquals(FollowUpState.DISMISSED, controller.state.value.brief?.decisions?.single()?.followUp?.state)
+        controller.resolveFollowUp(email(FollowUpState.DISMISSED), BriefDecisionOutcome.APPROVE)
+        runCurrent()
+        assertEquals(listOf(BriefDecisionOutcome.DISMISS), api.resolveCalls)
+    }
 }

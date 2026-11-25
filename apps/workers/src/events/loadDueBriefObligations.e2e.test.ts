@@ -108,6 +108,7 @@ describe('a composed brief with a confirmed obligation', () => {
           questions: [],
           emails: [],
           delegations: [],
+          reminders: [],
           obligations: (await loadDueBriefObligations(userId, now)).map(item => toBriefObligation(item, now)),
         }),
         canCompose: async () => 'ok',

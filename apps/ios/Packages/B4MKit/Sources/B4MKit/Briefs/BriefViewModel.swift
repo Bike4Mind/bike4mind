@@ -19,6 +19,12 @@ public final class BriefViewModel {
     case failed(BriefReplyFailure)
   }
 
+  /// An edit, approve or dismiss of a follow-up sent from this screen. A success swaps in the returned decision.
+  public enum FollowUpState: Equatable, Sendable {
+    case submitting
+    case failed(BriefDecisionFailure)
+  }
+
   public typealias Sleep = @Sendable (Duration) async throws -> Void
 
   public private(set) var state: State = .loading
@@ -29,6 +35,7 @@ public final class BriefViewModel {
       approvalStates = [:]
       replyStates = [:]
       replyDrafts = [:]
+      followUpStates = [:]
     }
   }
   /// Whether a compose request or a poll of a composing brief is in flight.
@@ -41,6 +48,7 @@ public final class BriefViewModel {
   public private(set) var replyStates: [String: ReplyState] = [:]
   /// Drafts belong to the displayed brief, just like its local decision states.
   public private(set) var replyDrafts: [String: String] = [:]
+  public private(set) var followUpStates: [String: FollowUpState] = [:]
 
   public func setReplyDraft(_ text: String, decisionID: String, briefID: String?) {
     guard let briefID, brief?.id == briefID else { return }
@@ -49,6 +57,7 @@ public final class BriefViewModel {
 
   @ObservationIgnored private let api: any BriefAPI
   @ObservationIgnored private let pendingActions: (any PendingActionAPI)?
+  @ObservationIgnored private let followUps: (any BriefFollowUpAPI)?
   @ObservationIgnored private let briefID: String?
   @ObservationIgnored private let sleep: Sleep
   @ObservationIgnored private let pollInterval: Duration
@@ -59,6 +68,7 @@ public final class BriefViewModel {
 
   public init(
     api: any BriefAPI, briefID: String? = nil, pendingActions: (any PendingActionAPI)? = nil,
+    followUps: (any BriefFollowUpAPI)? = nil,
     pollInterval: Duration = .seconds(8),
     pollWindow: Duration = .seconds(120),
     sleep: @escaping Sleep = { try await Task.sleep(for: $0) }
@@ -66,6 +76,7 @@ public final class BriefViewModel {
     self.api = api
     self.briefID = briefID
     self.pendingActions = pendingActions
+    self.followUps = followUps
     self.pollInterval = pollInterval
     self.sleep = sleep
     maxPolls = max(1, Int(pollWindow / pollInterval))
@@ -166,6 +177,62 @@ public final class BriefViewModel {
       replyStates[decision.id] = .failed(.api(Self.apiError(from: error)))
     }
     await reload(briefID: brief.id)
+  }
+
+  /// Saves an edit to a pending follow-up. Returns whether the edit form is done: saved, or the follow-up settled
+  /// elsewhere and can no longer be edited. When it is not, the form stays open with the user's changes.
+  @discardableResult
+  public func editFollowUp(_ decision: BriefDecision, _ edit: BriefDecisionEdit) async -> Bool {
+    guard !edit.isEmpty else { return false }
+    let saved =
+      await submitFollowUp(decision) { api, briefID in
+        try await api.editDecision(briefID: briefID, decisionID: decision.id, edit: edit)
+      } != nil
+    return saved || brief?.decisions.first(where: { $0.id == decision.id })?.followUp?.isActionable != true
+  }
+
+  /// Approves or dismisses a pending follow-up. Returns the draft of an approved follow-up email so the caller can
+  /// hand it to the device mail app; the server never sends it.
+  @discardableResult
+  public func resolveFollowUp(_ decision: BriefDecision, _ outcome: BriefDecisionOutcome) async -> BriefDraftReply? {
+    let resolved = await submitFollowUp(decision) { api, briefID in
+      try await api.resolveDecision(briefID: briefID, decisionID: decision.id, outcome: outcome)
+    }
+    guard outcome == .approve, let resolved, resolved.followUp?.kind == .followUpEmail else { return nil }
+    return resolved.draftReply
+  }
+
+  public func followUpFailure(for decision: BriefDecision) -> BriefDecisionFailure? {
+    guard case .failed(let failure) = followUpStates[decision.id] else { return nil }
+    return failure
+  }
+
+  private func submitFollowUp(
+    _ decision: BriefDecision,
+    _ call: @Sendable (any BriefFollowUpAPI, String) async throws -> BriefDecision
+  ) async -> BriefDecision? {
+    guard let brief, let followUps, let current = brief.decisions.first(where: { $0.id == decision.id }),
+      current.followUp?.isActionable == true, followUpStates[decision.id] != .submitting
+    else { return nil }
+    followUpStates[decision.id] = .submitting
+    do {
+      let updated = try await call(followUps, brief.id)
+      guard let shown = self.brief, shown.id == brief.id else { return nil }
+      followUpStates[decision.id] = nil
+      self.brief = shown.replacing(updated)
+      return updated
+    } catch BriefDecisionFailure.closed {
+      guard self.brief?.id == brief.id else { return nil }
+      followUpStates[decision.id] = nil
+      await reload(briefID: brief.id)
+    } catch let failure as BriefDecisionFailure {
+      guard self.brief?.id == brief.id else { return nil }
+      followUpStates[decision.id] = .failed(failure)
+    } catch {
+      guard self.brief?.id == brief.id else { return nil }
+      followUpStates[decision.id] = .failed(.api(Self.apiError(from: error)))
+    }
+    return nil
   }
 
   /// Keep dispatch feedback visible even when a refresh closes the question.

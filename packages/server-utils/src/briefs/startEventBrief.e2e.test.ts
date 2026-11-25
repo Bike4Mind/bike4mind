@@ -67,6 +67,7 @@ const makeDeps = () => {
     hasRunsSince: async (userId, since) =>
       (await agentExecutionRepository.findByUserIdPaginated(userId, { fromDate: since }, { limit: 1 })).items.length >
       0,
+    hasDueReminders: async (id, now) => (await assistantBriefRepository.findDueReminders(id, now, 1)).length > 0,
     hasPendingEmails: async (userId, end) =>
       (
         await Promise.all(EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(userId, end, 1, kind)))

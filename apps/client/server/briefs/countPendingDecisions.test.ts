@@ -70,6 +70,19 @@ describe('countPendingDecisions', () => {
     await expect(countPendingDecisions('owner', NOW)).resolves.toMatchObject({ count: 1, briefDecisions: 1 });
   });
 
+  it('counts a follow-up decision only while it is pending', async () => {
+    repos.findLatestReadyDecisionRefs.mockResolvedValue({
+      _id: { toString: () => 'brief-1' },
+      decisions: [
+        { followUp: { state: 'pending' } },
+        { followUp: { state: 'approved' } },
+        { followUp: { state: 'dismissed' } },
+      ],
+    });
+
+    await expect(countPendingDecisions('owner', NOW)).resolves.toMatchObject({ count: 1, briefDecisions: 1 });
+  });
+
   it('propagates a failed read instead of answering a partial count', async () => {
     repos.findSessionIdsByUserId.mockRejectedValue(new Error('db down'));
 
