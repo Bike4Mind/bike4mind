@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { ApiKeyType } from '@bike4mind/common';
+import { getEffectiveApiKey } from '../../apiKeyService';
 import {
   applyExampleRunPolicy,
   exampleRunToolMode,
+  exampleRunWiring,
+  withoutUserApiKeys,
   exampleStepLabel,
   simulatedToolResult,
   type ExampleRunStep,
@@ -98,5 +102,75 @@ describe('applyExampleRunPolicy', () => {
       { label: 'Searched the web for "q"', simulated: false },
       { label: 'Created issue in example-org/app', simulated: true },
     ]);
+  });
+});
+
+describe('exampleRunWiring', () => {
+  const tool = (name: string, toolFn = vi.fn(async () => 'real')): ICompletionOptionTools => ({
+    toolSchema: { name, description: '', parameters: { type: 'object', properties: {} } },
+    toolFn,
+  });
+
+  it('changes nothing on a normal turn', () => {
+    const wiring = exampleRunWiring(undefined);
+    const tools = [tool('github__create_issue')];
+    expect(wiring.apiKeyOwner('user-1')).toBe('user-1');
+    expect(wiring.enforceCredits(true)).toBe(true);
+    expect(wiring.payerGates).toBe(true);
+    expect(wiring.researchModeAllowed).toBe(true);
+    expect(wiring.tools(tools)).toBe(tools);
+    expect(wiring.childTools).toBeUndefined();
+    const db = { apiKeys: { findByUserIdAndType: vi.fn(), findByUserIdAndTypes: vi.fn() } };
+    expect(wiring.toolDb(db)).toBe(db);
+    expect(wiring.pinnedSkill).toBeUndefined();
+  });
+
+  it('takes platform keys, drops the payer gates and research mode, and pins the skill in an example run', () => {
+    const skill = { name: 'launch-plan', body: 'Plan it' };
+    const wiring = exampleRunWiring({ onStep: vi.fn(), skill });
+    expect(wiring.apiKeyOwner('user-1')).toBeNull();
+    expect(wiring.enforceCredits(true)).toBe(false);
+    expect(wiring.payerGates).toBe(false);
+    expect(wiring.researchModeAllowed).toBe(false);
+    expect(wiring.pinnedSkill).toBe(skill);
+  });
+
+  it.each(['tools', 'childTools'] as const)(
+    'puts %s (main tools and deferred declarations, or a subagent) behind the dry-run policy',
+    async which => {
+      const steps: ExampleRunStep[] = [];
+      const wrap = exampleRunWiring({ onStep: step => steps.push(step) })[which]!;
+      const realFn = vi.fn(async () => 'posted');
+      const [wrapped] = wrap([tool('github__create_issue', realFn)]);
+      expect(JSON.parse(String(await wrapped.toolFn({})))).toMatchObject({ simulated: true });
+      expect(realFn).not.toHaveBeenCalled();
+      expect(steps).toHaveLength(1);
+    }
+  );
+});
+
+describe('withoutUserApiKeys', () => {
+  const db = {
+    apiKeys: {
+      findByUserIdAndType: vi.fn(async () => ({ apiKey: 'author-own-key' })),
+      findByUserIdAndTypes: vi.fn(async () => [{ apiKey: 'author-own-key' }]),
+      other: vi.fn(() => 'kept'),
+    },
+    adminSettings: { findBySettingName: vi.fn(async () => ({ settingValue: 'platform-key' })) },
+  };
+
+  it("resolves the image tools' provider key from the platform, never the author's saved key", async () => {
+    const adapters = { db: db as never };
+    expect(await getEffectiveApiKey('author-1', { type: ApiKeyType.openai }, adapters)).toBe('author-own-key');
+    expect(
+      await getEffectiveApiKey('author-1', { type: ApiKeyType.openai }, { db: withoutUserApiKeys(db) as never })
+    ).toBe('platform-key');
+  });
+
+  it('keeps the rest of the repository', async () => {
+    const wrapped = withoutUserApiKeys(db);
+    expect(await wrapped.apiKeys.findByUserIdAndTypes()).toEqual([]);
+    expect(wrapped.apiKeys.other()).toBe('kept');
+    expect(wrapped.adminSettings).toBe(db.adminSettings);
   });
 });

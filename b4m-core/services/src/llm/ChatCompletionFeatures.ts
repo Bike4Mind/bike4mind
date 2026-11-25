@@ -706,6 +706,8 @@ export interface ChatCompletionFeature {
     questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
     /** The turn's active organization, which owns its billing (null/unset = the user). */
     organizationId?: string | null;
+    /** An example run's approved skill (ExampleRunMode.skill); SkillsFeature expands `/name` from it. */
+    exampleRunSkill?: { name: string; body: string };
   }) => Promise<{ shouldContinue: boolean }>;
   getContextMessages: (
     quest: IChatHistoryItemDocument,

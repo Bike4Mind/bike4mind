@@ -15,6 +15,13 @@ export interface ExampleRunStep {
 /** Passed to ChatCompletionProcess.process only by server code; no request body can carry it. */
 export interface ExampleRunMode {
   onStep: (step: ExampleRunStep) => void;
+  /**
+   * The approved version's skill. A `/name` mention of it expands from this, not from the author's
+   * live skill row or a same-named shared skill (SkillsFeature).
+   */
+  skill?: { name: string; body: string };
+  /** Ends the turn at the run's deadline; the caller settles the quest. */
+  abortSignal?: AbortSignal;
 }
 
 export type ExampleRunToolMode = 'real' | 'simulated';
@@ -235,4 +242,44 @@ export function applyExampleRunPolicy(tools: ICompletionOptionTools[], mode: Exa
       },
     };
   });
+}
+
+type ApiKeyReads = { findByUserIdAndType: unknown; findByUserIdAndTypes: unknown };
+
+/**
+ * The tool db with no user-saved provider keys, so key resolvers (getEffectiveApiKey in the image
+ * tools) fall through to the platform's admin-setting keys.
+ */
+export function withoutUserApiKeys<D extends { apiKeys: ApiKeyReads }>(db: D): D {
+  const apiKeys = new Proxy(db.apiKeys, {
+    get(target, prop, receiver) {
+      if (prop === 'findByUserIdAndType') return async () => null;
+      if (prop === 'findByUserIdAndTypes') return async () => [];
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { ...db, apiKeys };
+}
+
+/**
+ * Every point where ChatCompletionProcess.process differs for an example run, so each one is tested
+ * here (exampleRunTools.test.ts). Without `exampleRun` each is the normal turn's behavior.
+ */
+export function exampleRunWiring(exampleRun: ExampleRunMode | undefined) {
+  return {
+    /** Null makes getEffectiveLLMApiKeys resolve the platform's admin-setting keys only. */
+    apiKeyOwner: (userId: string): string | null => (exampleRun ? null : userId),
+    /** The platform pays, so no credit reservation, settlement or free-tier model gate. */
+    enforceCredits: (setting: boolean): boolean => !exampleRun && setting,
+    payerGates: !exampleRun,
+    researchModeAllowed: !exampleRun,
+    tools: (tools: ICompletionOptionTools[]): ICompletionOptionTools[] =>
+      exampleRun ? applyExampleRunPolicy(tools, exampleRun) : tools,
+    childTools: exampleRun
+      ? (tools: ICompletionOptionTools[]): ICompletionOptionTools[] => applyExampleRunPolicy(tools, exampleRun)
+      : undefined,
+    toolDb: <D extends { apiKeys: ApiKeyReads }>(db: D): D => (exampleRun ? withoutUserApiKeys(db) : db),
+    pinnedSkill: exampleRun?.skill,
+  };
 }
