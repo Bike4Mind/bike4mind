@@ -41,8 +41,7 @@ public struct TrackedGeneration: Identifiable, Equatable, Sendable {
 
 /// Follows every generation started from Studio until it settles.
 ///
-/// Video, music and Scene jobs report through the realtime `generation_job_updated` frame; images have no job
-/// frame, so they are polled through their quest. Every generation is also polled on a backoff, because
+/// Generation jobs report through the realtime `generation_job_updated` frame. Every generation is also polled on a backoff, because
 /// frames sent while the socket was down are never replayed. Polling stops at a terminal phase or after
 /// `pollWindow`, so a job the server lost cannot poll forever.
 @MainActor
@@ -110,8 +109,7 @@ public final class GenerationTracker {
   }
 
   public func cancel(_ id: String) async throws {
-    guard let tracked = generations.first(where: { $0.id == id }), tracked.handle.isCancellable,
-      !tracked.phase.isTerminal
+    guard let tracked = generations.first(where: { $0.id == id }), !tracked.phase.isTerminal
     else { return }
     try await api.cancel(tracked.handle)
     apply(GenerationStatus(phase: .cancelled), to: id)

@@ -265,10 +265,13 @@
         }
       }
 
-      func generate(_ request: GenerationRequest) async throws -> GenerationHandle {
-        GenerationHandle(
-          kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date(),
-          modelID: request.modelID, params: request.params)
+      func generate(_ request: GenerationRequest) async throws -> [GenerationHandle] {
+        let images = request.kind == .image ? Int(request.params[.count]?.number ?? 1) : 1
+        return (0..<images).map { _ in
+          GenerationHandle(
+            kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date(),
+            modelID: request.modelID, params: request.params)
+        }
       }
 
       func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
@@ -290,8 +293,6 @@
       }
 
       func cancel(_ handle: GenerationHandle) async throws {}
-
-      func createSession(name: String) async throws -> String { "fixture-session" }
     }
 
     private struct FixtureUploader: FileUploading {
