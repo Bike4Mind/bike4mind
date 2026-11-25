@@ -196,6 +196,7 @@ export * from './utils/stopReasons';
 export * from './utils/retrievalRate';
 export * from './utils/answerDiagnosis';
 export * from './utils/requestId';
+export * from './utils/randomUuid';
 export * from './apiKeyRateLimitHeaders';
 export * from './utils/inviteToken';
 export * from './utils/artifactPublishSlug';

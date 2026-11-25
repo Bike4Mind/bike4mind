@@ -12,13 +12,10 @@ import {
   countUnresolvedPlaceholders,
   replacePromptVariables,
   type IResolvedPromptDispatch,
+  randomUuid,
 } from '@bike4mind/common';
 
-function makeNonce(): string {
-  const c = globalThis.crypto;
-  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
+const makeNonce = randomUuid;
 
 /**
  * The outcome of a launch, so callers can distinguish "text placed in the input"

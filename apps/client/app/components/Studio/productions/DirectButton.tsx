@@ -10,6 +10,7 @@ import {
   type IFabFileDocument,
   type IResolvedPromptDispatch,
   type StudioCompositionResponse,
+  randomUuid,
 } from '@bike4mind/common';
 import EmbeddedFileBrowser, { type EmbeddedFileBrowserHandle } from '@client/app/components/Files/EmbeddedFileBrowser';
 import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
@@ -20,8 +21,7 @@ import { generateNewSession } from '@client/app/utils/sessionsAPICalls';
 const BRIEF_MAX_LENGTH = 1000;
 const SESSION_NAME_BRIEF_LENGTH = 40;
 
-const makeNonce = (): string =>
-  globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const makeNonce = randomUuid;
 
 const productLines = (picked: IFabFileDocument | null, brandProducts: readonly string[]): string[] => {
   if (picked) return [`Product photo (Files id): ${picked.id}`];
