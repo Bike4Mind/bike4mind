@@ -53,6 +53,7 @@ export const handOffObligationContract = defineEndpoint({
     'obligation route.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
+  emitsRateLimitHeaders: true,
   scopes: SCOPES,
   request: ObligationHandoffRequestSchema,
   requestExample: { file_id: 'file_example' },
@@ -89,6 +90,7 @@ export const listObligationsContract = defineEndpoint({
     '`next_cursor` back as `cursor` until it is `null`.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
+  emitsRateLimitHeaders: true,
   scopes: SCOPES,
   queryParams: ListObligationsQuerySchema,
   responses: {
@@ -108,6 +110,7 @@ export const getObligationContract = defineEndpoint({
   description: 'Reads one obligation. Only its owner can read it; anyone else gets `404`, exactly like a missing one.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
+  emitsRateLimitHeaders: true,
   scopes: SCOPES,
   pathParams: ObligationIdParamSchema,
   responses: {
@@ -132,6 +135,7 @@ export const updateObligationContract = defineEndpoint({
     'Send at least one field.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
+  emitsRateLimitHeaders: true,
   scopes: SCOPES,
   pathParams: ObligationIdParamSchema,
   request: ObligationUpdateRequestSchema,
