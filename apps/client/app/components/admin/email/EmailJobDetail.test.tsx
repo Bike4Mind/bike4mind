@@ -91,7 +91,8 @@ const outsideDialogs = () => emailCells().filter(el => !el.closest('[role="dialo
 
 const clickNext = (dialog: HTMLElement) =>
   fireEvent.click(within(dialog).getByRole('button', { name: /^next( page)?$/i }));
-const closeDialog = (dialog: HTMLElement) => fireEvent.keyDown(dialog, { key: 'Escape' });
+const closeDialog = (dialog: HTMLElement) =>
+  fireEvent.click(within(dialog).getByTestId(`${dialog.getAttribute('data-testid')}-close-btn`));
 
 const openViewAll = async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'View All 30 Recipients' }));
@@ -139,6 +140,7 @@ describe('EmailJobDetail', () => {
     expect(screen.getByText('30')).toBeInTheDocument();
     expect(screen.getByText('2')).toBeInTheDocument();
     expect(screen.getByText('User 01')).toBeInTheDocument();
+    expect(screen.getByTestId('email-job-recipients-inline-table-frame')).toHaveAttribute('data-framed', 'false');
   });
 
   it('narrows the inline list by search and says when nothing matches', async () => {
@@ -160,6 +162,8 @@ describe('EmailJobDetail', () => {
     const dialog = await openViewAll();
 
     expect(within(dialog).getByText('Recipients (30 total)')).toBeInTheDocument();
+    expect(dialog).toHaveAttribute('data-testid', 'email-job-recipients-dialog');
+    expect(within(dialog).getByTestId('email-job-recipients-table')).toBeInTheDocument();
     expect(emailCells(dialog)).toHaveLength(25);
     expect(emailCells(dialog)[0]).toHaveTextContent('u01@example.com');
 
@@ -203,8 +207,10 @@ describe('EmailJobDetail', () => {
     renderDetail('job1');
     await screen.findByRole('button', { name: 'View All 30 Recipients' });
 
-    fireEvent.click(screen.getByTitle('Full screen preview'));
+    fireEvent.click(screen.getByTestId('email-job-fullscreen-btn'));
     const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveAttribute('data-testid', 'email-job-fullscreen-preview-dialog');
+    expect(within(dialog).getByTestId('email-job-preview-recipient-select')).toBeInTheDocument();
     expect(within(dialog).getByText('Subject:')).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole('combobox'));
