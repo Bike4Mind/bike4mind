@@ -34,6 +34,8 @@ export default function EmailJobsPanel() {
   const [excludeTest, setExcludeTest] = useState(false);
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>({ start: '', end: '' });
   const [showFilters, setShowFilters] = useState(false);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(25);
 
   const {
     data: jobs,
@@ -41,6 +43,8 @@ export default function EmailJobsPanel() {
     isError,
     refetch,
   } = useEmailJobs({
+    page,
+    limit,
     excludeTest,
     startDate: dateRange.start || undefined,
     endDate: dateRange.end || undefined,
@@ -58,6 +62,7 @@ export default function EmailJobsPanel() {
   const clearFilters = () => {
     setExcludeTest(false);
     setDateRange({ start: '', end: '' });
+    setPage(1);
   };
 
   const handleOpenEdit = (job: IEmailJobDocument) => {
@@ -128,7 +133,7 @@ export default function EmailJobsPanel() {
     {
       id: 'status',
       label: 'Status',
-      width: '14%',
+      width: '11rem',
       wrap: true,
       render: job => (
         <Stack spacing={0.5}>
@@ -158,6 +163,36 @@ export default function EmailJobsPanel() {
             <Typography level="body-xs" sx={{ color: 'neutral.500' }}>
               Scheduled: {new Date(job.scheduledAt).toLocaleString()}
             </Typography>
+          )}
+          {job.status === EmailJobStatus.SCHEDULED && (
+            <Button
+              size="sm"
+              variant="soft"
+              color="danger"
+              startDecorator={<StopIcon />}
+              sx={{ alignSelf: 'flex-start' }}
+              onClick={() => handleCancel(job.id)}
+              loading={cancelMutation.isPending}
+              data-testid={`cancel-scheduled-job-${job.id}`}
+            >
+              Cancel
+            </Button>
+          )}
+          {(job.status === EmailJobStatus.QUEUED ||
+            job.status === EmailJobStatus.PROCESSING ||
+            job.overallStatus === EmailJobOverallStatus.SENDING) && (
+            <Button
+              size="sm"
+              variant="soft"
+              color="danger"
+              startDecorator={<StopIcon />}
+              sx={{ alignSelf: 'flex-start' }}
+              onClick={() => handleCancel(job.id)}
+              loading={cancelMutation.isPending}
+              data-testid={`cancel-job-${job.id}`}
+            >
+              Cancel
+            </Button>
           )}
         </Stack>
       ),
@@ -213,34 +248,6 @@ export default function EmailJobsPanel() {
       >
         <EditIcon />
       </IconButton>
-      {job.status === EmailJobStatus.SCHEDULED && (
-        <Button
-          size="sm"
-          variant="soft"
-          color="danger"
-          startDecorator={<StopIcon />}
-          onClick={() => handleCancel(job.id)}
-          loading={cancelMutation.isPending}
-          data-testid={`cancel-scheduled-job-${job.id}`}
-        >
-          Cancel
-        </Button>
-      )}
-      {(job.status === EmailJobStatus.QUEUED ||
-        job.status === EmailJobStatus.PROCESSING ||
-        job.overallStatus === EmailJobOverallStatus.SENDING) && (
-        <Button
-          size="sm"
-          variant="soft"
-          color="danger"
-          startDecorator={<StopIcon />}
-          onClick={() => handleCancel(job.id)}
-          loading={cancelMutation.isPending}
-          data-testid={`cancel-job-${job.id}`}
-        >
-          Cancel
-        </Button>
-      )}
       <IconButton
         size="sm"
         variant="plain"
@@ -286,7 +293,10 @@ export default function EmailJobsPanel() {
             <Checkbox
               label="Exclude test campaigns"
               checked={excludeTest}
-              onChange={e => setExcludeTest(e.target.checked)}
+              onChange={e => {
+                setExcludeTest(e.target.checked);
+                setPage(1);
+              }}
               data-testid="exclude-test-checkbox"
             />
             <FormControl size="sm" sx={{ minWidth: 150 }}>
@@ -294,7 +304,10 @@ export default function EmailJobsPanel() {
               <OptionalDateInput
                 size="sm"
                 value={dateRange.start}
-                onChange={start => setDateRange({ ...dateRange, start })}
+                onChange={start => {
+                  setDateRange({ ...dateRange, start });
+                  setPage(1);
+                }}
                 emptyLabel="From any date"
                 setLabel="Set start date"
                 clearLabel="Remove start date"
@@ -309,7 +322,10 @@ export default function EmailJobsPanel() {
               <OptionalDateInput
                 size="sm"
                 value={dateRange.end}
-                onChange={end => setDateRange({ ...dateRange, end })}
+                onChange={end => {
+                  setDateRange({ ...dateRange, end });
+                  setPage(1);
+                }}
                 emptyLabel="To any date"
                 setLabel="Set end date"
                 clearLabel="Remove end date"
@@ -373,8 +389,19 @@ export default function EmailJobsPanel() {
               />
             )
           }
+          pagination={{
+            page,
+            pageSize: limit,
+            total: jobs?.meta.total ?? 0,
+            onPageChange: setPage,
+            onPageSizeChange: size => {
+              setLimit(size);
+              setPage(1);
+            },
+          }}
           rowActions={renderRowActions}
-          actionsWidth="11rem"
+          actionsWidth="6rem"
+          minWidth="52rem"
         />
       )}
     </Stack>

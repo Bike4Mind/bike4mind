@@ -32,7 +32,7 @@ const CATEGORY_LABELS: Record<EmailCategory, string> = {
   [EmailCategory.TRANSACTIONAL]: 'Transactional',
 };
 
-const columns: DataColumn<IEmailTemplateDocument>[] = [
+const infoColumns: DataColumn<IEmailTemplateDocument>[] = [
   {
     id: 'name',
     label: 'Name',
@@ -60,16 +60,6 @@ const columns: DataColumn<IEmailTemplateDocument>[] = [
     ),
   },
   { id: 'subject', label: 'Subject', render: template => template.subject },
-  {
-    id: 'status',
-    label: 'Status',
-    width: '7rem',
-    render: template => (
-      <Chip color={template.isActive ? 'success' : 'neutral'} size="sm" variant="soft">
-        {template.isActive ? 'Active' : 'Inactive'}
-      </Chip>
-    ),
-  },
 ];
 
 export default function EmailTemplatesPanel() {
@@ -136,59 +126,76 @@ export default function EmailTemplatesPanel() {
 
   const existingSlugs = templates?.data?.map((t: IEmailTemplateDocument) => t.slug) || [];
 
-  const renderRowActions = (template: IEmailTemplateDocument) => {
-    const usingJobs = getJobsUsingTemplate(template.id);
-    return (
-      <>
+  // The in-use lock sits in Status rather than the hover-revealed row actions so it is always visible.
+  const columns: DataColumn<IEmailTemplateDocument>[] = [
+    ...infoColumns,
+    {
+      id: 'status',
+      label: 'Status',
+      width: '11rem',
+      render: template => {
+        const usingJobs = getJobsUsingTemplate(template.id);
+        return (
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Chip color={template.isActive ? 'success' : 'neutral'} size="sm" variant="soft">
+              {template.isActive ? 'Active' : 'Inactive'}
+            </Chip>
+            {usingJobs.length > 0 && (
+              <Tooltip
+                title={`Cannot delete: Used by ${usingJobs.length} campaign(s): ${usingJobs.slice(0, 3).join(', ')}${usingJobs.length > 3 ? '...' : ''}`}
+              >
+                <Chip
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  startDecorator={<LockIcon />}
+                  data-testid={`template-in-use-${template.id}`}
+                >
+                  In use
+                </Chip>
+              </Tooltip>
+            )}
+          </Stack>
+        );
+      },
+    },
+  ];
+
+  const renderRowActions = (template: IEmailTemplateDocument) => (
+    <>
+      <IconButton
+        size="sm"
+        variant="plain"
+        onClick={() => handleOpenEdit(template.id)}
+        data-testid={`edit-template-${template.id}`}
+      >
+        <EditIcon />
+      </IconButton>
+      <Tooltip title="Clone template">
         <IconButton
           size="sm"
           variant="plain"
-          onClick={() => handleOpenEdit(template.id)}
-          data-testid={`edit-template-${template.id}`}
+          color="primary"
+          onClick={() => handleClone(template.id)}
+          loading={cloneMutation.isPending}
+          data-testid={`clone-template-${template.id}`}
         >
-          <EditIcon />
+          <ContentCopyIcon />
         </IconButton>
-        <Tooltip title="Clone template">
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="primary"
-            onClick={() => handleClone(template.id)}
-            loading={cloneMutation.isPending}
-            data-testid={`clone-template-${template.id}`}
-          >
-            <ContentCopyIcon />
-          </IconButton>
-        </Tooltip>
-        {isTemplateInUse(template.id) ? (
-          <Tooltip
-            title={`Cannot delete: Used by ${usingJobs.length} campaign(s): ${usingJobs.slice(0, 3).join(', ')}${usingJobs.length > 3 ? '...' : ''}`}
-          >
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              disabled
-              sx={{ opacity: 0.5 }}
-              data-testid={`template-in-use-${template.id}`}
-            >
-              <LockIcon />
-            </IconButton>
-          </Tooltip>
-        ) : (
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="danger"
-            onClick={() => setDeleteConfirmId(template.id)}
-            data-testid={`delete-template-${template.id}`}
-          >
-            <DeleteIcon />
-          </IconButton>
-        )}
-      </>
-    );
-  };
+      </Tooltip>
+      {!isTemplateInUse(template.id) && (
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="danger"
+          onClick={() => setDeleteConfirmId(template.id)}
+          data-testid={`delete-template-${template.id}`}
+        >
+          <DeleteIcon />
+        </IconButton>
+      )}
+    </>
+  );
 
   // Show editor view
   if (isCreating || editingTemplateId) {
@@ -241,7 +248,8 @@ export default function EmailTemplatesPanel() {
             />
           }
           rowActions={renderRowActions}
-          actionsWidth="7.5rem"
+          actionsWidth="8rem"
+          minWidth="50rem"
         />
       )}
 

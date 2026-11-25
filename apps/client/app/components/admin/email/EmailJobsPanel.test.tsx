@@ -49,6 +49,11 @@ const job = {
   status: 'draft',
 };
 
+const pageOf = (rows: unknown[], total = rows.length) => ({
+  data: rows,
+  meta: { currentPage: 1, totalPages: Math.ceil(total / 25), total },
+});
+
 const setStartDate = (value: string) => {
   fireEvent.click(screen.getByTestId('date-range-start-input-set-btn'));
   fireEvent.change(screen.getByTestId('date-range-start-input'), { target: { value } });
@@ -56,7 +61,7 @@ const setStartDate = (value: string) => {
 
 describe('EmailJobsPanel', () => {
   beforeEach(() => {
-    Object.assign(mocks.jobs, { data: { data: [] }, isLoading: false, isError: false });
+    Object.assign(mocks.jobs, { data: pageOf([]), isLoading: false, isError: false });
     mocks.jobs.refetch.mockClear();
   });
 
@@ -94,7 +99,7 @@ describe('EmailJobsPanel', () => {
   });
 
   it('keeps the rows on screen when a background refetch fails', () => {
-    Object.assign(mocks.jobs, { data: { data: [job] }, isError: true });
+    Object.assign(mocks.jobs, { data: pageOf([job]), isError: true });
     renderPanel();
 
     expect(screen.getByTestId('edit-job-j1')).toBeInTheDocument();
@@ -133,7 +138,7 @@ describe('EmailJobsPanel', () => {
   });
 
   it('lists campaigns and opens one in the detail view', () => {
-    mocks.jobs.data = { data: [job] };
+    mocks.jobs.data = pageOf([job]);
     renderPanel();
 
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
@@ -142,34 +147,36 @@ describe('EmailJobsPanel', () => {
   });
 
   it('renders each campaign row inside the admin data table with the actions its status allows', () => {
-    mocks.jobs.data = {
-      data: [
-        {
-          ...job,
-          id: 'j2',
-          name: 'Weekly digest',
-          status: EmailJobStatus.SCHEDULED,
-          scheduledAt: '2026-12-01T09:00:00.000Z',
-        },
-        {
-          ...job,
-          id: 'j3',
-          name: 'Autumn recap',
-          status: EmailJobStatus.COMPLETED,
-          overallStatus: EmailJobOverallStatus.COMPLETE,
-          recipientCount: 4,
-          sentCount: 4,
-          openedCount: 1,
-        },
-      ],
-    };
+    mocks.jobs.data = pageOf([
+      {
+        ...job,
+        id: 'j2',
+        name: 'Weekly digest',
+        status: EmailJobStatus.SCHEDULED,
+        scheduledAt: '2026-12-01T09:00:00.000Z',
+      },
+      {
+        ...job,
+        id: 'j3',
+        name: 'Autumn recap',
+        status: EmailJobStatus.COMPLETED,
+        overallStatus: EmailJobOverallStatus.COMPLETE,
+        recipientCount: 4,
+        sentCount: 4,
+        openedCount: 1,
+      },
+    ]);
     renderPanel();
 
     const table = screen.getByTestId('email-campaigns-table');
     const scheduledRow = within(table).getByText('Weekly digest').closest('tr') as HTMLElement;
     const completeRow = within(table).getByText('Autumn recap').closest('tr') as HTMLElement;
 
+    // Cancel sits in Status, outside the hover-revealed row actions, so it is always visible.
     expect(within(scheduledRow).getByTestId('cancel-scheduled-job-j2')).toBeInTheDocument();
+    expect(
+      within(within(scheduledRow).getByTestId('admin-table-row-actions')).queryByTestId('cancel-scheduled-job-j2')
+    ).not.toBeInTheDocument();
     expect(within(completeRow).getByText('4 / 4')).toBeInTheDocument();
     expect(within(completeRow).getByText('25.0%')).toBeInTheDocument();
     expect(
@@ -177,5 +184,20 @@ describe('EmailJobsPanel', () => {
         .getAllByRole('button')
         .map(button => button.getAttribute('data-testid'))
     ).toEqual(['edit-job-j3', 'clone-job-j3']);
+  });
+
+  it('pages the campaigns on the server and reports the server total', () => {
+    mocks.jobs.data = pageOf([job], 30);
+    renderPanel();
+
+    expect(mocks.lastParams).toMatchObject({ page: 1, limit: 25 });
+    expect(screen.getByTestId('admin-table-range')).toHaveTextContent('1 to 1 of 30');
+
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(mocks.lastParams).toMatchObject({ page: 2, limit: 25 });
+
+    fireEvent.click(screen.getByTestId('filter-campaigns-btn'));
+    setStartDate('2026-01-01');
+    expect(mocks.lastParams).toMatchObject({ page: 1, startDate: '2026-01-01' });
   });
 });

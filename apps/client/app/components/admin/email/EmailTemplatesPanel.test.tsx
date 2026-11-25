@@ -154,12 +154,14 @@ describe('EmailTemplatesPanel', () => {
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
   });
 
-  it('shows a lock instead of delete for a template a campaign uses', () => {
+  it('shows an always-visible lock instead of delete for a template a campaign uses', () => {
     mocks.templates.data = { data: [template] };
     mocks.jobs.data = { data: [{ id: 'j1', name: 'Launch', templateId: 't1' }] };
     renderPanel();
 
-    expect(screen.getByTestId('template-in-use-t1')).toBeDisabled();
+    const lock = screen.getByTestId('template-in-use-t1');
+    expect(lock).toHaveTextContent('In use');
+    expect(within(screen.getByTestId('admin-table-row-actions')).queryByTestId('template-in-use-t1')).toBeNull();
     expect(screen.queryByTestId('delete-template-t1')).not.toBeInTheDocument();
   });
 });

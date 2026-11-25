@@ -271,6 +271,7 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
       <DataTable<IEmailSendAttemptDocument>
         label="Email activity"
         testId="email-activity-table"
+        minWidth="72rem"
         rows={attempts}
         columns={columns}
         getRowId={attempt => attempt.id}
