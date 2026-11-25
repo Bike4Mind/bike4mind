@@ -62,6 +62,6 @@ describe('a reply a model server refused for credentials', () => {
     );
     expect(container.querySelector('[data-testid="chat-server-credentials-chip"]')).not.toBeNull();
     act(() => container.querySelector<HTMLElement>('[data-testid="chat-server-credentials-btn"]')!.click());
-    expect(navigate).toHaveBeenCalledWith({ to: '/settings', search: { section: 'servers' } });
+    expect(navigate).toHaveBeenCalledWith({ to: '/settings', search: { section: 'models', setting: 'model-servers' } });
   });
 });

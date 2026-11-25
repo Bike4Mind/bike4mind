@@ -51,7 +51,7 @@ const MAX_TIMEOUT_MS = 300_000;
 const MIN_STREAMS_BUDGET = 2_000;
 
 /** Grace between asking the process group to stop and killing it outright. */
-const SIGKILL_DELAY_MS = 3_000;
+export const SIGKILL_DELAY_MS = 3_000;
 
 /** Long enough for the runner's final summary lines to land after the idle marker. */
 const WATCH_GRACE_MS = 1_500;

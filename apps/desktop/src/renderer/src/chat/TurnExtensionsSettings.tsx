@@ -69,7 +69,7 @@ export function TurnExtensionsSettings({
         }}
         sx={{ alignSelf: 'flex-start', minWidth: 140 }}
         slotProps={{
-          button: { 'aria-label': 'Long-running agents', 'data-testid': 'settings-turn-extensions-select' },
+          button: { 'aria-label': 'Extra turns for long tasks', 'data-testid': 'settings-turn-extensions-select' },
         }}
       >
         {CHOICES.map(count => (
