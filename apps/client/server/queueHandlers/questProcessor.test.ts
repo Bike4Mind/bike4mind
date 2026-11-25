@@ -451,6 +451,71 @@ describe('processQuest', () => {
     }, 120_000);
   });
 
+  describe('example run', () => {
+    const run = async (exampleRun: Record<string, unknown>) => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      return processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+        logger as never,
+        exampleRun as never
+      );
+    };
+
+    it('runs platform-paid: no free-tier cap, meter, generation jobs or first-value event, with the deadline signal', async () => {
+      mockProcess.mockClear();
+      processOptions.mockClear();
+      mockCapCheck.mockClear();
+      mockRecordFirstChatValue.mockClear();
+      const abortSignal = new AbortController().signal;
+      const exampleRun = { onStep: vi.fn(), abortSignal };
+
+      await run(exampleRun);
+
+      expect(mockCapCheck).not.toHaveBeenCalled();
+      const options = processOptions.mock.lastCall?.[0] as Record<string, unknown>;
+      expect(options.createCompletionMeter).toBeUndefined();
+      expect(options.audioToolJobs).toBeUndefined();
+      expect(mockProcess).toHaveBeenCalledWith(
+        expect.objectContaining({
+          exampleRun,
+          abortSignal,
+          videoToolConfigResolver: undefined,
+          musicToolConfigResolver: undefined,
+          imageJobsResolver: undefined,
+        })
+      );
+      expect(mockRecordFirstChatValue).not.toHaveBeenCalled();
+    }, 120_000);
+
+    it('leaves a normal turn on the metered path', async () => {
+      processOptions.mockClear();
+      mockProcess.mockClear();
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+        logger as never
+      );
+      const options = processOptions.mock.lastCall?.[0] as Record<string, unknown>;
+      expect(options.createCompletionMeter).toEqual(expect.any(Function));
+      expect(mockProcess.mock.lastCall?.[0]).toMatchObject({ exampleRun: undefined, abortSignal: undefined });
+    }, 120_000);
+
+    it('still refuses a spend-frozen account', async () => {
+      const { questRepository } = await import('@bike4mind/database');
+      const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
+      mockFindActiveFreeze.mockResolvedValueOnce({ scopeType: 'User', frozenAt: new Date(), reason: 'internal' });
+      mockProcess.mockClear();
+
+      await expect(run({ onStep: vi.fn() })).resolves.toBeUndefined();
+
+      expect(settle).toHaveBeenCalledWith('quest-1', expect.objectContaining({ errorCode: 'spend_frozen' }));
+      expect(mockProcess).not.toHaveBeenCalled();
+      settle.mockRestore();
+    }, 120_000);
+  });
+
   describe('first_value', () => {
     const visitId = 'a'.repeat(32);
     const run = async (extra: Record<string, unknown>) => {

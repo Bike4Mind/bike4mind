@@ -375,42 +375,43 @@ export async function processQuest(
     // Every quest-creating surface (web app, public chat API, Slack, voice proxy) lands here, so this
     // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
     // quest with the reason instead of throwing into the route's generic-failure reply and metric.
-    // The platform pays for an example run, so the author's own spend limits do not apply.
-    if (!exampleRun) {
-      try {
-        // Ahead of the cap and the turn: a frozen subject is refused before any context is assembled.
-        await assertSpendNotFrozen(
-          spendFreezeSubjectForRequest(
-            {
-              user: { id: params.userId },
-              apiKeyInfo: params.apiKeyId ? { keyId: params.apiKeyId } : undefined,
-            },
-            params.organizationId ?? null
-          ),
-          { db: { spendFreezes: spendFreezeRepository } }
-        );
+    try {
+      // Ahead of the cap and the turn: a frozen subject is refused before any context is assembled.
+      // An example run is checked too: the freeze is about the account, whoever pays.
+      await assertSpendNotFrozen(
+        spendFreezeSubjectForRequest(
+          {
+            user: { id: params.userId },
+            apiKeyInfo: params.apiKeyId ? { keyId: params.apiKeyId } : undefined,
+          },
+          params.organizationId ?? null
+        ),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
+      // The free-tier cap limits the author's own spend; the platform pays for an example run.
+      if (!exampleRun) {
         await checkFreeTierDailySpendCap({
           user: storedUser,
           billingOrganizationId: params.organizationId,
           usageEventRepository,
           logger,
         });
-      } catch (error) {
-        const frozen = isSpendFrozenError(error);
-        if (!frozen && !isFreeTierDailyCapError(error)) throw error;
-        logger.info(`Quest refused by the ${frozen ? 'spend freeze' : 'free-tier daily spend cap'}`, {
-          questId: params.questId,
-        });
-        await questRepository.settleIfUnfinished(params.questId, {
-          status: 'stopped',
-          type: 'error',
-          reply: error.message,
-          replies: [error.message],
-          ...(frozen ? { errorCode: SPEND_FROZEN_ERROR_CODE } : {}),
-        });
-        await liveActivity.end('failed');
-        return;
       }
+    } catch (error) {
+      const frozen = isSpendFrozenError(error);
+      if (!frozen && !isFreeTierDailyCapError(error)) throw error;
+      logger.info(`Quest refused by the ${frozen ? 'spend freeze' : 'free-tier daily spend cap'}`, {
+        questId: params.questId,
+      });
+      await questRepository.settleIfUnfinished(params.questId, {
+        status: 'stopped',
+        type: 'error',
+        reply: error.message,
+        replies: [error.message],
+        ...(frozen ? { errorCode: SPEND_FROZEN_ERROR_CODE } : {}),
+      });
+      await liveActivity.end('failed');
+      return;
     }
 
     // Withholding mutates the document, so do it after the billing exemption check.
@@ -510,6 +511,7 @@ export async function processQuest(
       imageJobFilesResolver: resolveImageJobFiles,
       callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
       exampleRun,
+      abortSignal: exampleRun?.abortSignal,
     });
   } catch (error) {
     await liveActivity.end('failed');
