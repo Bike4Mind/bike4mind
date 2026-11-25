@@ -4,6 +4,7 @@ import {
   archiveConfirmationDialog,
   archiveDecisionFrom,
   archiveFromSidebar,
+  confirmArchiveFromIpc,
   type ArchiveConfirmation,
   type ArchiveConfirmationAnswer,
   type ArchiveDecision,
@@ -168,5 +169,29 @@ describe('sidebar archive confirmation', () => {
     });
     await run();
     expect(service.setSessionArchived).not.toHaveBeenCalled();
+  });
+});
+
+describe('confirmArchiveFromIpc', () => {
+  const question = {
+    parentTitle: 'Parent',
+    finished: [{ id: 'a', title: 'A' }],
+    kept: [{ id: 'b', title: 'B', status: 'running' }],
+  };
+
+  it('returns null without showing the dialog when the question is malformed', async () => {
+    const show = vi.fn();
+    expect(await confirmArchiveFromIpc({ parentTitle: 1 }, show)).toBeNull();
+    expect(show).not.toHaveBeenCalled();
+  });
+
+  it('maps a confirmed answer with the checkbox ticked to the finished sub-session ids', async () => {
+    const show = vi.fn(async () => ({ response: 0, checkboxChecked: true }));
+    expect(await confirmArchiveFromIpc(question, show)).toEqual({ confirmed: true, archiveChildIds: ['a'] });
+    expect(show).toHaveBeenCalledOnce();
+  });
+
+  it('returns null when the user cancels', async () => {
+    expect(await confirmArchiveFromIpc(question, async () => ({ response: 1, checkboxChecked: true }))).toBeNull();
   });
 });

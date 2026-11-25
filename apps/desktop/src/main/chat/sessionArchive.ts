@@ -1,4 +1,5 @@
 import type { ChatSessionSummary } from '@shared/chat';
+import { archiveConfirmationSchema } from '@shared/hostProtocol';
 import type { ArchiveAnswer, ArchiveQuestion } from '@shared/ipc';
 import type { ChatService } from './ChatService';
 import type { SessionStore } from './SessionStore';
@@ -110,6 +111,16 @@ export function archiveConfirmationDialog(facts: ArchiveQuestion): ArchiveConfir
       : {}),
     noLink: true,
   };
+}
+
+/** Parses an untrusted question, shows the dialog, and returns the user's decision; null when the question is invalid or the user cancelled. */
+export async function confirmArchiveFromIpc(
+  raw: unknown,
+  showMessageBox: (options: ArchiveConfirmation) => Promise<ArchiveConfirmationAnswer>
+): Promise<ArchiveAnswer | null> {
+  const question = archiveConfirmationSchema.safeParse(raw);
+  if (!question.success) return null;
+  return archiveDecisionFrom(question.data, await showMessageBox(archiveConfirmationDialog(question.data)));
 }
 
 /** The decision a message box answer stands for; null when the user cancelled. */

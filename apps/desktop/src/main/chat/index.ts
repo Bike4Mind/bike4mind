@@ -80,8 +80,7 @@ import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
-import { archiveConfirmationDialog, archiveDecisionFrom } from './sessionArchive';
-import { archiveConfirmationSchema } from '@shared/hostProtocol';
+import { confirmArchiveFromIpc } from './sessionArchive';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
@@ -751,12 +750,10 @@ export function registerChat(
   // Archiving itself goes through session/setArchived; only the question is asked here, where
   // Electron's dialog lives.
   ipcMain.handle(IPC_CHANNELS.chatConfirmArchive, async (event, raw: unknown): Promise<ArchiveAnswer | null> => {
-    const question = archiveConfirmationSchema.safeParse(raw);
-    if (!question.success) return null;
-    const options = archiveConfirmationDialog(question.data);
     const window = BrowserWindow.fromWebContents(event.sender);
-    const answer = await (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options));
-    return archiveDecisionFrom(question.data, answer);
+    return confirmArchiveFromIpc(raw, options =>
+      window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options)
+    );
   });
   ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, raw: unknown) => {
     const scope = parseSkillsScope(raw);
