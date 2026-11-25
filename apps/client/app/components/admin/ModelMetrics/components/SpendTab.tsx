@@ -133,7 +133,7 @@ const KpiCard: React.FC<{ kpi: SpendKpi }> = ({ kpi }) => {
 
 export type SpendAccountRow = SpendData['byAccount'][number];
 
-// The parent owns the spend query and its error state, so the table never shows a retry.
+// DataTable requires a retry handler; the parent owns the spend query's error state and `empty` has no action.
 const noRetry = () => undefined;
 
 const accountColumns: DataColumn<SpendAccountRow>[] = [

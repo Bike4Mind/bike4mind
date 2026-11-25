@@ -7,7 +7,7 @@ import type { ChartData, RateLimitSnapshot } from '../types';
 import { DataTable, EmptyState, SectionCard, StatusChip } from '../../shared';
 import { throttledColumns } from '../snapshotColumns';
 
-// The snapshots come from the parent's query, which shows its own error state.
+// DataTable requires a retry handler; the parent owns the snapshots query and its error state.
 const noRetry = () => undefined;
 
 const INTEGRATION_COLORS: Record<string, string> = {

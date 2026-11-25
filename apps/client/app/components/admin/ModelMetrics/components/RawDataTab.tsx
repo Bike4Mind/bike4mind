@@ -20,7 +20,7 @@ interface RawDataTabProps {
   onShowInfoModal: () => void;
 }
 
-// The parent renders its own error state, so the table never shows a retry.
+// DataTable requires a retry handler; the parent renders the error state and `empty` has no action.
 const noRetry = () => undefined;
 
 const statusColor = (status: ModelMetric['status']) =>
@@ -49,7 +49,10 @@ const MetricDetails = ({ metric }: { metric: ModelMetric }) => {
   const streaming = performance?.streamingPerformance;
   const hasStreaming = !!streaming && ((streaming.chunkCount ?? 0) > 0 || (streaming.totalStreamTime ?? 0) > 0);
   return (
-    <Box sx={{ mt: 1, display: 'grid', gridTemplateColumns: '1fr', gap: 1 }} data-testid="model-metrics-raw-row-details">
+    <Box
+      sx={{ mt: 1, display: 'grid', gridTemplateColumns: '1fr', gap: 1 }}
+      data-testid="model-metrics-raw-row-details"
+    >
       <DetailSection title="Core timing">
         <DetailRow label="Context retrieval">{formatDuration(performance?.contextRetrievalTime)}</DetailRow>
         <DetailRow label="Model inference">{formatDuration(performance?.modelInferenceTime)}</DetailRow>
