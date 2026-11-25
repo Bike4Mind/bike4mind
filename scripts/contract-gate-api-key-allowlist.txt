@@ -504,6 +504,7 @@ apps/client/pages/api/mcp-servers/notion/settings.ts
 apps/client/pages/api/mcp/confirm.ts
 apps/client/pages/api/mcp/delete-attachment.ts
 apps/client/pages/api/mcp/download-attachment.ts
+apps/client/pages/api/mcp/functions.ts  # deliberately accepts functions:invoke API keys: an MCP server (JSON-RPC over streamable HTTP) for the key owner's own live functions, not a REST operation, so kept out of the public OpenAPI; session callers refused in the handler, rate limited
 apps/client/pages/api/mcp/github/repositories.ts
 apps/client/pages/api/mcp/github/status.ts
 apps/client/pages/api/mementos/[id]/delete.ts

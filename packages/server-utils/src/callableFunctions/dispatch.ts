@@ -64,7 +64,8 @@ const MIB = 1024 * 1024;
 /**
  * Per surface: input and output caps (5 MB is the runtime's ceiling; results that go into a model's context get
  * 256 KB) and the longest the dispatcher waits for one run. Every surface answers synchronously within the web
- * function's 60 s (`infra/web.ts`), so no wait passes 45 s.
+ * function's 60 s (`infra/web.ts`), so no wait passes 45 s. An MCP answer carries the output twice, so its cap is
+ * 2 MB to leave room in the web function's 6 MB response.
  */
 export const CALLABLE_FUNCTION_SURFACE_CAPS: Record<
   CallableFunctionCallSurface,
@@ -72,7 +73,7 @@ export const CALLABLE_FUNCTION_SURFACE_CAPS: Record<
 > = {
   test: { inputBytes: 5 * MIB, outputBytes: 5 * MIB, waitMs: 45_000 },
   rest: { inputBytes: 5 * MIB, outputBytes: 5 * MIB, waitMs: 45_000 },
-  mcp: { inputBytes: 5 * MIB, outputBytes: 5 * MIB, waitMs: 45_000 },
+  mcp: { inputBytes: 5 * MIB, outputBytes: 2 * MIB, waitMs: 45_000 },
   chat: { inputBytes: 5 * MIB, outputBytes: 256 * 1024, waitMs: 45_000 },
   agent: { inputBytes: 5 * MIB, outputBytes: 256 * 1024, waitMs: 45_000 },
 };

@@ -341,6 +341,7 @@ export const SettingKeySchema = z.enum([
   'EnableArtifactsDefault',
   'pythonArtifactDataOrigins',
   'EnableCallableFunctions',
+  'EnableCallableFunctionsMcp',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -2864,6 +2865,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableArtifactsDefault', order: 21 },
       { key: 'pythonArtifactDataOrigins', order: 22 },
       { key: 'EnableCallableFunctions', order: 23 },
+      { key: 'EnableCallableFunctionsMcp', order: 24 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -3879,6 +3881,19 @@ export const settingsMap = {
     order: 23,
     dependsOn: 'EnableArtifacts',
     // Read through resolveCallableFunctionsEnabled in packages/server-utils, never as the raw platform value.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  EnableCallableFunctionsMcp: makeBooleanSetting({
+    key: 'EnableCallableFunctionsMcp',
+    name: 'Enable Callable Functions over MCP',
+    defaultValue: false,
+    description:
+      'Lets an MCP client list and call the live functions of the person whose functions:invoke API key it uses, at /api/mcp/functions. Needs Enable Callable Functions. Off (default): the endpoint refuses every request. Can be overridden per organization.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24,
+    dependsOn: 'EnableCallableFunctions',
+    // Read through resolveCallableFunctionsMcpEnabled in packages/server-utils, never as the raw platform value.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   EnableAgents: makeBooleanSetting({
