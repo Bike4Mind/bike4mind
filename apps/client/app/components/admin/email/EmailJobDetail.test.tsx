@@ -155,6 +155,10 @@ describe('EmailJobDetail', () => {
     fireEvent.change(search, { target: { value: 'zzz' } });
     expect(outsideDialogs()).toHaveLength(0);
     expect(screen.getByText('No recipients match your search')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('email-job-recipients-inline-table-clear-search-btn'));
+    expect(search).toHaveValue('');
+    expect(outsideDialogs()).toHaveLength(5);
   });
 
   it('pages the View All dialog 25 at a time and resets to page one on search', async () => {
@@ -176,7 +180,13 @@ describe('EmailJobDetail', () => {
       'u30@example.com',
     ]);
 
-    fireEvent.change(within(dialog).getByPlaceholderText('Search by email or name...'), { target: { value: 'u2' } });
+    // Every row matches, so the result still spans two pages and only the reset brings back page one.
+    const modalSearch = within(dialog).getByPlaceholderText('Search by email or name...');
+    fireEvent.change(modalSearch, { target: { value: 'example.com' } });
+    expect(emailCells(dialog)).toHaveLength(25);
+    expect(emailCells(dialog)[0]).toHaveTextContent('u01@example.com');
+
+    fireEvent.change(modalSearch, { target: { value: 'u2' } });
     expect(emailCells(dialog)).toHaveLength(10);
     expect(emailCells(dialog)[0]).toHaveTextContent('u20@example.com');
 
@@ -201,6 +211,11 @@ describe('EmailJobDetail', () => {
     await screen.findByText('Eligible');
     expect(screen.queryByRole('button', { name: /View All/ })).toBeNull();
     expect(emailCells()).toHaveLength(0);
+    expect(screen.getByText('No recipients found')).toBeInTheDocument();
+
+    m.preview.mockClear();
+    fireEvent.click(screen.getByTestId('email-job-recipients-inline-table-refresh-btn'));
+    await waitFor(() => expect(m.preview).toHaveBeenCalledTimes(1));
   });
 
   it('opens the fullscreen preview, previews as a chosen recipient, and closes', async () => {

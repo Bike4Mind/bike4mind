@@ -464,6 +464,27 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
     );
   }
 
+  const renderRecipientsEmpty = (testId: string) =>
+    viewUsersSearch ? (
+      <EmptyState
+        title="No recipients match your search"
+        action={
+          <Button variant="outlined" onClick={() => setViewUsersSearch('')} data-testid={`${testId}-clear-search-btn`}>
+            Clear search
+          </Button>
+        }
+      />
+    ) : (
+      <EmptyState
+        title="No recipients found"
+        action={
+          <Button variant="outlined" onClick={handlePreviewRecipients} data-testid={`${testId}-refresh-btn`}>
+            Refresh recipients
+          </Button>
+        }
+      />
+    );
+
   // Scrolling layout - no nested scroll areas
   return (
     <Box sx={{ pb: 4 }}>
@@ -741,15 +762,11 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                         getRowId={getRecipientId}
                         pagination={false}
                         framed={false}
-                        maxHeight="150px"
-                        minWidth="20rem"
+                        maxHeight="20rem"
+                        // The form column is a fixed half of the page, so the table squeezes to fit it.
+                        minWidth="0"
                         onRetry={handlePreviewRecipients}
-                        empty={
-                          <EmptyState
-                            title={viewUsersSearch ? 'No recipients match your search' : 'No recipients found'}
-                            action={null}
-                          />
-                        }
+                        empty={renderRecipientsEmpty('email-job-recipients-inline-table')}
                       />
 
                       {/* View All Button */}
@@ -1205,14 +1222,9 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
             getRowId={getRecipientId}
             pageResetKey={viewUsersSearch}
             maxHeight="55vh"
-            minWidth="20rem"
+            minWidth="16rem"
             onRetry={handlePreviewRecipients}
-            empty={
-              <EmptyState
-                title={viewUsersSearch ? 'No recipients match your search' : 'No recipients found'}
-                action={null}
-              />
-            }
+            empty={renderRecipientsEmpty('email-job-recipients-table')}
           />
         </Stack>
       </AdminDialog>
@@ -1268,7 +1280,16 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
             </Typography>
           </Box>
           {previewHtml && (
-            <Box sx={{ height: '70vh', bgcolor: 'white', borderRadius: 'md', overflow: 'hidden' }}>
+            // Leaves room for the title, select and subject under the dialog's max height, so only the email scrolls.
+            <Box
+              sx={{
+                height: 'calc(100vh - 340px)',
+                minHeight: 320,
+                bgcolor: 'white',
+                borderRadius: 'md',
+                overflow: 'hidden',
+              }}
+            >
               <iframe
                 srcDoc={previewHtml}
                 // Opaque-origin, no scripts: rendered email HTML must not run with the
