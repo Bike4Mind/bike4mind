@@ -21,7 +21,7 @@ const { values } = parseArgs({
   options: {
     stage: { type: 'string' },
     key: { type: 'string' },
-    app: { type: 'string', default: 'bike4mind' },
+    app: { type: 'string', default: process.env.SEED_APP_NAME || 'bike4mind' },
     'dry-run': { type: 'boolean', default: false },
     force: { type: 'boolean', default: false },
   },

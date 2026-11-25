@@ -19,7 +19,7 @@ export const WRAPPED_SECRET_NAME = 'SECRET_ENCRYPTION_KEY_WRAPPED';
 export function parseSecretListing(listing: string, name: string): string | undefined {
   let inFallback = false;
   for (const line of listing.split('\n')) {
-    if (line.startsWith('#')) inFallback = /fallback/i.test(line);
+    if (line.startsWith('#')) inFallback = /^#\s*fallback\s*$/i.test(line);
     else if (!inFallback && line.startsWith(`${name}=`)) return line.slice(name.length + 1).trim();
   }
   return undefined;

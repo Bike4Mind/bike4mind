@@ -106,6 +106,11 @@ describe('parseSecretListing', () => {
     expect(parseSecretListing(listing, NAME)).toBeUndefined();
   });
 
+  it('does not mistake a stage named like the fallback section for it', () => {
+    const listing = [...fallback, '', '# bike4mind/fallback-test', `${NAME}=own`].join('\n');
+    expect(parseSecretListing(listing, NAME)).toBe('own');
+  });
+
   it('reads a listing that has no section headers', () => {
     expect(parseSecretListing(`A=1\n${NAME}=own`, NAME)).toBe('own');
   });
