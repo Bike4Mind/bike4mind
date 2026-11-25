@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { DATETIME_COLUMN_WIDTH } from '@client/app/components/admin/shared/DataTable';
 import { IntegrationDetailPanel } from './IntegrationDetailPanel';
 import type { IntegrationDashboardEntry, RecentError } from '../types';
 
@@ -70,6 +71,14 @@ describe('IntegrationDetailPanel recent errors', () => {
     expect(rows[1]).toHaveTextContent('Token revoked');
     expect(within(rows[1]).getByText('Token revoked').closest('td')).toHaveAttribute('data-cell-wrap');
     expect(rows[1]).toHaveTextContent('disconnect');
+  });
+
+  it('sizes the Time column for the full locale timestamp', () => {
+    const occurredAt = new Date(2026, 11, 28, 12, 58, 58);
+    renderPanel([recentError({ occurredAt: occurredAt.toISOString() })]);
+    const table = screen.getByTestId('integration-recent-errors-table');
+    expect(within(table).getByRole('columnheader', { name: 'Time' }).style.width).toBe(DATETIME_COLUMN_WIDTH);
+    expect(within(table).getByText(occurredAt.toLocaleString())).toBeInTheDocument();
   });
 
   it('says so when there are no recent errors, and keeps the override buttons working', () => {

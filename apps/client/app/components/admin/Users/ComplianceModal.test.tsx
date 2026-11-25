@@ -4,6 +4,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { DATETIME_COLUMN_WIDTH } from '@client/app/components/admin/shared/DataTable';
 import ComplianceModal, { useComplianceModal } from './ComplianceModal';
 import type { UserComplianceResponse } from '@bike4mind/common';
 
@@ -168,6 +169,30 @@ describe('ComplianceModal', () => {
     const revokedRow = screen.getByText('session_revoked').closest('tr') as HTMLElement;
     expect(within(revokedRow).getByText('admin-1').closest('td')).toHaveAttribute('data-cell-wrap');
     expect(within(revokedRow).getByText('5.6.7.8').closest('td')).toHaveAttribute('data-cell-wrap');
+  });
+
+  it('sizes both When columns for the full locale timestamp', () => {
+    const incidentAt = new Date(2026, 11, 28, 12, 58, 58);
+    const authAt = new Date(2026, 10, 27, 11, 57, 57);
+    mockData.mockReturnValue({
+      data: {
+        ...NEVER_ACCEPTED,
+        moderationIncidents: [
+          { labels: [], provider: 'openai', model: 'gpt-image-1', createdAt: incidentAt.toISOString() },
+        ],
+        recentAuthEvents: [{ event: 'login', actorIp: '1.2.3.4', userAgent: 'jest', createdAt: authAt.toISOString() }],
+      },
+      isLoading: false,
+    });
+    render(<ComplianceModal />, { wrapper: TestWrapper });
+    for (const [testId, at] of [
+      ['compliance-incidents-table', incidentAt],
+      ['compliance-auth-events', authAt],
+    ] as const) {
+      const table = screen.getByTestId(testId);
+      expect(within(table).getByRole('columnheader', { name: 'When' }).style.width).toBe(DATETIME_COLUMN_WIDTH);
+      expect(within(table).getByText(at.toLocaleString())).toBeInTheDocument();
+    }
   });
 
   it('renders every returned row without a pager', () => {

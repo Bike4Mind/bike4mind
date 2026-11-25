@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Alert, Button, Chip, LinearProgress, Stack, Typography } from '@mui/joy';
 import type { UserComplianceResponse } from '@bike4mind/common';
 import { AdminDialog } from '@client/app/components/admin/shared/AdminDialog';
-import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
+import { DATETIME_COLUMN_WIDTH, DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
 import { Dash } from '@client/app/components/admin/shared/Dash';
 import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
 import { create } from 'zustand';
@@ -32,7 +32,7 @@ const Mono = ({ children }: { children: string }) => (
 );
 
 const INCIDENT_COLUMNS: DataColumn<Incident>[] = [
-  { id: 'when', label: 'When', width: '11rem', render: m => fmt(m.createdAt) },
+  { id: 'when', label: 'When', width: DATETIME_COLUMN_WIDTH, render: m => fmt(m.createdAt) },
   {
     id: 'labels',
     label: 'Labels',
@@ -44,7 +44,7 @@ const INCIDENT_COLUMNS: DataColumn<Incident>[] = [
 ];
 
 const AUTH_EVENT_COLUMNS: DataColumn<AuthEvent>[] = [
-  { id: 'when', label: 'When', width: '11rem', render: e => fmt(e.createdAt) },
+  { id: 'when', label: 'When', width: DATETIME_COLUMN_WIDTH, render: e => fmt(e.createdAt) },
   { id: 'event', label: 'Event', render: e => e.event },
   // actorUserId is only set for admin-driven events (e.g. session_revoked) - a self-initiated
   // logout has no distinct actor to show.
