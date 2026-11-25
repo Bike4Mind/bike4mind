@@ -78,7 +78,7 @@ const makeFile = (mimeType: string, overrides: Record<string, unknown> = {}) => 
 
 const call = (newContent: string) => {
   const { req, res } = createMocks({ method: 'POST', query: { id: FILE_ID }, body: { newContent } });
-  Object.assign(req, { user, ability: { can: () => true } });
+  Object.assign(req, { user, ability: { can: () => true }, logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } });
   return handler(req, res).then(() => res);
 };
 

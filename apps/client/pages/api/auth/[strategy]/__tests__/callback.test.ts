@@ -122,6 +122,8 @@ const stateNaming = (clientId: string): VerifyResult<BaseStatePayload & { client
 });
 import handler from '@pages/api/auth/[strategy]/callback';
 
+const log = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
+
 function makeReqRes(headers: Record<string, string> = {}, query: Record<string, string> = {}) {
   const { req, res } = createMocks({
     method: 'GET',
@@ -129,6 +131,7 @@ function makeReqRes(headers: Record<string, string> = {}, query: Record<string, 
     headers: { host: 'localhost:3000', 'user-agent': 'vitest', ...headers },
     url: '/api/auth/github/callback',
   });
+  Object.assign(req, { logger: log });
   return { req: req as any, res: res as any };
 }
 
@@ -153,6 +156,9 @@ async function runCallback(
 }
 
 beforeEach(() => {
+  log.error.mockClear();
+  log.warn.mockClear();
+  log.info.mockClear();
   vi.clearAllMocks();
   registeredStrategies.names = new Set(['google', 'github']);
   mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
@@ -162,20 +168,19 @@ describe('[strategy]/callback - unavailable provider and empty callback', () => 
   it.each(['apple', 'facebook'])(
     'answers 404 for the %s callback when that provider is not registered, without an error log',
     async strategy => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const errorSpy = log.error;
       const { req, res } = makeReqRes({}, { strategy });
 
       await expect(handler(req, res, vi.fn())).rejects.toMatchObject({ statusCode: 404 });
 
       expect(mockAuthenticate).not.toHaveBeenCalled();
       expect(errorSpy).not.toHaveBeenCalled();
-      errorSpy.mockRestore();
     }
   );
 
   it('redirects a callback carrying neither code nor error to the login page at warn', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
     const { req, res } = makeReqRes({}, { strategy: 'google', code: '' });
 
     await handler(req, res, vi.fn());
@@ -184,8 +189,6 @@ describe('[strategy]/callback - unavailable provider and empty callback', () => 
     expect(mockAuthenticate).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith('OAuth callback without code or error', { strategy: 'google' });
     expect(errorSpy).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 
   it('still hands a provider error return (no code) to passport', async () => {
@@ -278,45 +281,39 @@ describe('[strategy]/callback - !user branch log level', () => {
     'duplicate_account',
     'forbidden_system_user',
   ])('logs the expected %s outcome at warn, below the level the alert channel pages on', async code => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
 
     await runCallback(null, undefined, { code });
 
-    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', { code });
+    expect(warnSpy).toHaveBeenCalledWith('Passport authenticate user not found', { info: { code } });
     expect(errorSpy).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 
   it('logs a cancelled consent (?error=access_denied) at warn with its own reason', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
     // What passport-oauth2 passes to fail() when the provider redirects back with access_denied.
     const info = { message: 'The user has denied your application access.' };
 
     const res = await runCallback(null, undefined, info, undefined, { error: 'access_denied' });
 
-    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', info);
+    expect(warnSpy).toHaveBeenCalledWith('Passport authenticate user not found', { info });
     expect(errorSpy).not.toHaveBeenCalled();
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'access_denied' }));
     expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 
   it('keeps an unrecognized failure at error', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
 
     await runCallback(null, undefined, { message: 'Failed to obtain access token' });
 
-    expect(errorSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', {
-      message: 'Failed to obtain access token',
+    expect(errorSpy).toHaveBeenCalledWith('Passport authenticate user not found', {
+      info: { message: 'Failed to obtain access token' },
     });
     expect(warnSpy).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 });
 
@@ -333,17 +330,15 @@ describe('[strategy]/callback - err branch log level', () => {
   }
 
   it('logs a replayed or expired authorization code (invalid_grant) at warn', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
     const err = tokenError('invalid_grant');
 
     const res = await runCallback(err, undefined, undefined);
 
-    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
+    expect(warnSpy).toHaveBeenCalledWith('Passport authenticate error', { info: undefined, error: err });
     expect(errorSpy).not.toHaveBeenCalled();
     expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 
   it.each([
@@ -351,28 +346,24 @@ describe('[strategy]/callback - err branch log level', () => {
     'account_link_email_mismatch',
     'account_link_requires_verification',
   ])('warns for an expected provider or account-link refusal: %s', async err => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
     await runCallback(err, undefined, undefined);
-    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
+    expect(warnSpy).toHaveBeenCalledWith('Passport authenticate error', { info: undefined, error: err });
     expect(errorSpy).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 
   it.each([
     ['another TokenError code', tokenError('invalid_client')],
     ['a non-token error', new Error('boom')],
   ])('keeps %s at error', async (_label, err) => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
 
     await runCallback(err, undefined, undefined);
 
-    expect(errorSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
+    expect(errorSpy).toHaveBeenCalledWith('Passport authenticate error', { info: undefined, error: err });
     expect(warnSpy).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 });
 
@@ -533,7 +524,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
   it('rescores a new account only after its signup network is stamped', async () => {
     await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
 
-    // The test request carries no logger, so only the user id is asserted.
+    // Only the user id is asserted; the logger arguments are not part of this contract.
     expect(mockRefreshSignupRiskScore.mock.calls.map(([userId]) => userId)).toEqual(['u-new']);
     expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
       mockRefreshSignupRiskScore.mock.invocationCallOrder[0]
