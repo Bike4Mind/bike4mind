@@ -1,5 +1,6 @@
 import { BRIEF_LIMITS } from '@bike4mind/common';
-import { obligationRepository, userRepository } from '@bike4mind/database';
+import { obligationRepository, userRepository, type IObligation } from '@bike4mind/database';
+import type { BriefObligation } from './briefCompose.composition';
 
 /** How many days ahead of its due date a confirmed obligation starts appearing in the brief. */
 export const OBLIGATION_LEAD_DAYS = 7;
@@ -37,4 +38,15 @@ export async function loadDueBriefObligations(userId: string, now: Date) {
     addDays(today, OBLIGATION_LEAD_DAYS),
     BRIEF_LIMITS.itemsPerSection
   );
+}
+
+export function toBriefObligation(item: IObligation, now: Date): BriefObligation {
+  return {
+    obligationId: item._id.toString(),
+    payee: item.payee,
+    amount: item.amountValue,
+    currency: item.currency,
+    dueDate: (item.dueDate ?? now).toISOString().slice(0, 10),
+    summary: item.summary,
+  };
 }

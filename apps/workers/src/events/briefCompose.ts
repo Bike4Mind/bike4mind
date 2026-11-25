@@ -1,7 +1,7 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { loadPendingBriefEmails } from './loadPendingBriefEmails';
 import { loadPendingBriefDelegations } from './loadPendingBriefDelegations';
-import { loadDueBriefObligations } from './loadDueBriefObligations';
+import { loadDueBriefObligations, toBriefObligation } from './loadDueBriefObligations';
 import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   agentExecutionRepository,
@@ -242,14 +242,7 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
       status: item.status,
       result: item.result,
     })),
-    obligations: obligations.map(item => ({
-      obligationId: item._id.toString(),
-      payee: item.payee,
-      amount: item.amountValue,
-      currency: item.currency,
-      dueDate: (item.dueDate ?? now).toISOString().slice(0, 10),
-      summary: item.summary,
-    })),
+    obligations: obligations.map(item => toBriefObligation(item, now)),
   };
 }
 
