@@ -64,6 +64,8 @@ import {
 import { STUDIO_STARTING, useStudioSession } from './rail/studioSession';
 import { usePlaceShortcuts } from './rail/shortcuts';
 import { StudioMain, StudioSidebar } from './rail/StudioPlace';
+import { LibraryMain, LibrarySidebar } from './rail/LibraryPlace';
+import type { LibraryFilter } from './library/libraryFeed';
 import { readSidebarWidth } from './sidebarWidth';
 import type { ModelsInUse } from '../models/InstalledTab';
 import type { ComposerFill } from './composerInput';
@@ -340,7 +342,7 @@ export function ChatShell({
   const onRestore = useCallback((session: ChatSessionSummary | null) => {
     const restoredMode = session && isSessionPlace(session.mode) ? session.mode : 'chat';
     setModeOnly(current => (session ? restoredMode : current));
-    // Studio and Agents are not where a session opens, so a restore leaves the user there.
+    // Studio, Agents and Library are not where a session opens, so a restore leaves the user there.
     setPlace(current => (!isSessionPlace(current) || !session ? current : restoredMode));
     if (session) setActiveId(session.id);
   }, []);
@@ -445,6 +447,8 @@ export function ChatShell({
   const inAgents = place === 'agents';
   // The conversation's side panels (tasks, browser, files, model, simulator) belong to Chat and Code.
   const inSessionPlace = isSessionPlace(place);
+  const inLibrary = place === 'library';
+  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>('all');
   const [studioRegion, studioWidth] = useElementWidth();
   const studioContainer = useRef<HTMLDivElement | null>(null);
   const setStudioRegion = useCallback(
@@ -1860,6 +1864,18 @@ export function ChatShell({
               onToggleCollapsed={() => setCollapsed(current => !current)}
             />
           )
+        ) : inLibrary ? (
+          !collapsed && (
+            <LibrarySidebar
+              width={readSidebarWidth()}
+              filter={libraryFilter}
+              onSelectFilter={filter => {
+                setScreen('conversation');
+                setLibraryFilter(filter);
+              }}
+              onToggleCollapsed={() => setCollapsed(current => !current)}
+            />
+          )
         ) : inAgents ? null : (
           <SessionList
             sessions={sessions}
@@ -1951,6 +1967,14 @@ export function ChatShell({
         />
       ) : inAgents ? (
         <AgentsPlace groups={board} onOpen={selectSession} onOpenMissionControl={() => setScreen('mission-control')} />
+      ) : inLibrary ? (
+        <LibraryMain
+          filter={libraryFilter}
+          accountKey={studioAccountKey}
+          api={window.b4m.library}
+          onOpenSession={selectSession}
+          onOpenStudio={() => selectPlace('studio')}
+        />
       ) : (
         <Box
           ref={setStudioRegion}
