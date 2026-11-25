@@ -120,6 +120,8 @@ export interface ICallableFunctionResult {
   callerUserId: string;
   functionId: string;
   apiKeyId?: string;
+  /** The organization the call was made in, so the queued run makes its checks as the caller did. */
+  organizationId?: string;
   state: CallableFunctionResultState;
   input?: Record<string, unknown>;
   outcome?: CallableFunctionCallOutcome;

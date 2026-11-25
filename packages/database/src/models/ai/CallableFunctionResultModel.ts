@@ -19,6 +19,7 @@ const CallableFunctionResultSchema = new Schema<ICallableFunctionResultDocument>
     callerUserId: { type: String, required: true },
     functionId: { type: String, required: true, maxlength: 64 },
     apiKeyId: { type: String },
+    organizationId: { type: String },
     state: { type: String, enum: CALLABLE_FUNCTION_RESULT_STATES, required: true },
     input: { type: Schema.Types.Mixed },
     outcome: { type: String, enum: CALLABLE_FUNCTION_CALL_OUTCOMES },
@@ -51,7 +52,10 @@ const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value) ??
 
 class CallableFunctionResultRepository extends BaseRepository<ICallableFunctionResultDocument & IMongoDocument> {
   async createQueued(
-    row: Pick<ICallableFunctionResult, 'callId' | 'callerUserId' | 'functionId' | 'apiKeyId' | 'input'>
+    row: Pick<
+      ICallableFunctionResult,
+      'callId' | 'callerUserId' | 'functionId' | 'apiKeyId' | 'organizationId' | 'input'
+    >
   ): Promise<ICallableFunctionResultDocument> {
     return this.create({ ...row, state: 'queued' });
   }

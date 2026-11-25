@@ -42,6 +42,7 @@ export async function queueFunctionCall(
         callerUserId: request.caller.id,
         functionId: request.functionId,
         ...(request.apiKeyId ? { apiKeyId: request.apiKeyId } : {}),
+        ...(request.caller.organizationId ? { organizationId: request.caller.organizationId } : {}),
         input: request.args,
       });
       try {
@@ -76,7 +77,10 @@ export async function runQueuedFunctionCall(
     const limitMs = await resolveCallableFunctionTimeLimitMs({ id: claimed.callerUserId });
     const call = await dispatchFunctionCall(
       {
-        caller: { id: claimed.callerUserId },
+        caller: {
+          id: claimed.callerUserId,
+          ...(claimed.organizationId ? { organizationId: claimed.organizationId } : {}),
+        },
         functionId: claimed.functionId,
         args: claimed.input ?? {},
         surface: 'rest',
