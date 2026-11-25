@@ -10,7 +10,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decisionClosed, loadPendingFollowUp, readSerializedDecision } from '@server/briefs/followUpDecision';
 
-const isEmailAddress = (value: string) => z.email().safeParse(value.trim()).success;
+const isEmailAddress = (value: string) => z.email().safeParse(value).success;
 
 const route = nextRouteForContract(resolveBriefDecisionContract, {
   rateLimit: perUserRateLimit('POST /api/v1/briefs/[id]/decisions/[decisionId]/resolve'),

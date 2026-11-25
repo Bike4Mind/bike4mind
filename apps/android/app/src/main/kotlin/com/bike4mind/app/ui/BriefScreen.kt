@@ -65,6 +65,11 @@ import java.time.format.FormatStyle
 class BriefViewModel(graph: AppGraph, briefId: String?) : ViewModel() {
     val controller = graph.brief(briefId, viewModelScope).also { it.load() }
     val dictation = graph.dictation(viewModelScope)
+
+    // Cancelling viewModelScope stops transcription but not the recorder; only cancel() releases the mic.
+    override fun onCleared() {
+        dictation.cancel()
+    }
 }
 
 /**

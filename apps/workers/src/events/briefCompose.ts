@@ -231,7 +231,11 @@ async function composeFollowUp(deps: BriefComposeDeps, brief: IAssistantBrief, s
       briefId,
     });
   } catch (error) {
-    logger.error('[Brief] follow-up composition failed', { briefId, error });
+    // A JSON.parse SyntaxError message quotes the memo-derived reply, so only its name is logged.
+    logger.error('[Brief] follow-up composition failed', {
+      briefId,
+      ...(error instanceof SyntaxError ? { errorName: error.name } : { error }),
+    });
     await briefs.markFailed(briefId, 'composition_failed');
   }
 }

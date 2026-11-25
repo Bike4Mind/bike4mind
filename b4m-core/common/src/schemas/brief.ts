@@ -213,7 +213,7 @@ export const BriefDecisionEditSchema = z
     text: z.string().min(1).max(BRIEF_LIMITS.itemText).regex(/\S/, 'Text must not be blank').optional(),
     draftReply: z
       .object({
-        to: z.string().min(1).max(BRIEF_LIMITS.draftTo),
+        to: z.string().trim().min(1).max(BRIEF_LIMITS.draftTo),
         subject: z.string().min(1).max(BRIEF_LIMITS.draftSubject),
         body: z.string().min(1).max(BRIEF_LIMITS.draftBody),
       })

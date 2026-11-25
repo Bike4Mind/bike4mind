@@ -108,6 +108,11 @@ describe('BriefFollowUpRequestSchema', () => {
 });
 
 describe('BriefDecisionEditSchema', () => {
+  it('stores the trimmed recipient it validated', () => {
+    const parsed = BriefDecisionEditSchema.parse({ draftReply: { to: ' sam@example.com ' } });
+    expect(parsed.draftReply?.to).toBe('sam@example.com');
+  });
+
   it('accepts a single field', () => {
     expect(BriefDecisionEditSchema.safeParse({ text: 'Call Sam' }).success).toBe(true);
     expect(BriefDecisionEditSchema.safeParse({ draftReply: { to: 'sam@example.com' } }).success).toBe(true);

@@ -161,7 +161,8 @@ struct CaptureMenu: View {
       do {
         let brief = try await services.briefFollowUps.followUp(
           transcript: String(trimmed.prefix(Self.maxFollowUpTranscript)), timeZone: TimeZone.current.identifier)
-        flow = .followUpBrief(brief.id)
+        // A sheet opened while the memo was sending keeps what the user typed; the brief_ready push still opens it.
+        if case .none = flow { flow = .followUpBrief(brief.id) }
       } catch {
         Self.logger.error("Follow-up memo was not accepted: \(String(describing: error), privacy: .public)")
         afterProblem = nil

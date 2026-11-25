@@ -144,6 +144,8 @@ const schema = new Schema<IAssistantBrief>(
 
 schema.index({ userId: 1, createdAt: -1 });
 schema.index({ 'followUpInput.expiresAt': 1 }, { expireAfterSeconds: 0 });
+// Only memo briefs carry reminders; serves the due-reminder aggregates without walking every daily brief.
+schema.index({ userId: 1, 'decisions.followUp.remindAt': 1 }, { partialFilterExpression: { origin: 'followUp' } });
 
 export const AssistantBriefModel =
   (mongoose.models.AssistantBrief as mongoose.Model<IAssistantBrief> | undefined) ??
@@ -342,7 +344,7 @@ export const assistantBriefRepository = {
       'decisions.followUp.surfacedAt': null,
     };
     const rows = await AssistantBriefModel.aggregate<{ _id: mongoose.Types.ObjectId; decision: StoredBriefDecision }>([
-      { $match: { userId, ...due } },
+      { $match: { userId, origin: 'followUp', ...due } },
       { $unwind: '$decisions' },
       { $match: due },
       { $sort: { 'decisions.followUp.remindAt': 1 } },
@@ -382,7 +384,7 @@ export const assistantBriefRepository = {
    */
   async findEarliestPendingReminderAt(userId: string, after?: Date): Promise<Date | null> {
     const [row] = await AssistantBriefModel.aggregate<{ remindAt: Date }>([
-      { $match: { userId, 'decisions.followUp.kind': 'reminder' } },
+      { $match: { userId, origin: 'followUp', 'decisions.followUp.kind': 'reminder' } },
       { $unwind: '$decisions' },
       {
         $match: {
