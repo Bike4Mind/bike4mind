@@ -332,6 +332,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "SECRET_ENCRYPTION_KEY_WRAPPED": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "SESSION_SECRET": {
       "type": "sst.sst.Secret"
       "value": string

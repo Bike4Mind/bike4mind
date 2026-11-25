@@ -100,7 +100,8 @@
         "!../server-utils/.turbo/**",
         "$TURBO_ROOT$/b4m-core/*/package.json",
         "$TURBO_ROOT$/packages/*/package.json",
-        "$TURBO_ROOT$/catalog/model-hub/**"
+        "$TURBO_ROOT$/catalog/model-hub/**",
+        "$TURBO_ROOT$/infra/secretsAtRestKey.ts"
       ]
     },
     // The curated v3 schema and v2 converter tests read the lists in catalog/model-hub; the chunking

@@ -4,6 +4,8 @@
  */
 
 import { chatCompletion } from './chatCompletion';
+import { secrets } from './secrets';
+import { lambdaVpc } from './vpc';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import {
   secretsAtRestDecryptOutsideAppEventPattern,
@@ -114,6 +116,15 @@ function createAccess() {
       tags: { Application: 'SecretsAtRest', Severity: 'Critical' },
     });
   }
+
+  // Manual invoke only, no schedule: shows a VPC-attached function reaches KMS and records Decrypt latency.
+  new sst.aws.Function('SecretsAtRestUnwrapProbe', {
+    handler: 'apps/workers/src/security/secretsAtRestUnwrapProbe.handler',
+    runtime: 'nodejs24.x',
+    vpc: lambdaVpc,
+    timeout: '10 seconds',
+    link: [secrets.SECRET_ENCRYPTION_KEY_WRAPPED],
+  });
 }
 
 createAccess();
