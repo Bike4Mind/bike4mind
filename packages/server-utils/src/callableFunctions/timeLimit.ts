@@ -43,7 +43,7 @@ export async function resolveCallableFunctionPendingCallLimit(user: { id: string
   const limit = await lowestAcrossOrganizations(
     'CallableFunctionPendingCallLimit',
     user,
-    settingsMap.CallableFunctionPendingCallLimit.defaultValue
+    settingsMap.CallableFunctionPendingCallLimit.defaultValue ?? 1
   );
   return Math.max(1, Math.floor(limit));
 }
