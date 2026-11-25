@@ -140,6 +140,16 @@ describe('freshness', () => {
     expect(merged.headline.kind).toBe('delayed');
   });
 
+  it('a probesAsOf far in the future is not fresh, a little skew is', () => {
+    expect(mergeStatusSources(summaryAged(-600, { components }), null, null, NOW).fresh).toBe(false);
+    expect(mergeStatusSources(summaryAged(-30, { components }), null, null, NOW).fresh).toBe(true);
+  });
+
+  it('an external checkedAt far in the future is not used', () => {
+    expect(mergeStatusSources(null, null, makeExternal({ checkedAt: secondsAgo(-600) }), NOW).external).toBeNull();
+    expect(mergeStatusSources(null, null, makeExternal({ checkedAt: secondsAgo(-30) }), NOW).external).not.toBeNull();
+  });
+
   it('hard stale boundary is exclusive at 900 seconds', () => {
     expect(mergeStatusSources(summaryAged(900, { components }), null, null, NOW).hardStale).toBe(false);
   });
@@ -682,6 +692,15 @@ describe('summary rows survive a size-ladder cut', () => {
     );
     const merged = mergeStatusSources(snapshot.summary, null, null, NOW, { incidentsIndex: resolved });
     expect(stateOf(merged, 'comp-20')).toBe('operational');
+  });
+
+  it('keeps a published maintenance label when the head that explains it was cut', () => {
+    const maintenance = { incidentId: 'mt00000001', endsAt: isoSeconds(minutesAgo(-30)) };
+    const row = comp('web-app', { state: 'degraded', maintenance });
+    const cut = makeSummary({ components: [row], moreActiveIncidents: 1 });
+    expect(mergeStatusSources(cut, null, null, NOW).components[0].maintenance).toEqual(maintenance);
+    const whole = makeSummary({ components: [row], moreActiveIncidents: 0 });
+    expect(mergeStatusSources(whole, null, null, NOW).components[0].maintenance).toBeNull();
   });
 
   it('does not floor when no head was cut', () => {

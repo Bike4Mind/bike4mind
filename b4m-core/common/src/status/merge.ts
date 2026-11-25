@@ -20,6 +20,8 @@ import { worstImpact, worstState, type ComponentImpact, type DisplayState } from
 export const EXTERNAL_MAX_AGE_SECONDS = 180;
 const BREAKGLASS_BACKWARD_MS = 15 * 60 * 1000;
 const BREAKGLASS_FORWARD_MS = 60 * 1000;
+// Clock skew allowed before a timestamp in the future stops counting as recent.
+const FUTURE_TOLERANCE_MS = 60 * 1000;
 const BREAKGLASS_START_FLOOR_MS = 24 * 60 * 60 * 1000;
 const EXTERNAL_OVERRIDE_MAX_MS = 24 * 60 * 60 * 1000;
 const BREAKGLASS_SCHEDULE_MAX_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
@@ -223,7 +225,8 @@ export function mergeStatusSources(
   const nowMs = typeof serverNow === 'number' ? serverNow : serverNow.getTime();
 
   const ageSeconds = S ? (nowMs - ms(S.probesAsOf)) / 1000 : null;
-  const fresh = S !== null && ageSeconds !== null && ageSeconds <= S.staleAfterSeconds;
+  const fresh =
+    S !== null && ageSeconds !== null && ageSeconds >= -FUTURE_TOLERANCE_MS / 1000 && ageSeconds <= S.staleAfterSeconds;
   const hardStale = S !== null && ageSeconds !== null && ageSeconds > S.hardStaleAfterSeconds;
   const mode: MergeMode = !S ? 'unavailable' : hardStale ? 'hard_stale' : fresh ? 'fresh' : 'stale';
 
@@ -236,6 +239,7 @@ export function mergeStatusSources(
     nowMs < Math.min(ms(B.externalOverride.ignoreUntil), overrideLatest);
   const externalUsable =
     !!E &&
+    nowMs - ms(E.checkedAt) >= -FUTURE_TOLERANCE_MS &&
     nowMs - ms(E.checkedAt) <= EXTERNAL_MAX_AGE_SECONDS * 1000 &&
     !(S?.externalIgnoredUntil && nowMs < ms(S.externalIgnoredUntil)) &&
     !externalOverrideActive;
@@ -334,7 +338,11 @@ export function mergeStatusSources(
       ...row,
       baseState: base,
       state,
-      maintenance: maintenance ? { incidentId: maintenance.incidentId, endsAt: maintenance.endsAt } : null,
+      maintenance: maintenance
+        ? { incidentId: maintenance.incidentId, endsAt: maintenance.endsAt }
+        : floorToSummary
+          ? row.maintenance
+          : null,
       staleAsOf: S && !fresh ? S.probesAsOf : null,
     };
   };
