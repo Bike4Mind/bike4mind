@@ -71,18 +71,19 @@ value, so a rollback is the same procedure in reverse and ends with a rewrap and
 by the live data, but a database backup taken before the rewrap still holds keys wrapped under it:
 keep the old value until those backups age out of retention.
 
-Preview and personal stages that read the account-wide fallback do not run the rewrap. Set the old value
+The production procedure above does not rewrap preview and personal stages that read the account-wide fallback. Set the old value
 with `sst secret set MEMORY_KEY_SECRET_PREVIOUS <old> --fallback` and the new one with
 `sst secret set MEMORY_KEY_SECRET <new> --fallback`. Previews accept the single-step swap, without the
 step 2 deploy. The fallback previous key applies to every stage in that account that has no value of its
 own.
 
-Those stages never run the rewrap, so memory keys they wrapped before the swap stay under the old value
-and are readable only through the fallback previous key. Before clearing it
-(`sst secret set MEMORY_KEY_SECRET_PREVIOUS not-configured --fallback`), run `migrate:rewrap-memory-keys
---dry-run`, the default run and `--verify` under `sst shell --stage <stage>` for each stage whose memory
-should survive, or accept that memory written before the swap becomes unreadable on every stage that still
-reads the fallback. Long-lived personal stages are the ones most likely to need the rewrap.
+The production procedure does not rewrap those stages, so memory keys they wrapped before the swap stay
+under the old value and are readable only through the fallback previous key. Before clearing it
+(`sst secret set MEMORY_KEY_SECRET_PREVIOUS not-configured --fallback`), redeploy each stage whose memory
+should survive so it runs with the swapped values, then run `migrate:rewrap-memory-keys --dry-run`, the
+default run and `--verify` under `sst shell --stage <stage>`. Skipping the redeploy leaves the running stage
+unable to open rewrapped keys. Otherwise accept that memory written before the swap becomes unreadable on every stage that still
+reads the fallback, taking effect at that stage's next deploy. Long-lived personal stages are the ones most likely to need the rewrap.
 
 The cloud deploy check applies to every stage, including PR previews and personal stages. Before this
 change reaches `main`, set an account-wide default in each AWS account those stages deploy to
