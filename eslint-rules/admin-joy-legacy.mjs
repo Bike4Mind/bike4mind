@@ -7,7 +7,6 @@ const componentsByFile = {
   'MigrateUsersTab.tsx': ['Card', 'Modal'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
   'Team/index.tsx': ['Card', 'Modal'],
-  'email/EmailJobDetail.tsx': ['Table', 'Modal'],
 };
 
 const migrationReasons = {
