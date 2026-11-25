@@ -28,9 +28,25 @@ export function creditsOrbState({ outlook, organization, profile }: CreditsGlanc
   if (outlook.kind === 'unknown') return { tone: 'unknown', level: 0, balance };
   // The ring leaves `idle` (no burn to project from) empty because a number sits beside it; the
   // orb has none until clicked, so an idle balance that is positive reads as full, not out.
+  // A level that is not a number (a bad burn read, say) must not read as out while credits remain.
   const hasBalance = balance !== null && balance > 0;
-  const level = outlook.kind === 'idle' && hasBalance ? 1 : outlook.ringFill;
-  return { tone: outlook.tone, level, balance };
+  const level = (outlook.kind === 'idle' || !Number.isFinite(outlook.ringFill)) && hasBalance ? 1 : outlook.ringFill;
+  return { tone: outlook.tone, level: Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0, balance };
+}
+
+/** The lowest and highest liquid line, as a percent of the orb's height. */
+export const ORB_FILL_FLOOR_PERCENT = 16;
+export const ORB_FILL_CEILING_PERCENT = 78;
+
+/**
+ * How high the orb's liquid stands for a level. A full orb stops below the rim so its surface
+ * stays visible (filled to the brim it is a flat disc that reads as empty), and any positive
+ * level shows at least a sliver, so only a level of 0 is drawn empty.
+ */
+export function orbFillPercent(level: number): number {
+  if (!Number.isFinite(level) || level <= 0) return 0;
+  const span = ORB_FILL_CEILING_PERCENT - ORB_FILL_FLOOR_PERCENT;
+  return Math.round(ORB_FILL_FLOOR_PERCENT + Math.min(1, level) * span);
 }
 
 /** The orb's accessible name; always carries the state, since colour alone cannot. */

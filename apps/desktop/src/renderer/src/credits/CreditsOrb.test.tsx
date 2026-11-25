@@ -3,9 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { BillingAccount } from '@shared/account';
+import type { AccountProfile, BillingAccount } from '@shared/account';
 import { CreditsOrb } from './CreditsOrb';
 import { creditOutlook } from './creditOutlook';
+import { ORB_FILL_CEILING_PERCENT } from './creditsOrbState';
 import type { CreditsGlance } from './useCreditsGlance';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -60,5 +61,25 @@ describe('CreditsOrb popover', () => {
     expect(byTestId('rail-credits-payer')?.textContent).toBe('Paying: Acme');
     expect(byTestId('rail-credits-top-up-btn')).toBeNull();
     expect(byTestId('rail-credits-orb-face')?.getAttribute('data-tone')).toBe('ok');
+  });
+
+  it('draws a healthy personal balance with no recent burn as a filled orb, not an empty one', async () => {
+    const outlook = creditOutlook({ balance: 38_099, burnPerDay: 0, refillAt: null, expiring: undefined, now: NOW });
+    const profile = { credits: { balance: 38_099, monthlyAllowance: null }, tier: 'free' } as AccountProfile;
+    await mountOpen({ profile, organization: null, outlook, burnPerDay: null, readAt: NOW });
+    expect(byTestId('rail-credits-payer')?.textContent).toBe('Paying: Personal');
+    expect(byTestId('rail-credits-top-up-btn')).not.toBeNull();
+    const face = byTestId('rail-credits-orb-face');
+    expect(face?.getAttribute('data-tone')).toBe('ok');
+    expect(Number(face?.getAttribute('data-fill'))).toBe(ORB_FILL_CEILING_PERCENT);
+  });
+
+  it('keeps a low balance visible as a tinted sliver', async () => {
+    const outlook = creditOutlook({ balance: 1000, burnPerDay: 200, refillAt: null, expiring: undefined, now: NOW });
+    const profile = { credits: { balance: 1000, monthlyAllowance: null }, tier: 'free' } as AccountProfile;
+    await mountOpen({ profile, organization: null, outlook, burnPerDay: 200, readAt: NOW });
+    const face = byTestId('rail-credits-orb-face');
+    expect(face?.getAttribute('data-tone')).toBe('low');
+    expect(Number(face?.getAttribute('data-fill'))).toBeGreaterThan(0);
   });
 });

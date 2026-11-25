@@ -9,7 +9,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { RailTooltipTitle } from '../chat/rail/PlaceRail';
 import { formatCredits } from './CreditsGlance';
-import { creditsOrbLabel, creditsOrbState, type CreditsOrbTone } from './creditsOrbState';
+import { creditsOrbLabel, creditsOrbState, orbFillPercent, type CreditsOrbTone } from './creditsOrbState';
 import type { CreditsGlance } from './useCreditsGlance';
 
 const ORB_SIZE = 28;
@@ -23,19 +23,22 @@ const TINT: Record<CreditsOrbTone, string> = {
 };
 
 /**
- * A glass orb whose fill is the remaining balance. Quiet while ok (a hairline ring and a faint
- * fill, no colour); low and critical tint the fill and the ring, so a near-empty orb still shows
- * it. Pure CSS, and nothing in it moves except a level change easing, which reduced motion turns
- * off.
+ * A glass orb whose liquid is the remaining balance. Quiet while ok (a neutral fill under a
+ * visible surface line, no colour); low and critical tint the fill and the ring, so a near-empty
+ * orb still shows it. The liquid never reaches the rim (see `orbFillPercent`), and a sheen sits
+ * on top, so a full orb reads as full rather than as a flat empty disc. Pure CSS, and nothing in
+ * it moves except a level change easing, which reduced motion turns off.
  */
 export function CreditsOrbFace({ tone, level }: { tone: CreditsOrbTone; level: number }) {
   const attention = tone === 'low' || tone === 'critical';
+  const fill = orbFillPercent(level);
   return (
     <Box
       component="span"
       aria-hidden
       data-testid="rail-credits-orb-face"
       data-tone={tone}
+      data-fill={fill}
       sx={{
         position: 'relative',
         display: 'block',
@@ -45,18 +48,31 @@ export function CreditsOrbFace({ tone, level }: { tone: CreditsOrbTone; level: n
         overflow: 'hidden',
         boxShadow: attention
           ? `inset 0 0 0 1.5px color-mix(in srgb, ${TINT[tone]} 85%, transparent)`
-          : 'inset 0 0 0 1px var(--joy-palette-divider)',
+          : `inset 0 0 0 1px color-mix(in srgb, ${TINT[tone]} 55%, transparent)`,
         '&::before': {
           content: '""',
           position: 'absolute',
           left: '-30%',
           right: '-30%',
           bottom: 0,
-          height: `${Math.round(Math.min(1, Math.max(0, level)) * 100)}%`,
-          background: `color-mix(in srgb, ${TINT[tone]} ${attention ? 72 : 24}%, transparent)`,
+          height: `${fill}%`,
+          background: `color-mix(in srgb, ${TINT[tone]} ${attention ? 72 : 40}%, transparent)`,
+          borderTop:
+            fill > 0 ? `1.5px solid color-mix(in srgb, ${TINT[tone]} ${attention ? 95 : 75}%, transparent)` : 'none',
           borderRadius: '42% 46% 0 0 / 14% 12% 0 0',
           transition: 'height 0.9s cubic-bezier(.2,.8,.2,1)',
           [REDUCED_MOTION]: { transition: 'none' },
+        },
+        '&::after': {
+          content: '""',
+          position: 'absolute',
+          top: '12%',
+          left: '20%',
+          width: '34%',
+          height: '22%',
+          borderRadius: '50%',
+          background: 'radial-gradient(closest-side, rgba(255,255,255,0.45), transparent)',
+          pointerEvents: 'none',
         },
       }}
     />
