@@ -10,7 +10,9 @@ vi.mock('recharts', async () => (await import('../EventMetrics/utils/chartTestUt
 
 const chartData = (
   exportStatus: { success: number; failed: number },
-  agentDistribution: Record<string, number> = { helper: 3, analyst: 1 }
+  agentDistribution: Record<string, number> = { helper: 3, analyst: 1 },
+  exportFormats = { json: 1, csv: 1, markdown: 0 },
+  eventsByType: Record<string, number> = { 'slack.message': 4, 'slack.export': 2 }
 ): ChartData => ({
   timeSeriesData: [],
   categoryBreakdown: [],
@@ -19,8 +21,8 @@ const chartData = (
   categoryDistribution: [],
   userActivity: [],
   slackMetrics: {
-    eventsByType: { 'slack.message': 4, 'slack.export': 2 },
-    exportFormats: { json: 1, csv: 1, markdown: 0 },
+    eventsByType,
+    exportFormats,
     exportStatus,
     agentDistribution,
     intentDistribution: { question: 2, export: 2 },
@@ -60,5 +62,17 @@ describe('SlackMetricsTab sections', () => {
     expect(screen.getByTestId('slack-export-success')).toHaveTextContent('No exports recorded');
     expect(screen.queryByTestId('slack-agents-table-toggle-btn')).toBeNull();
     expect(screen.getByTestId('slack-activity-table-toggle-btn')).toBeInTheDocument();
+  });
+
+  it('shows the export formats notice when every format count is zero', () => {
+    renderTab(chartData({ success: 0, failed: 0 }, undefined, { json: 0, csv: 0, markdown: 0 }));
+    expect(screen.getByTestId('slack-export-formats')).toHaveTextContent('No exports recorded');
+    expect(screen.queryByTestId('slack-export-formats-caption')).toBeNull();
+  });
+
+  it('pluralizes the activity caption by count', () => {
+    renderTab(chartData({ success: 1, failed: 0 }, undefined, undefined, { 'slack.message': 1 }));
+    expect(screen.getByTestId('slack-activity-caption')).toHaveTextContent('1 event across 1 event type');
+    expect(screen.getByTestId('slack-activity-caption')).not.toHaveTextContent('events');
   });
 });

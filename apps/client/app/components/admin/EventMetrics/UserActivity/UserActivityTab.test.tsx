@@ -71,6 +71,16 @@ describe('UserActivityTab', () => {
     expect(screen.getByText('Logout')).toBeTruthy();
   });
 
+  it('keeps the metadata column wider than the fixed columns leave it on a narrow screen', () => {
+    renderTab();
+    const table = screen.getByTestId('user-activity-table');
+    const fixedRem = Array.from(table.querySelectorAll<HTMLElement>('thead th')).reduce(
+      (sum, th) => sum + (parseFloat(th.style.width) || 0),
+      0
+    );
+    expect(parseFloat(getComputedStyle(table).minWidth) - fixedRem).toBeGreaterThanOrEqual(12);
+  });
+
   it('expands and collapses row metadata, with no toggle for a row without any', () => {
     renderTab({
       rows: [

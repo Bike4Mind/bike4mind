@@ -418,6 +418,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
             columns={columns}
             getRowId={row => row.key}
             rowTestId={() => 'user-activity-row'}
+            minWidth="57rem"
             pagination={false}
             onRetry={onRefresh}
             empty={

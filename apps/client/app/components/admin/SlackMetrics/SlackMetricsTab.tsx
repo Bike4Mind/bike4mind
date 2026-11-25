@@ -37,6 +37,7 @@ interface SlackMetricsTabProps {
 
 type Slice = { name: string; value: number };
 
+const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 const sumOf = (rows: readonly Slice[]) => rows.reduce((sum, row) => sum + row.value, 0);
 const largest = (rows: readonly Slice[]) =>
   rows.reduce<Slice | undefined>((best, row) => (!best || row.value > best.value ? row : best), undefined);
@@ -95,7 +96,12 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, fil
   );
 
   const formatData = React.useMemo(
-    () => (slackMetrics ? Object.entries(slackMetrics.exportFormats).map(([name, value]) => ({ name, value })) : []),
+    () =>
+      slackMetrics
+        ? Object.entries(slackMetrics.exportFormats)
+            .map(([name, value]) => ({ name, value }))
+            .filter(d => d.value > 0)
+        : [],
     [slackMetrics]
   );
 
@@ -152,12 +158,12 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, fil
     >
       <Box className="slack-wide" sx={{ minWidth: 0 }}>
         <ChartSection
-          title="Slack Event Activity"
+          title="Slack event activity"
           testId="slack-activity"
           body={sliceBody({
             rows: typeData,
             emptyTitle: 'No Slack events recorded',
-            caption: rows => `${sumOf(rows).toLocaleString()} events across ${rows.length} event types`,
+            caption: rows => `${plural(sumOf(rows), 'event')} across ${plural(rows.length, 'event type')}`,
             tableLabel: 'Slack events by type',
             testId: 'slack-activity',
             valueLabel: 'Events',
@@ -177,7 +183,7 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, fil
       </Box>
 
       <ChartSection
-        title="Agent Usage"
+        title="Agent usage"
         testId="slack-agents"
         body={sliceBody({
           rows: agentData,
@@ -211,7 +217,7 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, fil
       />
 
       <ChartSection
-        title="Intent Breakdown"
+        title="Intent breakdown"
         testId="slack-intents"
         body={sliceBody({
           rows: intentData,
@@ -245,7 +251,7 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, fil
       />
 
       <ChartSection
-        title="Export Formats"
+        title="Export formats"
         testId="slack-export-formats"
         body={sliceBody({
           rows: formatData,
@@ -279,7 +285,7 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, fil
       />
 
       <ChartSection
-        title="Export Success Rate"
+        title="Export success rate"
         testId="slack-export-success"
         body={sliceBody({
           rows: statusData,
