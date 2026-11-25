@@ -5,7 +5,8 @@ import { Logger } from '@bike4mind/observability';
 const h = vi.hoisted(() => ({
   findListing: vi.fn(),
   snapshot: vi.fn(),
-  findSkill: vi.fn(),
+  findTemplate: vi.fn(),
+  settle: vi.fn(),
   findFile: vi.fn(),
   createSession: vi.fn(),
   createQuest: vi.fn(),
@@ -17,10 +18,12 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   Quest: { create: h.createQuest },
-  questRepository: { findById: h.findQuest },
+  questRepository: { findById: h.findQuest, settleIfUnfinished: h.settle },
   sessionRepository: { create: h.createSession },
-  skillRepository: { findById: h.findSkill },
+  SkillListingTemplate: { findOne: (query: unknown) => ({ lean: () => h.findTemplate(query) }) },
   fabFileRepository: { findById: h.findFile },
+  fabFileChunkRepository: {},
+  userRepository: {},
   failSkillTemplateExampleRun: h.fail,
   adminSettingsRepository: {},
   dataLakeRepository: {},
@@ -78,6 +81,7 @@ const deps = (overrides: Partial<TemplateExampleRunDeps> = {}): TemplateExampleR
   }),
   textModel: vi.fn(async () => ({ modelId: 'ops-model', complete: vi.fn(async () => '# Sample notes') })),
   storeSample: vi.fn(async () => 'sample-file-1'),
+  deleteSample: vi.fn(async () => undefined),
   mediaInfo: vi.fn(async () => ({ bytes: 1000, mime: 'image/png' })),
   checkImage: vi.fn(async () => undefined),
   getClassifier: vi.fn(async () => ({ model: 'stub', complete: vi.fn() })),
@@ -97,7 +101,8 @@ beforeEach(() => {
     snapshot: { name: 'launch-plan', body: 'Plan it', allowedTools: ['web_search', 'github__search_issues'] },
     versionId: 'v1',
   });
-  h.findSkill.mockResolvedValue({ id: 'skill-1', name: 'launch-plan', userId: 'author-1' });
+  h.findTemplate.mockResolvedValue(null);
+  h.settle.mockResolvedValue(true);
   h.createSession.mockResolvedValue({ id: 'session-1' });
   h.createQuest.mockResolvedValue({ id: 'quest-1' });
   h.findQuest.mockResolvedValue({
@@ -208,38 +213,140 @@ describe('runTemplateExample', () => {
   });
 
   it.each(['pending', 'scanning', 'blocked', undefined])(
-    'writes a fresh sample instead of reusing an upload that is %s',
+    'fails before any spend, saying so, when the chosen upload is %s',
     async moderationStatus => {
       h.findFile.mockResolvedValue({ userId: 'author-1', moderationStatus });
       const d = deps();
       const sampleFile = { fabFileId: 'up-1', name: 'brief.pdf', mime: 'application/pdf' };
       await runTemplateExample(payload({ takesFile: true, sampleFile }), logger, d);
-      expect(d.storeSample).toHaveBeenCalled();
-      expect(h.write.mock.calls[0][2].$set['example.sampleFile']).toMatchObject({ source: 'generated' });
+      expect(d.storeSample).not.toHaveBeenCalled();
+      expect(d.processQuest).not.toHaveBeenCalled();
+      expect(h.fail).toHaveBeenCalledWith('l1', RUN_AT, expect.stringContaining('sample file you chose'));
+      expect(h.release).toHaveBeenCalled();
     }
   );
 
+  it('runs the approved snapshot, not the live skill, by its snapshot name', async () => {
+    const d = deps();
+    await runTemplateExample(payload(), logger, d);
+    const [body, , mode] = vi.mocked(d.processQuest).mock.calls[0];
+    expect(body.message).toBe('/launch-plan Plan the launch');
+    expect(mode.skill).toEqual({ name: 'launch-plan', body: 'Plan it' });
+    expect(mode.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
   it.each([
-    ['the listing is no longer live', () => h.findListing.mockResolvedValue({ status: 'withdrawn' })],
-    ['the skill is gone', () => h.findSkill.mockResolvedValue(null)],
-    ['the quest errored', () => h.findQuest.mockResolvedValue({ type: 'error', reply: 'boom' })],
-    ['the reply is empty', () => h.findQuest.mockResolvedValue({ type: 'message', reply: '  ', replies: [] })],
-  ])('fails the run and gives it back when %s', async (_name, arrange) => {
+    ['the listing is no longer live', () => h.findListing.mockResolvedValue({ status: 'withdrawn' }), {}],
+    ['the sample file cannot be written', () => undefined, { takesFile: true }],
+  ])('fails the run and gives it back when %s, before any spend', async (_name, arrange, extra) => {
     arrange();
-    await runTemplateExample(payload(), logger, deps());
+    const d = deps({ textModel: vi.fn(async () => ({ modelId: 'ops-model', complete: vi.fn(async () => ' ') })) });
+    await runTemplateExample(payload(extra), logger, d);
+    expect(d.processQuest).not.toHaveBeenCalled();
     expect(h.write).not.toHaveBeenCalled();
     expect(h.fail).toHaveBeenCalledWith('l1', RUN_AT, expect.any(String));
     expect(h.release).toHaveBeenCalledWith({ key: 'cap-key', expiresAt: '2026-11-26T00:00:00.000Z' });
   });
 
-  it('fails the run when processing throws', async () => {
+  it.each([
+    ['the quest errored', () => h.findQuest.mockResolvedValue({ type: 'error', reply: 'boom' })],
+    ['the reply is empty', () => h.findQuest.mockResolvedValue({ type: 'message', reply: '  ', replies: [] })],
+    [
+      'the reply is an artifact the page cannot show',
+      () =>
+        h.findQuest.mockResolvedValue({
+          type: 'message',
+          reply: '<artifact identifier="a" type="application/vnd.ant.react" title="App">x</artifact>',
+          replies: [],
+        }),
+    ],
+    ['the scan write conflicts', () => h.write.mockRejectedValue(new Error('The template changed'))],
+  ])('fails the run but keeps the cap spent when %s after processing', async (_name, arrange) => {
+    arrange();
+    await runTemplateExample(payload(), logger, deps());
+    expect(h.fail).toHaveBeenCalledWith('l1', RUN_AT, expect.any(String));
+    expect(h.release).not.toHaveBeenCalled();
+  });
+
+  it('fails the run, settles the hidden quest and keeps the cap spent when processing throws', async () => {
     await runTemplateExample(
       payload(),
       logger,
       deps({ processQuest: vi.fn(async () => Promise.reject(new Error('provider down'))) })
     );
     expect(h.fail).toHaveBeenCalledWith('l1', RUN_AT, 'provider down');
-    expect(h.release).toHaveBeenCalled();
+    expect(h.settle).toHaveBeenCalledWith(
+      'quest-1',
+      expect.objectContaining({ status: 'stopped', type: 'error', reply: 'provider down' })
+    );
+    expect(h.release).not.toHaveBeenCalled();
+  });
+
+  it('leaves the cap alone when a newer run has superseded this one', async () => {
+    h.fail.mockResolvedValue(false);
+    h.findListing.mockResolvedValue({ status: 'withdrawn' });
+    await runTemplateExample(payload(), logger, deps());
+    expect(h.release).not.toHaveBeenCalled();
+  });
+
+  it('aborts and fails a run past its deadline, settling the hidden quest', async () => {
+    let seen: AbortSignal | undefined;
+    const processQuest = vi.fn(async (_body, _logger, mode) => {
+      seen = mode.abortSignal;
+      await new Promise(() => undefined);
+    });
+    await runTemplateExample(payload(), logger, deps({ processQuest, deadlineMs: 20 }));
+    expect(seen?.aborted).toBe(true);
+    expect(h.fail).toHaveBeenCalledWith('l1', RUN_AT, 'The example run took too long');
+    expect(h.settle).toHaveBeenCalledWith('quest-1', expect.objectContaining({ type: 'error' }));
+    expect(h.write).not.toHaveBeenCalled();
+  });
+
+  it('counts a turn that ended quietly at the deadline as late', async () => {
+    const processQuest = vi.fn(
+      async (_body, _logger, mode) =>
+        new Promise<void>(resolve => mode.abortSignal.addEventListener('abort', () => resolve()))
+    );
+    await runTemplateExample(payload(), logger, deps({ processQuest, deadlineMs: 20 }));
+    expect(h.fail).toHaveBeenCalledWith('l1', RUN_AT, 'The example run took too long');
+  });
+
+  describe('generated sample cleanup', () => {
+    it('deletes the previous generated sample once the new example lands', async () => {
+      h.findTemplate.mockResolvedValue({
+        example: { sampleFile: { source: 'generated', fabFileId: 'old-sample', name: 'a.md', mime: 'text/markdown' } },
+      });
+      const d = deps();
+      await runTemplateExample(payload({ takesFile: true }), logger, d);
+      expect(d.deleteSample).toHaveBeenCalledTimes(1);
+      expect(d.deleteSample).toHaveBeenCalledWith('author-1', 'old-sample');
+    });
+
+    it('never deletes an uploaded sample', async () => {
+      h.findTemplate.mockResolvedValue({
+        example: { sampleFile: { source: 'upload', fabFileId: 'up-1', name: 'a.pdf', mime: 'application/pdf' } },
+      });
+      const d = deps();
+      await runTemplateExample(payload({ takesFile: true }), logger, d);
+      expect(d.deleteSample).not.toHaveBeenCalled();
+    });
+
+    it('deletes the sample it generated when the run fails', async () => {
+      const d = deps({ processQuest: vi.fn(async () => Promise.reject(new Error('provider down'))) });
+      await runTemplateExample(payload({ takesFile: true }), logger, d);
+      expect(d.deleteSample).toHaveBeenCalledWith('author-1', 'sample-file-1');
+    });
+
+    it('deletes the sample it generated when a newer run replaced this one', async () => {
+      h.write.mockResolvedValue(null);
+      h.findTemplate.mockResolvedValue({
+        example: { sampleFile: { source: 'generated', fabFileId: 'old-sample', name: 'a.md', mime: 'text/markdown' } },
+      });
+      const d = deps();
+      await runTemplateExample(payload({ takesFile: true }), logger, d);
+      expect(d.deleteSample).toHaveBeenCalledTimes(1);
+      expect(d.deleteSample).toHaveBeenCalledWith('author-1', 'sample-file-1');
+    });
   });
 });
 
