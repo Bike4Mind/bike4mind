@@ -1,5 +1,8 @@
 import { IModelPrice, IModelPriceTier, billableRealtimeVoiceTier, resolveModelPriceRow } from '@bike4mind/common';
 import { DEFAULT_REALTIME_VOICE_MODEL, REALTIME_VOICE_PRICING } from '@bike4mind/llm-adapters';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'realtimeVoicePricing' } });
 
 export type RealtimeVoiceRateSource = 'catalog' | 'fallback' | 'fallback-default';
 
@@ -21,8 +24,12 @@ export function pickRealtimeVoiceTier(
   if (tier) return { tier, source: 'catalog' };
   const fallback = REALTIME_VOICE_PRICING[model];
   if (fallback) return { tier: fallback, source: 'fallback' };
-  console.error(
-    `[UNPRICED_MODEL] ${model} (realtime-voice) has no catalog row or fallback rates; settling at ${DEFAULT_REALTIME_VOICE_MODEL} rates`
+  logger.error(
+    '[UNPRICED_MODEL] realtime-voice model has no catalog row or fallback rates; settling at the default rates',
+    {
+      model,
+      defaultModel: DEFAULT_REALTIME_VOICE_MODEL,
+    }
   );
   return { tier: REALTIME_VOICE_PRICING[DEFAULT_REALTIME_VOICE_MODEL], source: 'fallback-default' };
 }

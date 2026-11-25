@@ -25,18 +25,13 @@ import {
   RETENTION_ESTIMATE_MS,
 } from '@bike4mind/server-utils/organizations/retentionPolicy';
 
-const effects = vi.hoisted(() => ({ files: vi.fn(), media: vi.fn(), unpublish: vi.fn(), flush: vi.fn() }));
+const effects = vi.hoisted(() => ({ files: vi.fn(), media: vi.fn(), unpublish: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: effects.files }),
   getGeneratedImageStorage: () => ({ delete: effects.media }),
 }));
 vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: effects.unpublish,
-}));
-vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', () => ({
-  createCdnInvalidationBatch: () => ({ add: vi.fn(), flush: effects.flush }),
-  generatedCdnPath: (key: string) => `/generated/${key}`,
-  MAX_PATHS_PER_BATCH: 3000,
 }));
 import { cleanupOrganizationRetention } from './retentionCleanup';
 
@@ -382,7 +377,7 @@ describe('explicit organization retention on disposable data', () => {
       expect((await Quest.collection.findOne({ _id: target }))?.deletedAt).toBeNull();
     });
     it('reaches an eligible media object past a full batch of non-generated keys', async () => {
-      for (let i = 0; i < 55; i++) await generatedObject(await notebook(orgId), `not-a-generated-key-${i}.png`);
+      for (let i = 0; i < 55; i++) await generatedObject(await notebook(orgId), `nested/not-a-generated-key-${i}.png`);
       await generatedObject(await notebook(orgId));
       await cleanupOrganizationRetention(orgId, options());
       expect(effects.media).not.toHaveBeenCalled();

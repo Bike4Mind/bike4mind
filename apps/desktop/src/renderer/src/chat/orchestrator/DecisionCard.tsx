@@ -83,7 +83,7 @@ export function DecisionCard({ decision, asker, onOpenDetails, onSettled }: Deci
   );
 }
 
-function DecisionBody({
+export function DecisionBody({
   decision,
   asker,
   onOpenDetails,

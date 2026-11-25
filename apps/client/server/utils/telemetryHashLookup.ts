@@ -3,6 +3,9 @@ import { createHmac } from 'crypto';
 import { User, questRepository, organizationRepository } from '@bike4mind/database';
 import { legacySigningKey, signingKey, verificationKeys } from '@bike4mind/server-utils/security/signingKeys';
 import { normalizeTelemetryUserId } from './telemetryIdentity';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'telemetryHashLookup' } });
 
 /** Number of days of telemetry to cover when regenerating hashes for DSAR/deletion */
 const TELEMETRY_RETENTION_DAYS = 90;
@@ -19,7 +22,7 @@ export function deriveTelemetrySalts(): { salt: string; dateKey: string }[] {
     ...new Set([...verificationKeys('telemetry-salt'), signingKey('telemetry-salt'), legacySigningKey()]),
   ].filter(key => key !== '' && key !== 'not-configured');
   if (hmacSecrets.length === 0 && process.env.NODE_ENV !== 'development') {
-    console.warn(
+    logger.warn(
       '[Telemetry] Neither HMAC_SIGNING_SECRET nor SECRET_ENCRYPTION_KEY is configured - using predictable fallback salt. Hashes are reversible.'
     );
   }

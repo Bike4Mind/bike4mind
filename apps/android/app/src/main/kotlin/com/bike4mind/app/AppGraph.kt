@@ -43,6 +43,7 @@ import com.bike4mind.kit.briefs.BriefWire
 import com.bike4mind.kit.chat.ChatController
 import com.bike4mind.kit.chat.ChatSendWire
 import com.bike4mind.kit.chat.LiveChatBackend
+import com.bike4mind.kit.credits.CreditsController
 import com.bike4mind.kit.environment.ServerEnvironment
 import com.bike4mind.kit.media.FileMediaListCache
 import com.bike4mind.kit.media.MediaDetailController
@@ -176,6 +177,8 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     }
 
     fun settings(scope: CoroutineScope) = SettingsController(account, scope)
+
+    fun credits(scope: CoroutineScope) = CreditsController({ accountApi.getCreditBalance().requireBody().balance }, scope)
 
     fun accountDeletion(scope: CoroutineScope) = AccountDeletionController(account, scope, ::endSessionAfterDeletion)
 

@@ -30,6 +30,7 @@ import { INNKEEPER_GREETING, ReplyBubble } from './InnkeeperDesk';
 import { useAgentAnnouncements } from './announcements';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import { NeedsYouBubble } from './NeedsYouBubble';
+import { TavernDialogue } from './TavernDialogue';
 import { OverflowStack, type StackedAgent } from './OverflowStack';
 import { PLAQUE_EDGE, PLAQUE_WOOD } from './plaque';
 import { QuestBoard } from './QuestBoard';
@@ -672,6 +673,8 @@ export function TavernView({
   settled = false,
   pause,
   answerFromBubble = true,
+  inSceneDecisions = false,
+  needsYouFocusRequest,
 }: OrchestratorViewProps & {
   /** When the scene holds still; the mini Tavern pauses as soon as it loses focus. */
   pause?: ScenePauseOptions;
@@ -735,9 +738,22 @@ export function TavernView({
       .map(({ agent, placement }) => ({ id: agent.id, zone: placement.zone, point: placement.point }))
   );
   const needsYou = new Map([...needsYouGroupsByCarrier].map(([id, group]) => [id, group.length]));
+  // One place to answer: with the dialogue box up, a waiting sprite keeps only its "Needs you!" marker.
+  // It stays up at last call too, when someone away from the keyboard is most likely to come back to it.
+  const dialogue = inSceneDecisions && answerFromBubble;
   // Until everyone is seated the bubble rides inside the walking sprite; after that it stands on its own with buttons.
-  const answerBubbles = answerFromBubble && arrived ? needsYouGroupsByCarrier : new Map<string, string[]>();
+  const answerBubbles =
+    answerFromBubble && arrived && !dialogue ? needsYouGroupsByCarrier : new Map<string, string[]>();
   const agentsById = new Map(agents.map(agent => [agent.id, agent]));
+  const [dialogueFront, setDialogueFront] = useState<string | undefined>(undefined);
+  const [dialogueFocus, setDialogueFocus] = useState(0);
+  // A waiting character, clicked, brings its request to the front of the box instead of opening its details.
+  const selectSprite = (id: string) => {
+    if (dialogue && agentsById.get(id)?.state === 'needs-you') {
+      setDialogueFront(id);
+      setDialogueFocus(value => value + 1);
+    } else onSelect(id);
+  };
   // The bar's bubble sits on the line of the Innkeeper's plate at every stage size, so the plate
   // steps aside while it is up; pointing at the Innkeeper still shows it (LIFTED).
   const barCalling = visible.some(({ agent, placement }) => placement.zone === 'bar' && needsYou.has(agent.id));
@@ -862,7 +878,7 @@ export function TavernView({
             selected={agent.id === selectedId}
             visited={reducedMotion && agent.id === visit}
             cheering={celebrating}
-            onSelect={onSelect}
+            onSelect={selectSprite}
             onOpenPr={onOpenPr}
           />
         ))}
@@ -911,6 +927,21 @@ export function TavernView({
             onOpenPr={onOpenPr}
           />
         ))}
+        {dialogue && (
+          <TavernDialogue
+            agents={agents}
+            nameOf={id => {
+              const agent = agentsById.get(id);
+              return agent ? shortName(agent) : id;
+            }}
+            portraitOf={id => characterSprite(characters.get(id) ?? 1, 'call')}
+            frontKey={dialogueFront}
+            onFrontChange={setDialogueFront}
+            onOpenDetails={onSelect}
+            focusRequest={dialogueFocus + (needsYouFocusRequest ?? 0)}
+            look={mode === 'dark' ? 'wood' : 'parchment'}
+          />
+        )}
         {sceneOverlay}
         {agentDetailsOverlay}
       </Box>
