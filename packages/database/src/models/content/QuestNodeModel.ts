@@ -19,7 +19,7 @@ import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
 
-// Both collections are dropped by migration 20260921253850; without these, model init on every
+// Both collections are dropped by migration 20261125121820; without these, model init on every
 // cold start would recreate them with their indexes. Remove together with these models.
 const LEGACY_DROPPED_COLLECTION = { autoCreate: false, autoIndex: false } as const;
 

@@ -8,7 +8,7 @@ vi.mock('../../utils/config', () => ({ Config: {} }));
 import migration, {
   LEGACY_QUEST_PLAN_COLLECTIONS,
   VERIFY_LEGACY_QUEST_PLAN_FILES_ID,
-} from './20260921253850_drop-legacy-quest-plan-collections';
+} from './20261125121820_drop-legacy-quest-plan-collections';
 import { AvailableMigrations } from './index';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -66,12 +66,12 @@ const seed = async () => {
 };
 
 describe('drop legacy quest plan collections migration', () => {
-  it('is registered after the coverage check and before the migrations that must sort last', () => {
+  it('is registered after the coverage check', () => {
     expect(AvailableMigrations).toContain(migration);
     const verify = AvailableMigrations.find(m => m.id === VERIFY_LEGACY_QUEST_PLAN_FILES_ID);
     expect(verify?.name).toBe('verify legacy quest plan file coverage');
+    expect(migration.id).toBe(20261125121820);
     expect(migration.id).toBeGreaterThan(VERIFY_LEGACY_QUEST_PLAN_FILES_ID);
-    expect(migration.id).toBeLessThan(20260922000000);
   });
 
   it('stays pending and touches nothing until the coverage check has been applied', async () => {

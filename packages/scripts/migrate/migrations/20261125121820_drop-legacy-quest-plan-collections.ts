@@ -58,7 +58,9 @@ const format = (c: Record<string, number>) =>
 const unsetField = async (collection: string, field: string, deadline: Date): Promise<boolean> => {
   const coll = db().collection<{ _id: DocId }>(collection);
   const flush = async (ids: DocId[]) => {
-    if (ids.length) await coll.updateMany({ _id: { $in: ids } }, { $unset: { [field]: '' } });
+    if (!ids.length) return;
+    // update-validators-off: native driver on the raw collection has no schema, and this only unsets a field
+    await coll.updateMany({ _id: { $in: ids } }, { $unset: { [field]: '' } });
   };
   const cursor = coll.find({ [field]: { $exists: true } }, { projection: { _id: 1 } }).batchSize(BATCH_SIZE);
   let ids: DocId[] = [];
@@ -87,9 +89,9 @@ const unsetField = async (collection: string, field: string, deadline: Date): Pr
  * history; the only change to it is the `$unset`. Irreversible, so down is a no-op.
  */
 const migration: MigrationFile = {
-  // Backdated below EnsureOAuthGrantClientUserIndex (20260922000000) so it sorts after the coverage
-  // check but before the OAuth backfill, which must sort last.
-  id: 20260921253850,
+  // A generated UTC timestamp (scripts/check-migration-ids.mjs). It sorts after the coverage check,
+  // but the order that matters is enforced in up(): the check must be applied in an earlier run.
+  id: 20261125121820,
   name: 'drop legacy quest plan collections',
 
   up: async ctx => {
