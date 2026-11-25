@@ -53,7 +53,9 @@ const { createInProcessCallableFunctionRunner } =
   await import('@bike4mind/server-utils/callableFunctions/runtimeRunner');
 const { handleCallableFunctionCallRecords } = await import('./callableFunctionCall');
 
-vi.setConfig({ testTimeout: Math.max(MONGO_TEST_TIMEOUT_MS, 120_000), hookTimeout: MONGO_TEST_TIMEOUT_MS });
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+// Pyodide's cold load on a busy host, on top of the database work.
+const REAL_RUNTIME = { timeout: MONGO_TEST_TIMEOUT_MS * 2 };
 
 const OWNER = { id: 'owner-1' };
 const STRANGER = { id: 'stranger-1' };
@@ -342,7 +344,7 @@ describe('a queued call', () => {
     expect(limits).toEqual([300_000, CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS]);
   });
 
-  it('ends timeout when the run outlives its limit in the real runtime', async () => {
+  it('ends timeout when a run outlives its limit in the real runtime', REAL_RUNTIME, async () => {
     const pyodideDir = realpathSync(path.dirname(createRequire(import.meta.url).resolve('pyodide')));
     const childPath = path.resolve(import.meta.dirname, '../callableFunctions/child.ts');
     vi.stubEnv('CALLABLE_FUNCTION_CHILD_PATH', childPath);

@@ -13,6 +13,7 @@ import {
   isPreviewStage,
 } from './constants';
 import { subscribeUnlessPreview } from './previewQueueConsumers';
+import { CALLABLE_FUNCTION_CALL_CONSUMER_MAX_CONCURRENCY } from '../packages/server-utils/src/callableFunctions/runtimeLimits';
 import { imageProcessor } from './imageProcessor';
 import {
   buildQueuePair,
@@ -807,7 +808,14 @@ const callableFunctionCallQueueSubscription = callableFunctionCallQueue.subscrib
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
   },
-  SINGLE_RECORD_BATCH
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Caps pollers instead of reserving concurrency: a throttled consumer would return the job unclaimed and spend
+    // one of its two receives, sending a call that never ran to the dead-letter queue.
+    transform: {
+      eventSourceMapping: { scalingConfig: { maximumConcurrency: CALLABLE_FUNCTION_CALL_CONSUMER_MAX_CONCURRENCY } },
+    },
+  }
 );
 
 // Quest Export Queue

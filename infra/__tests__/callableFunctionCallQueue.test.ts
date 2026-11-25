@@ -7,6 +7,12 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  CALLABLE_FUNCTION_CALL_CONSUMER_MAX_CONCURRENCY,
+  CALLABLE_FUNCTION_CALL_QUEUE_MAX_RECEIVES,
+  CALLABLE_FUNCTION_CALL_QUEUE_VISIBILITY_TIMEOUT_SECONDS,
+  CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY,
+} from '../../packages/server-utils/src/callableFunctions/runtimeLimits';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
@@ -40,7 +46,17 @@ describe('asynchronous callable function call queue', () => {
 
   it('runs one record at a time in the queued-call handler', () => {
     expect(subscription).toMatch(/handler:\s*'apps\/workers\/src\/queueHandlers\/callableFunctionCall\.dispatch'/);
-    expect(subscription).toMatch(/SINGLE_RECORD_BATCH\s*$/);
+    expect(subscription).toMatch(/\.\.\.SINGLE_RECORD_BATCH,/);
+  });
+
+  it("caps the consumer's pollers below the runtime's reserved concurrency, without reserving its own", () => {
+    expect(subscription).toMatch(
+      /scalingConfig:\s*\{\s*maximumConcurrency:\s*CALLABLE_FUNCTION_CALL_CONSUMER_MAX_CONCURRENCY\s*\}/
+    );
+    expect(subscription).not.toMatch(/concurrency:\s*\{\s*reserved/);
+    // SQS event sources accept 2 to 1000.
+    expect(CALLABLE_FUNCTION_CALL_CONSUMER_MAX_CONCURRENCY).toBeGreaterThanOrEqual(2);
+    expect(CALLABLE_FUNCTION_CALL_CONSUMER_MAX_CONCURRENCY).toBeLessThan(CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY);
   });
 
   // The handler's longest time limit is derived from this timeout; with retry 2 the one redelivery lands one
@@ -53,6 +69,8 @@ describe('asynchronous callable function call queue', () => {
     );
     expect(queue).toMatch(/retry:\s*2\b/);
     expect(minutes(queue, 'visibilityTimeout')).toBe(20);
+    expect(CALLABLE_FUNCTION_CALL_QUEUE_MAX_RECEIVES).toBe(2);
+    expect(CALLABLE_FUNCTION_CALL_QUEUE_VISIBILITY_TIMEOUT_SECONDS).toBe(20 * 60);
   });
 
   it('alarms on its dead-letter queue and shows it in the admin queue list', () => {

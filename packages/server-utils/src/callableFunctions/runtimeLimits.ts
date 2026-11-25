@@ -71,3 +71,13 @@ export const CALLABLE_FUNCTION_LAMBDA_EPHEMERAL_STORAGE_MB = 10_240;
 
 /** Bounds the runtime's share of the account's concurrency pool, and so its worst-case spend. */
 export const CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY = 50;
+
+/**
+ * Most queued calls the consumer runs at once (its event source's `maximumConcurrency`). Each holds one runtime
+ * invocation for its whole run, so half the runtime's reserved concurrency leaves the other half to synchronous calls.
+ */
+export const CALLABLE_FUNCTION_CALL_CONSUMER_MAX_CONCURRENCY = CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY / 2;
+
+/** callableFunctionCallQueue's visibility timeout and its receives before the dead-letter queue (infra/queues.ts). */
+export const CALLABLE_FUNCTION_CALL_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 1200;
+export const CALLABLE_FUNCTION_CALL_QUEUE_MAX_RECEIVES = 2;
