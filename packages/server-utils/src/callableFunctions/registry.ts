@@ -25,8 +25,10 @@ import {
   type FunctionContract,
   type FunctionContractProblem,
   type ICallableFunctionDetail,
+  type ICallableFunctionOfferable,
   type ICallableFunctionPin,
   type ICallableFunctionPublic,
+  type McpToolApprovalMode,
 } from '@bike4mind/common';
 import {
   artifactContentRepository,
@@ -267,6 +269,34 @@ export async function setCallableFunctionEnabled(
   const fn = await callableFunctionRepository.setEnabled(id, userOwner(actor), enabled);
   if (!fn) throw notFound();
   return toCallableFunctionPublic(fn, await readHead(actor, fn.pin.artifactId));
+}
+
+export async function setCallableFunctionApproval(
+  actor: CallableFunctionActor,
+  id: string,
+  approval: McpToolApprovalMode
+): Promise<ICallableFunctionPublic> {
+  const fn = await callableFunctionRepository.setApproval(id, userOwner(actor), approval);
+  if (!fn) throw notFound();
+  return toCallableFunctionPublic(fn, await readHead(actor, fn.pin.artifactId));
+}
+
+/** The actor's functions chat may offer: live, turned on, and with their artifact still in place. */
+export async function listOfferedCallableFunctions(
+  actor: CallableFunctionActor,
+  options: { limit?: number; excludeAlwaysAsk?: boolean } = {}
+): Promise<ICallableFunctionOfferable[]> {
+  const { limit, excludeAlwaysAsk } = options;
+  const functions = await callableFunctionRepository.listLiveForOwner(userOwner(actor), { excludeAlwaysAsk });
+  const heads = await readHeads(
+    actor,
+    functions.map(fn => fn.pin.artifactId)
+  );
+  const live = functions.filter(
+    fn => effectiveCallableFunctionStatus(fn, heads.get(fn.pin.artifactId) ?? null) === 'live'
+  );
+  // After the head filter, so a function whose artifact is gone never takes one of the `limit` slots.
+  return limit ? live.slice(0, limit) : live;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { CALLABLE_FUNCTION_EXAMPLE_LIMITS, FUNCTION_CONTRACT_LIMITS } from '@bike4mind/common';
+import { CALLABLE_FUNCTION_EXAMPLE_LIMITS, FUNCTION_CONTRACT_LIMITS, MCP_TOOL_APPROVAL_MODES } from '@bike4mind/common';
 import { z } from 'zod';
 
 // Bodies of pages/api/callable-functions/**. `.strict()` everywhere: the hash, the pin, the name, the state, and
@@ -23,7 +23,11 @@ export const callableFunctionPinBodySchema = z
   })
   .strict();
 
-export const callableFunctionPatchBodySchema = z.object({ enabled: z.boolean() }).strict();
+/** One setting per request: turn the tool on or off, or set when chat asks before a call. */
+export const callableFunctionPatchBodySchema = z.union([
+  z.object({ enabled: z.boolean() }).strict(),
+  z.object({ approval: z.enum(MCP_TOOL_APPROVAL_MODES) }).strict(),
+]);
 
 /**
  * At most the names of the declared tests to run (the ones a budget left not run); the tests themselves and the

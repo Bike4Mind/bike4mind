@@ -14,6 +14,7 @@ import type { CallableFunctionTenant } from './runtimeRunner';
 const h = vi.hoisted(() => ({
   enabled: true,
   fn: null as Record<string, unknown> | null,
+  hostFn: null as Record<string, unknown> | null,
   artifact: null as Record<string, unknown> | null,
   rows: [] as Record<string, unknown>[],
   reads: [] as string[],
@@ -34,6 +35,7 @@ vi.mock('./access', () => ({
 vi.mock('@bike4mind/database', async () => ({
   mongoose: (await import('mongoose')).default,
   callableFunctionRepository: {
+    findBySlugForOwner: vi.fn(async () => h.hostFn),
     findById: vi.fn(async () => {
       h.reads.push('record');
       readTakesTime();
@@ -55,6 +57,12 @@ vi.mock('@bike4mind/database', async () => ({
   },
 }));
 
+vi.mock('./registry', () => ({ listOfferedCallableFunctions: vi.fn(async () => []) }));
+vi.mock('../mcpConnections/customMcpToolHost', () => ({
+  customMcpToolHost: { listConnections: vi.fn(async () => []), callTool: vi.fn() },
+}));
+
+import { createFunctionToolHost, FUNCTION_CONNECTION_ID } from './functionToolHost';
 import { artifactRepository, callableFunctionCallRepository, callableFunctionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { resolveCallableFunctionsEnabled } from './access';
@@ -146,6 +154,7 @@ const onlyRow = () => {
 beforeEach(() => {
   h.enabled = true;
   h.fn = record();
+  h.hostFn = record({ state: 'live', approval: 'default' });
   h.artifact = { id: 'artifact-1', version: 3, deletedAt: null };
   h.rows = [];
   h.reads = [];
@@ -258,6 +267,7 @@ describe('dispatchFunctionCall refusals, in order', () => {
 
 describe('dispatchFunctionCall outcomes', () => {
   it('runs the pinned code with the surface output cap and returns the outputs with a stamp', async () => {
+    h.fn = record({ state: 'live' });
     const runner = runnerOf(ok());
     const result = await dispatchFunctionCall(call({ surface: 'chat' }), { runner });
     expect(result).toMatchObject({ outcome: 'ok', outputs: { deflection: 8381.0 }, callId: 'call-1' });
@@ -302,6 +312,7 @@ describe('dispatchFunctionCall outcomes', () => {
   });
 
   it('refuses outputs over the surface cap', async () => {
+    h.fn = record({ state: 'live' });
     const big = ok({ outputs: { deflection: 1, samples: new Array(30_000).fill(0.123456789) } });
     const result = await dispatchFunctionCall(call({ surface: 'chat' }), { runner: runnerOf(big) });
     expect(result).toMatchObject({ outcome: 'output_too_large', reason: 'result_too_large' });
@@ -618,5 +629,78 @@ describe('readServerContract', () => {
 describe('surface caps', () => {
   it('never wait past 45 s, inside the web function', () => {
     for (const caps of Object.values(CALLABLE_FUNCTION_SURFACE_CAPS)) expect(caps.waitMs).toBeLessThanOrEqual(45_000);
+  });
+});
+
+describe('function host and dispatch admission use the executing record', () => {
+  it.each(['chat', 'agent'] as const)(
+    'refuses a repinned draft at %s dispatch after the host read live',
+    async surface => {
+      h.fn = record({
+        state: 'draft',
+        pin: { ...record().pin, version: 4, source: 'new draft', contentHash: 'new-hash' },
+      });
+      const runner = runnerOf(ok());
+      const host = createFunctionToolHost(surface, {
+        dispatch: (request, options) => dispatchFunctionCall(request, { ...options, runner }),
+      });
+      const response = await host.callTool({
+        connectionId: FUNCTION_CONNECTION_ID,
+        userId: OWNER.id,
+        toolName: CONTRACT.name,
+        args: ARGS,
+        approved: true,
+      });
+      expect(runner).not.toHaveBeenCalled();
+      expect(response.result.content).toEqual([
+        { type: 'text', text: JSON.stringify({ outcome: 'refused', reason: 'not_live' }) },
+      ]);
+      expect(onlyRow()).toMatchObject({ codeHash: 'new-hash', reason: 'not_live' });
+    }
+  );
+
+  it.each(['chat', 'agent'] as const)('rechecks a new always-ask policy at %s dispatch', async surface => {
+    h.fn = record({ state: 'live', approval: 'always_ask' });
+    const runner = runnerOf(ok());
+    const host = createFunctionToolHost(surface, {
+      dispatch: (request, options) => dispatchFunctionCall(request, { ...options, runner }),
+    });
+    const response = await host.callTool({
+      connectionId: FUNCTION_CONNECTION_ID,
+      userId: OWNER.id,
+      toolName: CONTRACT.name,
+      args: ARGS,
+      approved: false,
+    });
+    expect(runner).not.toHaveBeenCalled();
+    expect(response.result.content).toEqual([
+      { type: 'text', text: JSON.stringify({ outcome: 'refused', reason: 'approval_required' }) },
+    ]);
+    expect(onlyRow()).toMatchObject({ reason: 'approval_required' });
+  });
+
+  it.each(['chat', 'agent'] as const)('forwards an explicit approval to an always-ask %s dispatch', async surface => {
+    h.fn = record({ state: 'live', approval: 'always_ask' });
+    const runner = runnerOf(ok());
+    const host = createFunctionToolHost(surface, {
+      dispatch: (request, options) => dispatchFunctionCall(request, { ...options, runner }),
+    });
+    const response = await host.callTool({
+      connectionId: FUNCTION_CONNECTION_ID,
+      userId: OWNER.id,
+      toolName: CONTRACT.name,
+      args: ARGS,
+      approved: true,
+    });
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(response.result.isError).toBeUndefined();
+    expect(onlyRow()).toMatchObject({ outcome: 'ok' });
+  });
+
+  it.each(['test', 'rest'] as const)('retains explicit draft execution on the %s surface', async surface => {
+    h.fn = record({ state: 'draft', approval: 'always_ask' });
+    const runner = runnerOf(ok());
+    expect(await dispatchFunctionCall(call({ surface }), { runner })).toMatchObject({ outcome: 'ok' });
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 });

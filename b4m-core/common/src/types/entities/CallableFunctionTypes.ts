@@ -3,12 +3,16 @@ import type { FunctionContract, FunctionContractChange, FunctionTestTolerance } 
 import { IBaseRepository } from './BaseTypes';
 import type { CallableFunctionCallOutcome, CallableFunctionStamp } from './CallableFunctionCallTypes';
 import { IMongoDocument } from './common';
+import type { McpToolApprovalMode } from './McpConnectionTypes';
 
 /**
  * A Python artifact saved as a callable function: its code copied at one version, with the `FUNCTION` contract the
  * owner's browser read from it. Only the owner can see or call it. API responses go through
  * {@link toCallableFunctionPublic} or {@link toCallableFunctionDetail}.
  */
+
+/** Internal tool namespace: connector slugs must start with a lowercase letter. */
+export const CALLABLE_FUNCTION_TOOL_CONNECTION_ID = '_fn';
 
 export const CALLABLE_FUNCTION_OWNER_TYPES = ['user'] as const;
 export type CallableFunctionOwnerType = (typeof CALLABLE_FUNCTION_OWNER_TYPES)[number];
@@ -141,6 +145,8 @@ export interface ICallableFunction {
   description: string;
   state: CallableFunctionState;
   enabled: boolean;
+  /** When chat and agent runs ask before a call, as for a connector tool; unset reads as `default`. */
+  approval?: McpToolApprovalMode;
   pin: ICallableFunctionPin;
   /** Display data only: every call reads `FUNCTION` from the code again. */
   contract: FunctionContract;
@@ -161,6 +167,17 @@ export type ICallableFunctionSummary = Omit<
   pin: Omit<ICallableFunctionPin, 'source'>;
 };
 
+/** How many live functions one chat or agent turn offers, oldest first; connectors keep the rest of the tool budget. */
+export const MAX_CALLABLE_FUNCTIONS_PER_TURN = 20;
+
+/** The read chat offers from: the contract without the pinned code, server run, promotion record, or case results. */
+export type ICallableFunctionOfferable = Omit<
+  ICallableFunctionDocument,
+  'pin' | 'lastServerRun' | 'promoted' | 'caseResults'
+> & {
+  pin: Omit<ICallableFunctionPin, 'source'>;
+};
+
 /** The artifact's current version and deletion, read beside a function; null when the artifact is gone. */
 export interface CallableFunctionHead {
   version: number;
@@ -174,6 +191,7 @@ export interface ICallableFunctionPublic {
   status: CallableFunctionStatus;
   state: CallableFunctionState;
   enabled: boolean;
+  approval: McpToolApprovalMode;
   pin: Pick<ICallableFunctionPin, 'artifactId' | 'version' | 'contentHash' | 'pinnedAt' | 'seq'>;
   latestVersion: number | null;
   /** The artifact has a newer version than the pinned one. */
@@ -214,6 +232,7 @@ export function toCallableFunctionPublic(
     status: effectiveCallableFunctionStatus(doc, head),
     state: doc.state,
     enabled: doc.enabled,
+    approval: doc.approval ?? 'default',
     pin: {
       artifactId: doc.pin.artifactId,
       version: doc.pin.version,
@@ -375,6 +394,16 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
   listForOwner(owner: CallableFunctionOwner, filter?: { artifactId?: string }): Promise<ICallableFunctionSummary[]>;
   countForOwner(owner: CallableFunctionOwner): Promise<number>;
   setEnabled(id: string, owner: CallableFunctionOwner, enabled: boolean): Promise<ICallableFunctionDocument | null>;
+  setApproval(
+    id: string,
+    owner: CallableFunctionOwner,
+    approval: McpToolApprovalMode
+  ): Promise<ICallableFunctionDocument | null>;
+  /** Live and turned on, oldest first, without the pinned code; the artifact may still be gone. */
+  listLiveForOwner(
+    owner: CallableFunctionOwner,
+    options?: { limit?: number; excludeAlwaysAsk?: boolean }
+  ): Promise<ICallableFunctionOfferable[]>;
   /** Compare-and-set on `pin.version === expectedVersion`; null when stale, missing, or not the owner's. */
   repin(
     id: string,

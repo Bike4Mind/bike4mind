@@ -9,6 +9,7 @@ import type {
   FunctionContractChange,
   FunctionContractProblem,
   ICallableFunctionPublic,
+  McpToolApprovalMode,
 } from '@bike4mind/common';
 import type { CallableFunctionsStatus } from '@pages/api/callable-functions/status';
 import type { CallableFunctionTestRun } from '@pages/api/callable-functions/[id]/test-run';
@@ -184,6 +185,25 @@ export const useSetCallableFunctionEnabled = () => {
     onSettled: invalidate,
   });
 };
+
+export const useSetCallableFunctionApproval = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async ({ id, approval }: { id: string; approval: McpToolApprovalMode }) =>
+      (await api.patch<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}`, { approval })).data,
+    onSettled: invalidate,
+  });
+};
+
+/** Every tool the person saved, oldest first; off until the setting is on. */
+export function useCallableFunctionList(enabled: boolean) {
+  const hasAccessToken = useAccessToken(s => !!s.accessToken);
+  return useQuery({
+    queryKey: [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'all'],
+    queryFn: async () => (await api.get<ICallableFunctionPublic[]>(COLLECTION)).data,
+    enabled: hasAccessToken && enabled,
+  });
+}
 
 /**
  * Runs the saved tool's declared tests on the server, against the pinned code, or only the named ones (those an
