@@ -345,6 +345,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/music-generations/{id}',
   },
+  getObligation: {
+    method: 'GET',
+    path: '/api/v1/obligations/{id}',
+  },
   getPendingDecisionCount: {
     method: 'GET',
     path: '/api/v1/pending-decisions',
@@ -392,6 +396,10 @@ export const operations = {
   getWhatsNewMedia: {
     method: 'GET',
     path: '/api/v1/whats-new/media/{id}/{asset}',
+  },
+  handOffObligation: {
+    method: 'POST',
+    path: '/api/v1/obligations',
   },
   importSkillMarketListing: {
     method: 'POST',
@@ -492,6 +500,10 @@ export const operations = {
   listMySkills: {
     method: 'GET',
     path: '/api/v1/skills/mine',
+  },
+  listObligations: {
+    method: 'GET',
+    path: '/api/v1/obligations',
   },
   listProjectFiles: {
     method: 'GET',
@@ -692,6 +704,10 @@ export const operations = {
   updateFile: {
     method: 'PATCH',
     path: '/api/v1/files/{id}',
+  },
+  updateObligation: {
+    method: 'PATCH',
+    path: '/api/v1/obligations/{id}',
   },
   updateProject: {
     method: 'PATCH',
