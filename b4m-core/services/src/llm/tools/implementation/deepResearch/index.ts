@@ -112,11 +112,9 @@ export async function performDeepResearch(
   const startTime = Date.now();
   const timeLimit = duration * 60 * 1000; // Convert minutes to milliseconds
   let topic = params.topic;
-  const log = console.log;
+  const log = (...args: unknown[]) => Logger.debug(...args);
 
-  log(
-    `🔬 Deep Research: Starting research on "${params.topic} with maxDepth ${maxDepth} and duration ${duration} minutes"`
-  );
+  log('Deep Research: Starting research', { topic: params.topic, maxDepth, duration });
 
   const state: ResearchState = {
     findings: [],
@@ -193,7 +191,7 @@ export async function performDeepResearch(
             description: result.description,
           }));
         } catch (error) {
-          log(`🔬 Deep Research: Firecrawl search failed for query "${query}":`, error);
+          log('Deep Research: Firecrawl search failed', { query, error });
           // Return empty array so research can continue with other searchers
           return [];
         }
