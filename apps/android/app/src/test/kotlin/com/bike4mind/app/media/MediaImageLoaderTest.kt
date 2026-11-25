@@ -101,6 +101,26 @@ class MediaImageLoaderTest {
     }
 
     @Test
+    fun anOpaqueTileIsCachedAsJpegEvenWhenItsPngHasAnAlphaChannel() = runTest {
+        // An ARGB PNG with every pixel opaque, as most generated images are.
+        loader { png(color = Color.RED) }.thumbnail(item())
+
+        assertEquals(listOf(0xFF, 0xD8), tiles().single().readBytes().take(2).map { it.toInt() and 0xFF })
+    }
+
+    @Test
+    fun oneTransparentPixelIsEnoughToKeepThePng() = runTest {
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.RED)
+            setPixel(7, 7, Color.TRANSPARENT)
+        }
+        val bytes = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        loader { bytes }.thumbnail(item())
+
+        assertEquals(listOf(0x89, 0x50), tiles().single().readBytes().take(2).map { it.toInt() and 0xFF })
+    }
+
+    @Test
     fun anIdThatIsNotPlainIsNeverWrittenToDisk() = runTest {
         loader().thumbnail(item(id = "../escape"))
         assertTrue(tiles().isEmpty())
