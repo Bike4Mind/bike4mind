@@ -24,6 +24,10 @@ type Incident = UserComplianceResponse['moderationIncidents'][number] & { rowId:
 type AuthEvent = UserComplianceResponse['recentAuthEvents'][number] & { rowId: string };
 
 const TABLE_MAX_HEIGHT = '40vh';
+// Fits the longest UserAuthAuditEvent (`account_data_export_requested`) at ~7.5 px a character, plus cell padding.
+const EVENT_COLUMN_WIDTH = '16rem';
+// When + Event + three wrap columns at their pre-widening share; narrower dialogs scroll the table sideways.
+const AUTH_EVENTS_MIN_WIDTH = `${parseFloat(DATETIME_COLUMN_WIDTH) + parseFloat(EVENT_COLUMN_WIDTH) + 3 * 7.5}rem`;
 
 const Mono = ({ children }: { children: string }) => (
   <Typography level="body-sm" sx={{ fontFamily: 'code', color: 'inherit' }}>
@@ -45,7 +49,7 @@ const INCIDENT_COLUMNS: DataColumn<Incident>[] = [
 
 const AUTH_EVENT_COLUMNS: DataColumn<AuthEvent>[] = [
   { id: 'when', label: 'When', width: DATETIME_COLUMN_WIDTH, render: e => fmt(e.createdAt) },
-  { id: 'event', label: 'Event', render: e => e.event },
+  { id: 'event', label: 'Event', width: EVENT_COLUMN_WIDTH, render: e => e.event },
   // actorUserId is only set for admin-driven events (e.g. session_revoked) - a self-initiated
   // logout has no distinct actor to show.
   {
@@ -151,6 +155,7 @@ const ComplianceModal = () => {
               rows={authEvents}
               columns={AUTH_EVENT_COLUMNS}
               getRowId={getRowId}
+              minWidth={AUTH_EVENTS_MIN_WIDTH}
               pagination={false}
               maxHeight={TABLE_MAX_HEIGHT}
               onRetry={() => void refetch()}

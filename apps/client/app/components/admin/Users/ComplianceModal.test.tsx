@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ComplianceModal, { useComplianceModal } from './ComplianceModal';
 import type { UserComplianceResponse } from '@bike4mind/common';
+import { USER_AUTH_AUDIT_EVENTS } from '@bike4mind/database';
 
 const mockData = vi.fn();
 
@@ -194,6 +195,33 @@ describe('ComplianceModal', () => {
       expect(parseFloat(width)).toBeGreaterThanOrEqual(13.5);
       expect(within(table).getByText(at.toLocaleString())).toBeInTheDocument();
     }
+  });
+
+  it('keeps the longest auth event readable next to the widened When column', () => {
+    const longest = USER_AUTH_AUDIT_EVENTS.reduce((a, b) => (b.length > a.length ? b : a));
+    mockData.mockReturnValue({
+      data: {
+        ...NEVER_ACCEPTED,
+        recentAuthEvents: [
+          { event: longest, actorIp: '1.2.3.4', userAgent: 'jest', createdAt: new Date(2026, 10, 27).toISOString() },
+        ],
+      },
+      isLoading: false,
+    });
+    render(<ComplianceModal />, { wrapper: TestWrapper });
+    const table = screen.getByTestId('compliance-auth-events');
+    const remOf = (name: string) => {
+      const width = within(table).getByRole('columnheader', { name }).style.width;
+      expect(width).toMatch(/^[\d.]+rem$/);
+      return parseFloat(width);
+    };
+    // jsdom has no layout: assert the sizing instead. ~7.5 px a character in this font (measured on a
+    // preview), plus 12 px cell padding on each side.
+    const eventRem = remOf('Event');
+    expect(eventRem * 16).toBeGreaterThanOrEqual(longest.length * 7.5 + 24);
+    // The other three columns keep at least their old ~7.5rem share; below that the table scrolls.
+    expect(parseFloat(getComputedStyle(table).minWidth)).toBeGreaterThanOrEqual(remOf('When') + eventRem + 3 * 7.5);
+    expect(within(table).getByText(longest)).toBeInTheDocument();
   });
 
   it('renders every returned row without a pager', () => {
