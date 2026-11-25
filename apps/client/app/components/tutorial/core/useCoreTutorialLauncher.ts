@@ -20,9 +20,14 @@ const resumeRefused = (error: unknown): boolean => {
   return status === 404 || status === 409;
 };
 
-/** The message the tutorial opens with, which the user sends from the composer to begin. */
-export const openingPromptOf = (tutorial: Pick<TutorialRunModule, 'steps'>): string | undefined =>
-  tutorial.steps.find(step => step.type === 'prompt' && step.turn === 0)?.prompt;
+/**
+ * The message the tutorial opens with, which the user sends from the composer to begin. Only a walk whose first
+ * step sends it gets one: pre-filling a prompt behind an earlier step (an attach) would invite Send too soon.
+ */
+export const openingPromptOf = (tutorial: Pick<TutorialRunModule, 'steps'>): string | undefined => {
+  const [first] = tutorial.steps;
+  return first?.type === 'prompt' && first.turn === 0 ? first.prompt : undefined;
+};
 
 /**
  * Starts and resumes core tutorials. Starting opens a fresh tutorial notebook, puts the opening message in its
