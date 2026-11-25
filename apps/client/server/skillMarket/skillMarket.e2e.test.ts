@@ -2087,12 +2087,12 @@ describe('template pages: try route and lifecycle (real mongod)', () => {
 
     await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'delist', reason: 'malware' }, true);
     let template = (await SkillListingTemplate.findOne({ listingId: listing.id }))!;
-    expect(template.status).not.toBe('published');
+    expect(template.status).toBe('draft');
     expect(template.freeRunEnabled).toBe(false);
 
     await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'restore' }, true);
     template = (await SkillListingTemplate.findOne({ listingId: listing.id }))!;
-    expect(template.status).not.toBe('published');
+    expect(template.status).toBe('draft');
     expect(template.freeRunEnabled).toBe(false);
   });
 });

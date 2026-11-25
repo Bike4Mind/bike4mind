@@ -49,6 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockSearch = {};
   mockConsumeTrusted.mockReturnValue(false);
+  useChatInput.getState().setDraft(NEW_NOTEBOOK_DRAFT_KEY, '');
 });
 
 describe('NewNotebookPage quest launch', () => {
@@ -90,6 +91,14 @@ describe('NewNotebookPage quest launch', () => {
       enableQuestMaster: true,
     });
     expect(mockSetPreparingQuest).toHaveBeenCalledWith('plan my week');
+  });
+
+  it('keeps a saved new-chat draft when the URL has no goal', () => {
+    useChatInput.getState().setDraft(NEW_NOTEBOOK_DRAFT_KEY, 'an older unsent prompt');
+
+    render(<NewNotebookPage />);
+
+    expect(useChatInput.getState().getDraft(NEW_NOTEBOOK_DRAFT_KEY)).toBe('an older unsent prompt');
   });
 
   it('does nothing when there is no goal in the URL', () => {
