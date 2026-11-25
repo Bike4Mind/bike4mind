@@ -9,7 +9,8 @@ enum StudioWire {
 
   static let sceneCompositionsPath = "api/v1/scene-compositions"
   static let imageJobsPath = "api/v1/image-jobs"
-  /// `IMAGE_JOB_COUNT_MAX` (b4m-core/common/src/schemas/imageJobs.ts): the models listing allows more images than a job request does.
+  /// `IMAGE_JOB_COUNT_MAX` (b4m-core/common/src/schemas/imageJobs.ts): the models listing allows more images than a
+  /// job request does.
   static let imageJobCountMaximum = 4
 
   /// The job collection a kind's handles live under.

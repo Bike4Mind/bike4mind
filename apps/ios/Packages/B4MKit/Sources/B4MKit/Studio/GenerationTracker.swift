@@ -41,9 +41,9 @@ public struct TrackedGeneration: Identifiable, Equatable, Sendable {
 
 /// Follows every generation started from Studio until it settles.
 ///
-/// Generation jobs report through the realtime `generation_job_updated` frame. Every generation is also polled on a backoff, because
-/// frames sent while the socket was down are never replayed. Polling stops at a terminal phase or after
-/// `pollWindow`, so a job the server lost cannot poll forever.
+/// Generation jobs report through the realtime `generation_job_updated` frame. Every generation is also polled on a
+/// backoff, because frames sent while the socket was down are never replayed. Polling stops at a terminal phase or
+/// after `pollWindow`, so a job the server lost cannot poll forever.
 @MainActor
 @Observable
 public final class GenerationTracker {
