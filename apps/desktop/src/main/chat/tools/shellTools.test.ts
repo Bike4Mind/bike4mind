@@ -10,7 +10,14 @@ import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 import { UNNAMED_DISTRO } from './shellScan';
 import * as sessionScripts from './sessionScripts';
 import { forgetSessionWrites, recordSessionWrite } from './sessionScripts';
-import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
+import {
+  SIGKILL_DELAY_MS,
+  bashExecute,
+  bashExecuteRunOptions,
+  doubleWrapRefusal,
+  mainCheckoutOf,
+  shellApproval,
+} from './shellTools';
 import { bashBackground } from './backgroundTools';
 import { MAX_TOOL_OUTPUT_CHARS, type ToolContext } from './types';
 import { resolveUserPath } from './userPath';
@@ -34,6 +41,11 @@ describe('bash_execute', () => {
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-shell-')));
     context = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
+  });
+
+  // A test that fails while it holds fake timers would otherwise hand them to every later test.
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('runs the command and reports its output and exit code', async () => {
@@ -191,17 +203,15 @@ describe('bash_execute', () => {
   it('kills a command that outruns its timeout instead of hanging the turn', async () => {
     const started = Date.now();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    try {
-      const pending = bashExecute.run({ command: 'touch up; sleep 30', timeout: 1000 }, context);
-      await commandStarted();
-      await vi.advanceTimersByTimeAsync(1_000);
-      const result = await pending;
+    const pending = bashExecute.run({ command: 'touch up; sleep 30', timeout: 1000 }, context);
+    await commandStarted();
+    // Past the SIGKILL grace too: macOS bash 3.2 forks `sleep` rather than exec'ing it, and a group
+    // SIGTERM sent while it forks can miss the child, which only the SIGKILL then reaches.
+    await vi.advanceTimersByTimeAsync(1_000 + SIGKILL_DELAY_MS);
+    const result = await pending;
 
-      expect(result).toContain('[timed out');
-      expect(Date.now() - started).toBeLessThan(10_000);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(result).toContain('[timed out');
+    expect(Date.now() - started).toBeLessThan(10_000);
   }, 15_000);
 
   it('stops the command when the turn is aborted', async () => {
