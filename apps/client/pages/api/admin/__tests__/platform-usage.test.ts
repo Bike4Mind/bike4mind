@@ -98,6 +98,18 @@ describe('GET /api/admin/platform-usage', () => {
     expect(res._getJSONData().days).toBe(7);
   });
 
+  it.each([CreditHolderType.User, CreditHolderType.Organization])('preserves the %s owner filter', async ownerType => {
+    const { run } = call({ query: { ownerType, source: 'system' } });
+    await run();
+    expect(mockPlatformUsageSummary).toHaveBeenCalledWith({ days: 30, source: 'system', ownerType });
+  });
+
+  it('does not treat platform attribution as a credit-holder type', async () => {
+    const { run } = call({ query: { ownerType: 'platform' } });
+    await expect(run()).rejects.toThrow();
+    expect(mockPlatformUsageSummary).not.toHaveBeenCalled();
+  });
+
   describe('consumer owner attribution', () => {
     const orgKeyId = 'a'.repeat(24);
     const userKeyId = 'b'.repeat(24);

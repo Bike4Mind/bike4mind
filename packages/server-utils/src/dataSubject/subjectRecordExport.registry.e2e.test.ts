@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { accountDeletionNoticeRepository, mongoose } from '@bike4mind/database';
+import {
+  accountDeletionNoticeRepository,
+  mongoose,
+  PlatformAttempt,
+  platformAttemptRepository,
+  UsageEvent,
+  usageEventRepository,
+} from '@bike4mind/database';
+import { CreditHolderType, PlatformUsageEvent, type IPlatformUsageEventInput } from '@bike4mind/common';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
@@ -29,6 +37,103 @@ afterAll(async () => {
 });
 
 describe('SubjectRecordExport over the real registry', () => {
+  it('withholds actorless platform accounting from personal exports and preserves it through person erasure', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    const at = new Date(Date.now() - 2000);
+    const completedAt = new Date(at.getTime() + 1000);
+    const providerCallId = new mongoose.Types.ObjectId().toString();
+    const attribution = {
+      kind: 'platform_operation' as const,
+      operation: 'sre_diagnosis' as const,
+      environment: 'test' as const,
+      logicalJobId: 'platform-job',
+      executionId: 'platform-execution',
+    };
+    const fact: IPlatformUsageEventInput = {
+      attribution,
+      providerCallId,
+      requestId: attribution.executionId,
+      provider: 'privacy-test-provider',
+      model: 'privacy-test-model',
+      feature: 'operations',
+      source: 'system',
+      keySource: 'platform',
+      creditsCharged: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      providerInputTokens: 1000,
+      providerOutputTokens: 500,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      settledBasis: 'provider',
+      costUsd: 0.002,
+      priceSource: 'literal',
+      rates: { tierKey: 0, input: 0.000001, output: 0.000002 },
+      status: 'ok',
+      dispatchedAt: at,
+      completedAt,
+      usageOccurredAt: at,
+      timestampSource: 'dispatch',
+      recordedAt: new Date(),
+    };
+    PlatformUsageEvent.parse({ ...fact, createdAt: new Date(), updatedAt: new Date() });
+    await platformAttemptRepository.register({
+      attribution,
+      providerCallId,
+      provider: fact.provider,
+      model: fact.model,
+      leaseExpiresAt: new Date(Date.now() + 60000),
+    });
+    expect(await platformAttemptRepository.claimDispatch(providerCallId, at)).toBe(true);
+    await platformAttemptRepository.stageUsage(providerCallId, fact);
+    const platform = await usageEventRepository.recordPlatform(fact);
+    const personal = await usageEventRepository.record({
+      requestId: `personal-call-${userId}`,
+      userId,
+      ownerId: userId,
+      ownerType: CreditHolderType.User,
+      feature: 'chat',
+      provider: 'privacy-test-provider',
+      model: 'privacy-test-model',
+      inputTokens: 10,
+      outputTokens: 10,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0.001,
+      creditsCharged: 1,
+      status: 'ok',
+    });
+    if (!personal) throw new Error('Personal usage was not recorded');
+    try {
+      assertEveryModelClassified(mongoose.modelNames());
+      expect(() => assertEveryModelClassified([...mongoose.modelNames(), 'UnclassifiedPlatformFixture'])).toThrow(
+        'UnclassifiedPlatformFixture'
+      );
+      const exporter = new SubjectRecordExport({ userId, email: null });
+      const attempts = [];
+      for await (const row of exporter.records('PlatformAttempt')) attempts.push(row);
+      expect(attempts).toEqual([]);
+      const usage = [];
+      for await (const row of exporter.records('UsageEvent')) usage.push(row);
+      expect(usage).toHaveLength(1);
+      expect(usage[0].requestId).toBe(`personal-call-${userId}`);
+      const beforeAttempt = await PlatformAttempt.findOne({ providerCallId }).lean();
+      const beforeUsage = await UsageEvent.findById(platform.id).lean();
+      await new SubjectErasureExecutor({ userId, email: null }, async () => {}, {
+        PlatformAttempt: DATA_HOLDER_REGISTRY.PlatformAttempt,
+        UsageEvent: DATA_HOLDER_REGISTRY.UsageEvent,
+      }).run();
+      expect(await UsageEvent.findById(personal.id).lean()).toBeNull();
+      expect(await PlatformAttempt.findOne({ providerCallId }).lean()).toEqual(beforeAttempt);
+      expect(await UsageEvent.findById(platform.id).lean()).toEqual(beforeUsage);
+      const summary = await usageEventRepository.platformUsageSummary({ days: 1, source: 'system' });
+      expect(summary.byModel.find(row => row.model === 'privacy-test-model')?.cogsUsd).toBe(0.002);
+    } finally {
+      await PlatformAttempt.deleteMany({ providerCallId });
+      await UsageEvent.deleteMany({ _id: { $in: [personal.id, platform.id] } });
+    }
+  });
+
   it('exports only the subject reservations and retains their accounting and retry bindings on erasure', async () => {
     const userId = new mongoose.Types.ObjectId().toString();
     const otherUserId = new mongoose.Types.ObjectId().toString();

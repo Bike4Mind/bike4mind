@@ -178,6 +178,31 @@ describe('related discovery', () => {
       else process.env.CLIENT_TEST_LANE = previous;
     }
   });
+  it('drops the module graph that selection built before running the selected tests', async () => {
+    const file = 'apps/client/app/constants/apiKeyScopeEndpoints.generated.test.ts';
+    const spec = { moduleId: resolve(root, file), project: { name: 'node' } };
+    const order = [];
+    const moduleGraph = () => ({ invalidateAll: () => order.push('invalidate') });
+    const create = vi.fn(async () => ({
+      config: {}, close: vi.fn(), standalone: async () => {},
+      projects: [
+        { vite: { environments: { ssr: { moduleGraph: moduleGraph() }, client: { moduleGraph: moduleGraph() } } } },
+        { vite: { environments: { ssr: { moduleGraph: moduleGraph() } } } },
+      ],
+      globTestSpecifications: async () => [spec],
+      getRelevantTestSpecifications: async () => { order.push('select'); return [spec]; },
+      runTestSpecifications: async () => { order.push('run'); return { testModules: [], unhandledErrors: [] }; },
+    }));
+    const previous = process.env.CLIENT_TEST_LANE;
+    try {
+      expect(await runRelated({ plan: { mode: 'related', files: [file] }, script: 'test:integration', root, create, run: vi.fn() })).toBe(0);
+      expect(order.slice(-4)).toEqual(['invalidate', 'invalidate', 'invalidate', 'run']);
+      expect(order.indexOf('invalidate')).toBeGreaterThan(order.lastIndexOf('select'));
+    } finally {
+      if (previous === undefined) delete process.env.CLIENT_TEST_LANE;
+      else process.env.CLIENT_TEST_LANE = previous;
+    }
+  });
   it('runs the selected client tests from the client package directory', async () => {
     const file = 'apps/client/app/constants/apiKeyScopeEndpoints.generated.test.ts';
     const spec = { moduleId: resolve(root, file), project: { name: 'node' } };
