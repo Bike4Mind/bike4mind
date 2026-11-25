@@ -131,6 +131,13 @@ describe('EmailActivityHistory table', () => {
     expect(mocks.refetch).toHaveBeenCalled();
   });
 
+  it('shows skeleton rows while the previous page stands in for the next one', () => {
+    mocks.result = { ...pageOf(2, 2), isPlaceholderData: true };
+    renderHistory();
+    expect(screen.getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
+    expect(screen.queryByText('a1@example.com')).not.toBeInTheDocument();
+  });
+
   it('keeps the rows on screen when a background refetch fails', () => {
     mocks.result = { ...pageOf(2, 2), isError: true };
     renderHistory();

@@ -41,6 +41,7 @@ export default function EmailJobsPanel() {
     data: jobs,
     isLoading,
     isError,
+    isPlaceholderData,
     refetch,
   } = useEmailJobs({
     page,
@@ -355,6 +356,7 @@ export default function EmailJobsPanel() {
           rows={jobs?.data ?? []}
           columns={columns}
           getRowId={job => job.id}
+          loading={isPlaceholderData}
           onRetry={() => void refetch()}
           empty={
             hasFilters ? (

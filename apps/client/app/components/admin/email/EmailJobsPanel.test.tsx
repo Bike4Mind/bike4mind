@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     data: undefined as unknown,
     isLoading: false,
     isError: false,
+    isPlaceholderData: false,
     refetch: vi.fn(),
   },
   lastParams: undefined as unknown,
@@ -61,7 +62,7 @@ const setStartDate = (value: string) => {
 
 describe('EmailJobsPanel', () => {
   beforeEach(() => {
-    Object.assign(mocks.jobs, { data: pageOf([]), isLoading: false, isError: false });
+    Object.assign(mocks.jobs, { data: pageOf([]), isLoading: false, isError: false, isPlaceholderData: false });
     mocks.jobs.refetch.mockClear();
   });
 
@@ -87,6 +88,13 @@ describe('EmailJobsPanel', () => {
     renderPanel();
 
     expect(screen.getByTestId('email-campaigns-loading')).toHaveTextContent('Loading campaigns');
+  });
+
+  it('shows skeleton rows while the previous page stands in for the next one', () => {
+    mocks.jobs.isPlaceholderData = true;
+    renderPanel();
+
+    expect(screen.getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
   });
 
   it('shows an error state whose retry refetches the campaigns', () => {

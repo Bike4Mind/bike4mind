@@ -91,6 +91,7 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
     data: historyData,
     isLoading,
     isError,
+    isPlaceholderData,
     refetch,
   } = useEmailJobHistory(jobId, {
     page,
@@ -275,7 +276,7 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
         rows={attempts}
         columns={columns}
         getRowId={attempt => attempt.id}
-        loading={isLoading}
+        loading={isLoading || isPlaceholderData}
         // A failed background refetch keeps the last rows on screen instead of swapping in the error.
         error={isError && !historyData ? 'Could not load activity.' : undefined}
         onRetry={() => void refetch()}
