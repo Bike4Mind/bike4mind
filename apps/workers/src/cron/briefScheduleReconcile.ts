@@ -9,7 +9,7 @@
  * pushes off, windows with no agent runs and no pending triaged email, and starts within
  * SCHEDULED_BRIEF_MIN_GAP_MS of another brief start (`debounced`: a racing event brief covers the slot,
  * which stays advanced). The next slot is the earlier of the schedule's next slot and the next approved
- * reminder, and a debounced or in-flight slot with a reminder already due is retried once the gap has passed,
+ * reminder, and accepted, debounced or in-flight work with an unlisted due reminder is retried once the gap has passed,
  * so a reminder the racing brief did not list never waits for the following regular slot.
  *
  * A second pass starts one brief per ended calendar busy block (startBlockBrief). The claim is the same
@@ -50,6 +50,7 @@ export type BriefScheduleReconcileDeps = {
     typeof userRepository,
     | 'findDueBriefSchedules'
     | 'advanceNextBriefAt'
+    | 'pullNextBriefAtForward'
     | 'findDueBlockBriefs'
     | 'advanceNextBlockBriefAt'
     | 'releaseBlockBriefClaim'
@@ -95,14 +96,30 @@ async function withNextReminder(
   }
 }
 
-async function retryRacedSlot(deps: BriefScheduleReconcileDeps, userId: string, now: Date, next: Date): Promise<void> {
-  const retryAt = new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS);
-  if (retryAt >= next) return;
+async function reconcileReminderWakeUp(
+  deps: BriefScheduleReconcileDeps,
+  userId: string,
+  now: Date,
+  outcome: ScheduledBriefOutcome
+): Promise<void> {
+  const retryOverdue = outcome === 'enqueued' || outcome === 'debounced' || outcome === 'in_flight';
+  if (!retryOverdue && outcome !== 'no_activity') return;
   try {
-    if ((await deps.reminders.findDueReminders(userId, now, 1)).length === 0) return;
-    await deps.users.advanceNextBriefAt(userId, next, retryAt);
+    // Accepted work may list only part of the backlog. Keep a bounded retry until it is surfaced.
+    const reminderAt = await deps.reminders.findEarliestPendingReminderAt(userId, retryOverdue ? undefined : now);
+    if (!reminderAt) return;
+    const wakeAt = reminderAt <= now ? new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS) : reminderAt;
+    await deps.users.pullNextBriefAtForward(userId, wakeAt);
   } catch (err) {
-    logger.warn('[briefScheduleReconcile] failed to re-arm a raced slot for a due reminder', { userId, err });
+    // Never release an accepted composition because its post-claim reminder lookup failed.
+    logger.warn('[briefScheduleReconcile] failed to reconcile a reminder wake-up', { userId, err });
+    if (retryOverdue) {
+      try {
+        await deps.users.pullNextBriefAtForward(userId, new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS));
+      } catch (retryError) {
+        logger.warn('[briefScheduleReconcile] failed to retain a reminder retry', { userId, err: retryError });
+      }
+    }
   }
 }
 
@@ -180,9 +197,7 @@ export async function runBriefScheduleReconcile(
     try {
       const outcome = await deps.startScheduledBrief(user.id);
       result[outcome]++;
-      if ((outcome === 'debounced' || outcome === 'in_flight') && next) {
-        await retryRacedSlot(deps, user.id, now, next);
-      }
+      await reconcileReminderWakeUp(deps, user.id, now, outcome);
     } catch (err) {
       result.failed++;
       // Only release submission failures when non-delivery and cleanup are established.
