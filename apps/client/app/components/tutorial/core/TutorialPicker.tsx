@@ -54,7 +54,7 @@ export function TutorialPicker({
       >
         <ModalClose data-testid="tutorial-picker-close" />
         <DialogTitle id="tutorial-picker-title">Tutorials</DialogTitle>
-        <DialogContent sx={{ gap: 2 }}>
+        <DialogContent sx={{ gap: 2, overflowY: 'auto' }}>
           <Typography level="body-sm">
             Short guided tours. Each step can be skipped, and you can leave and pick up where you stopped.
           </Typography>
@@ -74,7 +74,7 @@ export function TutorialPicker({
               <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 1 }}>
                 {group.blurb}
               </Typography>
-              <Stack gap={1}>
+              <Stack gap={0.75}>
                 {group.modules.map(tutorial => {
                   const status = statusOf(tutorial, progress?.[tutorial.id], liveModuleId);
                   const chip = STATUS_CHIP[status];
@@ -85,7 +85,13 @@ export function TutorialPicker({
                       direction={{ xs: 'column', sm: 'row' }}
                       alignItems={{ xs: 'stretch', sm: 'center' }}
                       gap={1}
-                      sx={{ p: 1.25, borderRadius: 'sm', border: '1px solid', borderColor: 'neutral.outlinedBorder' }}
+                      sx={{
+                        px: 1.25,
+                        py: 1,
+                        borderRadius: 'sm',
+                        border: '1px solid',
+                        borderColor: 'neutral.outlinedBorder',
+                      }}
                     >
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
@@ -101,7 +107,12 @@ export function TutorialPicker({
                           </Chip>
                         </Stack>
                         {tutorial.pitch && (
-                          <Typography level="body-xs" sx={{ color: 'text.secondary', mt: 0.25 }}>
+                          <Typography
+                            level="body-xs"
+                            noWrap
+                            title={tutorial.pitch}
+                            sx={{ color: 'text.secondary', mt: 0.25 }}
+                          >
                             {tutorial.pitch}
                           </Typography>
                         )}

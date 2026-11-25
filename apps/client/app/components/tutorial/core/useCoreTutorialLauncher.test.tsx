@@ -1,0 +1,112 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
+import { act, renderHook } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { TutorialProgressEntry, TutorialRunModule } from '@bike4mind/common';
+
+const transport = vi.hoisted(() => ({
+  start: vi.fn(),
+  resume: vi.fn(),
+  progress: vi.fn(),
+}));
+const navigate = vi.hoisted(() => vi.fn(async () => undefined));
+const toast = vi.hoisted(() => vi.fn());
+
+vi.mock('../hostBase', async importOriginal => ({
+  ...(await importOriginal<typeof import('../hostBase')>()),
+  useTutorialHost: () => ({ apiBase: '/api/tutorials', transport }),
+  useTutorialHostBase: () => '/api/tutorials',
+}));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
+vi.mock('sonner', () => ({ toast }));
+vi.mock('@client/app/hooks/useChatInput', () => ({
+  useChatInput: { getState: () => ({ setDraft: vi.fn(), setChatInputValue: vi.fn(), requestFocus: vi.fn() }) },
+}));
+
+import { resetTutorialStores } from '../useTutorialStore';
+import { RESUME_FAILED_NOTICE, RESUME_FELL_BACK_NOTICE, useCoreTutorialLauncher } from './useCoreTutorialLauncher';
+
+const firstSteps = {
+  id: 'first-steps',
+  title: 'First steps',
+  pitch: '',
+  version: 1,
+  revision: 0,
+  steps: [
+    { id: 'send', type: 'prompt', turn: 0, prompt: 'Hello?', title: 'Send', body: '' },
+    { id: 'done', type: 'bridge', title: 'Done', body: '' },
+  ],
+} as unknown as TutorialRunModule;
+
+const savedWalk = {
+  status: 'in_progress',
+  sessionId: 'old',
+  stepId: 'done',
+  moduleVersion: 1,
+  moduleRevision: 0,
+} as unknown as TutorialProgressEntry;
+
+const started = { sessionId: 'new', version: 1, revision: 0 };
+const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { response: { status } });
+
+const renderLauncher = () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+  return renderHook(() => useCoreTutorialLauncher([firstSteps]), { wrapper }).result;
+};
+
+beforeEach(() => {
+  transport.start.mockResolvedValue(started);
+  transport.progress.mockResolvedValue({ 'first-steps': savedWalk });
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+  resetTutorialStores();
+});
+
+describe('useCoreTutorialLauncher', () => {
+  it('opens one tutorial notebook when start is pressed twice in a row', async () => {
+    const launcher = renderLauncher();
+    await act(async () => {
+      await Promise.all([launcher.current.start('first-steps'), launcher.current.start('first-steps')]);
+    });
+    expect(transport.start).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: 'new' } });
+  });
+
+  it('starts over with a notice when the server refuses the resume', async () => {
+    transport.resume.mockRejectedValue(httpError(409));
+    const launcher = renderLauncher();
+    await act(() => launcher.current.resume('first-steps'));
+    expect(toast).toHaveBeenCalledWith(RESUME_FELL_BACK_NOTICE);
+    expect(transport.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the saved walk when the resume fails for another reason', async () => {
+    transport.resume.mockRejectedValue(new Error('Network Error'));
+    const launcher = renderLauncher();
+    await act(() => launcher.current.resume('first-steps'));
+    expect(toast).toHaveBeenCalledWith(RESUME_FAILED_NOTICE);
+    expect(transport.start).not.toHaveBeenCalled();
+  });
+
+  it('keeps the saved walk when progress cannot be read', async () => {
+    transport.progress.mockRejectedValue(new Error('Network Error'));
+    const launcher = renderLauncher();
+    await act(() => launcher.current.resume('first-steps'));
+    expect(toast).toHaveBeenCalledWith(RESUME_FAILED_NOTICE);
+    expect(transport.start).not.toHaveBeenCalled();
+    expect(transport.resume).not.toHaveBeenCalled();
+  });
+
+  it('resumes at the saved step on the saved notebook', async () => {
+    transport.resume.mockResolvedValue({ sessionId: 'old', version: 1, revision: 0 });
+    const launcher = renderLauncher();
+    await act(() => launcher.current.resume('first-steps'));
+    expect(transport.start).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: 'old' } });
+  });
+});

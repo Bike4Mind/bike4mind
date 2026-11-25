@@ -9,7 +9,7 @@ import { CORE_TUTORIAL_CONTENT } from './content';
 import { CORE_TUTORIAL_SETTING } from './settingName';
 import { tutorialContent } from './effectiveModules';
 import type { FieldMap } from './overrides';
-import { CORE_TUTORIALS, resolveCoreTutorial } from './registry';
+import { CORE_TUTORIALS, byCoreTutorialRank, resolveCoreTutorial } from './registry';
 import type { TutorialSummary } from './routes/index';
 import { tutorialService } from './service';
 import { coreTutorialVisibleTo, filterCoreTutorialsVisibleTo } from './visibility';
@@ -42,7 +42,8 @@ export async function coreServiceFor(req: TutorialRequest) {
     modules: [
       ...modules
         .filter(m => visible.has(m.id) && resolveCoreTutorial(m.id)?.enabled)
-        .map(m => withTrack(m, resolveCoreTutorial(m.id)?.track)),
+        .map(m => withTrack(m, resolveCoreTutorial(m.id)?.track))
+        .sort(byCoreTutorialRank),
       ...(await coreDraftModules(req.user!)),
     ],
     models: coreModels,

@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
@@ -9,8 +10,15 @@ import { useTutorialStoreApi } from '../useTutorialStore';
 import { useTutorialPicker } from './tutorialPickerStore';
 
 export const START_FAILED_NOTICE = "Couldn't start that tutorial - please try again.";
+export const RESUME_FAILED_NOTICE = "Couldn't pick that tutorial up - please try again.";
 export const RESUME_FELL_BACK_NOTICE =
   "That tutorial can't be picked up where it stopped, so it starts from the beginning.";
+
+/** The server refused the resume (the notebook was written in, or is gone): starting over is the way on. */
+const resumeRefused = (error: unknown): boolean => {
+  const status = (error as { response?: { status?: number } } | null)?.response?.status;
+  return status === 404 || status === 409;
+};
 
 /** The message the tutorial opens with, which the user sends from the composer to begin. */
 export const openingPromptOf = (tutorial: Pick<TutorialRunModule, 'steps'>): string | undefined =>
@@ -29,7 +37,21 @@ export function useCoreTutorialLauncher(modules: readonly TutorialRunModule[]) {
 
   const goToSession = (sessionId: string) => navigate({ to: '/notebooks/$id', params: { id: sessionId } });
 
-  const start = async (moduleId: string) => {
+  // One launch at a time: a double click must not open two tutorial notebooks.
+  const launching = useRef(false);
+  const once =
+    (launch: (moduleId: string) => Promise<void>) =>
+    async (moduleId: string): Promise<void> => {
+      if (launching.current) return;
+      launching.current = true;
+      try {
+        await launch(moduleId);
+      } finally {
+        launching.current = false;
+      }
+    };
+
+  const startNow = async (moduleId: string) => {
     const tutorial = modules.find(m => m.id === moduleId);
     if (!tutorial || tutorial.steps.length === 0) return;
     closePicker(false);
@@ -55,7 +77,7 @@ export function useCoreTutorialLauncher(modules: readonly TutorialRunModule[]) {
     }
   };
 
-  const resume = async (moduleId: string) => {
+  const resumeNow = async (moduleId: string) => {
     const tutorial = modules.find(m => m.id === moduleId);
     if (!tutorial) return;
     closePicker(false);
@@ -64,21 +86,35 @@ export function useCoreTutorialLauncher(modules: readonly TutorialRunModule[]) {
       await goToSession(live.sessionId);
       return;
     }
-    const progress = await queryClient
-      .fetchQuery({ queryKey: tutorialProgressKey(apiBase), queryFn: transport.progress, staleTime: 0 })
-      .catch(() => undefined);
-    const entry = progress?.[moduleId];
+    let progress: Awaited<ReturnType<typeof transport.progress>>;
+    try {
+      progress = await queryClient.fetchQuery({
+        queryKey: tutorialProgressKey(apiBase),
+        queryFn: transport.progress,
+        staleTime: 0,
+      });
+    } catch (error) {
+      console.warn('Tutorial progress failed', error);
+      toast(RESUME_FAILED_NOTICE);
+      return;
+    }
+    const entry = progress[moduleId];
     if (!entry || entry.status === 'finished' || !walkIsCurrent(entry, tutorial)) {
-      await start(moduleId);
+      await startNow(moduleId);
       return;
     }
     let resumed: Awaited<ReturnType<typeof transport.resume>>;
     try {
       resumed = await transport.resume({ moduleId });
-    } catch {
-      // The server refuses a session the user has since written in, or one that is gone.
+    } catch (error) {
+      // A transient failure must not throw the saved walk away for a fresh one.
+      if (!resumeRefused(error)) {
+        console.warn('Tutorial resume failed', error);
+        toast(RESUME_FAILED_NOTICE);
+        return;
+      }
       toast(RESUME_FELL_BACK_NOTICE);
-      await start(moduleId);
+      await startNow(moduleId);
       return;
     } finally {
       void queryClient.invalidateQueries({ queryKey: tutorialProgressKey(apiBase) });
@@ -94,5 +130,5 @@ export function useCoreTutorialLauncher(modules: readonly TutorialRunModule[]) {
     await goToSession(resumed.sessionId);
   };
 
-  return { start, resume };
+  return { start: once(startNow), resume: once(resumeNow) };
 }

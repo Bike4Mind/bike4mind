@@ -306,7 +306,12 @@ export function TutorialRunner({
       const seeded = turn !== undefined && (quests ?? NO_QUESTS).some(q => markedTurn(q) === turn);
       const sentByUser =
         Boolean(step.prompt) && (quests ?? NO_QUESTS).some(q => q.prompt && samePrompt(q.prompt, step.prompt!));
+      // Wait out a pending jump so seeded turns land in order.
+      await jumpInFlight.current;
       if (turn !== undefined && !seeded && !sentByUser) await advance(turn);
+      const after = store.getState().active;
+      // The walk may have ended or moved on while the turn was seeded.
+      if (after?.moduleId !== script.id || after.stepId !== step.id) return;
       clearStalePrompt(script, current.sessionId);
       completeFrom(step.id);
     } catch (error) {

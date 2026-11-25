@@ -7,7 +7,9 @@ import { useTutorialPicker } from './tutorialPickerStore';
 export function HelpTutorialsEntry() {
   const enabled = useTutorialsEnabled();
   const openPicker = useTutorialPicker(s => s.setOpen);
-  if (!enabled) return null;
+  // Help also opens on admin pages, where no host runs the picker.
+  const hostMounted = useTutorialPicker(s => s.hostMounted);
+  if (!enabled || !hostMounted) return null;
   return (
     <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 3 }}>
       <Typography level="body-sm" sx={{ flex: 1 }}>

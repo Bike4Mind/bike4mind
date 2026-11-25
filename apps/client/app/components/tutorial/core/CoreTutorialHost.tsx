@@ -43,12 +43,24 @@ function CoreTutorialHostInner() {
   const progressQuery = useTutorialProgress();
   const modules = modulesQuery.data ?? NO_MODULES;
   const { start, resume } = useCoreTutorialLauncher(modules);
-  const { open, setOpen, requestedTrack, clearTrackRequest } = useTutorialPicker();
+  const { open, setOpen, requestedTrack, clearTrackRequest, setHostState } = useTutorialPicker();
   useTutorialAutoRouteOff(currentSessionId);
+
+  useEffect(() => {
+    setHostState({ hostMounted: true });
+    return () => setHostState({ hostMounted: false, walkOnScreen: false });
+  }, [setHostState]);
 
   // A track an entry point asked for continues where the user stands in it.
   useEffect(() => {
-    if (!requestedTrack || !modulesQuery.isSuccess || progressQuery.isPending) return;
+    if (!requestedTrack) return;
+    // A request the lists cannot answer is dropped, so it never fires later on a background refetch.
+    if (modulesQuery.isError || progressQuery.isError) {
+      clearTrackRequest();
+      setOpen(true);
+      return;
+    }
+    if (!modulesQuery.isSuccess || progressQuery.isPending) return;
     clearTrackRequest();
     const next = nextInTrack(modules, progressQuery.data, requestedTrack);
     if (!next) setOpen(true);
@@ -56,6 +68,8 @@ function CoreTutorialHostInner() {
     else void start(next.tutorial.id);
   }, [
     requestedTrack,
+    modulesQuery.isError,
+    progressQuery.isError,
     modulesQuery.isSuccess,
     progressQuery.isPending,
     progressQuery.data,
@@ -107,6 +121,7 @@ function CoreTutorialHostInner() {
   }, [activeModuleId, modulesQuery.isSuccess, modules, store, queryClient]);
 
   const onTutorialSession = Boolean(active && active.sessionId === currentSessionId);
+  useEffect(() => setHostState({ walkOnScreen: onTutorialSession }), [onTutorialSession, setHostState]);
   const questsQuery = useGetSessionQuests(onTutorialSession ? currentSessionId : null);
   const quests = useMemo(
     () => (questsQuery.data?.pages ?? []).flatMap(page => page.data) as unknown as TutorialQuest[],
