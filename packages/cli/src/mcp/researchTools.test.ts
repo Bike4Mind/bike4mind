@@ -204,6 +204,13 @@ describe('research tool descriptions', () => {
     }
   );
 
+  it.each(['create_research_config', 'update_research_config', 'delete_research_config'])(
+    '%s says to change settings only on user request',
+    tool => {
+      expect(descriptions.get(tool)).toContain('only when the user asks for it');
+    }
+  );
+
   it('no tool description asks the user or waits for a go-ahead', () => {
     for (const [name, description] of descriptions) {
       if (!name.includes('research') && name !== 'get_lake_config_history') continue;
