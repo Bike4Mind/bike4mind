@@ -208,6 +208,11 @@ describe('account purge reconciliation', () => {
     expect(holderExportScope(ownerMatches)).toEqual({ scope: 'matchedPaths', paths: ['ownerUserId'] });
   });
 
+  it("deletes the asynchronous call results a person is waiting on, and no one else's", () => {
+    expect(matched('CallableFunctionResult', { callerUserId: userId })).toEqual(['deleteDocument']);
+    expect(matched('CallableFunctionResult', { callerUserId: 'other' })).toEqual([]);
+  });
+
   it('deletes only a personal project and anonymizes the owner of an organization one', () => {
     const holder = DATA_HOLDER_REGISTRY.Project;
     if (holder.kind !== 'holder') throw new Error('Project must be a holder');

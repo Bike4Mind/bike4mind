@@ -8,6 +8,9 @@ import { DATACENTER_ASNS } from '@bike4mind/server-utils/auth/datacenterAsns';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { alertSignupNetworkBurst } from './signupNetworkAlerts';
 import { withAccountNotPurging } from './withAccountNotPurging';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'networkMeta' } });
 
 // x-amzn-waf- + the InsertHeaders name of the forward-anon-ip-label / forward-bot-signal-label rules
 // in infra/waf/bike4mind-api-protection-dev.json.
@@ -47,15 +50,15 @@ export function readNetworkMeta(req: NetworkRequest): INetworkMeta {
   };
 }
 
-// console.warn, as recordSignupAcquisition does: a log call that could itself throw would break
-// the never-throw contract below.
+// Logger's argument handling is hardened against hostile values, and it writes through console.warn as before,
+// so logging adds no new way to break the never-throw contract below.
 function warnNotRecorded(what: string, err: unknown): void {
-  console.warn(`[auth] ${what} not recorded`, err instanceof Error ? err.message : err);
+  logger.warn(`[auth] ${what} not recorded`, { error: err });
 }
 
 async function requestRiskEvidenceRefreshSafely(userId: string, trigger: 'signup' | 'login'): Promise<void> {
   try {
-    await requestRiskEvidenceRefresh(userId, trigger, console);
+    await requestRiskEvidenceRefresh(userId, trigger, logger);
   } catch (err) {
     warnNotRecorded('risk evidence refresh request', err);
   }

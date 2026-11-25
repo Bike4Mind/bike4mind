@@ -5,6 +5,9 @@ import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { RemoteMcpNetworkOptions } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { loadConnectionClient } from '@bike4mind/server-utils/mcpConnections/oauth/clientIdentity';
 import { withOAuthFetch } from '@bike4mind/server-utils/mcpConnections/oauth/oauthFetch';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'mcpOAuthRevoke' } });
 
 /** One deadline for the whole revocation: the caller is a request that is about to delete or clear the grant. */
 export const REVOKE_DEADLINE_MS = 5_000;
@@ -39,7 +42,11 @@ export async function revokeConnectionGrant(
           await revokeRemoteMcpToken(endpoint, { token, hint, client, fetchFn: pinned });
         } catch (error) {
           const code = error instanceof RemoteMcpOAuthError ? error.code : 'request_failed';
-          console.warn(`[mcpOAuth] Revoking the ${hint} of connection ${connection.id} failed (${code})`);
+          logger.warn('[mcpOAuth] Revoking a token of the connection failed', {
+            hint,
+            connectionId: connection.id,
+            code,
+          });
         }
       }
     });
@@ -48,13 +55,15 @@ export async function revokeConnectionGrant(
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<void>(resolve => {
     timer = setTimeout(() => {
-      console.warn(`[mcpOAuth] Revoking the grant of connection ${connection.id} timed out`);
+      logger.warn('[mcpOAuth] Revoking the grant of the connection timed out', { connectionId: connection.id });
       resolve();
     }, deadlineMs);
   });
   try {
     await Promise.race([
-      revokeAll().catch(() => console.warn(`[mcpOAuth] Could not revoke the grant of connection ${connection.id}`)),
+      revokeAll().catch(() =>
+        logger.warn('[mcpOAuth] Could not revoke the grant of the connection', { connectionId: connection.id })
+      ),
       deadline,
     ]);
   } finally {

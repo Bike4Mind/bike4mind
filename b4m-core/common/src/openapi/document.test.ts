@@ -359,6 +359,7 @@ describe('buildOpenApiDocument', () => {
     const polledElsewhere: Record<string, string> = {
       '/api/v1/briefs/{id}/decisions/{decisionId}/reply': '/api/v1/agent-executions/{id}',
       '/api/v1/data-lakes/{id}/research/runs': '/api/v1/data-lakes/{id}/research/runs/{run_id}',
+      '/api/v1/functions/{id}/invoke': '/api/v1/functions/calls/{call_id}',
     };
     for (const path of queued) {
       if (path in polledElsewhere) {

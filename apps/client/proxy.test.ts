@@ -666,7 +666,11 @@ describe('proxy configured object-store origin', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubEnv('S3_PRESIGN_ENDPOINT', configured);
     expect(policy()).toBe(baseline);
-    expect(warn).toHaveBeenCalledExactlyOnceWith('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toMatchObject({
+      name: 'S3_PRESIGN_ENDPOINT',
+      message: '[csp] ignoring invalid deployment media origin',
+    });
   });
 
   it.each(['/api/files', '/p/example', '/embed/chat'])('preserves policy exclusions for %s', path => {

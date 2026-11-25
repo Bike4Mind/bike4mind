@@ -884,6 +884,21 @@ export default defineConfig([
     rules: { 'no-console': 'error' },
   },
 
+  // apps/client/server is covered too. server/scripts and the tutorials apply CLI print for a person at a
+  // terminal by design, and *.integration.ts files are run by hand, so those stay on console.
+  {
+    files: ['apps/client/server/**/*.{ts,tsx}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'apps/client/server/scripts/**',
+      'apps/client/server/tutorials/apply/cli.ts',
+      '**/*.integration.ts',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
   // Core server packages log through the Logger too (same rationale as the server-utils block above).
   // CORE_NO_CONSOLE_EXEMPT_SCRIPTS are CLI scripts run with tsx whose stdout is their output.
   {

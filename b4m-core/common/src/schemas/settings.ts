@@ -342,6 +342,8 @@ export const SettingKeySchema = z.enum([
   'pythonArtifactDataOrigins',
   'EnableCallableFunctions',
   'EnableCallableFunctionsMcp',
+  'CallableFunctionTimeLimitSeconds',
+  'CallableFunctionPendingCallLimit',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -2701,6 +2703,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'pythonArtifactDataOrigins', order: 22 },
       { key: 'EnableCallableFunctions', order: 23 },
       { key: 'EnableCallableFunctionsMcp', order: 24 },
+      { key: 'CallableFunctionTimeLimitSeconds', order: 24.5 },
+      { key: 'CallableFunctionPendingCallLimit', order: 24.6 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -3729,6 +3733,38 @@ export const settingsMap = {
     order: 24,
     dependsOn: 'EnableCallableFunctions',
     // Read through resolveCallableFunctionsMcpEnabled in packages/server-utils, never as the raw platform value.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionTimeLimitSeconds: makeNumberSetting({
+    key: 'CallableFunctionTimeLimitSeconds',
+    name: 'Callable Function Time Limit (seconds)',
+    defaultValue: 30,
+    min: 1,
+    max: 795,
+    int: true,
+    description:
+      "How long one call of a saved function may run, in seconds, not counting the runtime's start. Default 30, at most 795. A synchronous API call stops at 45 seconds whatever this is; a call sent with mode async runs to this limit and is polled for its result. Can be overridden per organization; a person in several organizations gets the lowest.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.5,
+    dependsOn: 'EnableCallableFunctions',
+    // Read through resolveCallableFunctionTimeLimitMs in packages/server-utils.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionPendingCallLimit: makeNumberSetting({
+    key: 'CallableFunctionPendingCallLimit',
+    name: 'Callable Function Pending Call Limit',
+    defaultValue: 10,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many asynchronous calls one person may have queued or running at once. A call sent with mode async past this is refused with 429 until one finishes. Can be overridden per organization; a person in several organizations gets the lowest.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.6,
+    dependsOn: 'EnableCallableFunctions',
+    // Read through resolveCallableFunctionPendingCallLimit in packages/server-utils.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   EnableAgents: makeBooleanSetting({
