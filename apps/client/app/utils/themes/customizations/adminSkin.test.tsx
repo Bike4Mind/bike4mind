@@ -93,6 +93,28 @@ describe('admin skin scope', () => {
   });
 });
 
+// jsdom cannot resolve the palette variables, so this reads the emitted rule rather than a computed color.
+describe('admin field error state', () => {
+  it('gives an errored field the danger border over the neutral outlined one', () => {
+    render(
+      <AppTheme>
+        <Sheet data-admin-surface>
+          <Input error data-testid="errored" />
+        </Sheet>
+      </AppTheme>
+    );
+
+    const emotionClass = [...screen.getByTestId('errored').classList].find(name => name.startsWith('css-'));
+    const rules = [...document.styleSheets].flatMap(sheet => [...sheet.cssRules]) as CSSStyleRule[];
+    const errorRule = rules.find(
+      rule =>
+        rule.selectorText?.includes(`.${emotionClass}`) &&
+        rule.selectorText.includes('.MuiInput-variantOutlined.Mui-error')
+    );
+    expect(errorRule?.style.getPropertyValue('border-color')).toBe('var(--joy-palette-admin-danger)');
+  });
+});
+
 // A field's only focus indicator is the ring on its root; an outline on the native control inside
 // draws a second, square box (the outline rule comes from both the skin and `adminFocusScope`).
 describe('admin focus ring', () => {

@@ -365,6 +365,8 @@ const field = (prefix: string) => ({
         backgroundColor: admin('surface'),
         borderColor: admin('borderStrong'),
         boxShadow: 'none',
+        // The neutral border above would otherwise hide Joy's own error border.
+        '&.Mui-error': { borderColor: admin('danger') },
       },
   },
 });
