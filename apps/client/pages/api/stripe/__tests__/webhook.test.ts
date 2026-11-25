@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   findByStripeSubscriptionId: vi.fn(),
   notifyPaymentActionRequired: vi.fn(),
   notifyUnpaid: vi.fn(),
+  clearUnpaidNotice: vi.fn(),
   notifyPaymentFailed: vi.fn(),
   notifyOrgEvent: vi.fn(),
   notifyCanceledForNonPayment: vi.fn(),
@@ -161,6 +162,7 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: mocks.notifyPaymentFailed,
   notifyPaymentActionRequired: mocks.notifyPaymentActionRequired,
   notifyUnpaid: mocks.notifyUnpaid,
+  clearUnpaidNotice: mocks.clearUnpaidNotice,
   notifyCanceledForNonPayment: mocks.notifyCanceledForNonPayment,
 }));
 vi.mock('@bike4mind/services/organizationService/orgEventObserver', () => ({
@@ -279,18 +281,12 @@ describe('customer.subscription.updated', () => {
     data: { object: { id: 'sub_1', status: 'unpaid', latest_invoice: 'in_1', ...overrides } },
   });
 
-  it('notifies the owner once the subscription is unpaid, keyed on the latest invoice', async () => {
+  it('notifies the owner once the subscription is unpaid', async () => {
     const res = await deliver(updated());
 
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.publishSubscriptionUpdated).toHaveBeenCalledTimes(1);
-    expect(mocks.notifyUnpaid).toHaveBeenCalledExactlyOnceWith(userRow, 'in_1', logger);
-  });
-
-  it('reads the invoice id off an expanded latest_invoice', async () => {
-    await deliver(updated({ latest_invoice: { id: 'in_2' } }));
-
-    expect(mocks.notifyUnpaid).toHaveBeenCalledWith(userRow, 'in_2', logger);
+    expect(mocks.notifyUnpaid).toHaveBeenCalledExactlyOnceWith(userRow, logger);
   });
 
   it('hands an org subscription row to the notice, which resolves the owner', async () => {
@@ -299,12 +295,20 @@ describe('customer.subscription.updated', () => {
 
     await deliver(updated());
 
-    expect(mocks.notifyUnpaid).toHaveBeenCalledWith(orgRow, 'in_1', logger);
+    expect(mocks.notifyUnpaid).toHaveBeenCalledWith(orgRow, logger);
   });
 
   it('sends nothing for another status', async () => {
     await deliver(updated({ status: 'past_due' }));
 
+    expect(mocks.notifyUnpaid).not.toHaveBeenCalled();
+    expect(mocks.clearUnpaidNotice).not.toHaveBeenCalled();
+  });
+
+  it.each(['active', 'trialing'])('re-arms the unpaid notice when the subscription is %s again', async status => {
+    await deliver(updated({ status }));
+
+    expect(mocks.clearUnpaidNotice).toHaveBeenCalledExactlyOnceWith('sub_1', logger);
     expect(mocks.notifyUnpaid).not.toHaveBeenCalled();
   });
 

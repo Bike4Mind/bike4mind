@@ -59,6 +59,7 @@ import {
   notifyCanceledForNonPayment,
   notifyPaymentActionRequired,
   notifyPaymentFailed,
+  clearUnpaidNotice,
   notifyUnpaid,
 } from '@server/billing/paymentFailureNotice';
 import { recordBillingEvent, type BillingEventHints } from '@server/billing/billingEventStore';
@@ -505,7 +506,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       );
 
       // Dunning that ends by marking the subscription unpaid never reaches customer.subscription.deleted.
-      // Once per unpaid invoice, so later updates and redeliveries in the same state stay silent.
+      // Once per unpaid spell: later updates, redeliveries and new invoices in the same state stay silent.
       if (subscription.status === 'unpaid') {
         const row = await subscriptionRepository.findByStripeSubscriptionId(subscription.id);
         if (!row || !isCancellableSubscriptionStatus(row.status)) {
@@ -513,13 +514,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             `Ignoring unpaid notice on subscription ${subscription.id}: no row in this stage, or it is already closed`
           );
         } else {
-          const latestInvoice = subscription.latest_invoice;
-          await notifyUnpaid(
-            row,
-            typeof latestInvoice === 'string' ? latestInvoice : (latestInvoice?.id ?? null),
-            req.logger
-          );
+          await notifyUnpaid(row, req.logger);
         }
+      } else if (subscription.status === 'active' || subscription.status === 'trialing') {
+        // Recovered states only: a stale past_due event delivered after unpaid must not re-arm it.
+        await clearUnpaidNotice(subscription.id, req.logger);
       }
 
       break;
