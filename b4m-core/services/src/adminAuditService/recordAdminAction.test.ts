@@ -82,7 +82,7 @@ describe('recordAdminAction', () => {
     });
   });
 
-  it('falls back to console.error without a logger', async () => {
+  it('falls back to the global Logger without a logger', async () => {
     const { append } = setup();
     append.mockRejectedValueOnce(new Error('x'));
     const spy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);

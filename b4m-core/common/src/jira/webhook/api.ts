@@ -138,7 +138,9 @@ export class WebhookApi {
     });
 
     if (!response.webhookRegistrationResult || response.webhookRegistrationResult.length === 0) {
-      throw new Error('Failed to register webhook: No registration result returned');
+      throw new Error(
+        `Failed to register webhook: No registration result returned: ${JSON.stringify(response).slice(0, 500)}`
+      );
     }
 
     const result = response.webhookRegistrationResult[0];

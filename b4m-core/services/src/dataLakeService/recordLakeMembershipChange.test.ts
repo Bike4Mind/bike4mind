@@ -114,7 +114,7 @@ describe('recordLakeMembershipChange', () => {
       );
     });
 
-    it('falls back to console.error when no logger is wired, so it cannot go fully silent', async () => {
+    it('falls back to the global Logger when no logger is wired, so it cannot go fully silent', async () => {
       const spy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
       const { adapters: a } = adapters({ record: vi.fn().mockRejectedValue(new Error('mongo down')) });
       await recordLakeMembershipChange(

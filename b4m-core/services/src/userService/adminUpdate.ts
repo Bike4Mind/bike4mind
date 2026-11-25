@@ -166,7 +166,7 @@ async function sendFriendRequestsToOrgMembers(
       );
     } catch (error) {
       if (error instanceof BadRequestError) {
-        Logger.warn('Error sending friend request', { memberId, error });
+        Logger.info('Error sending friend request', { memberId, error });
         return;
       }
       throw error;
