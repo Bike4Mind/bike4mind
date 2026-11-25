@@ -212,7 +212,6 @@
     "zustand": "^5.0.13"
   },
   "devDependencies": {
-    "@bike4mind/eslint-config": "workspace:*",
     "@bike4mind/typescript-config": "workspace:*",
     "@playwright/test": "^1.65.0",
     "@serwist/turbopack": "9.5.3",
@@ -246,8 +245,6 @@
     "@types/sanitize-html": "^2.16.1",
     "@types/speakeasy": "^2.0.10",
     "@types/yauzl": "^3.4.0",
-    "@typescript-eslint/eslint-plugin": "^8.63.0",
-    "@typescript-eslint/parser": "^8.63.0",
     "@vitejs/plugin-react": "^6.1.2",
     "aws-sdk-client-mock": "^4.1.0",
     "esbuild": "^0.28.1",
