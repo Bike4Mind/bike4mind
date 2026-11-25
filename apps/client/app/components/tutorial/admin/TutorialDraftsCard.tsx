@@ -357,7 +357,6 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
       ) : (drafts.data?.drafts ?? []).length === 0 ? (
         <EmptyState
           title="No made tutorials yet"
-          description="Capture one from a finished session of your own."
           action={
             <Button
               size="sm"

@@ -56,11 +56,11 @@ describe('TutorialsSwitchCard', () => {
     expect(mockMutate).toHaveBeenCalledWith(false);
   });
 
-  it('shows a labelled loading state in place of the switch on first load', () => {
+  it('shows a labelled loading state with a disabled switch on first load', () => {
     current.value = { data: undefined, isLoading: true, isError: false };
     renderCard();
     expect(screen.getByTestId('admin-loading-state')).toHaveTextContent('Loading the tutorials switch');
-    expect(screen.queryByTestId('tutorials-switch')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tutorials-switch')).toBeDisabled();
   });
 
   it('shows an error with a retry and disables the switch when the read fails', () => {

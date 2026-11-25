@@ -25,7 +25,7 @@ export const TutorialOwnerSection: React.FC<{ owner: TutorialOwner }> = ({ owner
         </Link>
       }
     >
-      <Box sx={{ p: 2 }}>
+      <>
         {summary.isLoading ? (
           <LoadingState label={`Loading ${owner.label} tutorials`} />
         ) : summary.isError ? (
@@ -37,7 +37,7 @@ export const TutorialOwnerSection: React.FC<{ owner: TutorialOwner }> = ({ owner
         ) : (summary.data ?? []).length === 0 ? (
           <EmptyState title={`${owner.label} has no tutorials yet`} action={null} />
         ) : (
-          <Stack gap={0.5}>
+          <Stack gap={0.5} sx={{ p: 2 }}>
             {(summary.data ?? []).map(row => (
               <Box
                 key={row.id}
@@ -52,7 +52,7 @@ export const TutorialOwnerSection: React.FC<{ owner: TutorialOwner }> = ({ owner
             ))}
           </Stack>
         )}
-      </Box>
+      </>
     </SectionCard>
   );
 };

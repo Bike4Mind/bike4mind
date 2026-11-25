@@ -32,19 +32,16 @@ const TutorialsSwitchCard: FC<Props> = ({
             {description}
           </Typography>
         </Box>
-        {current.isLoading ? (
-          <LoadingState label="Loading the tutorials switch" />
-        ) : (
-          <Switch
-            checked={enabled}
-            disabled={current.isError || save.isPending}
-            onChange={event => save.mutate(event.target.checked)}
-            slotProps={{
-              input: { 'aria-label': title, 'data-testid': 'tutorials-switch' } as Record<string, unknown>,
-            }}
-          />
-        )}
+        <Switch
+          checked={enabled}
+          disabled={current.isLoading || current.isError || save.isPending}
+          onChange={event => save.mutate(event.target.checked)}
+          slotProps={{
+            input: { 'aria-label': title, 'data-testid': 'tutorials-switch' } as Record<string, unknown>,
+          }}
+        />
       </Box>
+      {current.isLoading && <LoadingState label="Loading the tutorials switch" />}
       {current.isError && (
         <ErrorState
           message="Could not read the tutorials switch."
