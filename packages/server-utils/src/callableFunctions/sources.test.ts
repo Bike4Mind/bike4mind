@@ -127,6 +127,26 @@ describe('setCallableFunctionSources', () => {
     });
     expect(h.setSources).toHaveBeenCalledTimes(1);
   });
+
+  it('saves a shorter list for a tool over a lowered total, and refuses one as long', async () => {
+    const MIB = 1024 * 1024;
+    const limits = { fileBytes: 4 * MIB, totalBytes: 2 * MIB };
+    const three = [live('a.csv'), live('b.csv'), live('c.csv')];
+    withFunction(three);
+    (h.fn!.pin as { dataPins: unknown[] }).dataPins = [];
+    await setCallableFunctionSources(OWNER, FN_ID, three.slice(0, 2), { ...deps, limits });
+    expect(h.setSources).toHaveBeenCalledTimes(1);
+    await expect(
+      setCallableFunctionSources(OWNER, FN_ID, [...three.slice(0, 2), live('d.csv')], { ...deps, limits })
+    ).rejects.toMatchObject({ additionalInfo: { code: 'source_total_too_large' } });
+  });
+
+  it('caps every fetch at the 4 MB a source holds of the total, above a larger file limit', async () => {
+    withFunction([live()]);
+    const limits = { fileBytes: 100 * 1024 * 1024, totalBytes: 1024 * 1024 * 1024 };
+    await resolveCallableFunctionSources(h.fn as never, { ...deps, limits });
+    expect(fetcher).toHaveBeenCalledWith(expect.objectContaining({ maxBodyBytes: 4 * 1024 * 1024 }));
+  });
 });
 
 describe('pinned sources', () => {

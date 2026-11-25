@@ -101,7 +101,8 @@ export async function setCallableFunctionSources(
     const limits = deps.limits ?? (await resolveCallableFunctionDataLimits(actor));
     const needed =
       pins.reduce((sum, pin) => sum + pin.bytes, 0) + sources.length * callableFunctionSourceMaxBytes(limits);
-    if (needed > limits.totalBytes) {
+    // A shorter list is saved even over the total, so a tool over a since-lowered limit can shrink.
+    if (needed > limits.totalBytes && sources.length >= (fn.sources?.length ?? 0)) {
       throw new BadRequestError(
         `These sources can fetch up to ${megabytes(callableFunctionSourceMaxBytes(limits))} each, which with the data ` +
           `files is ${Math.ceil(needed / MIB)} MB, over this tool's ${megabytes(limits.totalBytes)} total.`,
@@ -173,12 +174,12 @@ async function resolveDeps(fn: SourceOwner, deps: CallableFunctionSourceDeps): P
   };
 }
 
-/** Fetches through the guarded fetch, capped by the owner's per-file data limit. */
+/** Fetches through the guarded fetch, capped at what each source holds of the total, in process or not. */
 const fetchSource = (source: ICallableFunctionSource, deps: Resolved) =>
   deps.fetcher({
     url: source.url,
     origins: deps.origins,
-    maxBodyBytes: deps.limits.fileBytes,
+    maxBodyBytes: callableFunctionSourceMaxBytes(deps.limits),
     timeoutMs: CALLABLE_FUNCTION_SOURCE_TIMEOUT_MS,
   });
 
