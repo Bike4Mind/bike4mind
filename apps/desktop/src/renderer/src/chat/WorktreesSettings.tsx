@@ -79,8 +79,8 @@ function WorktreeRow({
           {worktree.safe ? (
             <Button
               size="sm"
+              variant="outlined"
               color="danger"
-              variant="soft"
               disabled={busy}
               onClick={() => void onRemove(directory, worktree.path)}
               data-testid="worktrees-remove-btn"
@@ -90,7 +90,7 @@ function WorktreeRow({
           ) : (
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
               color="neutral"
               onClick={() => void onReveal(directory, worktree.path)}
               data-testid="worktrees-reveal-btn"
@@ -139,8 +139,8 @@ export function WorktreesView({ state }: { state: WorktreesState }) {
               {safeCount > 0 && (
                 <Button
                   size="sm"
+                  variant="outlined"
                   color="danger"
-                  variant="soft"
                   disabled={busy}
                   onClick={() => void removeAllSafe(project.directory)}
                   data-testid="worktrees-remove-all-btn"

@@ -5,9 +5,16 @@ export interface AdminTabVisibility {
   /** The signed-in user. Required so no caller can forget a delegated admin's tab permissions. */
   user: Parameters<typeof canOpenAdminTab>[0];
   enableUserMigration?: boolean;
-  /** Undefined until the visibility query answers. */
-  liveOpsTriage?: boolean;
 }
+
+// These tabs moved into other pages; their members stay so old slugs and palette entries keep redirecting.
+const RETIRED_TABS: ReadonlySet<AdminTab> = new Set([
+  AdminTab.RegistrationInvites,
+  AdminTab.PartnerSignupRules,
+  AdminTab.HeldSignupGrants,
+  AdminTab.ModelLifecycle,
+  AdminTab.SecOpsTriage,
+]);
 
 /**
  * Whether the admin console can draw a panel for this tab right now, for this user. A tab that
@@ -16,9 +23,8 @@ export interface AdminTabVisibility {
 export function canRenderAdminTab(tab: AdminTab, visibility: AdminTabVisibility): boolean {
   // A retired tab id has no panel.
   if (AdminTab[tab] === undefined) return false;
+  if (RETIRED_TABS.has(tab)) return false;
   if (!canOpenAdminTab(visibility.user, tab)) return false;
   if (tab === AdminTab.Migrate) return !!visibility.enableUserMigration;
-  // Keep a deep link that arrived before the visibility query answered.
-  if (tab === AdminTab.LiveOpsTriage) return visibility.liveOpsTriage ?? true;
   return true;
 }

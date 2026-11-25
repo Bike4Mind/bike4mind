@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
+import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useNeedsYouAlerts } from './useNeedsYouAlerts';
+import { writePresenter } from './orchestratorPrefs';
+import { PRESENTER_NOTICE_BODY, PRESENTER_NOTICE_TITLE, useNeedsYouAlerts } from './useNeedsYouAlerts';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -34,9 +35,12 @@ const setBadgeCount = vi.fn(async (_count: number) => undefined);
 const onOpen = vi.fn();
 const takePendingOpen = vi.fn(async (): Promise<AttentionOpenEvent | null> => null);
 let focused = false;
+let scope: NotifyScope = 'agents';
+let viewingId: string | null = null;
 
+let unread: ReadonlySet<string> = new Set();
 const Probe = ({ statuses, loaded }: { statuses: ReadonlyMap<string, ChatSessionStatus>; loaded: boolean }) => {
-  useNeedsYouAlerts(sessions, statuses, loaded, onOpen);
+  useNeedsYouAlerts(sessions, statuses, loaded, onOpen, viewingId, unread);
   return null;
 };
 const render = (entries: Record<string, ChatSessionStatus>, loaded = true) =>
@@ -44,6 +48,9 @@ const render = (entries: Record<string, ChatSessionStatus>, loaded = true) =>
 
 beforeEach(() => {
   focused = false;
+  scope = 'agents';
+  viewingId = null;
+  unread = new Set();
   sessions = DEFAULT_SESSIONS;
   openListener = null;
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
@@ -68,6 +75,8 @@ beforeEach(() => {
       claim,
       setBadgeCount,
       takePendingOpen,
+      getNotifyScope: vi.fn(async () => scope),
+      onNotifyScope: () => () => undefined,
       onOpen: (listener: (event: AttentionOpenEvent) => void) => {
         openListener = listener;
         return () => {
@@ -82,6 +91,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  window.localStorage.clear();
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -100,11 +110,105 @@ describe('useNeedsYouAlerts', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
+  it('does not announce an unread finished reply, but announces a request that lands on it', async () => {
+    await render({ child: 'processing' });
+    unread = new Set(['child']);
+    await render({ child: 'needs-action' });
+    expect(notify).not.toHaveBeenCalled();
+    expect(chime.playChime).not.toHaveBeenCalled();
+    unread = new Set();
+    await render({ child: 'needs-action' });
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
   it('stays quiet for a plain session with no agents', async () => {
     sessions = [...DEFAULT_SESSIONS, { ...DEFAULT_SESSIONS[0], id: 'plain', title: 'Plain' }];
     await render({ plain: 'processing' });
     await render({ plain: 'needs-action' });
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('still counts a waiting plain session on the dock badge under the agents scope', async () => {
+    sessions = [...DEFAULT_SESSIONS, { ...DEFAULT_SESSIONS[0], id: 'plain', title: 'Plain' }];
+    await render({ plain: 'processing' });
+    await render({ plain: 'needs-action' });
+    expect(chime.playChime).not.toHaveBeenCalled();
+    expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+    await render({ plain: 'done' });
+    expect(setBadgeCount).toHaveBeenLastCalledWith(0);
+  });
+
+  describe('with the all scope', () => {
+    const PLAIN = { ...DEFAULT_SESSIONS[0], id: 'plain', title: 'Plain' };
+
+    beforeEach(() => {
+      scope = 'all';
+      sessions = [...DEFAULT_SESSIONS, PLAIN];
+    });
+
+    it('notifies, chimes and badges for a plain session that starts needing the user', async () => {
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(chime.playChime).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledWith({
+        sessionId: 'plain',
+        rootId: 'plain',
+        title: 'Plain needs you',
+        body: 'bash pnpm test',
+      });
+      expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it('stays quiet for an archived plain session', async () => {
+      sessions = [...DEFAULT_SESSIONS, { ...PLAIN, archived: true }];
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(chime.playChime).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+      expect(setBadgeCount).toHaveBeenLastCalledWith(0);
+    });
+
+    it('does not announce the plain session the user is viewing in a focused window', async () => {
+      viewingId = 'plain';
+      focused = true;
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(chime.playChime).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+      expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it('claims the viewed plain session, so another window cannot announce it', async () => {
+      viewingId = 'plain';
+      focused = true;
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(claim).toHaveBeenCalledWith(['plain']);
+      expect(chime.playChime).not.toHaveBeenCalled();
+    });
+
+    it('stays silent in a second window when the viewing window claimed the entry first', async () => {
+      claim.mockResolvedValueOnce([]);
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(chime.playChime).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('still announces an agent the user is viewing in a focused window', async () => {
+      viewingId = 'child';
+      focused = true;
+      await render({ child: 'processing' });
+      await render({ child: 'needs-action' });
+      expect(chime.playChime).toHaveBeenCalledTimes(1);
+    });
+
+    it('announces the viewed plain session once the window is in the background', async () => {
+      viewingId = 'plain';
+      await render({ plain: 'processing' });
+      await render({ plain: 'needs-action' });
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('does not announce sessions that were already waiting when the window opened', async () => {
@@ -159,6 +263,33 @@ describe('useNeedsYouAlerts', () => {
     await render({});
     await render({ root: 'needs-action' });
     expect(notify.mock.calls[0][0]).toMatchObject({ sessionId: 'root', rootId: 'root', title: 'Audit needs you' });
+  });
+
+  describe('Presenter mode', () => {
+    it('on: still alerts, with only the generic title and no session title or request', async () => {
+      writePresenter(true);
+      await render({});
+      await render({ child: 'needs-action', root: 'needs-action' });
+      expect(chime.playChime).toHaveBeenCalledTimes(1);
+      expect(notify.mock.calls.map(([notice]) => notice)).toEqual([
+        { sessionId: 'child', rootId: 'root', title: PRESENTER_NOTICE_TITLE, body: PRESENTER_NOTICE_BODY },
+        { sessionId: 'root', rootId: 'root', title: PRESENTER_NOTICE_TITLE, body: PRESENTER_NOTICE_BODY },
+      ]);
+      const shown = JSON.stringify(notify.mock.calls);
+      for (const real of ['Audit', 'Review the auth middleware', 'pnpm test']) expect(shown).not.toContain(real);
+    });
+
+    it('off: names the session and spells out the request', async () => {
+      writePresenter(false);
+      await render({});
+      await render({ root: 'needs-action' });
+      expect(notify.mock.calls[0][0]).toEqual({
+        sessionId: 'root',
+        rootId: 'root',
+        title: 'Audit needs you',
+        body: 'bash pnpm test',
+      });
+    });
   });
 
   it('stays quiet while the window is focused, but still chimes', async () => {

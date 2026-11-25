@@ -6,7 +6,6 @@ import type { DecisionToolRequest } from '../implementation/decide/request';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
-import type { ProviderSlotStore } from '../../../providerCapacity';
 import type { OperationalBillingAdapters } from '../../../billing/recordOperationalUsage';
 import type { OperationalBillingCheck } from '../../../billing/isOperationalBillingEnabled';
 import {
@@ -34,6 +33,7 @@ import {
   type AuthOrigin,
   type CitableSource,
   type DecisionResponse,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 
 /**
@@ -111,7 +111,8 @@ export interface ToolContext {
   sessionId?: string;
   /**
    * Quest (turn) id of the current chat, for lake-access audit rows (recordLakeAccessEvent) to
-   * join back to their turn - a diagnostic join key, never authorization data. Optional for the
+   * join back to their turn, and the key for save_content_to_data_lake's per-turn save count (a quota,
+   * not an access check) - never authorization data. Optional for the
    * same reason as `sessionId`, plus one agent-mode-specific case: an agent execution's real Quest
    * id is only known from the point `agentExecutor` resolves it (see the dispatch-time capture in
    * `agentExecute.ts` and its resume-path fallback) - a tool call before that point genuinely has
@@ -128,8 +129,6 @@ export interface ToolContext {
     latticeModels?: Pick<ILatticeModelRepository, 'create' | 'findById' | 'update'>;
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
-    /** Concurrency slots for the shared ElevenLabs key (runElevenLabsWithCapacity); absent runs unslotted. */
-    caches?: ProviderSlotStore;
     /**
      * The image tools bump the session's imageCount through this (see recordGeneratedImages).
      * `findAllByIds` pairs with `quests` below for resolveOwnedGeneratedImageUrl.
@@ -138,8 +137,11 @@ export interface ToolContext {
     /**
      * Owner lookup for generated-image keys (see resolveOwnedGeneratedImageUrl). Absent (or
      * `sessions.findAllByIds` absent) means every generated key is refused - fail closed.
+     * `claimLakeSaveSlot` holds save_content_to_data_lake's per-turn count on the quest; without it
+     * (or without `questId`) that tool counts per tool build instead.
      */
-    quests?: Pick<IChatHistoryItemRepository, 'findSessionIdsByImage'>;
+    quests?: Pick<IChatHistoryItemRepository, 'findSessionIdsByImage'> &
+      Partial<Pick<IChatHistoryItemRepository, 'claimLakeSaveSlot'>>;
     fabfilechunks?: Pick<
       IFabFileChunkRepository,
       | 'findByFabFileId'
@@ -275,6 +277,8 @@ export interface ToolContext {
    * write by it must re-check membership itself - see create_data_lake. Absent = personal context.
    */
   organizationId?: string;
+  /** Policy scope is independent of the tool's personal/organization data-write scope. */
+  governingOrgModelPolicy?: ReadOrgModelPolicy;
   /**
    * How the turn was authenticated (see AuthOrigin). Required so that every door that runs tools
    * has to decide it: a tool that must refuse non-session turns checks `authOrigin === 'session'`

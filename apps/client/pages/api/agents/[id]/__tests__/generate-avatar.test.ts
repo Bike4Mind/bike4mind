@@ -1,16 +1,18 @@
 import { estimateImageCredits } from '@bike4mind/services/imageCost';
 import { ApiKeyScope, CreditHolderType, ImageModels } from '@bike4mind/common';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
-vi.mock('@server/billing/reserveRequestCredits', () => ({
+import { reserveRequestCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
   reserveRequestCredits: vi.fn(async () => ({ refund: vi.fn(), settle: vi.fn(async () => 1) })),
 }));
 vi.mock('@bike4mind/services/imageCost', () => ({
   estimateImageCredits: vi.fn(() => ({ requiredCredits: 50, usdCost: 0.025 })),
 }));
 
-import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
+import { assertMediaModelAdmission } from '@bike4mind/server-utils/billing/assertMediaModelAdmission';
 import { ForbiddenError } from '@bike4mind/utils';
-vi.mock('@server/billing/assertMediaModelAdmission', () => ({ assertMediaModelAdmission: vi.fn(async () => {}) }));
+vi.mock('@bike4mind/server-utils/billing/assertMediaModelAdmission', () => ({
+  assertMediaModelAdmission: vi.fn(async () => {}),
+}));
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
@@ -18,7 +20,7 @@ vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   assertOutboundActionAllowed: async () => undefined,
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
 }));
 
@@ -57,7 +59,9 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { signedUrlExpiresAt: (_url: string, seconds: number) => new Date(Date.now() + seconds * 1000) },
   meterCompletionBackend: (llm: unknown) => llm,
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createRequestCompletionMeter: () => vi.fn(),
+}));
 
 vi.mock('axios', () => ({ default: { get: h.axiosGet } }));
 
@@ -162,7 +166,8 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
     expect(assertMediaModelAdmission).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'u1' }),
       'test-image-model',
-      true
+      true,
+      undefined
     );
     const operations = await h.getOperationsModel.mock.results[0].value;
     expect(operations.llm.complete).not.toHaveBeenCalled();
@@ -184,6 +189,12 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
     );
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
     expect(vi.mocked(reserveRequestCredits).mock.calls[0][0].req).toBe(req);
+    expect(assertMediaModelAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      'test-image-model',
+      true,
+      'billing-org'
+    );
     expect(reserveRequestCredits).toHaveBeenCalledWith(
       expect.objectContaining({
         req: expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) }),

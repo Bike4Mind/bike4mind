@@ -44,7 +44,7 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGetSettingsValue, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import {
@@ -52,6 +52,7 @@ import {
   SreRepoConfigSchema,
   SRE_SECRET_PLACEHOLDER,
   SRE_METRICS_WINDOWS,
+  SreSourceType,
   getConfiguredRepoSlugs,
   type ModelInfo,
   type SreAgentConfig,
@@ -65,7 +66,6 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
-import SaveIcon from '@mui/icons-material/Save';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ReplayIcon from '@mui/icons-material/Replay';
 import CancelIcon from '@mui/icons-material/Cancel';
@@ -84,6 +84,7 @@ import {
   StatTile,
 } from './shared';
 import { ADMIN_REGION_GAP, adminSurface } from './shared/adminStyles';
+import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
 import type { ISreErrorTracking } from '@bike4mind/database/infra';
 
 // Config Section
@@ -181,20 +182,9 @@ function setRepoField<K extends keyof SreRepoConfig>(
 }
 
 /** Gate editor for per-repo gate config */
-function RepoGateEditor({
-  label,
-  gate,
-  onChange,
-}: {
-  label: string;
-  gate: { enabled: boolean; autoThreshold: number; askThreshold: number; approvalTimeoutHours: number };
-  onChange: (g: {
-    enabled: boolean;
-    autoThreshold: number;
-    askThreshold: number;
-    approvalTimeoutHours: number;
-  }) => void;
-}) {
+function RepoGateEditor<
+  G extends { enabled: boolean; autoThreshold: number; askThreshold: number; approvalTimeoutHours: number },
+>({ label, gate, onChange }: { label: string; gate: G; onChange: (g: G) => void }) {
   return (
     <Box sx={{ py: 1.5, '& + &': { borderTop: '1px solid', borderColor: 'admin.border' } }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
@@ -242,6 +232,39 @@ function RepoGateEditor({
         </Stack>
       )}
     </Box>
+  );
+}
+
+const AUTO_DISPATCH_SOURCE_LABELS: Record<SreSourceType, string> = {
+  [SreSourceType.CLOUDWATCH]: 'CloudWatch errors',
+  [SreSourceType.GITHUB_ISSUE]: 'GitHub issues',
+};
+
+/** Sources whose fixes may dispatch without Slack approval; any other source always asks. */
+export function AutoDispatchSourcesField({
+  sources,
+  onChange,
+}: {
+  sources: SreSourceType[];
+  onChange: (sources: SreSourceType[]) => void;
+}) {
+  return (
+    <FormControl sx={{ pb: 1.5 }}>
+      <FormLabel>Auto-dispatch without approval</FormLabel>
+      <Stack direction="row" spacing={2}>
+        {Object.values(SreSourceType).map(source => (
+          <Checkbox
+            key={source}
+            size="sm"
+            label={AUTO_DISPATCH_SOURCE_LABELS[source]}
+            checked={sources.includes(source)}
+            onChange={e => onChange(e.target.checked ? [...sources, source] : sources.filter(s => s !== source))}
+            data-testid={`sre-auto-dispatch-source-${source}`}
+          />
+        ))}
+      </Stack>
+      <FormHelperText>Auto-band fixes from unchecked sources wait for Slack approval.</FormHelperText>
+    </FormControl>
   );
 }
 
@@ -510,8 +533,8 @@ function RepoConfigCard({
                     }}
                   />
                   <FormHelperText>
-                    Comma-separated Slack user IDs authorized to approve/reject fixes. Leave empty to allow anyone in
-                    the channel.
+                    Comma-separated Slack user IDs authorized to approve/reject fixes. With no IDs configured, nobody
+                    can approve a fix.
                   </FormHelperText>
                 </FormControl>
               </Stack>
@@ -756,6 +779,18 @@ function RepoConfigCard({
             gate={repo.gates.diagnosticianToSurgeon}
             onChange={g => onChange({ ...repo, gates: { ...repo.gates, diagnosticianToSurgeon: g } })}
           />
+          <AutoDispatchSourcesField
+            sources={repo.gates.diagnosticianToSurgeon.autoDispatchSources ?? []}
+            onChange={autoDispatchSources =>
+              onChange({
+                ...repo,
+                gates: {
+                  ...repo.gates,
+                  diagnosticianToSurgeon: { ...repo.gates.diagnosticianToSurgeon, autoDispatchSources },
+                },
+              })
+            }
+          />
         </CollapsibleSection>
 
         {/* File Scope */}
@@ -990,19 +1025,33 @@ function RepoConfigCard({
 
 // Main Config Tab
 
+function parseSreConfig(raw: unknown): SreAgentConfig {
+  try {
+    return SreAgentConfigSchema.parse(raw);
+  } catch {
+    return SreAgentConfigSchema.parse({});
+  }
+}
+
 function SreConfigPanel() {
   const rawConfig = useGetSettingsValue('sreAgentConfig');
+  const savedConfig = useMemo(() => (rawConfig ? parseSreConfig(rawConfig) : null), [rawConfig]);
+  if (!savedConfig) return <LoadingState label="Loading configuration" />;
+  return (
+    <SettingsDraftProvider>
+      <SreConfigForm savedConfig={savedConfig} />
+    </SettingsDraftProvider>
+  );
+}
+
+// The whole sreAgentConfig object is one staged draft: the SaveBar writes it in one update and Discard
+// returns the form to the stored value.
+function SreConfigForm({ savedConfig }: { savedConfig: SreAgentConfig }) {
   const updateSettings = useUpdateSettings();
-  const [config, setConfig] = useState<SreAgentConfig | null>(null);
-  const [savedConfig, setSavedConfig] = useState<SreAgentConfig | null>(null);
-  // Ref holds the latest config so handleSave avoids a stale closure when React 18
-  // batches GithubLabelInput's onBlur setConfig before the Save button's onClick runs.
-  // useLayoutEffect updates the ref synchronously after DOM commit, before any later
-  // click handler fires.
-  const latestConfigRef = useRef<SreAgentConfig | null>(null);
-  useLayoutEffect(() => {
-    latestConfigRef.current = config;
-  }, [config]);
+  const { value: config, setValue: setConfig } = useSettingsDraft('sreAgentConfig', savedConfig, {
+    name: 'SRE agent configuration',
+    save: value => updateSettings.mutateAsync({ key: 'sreAgentConfig', value }),
+  });
 
   const { data: models } = useModelInfo();
   const { data: workspacesData } = useQuery({
@@ -1025,52 +1074,10 @@ function SreConfigPanel() {
   );
   const slackWorkspaces = workspacesData?.workspaces ?? [];
 
-  useEffect(() => {
-    if (rawConfig) {
-      try {
-        const parsed = SreAgentConfigSchema.parse(rawConfig);
-        setConfig(parsed);
-        setSavedConfig(parsed);
-      } catch {
-        const empty = SreAgentConfigSchema.parse({});
-        setConfig(empty);
-        setSavedConfig(empty);
-      }
-    }
-  }, [rawConfig]);
-
-  const isDirty = config && savedConfig ? JSON.stringify(config) !== JSON.stringify(savedConfig) : false;
-
-  const handleSave = useCallback(async () => {
-    // Read from the ref, not the closure, to guard against React 18 batching
-    // GithubLabelInput's onBlur setConfig after the Save click fires.
-    const currentConfig = latestConfigRef.current;
-    if (!currentConfig) return;
-    try {
-      await updateSettings.mutateAsync({ key: 'sreAgentConfig', value: currentConfig });
-      setConfig(currentConfig);
-      setSavedConfig(currentConfig);
-      toast.success('SRE Agent configuration saved');
-    } catch (err) {
-      const msg = isAxiosError<{ error?: string; message?: string }>(err)
-        ? err.response?.data?.error || err.response?.data?.message
-        : undefined;
-      toast.error(`Failed to save: ${msg || (err instanceof Error ? err.message : 'Unknown error')}`);
-    }
-  }, [updateSettings]);
-
-  const handleReset = useCallback(() => {
-    if (savedConfig) {
-      setConfig(savedConfig);
-    }
-  }, [savedConfig]);
-
-  if (!config) return <LoadingState label="Loading configuration" />;
-
   return (
     // pb clears the fixed "AI Chat" pill (bottom:20 + ~40px tall, zIndex 1300) the admin page
-    // floats at the viewport's bottom-right, so the Save/Reset bar below isn't obscured by it.
-    // See FloatingChatWindow.tsx.
+    // floats at the viewport's bottom-right, so the last row above the sticky SaveBar isn't obscured
+    // by it. See FloatingChatWindow.tsx.
     <Stack gap={ADMIN_REGION_GAP} sx={{ pb: 10 }}>
       <ConfigSection title="Repositories">
         <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
@@ -1126,37 +1133,6 @@ function SreConfigPanel() {
           </Alert>
         )}
       </ConfigSection>
-
-      {/* Save Bar */}
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'flex-end' }}>
-        {isDirty && (
-          <Chip color="warning" variant="soft" size="sm" data-testid="sre-unsaved-changes-chip">
-            Unsaved changes
-          </Chip>
-        )}
-        <Button
-          variant="outlined"
-          color="neutral"
-          size="sm"
-          disabled={!isDirty}
-          onClick={handleReset}
-          data-testid="sre-config-reset-btn"
-        >
-          Reset
-        </Button>
-        <Button
-          variant="solid"
-          color="primary"
-          size="sm"
-          disabled={!isDirty}
-          loading={updateSettings.isPending}
-          onClick={handleSave}
-          startDecorator={<SaveIcon />}
-          data-testid="sre-config-save-btn"
-        >
-          Save
-        </Button>
-      </Box>
     </Stack>
   );
 }
@@ -2458,13 +2434,13 @@ export default function SreAgentTab() {
           <Tab data-testid="sre-tab-configuration">Configuration</Tab>
         </TabList>
 
-        <TabPanel value={0} sx={panelSx} data-admin-self-framed>
+        <TabPanel value={0} sx={panelSx}>
           <PipelineStatusPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={1} sx={panelSx} data-admin-self-framed>
+        <TabPanel value={1} sx={panelSx}>
           <PatternLibraryPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={2} sx={panelSx} data-admin-self-framed>
+        <TabPanel value={2} sx={panelSx}>
           <SreConfigPanel />
         </TabPanel>
       </Tabs>

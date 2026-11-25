@@ -1,9 +1,10 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import { BaseArtifact, ArtifactTypeSchema, RepositoryPatch, RepositoryUpdateOptions } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
+import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 
 // Mongoose document interface - omit 'id' from BaseArtifact to avoid conflict with Document._id
-export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document {
+export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document<string> {
   id: string; // Custom id field
   softDelete(): Promise<IArtifactDocument>;
   restore(): Promise<IArtifactDocument>;
@@ -97,6 +98,7 @@ const ArtifactSchema = new Schema(
     },
     organizationId: {
       type: String,
+      immutable: true,
     },
     visibility: {
       type: String,
@@ -260,6 +262,8 @@ ArtifactSchema.methods.restore = function () {
   return this.save();
 };
 
+ArtifactSchema.plugin(organizationContentPolicyPlugin);
+
 export const Artifact: Model<IArtifactDocument> =
   (mongoose.models.Artifact as mongoose.Model<IArtifactDocument>) ||
   model<IArtifactDocument>('Artifact', ArtifactSchema);
@@ -268,6 +272,24 @@ export const Artifact: Model<IArtifactDocument> =
 // Fields the public artifact list and search return; content and sharing state are never loaded.
 const PUBLIC_ARTIFACT_LIST_FIELDS =
   'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt';
+
+type PublicArtifactListItem = Pick<
+  IArtifactDocument,
+  | '_id'
+  | 'id'
+  | 'type'
+  | 'title'
+  | 'description'
+  | 'version'
+  | 'versionTag'
+  | 'status'
+  | 'tags'
+  | 'sessionId'
+  | 'projectId'
+  | 'visibility'
+  | 'createdAt'
+  | 'updatedAt'
+>;
 
 export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
   constructor(model: Model<IArtifactDocument>) {
@@ -311,6 +333,30 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     );
   }
 
+  /** Keep collaborator grants and flags while replacing the scoped owner's access in one write. */
+  async reassignMemberContent(
+    scope: { organizationId: string; userId: string; deletedAt: null },
+    recipientId: string
+  ): Promise<{ modifiedCount: number }> {
+    const { organizationId, userId } = scope;
+    if (!organizationId || !userId || !recipientId || userId === recipientId) {
+      throw new Error('Artifact reassignment requires an organization and two distinct users');
+    }
+    const query = this.model.updateMany(
+      { organizationId, userId, deletedAt: null },
+      {
+        $set: { userId: recipientId },
+        $pull: {
+          'permissions.canRead': userId,
+          'permissions.canWrite': userId,
+          'permissions.canDelete': userId,
+        },
+      }
+    );
+    if (this._txn) query.session(this._txn);
+    return query.exec();
+  }
+
   /**
    * One newest-first page of `conditions`, bounded before `beforeId` when given. Shared by the public
    * list and search so their cursor handling, projection and hasMore rule cannot drift apart.
@@ -330,7 +376,7 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
       .select(PUBLIC_ARTIFACT_LIST_FIELDS)
       .sort({ _id: -1 })
       .limit(limit + 1)
-      .lean()
+      .lean<PublicArtifactListItem[]>()
       .exec();
 
     const hasMore = result.length > limit;

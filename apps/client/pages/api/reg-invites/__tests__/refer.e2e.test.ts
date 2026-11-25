@@ -12,7 +12,14 @@ import {
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (...handlers: unknown[]) => handlers[handlers.length - 1] }),
+  baseApi: () => {
+    const chain = { use: () => chain, post: (...handlers: unknown[]) => handlers[handlers.length - 1] };
+    return chain;
+  },
+}));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => undefined }));
+vi.mock('@server/utils/recipientSendLimits', () => ({
+  reserveRecipientSendBudget: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -60,6 +67,7 @@ function request(userId: string, emails: string[], staleQuota = 1) {
   Object.assign(req, {
     user: { id: userId, emailVerified: true, numReferralsAvailable: staleQuota, regInvites: [] },
     ability: {},
+    logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
     body: { userName: 'Sender', friendEmail: emails, emailTitle: 'Join', emailBody: 'Welcome' },
   });
   return {

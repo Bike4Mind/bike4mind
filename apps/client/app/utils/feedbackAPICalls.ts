@@ -6,6 +6,8 @@ import type {
   FeedbackRollupResponse,
   UpdateFeedbackStatusRequest,
   UpdateFeedbackStatusResponse,
+  FeedbackHistoryPage,
+  FeedbackReporterSummary,
 } from '@bike4mind/common';
 import type {
   FeedbackListParams,
@@ -104,4 +106,20 @@ export const getFeedbackByIdFromServer = async (feedbackId: string): Promise<IEx
     `/api/feedback/${encodeURIComponent(feedbackId)}/read`
   );
   return response.data;
+};
+
+export const getFeedbackHistoryFromServer = async (id: string, cursor?: string): Promise<FeedbackHistoryPage> => {
+  const response = await api.get<FeedbackHistoryPage>(`/api/admin/feedback/${encodeURIComponent(id)}/history`, {
+    params: { cursor },
+  });
+  return response.data;
+};
+
+export const getFeedbackReporterSummaryFromServer = async (id: string): Promise<FeedbackReporterSummary> => {
+  const response = await api.get<FeedbackReporterSummary>(`/api/admin/feedback/${encodeURIComponent(id)}/reporter`);
+  return response.data;
+};
+
+export const addFeedbackNoteOnServer = async (id: string, note: string): Promise<void> => {
+  await api.post(`/api/admin/feedback/${encodeURIComponent(id)}/history`, { note });
 };

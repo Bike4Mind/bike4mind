@@ -16,7 +16,7 @@ import {
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { generateAgentAvatar } from '@server/agents/authoring/generateAgentAvatar';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 interface AgentAvatarRequest {
   imageModel?: string;

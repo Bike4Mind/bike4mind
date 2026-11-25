@@ -6,7 +6,8 @@ import {
   startOllamaServe,
 } from '@bike4mind/local-models';
 import type { LaunchRuntime, ModelServerLaunchSettings } from '@shared/modelServers';
-import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import { findOnPath, resolveUserPath } from '../chat/tools/userPath';
 import {
   adoptedHandle,
@@ -110,12 +111,20 @@ export class LocalServerSupervisor {
     if (!file) return;
     let found: OwnedRecord[];
     let listedCount: number;
+    let resealed = false;
     try {
       const text = await file.read();
       const cipher = this.sealer();
       found = readOwnedRecords(
         text,
-        cipher ? sealed => cipher.decryptString(Buffer.from(sealed, 'base64')) : undefined
+        cipher
+          ? sealed => {
+              const blob = Buffer.from(sealed, 'base64');
+              const key = cipher.decryptString(blob);
+              resealed ||= cipher.needsReencrypt?.(blob) === true;
+              return key;
+            }
+          : undefined
       );
       listedCount = ownedEntryCount(text);
     } catch (error) {
@@ -155,7 +164,8 @@ export class LocalServerSupervisor {
       if (unverifiedLaunches) reset = true;
       this.watch(record.id, slot, handle);
     }
-    if (this.unverified.size > 0 || this.records.size !== listedCount || reset) await this.persist();
+    // A key read from an older cipher format is written back in the current one.
+    if (this.unverified.size > 0 || this.records.size !== listedCount || reset || resealed) await this.persist();
   }
 
   /**

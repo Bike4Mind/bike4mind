@@ -11,6 +11,10 @@ import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -28,7 +32,10 @@ describe('ChatService tool loop', () => {
   let store: SessionStore;
 
   /** `turnLimits` is how a test reaches a budget whose real values it could not afford to. */
-  function build(turnLimits?: ChatServiceDeps['turnLimits']): ChatService {
+  function build(
+    turnLimits?: ChatServiceDeps['turnLimits'],
+    turnExtensions?: ChatServiceDeps['turnExtensions']
+  ): ChatService {
     // Bound to this test's sinks: a previous service replying late must not write into the next test's.
     const emitted = events;
     const boundPost = post;
@@ -48,6 +55,7 @@ describe('ChatService tool loop', () => {
       access: { list: async () => [root] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       ...(turnLimits ? { turnLimits } : {}),
+      ...(turnExtensions ? { turnExtensions } : {}),
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
@@ -110,6 +118,7 @@ describe('ChatService tool loop', () => {
       'web_fetch',
       'ask_user',
       'request_directory',
+      'loop',
     ]);
   });
 
@@ -151,9 +160,10 @@ describe('ChatService tool loop', () => {
     await service.send(id, 'what is in my shared folder?');
     await firstRequest();
 
-    const preamble = post.mock.calls[0][1].messages[0];
-    expect(preamble.role).toBe('system');
-    expect(preamble.content).toContain(root);
+    const [shared, sessionTail] = post.mock.calls[0][1].messages;
+    expect([shared.role, sessionTail.role]).toEqual(['system', 'system']);
+    expect(sessionTail.content).toContain(root);
+    const preamble = shared;
     expect(preamble.content).toMatch(/absolute paths/);
   });
 
@@ -196,10 +206,10 @@ describe('ChatService tool loop', () => {
     expect(toolEnd && 'call' in toolEnd ? toolEnd.call.preview : '').toContain('huge.bin');
 
     // The second request must carry the provider's tool_use / tool_result pair.
-    // Index 0 is the access preamble, 1 the user prompt.
+    // Indexes 0 and 1 are the two halves of the system prompt, 2 the user prompt.
     const second = post.mock.calls[1][1].messages;
-    expect(second[2]).toMatchObject({ role: 'assistant', content: [{ type: 'tool_use', id: 'call_1' }] });
-    expect(second[3]).toMatchObject({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1' }] });
+    expect(second[3]).toMatchObject({ role: 'assistant', content: [{ type: 'tool_use', id: 'call_1' }] });
+    expect(second[4]).toMatchObject({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1' }] });
 
     const persisted = (await service.getSession(id))?.messages[1];
     expect(persisted?.toolCalls).toHaveLength(1);
@@ -222,7 +232,7 @@ describe('ChatService tool loop', () => {
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 3000, interval: 5 });
     expect(events.find(event => event.type === 'tool-end')).toMatchObject({ call: { status: 'denied' } });
 
-    const result = post.mock.calls[1][1].messages[3].content[0];
+    const result = post.mock.calls[1][1].messages[4].content[0];
     expect(result).toMatchObject({ type: 'tool_result', is_error: true });
     expect(result.content).toMatch(/outside the folders shared with you/);
 
@@ -298,6 +308,76 @@ describe('ChatService tool loop', () => {
     expect(done).toMatchObject({ stopReason: 'turn_time_limit' });
     // The round that was already in flight still finished; nothing after it started.
     expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  describe('automatic extension of a productive turn', () => {
+    const sentText = (call: number): string => JSON.stringify(post.mock.calls[call][1].messages);
+
+    it('carries a varied turn past its round budget, tells the model, and stops once the cap is spent', async () => {
+      service = build({ rounds: 2 }, async () => 1);
+      const { id } = await service.createSession();
+      await service.send(id, 'work');
+      await firstRequest();
+
+      // Round 2 reaches the budget and is extended once (two more rounds); round 4 has no extension left.
+      await driveRounds(4, round => `{"pattern":"*${round}"}`);
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+      expect(post).toHaveBeenCalledTimes(4);
+      expect(sentText(2)).toContain('extended automatically (1 of 1)');
+      // One extension, one note: the stopping round adds none.
+      expect(sentText(3).split('extended automatically').length - 1).toBe(1);
+    });
+
+    it('carries a turn past its time budget the same way', async () => {
+      service = build({ wallClockMs: 0 }, async () => 1);
+      const { id } = await service.createSession();
+      await service.send(id, 'slow');
+      await firstRequest();
+
+      await driveRounds(2, round => `{"pattern":"*${round}"}`);
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'turn_time_limit' });
+      expect(post).toHaveBeenCalledTimes(2);
+    });
+
+    it('never extends a turn that is repeating the same round', async () => {
+      service = build({ rounds: 3 }, async () => 3);
+      const { id } = await service.createSession();
+      await service.send(id, 'loop');
+      await firstRequest();
+
+      // Two repeats in a row by the budget round: short of the stall stop, but not progress either.
+      await driveRounds(3, () => '{"pattern":"*"}');
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+      expect(post).toHaveBeenCalledTimes(3);
+    });
+
+    it('still stops a stalled turn immediately, whatever the setting allows', async () => {
+      service = build(undefined, async () => 10);
+      const { id } = await service.createSession();
+      await service.send(id, 'loop');
+      await firstRequest();
+
+      await driveRounds(6, () => '{"pattern":"*"}');
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_stall_limit' });
+      expect(post).toHaveBeenCalledTimes(6);
+    });
+
+    it('stops at the budget as before when the setting is "always stop"', async () => {
+      service = build({ rounds: 2 }, async () => 0);
+      const { id } = await service.createSession();
+      await service.send(id, 'work');
+      await firstRequest();
+
+      await driveRounds(2, round => `{"pattern":"*${round}"}`);
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(sentText(1)).not.toContain('extended automatically');
+    });
   });
 
   it('continues a budget-stopped turn in the same message, keeping what it already said', async () => {

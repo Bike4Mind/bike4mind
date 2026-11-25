@@ -6,8 +6,11 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import {
+  fileContentUrl,
+  signFabFileGet,
+  type FabFileSignOptions,
+} from '@bike4mind/server-utils/files/browserFileSigner';
 
 /**
  * The files attached to one quest, with a fresh signed `fileUrl` on each serveable file. Shared by
@@ -30,12 +33,8 @@ export async function listQuestFiles(userId: string, questId: string, { browser 
         adminSettings: adminSettingsRepository,
       },
       storage: {
-        generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) =>
-          getFilesStorage().getSignedUrl(path, 'get', {
-            expiresIn: expireInSeconds,
-            audience: 'browser',
-            signingDate: options?.signingDate,
-          }),
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) =>
+          signFabFileGet(path, expireInSeconds, options),
         ...(browser && { contentUrl: fileContentUrl }),
       },
     }

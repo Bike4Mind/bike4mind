@@ -1,4 +1,12 @@
-import { forwardRef, KeyboardEvent as ReactKeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
+import {
+  forwardRef,
+  KeyboardEvent as ReactKeyboardEvent,
+  ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Avatar, Box, Chip, CircularProgress, Divider, IconButton, Radio, Stack, Tooltip, Typography } from '@mui/joy';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useLocation, useNavigate } from '@tanstack/react-router';
@@ -9,6 +17,7 @@ import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
 import { useUser } from '@client/app/contexts/UserContext';
+import { userIsDeveloper } from '@client/app/utils/user';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
@@ -29,6 +38,12 @@ import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { useGetAppFileUrl } from '@client/app/utils/s3';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
+import {
+  orderAccountsByRecentTeams,
+  readTeamPreference,
+  recentTeamsKey,
+  rememberTeam,
+} from '@client/app/components/organizations/teamPreferences';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
@@ -260,6 +275,7 @@ const ProfileMenu = () => {
   const modeToggleEnabled = theme.branding.modeToggleEnabled;
 
   const currentUser = useUser(s => s.currentUser);
+  const isAdmin = useUser(s => s.isAdmin);
   const avatarVersion = useUser(s => s.avatarVersion);
   // Delegated admins too: the console admits anyone it has a tab to show.
   const canOpenAdmin = canEnterAdminConsole(currentUser);
@@ -268,11 +284,15 @@ const ProfileMenu = () => {
   const { isFeatureEnabled } = useFeatureEnabled();
   const isHearthEnabled = isFeatureEnabled('enableHearth');
   // Premium-overlay launch points (codegen glue - empty array in the open-core
-  // fork). Visibility semantics (STRICT - no admin/developer bypass, hidden
-  // while entitlements load, hidden-not-redirected on denial) live in
-  // filterVisiblePremiumNavItems - see its doc comment and unit tests.
+  // fork). Visibility semantics live in filterVisiblePremiumNavItems.
+  const isStaff = isAdmin || userIsDeveloper(currentUser);
   const { data: entitlements } = useEntitlements();
-  const visiblePremiumNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
+  const visiblePremiumNavItems = filterVisiblePremiumNavItems(
+    premiumNavItems,
+    entitlements,
+    currentUser?.tags,
+    isStaff
+  );
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
   const isDesktopPromoEnabled = useDesktopPromoEnabled();
   const isPreferenceArenaEnabled = usePreferenceArenaEnabled();
@@ -295,6 +315,12 @@ const ProfileMenu = () => {
   const focusOnOpenRef = useRef<'first' | 'last'>('first');
   const [open, setOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  // Re-read on each open, not on select, so the card you just clicked does not jump while the menu is up.
+  const orderedAccounts = useMemo(
+    () => orderAccountsByRecentTeams(accounts, currentUser ? readTeamPreference(recentTeamsKey(currentUser.id)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` is the refresh trigger for localStorage
+    [accounts, currentUser?.id, open]
+  );
   const { openView: openBillingView } = useBillingView();
 
   const closeAll = () => {
@@ -431,14 +457,17 @@ const ProfileMenu = () => {
           })}
         >
           <Stack sx={{ gap: 1, p: 0.5 }}>
-            {accounts.map(account => (
+            {orderedAccounts.map(account => (
               <AccountCard
                 key={account.id}
                 name={stripPersonalSuffix(account.name)}
                 typeLabel={showAccountType ? (account.personal ? '(Personal)' : '(Team)') : null}
                 credits={account.credits}
                 selected={selectedAccount?.id === account.id}
-                onSelect={() => setSelectedAccount(account)}
+                onSelect={() => {
+                  setSelectedAccount(account);
+                  if (currentUser && !account.personal) rememberTeam(currentUser.id, account.id);
+                }}
                 bare={accounts.length === 1}
                 showCredits={isCreditsEnabled}
               />

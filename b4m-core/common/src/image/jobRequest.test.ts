@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ImageModels } from '../models';
-import { IMAGE_JOB_INPUTS_MAX, IMAGE_JOB_PROMPT_MAX_CHARS, ImageJobRequestSchema, imageJobInputs } from './jobRequest';
+import {
+  IMAGE_JOB_EDIT_REGIONS_PAYLOAD_MAX,
+  IMAGE_JOB_INPUTS_MAX,
+  IMAGE_JOB_PROMPT_MAX_CHARS,
+  ImageJobRequestSchema,
+  imageJobInputs,
+} from './jobRequest';
 
 const FILE_ID = 'a'.repeat(24);
 const valid = { model: ImageModels.GPT_IMAGE_1, mode: 'generate', prompt: 'a red bicycle' } as const;
@@ -26,6 +32,13 @@ describe('ImageJobRequestSchema', () => {
       seed: 0,
     };
     expect(ImageJobRequestSchema.parse(request)).toEqual(request);
+  });
+
+  it('accepts a BFL safety tolerance up to the cap and refuses one above it', () => {
+    const request = { ...valid, safetyTolerance: 0, promptUpsampling: true };
+    expect(ImageJobRequestSchema.parse(request)).toEqual(request);
+    expect(ImageJobRequestSchema.safeParse({ ...valid, safetyTolerance: 3 }).success).toBe(false);
+    expect(ImageJobRequestSchema.safeParse({ ...valid, safetyTolerance: 1.5 }).success).toBe(false);
   });
 
   it('trims the prompt', () => {
@@ -69,6 +82,48 @@ describe('ImageJobRequestSchema', () => {
     }));
     const prompt = 'x'.repeat(IMAGE_JOB_PROMPT_MAX_CHARS);
     expect(ImageJobRequestSchema.safeParse({ ...valid, inputs, prompt }).success).toBe(true);
+  });
+});
+
+describe('ImageJobRequestSchema job-only models and edit regions', () => {
+  const region = { prompt: 'make it blue', bbox: [0.1, 0.2, 0.8, 0.9] };
+
+  it.each(['test-image', 'local-image/sdxl', 'local-image/models/v1.5:fp16'])('accepts the model %s', model => {
+    expect(ImageJobRequestSchema.safeParse({ ...valid, model }).success).toBe(true);
+  });
+
+  it.each(['local-image/', 'local-image/   ', 'local-image'])('rejects the model %j', model => {
+    expect(ImageJobRequestSchema.safeParse({ ...valid, model }).success).toBe(false);
+  });
+
+  it('accepts editRegions and keeps them', () => {
+    const request = { ...valid, mode: 'edit', editRegions: [region] };
+    expect(ImageJobRequestSchema.parse(request)).toEqual(request);
+  });
+
+  it('rejects an empty editRegions array and a malformed region', () => {
+    expect(ImageJobRequestSchema.safeParse({ ...valid, editRegions: [] }).success).toBe(false);
+    expect(ImageJobRequestSchema.safeParse({ ...valid, editRegions: [{ prompt: 'x', bbox: [0, 0, 1] }] }).success).toBe(
+      false
+    );
+  });
+});
+
+describe('editRegions payload bound', () => {
+  const region = { prompt: 'x', bbox: [0, 0, 0.5, 0.5] };
+  const request = (count: number) => ({
+    ...valid,
+    mode: 'edit',
+    editRegions: Array.from({ length: count }, () => region),
+  });
+
+  it('leaves the per-model cap to the catalog', () => {
+    expect(ImageJobRequestSchema.safeParse(request(9)).success).toBe(true);
+  });
+
+  it('bounds the payload', () => {
+    expect(ImageJobRequestSchema.safeParse(request(IMAGE_JOB_EDIT_REGIONS_PAYLOAD_MAX)).success).toBe(true);
+    expect(ImageJobRequestSchema.safeParse(request(IMAGE_JOB_EDIT_REGIONS_PAYLOAD_MAX + 1)).success).toBe(false);
   });
 });
 

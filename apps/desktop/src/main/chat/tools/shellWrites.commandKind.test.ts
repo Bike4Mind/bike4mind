@@ -2,16 +2,18 @@ import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { gitCommandKind, gitRefusesImplicitBare, withGrantedRoots } from './shellWrites';
 import { resolveUserPath } from './userPath';
 
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 
 describe('gitCommandKind answers kept across scans', () => {
+  let shared: string;
   let base: string;
   let repo: string;
   let withProgram: string;
@@ -19,23 +21,31 @@ describe('gitCommandKind answers kept across scans', () => {
 
   const kind = (roots: readonly string[], name = 'zzz') => withGrantedRoots(roots, () => gitCommandKind(repo, name));
 
-  beforeEach(async () => {
-    base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-kind-')));
-    repo = join(base, 'repo');
-    withProgram = join(base, 'with');
-    plain = join(base, 'plain');
+  beforeAll(async () => {
+    shared = await realpath(await mkdtemp(join(tmpdir(), 'b4m-kind-')));
+    repo = join(shared, 'repo');
+    withProgram = join(shared, 'with');
+    plain = join(shared, 'plain');
     for (const folder of [repo, withProgram, plain]) await mkdir(folder);
     const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
     for (const folder of [withProgram, plain]) await symlink(realGit, join(folder, 'git'));
     await writeFile(join(withProgram, 'git-zzz'), '#!/bin/sh\nexit 0\n');
     await chmod(join(withProgram, 'git-zzz'), 0o755);
     execFileSync(realGit, ['-C', repo, 'init', '-q', '-b', 'main']);
+  });
+
+  afterAll(async () => {
+    await rm(shared, { recursive: true, force: true });
+  });
+
+  // A folder of its own per test, as the answers are kept by PATH.
+  beforeEach(async () => {
+    base = await mkdtemp(join(shared, 't-'));
     vi.stubEnv('HOME', join(base, 'home'));
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.unstubAllEnvs();
-    await rm(base, { recursive: true, force: true });
   });
 
   it('reads a program git finds on PATH as its own, and a name with none as an alias', async () => {
@@ -70,6 +80,7 @@ describe('gitCommandKind answers kept across scans', () => {
       expect(await kind([])).toBeNull();
     } finally {
       vi.mocked(resolveUserPath).mockImplementation(async () => process.env.PATH ?? '');
+      await rm(join(repo, 'bin'), { recursive: true, force: true });
     }
   });
 

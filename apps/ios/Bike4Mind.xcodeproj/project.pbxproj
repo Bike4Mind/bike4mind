@@ -50,6 +50,7 @@
 		B4A000000000000000000201 /* Bike4Mind.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Bike4Mind.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B4A700000000000000000201 /* Widgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = Widgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B4A600000000000000000201 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B4A000000000000000000231 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -85,6 +86,11 @@
 		B4A600000000000000000302 /* CaptureUI */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = CaptureUI;
+			sourceTree = "<group>";
+		};
+		B4A800000000000000000302 /* ActivityIntents */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ActivityIntents;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -124,6 +130,8 @@
 				B4A700000000000000000301 /* Widgets */,
 				B4A600000000000000000301 /* ShareExtension */,
 				B4A600000000000000000302 /* CaptureUI */,
+				B4A800000000000000000302 /* ActivityIntents */,
+				B4A000000000000000000231 /* Signing.xcconfig */,
 				B4A000000000000000000602 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -159,6 +167,7 @@
 			fileSystemSynchronizedGroups = (
 				B4A000000000000000000301 /* Bike4Mind */,
 				B4A600000000000000000302 /* CaptureUI */,
+				B4A800000000000000000302 /* ActivityIntents */,
 			);
 			name = Bike4Mind;
 			packageProductDependencies = (
@@ -182,6 +191,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				B4A700000000000000000301 /* Widgets */,
+				B4A800000000000000000302 /* ActivityIntents */,
 			);
 			name = Widgets;
 			packageProductDependencies = (
@@ -324,6 +334,7 @@
 /* Begin XCBuildConfiguration section */
 		B4A000000000000000000911 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B4A000000000000000000231 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -353,6 +364,7 @@
 		};
 		B4A000000000000000000912 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B4A000000000000000000231 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -379,19 +391,20 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Bike4Mind/Resources/Bike4Mind.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(B4M_APP_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Bike4Mind;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_UIBackgroundModes = audio;
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bike4Mind uses Face ID to unlock the app when App Lock is on.";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Bike4Mind uses the camera to capture photos you choose to save to a lake.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind records your voice to turn it into text for a message or a note.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Bike4Mind uses the camera to scan documents and capture photos you choose to save or ask about.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind records your voice to turn it into text for a message or a note, and listens so you can talk with it hands-free.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Bike4Mind recognizes your speech so you can have a spoken conversation. Recognition happens on your device when your language supports it.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Bike4Mind reads photos you choose to save to a lake or send in a session.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Bike4Mind saves the images and videos you create to your photo library when you ask it to.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -403,7 +416,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bike4mind.app;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(B4M_APP_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -417,19 +430,20 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Bike4Mind/Resources/Bike4Mind.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(B4M_APP_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Bike4Mind;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_UIBackgroundModes = audio;
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bike4Mind uses Face ID to unlock the app when App Lock is on.";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Bike4Mind uses the camera to capture photos you choose to save to a lake.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind records your voice to turn it into text for a message or a note.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Bike4Mind uses the camera to scan documents and capture photos you choose to save or ask about.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind records your voice to turn it into text for a message or a note, and listens so you can talk with it hands-free.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Bike4Mind recognizes your speech so you can have a spoken conversation. Recognition happens on your device when your language supports it.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Bike4Mind reads photos you choose to save to a lake or send in a session.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Bike4Mind saves the images and videos you create to your photo library when you ask it to.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -441,7 +455,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bike4mind.app;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(B4M_APP_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -454,10 +468,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = WidgetSupport/Widgets.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(B4M_WIDGETS_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = WidgetSupport/Info.plist;
@@ -468,7 +481,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bike4mind.app.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(B4M_WIDGETS_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -482,10 +495,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = WidgetSupport/Widgets.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(B4M_WIDGETS_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = WidgetSupport/Info.plist;
@@ -496,7 +508,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bike4mind.app.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(B4M_WIDGETS_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -510,10 +522,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(B4M_SHARE_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -522,7 +533,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bike4mind.app.ShareExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(B4M_SHARE_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -536,10 +547,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(B4M_SHARE_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -548,7 +558,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bike4mind.app.ShareExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(B4M_SHARE_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

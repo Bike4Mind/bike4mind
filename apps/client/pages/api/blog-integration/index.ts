@@ -43,7 +43,7 @@ const handler = baseApi()
         },
       });
     } catch (error) {
-      console.error('[Blog Integration GET] Error:', error);
+      req.logger.error('Failed to fetch blog settings', { error });
       return res.status(500).json({
         error: 'Failed to fetch blog settings',
         message: error instanceof Error ? error.message : 'Unknown error',
@@ -106,7 +106,7 @@ const handler = baseApi()
             });
           }
           if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-            console.warn('[Blog Integration POST] API test timed out after 5s');
+            req.logger.warn('Blog API test timed out after 5s');
             // Continue anyway - timeout shouldn't block setup
           } else {
             throw fetchError;
@@ -120,7 +120,7 @@ const handler = baseApi()
           });
         }
       } catch (testError) {
-        console.warn('[Blog Integration POST] Could not test API key:', testError);
+        req.logger.warn('Could not test API key', { error: testError });
         // Continue anyway - the blog server might not have a GET endpoint
       }
 
@@ -135,14 +135,12 @@ const handler = baseApi()
         },
       });
 
-      console.log(`[Blog Integration POST] ✅ User ${req.user.id} connected blog: ${baseUrl}`);
-
       return res.status(200).json({
         success: true,
         message: 'Blog integration configured successfully',
       });
     } catch (error) {
-      console.error('[Blog Integration POST] Error:', error);
+      req.logger.error('Failed to save blog settings', { error });
       return res.status(500).json({
         error: 'Failed to save blog settings',
         message: error instanceof Error ? error.message : 'Unknown error',
@@ -156,14 +154,12 @@ const handler = baseApi()
         blogIntegration: null,
       });
 
-      console.log(`[Blog Integration DELETE] ✅ User ${req.user.id} disconnected blog`);
-
       return res.status(200).json({
         success: true,
         message: 'Blog integration disconnected successfully',
       });
     } catch (error) {
-      console.error('[Blog Integration DELETE] Error:', error);
+      req.logger.error('Failed to disconnect blog', { error });
       return res.status(500).json({
         error: 'Failed to disconnect blog',
         message: error instanceof Error ? error.message : 'Unknown error',

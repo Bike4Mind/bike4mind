@@ -79,12 +79,18 @@ const SENSITIVE_ADMIN_SETTING_NAMES = new Set(
 // Settings tied to a stage's own Cloudflare Turnstile widget. Copying them would enable the challenge
 // on a preview whose hostname the widget does not list; a preview opts in by setting them itself.
 // modelListRevision mirrors a cache row this sync does not copy; a copied value would make every tab
-// on the preview refetch its model list on each load.
+// on the preview refetch its model list on each load. modelAccessRevision is the preview's own stamp,
+// bumped by its own access writes.
+// The Bedrock guardrail settings name a guardrail in the source stage's own account; a preview opts in
+// by setting its own.
 const PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES = [
   'turnstileEnabled',
   'turnstileFailClosed',
   'turnstileSiteKey',
+  'BedrockGuardrailId',
+  'BedrockGuardrailVersion',
   'modelListRevision',
+  'modelAccessRevision',
 ];
 
 // Source-side query for a synced collection. adminsettings excludes sensitive rows (above);

@@ -4,7 +4,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
-import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
+import { assertOwnerCanAfford } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 const handler = baseApi().post(async (req, res) => {
   const { id: sessionId } = req.query;

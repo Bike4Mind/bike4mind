@@ -1,4 +1,10 @@
-import type { ISignupRiskScore, IUserDeletion, UserModerationStatus } from '@bike4mind/common';
+import {
+  isActiveInterventionHold,
+  type InterventionHold,
+  type ISignupRiskScore,
+  type IUserDeletion,
+  type UserModerationStatus,
+} from '@bike4mind/common';
 
 /** The conditions that make an account unusable. The order below is precedence. */
 export type AccountBlockReason = 'banned' | 'disputePending' | 'suspended';
@@ -13,6 +19,9 @@ export interface AccountStateFields {
   suspensionReasonCategory?: string | null;
   disputePending?: boolean | null;
   moderation?: { status?: UserModerationStatus | null } | null;
+  /** Read only by isPersonaExpired, never by accountBlockReasons (an expired persona owes no billing action). */
+  isPersona?: boolean | null;
+  personaExpiresAt?: Date | string | null;
 }
 
 /**
@@ -21,7 +30,7 @@ export interface AccountStateFields {
  * `suspend_pending` and `throttled` are deliberately NOT reasons: the former awaits a human's
  * confirmation and the latter is a rate limit, so neither is refused at key-use time. Both the
  * admin update and the Stripe dispute webhook derive their deactivation decision from this list,
- * and the use-time gate in `apps/client/server/cli/auth.ts` must switch on it in the same order.
+ * and the use-time gate in `packages/server-utils/src/cli/auth.ts` must switch on it in the same order.
  */
 export function accountBlockReasons(user: AccountStateFields): AccountBlockReason[] {
   const reasons: AccountBlockReason[] = [];
@@ -29,6 +38,20 @@ export function accountBlockReasons(user: AccountStateFields): AccountBlockReaso
   if (user.disputePending) reasons.push('disputePending');
   if (user.moderation?.status === 'suspended') reasons.push('suspended');
   return reasons;
+}
+
+export const PERSONA_EXPIRED_MESSAGE = 'This test persona has expired.';
+
+/**
+ * A test persona past its personaExpiresAt. Checked at use time (assertAccountStateUsable) and at
+ * sign-in (issueSessionForRequest), so expiry holds even when the persona sweep has not run yet.
+ * A persona with no expiry counts as expired: the mint route always sets one.
+ */
+export function isPersonaExpired(user: AccountStateFields, now: Date = new Date()): boolean {
+  if (user.isPersona !== true) return false;
+  if (!user.personaExpiresAt) return true;
+  const expiresMs = new Date(user.personaExpiresAt).getTime();
+  return !Number.isFinite(expiresMs) || expiresMs <= now.getTime();
 }
 
 /**
@@ -89,7 +112,28 @@ export type AiAccessStateFields = AccountStateFields & {
   isModerated?: boolean | null;
   riskScore?: Pick<ISignupRiskScore, 'reviewState'> | null;
   deletion?: Pick<IUserDeletion, 'scheduledFor'> | null;
+  interventionHolds?: InterventionHold[] | null;
 };
+
+export const AI_ACCESS_UNDER_REVIEW_MESSAGE =
+  'AI features on this account are paused while it is reviewed. You can still sign in, export your data and use your API keys for everything else. Please contact support to request a review.';
+
+export const AI_ACCESS_VERIFICATION_REQUIRED_MESSAGE =
+  'AI features on this account are paused until it is verified. Follow the verification steps in your account settings, or contact support to verify another way. You can still sign in and access your data.';
+
+/**
+ * The refusal an active automated review or verify hold (apps/workers/src/security/autoContainment)
+ * puts on AI use; null when there is none or every hold has expired. Review wins over verify.
+ */
+export function interventionHoldMessage(
+  user: Pick<AiAccessStateFields, 'interventionHolds'>,
+  now: Date
+): string | null {
+  const active = (user.interventionHolds ?? []).filter(hold => isActiveInterventionHold(hold, now));
+  if (active.some(hold => hold.tier === 'review')) return AI_ACCESS_UNDER_REVIEW_MESSAGE;
+  if (active.some(hold => hold.tier === 'verify')) return AI_ACCESS_VERIFICATION_REQUIRED_MESSAGE;
+  return null;
+}
 
 export const AI_ACCESS_DELETION_PENDING_MESSAGE =
   'AI features are unavailable while your account is scheduled for deletion. Cancel the deletion to use them again.';
@@ -100,14 +144,14 @@ export const AI_ACCESS_DELETION_PENDING_MESSAGE =
  * or an agent run outlives the request that authenticated it, and its user is reloaded rather than re-authed.
  * Review holds are separate from manual restrictions, so approval cannot undo an admin restriction.
  */
-export function aiAccessDeniedMessage(user: AiAccessStateFields): string | null {
+export function aiAccessDeniedMessage(user: AiAccessStateFields, now: Date = new Date()): string | null {
   const blocked = accountBlockedMessage(user);
   if (blocked) return blocked;
   // A queued job or agent run outlives the request that froze the account, so it is refused here too.
   if (user.deletion?.scheduledFor) return AI_ACCESS_DELETION_PENDING_MESSAGE;
   if (isAiAccessRevoked(user)) return AI_ACCESS_REVOKED_MESSAGE;
   if (user.riskScore?.reviewState === 'pending') return AI_ACCESS_PENDING_REVIEW_MESSAGE;
-  return null;
+  return interventionHoldMessage(user, now);
 }
 
 /** Every refusal `aiAccessDeniedMessage` can return; must stay in sync with its branches. */
@@ -116,6 +160,8 @@ const AI_ACCESS_DENIED_MESSAGES: ReadonlySet<string> = new Set([
   AI_ACCESS_DELETION_PENDING_MESSAGE,
   AI_ACCESS_REVOKED_MESSAGE,
   AI_ACCESS_PENDING_REVIEW_MESSAGE,
+  AI_ACCESS_UNDER_REVIEW_MESSAGE,
+  AI_ACCESS_VERIFICATION_REQUIRED_MESSAGE,
 ]);
 
 /**

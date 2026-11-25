@@ -57,13 +57,17 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+// finalize reaches the quota check through planVersionedPublish, which imports it from this module.
+vi.mock('@server/services/publish/checkPublishQuota', async importOriginal => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, checkPublishQuota: mockQuota };
+});
 vi.mock('@server/services/publish', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
     validateBundle: () => ({ valid: true, violations: [] }),
     checkScopePermission: () => Promise.resolve({ ok: true }),
-    checkPublishQuota: mockQuota,
     resolveVisibility: (_tier: string, visibility?: string) => ({ ok: true, visibility: visibility ?? 'private' }),
     buildPublishS3KeyPrefix: () => 'user/owner1/doc/',
     buildPublishUrlPath: () => '/p/u/owner1/doc',

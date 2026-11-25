@@ -25,6 +25,13 @@ export {
   type VersionBytes,
 } from './checkPublishQuota';
 export {
+  planPublishVersions,
+  planVersionedPublish,
+  versionsPushUpdate,
+  type PlanPublishVersionsInput,
+  type PreviousVersionState,
+} from './planPublishVersions';
+export {
   invalidatePublishCdn,
   publishCachePaths,
   toCacheTarget,
@@ -105,7 +112,7 @@ export {
 } from './transpileReactArtifact';
 export { renderArtifactIndexHtml } from './renderArtifactHtml';
 export { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
-export { loadLiveOwner } from './loadLiveOwner';
+export { excludeNonLiveOwners, loadLiveOwner } from './loadLiveOwner';
 export {
   consumePublishAction,
   publishActionLimit,

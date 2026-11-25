@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react';
+import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
 import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
-import { EXAMPLE_QUESTS } from './exampleQuests';
+import { singlePaneLayout } from './orchestratorLayout';
 import type { AgentView } from './roster';
 import { TavernView } from './tavern/TavernView';
+import { Aquarium } from './aquarium/Aquarium';
+import { snapshotView } from './snapshotView';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 const FIXTURE = [
@@ -15,22 +17,21 @@ const FIXTURE = [
   agentFixture('d', 'done'),
 ];
 
-const chime = vi.hoisted(() => ({ playChime: vi.fn() }));
+const chime = vi.hoisted(() => ({ playChime: vi.fn(), playSoundEvent: vi.fn() }));
 vi.mock('./chime', () => chime);
 
-const onViewChange = vi.fn();
+const onLayoutChange = vi.fn();
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
 const themed = createThemedMount();
 
-const renderStage = (agents: AgentView[], dockControl?: ReactNode) =>
+const renderStage = (agents: AgentView[]) =>
   themed.render(
     <OrchestratorStage
       agents={agents}
-      view="table"
-      onViewChange={onViewChange}
+      layout={singlePaneLayout('table')}
+      onLayoutChange={onLayoutChange}
       actions={actions}
       introPlaying={false}
-      dockControl={dockControl}
     />
   );
 
@@ -42,8 +43,15 @@ const pressEscape = (init: KeyboardEventInit = {}) =>
   });
 
 beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
   (window as unknown as { b4m: unknown }).b4m = {
-    chat: { getSession: vi.fn().mockResolvedValue(null), onQueueChanged: vi.fn(() => () => undefined) },
+    chat: {
+      getSession: vi.fn().mockResolvedValue(null),
+      getHeldRelays: vi.fn().mockResolvedValue([]),
+      onStreamEvent: vi.fn(() => () => undefined),
+      onQueueChanged: vi.fn(() => () => undefined),
+      getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
+    },
   };
 });
 
@@ -59,26 +67,25 @@ describe('OrchestratorStage', () => {
       'No agents yet. Describe the work and it will be split across agents.'
     );
     expect(query('orchestrator-table')).toBeNull();
+    expect(el('orchestrator-summary-strip').textContent, 'no "0 agents" beside the empty state').toBe('');
 
     await renderStage([agentFixture('w', 'working')]);
     expect(query('orchestrator-empty-state')).toBeNull();
     expect(query('orchestrator-table-row-w')).not.toBeNull();
   });
 
-  describe('example quests', () => {
-    const onExampleQuest = vi.fn();
-    const renderEmpty = (view: 'tavern' | 'board' | 'table') =>
+  describe('empty stage', () => {
+    const renderEmpty = (view: 'tavern' | 'office') =>
       themed.render(
         <OrchestratorStage
           agents={[]}
-          view={view}
-          onViewChange={onViewChange}
+          layout={singlePaneLayout(view)}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           renderView={(id, props: OrchestratorViewProps) =>
             id === 'tavern' ? <TavernView {...props} /> : <div data-testid={`fake-${id}`} />
           }
-          onExampleQuest={onExampleQuest}
         />
       );
 
@@ -92,30 +99,13 @@ describe('OrchestratorStage', () => {
       );
     });
 
-    it.each(['tavern', 'board', 'table'] as const)('offers three example quests in the %s view', async view => {
-      await renderEmpty(view);
-      expect(query(`fake-${view}`)).toBeNull();
-      expect(EXAMPLE_QUESTS.map((_quest, index) => el(`orchestrator-example-quest-${index + 1}`).textContent)).toEqual([
-        'Audit this repo',
-        'Write missing tests',
-        'Compare approaches',
-      ]);
-      act(() => el('orchestrator-example-quest-2').click());
-      expect(onExampleQuest).toHaveBeenLastCalledWith(EXAMPLE_QUESTS[1].prompt);
-    });
-
-    it('keeps the plain empty line in the board and table views', async () => {
-      await renderEmpty('board');
+    it('renders the Office scene with zero agents and the plain empty line', async () => {
+      await renderEmpty('office');
+      expect(el('orchestrator-empty-state').contains(el('fake-office'))).toBe(true);
       expect(el('orchestrator-empty-state').textContent).toContain(
         'No agents yet. Describe the work and it will be split across agents.'
       );
-      expect(query('orchestrator-tavern')).toBeNull();
     });
-  });
-
-  it('leaves the summary strip blank on an empty stage', async () => {
-    await renderStage([]);
-    expect(el('orchestrator-summary-strip').textContent).toBe('');
   });
 
   it('summarises the roster, with ~ when a cost is unknown', async () => {
@@ -125,24 +115,10 @@ describe('OrchestratorStage', () => {
     );
   });
 
-  it('uses the singular for one agent', async () => {
+  it('uses the singular for one agent, and shows no needs-you pill when nothing needs the user', async () => {
     await renderStage([agentFixture('w', 'working', { credits: 1 })]);
     expect(query('orchestrator-summary-strip')?.textContent).toBe('1 agent \u00B7 1 working \u00B7 1 credit');
-  });
-
-  it('marks the credit total partial when an agent only reported dollars', async () => {
-    await renderStage([agentFixture('a', 'done', { usdCost: 1 }), agentFixture('b', 'done', { credits: 4 })]);
-    expect(query('orchestrator-summary-strip')?.textContent).toContain('\u00B7 ~4 credits');
-  });
-
-  it('falls back to dollars when no agent reported credits', async () => {
-    await renderStage([agentFixture('a', 'done', { usdCost: 4 }), agentFixture('b', 'done', { usdCost: 2 })]);
-    expect(query('orchestrator-summary-strip')?.textContent).toContain('\u00B7 $6.00');
-  });
-
-  it('leaves the cost out until an agent reports one', async () => {
-    await renderStage([agentFixture('a', 'working')]);
-    expect(query('orchestrator-summary-strip')?.textContent).toBe('1 agent \u00B7 1 working');
+    expect(query('orchestrator-needs-you-pill')).toBeNull();
   });
 
   it('counts the parent waiting on an approval as needing the user, and its pill opens the parent', async () => {
@@ -152,8 +128,8 @@ describe('OrchestratorStage', () => {
         agents={[agentFixture('w', 'working')]}
         parent={{ status: 'needs-action' }}
         onParentFocus={onParentFocus}
-        view="table"
-        onViewChange={onViewChange}
+        layout={singlePaneLayout('table')}
+        onLayoutChange={onLayoutChange}
         actions={actions}
         introPlaying={false}
       />
@@ -164,6 +140,30 @@ describe('OrchestratorStage', () => {
     expect(onParentFocus).toHaveBeenCalledTimes(1);
     expect(query('orchestrator-peek-drawer')).toBeNull();
   });
+
+  // Office shares the Tavern's parentScene branch.
+  it.each(['tavern', 'aquarium'] as const)(
+    'keeps the %s parent scene action distinct from attention focus',
+    async view => {
+      const onParentFocus = vi.fn();
+      const onParentToggle = vi.fn();
+      await themed.render(
+        <OrchestratorStage
+          agents={[agentFixture('w', 'working')]}
+          onParentFocus={onParentFocus}
+          onParentToggle={onParentToggle}
+          layout={singlePaneLayout(view)}
+          onLayoutChange={onLayoutChange}
+          actions={actions}
+          introPlaying={false}
+          renderView={(_view, props) => <button data-testid="scene-parent-action" onClick={props.onInnkeeperSelect} />}
+        />
+      );
+      await act(async () => el('scene-parent-action').click());
+      expect(onParentToggle).toHaveBeenCalledTimes(view !== 'aquarium' ? 1 : 0);
+      expect(onParentFocus).toHaveBeenCalledTimes(view === 'aquarium' ? 1 : 0);
+    }
+  );
 
   it('opens the first failed agent from the failed pill, and leaves it out when none failed', async () => {
     await renderStage([agentFixture('d', 'done'), agentFixture('f', 'failed'), agentFixture('g', 'failed')]);
@@ -176,36 +176,22 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-failed-pill')).toBeNull();
   });
 
-  it('hides the needs-you pill when nothing needs the user', async () => {
-    await renderStage([agentFixture('w', 'working')]);
-    expect(query('orchestrator-needs-you-pill')).toBeNull();
-  });
-
-  it('opens the drawer for the first needs-you agent from the pill and closes on Escape', async () => {
+  it('opens the drawer for the first needs-you agent from the pill, and only a fresh Escape closes it', async () => {
     await renderStage(FIXTURE);
     expect(query('orchestrator-peek-drawer')).toBeNull();
     await act(async () => el('orchestrator-needs-you-pill').click());
     expect(el('orchestrator-peek-drawer').textContent).toContain('Agent n');
-    await pressEscape();
-    expect(query('orchestrator-peek-drawer')).toBeNull();
-  });
 
-  it('keeps the drawer open for an Escape that is composing or already handled', async () => {
-    await renderStage(FIXTURE);
-    await act(async () => el('orchestrator-needs-you-pill').click());
     await pressEscape({ isComposing: true });
-    expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    expect(query('orchestrator-peek-drawer'), 'an IME-composing Escape is not a close').not.toBeNull();
     act(() => {
       const handled = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
       handled.preventDefault();
       document.body.dispatchEvent(handled);
     });
-    expect(query('orchestrator-peek-drawer')).not.toBeNull();
-  });
+    expect(query('orchestrator-peek-drawer'), 'an Escape another handler took is not a close').not.toBeNull();
 
-  it('claims the Escape that closes the drawer, so the docked conversation stays open', async () => {
-    await renderStage(FIXTURE);
-    await act(async () => el('orchestrator-needs-you-pill').click());
+    // The stage claims the Escape that closes it, so the docked conversation stays open.
     const reachedWindow: boolean[] = [];
     const onWindow = (event: KeyboardEvent) => reachedWindow.push(event.defaultPrevented);
     window.addEventListener('keydown', onWindow);
@@ -215,30 +201,183 @@ describe('OrchestratorStage', () => {
     expect(reachedWindow).toEqual([true]);
   });
 
-  it('opens the drawer when a table row is clicked', async () => {
-    await renderStage(FIXTURE);
-    await act(async () => el('orchestrator-table-row-w2').click());
-    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
+  // Office shares the Tavern's in-scene branch; its panel colour is a constant in ORCHESTRATOR_VIEW_INFO.
+  it.each(['tavern', 'aquarium', 'table'] as const)(
+    'overlays details within the %s viewport without adding a layout column',
+    async view => {
+      await themed.render(
+        <OrchestratorStage
+          agents={FIXTURE}
+          layout={singlePaneLayout(view)}
+          onLayoutChange={onLayoutChange}
+          actions={actions}
+          introPlaying={false}
+          renderView={(_id, props) => (
+            <div data-testid="scene-artwork" style={{ position: 'relative' }}>
+              <button data-testid="scene-select" onClick={() => props.onSelect('w1')} />
+              {props.agentDetailsOverlay}
+            </div>
+          )}
+        />
+      );
+      const scene = el('scene-select');
+      const viewport = el('orchestrator-scene-viewport');
+      await act(async () => scene.click());
+      const region = el('orchestrator-peek-drawer-region');
+      expect(viewport.contains(region)).toBe(true);
+      expect(el('scene-artwork').contains(region)).toBe(view !== 'table');
+      expect(el('scene-select')).toBe(scene);
+      expect(getComputedStyle(viewport).position).toBe('relative');
+      // jsdom recomputes every stylesheet per getComputedStyle call, so each element is read once.
+      const regionStyle = getComputedStyle(region);
+      const drawerStyle = getComputedStyle(el('orchestrator-peek-drawer'));
+      expect(regionStyle.position).toBe('absolute');
+      if (view === 'table') expect(regionStyle.inset).toBe('12px');
+      else {
+        expect(regionStyle.maxWidth).toBe('calc(100% - 24px)');
+        expect(regionStyle.maxHeight).toBe('calc(100% - 24px)');
+      }
+      expect(regionStyle.pointerEvents).toBe('none');
+      expect(drawerStyle.pointerEvents).toBe('auto');
+      expect(drawerStyle.backgroundColor).toBe(
+        view === 'tavern'
+          ? 'rgb(242, 236, 225)'
+          : view === 'aquarium'
+            ? 'rgb(231, 239, 240)'
+            : 'var(--joy-palette-background-surface)'
+      );
+    }
+  );
+
+  it('mounts Tavern details in the actual aspect-ratio artwork, not its frame or letterbox', async () => {
+    await themed.render(
+      <OrchestratorStage
+        agents={FIXTURE}
+        layout={singlePaneLayout('tavern')}
+        onLayoutChange={onLayoutChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={(_id, props) => <TavernView {...props} />}
+      />
+    );
+    const artwork = el('orchestrator-tavern');
+    await act(async () => el('orchestrator-tavern-agent-w1').click());
+    expect(el('orchestrator-peek-drawer-region').parentElement).toBe(artwork);
+    expect(el('orchestrator-tavern')).toBe(artwork);
   });
 
-  it('starts a fresh reply box when another agent is selected', async () => {
+  it('leaves requests to the Tavern dialogue box: no Needs-you strip, and the pill does not open details', async () => {
+    await themed.render(
+      <OrchestratorStage
+        agents={FIXTURE}
+        layout={singlePaneLayout('tavern')}
+        onLayoutChange={onLayoutChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={(_id, props) => <TavernView {...props} />}
+      />
+    );
+    await act(async () => undefined);
+    expect(query('orchestrator-needs-you-strip')).toBeNull();
+    await act(async () => el('orchestrator-needs-you-pill').click());
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+  });
+
+  it('opens compact details inside the Aquarium through its snapshot host', async () => {
+    const AquariumView = snapshotView(Aquarium, { displayName: 'Aquarium' });
+    await themed.render(
+      <OrchestratorStage
+        agents={FIXTURE}
+        layout={singlePaneLayout('aquarium')}
+        onLayoutChange={onLayoutChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={(_id, props) => <AquariumView {...props} />}
+      />
+    );
+    const tank = el('orchestrator-aquarium');
+    await act(async () => el('orchestrator-fish-w1').click());
+    expect(el('orchestrator-peek-drawer-region').parentElement).toBe(tank);
+    expect(el('orchestrator-aquarium')).toBe(tank);
+    expect(el('orchestrator-peek-actions').parentElement).toBe(el('orchestrator-peek-action-row'));
+    expect(document.activeElement).toBe(el('orchestrator-peek-drawer'));
+    await pressEscape();
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+  });
+
+  it('lists what an agent waits on in the Needs-you strip, and opens its details from there', async () => {
+    vi.mocked(window.b4m.chat.getHeldRelays).mockImplementation(async id =>
+      id === 'n'
+        ? [
+            {
+              id: 'h1',
+              sessionId: 'n',
+              text: 'merge it',
+              heldAt: '2026-10-01T00:00:00.000Z',
+              reason: 'other-project',
+              relay: { fromSessionId: 'x', fromTitle: 'Sender', hops: 1 },
+            },
+          ]
+        : []
+    );
+    await renderStage(FIXTURE);
+    await act(async () => undefined);
+    expect(el('orchestrator-needs-you-strip').textContent).toContain('merge it');
+    expect(window.b4m.chat.getHeldRelays).not.toHaveBeenCalledWith('w1');
+    await act(async () => el('decision-card-open-btn').click());
+    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent n');
+  });
+
+  it('opens the agent conversation when a table row is clicked, with a fresh reply box per agent', async () => {
+    // By id: the Needs-you strip reads the waiting agents' sessions too.
+    vi.mocked(window.b4m.chat.getSession).mockImplementation(async id =>
+      id === 'w2'
+        ? ({
+            messages: [{ id: 'reply-w2', role: 'assistant', content: 'Working on the second task.' }],
+          } as Awaited<ReturnType<typeof window.b4m.chat.getSession>>)
+        : null
+    );
     await renderStage(FIXTURE);
     await act(async () => el('orchestrator-table-row-w1').click());
     await typeInto(el('orchestrator-peek-reply-input') as HTMLTextAreaElement, 'half-written');
     await act(async () => el('orchestrator-table-row-w2').click());
-    expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value).toBe('');
+    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
+    expect(el('orchestrator-peek-conversation').contains(el('chat-message-assistant'))).toBe(true);
+    expect(el('chat-message-assistant').textContent).toContain('Working on the second task.');
+    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2', false);
+    expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value, 'draft is per agent').toBe('');
   });
 
   it('reports a view change', async () => {
     await renderStage(FIXTURE);
     act(() => el('orchestrator-view-menu-btn').click());
     act(() => el('orchestrator-view-option-board').click());
-    expect(onViewChange).toHaveBeenCalledWith('board');
+    expect(onLayoutChange).toHaveBeenCalledWith(singlePaneLayout('board'));
   });
 
-  it('renders the dock control in the header', async () => {
-    await renderStage(FIXTURE, <span data-testid="dock-probe" />);
-    expect(query('dock-probe')).not.toBeNull();
+  it('uses Office ambient copy and opens the parent attention request', async () => {
+    const onParentFocus = vi.fn();
+    const wake = vi.fn();
+    await themed.render(
+      <OrchestratorStage
+        agents={[]}
+        parent={{ status: 'needs-action' }}
+        layout={singlePaneLayout('office')}
+        onLayoutChange={onLayoutChange}
+        actions={actions}
+        introPlaying={false}
+        onParentFocus={onParentFocus}
+        ambient={{ settled: true, wake, on: true, onToggle: vi.fn() }}
+        renderView={(_id, props) => <div data-testid="office-settled" data-settled={props.settled} />}
+      />
+    );
+    expect(el('orchestrator-ambient-status').textContent).toBe('The office is quiet');
+    expect(el('office-settled').dataset.settled).toBe('true');
+    expect(el('orchestrator-needs-you-card').textContent).toContain('The orchestrator needs you');
+    expect(el('orchestrator-stage').textContent).not.toContain('Innkeeper');
+    act(() => el('orchestrator-needs-you-open-btn').click());
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(onParentFocus).toHaveBeenCalledTimes(1);
   });
 
   describe('settled (the ambient Tavern)', () => {
@@ -248,8 +387,8 @@ describe('OrchestratorStage', () => {
         <OrchestratorStage
           agents={agents}
           parent={parentStatus ? { status: parentStatus } : undefined}
-          view="tavern"
-          onViewChange={onViewChange}
+          layout={singlePaneLayout('tavern')}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           onParentFocus={onParentFocus}
@@ -265,9 +404,20 @@ describe('OrchestratorStage', () => {
       expect(query('orchestrator-view-menu-btn')).toBeNull();
       expect(query('fake-dock-control')).toBeNull();
 
-      await renderSettled([agentFixture('w', 'working')], false);
+      // No pill in the ambient line, so the count rides in it, as on the menu bar and the mini Tavern.
+      await renderSettled([agentFixture('n', 'needs-you'), agentFixture('d', 'done')], true, 'needs-action');
+      expect(el('orchestrator-ambient-status').textContent).toContain('2 need you');
+      // The parent's own wait comes first, and points at the conversation.
+      expect(el('orchestrator-needs-you-card').textContent).toContain('The Innkeeper needs you');
+      act(() => el('orchestrator-needs-you-open-btn').click());
+      expect(onParentFocus).toHaveBeenCalledTimes(1);
+
+      await renderSettled([agentFixture('n', 'needs-you')], false);
       expect(query('orchestrator-ambient-status')).toBeNull();
       expect(query('orchestrator-view-menu-btn')).not.toBeNull();
+      expect(query('fake-dock-control'), 'the dock control rides in the awake header').not.toBeNull();
+      expect(query('orchestrator-needs-you-card'), 'no card while awake: the pill says it').toBeNull();
+      expect(query('orchestrator-needs-you-pill')).not.toBeNull();
     });
 
     it('slides in only the request of an agent that needs you, answerable in place', async () => {
@@ -292,6 +442,7 @@ describe('OrchestratorStage', () => {
           ],
         }),
         respondToApproval: vi.fn().mockResolvedValue(undefined),
+        onStreamEvent: vi.fn(() => () => undefined),
         onQueueChanged: vi.fn(() => () => undefined),
       };
       (window as unknown as { b4m: unknown }).b4m = { chat };
@@ -321,36 +472,34 @@ describe('OrchestratorStage', () => {
 
       await renderSettled([agentFixture('n', 'needs-you')], true);
       expect(getComputedStyle(el('orchestrator-peek-drawer-region')).display).toBe('none');
+      // An Escape while settled must not drop the hidden selection.
+      await pressEscape();
 
       await renderSettled([agentFixture('n', 'needs-you')], false);
       expect(getComputedStyle(el('orchestrator-peek-drawer-region')).display).not.toBe('none');
       expect(query('orchestrator-peek-drawer')).not.toBeNull();
     });
 
-    it('preserves the selected drawer when Escape is pressed while settled', async () => {
+    it('closes a portaled action menu on settle without losing the drawer draft or reopening on wake', async () => {
       const agents = [agentFixture('n', 'needs-you')];
       await renderSettled(agents, false);
-      act(() => el('orchestrator-needs-you-pill').click());
-      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      await act(async () => el('orchestrator-needs-you-pill').click());
+      const drawer = el('orchestrator-peek-drawer');
+      await typeInto(el('orchestrator-peek-reply-input') as HTMLTextAreaElement, 'Keep my draft');
+      await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+      expect(query('orchestrator-peek-archive-btn')).not.toBeNull();
 
       await renderSettled(agents, true);
-      await pressEscape();
+      expect(query('orchestrator-peek-archive-btn')).toBeNull();
+      expect(query('orchestrator-peek-actions-menu')).toBeNull();
+      expect(el('orchestrator-peek-drawer')).toBe(drawer);
+
       await renderSettled(agents, false);
-      expect(query('orchestrator-peek-drawer-region')).not.toBeNull();
-      expect(query('orchestrator-peek-drawer')).not.toBeNull();
-    });
-
-    it('points at the conversation when the Innkeeper himself is waiting', async () => {
-      await renderSettled([agentFixture('w', 'working')], true, 'needs-action');
-      expect(el('orchestrator-needs-you-card').textContent).toContain('The Innkeeper needs you');
-      act(() => el('orchestrator-needs-you-open-btn').click());
-      expect(onParentFocus).toHaveBeenCalledTimes(1);
-    });
-
-    it('shows no card while awake: the header pill already says it', async () => {
-      await renderSettled([agentFixture('n', 'needs-you')], false);
-      expect(query('orchestrator-needs-you-card')).toBeNull();
-      expect(query('orchestrator-needs-you-pill')).not.toBeNull();
+      expect(query('orchestrator-peek-archive-btn')).toBeNull();
+      expect(el('orchestrator-peek-actions-menu-btn').getAttribute('aria-expanded')).toBe('false');
+      expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value).toBe('Keep my draft');
+      await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+      expect(query('orchestrator-peek-archive-btn')).not.toBeNull();
     });
   });
 
@@ -364,8 +513,8 @@ describe('OrchestratorStage', () => {
           parent={parent}
           rootId="root"
           report={REPORT}
-          view="table"
-          onViewChange={onViewChange}
+          layout={singlePaneLayout('table')}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           onReadReport={onReadReport}
@@ -391,11 +540,15 @@ describe('OrchestratorStage', () => {
         vi.advanceTimersByTime(5000);
       });
 
-    it('shows a banner with the run stats once the run completes, in the flow above any view', async () => {
+    it('shows a banner with the run stats once the run completes, in the flow above any view, chiming once', async () => {
+      const finaleCalls = () => chime.playSoundEvent.mock.calls.filter(([event]) => event === 'finale');
       await renderRun([agentFixture('a', 'working'), agentFixture('b', 'working')], { status: 'processing' });
       await renderRun(finished, { status: 'done' });
       expect(query('orchestrator-finale')).toBeNull();
+      expect(finaleCalls()).toHaveLength(0);
       await settle();
+      await renderRun(finished, { status: 'done' });
+      expect(finaleCalls(), 'one chime as the banner comes up, not per render').toEqual([['finale', undefined]]);
       const banner = el('orchestrator-finale');
       // One of the two failed, so the run ended rather than completed.
       expect(banner.textContent).toContain('Quest ended');
@@ -405,6 +558,58 @@ describe('OrchestratorStage', () => {
       expect(query('orchestrator-table')).not.toBeNull();
       // Off the Tavern it sits above the rows instead of floating over (and blocking) them.
       expect(banner.getAttribute('data-placement')).toBe('inline');
+    });
+
+    it("replaces the local estimate with the run's settled total once the server answers", async () => {
+      const spend = (creditsCharged: number) => ({
+        creditsCharged,
+        requests: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      });
+      const getRunSpend = vi.fn().mockResolvedValue({
+        status: 'settled',
+        runId: 'run-a',
+        local: { creditsCharged: 1750, requests: 2 },
+        checkedAt: '2026-10-01T00:11:00.000Z',
+        server: {
+          runId: 'run-a',
+          createdAt: '2026-10-01T00:00:00.000Z',
+          settled: spend(1800),
+          byRole: [
+            { ...spend(50), role: 'root' },
+            { ...spend(1750), role: 'worker' },
+          ],
+          byPurpose: [
+            { ...spend(1750), purpose: 'turn' },
+            { ...spend(50), purpose: 'title' },
+          ],
+          byModel: [],
+          byAttempt: [
+            { ...spend(1500), role: 'worker', taskId: 'a' },
+            { ...spend(250), role: 'worker', taskId: 'b' },
+          ],
+          byAttemptTruncated: false,
+        },
+      });
+      (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat.getRunSpend = getRunSpend;
+      await renderRun([agentFixture('a', 'working'), agentFixture('b', 'working')], { status: 'processing' });
+      await renderRun(finished, { status: 'done' });
+      await settle();
+
+      expect(getRunSpend).toHaveBeenCalledWith('root');
+      const chips = [...el('orchestrator-finale-stats').querySelectorAll('li')].map(chip => chip.textContent);
+      expect(chips).toContain('1,800 credits settled');
+      const spendLines = el('orchestrator-finale-spend');
+      expect(spendLines.getAttribute('data-reconciled')).toBe('true');
+      expect([...spendLines.querySelectorAll('li')].map(line => line.textContent)).toEqual([
+        'Root 50 credits \u00B7 Workers 1,750 credits over 2 attempts',
+        'Turns 1,750 credits \u00B7 Titles 50 credits',
+        'Turn charges match what this device recorded',
+        expect.stringMatching(/^Server total as of /),
+      ]);
     });
 
     it('says "Quest complete" only when every agent finished done', async () => {
@@ -419,21 +624,6 @@ describe('OrchestratorStage', () => {
       const chips = [...el('orchestrator-finale-stats').querySelectorAll('li')].map(chip => chip.textContent);
       expect(chips[0]).toBe('All 2 agents done');
       expect(chips.some(chip => chip?.includes('failed'))).toBe(false);
-    });
-
-    it('says "Quest ended" when an agent never finished', async () => {
-      await renderRun([agentFixture('a', 'done'), agentFixture('b', 'idle')], { status: 'done' });
-      await settle();
-      expect(el('orchestrator-finale').getAttribute('aria-label')).toBe('Quest ended');
-    });
-
-    it('chimes once as the banner comes up', async () => {
-      await renderRun([agentFixture('a', 'working')]);
-      await renderRun(finished);
-      expect(chime.playChime).not.toHaveBeenCalled();
-      await settle();
-      await renderRun(finished);
-      expect(chime.playChime).toHaveBeenCalledTimes(1);
     });
 
     it('reads the report and dismisses the banner', async () => {
@@ -467,8 +657,8 @@ describe('OrchestratorStage', () => {
             agents={agents}
             rootId="root"
             report={REPORT}
-            view="tavern"
-            onViewChange={onViewChange}
+            layout={singlePaneLayout('tavern')}
+            onLayoutChange={onLayoutChange}
             actions={actions}
             introPlaying={false}
             renderView={renderView}
@@ -488,8 +678,8 @@ describe('OrchestratorStage', () => {
             agents={agents}
             rootId="root"
             report={REPORT}
-            view="tavern"
-            onViewChange={onViewChange}
+            layout={singlePaneLayout('tavern')}
+            onLayoutChange={onLayoutChange}
             actions={actions}
             introPlaying={false}
             renderView={(_view, props) => <TavernView {...props} />}
@@ -502,14 +692,42 @@ describe('OrchestratorStage', () => {
       expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('scene');
     });
 
+    it('passes the finale overlay to Office and keeps it inline in Focus mode', async () => {
+      const renderOffice = (focus = false) =>
+        themed.render(
+          <OrchestratorStage
+            agents={finished}
+            rootId="root"
+            report={REPORT}
+            layout={singlePaneLayout('office')}
+            onLayoutChange={onLayoutChange}
+            actions={actions}
+            introPlaying={false}
+            focus={{ on: focus, onToggle: vi.fn() }}
+            renderView={(_id, props) => <div data-testid="office-scene">{props.sceneOverlay}</div>}
+          />
+        );
+      await renderOffice();
+      await settle();
+      expect(el('office-scene').contains(el('orchestrator-finale'))).toBe(true);
+      expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('scene');
+      expect(el('orchestrator-finale').getAttribute('data-look')).toBe('office');
+      expect(el('orchestrator-finale').getAttribute('aria-label')).toBe('Shift ended');
+
+      await renderOffice(true);
+      expect(query('office-scene')).toBeNull();
+      expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('inline');
+      expect(query('orchestrator-focus-panel')).not.toBeNull();
+    });
+
     it('waits for the parent to write its summary', async () => {
       const renderNoReport = (agents: AgentView[]) =>
         themed.render(
           <OrchestratorStage
             agents={agents}
             rootId="root"
-            view="table"
-            onViewChange={onViewChange}
+            layout={singlePaneLayout('table')}
+            onLayoutChange={onLayoutChange}
             actions={actions}
             introPlaying={false}
           />
@@ -521,14 +739,89 @@ describe('OrchestratorStage', () => {
     });
   });
 
+  it('swaps the view for the Focus panel, whose Open buttons reach the drawer and the parent', async () => {
+    const onParentFocus = vi.fn();
+    const renderFocused = (on: boolean) =>
+      themed.render(
+        <OrchestratorStage
+          agents={FIXTURE}
+          parent={{ status: 'needs-action' }}
+          onParentFocus={onParentFocus}
+          rootId="root"
+          layout={singlePaneLayout('table')}
+          onLayoutChange={onLayoutChange}
+          actions={actions}
+          introPlaying={false}
+          focus={{ on, onToggle: vi.fn() }}
+        />
+      );
+    await renderFocused(true);
+    expect(query('orchestrator-table-row-w1')).toBeNull();
+    const openButtons = () =>
+      Array.from(document.querySelectorAll<HTMLElement>('[data-testid="orchestrator-focus-open-btn"]'));
+    expect(openButtons()).toHaveLength(2);
+    await act(async () => openButtons()[0].click());
+    expect(onParentFocus).toHaveBeenCalledTimes(1);
+    await act(async () => openButtons()[1].click());
+    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent n');
+
+    await renderFocused(false);
+    expect(query('orchestrator-focus-panel')).toBeNull();
+    expect(query('orchestrator-table-row-w1')).not.toBeNull();
+  });
+
+  it('carries Focus actions out: Allow once and Stop through the stage, and a refusal from main back to the panel', async () => {
+    const respondToApproval = vi.fn().mockResolvedValue(undefined);
+    const chat = (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat;
+    chat.respondToApproval = respondToApproval;
+    chat.getSession = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          id: 'm1',
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'c1',
+              name: 'bash_execute',
+              input: { command: 'touch x' },
+              status: 'awaiting-approval',
+              approvalId: 'p1',
+              approvalDetail: '$ touch x',
+            },
+          ],
+        },
+      ],
+    });
+    await themed.render(
+      <OrchestratorStage
+        agents={[agentFixture('w1', 'working')]}
+        parent={{ status: 'needs-action' }}
+        rootId="root"
+        layout={singlePaneLayout('table')}
+        onLayoutChange={onLayoutChange}
+        actions={actions}
+        introPlaying={false}
+        focus={{ on: true, onToggle: vi.fn() }}
+      />
+    );
+    await act(async () => el('orchestrator-focus-stop-btn').click());
+    expect(actions.stop).toHaveBeenCalledWith('w1');
+
+    respondToApproval.mockRejectedValueOnce(new Error('Already answered'));
+    await act(async () => el('orchestrator-focus-allow-once-btn').click());
+    expect(respondToApproval).toHaveBeenCalledWith('p1', { decision: 'once' });
+    expect(el('orchestrator-focus-error').textContent).toBe('Already answered');
+  });
+
   it('opens the agent a notice asked for, once, and says it was taken', async () => {
     const onFocusAgentConsumed = vi.fn();
     const renderFocus = (focusAgent: string | null) =>
       themed.render(
         <OrchestratorStage
           agents={FIXTURE}
-          view="table"
-          onViewChange={onViewChange}
+          layout={singlePaneLayout('table')}
+          onLayoutChange={onLayoutChange}
           actions={actions}
           introPlaying={false}
           focusAgent={focusAgent}

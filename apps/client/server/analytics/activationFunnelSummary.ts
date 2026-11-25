@@ -5,11 +5,19 @@ import {
 } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import type { ActivationFunnel, ActivationFunnelStep } from '@client/app/utils/activationFunnel';
 import type { AnalyticsOverviewQuery } from '@client/app/utils/analyticsOverview';
-import { GatewayTimeoutError } from '@bike4mind/common';
-import { classifyFunnelCohort, COHORT_MAX_TIME_MS, paidWindowOpen, type FunnelMember } from './activationFunnel';
+import {
+  classifyFunnelCohort,
+  COHORT_MAX_TIME_MS,
+  paidWindowOpen,
+  withinBudget,
+  type FunnelMember,
+} from '@bike4mind/server-utils/analytics/activationFunnel';
 import { daysBetween, resolveOverviewWindow } from './analyticsOverview';
-import { shiftDay } from './analyticsRollup';
-import { signupVerdictUserIds } from './realSignup';
+import { shiftDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
+import { signupVerdictUserIds } from '@bike4mind/server-utils/analytics/realSignup';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'activationFunnelSummary' } });
 
 // ms. The whole request, kept well inside the 60s API Lambda so a slow funnel fails with a handled 504.
 const FUNNEL_BUDGET_MS = 40_000;
@@ -52,18 +60,6 @@ async function judgedMembers(
   return { members, tooNew: cohort.tooNewIds.filter(id => legit.has(id)).length, createdFrom, createdTo };
 }
 
-/** Rejects with a handled 504 once `expiresAt` (epoch ms) passes; the queries' own time limits stop the reads. */
-async function withinBudget<T>(work: Promise<T>, expiresAt: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new GatewayTimeoutError('The funnel took too long.')),
-      Math.max(0, expiresAt - Date.now())
-    );
-  });
-  return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
-}
-
 /**
  * The activation funnel for the query's range, resolved with the same classifier the Users drill-down uses
  * so a step's "stopped here" count equals the size of its list. Ranges longer than the drill-down accepts
@@ -81,7 +77,7 @@ export async function getActivationFunnel(query: AnalyticsOverviewQuery, now: Da
   // of the budget, and its failure must not hide the funnel. Its too-new count is never shown, so it is not read.
   const previous = window.previous
     ? await withinBudget(judgedMembers(window.previous, legitOnly, now, expiresAt, false), expiresAt).catch(error => {
-        console.warn('activation funnel: previous-period comparison failed', error);
+        logger.warn('activation funnel: previous-period comparison failed', { error });
         return undefined;
       })
     : undefined;

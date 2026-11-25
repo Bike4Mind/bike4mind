@@ -110,7 +110,8 @@ export interface PromptScenario {
   prompt: string;
   expectedKeywords: string[];
   /**
-   * The reply's deliverable is a generated image (rendered as `ai-response-image`). Success is
+   * The reply's deliverable is a generated image (rendered as `ai-response-image`, or as
+   * `image-job-card-image` when the chat image tool runs it as an image job). Success is
    * asserted on the rendered image, not on text keywords - an image-only reply carries no prose,
    * so keyword-on-text is a false negative for it. Also grants the image-generation time budget.
    */
@@ -133,6 +134,35 @@ export interface PromptScenario {
    * rejects that combination rather than letting it read as configuration that does nothing.
    */
   textStreamingBudgetSec?: number;
+}
+
+/** One `POST /api/ai/llm` completion the page made during a timed attempt. */
+export interface CompletionRef {
+  /** The completion's quest id: the key its `[ToolRound]` log lines carry. */
+  questId: string;
+  sessionId?: string;
+  /** `X-Request-ID` of the API call; joins API-side logs only (the worker logs under its own id). */
+  requestId?: string;
+  receivedAt: string;
+}
+
+/**
+ * Which completion(s) a row timed. Only `captured` (exactly one completion) is attributable to a
+ * single set of ToolRound logs; a resend inside one attempt is `ambiguous`, never collapsed.
+ */
+export interface PromptCorrelation {
+  status: 'captured' | 'missing' | 'ambiguous';
+  completions: CompletionRef[];
+  /** ISO time of Enter, and of the stream ending. */
+  sentAt?: string;
+  streamEndAt?: string;
+  /**
+   * Quest `fallbackInfo`, or 'unknown' when the quest could not be read. null means the poll body
+   * reports none; a dropped or cleared record also reads null.
+   */
+  fallback: Record<string, unknown> | null | 'unknown';
+  /** Quests do not persist the effective reasoning effort. */
+  effort: 'unknown';
 }
 
 export interface PromptResult {
@@ -183,4 +213,6 @@ export interface PromptResult {
    */
   firstTokenMs?: number;
   firstTokenSec?: number;
+  /** Absent on rows written before correlation was recorded. */
+  correlation?: PromptCorrelation;
 }

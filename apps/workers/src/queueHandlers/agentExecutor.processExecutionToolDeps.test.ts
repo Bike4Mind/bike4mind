@@ -3,10 +3,10 @@ vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
   resolveThinkingVisibility: vi.fn(async () => 'raw'),
 }));
 import type { ServerSubagentTracker } from '@bike4mind/services/llm';
-import { OPTI_SURFACE, isShadowTier } from '@bike4mind/common';
+import { OPTI_SURFACE, isShadowTier, hasAdminPermission } from '@bike4mind/common';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
 }));
 
@@ -99,6 +99,29 @@ vi.mock('./agentExecutor.musicToolConfig', async () => {
         createJob: vi.fn().mockResolvedValue({ ok: true, created: true }),
       }),
       slots: { claim: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    }),
+  };
+});
+
+vi.mock('./agentExecutor.audioToolConfig', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.audioToolConfig')>(
+    './agentExecutor.audioToolConfig'
+  );
+  return {
+    ...actual,
+    getAgentAudioToolJobsDeps: vi.fn().mockReturnValue({
+      buildBaseJobs: vi.fn().mockReturnValue({
+        createSpeechJob: vi.fn().mockResolvedValue({ ok: true, created: true }),
+        createSoundEffectJob: vi.fn().mockResolvedValue({ ok: true, created: true }),
+        runInline: vi.fn(),
+        readOutput: vi.fn(),
+        cancel: vi.fn(),
+      }),
+      resolveSpeechLimit: vi.fn().mockResolvedValue(3),
+      resolveSoundEffectLimit: vi.fn().mockResolvedValue(4),
+      speechSlots: { claim: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
+      soundEffectSlots: { claim: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
       logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     }),
   };
@@ -262,9 +285,12 @@ const execDoc = {
 
 const baseSession = { id: 'session-1', userId: 'user-1', disableUserIntegrations: true };
 
+const mockFindRoles = vi.fn();
+
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
   const repo = actual.agentExecutionRepository;
+  vi.spyOn(actual.adminRoleRepository, 'findByIds').mockImplementation((...args) => mockFindRoles(...args));
   vi.spyOn(repo, 'findById').mockResolvedValue(execDoc as never);
   vi.spyOn(repo, 'claimExecution').mockResolvedValue(true as never);
   vi.spyOn(repo, 'updateConnectionId').mockResolvedValue(undefined as never);
@@ -291,6 +317,7 @@ vi.mock('@bike4mind/database', async () => {
     count: 1,
     expiresAt: new Date(),
   } as never);
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 
@@ -382,6 +409,73 @@ describe('processExecution tool deps', () => {
     });
   });
 
+  describe('role-held admin permissions', () => {
+    const ROLE_ID = 'a'.repeat(24);
+    const DELETED_ROLE_ID = 'c'.repeat(24);
+
+    async function depsUserWith(fields: Record<string, unknown>, doc: Record<string, unknown> = execDoc) {
+      const { agentExecutionRepository, User } = await import('@bike4mind/database');
+      vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100, ...fields } as never);
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      const deps = await runWithSession(baseSession);
+      return deps.user as never;
+    }
+
+    beforeEach(() => {
+      mockFindRoles.mockReset();
+      mockFindRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+    });
+
+    it('counts a permission held only through a role', async () => {
+      const user = await depsUserWith({ adminRoleIds: [ROLE_ID] });
+
+      expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(true);
+    });
+
+    it('refuses the permission on the next call once the role is removed', async () => {
+      expect(hasAdminPermission(await depsUserWith({ adminRoleIds: [ROLE_ID] }), 'settings:manage')).toBe(true);
+
+      buildSharedToolsMock.mockClear();
+      expect(hasAdminPermission(await depsUserWith({ adminRoleIds: [] }), 'settings:manage')).toBe(false);
+    });
+
+    it('grants nothing for a deleted or malformed role id', async () => {
+      mockFindRoles.mockResolvedValue([]);
+
+      const user = await depsUserWith({ adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] });
+
+      expect(mockFindRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+    });
+
+    it('keeps the role permission hidden when the run was started without the admin scope', async () => {
+      const user = await depsUserWith(
+        { adminRoleIds: [ROLE_ID] },
+        { ...execDoc, apiKeyId: 'key-1', adminRoleWithheld: true }
+      );
+
+      expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+      expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+    });
+
+    it('never reaches the tools when the role lookup throws', async () => {
+      const { agentExecutionRepository, User } = await import('@bike4mind/database');
+      mockFindRoles.mockRejectedValue(new Error('db down'));
+      vi.mocked(User.findById).mockResolvedValueOnce({
+        id: 'user-1',
+        currentCredits: 100,
+        adminRoleIds: [ROLE_ID],
+      } as never);
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(execDoc as never);
+      const { handler } = await import('./agentExecutor');
+
+      await handler(continuationEvent(), lambdaContext).catch(() => undefined);
+
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe('video_generation wiring', () => {
     const videoExecDoc = {
       ...execDoc,
@@ -462,8 +556,84 @@ describe('processExecution tool deps', () => {
     });
   });
 
+  describe('audio_generation wiring', () => {
+    const audioExecDoc = {
+      ...execDoc,
+      linkedQuestId: 'q-run',
+      resolvedEnabledTools: ['audio_generation'],
+    };
+
+    async function runWithExecDoc(doc: Record<string, unknown>) {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      await runWithSession(baseSession);
+    }
+
+    const audioInput = { user: { id: 'user-1', organizationId: 'org-1' }, request: {}, source: 'agent' } as const;
+
+    it('caps speech and sound effects on the run Quest with the limits resolved for the run org', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      const { getAgentAudioToolJobsDeps } = await import('./agentExecutor.audioToolConfig');
+      await runWithExecDoc({ ...audioExecDoc, organizationId: 'org-1' });
+
+      const deps = vi.mocked(getAgentAudioToolJobsDeps).mock.results[0].value;
+      expect(deps.resolveSpeechLimit).toHaveBeenCalledWith({ userId: 'user-1', organizationId: 'org-1' });
+      const audioJobs = vi.mocked(buildSubagentToolConfig).mock.calls[0][0].audioJobs;
+      await audioJobs!.createSpeechJob(audioInput);
+      await audioJobs!.createSoundEffectJob(audioInput);
+      expect(deps.speechSlots.claim).toHaveBeenCalledWith('q-run', 3);
+      expect(deps.soundEffectSlots.claim).toHaveBeenCalledWith('q-run', 4);
+    });
+
+    it('keeps the uncapped job functions for a run started with an API key', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      const { getAgentAudioToolJobsDeps } = await import('./agentExecutor.audioToolConfig');
+      await runWithExecDoc({ ...audioExecDoc, apiKeyId: 'key-1' });
+
+      const deps = vi.mocked(getAgentAudioToolJobsDeps).mock.results[0].value;
+      expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].audioJobs).toBe(
+        deps.buildBaseJobs.mock.results[0].value
+      );
+      expect(deps.resolveSpeechLimit).not.toHaveBeenCalled();
+    });
+  });
+
   // Every iteration settles with an unconditional debit, so admission must require one whole
   // iteration's worth of credits, not merely a positive balance.
+  describe('Lambda handoff budget', () => {
+    async function resumeWith(payload: Record<string, unknown>) {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.incrementLambdaInvocationCount).mockClear();
+      // Queued only for a resume that spends the budget: a user resume never calls it, and mockClear keeps a queued
+      // value, which would leak into the next describe's first handoff.
+      if (payload.resumedBy !== 'user') {
+        vi.mocked(agentExecutionRepository.incrementLambdaInvocationCount).mockResolvedValueOnce(6 as never);
+      }
+      vi.mocked(agentExecutionRepository.markFailed).mockClear();
+      const { handler } = await import('./agentExecutor');
+      await handler({ executionId: 'exec-1', connectionId: 'conn-1', ...payload } as never, lambdaContext).catch(
+        () => undefined
+      );
+      return {
+        increment: vi.mocked(agentExecutionRepository.incrementLambdaInvocationCount),
+        markFailed: vi.mocked(agentExecutionRepository.markFailed),
+      };
+    }
+    const overBudget = { message: 'Execution exceeded maximum Lambda handoffs (5)' };
+
+    it('does not spend the budget on a resume the user clicked (a tool approval or a gate Proceed)', async () => {
+      const { increment, markFailed } = await resumeWith({ resumedBy: 'user' });
+      expect(increment).not.toHaveBeenCalled();
+      expect(markFailed).not.toHaveBeenCalledWith('exec-1', overBudget);
+    });
+
+    it('still fails a self-dispatched continuation past the budget', async () => {
+      const { increment, markFailed } = await resumeWith({});
+      expect(increment).toHaveBeenCalledWith('exec-1');
+      expect(markFailed).toHaveBeenCalledWith('exec-1', overBudget);
+    });
+  });
+
   describe('credit admission', () => {
     const pricedModel = {
       id: 'claude-sonnet-5',
@@ -1035,6 +1205,74 @@ describe('processExecution tool deps', () => {
     const deps = await runWithSession({ ...baseSession, includeLibraryFiles: false, forceKnowledgeRetrieval: false });
 
     expect(deps.sessionIncludeLibraryFiles).toBe(true);
+  });
+
+  describe('in-process subagent account check', () => {
+    type StepTracker = {
+      onStep: (info: {
+        childExecutionId: string;
+        agentName: string;
+        step: unknown;
+        iteration: number;
+      }) => Promise<void>;
+    };
+    async function runToolWiring() {
+      await runWithSession(baseSession);
+      const [, callbacks, options] = buildSharedToolsMock.mock.calls[0] as [
+        unknown,
+        { subagentTracker: StepTracker },
+        { getAbortSignal: () => AbortSignal },
+      ];
+      return { tracker: callbacks.subagentTracker, signal: options.getAbortSignal() };
+    }
+    const step = (iteration: number) => ({
+      childExecutionId: 'child-1',
+      agentName: 'researcher',
+      step: { type: 'thought', content: 'x' },
+      iteration,
+    });
+
+    it("aborts the run's tool signal when a child step finds the account blocked", async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { tracker, signal } = await runToolWiring();
+      vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ id: 'user-1', isBanned: true } as never);
+
+      await tracker.onStep(step(0));
+
+      expect(signal.aborted).toBe(true);
+    });
+
+    it('records a child stopped by the account abort as refused, not timed out', async () => {
+      const { userRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      const { tracker } = await runToolWiring();
+      vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ id: 'user-1', isBanned: true } as never);
+      await tracker.onStep(step(0));
+
+      await (
+        tracker as unknown as {
+          onFailure: (info: { childExecutionId: string; error: string; isTimeout: boolean }) => Promise<void>;
+        }
+      ).onFailure({ childExecutionId: 'child-1', error: 'timed out', isTimeout: true });
+
+      expect(agentExecutionRepository.markFailed).toHaveBeenCalledWith('child-1', {
+        message: expect.not.stringContaining('timed out'),
+        timedOut: false,
+      });
+    });
+
+    it('reads the account once per child iteration and leaves an active run alone', async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { tracker, signal } = await runToolWiring();
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValue({ id: 'user-1' } as never);
+
+      await tracker.onStep(step(0));
+      await tracker.onStep(step(0));
+      await tracker.onStep(step(1));
+
+      expect(findUser).toHaveBeenCalledTimes(2);
+      expect(findUser).toHaveBeenCalledWith('user-1');
+      expect(signal.aborted).toBe(false);
+    });
   });
 
   describe('contributed workspace session settings', () => {

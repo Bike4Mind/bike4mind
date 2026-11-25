@@ -4,12 +4,14 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInAuto } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import * as sessionScripts from './sessionScripts';
 import type { ApprovalPrompt, ToolContext } from './types';
 
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 
@@ -53,23 +55,21 @@ describe('shellApproval per part', () => {
   const parts = (prompt: ApprovalPrompt) =>
     (prompt.always?.commands ?? []).map(({ text, coverable, ask }) => ({ text, coverable, kinds: ask?.kinds ?? [] }));
 
-  it('asks only about the sending part of a chain, leaving the other coverable', async () => {
+  it('puts no ask on a part that may send data out', async () => {
     const prompt = await approve('git status && node -e 1');
-    expect(prompt.byPart).toBe(true);
-    expect(prompt.askInAuto).toBe(true);
-    expect(parts(prompt)).toEqual([
-      { text: 'git status', coverable: true, kinds: [] },
-      expect.objectContaining({ kinds: ['outbound'] }),
-    ]);
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(parts(prompt).map(part => part.kinds)).toEqual([[], []]);
   });
 
-  it('asks about a part whose operand it cannot read in every mode, and only that part', async () => {
+  it('asks about the whole script when a part has an unread operand', async () => {
     const prompt = await approve('git status && rm "$TARGET"');
-    expect(prompt.byPart).toBe(true);
+    expect(prompt.byPart).toBeUndefined();
+    expect(prompt.askInAuto).toBe(true);
     expect(prompt.askInFull).toBe(true);
+    expect(prompt.unchecked).toBe(true);
     expect(parts(prompt)).toEqual([
       { text: 'git status', coverable: true, kinds: [] },
-      expect.objectContaining({ coverable: false, kinds: ['unread'] }),
+      expect.objectContaining({ coverable: false, kinds: [] }),
     ]);
   });
 
@@ -91,6 +91,7 @@ describe('shellApproval per part', () => {
     await writeFile(join(project, '.env'), 'X=1');
     const prompt = await approve('git status && cat .env');
     expect(prompt.byPart).toBe(true);
+    expect(prompt.askInAuto).toBe(true);
     expect(parts(prompt)).toEqual([
       { text: 'git status', coverable: true, kinds: [] },
       expect.objectContaining({ kinds: ['env'] }),
@@ -99,14 +100,29 @@ describe('shellApproval per part', () => {
 
   it('keeps a substitution in program position opaque to the part that runs it', async () => {
     const prompt = await approve('git status && $(which node) -v');
+    expect(prompt.byPart).toBeUndefined();
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(parts(prompt)[0]).toEqual({ text: 'git status', coverable: true, kinds: [] });
-    expect(parts(prompt).at(-1)).toEqual(expect.objectContaining({ coverable: false, kinds: ['unread'] }));
+    expect(parts(prompt).at(-1)).toEqual(expect.objectContaining({ coverable: false }));
+  });
+
+  it.each([
+    ['a script written during this session', 'git status && node generated.js', true],
+    ['a failed check for session-written scripts', 'git status && printf ok', false],
+  ])('decides %s as a whole, which auto mode still runs', async (_, command, written) => {
+    const check = vi.spyOn(sessionScripts, 'sessionScriptRun');
+    if (written) check.mockResolvedValueOnce({ names: ['generated.js'], hooks: [], untracked: false, generation: '1' });
+    else check.mockRejectedValueOnce(new Error('cannot inspect scripts'));
+    const prompt = await approve(command, { sessionId: 'written-script' });
+    expect(prompt.byPart).toBeUndefined();
+    expect(runsCheckedInAuto(prompt)).toBe(true);
   });
 
   describe('floors that hold for the whole script', () => {
     const whole = (prompt: ApprovalPrompt) => {
       expect(prompt.byPart).toBeUndefined();
-      expect(prompt.askInAuto).toBe(true);
+      expect(runsCheckedInAuto(prompt)).toBe(false);
       expect(prompt.always?.commands.every(command => command.ask === undefined)).toBe(true);
     };
 
@@ -118,7 +134,7 @@ describe('shellApproval per part', () => {
 
     it('a cd that CDPATH may redirect before a part it cannot read', async () => {
       vi.stubEnv('CDPATH', undefined);
-      expect((await approve('cd src && rm "$TARGET" && git status')).byPart).toBe(true);
+      whole(await approve('cd src && rm "$TARGET" && git status'));
       vi.stubEnv('CDPATH', '/elsewhere');
       whole(await approve('cd src && rm "$TARGET" && git status'));
     });
@@ -138,28 +154,16 @@ describe('shellApproval per part', () => {
     });
 
     it('an export that every later part inherits', async () => {
-      whole(await approve("export GIT_SSH_COMMAND='sh -c x'; git push origin HEAD"));
-      whole(await approve('GIT_SSH_COMMAND=x; git push origin HEAD'));
-      whole(await approve('for HOME in .; do git status; done; git push origin HEAD'));
+      const prompts = await Promise.all([
+        approve("export GIT_SSH_COMMAND='sh -c x'; git push origin HEAD"),
+        approve('GIT_SSH_COMMAND=x; git push origin HEAD'),
+        approve('for HOME in .; do git status; done; git push origin HEAD'),
+      ]);
+      prompts.forEach(whole);
     });
 
     it('a git setting that makes git run a program', async () => {
       whole(await approve('git config core.fsmonitor ./x && git status'));
-    });
-
-    it('a script written during this session', async () => {
-      vi.spyOn(sessionScripts, 'sessionScriptRun').mockResolvedValueOnce({
-        names: ['generated.js'],
-        hooks: [],
-        untracked: false,
-        generation: '1',
-      });
-      whole(await approve('git status && node generated.js', { sessionId: 'written-script' }));
-    });
-
-    it('a failed check for session-written scripts', async () => {
-      vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValueOnce(new Error('cannot inspect scripts'));
-      whole(await approve('git status && printf ok'));
     });
 
     it('a WSL command whose distribution is not shared', async () => {

@@ -44,6 +44,19 @@ describe('resolveRegistrationInvite', () => {
     ).rejects.toBeInstanceOf(BadRequestError);
   });
 
+  it('refuses a code an admin set to used, unlimited or not', async () => {
+    await expect(
+      resolveRegistrationInvite(
+        'X',
+        EMAIL,
+        repo(invite({ unlimitedUse: true, status: RegInviteStatusType.used, used: new Date() }))
+      )
+    ).rejects.toThrow('This invite code has been disabled');
+    await expect(
+      resolveRegistrationInvite('X', EMAIL, repo(invite({ status: RegInviteStatusType.used })))
+    ).rejects.toThrow('Invite code already used');
+  });
+
   it('accepts a used unlimited code and an email bound to the same inbox in another case', async () => {
     const resolved = await resolveRegistrationInvite(
       'X',
@@ -117,16 +130,19 @@ describe('redeemRegistrationInvite', () => {
 
   it('keeps an unlimited code open and appends its history', async () => {
     const update = vi.fn();
+    const reopenUnlessClosed = vi.fn();
     const prior = { userId: 'earlier', usedAt: new Date(0) };
     await redeemRegistrationInvite({ invite: invite({ usageHistory: [prior] }), isUnlimited: true }, 'user-1', {
       update,
+      reopenUnlessClosed,
     });
     const [fields, options] = update.mock.calls[0];
+    // Status goes only through the conditional reopen, never the unconditional update.
     expect(fields).toEqual({
       id: 'invite-1',
-      status: RegInviteStatusType.open,
       usageHistory: [prior, { userId: 'user-1', usedAt: expect.any(Date) }],
     });
     expect(options).toEqual({ unset: ['used', 'usedbyId'] });
+    expect(reopenUnlessClosed).toHaveBeenCalledWith('invite-1');
   });
 });

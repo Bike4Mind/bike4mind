@@ -12,7 +12,6 @@ import {
 } from '@aws-sdk/client-transcribe';
 import { S3Client, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { BadRequestError } from '@bike4mind/utils';
-import { v4 as uuidv4 } from 'uuid';
 import { AllowedAudioMimeType } from './constants';
 
 export interface TranscriptionResult {
@@ -47,7 +46,10 @@ export class speechService {
     private bucketName: string,
     private region = process.env.AWS_REGION || 'us-east-2'
   ) {
-    this.s3 = new S3Client({ region: this.region });
+    // A custom S3 endpoint (self-host MinIO) is addressed path-style; see S3Storage in
+    // b4m-core/fab-pipeline.
+    const endpoint = process.env.AWS_ENDPOINT_URL_S3;
+    this.s3 = new S3Client({ region: this.region, ...(endpoint ? { endpoint, forcePathStyle: true } : {}) });
   }
 
   /**
@@ -106,7 +108,7 @@ export class speechService {
     if (!mediaFormat) throw new BadRequestError(`Unsupported audio mime type for AWS Transcribe: ${mimetype}`);
 
     const transcribeClient = new TranscribeClient({ region: this.region });
-    const jobName = `transcribe-${uuidv4()}`;
+    const jobName = `transcribe-${crypto.randomUUID()}`;
     const transcriptKey = `transcripts/${jobName}.json`;
 
     try {

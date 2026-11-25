@@ -24,11 +24,11 @@ import {
 } from '@bike4mind/utils';
 import { GENERATED_AUDIO_OFFLOAD_PREFIX, type GeneratedAssetLineageEntry } from '@bike4mind/common';
 import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
 import { signedUrlExpiresAt } from './get';
+import { storageReadOverrides, type StorageReadOverrides } from '@bike4mind/utils/contentDisposition';
 
 // The fab-file bucket reaps everything under these prefixes after 1 day (infra/buckets.ts,
 // expire-notebook-exports and expire-generated-audio-offload), so no durable FabFile may be stored there. Pinned to the rule by
@@ -69,6 +69,8 @@ export const createFabFileSchema = z.object({
 type CreateFabFileParameters = z.infer<typeof createFabFileSchema>;
 
 export interface CreateFabFileAdapters {
+  /** Server-validated ownership for generated assets, never parsed from upload parameters. */
+  ownerOrganizationId?: string;
   objectKey?: string;
   db: {
     fabFiles: {
@@ -97,12 +99,12 @@ export interface CreateFabFileAdapters {
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   storage: {
-    /** `ContentLength` binds a PUT to that byte length (see S3Storage.getSignedUrl). */
+    /** `ContentLength` binds a PUT to that byte length; the Response* overrides apply to a GET (see S3Storage.getSignedUrl). */
     generateSignedUrl: (
       path: string,
       expireInSeconds: number,
       type?: 'get' | 'put',
-      options?: { ContentLength?: number }
+      options?: { ContentLength?: number } & StorageReadOverrides
     ) => Promise<string>;
     upload: (
       path: string,
@@ -208,6 +210,7 @@ export const prepareFabFile = async (
     pendingUploadBytes,
     serverUpload,
     storageExempt,
+    ownerOrganizationId: explicitOwnerOrganizationId,
   }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
@@ -223,7 +226,7 @@ export const prepareFabFile = async (
   const tagNames = (params.tags ?? []).map(t => t.name);
   // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
   const targetLakes = await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
-  const ownerOrganizationId = pickOwnerOrganizationId(targetLakes);
+  const ownerOrganizationId = explicitOwnerOrganizationId ?? pickOwnerOrganizationId(targetLakes);
   assertCanWriteStaticRegistryTags(actor, tagNames);
 
   // A file joining a lake here must also land under that lake's content prefix, or it
@@ -245,7 +248,7 @@ export const prepareFabFile = async (
   }
 
   let filePath = params.prefix ? `${params.prefix}/` : '';
-  filePath += `${uuidv4()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
+  filePath += `${crypto.randomUUID()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
 
   if (objectKey) filePath = objectKey;
 
@@ -303,7 +306,12 @@ export const prepareFabFile = async (
     // moderationStatus to 'clean'/'blocked', and a url is only ever minted on read once clean
     // (see fabFileService/get.ts generateSignedUrl). Non-image content is unaffected.
     if (!mimeType.startsWith('image/')) {
-      buildData.fileUrl = await storage.generateSignedUrl(filePath, DEFAULT_EXPIRE_IN_SECONDS, 'get');
+      buildData.fileUrl = await storage.generateSignedUrl(
+        filePath,
+        DEFAULT_EXPIRE_IN_SECONDS,
+        'get',
+        storageReadOverrides({ mimeType, fileName: params.fileName, key: filePath })
+      );
       buildData.fileUrlExpireAt = signedUrlExpiresAt(buildData.fileUrl, DEFAULT_EXPIRE_IN_SECONDS);
     }
   } else if (!serverUpload) {

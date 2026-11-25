@@ -6,6 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   Group,
+  spaceRepository,
   fabFileRepository,
   sessionRepository,
   userRepository,
@@ -25,6 +26,11 @@ interface IParams {
   id?: string;
 }
 
+// Space invites have their own routes, which enforce the EnableSpaces flag and the manager check.
+const refuseSpace = (type: InviteType) => {
+  if (type === InviteType.Space) throw new BadRequestError('Manage space invites at /api/spaces/:id/invites');
+};
+
 const handler = baseApi()
   /**
    * GET /api/:type/invites/:id - Retrieves all pending invitations for a document
@@ -41,6 +47,7 @@ const handler = baseApi()
       if (!inviteType) {
         return res.status(400).json({ message: 'Invalid type' });
       }
+      refuseSpace(inviteType);
       // An id that is not an ObjectId names no document, so this route answers the 404 itself
       // rather than letting the lookup cast and raise a CastError. After the type check, so a
       // bad type still reports the bad type.
@@ -60,6 +67,7 @@ const handler = baseApi()
             projects: projectRepository,
             organizations: organizationRepository,
             groups: Group,
+            spaces: spaceRepository,
           },
         }
       );
@@ -82,6 +90,7 @@ const handler = baseApi()
       }
       const inviteType = resolveInviteType(urlPathType);
       if (!inviteType) throw new BadRequestError('Invalid type');
+      refuseSpace(inviteType);
       // Project invites have their own route (pages/api/projects/[id]/invites.ts), which shadows the
       // `projects` alias here. Only the raw `Project` value reaches this handler, and creating one
       // here would skip that route's API-key scope checks and its typed-address budget.
@@ -109,6 +118,7 @@ const handler = baseApi()
       if (!id) throw new BadRequestError('Invalid cancel invite request');
       const inviteType = resolveInviteType(type);
       if (!inviteType) throw new BadRequestError('Invalid cancel invite request');
+      refuseSpace(inviteType);
       if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
       const { email, userId } = (req.body ?? {}) as { email?: string; userId?: string };
 
@@ -124,6 +134,7 @@ const handler = baseApi()
             organizations: organizationRepository,
             projects: projectRepository,
             groups: Group,
+            spaces: spaceRepository,
           },
         }
       );

@@ -2,7 +2,6 @@ import { useUpdateSettings } from '@client/app/hooks/data/settings';
 import { getErrorMessage } from '@client/app/utils/error';
 import type { SettingKey } from '@bike4mind/common';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
-import SaveIcon from '@mui/icons-material/Save';
 import {
   Alert,
   Box,
@@ -21,11 +20,11 @@ import {
   Tooltip,
   Typography,
 } from '@mui/joy';
-import { useMemo, useRef, useState } from 'react';
-import { useSettingsDraft } from './SettingsDraftProvider';
+import { useMemo, useState } from 'react';
+import { useRequiredSettingsDraft } from './SettingsDraftProvider';
+import { useDlqQueues } from '@client/app/hooks/data/dlqManagement';
 import { AdminDialog } from './shared/AdminDialog';
 import { SettingFieldRow } from './shared/SettingFieldRow';
-import { useAdminSaveShortcut } from './shared/adminKeyboard';
 import {
   describeFields,
   formatValue,
@@ -57,6 +56,52 @@ function readStored(stored: unknown): ConfigObject {
 }
 
 const sameValue = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+
+function DlqQueueModes({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: unknown;
+  disabled: boolean;
+  onChange(next: ConfigObject): void;
+}) {
+  const queues = useDlqQueues();
+  const modes = toConfigObject(value);
+  const labels = [...new Set([...(queues.data?.map(queue => queue.label) ?? []), ...Object.keys(modes)])].sort();
+  return (
+    <Stack gap={1}>
+      <Typography level="title-sm">DLQ queue modes</Typography>
+      <Typography level="body-sm">
+        Unlisted queues recommend by default. Act remains recommend-only; no autonomous actions run.
+      </Typography>
+      {queues.isError && (
+        <Typography level="body-sm">
+          Queue discovery failed. Saved overrides remain editable; refresh to load other queues.
+        </Typography>
+      )}
+      {labels.map(label => (
+        <FormControl key={label}>
+          <FormLabel>{label}</FormLabel>
+          <Select
+            value={typeof modes[label] === 'string' ? modes[label] : 'recommend'}
+            disabled={disabled}
+            slotProps={{ button: { 'data-testid': `admin-setting-dlq-mode-${label}` } }}
+            onChange={(_, mode) => {
+              if (mode) onChange({ ...modes, [label]: mode });
+            }}
+          >
+            {['off', 'recommend', 'act'].map(mode => (
+              <Option key={mode} value={mode}>
+                {mode}
+              </Option>
+            ))}
+          </Select>
+        </FormControl>
+      ))}
+    </Stack>
+  );
+}
 
 const parseNumber = (text: string) => (text.trim() === '' ? NaN : Number(text));
 const formatNumber = (value: unknown) => (typeof value === 'number' && !Number.isNaN(value) ? String(value) : '');
@@ -173,6 +218,8 @@ function FieldControl({
           sx={{ alignSelf: 'flex-start', mt: 0.5 }}
         />
       );
+    case 'dlqQueueModes':
+      return <DlqQueueModes value={value} disabled={disabled} onChange={onChange} />;
     case 'unsupported':
       return (
         <Typography level="body-sm" data-testid={testId}>
@@ -336,7 +383,8 @@ function JsonDialog({
  * Form editor for a structured object setting (an operator config such as abuseAssessmentConfig),
  * generated from the setting's Zod schema (its STRUCTURED_SETTINGS entry): labels, help, bounds and defaults
  * all come from the schema. The value is checked with the same schema the server parses it with,
- * and a change with real-world consequences (see `confirmations`) is confirmed before it saves.
+ * and a change with real-world consequences (see `confirmations`) is confirmed in the SaveBar's warning
+ * dialog before it saves, so it renders inside a SettingsDraftProvider.
  */
 const AdminSchemaSettingField = ({
   setting,
@@ -349,8 +397,6 @@ const AdminSchemaSettingField = ({
   index: number;
 }) => {
   const testIdPrefix = `admin-setting-${setting.key}`;
-  const saveRef = useRef<HTMLDivElement>(null);
-  useAdminSaveShortcut(saveRef);
   const fields = useMemo(() => describeFields(schema), [schema]);
   const defaults = useMemo(() => schema.parse({}), [schema]);
   const stored = useMemo(() => {
@@ -368,7 +414,7 @@ const AdminSchemaSettingField = ({
     // The hook's value type is for transport only: the server parses it with the same schema.
     return updateSettings.mutateAsync({ key: setting.key, value: parsed.data as SettingValue });
   };
-  const draft = useSettingsDraft<ConfigObject>(setting.key, stored, {
+  const draft = useRequiredSettingsDraft<ConfigObject>('AdminSchemaSettingField', setting.key, stored, {
     name: setting.name,
     equals: sameValue,
     save,
@@ -377,36 +423,16 @@ const AdminSchemaSettingField = ({
   });
   const { value, setValue } = draft;
   const [jsonOpen, setJsonOpen] = useState(false);
-  const [confirming, setConfirming] = useState(false);
 
   const errors = validateConfig(schema, fields, value);
   const formError = errors[''];
-  const hasErrors = Object.keys(errors).length > 0;
   const warnings = warningsFor(value);
-  const isDirty = !sameValue(value, stored);
   const disabled = updateSettings.isPending || draft.pending;
   const saveError = updateSettings.error ? getErrorMessage(updateSettings.error) : undefined;
 
-  const commit = () => {
-    setConfirming(false);
-    const parsed = schema.safeParse(value);
-    if (!parsed.success) return;
-    updateSettings.mutate(
-      { key: setting.key, value: parsed.data as SettingValue },
-      { onSuccess: (data: { settingValue?: unknown } | undefined) => setValue(readStored(data?.settingValue)) }
-    );
-  };
-  const handleSave = () => (warnings.length ? setConfirming(true) : commit());
-
   return (
     <SettingFieldRow data-testid={`${testIdPrefix}-form`}>
-      <Stack
-        ref={draft.staged ? null : saveRef}
-        data-admin-settings-editor
-        tabIndex={0}
-        aria-label={`${setting.name} settings editor`}
-        gap={2}
-      >
+      <Stack data-admin-settings-editor tabIndex={0} aria-label={`${setting.name} settings editor`} gap={2}>
         <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}>
           <Box sx={{ minWidth: 0 }}>
             <Typography level="title-md" component="h3">
@@ -454,31 +480,6 @@ const AdminSchemaSettingField = ({
             {formError ?? saveError}
           </Typography>
         )}
-        {!draft.staged && (
-          <Stack direction="row" alignItems="center" justifyContent="flex-end" gap={1}>
-            {hasErrors && isDirty && (
-              <Typography level="body-sm" color="danger">
-                {FIX_FIELDS}
-              </Typography>
-            )}
-            <Tooltip title="Save setting (Cmd/Ctrl+S, including from inputs)" placement="top">
-              <Button
-                data-testid={`${testIdPrefix}-save-btn`}
-                data-admin-save
-                aria-label={`Save ${setting.name} (Cmd/Ctrl+S)`}
-                aria-keyshortcuts="Meta+s Control+s"
-                color="success"
-                size="sm"
-                type="button"
-                loading={updateSettings.isPending}
-                onClick={handleSave}
-                disabled={!isDirty || hasErrors}
-              >
-                <SaveIcon sx={{ marginX: 1 }} />
-              </Button>
-            </Tooltip>
-          </Stack>
-        )}
       </Stack>
       {jsonOpen && (
         <JsonDialog
@@ -491,35 +492,6 @@ const AdminSchemaSettingField = ({
             setJsonOpen(false);
           }}
         />
-      )}
-      {confirming && (
-        <AdminDialog
-          role="alertdialog"
-          title={`Save ${setting.name}?`}
-          onClose={() => setConfirming(false)}
-          data-testid={`${testIdPrefix}-confirm-dialog`}
-        >
-          <Stack gap={1}>
-            {warnings.map(warning => (
-              <Typography key={warning} level="body-sm">
-                {warning}
-              </Typography>
-            ))}
-          </Stack>
-          <Stack direction="row" gap={1} justifyContent="flex-end">
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => setConfirming(false)}
-              data-testid={`${testIdPrefix}-confirm-cancel-btn`}
-            >
-              Keep editing
-            </Button>
-            <Button color="danger" onClick={commit} data-testid={`${testIdPrefix}-confirm-save-btn`}>
-              Save and apply
-            </Button>
-          </Stack>
-        </AdminDialog>
       )}
     </SettingFieldRow>
   );

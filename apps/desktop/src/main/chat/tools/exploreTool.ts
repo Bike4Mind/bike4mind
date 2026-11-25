@@ -101,6 +101,15 @@ export const exploreTool: ToolDefinition = {
     const tally = createLoopTally();
     let spent: ChatUsage | undefined;
     const readPaths = new Set<string>();
+    // The longest text the explorer wrote alongside tool calls. A model sometimes writes its report
+    // there and ends with a pointer back to it ("Report delivered above."), which the parent never sees.
+    // That text is usually narration, so it is put before a short final reply, never in its place:
+    // a short final reply may be the real answer ("No handler for X exists.").
+    let earlierReport = '';
+    const reportFrom = (final: string): string =>
+      final.length >= SHORT_FINAL_REPORT_CHARS || earlierReport.length <= final.length
+        ? final
+        : [earlierReport, final].filter(Boolean).join('\n\n');
     // Also on the round-limit exit, which is the slow one worth explaining.
     const finish = async (report: string): Promise<string> => {
       context.report?.detail({ ...tally.summary(), ...(spent ? { usage: spent } : {}) });
@@ -128,7 +137,7 @@ export const exploreTool: ToolDefinition = {
             ...(on.maxTokens ? { maxTokens: on.maxTokens } : {}),
           },
           event => {
-            if (event.type === 'error' || event.type === 'meta') return;
+            if (event.type === 'error' || event.type === 'meta' || event.type === 'settled') return;
             if (event.text) text += filter.push(event.text).text;
             if (event.type === 'tool_use') {
               if (event.tools) requested.push(...event.tools);
@@ -163,9 +172,9 @@ export const exploreTool: ToolDefinition = {
       }
       if (context.signal.aborted) throw new Error('Exploring was stopped.');
 
-      if (requested.length === 0) return finish(text.trim() || 'The explorer finished without a report.');
+      if (requested.length === 0) return finish(reportFrom(text.trim()) || 'The explorer finished without a report.');
       if (round === MAX_EXPLORE_ROUNDS) {
-        const partial = text.trim();
+        const partial = reportFrom(text.trim());
         return finish(
           `${partial ? `${partial}\n\n` : ''}[The explorer reached its ${MAX_EXPLORE_ROUNDS}-round limit before ` +
             'writing a full report.]'
@@ -185,6 +194,9 @@ export const exploreTool: ToolDefinition = {
         if (result.name !== 'file_read' || result.error || typeof path !== 'string' || !path) continue;
         readPaths.add(isAbsolute(path) || !context.workingDirectory ? path : resolve(context.workingDirectory, path));
       }
+
+      const said = text.trim();
+      if (said.length > earlierReport.length) earlierReport = said;
 
       messages.push({
         role: 'assistant',
@@ -367,6 +379,12 @@ function parseArguments(raw: string | undefined): Record<string, unknown> {
   }
 }
 
+/**
+ * A final message shorter than this is taken as a pointer to a report written in an earlier round,
+ * when that earlier text is longer. Well under any real report, well over "Report delivered above.".
+ */
+export const SHORT_FINAL_REPORT_CHARS = 200;
+
 function exploreBrief(question: string, paths: readonly string[]): string {
   if (paths.length === 0) return question;
   return [question, '', 'Start from:', ...paths.map(path => `  ${path}`)].join('\n');
@@ -388,6 +406,8 @@ export function exploreSystemPrompt(context: Pick<ToolContext, 'roots' | 'workin
     'your report, so it can act on the report alone.',
     'Stop as soon as you can answer. Finish with a report: a short summary with file paths and line',
     'numbers, the conventions it needs to follow, and what you looked for and could not find.',
+    'Write the whole report in your final reply, the one with no tool calls: the agent receives only',
+    'that reply, so never point back to text you wrote alongside earlier tool calls.',
     'Report only what the tools showed you - no speculation, and never invent a path, symbol or line.',
     'End the report with a section headed "Edit points". List every place the agent will likely',
     'need to change or copy a pattern from, including existing tests and fixtures the new code',

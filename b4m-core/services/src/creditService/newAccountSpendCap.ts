@@ -1,3 +1,4 @@
+import type { InterventionSpendWindow } from './interventionSpendGate';
 import { insufficientCreditsError, type IAdminSettingsRepository, type IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -10,7 +11,8 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
  *
  * Every credit hold calls this before any balance moves: holdCredits (creditHold.ts), the completion
  * holds (apps/client/server/billing/completionCreditHolds.ts), ChatCompletionProcess's inline
- * reservation, the agent executor's iteration gate and voice session holds.
+ * reservation, the agent executor's iteration gate and voice session holds. A multi-job image batch
+ * is also checked as a whole before its per-job holds (generationJobs/createJob.ts checkBatchSpendCap).
  */
 
 const MINUTE_MS = 60_000;
@@ -36,6 +38,8 @@ export type NewAccountSpendCapAdapters = {
    * Best-effort: a failure is logged and the refusal stands.
    */
   onRefused?(event: NewAccountSpendCapRefusalEvent): Promise<void>;
+  /** Meters a limit intervention hold (interventionSpendGate.ts); without it, such a hold refuses all spend. */
+  interventionSpendWindow?: InterventionSpendWindow;
 };
 
 export type NewAccountSpendCapUser = Pick<IUserDocument, 'id' | 'createdAt' | 'isAdmin' | 'newAccountSpendCapLifted'>;

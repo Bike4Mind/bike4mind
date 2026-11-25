@@ -38,7 +38,7 @@ const renderModal = (props: Partial<React.ComponentProps<typeof MFAModal>> = {})
 const renderSetup = (props: Partial<React.ComponentProps<typeof MFAModal>> = {}) =>
   renderModal({
     mode: 'setup',
-    title: 'Set Up Multi-Factor Authentication',
+    title: 'Secure your account',
     qrCodeUrl: 'data:image/png;base64,AAAA',
     manualEntryKey: 'JBSWY3DPEHPK3PXP',
     backupCodes: BACKUP_CODES,
@@ -60,7 +60,7 @@ describe('MFAModal layout', () => {
 
   it('is exposed to assistive tech as a modal dialog named by its title', () => {
     renderSetup();
-    const dialog = screen.getByRole('dialog', { name: 'Set Up Multi-Factor Authentication' });
+    const dialog = screen.getByRole('dialog', { name: 'Secure your account' });
     expect(dialog.getAttribute('aria-modal')).toBe('true');
   });
 });
@@ -83,6 +83,66 @@ describe('MFAModal mode', () => {
     expect(screen.getByTestId('mfa-modal-verify-btn').textContent).toBe('Verify');
     expect(screen.getByTestId('mfa-modal-remember-device-checkbox')).toBeTruthy();
     expect(screen.getByTestId('mfa-modal-passkey-btn')).toBeTruthy();
+  });
+});
+
+describe('MFAModal leaving setup', () => {
+  it('offers forced setup a labelled sign-out instead of a close icon', () => {
+    const onSignOut = vi.fn();
+    const onCancel = vi.fn();
+    renderSetup({ onSignOut, onCancel });
+
+    expect(screen.queryByLabelText('Cancel MFA setup')).toBeNull();
+    const signOut = screen.getByTestId('mfa-modal-sign-out-btn');
+    expect(signOut.textContent).toBe('Sign out');
+    fireEvent.click(signOut);
+
+    expect(onSignOut).toHaveBeenCalledTimes(1);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('does not sign out on Escape during forced setup', () => {
+    const onSignOut = vi.fn();
+    const onClose = vi.fn();
+    renderSetup({ onSignOut, onClose });
+
+    fireEvent.keyDown(screen.getByTestId('mfa-modal-content'), { key: 'Escape' });
+
+    expect(onSignOut).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not sign out on a click outside the dialog during forced setup', () => {
+    const onSignOut = vi.fn();
+    const onClose = vi.fn();
+    renderSetup({ onSignOut, onClose });
+
+    fireEvent.click(screen.getByTestId('mfa-modal-backdrop'));
+
+    expect(onSignOut).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('shows the sign-out inside an enforced dialog, which has no close icon', () => {
+    const onSignOut = vi.fn();
+    renderSetup({ onSignOut, isEnforced: true });
+
+    fireEvent.click(screen.getByTestId('mfa-modal-sign-out-btn'));
+    expect(onSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the close icon for voluntary setup, which only cancels setup', () => {
+    const onCancel = vi.fn();
+    renderSetup({ onCancel });
+
+    expect(screen.queryByTestId('mfa-modal-sign-out-btn')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Cancel MFA setup'));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('never offers a sign-out while verifying', () => {
+    renderModal({ onSignOut: vi.fn() });
+    expect(screen.queryByTestId('mfa-modal-sign-out-btn')).toBeNull();
   });
 });
 

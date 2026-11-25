@@ -4,14 +4,17 @@ import SwiftUI
 /// Studio's bottom bar: Image / Video / Music, a model menu, a prompt and Generate.
 struct StudioCreateBar: View {
   @Bindable var model: StudioCreateViewModel
+  /// Set by Studio; offers starting from a photo. Absent where the bar has no upload route.
+  var photoContext: StudioEditContext?
   @FocusState private var isFocused: Bool
+  @State private var showsParams = false
   @ScaledMetric(relativeTo: .title) private var iconSize: CGFloat = 32
 
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
       HStack(spacing: Tokens.Spacing.s) {
         Picker("Create", selection: $model.kind) {
-          ForEach(GenerationKind.allCases, id: \.self) { kind in Text(kind.title).tag(kind) }
+          ForEach(GenerationKind.promptable, id: \.self) { kind in Text(kind.title).tag(kind) }
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: 260)
@@ -19,10 +22,17 @@ struct StudioCreateBar: View {
         Spacer(minLength: 0)
         modelMenu
       }
-      if model.kind == .music {
-        Toggle("Instrumental", isOn: $model.instrumental)
+      if !model.videoInputs.isEmpty {
+        inputsRow
+      }
+      if !model.controls.isEmpty || model.estimatedCredits != nil {
+        paramsRow
+      }
+      if let note = model.paramsNote {
+        Text(note)
           .font(Tokens.Typography.meta)
-          .accessibilityIdentifier("studio-create-instrumental")
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .accessibilityIdentifier("studio-create-params-note")
       }
       if let error = model.error {
         Text(error.message)
@@ -31,6 +41,7 @@ struct StudioCreateBar: View {
           .accessibilityIdentifier("studio-create-error")
       }
       HStack(alignment: .bottom, spacing: Tokens.Spacing.s) {
+        if let photoContext { StudioPhotoButton(context: photoContext) }
         promptField
         generateButton
       }
@@ -39,6 +50,57 @@ struct StudioCreateBar: View {
     .padding(.vertical, Tokens.Spacing.s)
     .background(.bar)
     .task(id: model.kind) { await model.loadModels() }
+    .sheet(isPresented: $showsParams) { StudioParamsSheet(model: model) }
+  }
+
+  /// The images attached by "Turn into...": each can be removed, and the prompt and settings stay editable.
+  private var inputsRow: some View {
+    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: Tokens.Spacing.s) {
+          ForEach(model.videoInputs) { input in
+            InputChip(input: input) { model.remove(input: input) }
+          }
+        }
+      }
+      if let issue = model.inputIssue {
+        Text(issue)
+          .font(Tokens.Typography.meta)
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .accessibilityIdentifier("studio-create-input-issue")
+      }
+    }
+  }
+
+  /// The summary chip opens the full panel; the prompt stays the one field a first-time user needs.
+  private var paramsRow: some View {
+    HStack(spacing: Tokens.Spacing.s) {
+      if !model.controls.isEmpty {
+        Button {
+          showsParams = true
+        } label: {
+          Label(model.paramsSummary ?? "Model defaults", systemImage: "slider.horizontal.3")
+            .font(Tokens.Typography.meta)
+            .lineLimit(1)
+            .padding(.horizontal, Tokens.Spacing.s)
+            .padding(.vertical, Tokens.Spacing.xs)
+            .background(Tokens.Palette.groupedBackground, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .frame(minHeight: 44)
+        .accessibilityLabel("Settings, \(model.paramsSummary ?? "model defaults")")
+        .accessibilityIdentifier("studio-create-params")
+      }
+      Spacer(minLength: 0)
+      if let credits = model.estimatedCredits {
+        Text("\(credits) credits")
+          .font(Tokens.Typography.meta)
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .monospacedDigit()
+          .accessibilityLabel("Estimated cost, \(credits) credits")
+          .accessibilityIdentifier("studio-create-cost")
+      }
+    }
   }
 
   @ViewBuilder
@@ -73,9 +135,9 @@ struct StudioCreateBar: View {
       .padding(.horizontal, Tokens.Spacing.m)
       .padding(.vertical, Tokens.Spacing.s + 2)
       .background(Tokens.Palette.groupedBackground)
-      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous))
+      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
       .overlay {
-        RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous)
+        RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
           .strokeBorder(Tokens.Palette.divider, lineWidth: 1)
       }
       .accessibilityIdentifier("studio-create-prompt")
@@ -86,6 +148,7 @@ struct StudioCreateBar: View {
     case .image: "Describe an image"
     case .video: "Describe a video"
     case .music: "Describe a song"
+    case .scene: ""
     }
   }
 
@@ -118,7 +181,34 @@ extension StudioSubmitError {
   var message: String {
     switch self {
     case .refused(let failure): failure.message
+    case .rejected(_, let message): message
     case .api(let error): error.message
     }
+  }
+}
+
+private struct InputChip: View {
+  let input: StudioInput
+  let onRemove: () -> Void
+
+  var body: some View {
+    HStack(spacing: Tokens.Spacing.xs) {
+      CachedThumbnail(url: input.item.url)
+        .frame(width: 32, height: 32)
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.sm, style: .continuous))
+      Text(input.role.title)
+        .font(Tokens.Typography.meta)
+      Button(action: onRemove) {
+        Image(systemName: "xmark.circle.fill")
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .frame(minWidth: 44, minHeight: 44)
+      }
+      .accessibilityLabel("Remove \(input.role.title) image")
+      .accessibilityIdentifier("studio-create-input-remove-\(input.role.rawValue)")
+    }
+    .padding(.leading, Tokens.Spacing.xs)
+    .background(Tokens.Palette.groupedBackground, in: Capsule())
+    .accessibilityElement(children: .combine)
+    .accessibilityIdentifier("studio-create-input-\(input.role.rawValue)")
   }
 }

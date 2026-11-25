@@ -11,7 +11,6 @@ import { getThemeConfig } from '@client/app/utils/themes';
  */
 const useGetAllOrganizations = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations }));
-vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
 import { UserActivityTab } from './UserActivityTab';
 import { useAnalyticsStore, ALL_VALUE } from './store';
@@ -43,21 +42,61 @@ describe('UserActivityTab', () => {
     renderTab({ rows: [], total: 0, error: new Error('Request failed with status code 502') });
 
     expect(screen.getByTestId('user-activity-error')).toBeTruthy();
-    expect(screen.queryByText('No data found')).toBeNull();
+    expect(screen.queryByText('No activity found')).toBeNull();
   });
 
-  it('still says "no data" when the request succeeded with no rows', () => {
-    renderTab({ rows: [], total: 0 });
+  it('still says "no activity" when the request succeeded with no rows, with a refresh', () => {
+    const onRefresh = vi.fn();
+    renderTab({ rows: [], total: 0, onRefresh });
 
-    expect(screen.getByText('No data found')).toBeTruthy();
+    expect(screen.getByTestId('user-activity-empty')).toHaveTextContent('No activity found');
     expect(screen.queryByTestId('user-activity-error')).toBeNull();
+    fireEvent.click(screen.getByTestId('user-activity-empty-refresh-btn'));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a failed request from the error state', () => {
+    const onRefresh = vi.fn();
+    renderTab({ rows: [], total: 0, error: new Error('boom'), onRefresh });
+
+    fireEvent.click(within(screen.getByTestId('user-activity-error')).getByTestId('admin-error-retry-btn'));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
   it('renders the rows the server returned', () => {
     renderTab();
 
+    expect(screen.getAllByTestId('user-activity-row')).toHaveLength(2);
     expect(screen.getByText('poy@example.com')).toBeTruthy();
     expect(screen.getByText('Logout')).toBeTruthy();
+  });
+
+  it('keeps the metadata column wider than the fixed columns leave it on a narrow screen', () => {
+    renderTab();
+    const table = screen.getByTestId('user-activity-table');
+    const fixedRem = Array.from(table.querySelectorAll<HTMLElement>('thead th')).reduce(
+      (sum, th) => sum + (parseFloat(th.style.width) || 0),
+      0
+    );
+    expect(parseFloat(getComputedStyle(table).minWidth) - fixedRem).toBeGreaterThanOrEqual(12);
+  });
+
+  it('expands and collapses row metadata, with no toggle for a row without any', () => {
+    renderTab({
+      rows: [
+        { ...ROWS[0], metadata: { reportId: 'r-1', source: 'web' } },
+        { ...ROWS[1], metadata: undefined },
+      ] as React.ComponentProps<typeof UserActivityTab>['rows'],
+    });
+
+    const toggles = screen.getAllByTestId('user-activity-metadata-toggle-btn');
+    expect(toggles).toHaveLength(1);
+    expect(screen.queryByTestId('user-activity-metadata-json')).toBeNull();
+    fireEvent.click(toggles[0]);
+    expect(screen.getByTestId('user-activity-metadata-json')).toHaveTextContent('"reportId": "r-1"');
+    expect(toggles[0]).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(toggles[0]);
+    expect(screen.queryByTestId('user-activity-metadata-json')).toBeNull();
   });
 
   it('counts pages from the server total, not the rows on screen', () => {

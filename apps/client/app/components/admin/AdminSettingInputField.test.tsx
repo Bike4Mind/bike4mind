@@ -41,17 +41,24 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 // anthropicDemoKey is isSensitive, so the server only ever sends this field a mask.
 const maskedValue = `${SENSITIVE_SETTING_MASK}tail`;
 
-const renderSensitiveField = (defaultValue: string) =>
+const renderStaged = (field: React.ReactElement) =>
   render(
     <TestWrapper>
-      <AdminSettingInputField setting={settingsMap.anthropicDemoKey} index={0} defaultValue={defaultValue} />
+      <SettingsDraftProvider>{field}</SettingsDraftProvider>
     </TestWrapper>
   );
+const saveBar = () => screen.queryByTestId('admin-save-bar');
+const saveConfirm = () => screen.getByTestId('admin-save-confirm-btn');
+const clickSave = async () => {
+  await act(async () => {
+    fireEvent.click(saveConfirm());
+  });
+};
+
+const renderSensitiveField = (defaultValue: string) =>
+  renderStaged(<AdminSettingInputField setting={settingsMap.anthropicDemoKey} index={0} defaultValue={defaultValue} />);
 
 const input = () => screen.getByTestId('admin-setting-anthropicDemoKey-input') as HTMLInputElement;
-// Qualified by testid: an unqualified getByRole('button') breaks with a confusing
-// "multiple elements" error the moment another button lands in this card.
-const saveButton = () => screen.getByTestId('admin-setting-anthropicDemoKey-save-btn');
 
 describe('staged settings fields', () => {
   it('does not stage a focused mask and discards plaintext without a write', () => {
@@ -93,32 +100,51 @@ describe('staged settings fields', () => {
   });
 });
 
-describe('AdminSettingInputField save shortcut boundaries', () => {
+describe('AdminSettingInputField outside a SettingsDraftProvider', () => {
+  it('throws, since the SaveBar is its only write path', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(
+        <TestWrapper>
+          <AdminSettingInputField setting={settingsMap.modelDiscoveryPriceBandPct} index={0} defaultValue={50} />
+        </TestWrapper>
+      )
+    ).toThrow('AdminSettingInputField must be rendered inside a SettingsDraftProvider.');
+    vi.mocked(console.error).mockRestore();
+  });
+});
+
+describe('AdminSettingInputField inside a SettingsDraftProvider', () => {
   beforeEach(() => {
     mutate.mockReset();
+    mutateAsync.mockReset();
+    mutateAsync.mockResolvedValue({});
     updateError = undefined;
     updatePending = false;
   });
 
-  it('does not save the platform value from a scoped override control', () => {
-    render(
-      <TestWrapper>
-        <AdminSettingInputField setting={settingsMap.EnforceLakeAdmission} index={0} defaultValue={false} />
-      </TestWrapper>
+  it('renders no per-field Save for the field or an inline sub-setting, and stages both into the SaveBar', async () => {
+    const sub = settingsMap.billOperationalUsage;
+    renderStaged(
+      <AdminSettingInputField
+        setting={settingsMap.EnforceLakeAdmission}
+        index={0}
+        defaultValue={false}
+        subSettings={[{ setting: sub, defaultValue: false }]}
+      />
     );
     fireEvent.click(screen.getByTestId('admin-setting-EnforceLakeAdmission-switch'));
-    fireEvent.change(screen.getByTestId('scoped-override-EnforceLakeAdmission-scope-id-input'), {
-      target: { value: 'organization-1' },
-    });
-    const platformSave = screen.getByTestId('admin-setting-EnforceLakeAdmission-save-btn');
-    expect(platformSave).toBeEnabled();
-    fireEvent.keyDown(screen.getByTestId('scoped-override-EnforceLakeAdmission-set-btn'), {
-      key: 's',
-      ctrlKey: true,
-    });
+    const subEditor = screen.getByLabelText(`${sub.name} settings editor`);
+    fireEvent.click(subEditor.querySelector('input[type="checkbox"]') as HTMLInputElement);
+
+    expect(screen.queryByTestId('admin-setting-EnforceLakeAdmission-save-btn')).toBeNull();
+    expect(screen.queryByTestId(`admin-setting-${sub.key}-save-btn`)).toBeNull();
+    expect(saveBar()).toHaveTextContent('2 unsaved changes');
+
+    await clickSave();
+    expect(mutateAsync).toHaveBeenCalledWith({ key: 'EnforceLakeAdmission', value: true });
+    expect(mutateAsync).toHaveBeenCalledWith({ key: sub.key, value: true });
     expect(mutate).not.toHaveBeenCalled();
-    fireEvent.keyDown(platformSave, { key: 's', ctrlKey: true });
-    expect(mutate).toHaveBeenCalledExactlyOnceWith({ key: 'EnforceLakeAdmission', value: true }, expect.anything());
   });
 });
 
@@ -134,14 +160,9 @@ describe('AdminSettingInputField money-affecting setting', () => {
   });
 
   const renderPrice = (defaultValue: number = 50) =>
-    render(
-      <TestWrapper>
-        <AdminSettingInputField setting={settingsMap.pricePerCredit} index={0} defaultValue={defaultValue} />
-      </TestWrapper>
-    );
+    renderStaged(<AdminSettingInputField setting={settingsMap.pricePerCredit} index={0} defaultValue={defaultValue} />);
 
   const priceInput = () => screen.getByTestId('admin-setting-pricePerCredit-input');
-  const priceSave = () => screen.getByTestId('admin-setting-pricePerCredit-save-btn');
 
   it('badges the field so an admin can see it moves a customer bill', () => {
     renderPrice();
@@ -149,88 +170,49 @@ describe('AdminSettingInputField money-affecting setting', () => {
   });
 
   it('leaves a setting that does not change a bill unbadged', () => {
-    render(
-      <TestWrapper>
-        <AdminSettingInputField setting={settingsMap.modelDiscoveryPriceBandPct} index={0} defaultValue={50} />
-      </TestWrapper>
+    renderStaged(
+      <AdminSettingInputField setting={settingsMap.modelDiscoveryPriceBandPct} index={0} defaultValue={50} />
     );
     expect(screen.queryByTestId('admin-setting-modelDiscoveryPriceBandPct-money-badge')).toBeNull();
   });
 
-  it('asks before writing, instead of saving the price on one click', () => {
+  it('writes nothing when the admin backs out of the warning, and keeps the edit', async () => {
     renderPrice();
     fireEvent.change(priceInput(), { target: { value: '60' } });
-    fireEvent.click(priceSave());
-    expect(mutate).not.toHaveBeenCalled();
-    expect(screen.getByTestId('admin-setting-money-dialog')).toBeInTheDocument();
-  });
-
-  it('shows the value being replaced and the one replacing it', () => {
-    renderPrice();
-    fireEvent.change(priceInput(), { target: { value: '60' } });
-    fireEvent.click(priceSave());
-    const change = screen.getByTestId('admin-setting-money-dialog-change');
-    expect(change).toHaveTextContent('Price Per Credit changes from 50 ($50 per credit) to 60 ($60 per credit).');
-  });
-
-  it('writes once, with the confirmed value, once the admin confirms', () => {
-    renderPrice();
-    fireEvent.change(priceInput(), { target: { value: '60' } });
-    fireEvent.click(priceSave());
-    fireEvent.click(screen.getByTestId('admin-setting-money-confirm-btn'));
-    expect(mutate).toHaveBeenCalledExactlyOnceWith({ key: 'pricePerCredit', value: 60 }, expect.anything());
-    expect(screen.queryByTestId('admin-setting-money-dialog')).toBeNull();
-  });
-
-  it('writes nothing when the admin backs out', () => {
-    renderPrice();
-    fireEvent.change(priceInput(), { target: { value: '60' } });
-    fireEvent.click(priceSave());
-    fireEvent.click(screen.getByTestId('admin-setting-money-cancel-btn'));
-    expect(mutate).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('admin-setting-money-dialog')).toBeNull();
+    await clickSave();
+    fireEvent.click(screen.getByTestId('admin-settings-warning-cancel-btn'));
+    expect(mutateAsync).not.toHaveBeenCalled();
     // The edit survives the cancel, so backing out of the confirm is not also a discard.
     expect(priceInput()).toHaveValue(60);
+    expect(saveBar()).toHaveTextContent('1 unsaved change');
   });
 
-  // The shortcut dispatches a click on the Save button, so it must land on the confirm and
-  // not on a write - the one path that would quietly bypass the dialog.
-  it('routes Cmd/Ctrl+S through the same confirmation', () => {
+  // The one path that could quietly bypass the warning.
+  it('routes Cmd/Ctrl+S through the same warning', async () => {
     renderPrice();
     fireEvent.change(priceInput(), { target: { value: '60' } });
-    fireEvent.keyDown(priceSave(), { key: 's', ctrlKey: true });
-    expect(mutate).not.toHaveBeenCalled();
-    expect(screen.getByTestId('admin-setting-money-dialog')).toBeInTheDocument();
-  });
-
-  it('renders a boolean price setting as on and off rather than true and false', () => {
-    render(
-      <TestWrapper>
-        <AdminSettingInputField setting={settingsMap.billOperationalUsage} index={0} defaultValue={false} />
-      </TestWrapper>
-    );
-    fireEvent.click(screen.getByTestId('admin-setting-billOperationalUsage-switch'));
-    fireEvent.click(screen.getByTestId('admin-setting-billOperationalUsage-save-btn'));
-    expect(screen.getByTestId('admin-setting-money-dialog-change')).toHaveTextContent(
-      'Bill Operational Usage changes from off to on.'
-    );
-  });
-
-  // The staged path never reaches the per-field confirm above: the SaveBar commits it. Admin
-  // Settings and Growth and Pricing both mount the provider, so the batched warning is the only
-  // thing standing in front of a price change there.
-  it('warns through the SaveBar when the change is staged', async () => {
-    render(
-      <TestWrapper>
-        <SettingsDraftProvider>
-          <AdminSettingInputField setting={settingsMap.pricePerCredit} index={0} defaultValue={50} />
-        </SettingsDraftProvider>
-      </TestWrapper>
-    );
-    fireEvent.change(screen.getByTestId('admin-setting-pricePerCredit-input'), { target: { value: '60' } });
     await act(async () => {
-      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+      fireEvent.keyDown(priceInput(), { key: 's', ctrlKey: true });
     });
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByTestId('admin-settings-warning-dialog')).toBeInTheDocument();
+  });
+
+  it('renders a boolean price setting as on and off rather than true and false', async () => {
+    renderStaged(<AdminSettingInputField setting={settingsMap.billOperationalUsage} index={0} defaultValue={false} />);
+    fireEvent.click(screen.getByTestId('admin-setting-billOperationalUsage-switch'));
+    await clickSave();
+    expect(screen.getByTestId('admin-settings-warning-dialog')).toHaveTextContent(
+      'Bill Operational Usage changes what customers pay: off to on.'
+    );
+  });
+
+  // The SaveBar commits every edit, so the batched warning is the only thing standing in front of
+  // a price change on Admin Settings and Growth and Pricing.
+  it('warns through the SaveBar before writing', async () => {
+    renderPrice();
+    fireEvent.change(priceInput(), { target: { value: '60' } });
+    await clickSave();
     expect(mutateAsync).not.toHaveBeenCalled();
     const dialog = screen.getByTestId('admin-settings-warning-dialog');
     expect(dialog).toHaveTextContent(
@@ -244,38 +226,23 @@ describe('AdminSettingInputField money-affecting setting', () => {
   });
 
   it('quotes the value being saved, not the one before the last keystroke', async () => {
-    render(
-      <TestWrapper>
-        <SettingsDraftProvider>
-          <AdminSettingInputField setting={settingsMap.pricePerCredit} index={0} defaultValue={50} />
-        </SettingsDraftProvider>
-      </TestWrapper>
-    );
-    const field = screen.getByTestId('admin-setting-pricePerCredit-input');
-    fireEvent.change(field, { target: { value: '60' } });
-    fireEvent.change(field, { target: { value: '70' } });
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
-    });
+    renderPrice();
+    fireEvent.change(priceInput(), { target: { value: '60' } });
+    fireEvent.change(priceInput(), { target: { value: '70' } });
+    await clickSave();
     expect(screen.getByTestId('admin-settings-warning-dialog')).toHaveTextContent(
       'Price Per Credit changes what customers pay: 50 ($50 per credit) to 70 ($70 per credit).'
     );
   });
 
-  it('does not stand in front of a staged setting that changes no bill', async () => {
-    render(
-      <TestWrapper>
-        <SettingsDraftProvider>
-          <AdminSettingInputField setting={settingsMap.modelDiscoveryPriceBandPct} index={0} defaultValue={50} />
-        </SettingsDraftProvider>
-      </TestWrapper>
+  it('does not stand in front of a setting that changes no bill', async () => {
+    renderStaged(
+      <AdminSettingInputField setting={settingsMap.modelDiscoveryPriceBandPct} index={0} defaultValue={50} />
     );
     fireEvent.change(screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input'), {
       target: { value: '60' },
     });
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
-    });
+    await clickSave();
     expect(screen.queryByTestId('admin-settings-warning-dialog')).toBeNull();
     expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'modelDiscoveryPriceBandPct', value: 60 });
   });
@@ -284,6 +251,8 @@ describe('AdminSettingInputField money-affecting setting', () => {
 describe('AdminSettingInputField sensitive setting', () => {
   beforeEach(() => {
     mutate.mockReset();
+    mutateAsync.mockReset();
+    mutateAsync.mockResolvedValue({});
     updateError = undefined;
     updatePending = false;
   });
@@ -306,24 +275,22 @@ describe('AdminSettingInputField sensitive setting', () => {
     expect(input().value).toBe(maskedValue);
   });
 
-  it('keeps Save disabled while the field is empty only because focus cleared the mask', () => {
+  it('stages nothing while the field is empty only because focus cleared the mask', () => {
     renderSensitiveField(maskedValue);
     fireEvent.focus(input());
 
     expect(input().value).toBe('');
-    expect(saveButton()).toBeDisabled();
+    expect(saveBar()).toBeNull();
   });
 
-  it('does not write when Save is clicked after focus without typing', () => {
+  it('does not write on Cmd/Ctrl+S after focus without typing', async () => {
     renderSensitiveField(maskedValue);
-
-    // Blur would restore the mask and re-disable Save, but a click is not guaranteed to
-    // blur the input first (macOS Safari and Firefox do not focus buttons on click), so
-    // the write path is guarded independently of event ordering.
     fireEvent.focus(input());
-    fireEvent.click(saveButton());
+    await act(async () => {
+      fireEvent.keyDown(input(), { key: 's', ctrlKey: true });
+    });
 
-    expect(mutate).not.toHaveBeenCalled();
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 
   it('hides typed plaintext so a pasted key does not stay rendered after blur', () => {
@@ -334,12 +301,11 @@ describe('AdminSettingInputField sensitive setting', () => {
     fireEvent.focus(input());
     fireEvent.change(input(), { target: { value: 'sk-ant-api03-fresh' } });
 
-    // Once real plaintext is in the field it must not be readable over someone's shoulder,
-    // which is the property main had via its re-mask-on-blur and this PR would otherwise drop.
+    // Once real plaintext is in the field it must not be readable over someone's shoulder.
     expect(input().getAttribute('type')).toBe('password');
   });
 
-  it('still allows an admin to deliberately clear a stored secret', () => {
+  it('still allows an admin to deliberately clear a stored secret', async () => {
     renderSensitiveField(maskedValue);
     fireEvent.focus(input());
     // Focus already emptied the field, so a real clear is type-then-delete. That is an
@@ -347,27 +313,21 @@ describe('AdminSettingInputField sensitive setting', () => {
     fireEvent.change(input(), { target: { value: 'x' } });
     fireEvent.change(input(), { target: { value: '' } });
 
-    expect(saveButton()).not.toBeDisabled();
-    fireEvent.click(saveButton());
-    expect(mutate).toHaveBeenCalledWith({ key: 'anthropicDemoKey', value: '', confirmClear: true }, expect.anything());
+    expect(saveConfirm()).toBeEnabled();
+    await clickSave();
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'anthropicDemoKey', value: '', confirmClear: true });
   });
 
-  it('submits a newly typed secret and then holds only what the server returns', () => {
+  it('submits a newly typed secret and drops the plaintext once it is saved', async () => {
     renderSensitiveField(maskedValue);
     fireEvent.focus(input());
     fireEvent.change(input(), { target: { value: 'sk-ant-api03-fresh' } });
-    fireEvent.click(saveButton());
+    fireEvent.blur(input());
+    await clickSave();
 
-    expect(mutate).toHaveBeenCalledWith(
-      { key: 'anthropicDemoKey', value: 'sk-ant-api03-fresh' },
-      expect.objectContaining({ onSuccess: expect.any(Function) })
-    );
-
-    // The mutation's onSuccess replaces the typed plaintext with the server's mask so the
-    // secret does not linger in the DOM after the write.
-    const { onSuccess } = mutate.mock.calls[0][1];
-    act(() => onSuccess({ settingName: 'anthropicDemoKey', settingValue: `${SENSITIVE_SETTING_MASK}resh` }));
-    expect(input().value).toBe(`${SENSITIVE_SETTING_MASK}resh`);
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'anthropicDemoKey', value: 'sk-ant-api03-fresh' });
+    expect(input().value).toBe(maskedValue);
+    expect(saveBar()).toBeNull();
   });
 });
 
@@ -376,19 +336,16 @@ describe('AdminSettingInputField sensitive setting', () => {
 const bandSetting = settingsMap.modelDiscoveryPriceBandPct;
 
 const renderBandField = (defaultValue: number) =>
-  render(
-    <TestWrapper>
-      <AdminSettingInputField setting={bandSetting} index={0} defaultValue={defaultValue} />
-    </TestWrapper>
-  );
+  renderStaged(<AdminSettingInputField setting={bandSetting} index={0} defaultValue={defaultValue} />);
 
 const bandInput = () => screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input') as HTMLInputElement;
-const bandSaveButton = () => screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-save-btn');
 const bandHelperText = () => screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-helper');
 
 describe('AdminSettingInputField number setting', () => {
   beforeEach(() => {
     mutate.mockReset();
+    mutateAsync.mockReset();
+    mutateAsync.mockResolvedValue({});
     updateError = undefined;
     updatePending = false;
   });
@@ -400,38 +357,31 @@ describe('AdminSettingInputField number setting', () => {
     expect(bandInput()).toHaveAttribute('max', '500');
   });
 
-  it('explains an out-of-range value rather than letting the save do nothing', () => {
+  it('explains an out-of-range value rather than letting the save do nothing', async () => {
     renderBandField(50);
     fireEvent.change(bandInput(), { target: { value: '600' } });
 
-    // The reported bug: the schema rejects 600 server-side, so a field that submitted it
-    // would look like a no-op save with no reason given anywhere.
+    // The schema rejects 600 server-side, so a field that submitted it would look like a
+    // no-op save with no reason given anywhere.
     expect(bandHelperText()).toHaveTextContent('Enter a number between 0 and 500.');
-    expect(bandSaveButton()).toBeDisabled();
+    expect(saveBar()).toHaveTextContent('Enter a number between 0 and 500.');
+    expect(saveConfirm()).toBeDisabled();
 
-    fireEvent.click(bandSaveButton());
-    expect(mutate).not.toHaveBeenCalled();
+    await clickSave();
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  it('saves a value inside the range and keeps showing the description', () => {
+  it('saves a value inside the range and keeps showing the description', async () => {
     renderBandField(50);
     fireEvent.change(bandInput(), { target: { value: '200' } });
 
     expect(bandHelperText()).toHaveTextContent(bandSetting.description);
-    fireEvent.click(bandSaveButton());
+    await clickSave();
 
-    expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: 200 }, expect.anything());
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'modelDiscoveryPriceBandPct', value: 200 });
   });
 
-  it('saves a dirty value on Cmd/Ctrl+S from the focused card', () => {
-    renderBandField(50);
-    fireEvent.change(bandInput(), { target: { value: '200' } });
-    fireEvent.keyDown(screen.getByLabelText(`${bandSetting.name} settings editor`), { key: 's', ctrlKey: true });
-
-    expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: 200 }, expect.anything());
-  });
-
-  it('forwards a cleared field as an empty value instead of coercing it to 0', () => {
+  it('forwards a cleared field as an empty value instead of coercing it to 0', async () => {
     renderBandField(50);
     fireEvent.change(bandInput(), { target: { value: '' } });
 
@@ -440,23 +390,10 @@ describe('AdminSettingInputField number setting', () => {
     // preprocess, the one thing that restores the setting's own default.
     expect(bandInput().value).toBe('');
     expect(bandHelperText()).toHaveTextContent(bandSetting.description);
-    expect(bandSaveButton()).not.toBeDisabled();
+    expect(saveConfirm()).toBeEnabled();
 
-    fireEvent.click(bandSaveButton());
-    expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: '' }, expect.anything());
-  });
-
-  it('re-displays the resolved default once the save response comes back, not the cleared field', () => {
-    renderBandField(50);
-    fireEvent.change(bandInput(), { target: { value: '' } });
-    fireEvent.click(bandSaveButton());
-
-    // The server resolves a cleared numeric field to the setting's own default (#2636) and
-    // returns it as settingValue - the field must pick that up instead of sitting empty until
-    // a full settings refetch.
-    const { onSuccess } = mutate.mock.calls[0][1];
-    act(() => onSuccess({ settingName: 'modelDiscoveryPriceBandPct', settingValue: 50 }));
-    expect(bandInput().value).toBe('50');
+    await clickSave();
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'modelDiscoveryPriceBandPct', value: '' });
   });
 
   it('surfaces the server reason when a write is rejected anyway', () => {
@@ -471,9 +408,8 @@ describe('AdminSettingInputField number setting', () => {
     updatePending = true;
     renderBandField(50);
 
-    // onSuccess resyncs this field from the server's response, so a second edit typed
-    // mid-flight would otherwise be silently overwritten by the response for the previous
-    // submission.
+    // The refetched setting resets this field to the server's value, so a second edit typed
+    // mid-flight would otherwise be silently overwritten.
     expect(bandInput()).toBeDisabled();
   });
 });
@@ -484,19 +420,16 @@ describe('AdminSettingInputField number setting', () => {
 const sizeSetting = settingsMap.MaxFileSize;
 
 const renderSizeField = (defaultValue: number) =>
-  render(
-    <TestWrapper>
-      <AdminSettingInputField setting={sizeSetting} index={0} defaultValue={defaultValue} />
-    </TestWrapper>
-  );
+  renderStaged(<AdminSettingInputField setting={sizeSetting} index={0} defaultValue={defaultValue} />);
 
 const sizeInput = () => screen.getByTestId('admin-setting-MaxFileSize-input') as HTMLInputElement;
-const sizeSaveButton = () => screen.getByTestId('admin-setting-MaxFileSize-save-btn');
 const sizeHelperText = () => screen.getByTestId('admin-setting-MaxFileSize-helper');
 
 describe('AdminSettingInputField min-1 number setting', () => {
   beforeEach(() => {
     mutate.mockReset();
+    mutateAsync.mockReset();
+    mutateAsync.mockResolvedValue({});
     updateError = undefined;
     updatePending = false;
   });
@@ -506,73 +439,69 @@ describe('AdminSettingInputField min-1 number setting', () => {
     if (sizeSetting.type === 'number') expect(sizeSetting.min).toBeGreaterThanOrEqual(1);
   });
 
-  it('clearing the field reports no range error and leaves Save enabled', () => {
+  it('clearing the field reports no range error and leaves Save enabled', async () => {
     renderSizeField(30);
     fireEvent.change(sizeInput(), { target: { value: '' } });
 
     expect(sizeInput().value).toBe('');
     expect(sizeHelperText()).toHaveTextContent(sizeSetting.description);
-    expect(sizeSaveButton()).not.toBeDisabled();
+    expect(saveConfirm()).toBeEnabled();
 
-    fireEvent.click(sizeSaveButton());
-    expect(mutate).toHaveBeenCalledWith({ key: 'MaxFileSize', value: '' }, expect.anything());
+    await clickSave();
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'MaxFileSize', value: '' });
   });
 
-  it('an explicit 0 still reports the below-minimum error and disables Save', () => {
+  it('an explicit 0 still reports the below-minimum error and disables Save', async () => {
     renderSizeField(30);
     fireEvent.change(sizeInput(), { target: { value: '0' } });
 
     expect(sizeHelperText()).toHaveTextContent('Enter a number of 1 or more.');
-    expect(sizeSaveButton()).toBeDisabled();
+    expect(saveConfirm()).toBeDisabled();
 
-    fireEvent.click(sizeSaveButton());
-    expect(mutate).not.toHaveBeenCalled();
+    await clickSave();
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  it('saves a valid value inside the range', () => {
+  it('saves a valid value inside the range', async () => {
     renderSizeField(30);
     fireEvent.change(sizeInput(), { target: { value: '100' } });
 
     expect(sizeHelperText()).toHaveTextContent(sizeSetting.description);
-    fireEvent.click(sizeSaveButton());
+    await clickSave();
 
-    expect(mutate).toHaveBeenCalledWith({ key: 'MaxFileSize', value: 100 }, expect.anything());
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'MaxFileSize', value: 100 });
   });
 });
 
 describe('AdminSettingInputField clearDeletesRow number setting', () => {
   const floorSetting = settingsMap.forcedRetrievalMinSimilarityPct;
   const renderField = (setting: (typeof settingsMap)[keyof typeof settingsMap], defaultValue: number | null) =>
-    render(
-      <TestWrapper>
-        <AdminSettingInputField setting={setting} index={0} defaultValue={defaultValue} />
-      </TestWrapper>
-    );
+    renderStaged(<AdminSettingInputField setting={setting} index={0} defaultValue={defaultValue} />);
   const floorInput = () => screen.getByTestId(`admin-setting-${floorSetting.key}-input`) as HTMLInputElement;
-  const floorSave = () => screen.getByTestId(`admin-setting-${floorSetting.key}-save-btn`);
 
   beforeEach(() => {
     mutate.mockReset();
+    mutateAsync.mockReset();
+    mutateAsync.mockResolvedValue({});
     updateError = undefined;
     updatePending = false;
   });
 
-  it('renders an unset floor blank with its unset label, Save disabled', () => {
+  it('renders an unset floor blank with its unset label, nothing staged', () => {
     expect(floorSetting.clearDeletesRow).toBe(true);
     renderField(floorSetting, null);
 
     expect(floorInput().value).toBe('');
     expect(floorInput()).toHaveAttribute('placeholder', 'per embedding space');
-    expect(floorSave()).toBeDisabled();
+    expect(saveBar()).toBeNull();
   });
 
-  it('saves a 75 typed into an unset floor as 75', () => {
+  it('saves a 75 typed into an unset floor as 75', async () => {
     renderField(floorSetting, null);
     fireEvent.change(floorInput(), { target: { value: '75' } });
 
-    expect(floorSave()).not.toBeDisabled();
-    fireEvent.click(floorSave());
-    expect(mutate).toHaveBeenCalledWith({ key: floorSetting.key, value: 75 }, expect.anything());
+    await clickSave();
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: floorSetting.key, value: 75 });
   });
 
   it('does not offer a save after typing into an unset floor and deleting it again', () => {
@@ -580,35 +509,31 @@ describe('AdminSettingInputField clearDeletesRow number setting', () => {
     fireEvent.change(floorInput(), { target: { value: '7' } });
     fireEvent.change(floorInput(), { target: { value: '' } });
 
-    expect(floorSave()).toBeDisabled();
+    expect(saveBar()).toBeNull();
   });
 
-  it('clears a stored floor and shows it unset once the server answers null', () => {
+  it('clears a stored floor by sending an empty value', async () => {
     renderField(floorSetting, 60);
     fireEvent.change(floorInput(), { target: { value: '' } });
-    fireEvent.click(floorSave());
+    await clickSave();
 
-    expect(mutate).toHaveBeenCalledWith({ key: floorSetting.key, value: '' }, expect.anything());
-    const { onSuccess } = mutate.mock.calls[0][1];
-    act(() => onSuccess({ settingName: floorSetting.key, settingValue: null }));
-    expect(floorInput().value).toBe('');
-    // Synced to unset, not left at '': a second click must not re-send the clear for a deleted row.
-    fireEvent.click(floorSave());
-    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: floorSetting.key, value: '' });
+    expect(saveBar()).toBeNull();
   });
 
-  it('shows the above-measured warning and confirms it on save', () => {
+  it('shows the above-measured warning and confirms it on save', async () => {
     floorWarning = '75% is above the 58% minimum measured for text-embedding-3-small';
     try {
       renderField(floorSetting, null);
       fireEvent.change(floorInput(), { target: { value: '75' } });
 
       expect(screen.getByTestId(`admin-setting-${floorSetting.key}-helper`)).toHaveTextContent(floorWarning);
-      fireEvent.click(floorSave());
-      expect(mutate).toHaveBeenCalledWith(
-        { key: floorSetting.key, value: 75, confirmAboveMeasuredFloor: true },
-        expect.anything()
-      );
+      await clickSave();
+      expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({
+        key: floorSetting.key,
+        value: 75,
+        confirmAboveMeasuredFloor: true,
+      });
     } finally {
       floorWarning = undefined;
     }
@@ -636,5 +561,23 @@ describe('AdminSettingInputField clearDeletesRow number setting', () => {
     renderField(settingsMap.modelDiscoveryPriceBandPct, 50);
 
     expect(screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input')).not.toHaveAttribute('placeholder');
+  });
+});
+
+describe('AdminSettingInputField locked setting', () => {
+  it('disables a locked number setting, offers no Save, and shows why', () => {
+    renderStaged(
+      <AdminSettingInputField
+        setting={bandSetting}
+        index={0}
+        defaultValue={50}
+        lockedNote="Only full administrators can change this setting."
+      />
+    );
+
+    expect(bandInput()).toBeDisabled();
+    expect(screen.queryByTestId('admin-setting-modelDiscoveryPriceBandPct-save-btn')).toBeNull();
+    expect(saveBar()).toBeNull();
+    expect(bandHelperText()).toHaveTextContent('Only full administrators can change this setting.');
   });
 });

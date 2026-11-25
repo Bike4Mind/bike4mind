@@ -40,7 +40,7 @@ vi.mock('@server/admin/search/searchEntities', () => ({ searchAdminEntities: sea
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 import handler from '../search';
 
-async function call(q: unknown, user: unknown = { id: 'admin', isAdmin: true }, method = 'GET') {
+async function call(q: unknown, user: unknown = { id: 'admin', isAdmin: true }, method: 'GET' | 'POST' = 'GET') {
   const { req, res } = createMocks({ method, query: { q } });
   Object.assign(req, { user });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
@@ -89,5 +89,35 @@ describe('admin search route', () => {
     audit.mockRejectedValue(new Error('Audit unavailable'));
     await expect(call('192.0.2.1')).rejects.toThrow('Audit unavailable');
     expect(search).not.toHaveBeenCalled();
+  });
+  describe('provider end-user identifier', () => {
+    const digest = 'ab'.repeat(32);
+    it('also audits the resolved account', async () => {
+      search.mockResolvedValue([{ type: 'user', id: 'u1', displayName: 'Ada', secondary: 'a***@x.com - active' }]);
+      await call(digest);
+      expect(audit).toHaveBeenCalledTimes(2);
+      expect(audit.mock.calls[0][1]).toMatchObject({ action: 'admin.search.performed' });
+      expect(audit.mock.calls[1][1]).toMatchObject({
+        action: 'user.provider_id.resolved',
+        target: { kind: 'user', id: 'u1', displayName: 'Ada' },
+        details: { providerEndUserId: digest, source: 'admin_search', matched: true, matchedCount: 1 },
+      });
+    });
+    it('targets the system when nothing matches', async () => {
+      await call(digest);
+      expect(audit.mock.calls[1][1]).toMatchObject({
+        action: 'user.provider_id.resolved',
+        target: { kind: 'system' },
+        details: { matched: false, matchedCount: 0 },
+      });
+    });
+    it('does not audit a provider lookup for a non-hex query', async () => {
+      await call('z'.repeat(64));
+      expect(audit.mock.calls.map(c => c[1].action)).not.toContain('user.provider_id.resolved');
+    });
+    it('fails the request when the provider audit fails', async () => {
+      audit.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('Audit unavailable'));
+      await expect(call(digest)).rejects.toThrow('Audit unavailable');
+    });
   });
 });

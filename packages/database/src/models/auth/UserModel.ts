@@ -6,6 +6,11 @@ import {
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
+  DEFAULT_STORAGE_LIMIT_MB,
+  USER_ACCOUNT_SEGMENTS,
+  type UserAccountSegment,
+  type BriefSchedule,
+  ConflictError,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -19,8 +24,13 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  IUserModeration,
+  MODERATION_REVIEW_STATUSES,
+  MODERATION_SEVERE_CATEGORIES,
+  ModerationReviewUser,
   ISignupRiskAutoApproval,
   ISignupRiskScore,
+  type InterventionHold,
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
@@ -43,12 +53,14 @@ import {
   PaginatedResponse,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
-import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
+import mongoose, { Document, Model, model, Schema, Query, type PipelineStage, type ClientSession } from 'mongoose';
 import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
+import { AutoContainmentDecisionModel } from '../infra/security/AutoContainmentDecisionModel';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
@@ -107,10 +119,12 @@ const MFASchema = new Schema(
     // TOTP secret (encrypted at rest, see encryptTotpSecretInUpdate) + hashed backup codes -
     // never serialize to a client. select:false keeps them out of every default
     // query/response; the MFA subsystem loads them explicitly via findByIdWithMfaSecrets
-    // (+select), which decrypts the secret. `totpEnabled` (not select:false) is the flag
-    // callers use to detect that MFA is configured.
-    totpSecret: { type: String, required: true, select: false },
+    // (+select), which decrypts the secret. `totpEnabled` and `passkeyEnabled` (not select:false)
+    // are the flags callers use to detect that MFA is configured (see userHasMFAConfigured).
+    // A passkey-only user has no totpSecret.
+    totpSecret: { type: String, select: false },
     totpEnabled: { type: Boolean, default: false },
+    passkeyEnabled: { type: Boolean, default: false },
     backupCodes: { type: [String], default: [], select: false },
     // Encrypted like totpSecret; only present between setup and enable.
     pendingBackupCodes: { type: String, select: false },
@@ -197,6 +211,21 @@ const UserPreferencesSchema = new Schema(
           chat_completed: { type: Boolean },
           generation_ready: { type: Boolean },
           agent_message: { type: Boolean },
+          session_handoff: { type: Boolean },
+          brief_ready: { type: Boolean },
+        },
+        { _id: false }
+      ),
+    },
+    // Validated by BriefScheduleSchema (@bike4mind/common) in PUT /api/v1/briefs/schedule. The general user
+    // update rewrites the whole preferences object, so it can carry a stale copy back; see IUserPreferences.
+    briefSchedule: {
+      type: new Schema(
+        {
+          enabled: { type: Boolean },
+          timeOfDay: { type: String },
+          days: { type: [Number], default: undefined },
+          timeZone: { type: String },
         },
         { _id: false }
       ),
@@ -272,6 +301,22 @@ const KeywordRoutingRuleSchema = new Schema(
 /** Newest-first cap on the retained per-user moderation-hit log. */
 export const MODERATION_HITS_RETAINED = 50;
 
+const InterventionHoldSchema = new Schema(
+  {
+    decisionId: { type: String, required: true },
+    detectionId: { type: String, required: true },
+    tier: { type: String, enum: ['limit', 'verify', 'holdGrant', 'review'], required: true },
+    policyVersion: { type: Number, required: true },
+    reason: { type: String, required: true },
+    appliedAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true },
+    releasedAt: { type: Date, default: null },
+    releasedBy: { type: String, default: null },
+    creditsPerHour: { type: Number },
+  },
+  { _id: false }
+);
+
 const ModerationHitSchema = new Schema(
   {
     at: { type: Date, required: true },
@@ -316,6 +361,8 @@ const UserDeletionSchema = new Schema(
     requestedAt: { type: Date, required: true },
     scheduledFor: { type: Date, required: true },
     source: { type: String, enum: [...ACCOUNT_DELETION_SOURCES], required: true },
+    requestedBy: { type: String, required: false },
+    erasureScope: { type: Schema.Types.Mixed, required: false },
     purgeStartedAt: { type: Date, required: false },
     purgeLeaseId: { type: String, required: false },
     purgeLeaseExpiresAt: { type: Date, required: false },
@@ -363,8 +410,9 @@ export type UserAccountRiskProfile = {
   signupAsn: number | null;
   signupDatacenter: boolean | null;
   signupWafAnonIp: boolean | null;
-  totpEnabled: boolean;
-  /** When TOTP setup began; enabling follows within the same setup flow. */
+  /** Either factor (authenticator app or passkey) is on. */
+  mfaEnabled: boolean;
+  /** When the first factor's setup began; enabling follows within the same setup flow. */
   mfaSetupAt: Date | null;
 };
 
@@ -392,6 +440,12 @@ const heldReviewTrancheFilter = {
   $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
 };
 
+/** `$type` repeats the partial index's filter, without which the planner cannot use it. */
+export const overdueDeletionRequestFilter = (requestedBefore: Date) => ({
+  'deletion.scheduledFor': { $type: 'date' as const },
+  'deletion.requestedAt': { $lte: requestedBefore },
+});
+
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
     super(model);
@@ -403,9 +457,24 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
   }
 
+  /** Sets the partner mark, or unsets the field for `null` (absent reads as customer). */
+  async setAccountSegment(userId: string, accountSegment: UserAccountSegment | null): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId },
+      accountSegment ? { $set: { accountSegment } } : { $unset: { accountSegment: 1 } }
+    );
+  }
+
   /** Null the active-org pointer of every user on the org (org delete). */
   async clearOrganizationPointer(organizationId: string): Promise<void> {
     await this.model.updateMany({ organizationId }, { $set: { organizationId: null } });
+  }
+
+  async retireOrgServiceAccount(userId: string, organizationId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId, isSystem: true, serviceAccountOrganizationId: organizationId },
+      { $set: { serviceAccountRetiredAt: new Date() } }
+    );
   }
 
   /** Add one group id to one user (idempotent via $addToSet). */
@@ -757,7 +826,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * filter. Decrypt-compare first, then condition the write on the exact stored value: a concurrent
    * re-setup writes fresh ciphertext, so the compare-and-set still refuses.
    */
-  async atomicEnableMfa(userId: string, totpSecret: string): Promise<IUserDocument | null> {
+  async atomicEnableMfa(
+    userId: string,
+    totpSecret: string,
+    hashedBackupCodes?: string[]
+  ): Promise<IUserDocument | null> {
     const current = await this.model
       .findOne({ _id: userId })
       .select('+mfa.totpSecret')
@@ -772,10 +845,47 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'mfa.totpEnabled': true,
           'mfa.failedAttempts': 0,
           'mfa.lastUsedAt': new Date(),
+          // Passed when the setup kept an existing factor's codes live (see setupMFA).
+          ...(hashedBackupCodes ? { 'mfa.backupCodes': hashedBackupCodes } : {}),
           updatedAt: new Date(),
         },
         $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1, 'mfa.pendingBackupCodes': 1 },
       },
+      { new: true }
+    );
+    return result ? result.toJSON() : null;
+  }
+
+  async atomicEnablePasskeyMfa(userId: string, hashedBackupCodes: string[]): Promise<IUserDocument | null> {
+    const now = new Date();
+    // A pipeline update, because `mfa` is usually null here: a dotted $set cannot create a field
+    // inside null, and a whole-`mfa` $set has no totpSecret, so stripSecretlessMfaFromUpdate would
+    // drop it. $literal keeps the stored values from being read as expressions.
+    const result = await this.model.findOneAndUpdate(
+      { _id: userId, 'mfa.totpEnabled': { $ne: true }, 'mfa.passkeyEnabled': { $ne: true } },
+      [
+        {
+          $set: {
+            mfa: {
+              $mergeObjects: [
+                { $ifNull: ['$mfa', {}] },
+                {
+                  $literal: {
+                    passkeyEnabled: true,
+                    totpEnabled: false,
+                    backupCodes: hashedBackupCodes,
+                    setupAt: now,
+                    lastUsedAt: now,
+                    failedAttempts: 0,
+                  },
+                },
+              ],
+            },
+            updatedAt: now,
+          },
+        },
+        { $unset: ['mfa.totpSecret', 'mfa.pendingBackupCodes', 'mfa.lastFailedAttempt', 'mfa.lockedUntil'] },
+      ],
       { new: true }
     );
     return result ? result.toJSON() : null;
@@ -834,7 +944,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     const docs = await this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('email username isAdmin adminPermissions')
+      .select('email username isAdmin adminPermissions adminRoleIds')
       .lean();
     return docs.map(d => ({
       id: String(d._id),
@@ -842,6 +952,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       username: d.username ?? undefined,
       isAdmin: d.isAdmin ?? undefined,
       adminPermissions: d.adminPermissions ? [...d.adminPermissions] : undefined,
+      adminRoleIds: d.adminRoleIds?.map(String),
     }));
   }
 
@@ -869,6 +980,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .limit(limit)
       .lean();
     return docs.map(d => String(d._id));
+  }
+
+  /** Deletion requests made at or before `requestedBefore` whose row still exists, i.e. not yet erased or cancelled. */
+  async countOverdueDeletionRequests(requestedBefore: Date): Promise<number> {
+    return this.model.countDocuments(overdueDeletionRequestFilter(requestedBefore));
   }
 
   /** Stamps IUser.signupLanding once; a later call never overwrites it. */
@@ -900,10 +1016,13 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
-  /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
-  async findIdsBySignupIp(ip: string, excludeId: string, limit: number): Promise<string[]> {
+  /**
+   * Accounts that signed up from this exact IP, newest first, leaving out excludeId when given;
+   * served by user_signupMeta_ip.
+   */
+  async findIdsBySignupIp(ip: string, excludeId: string | undefined, limit: number): Promise<string[]> {
     const docs = await this.model
-      .find({ 'signupMeta.ip': ip, _id: { $ne: convertIds([excludeId])[0] } })
+      .find({ 'signupMeta.ip': ip, ...(excludeId ? { _id: { $ne: convertIds([excludeId])[0] } } : {}) })
       .select('_id')
       .sort({ _id: -1 })
       .limit(limit)
@@ -920,7 +1039,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .find({ _id: { $in: convertIds(validIds) } })
       .select(
         'createdAt email signupMeta.ip signupMeta.ja4 signupMeta.asn signupMeta.isDatacenter signupMeta.wafAnonIp ' +
-          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.setupAt'
+          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.passkeyEnabled mfa.setupAt'
       )
       .lean();
     return docs.map(doc => ({
@@ -934,7 +1053,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       signupAsn: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0 ? doc.signupMeta.asn : null,
       signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
       signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
-      totpEnabled: doc.mfa?.totpEnabled === true,
+      mfaEnabled: doc.mfa?.totpEnabled === true || doc.mfa?.passkeyEnabled === true,
       mfaSetupAt: doc.mfa?.setupAt ?? null,
     }));
   }
@@ -1037,7 +1156,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async incrementCredits(userId: string, credits: number, options?: { updateLastCreditsPurchasedAt?: boolean }) {
-    console.log(`Incrementing credits for user ${userId} by ${credits}`);
+    Logger.debug('Incrementing credits', { userId, credits });
     const result = await this.model.findOneAndUpdate(
       { _id: userId },
       {
@@ -1116,6 +1235,66 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { $set: { currentStorageSize: next } }
     );
     return res.matchedCount === 1;
+  }
+
+  async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, planStorageLimitMb);
+  }
+
+  /**
+   * Drops the plan allowance once the subscription that granted it has ended, so the enforced
+   * `storageLimit` falls back to the manual override, or to DEFAULT_STORAGE_LIMIT_MB without one.
+   * Files already stored are untouched: a user left over the new limit can still read and delete,
+   * and the upload checks refuse anything that would add to the usage.
+   */
+  async clearPlanStorageLimit(userId: string): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, null);
+  }
+
+  private async writePlanStorageLimit(userId: string, planStorageLimitMb: number | null): Promise<boolean> {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    type StorageSnapshot = {
+      storageLimitOverride?: number | null;
+      planStorageLimit?: number | null;
+      storageLimit?: number | null;
+      __v?: number;
+    };
+    const fields = ['storageLimitOverride', 'planStorageLimit', 'storageLimit', '__v'] as const;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snapshot = await this.model
+        .findById(userId, { storageLimitOverride: 1, planStorageLimit: 1, storageLimit: 1, __v: 1 })
+        .lean<StorageSnapshot>();
+      if (!snapshot) return false;
+      // Preserve a legacy custom limit before retiring the missing-override fallback. Field
+      // presence matters: an explicit null means use the plan, and zero is a manual override.
+      const override = Object.hasOwn(snapshot, 'storageLimitOverride')
+        ? (snapshot.storageLimitOverride ?? null)
+        : snapshot.storageLimit == null || snapshot.storageLimit === DEFAULT_STORAGE_LIMIT_MB
+          ? null
+          : snapshot.storageLimit;
+      const result = await this.model.updateOne(
+        {
+          _id: userId,
+          $and: fields.map(field => ({
+            [field]: Object.hasOwn(snapshot, field) ? { $eq: snapshot[field], $exists: true } : { $exists: false },
+          })),
+        },
+        {
+          $set: {
+            storageLimitOverride: override,
+            planStorageLimit: planStorageLimitMb,
+            storageLimit: override ?? planStorageLimitMb ?? DEFAULT_STORAGE_LIMIT_MB,
+          },
+          // Even an equal-quantity grant must write: this fences a concurrent release's
+          // subscription snapshot. Timestamp changes alone can be elided in the same millisecond.
+          $inc: { __v: 1 },
+        },
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return true;
+      // Native transaction errors deliberately propagate so the entire transaction can retry.
+    }
+    throw new ConflictError('Storage allowance changed concurrently; retry the operation');
   }
 
   async findCurrentStorageSize(userId: string): Promise<number | null> {
@@ -1231,19 +1410,159 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async setModerationStatus(
     userId: string,
     status: UserModerationStatus,
-    options?: { throttledUntil?: Date | null }
+    options?: { throttledUntil?: Date | null; automatic?: boolean }
   ): Promise<IUserDocument | null> {
     return this.model.findOneAndUpdate(
       { _id: userId },
       {
         $set: {
           'moderation.status': status,
-          'moderation.statusChangedAt': new Date(),
+          ...(options?.automatic ? {} : { 'moderation.statusChangedAt': new Date() }),
           'moderation.throttledUntil': status === 'throttled' ? (options?.throttledUntil ?? null) : null,
         },
       },
       { new: true }
     );
+  }
+
+  /**
+   * Adds a graduated hold unless one from the same decision is already there, so a retried decision
+   * never applies twice. True when this call added it.
+   */
+  async addInterventionHold(userId: string, hold: InterventionHold, session?: ClientSession): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        isAdmin: { $ne: true },
+        isBanned: { $ne: true },
+        'interventionHolds.decisionId': { $ne: hold.decisionId },
+      },
+      { $push: { interventionHolds: hold } },
+      { runValidators: true, session }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Serializes a hold write with release and claim replacement on the original decision. */
+  async addClaimedInterventionHold(userId: string, hold: InterventionHold, startedAt: Date): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(hold.decisionId)) return false;
+    return withTransaction(async session => {
+      const claim = await AutoContainmentDecisionModel.updateOne(
+        {
+          _id: new mongoose.Types.ObjectId(hold.decisionId),
+          tier: hold.tier,
+          outcome: 'pending',
+          decidedAt: startedAt,
+          releasedAt: null,
+          containedUserIds: { $ne: userId },
+          userIds: userId,
+        },
+        { $inc: { holdWriteVersion: 1 } },
+        { session, runValidators: true }
+      );
+      if (claim.modifiedCount !== 1) return false;
+      return this.addInterventionHold(userId, hold, session);
+    });
+  }
+
+  /** Keeps a durable per-account Contain receipt and lifts only the original decision's holds. */
+  async releaseContainedInterventionHolds(
+    decisionId: string,
+    committedUserIds: string[],
+    release: { by: string; now: Date }
+  ): Promise<void> {
+    if (!mongoose.Types.ObjectId.isValid(decisionId) || committedUserIds.length === 0) return;
+    await withTransaction(async session => {
+      const decision = await AutoContainmentDecisionModel.findOne({
+        _id: new mongoose.Types.ObjectId(decisionId),
+        tier: { $ne: 'contain' },
+        outcome: { $in: ['pending', 'intervened', 'failed', 'capped'] },
+        releasedAt: null,
+      }).session(session);
+      if (!decision) return;
+      const selected = [...new Set(committedUserIds)].filter(userId => decision.userIds.includes(userId));
+      if (selected.length === 0) return;
+      // Both writers change this row in their transaction, so neither can commit from a stale snapshot.
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        { $inc: { holdWriteVersion: 1 }, $addToSet: { containedUserIds: { $each: selected } } },
+        { session, runValidators: true }
+      );
+      for (const userId of selected) await this.releaseInterventionHold(userId, decisionId, release, session);
+      const contained = new Set([...(decision.containedUserIds ?? []), ...selected]);
+      if (!decision.userIds.every(userId => contained.has(userId))) return;
+      const remaining = await this.model
+        .exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } })
+        .session(session);
+      if (remaining) return;
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        {
+          $set: {
+            outcome: 'released',
+            releasedAt: release.now,
+            releasedBy: release.by,
+            releaseReason: 'Graduated holds replaced by committed account containment',
+            releaseCondition: 'contained',
+          },
+        },
+        { session, runValidators: true }
+      );
+    });
+  }
+
+  /**
+   * Releases only the hold that decision applied. Never touches moderation, riskScore.reviewState,
+   * signupGrantHeldReason or any other decision's hold. True when an unreleased hold was released.
+   */
+  async releaseInterventionHold(
+    userId: string,
+    decisionId: string,
+    { by, now }: { by: string; now: Date },
+    session?: ClientSession
+  ): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        interventionHolds: { $elemMatch: { decisionId, releasedAt: null } },
+      },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': by } },
+      { arrayFilters: [{ 'hold.decisionId': decisionId, 'hold.releasedAt': null }], runValidators: true, session }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** True while any account still carries an unreleased hold from this decision (expired or not). */
+  async hasUnreleasedInterventionHold(decisionId: string): Promise<boolean> {
+    const found = await this.model.exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } });
+    return found !== null;
+  }
+
+  /**
+   * Stamps released every unreleased hold past its expiry, for audit only: the gates already ignore an
+   * expired hold. Returns the deciding decision ids so their records can be marked expired too.
+   */
+  async expireInterventionHolds(now: Date, limit = 500): Promise<string[]> {
+    const due = { releasedAt: null, expiresAt: { $lte: now } };
+    const docs = await this.model
+      .find({ interventionHolds: { $elemMatch: due } }, { interventionHolds: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId; interventionHolds?: InterventionHold[] }>>();
+    if (docs.length === 0) return [];
+    await this.model.updateMany(
+      { _id: { $in: docs.map(doc => doc._id) } },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': 'expiry' } },
+      { arrayFilters: [{ 'hold.releasedAt': null, 'hold.expiresAt': { $lte: now } }], runValidators: true }
+    );
+    const ids = new Set<string>();
+    for (const doc of docs) {
+      for (const hold of doc.interventionHolds ?? []) {
+        if (hold.releasedAt == null && hold.expiresAt.getTime() <= now.getTime()) ids.add(hold.decisionId);
+      }
+    }
+    return [...ids];
   }
 
   async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
@@ -1517,6 +1836,168 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  /** The review list's membership: an escalated status, or a severe hit newer than the last admin decision. */
+  private moderationReviewFilter() {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
+    // The newest retained severe hit is after the last status change, so no admin has acted on it yet.
+    const latestSevereHitAt = {
+      $max: {
+        $map: {
+          input: {
+            $filter: {
+              input: { $ifNull: ['$moderation.hits', []] },
+              as: 'hit',
+              cond: { $gt: [{ $size: { $setIntersection: [{ $ifNull: ['$$hit.categories', []] }, severe] } }, 0] },
+            },
+          },
+          as: 'hit',
+          in: '$$hit.at',
+        },
+      },
+    };
+    const lastStatusChange = { $ifNull: ['$moderation.statusChangedAt', new Date(0)] };
+    return {
+      $or: [
+        { 'moderation.status': { $in: [...MODERATION_REVIEW_STATUSES] } },
+        {
+          'moderation.hits.categories': { $in: severe },
+          $expr: { $gt: [latestSevereHitAt, lastStatusChange] },
+        },
+      ],
+    };
+  }
+
+  async countModerationReviewQueue(options: { limit?: number } = {}): Promise<number> {
+    return this.model.countDocuments(this.moderationReviewFilter(), { limit: options.limit }).maxTimeMS(5000).exec();
+  }
+
+  async findModerationReviewQueue(limit: number): Promise<ModerationReviewUser[]> {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
+    const docs = await this.model
+      .find(this.moderationReviewFilter())
+      .select('name email createdAt moderation')
+      .sort({ 'moderation.lastHitAt': -1, _id: -1 })
+      .limit(limit)
+      .maxTimeMS(5000)
+      .lean();
+    return docs.map(doc => {
+      const moderation = doc.moderation as IUserModeration;
+      const statusChangedAt = moderation.statusChangedAt ? new Date(moderation.statusChangedAt).getTime() : 0;
+      return {
+        id: String(doc._id),
+        name: doc.name ?? null,
+        email: doc.email ?? null,
+        createdAt: doc.createdAt ?? null,
+        moderation,
+        hasUnreviewedSevereHit: (moderation.hits ?? []).some(
+          hit =>
+            new Date(hit.at).getTime() > statusChangedAt && hit.categories?.some(category => severe.includes(category))
+        ),
+      };
+    });
+  }
+
+  /**
+   * Replaces the brief schedule and its due time together. A null `nextBriefAt` (schedule off) removes the field and drops the user from the
+   * reconciler's index.
+   */
+  async setBriefSchedule(userId: string, schedule: BriefSchedule, nextBriefAt: Date | null): Promise<void> {
+    await this.ensurePreferencesObject(userId);
+    await this.model.updateOne(
+      { _id: userId },
+      nextBriefAt
+        ? { $set: { 'preferences.briefSchedule': schedule, nextBriefAt } }
+        : { $set: { 'preferences.briefSchedule': schedule }, $unset: { nextBriefAt: 1 } },
+      { runValidators: true }
+    );
+  }
+
+  /** A dotted `$set` under `preferences` fails while the field is null (its schema default). */
+  private async ensurePreferencesObject(userId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId, preferences: null },
+      { $set: { preferences: {} } },
+      { runValidators: true }
+    );
+  }
+
+  async getBriefSchedule(userId: string): Promise<{ schedule: BriefSchedule | null; nextBriefAt: Date | null }> {
+    const user = await this.model
+      .findById(userId, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
+      .lean<Pick<IUserDocument, 'preferences' | 'nextBriefAt'>>();
+    return { schedule: user?.preferences?.briefSchedule ?? null, nextBriefAt: user?.nextBriefAt ?? null };
+  }
+
+  /**
+   * Users whose scheduled brief is due, earliest first. The `$type` term is what lets the planner use the
+   * `user_nextBriefAt` partial index; without it the scan is a COLLSCAN plus an in-memory sort.
+   */
+  async findDueBriefSchedules(
+    now: Date,
+    limit: number
+  ): Promise<{ id: string; schedule: BriefSchedule | null; nextBriefAt: Date }[]> {
+    const users = await this.model
+      .find({ nextBriefAt: { $type: 'date', $lte: now } }, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
+      .sort({ nextBriefAt: 1 })
+      .limit(limit)
+      .lean<(Pick<IUserDocument, 'preferences'> & { _id: unknown; nextBriefAt: Date })[]>();
+    return users.map(user => ({
+      id: String(user._id),
+      schedule: user.preferences?.briefSchedule ?? null,
+      nextBriefAt: user.nextBriefAt,
+    }));
+  }
+
+  /**
+   * Moves a due user to its next slot (or off the schedule with null), only while `nextBriefAt` still holds
+   * the value the caller read. That compare-and-set is the claim: false means another run took this slot.
+   */
+  async advanceNextBriefAt(userId: string, expected: Date, next: Date | null): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, nextBriefAt: expected },
+      next ? { $set: { nextBriefAt: next } } : { $unset: { nextBriefAt: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Claims the shared brief-start debounce when no brief started within `minGapMs` of `now`, returning the
+   * replaced value for releaseBriefStart; null when refused. A stored value in the future counts as recent.
+   */
+  async claimBriefStart(userId: string, now: Date, minGapMs: number): Promise<{ previous: Date | null } | null> {
+    const before = await this.model
+      .findOneAndUpdate(
+        {
+          _id: userId,
+          $or: [
+            { lastBriefStartedAt: { $exists: false } },
+            { lastBriefStartedAt: null },
+            { lastBriefStartedAt: { $lte: new Date(now.getTime() - minGapMs) } },
+          ],
+        },
+        { $set: { lastBriefStartedAt: now } },
+        { new: false, projection: { lastBriefStartedAt: 1 }, runValidators: true }
+      )
+      .lean<{ lastBriefStartedAt?: Date | null }>()
+      .exec();
+    return before ? { previous: before.lastBriefStartedAt ?? null } : null;
+  }
+
+  /**
+   * Gives back a claim by restoring the value it replaced, only while `lastBriefStartedAt` still holds this
+   * caller's `claimedAt`. Restoring rather than unsetting matters because the scheduled and event paths
+   * claim with different gaps: an unset would let an event start ignore an earlier event brief.
+   */
+  async releaseBriefStart(userId: string, claimedAt: Date, previous: Date | null): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, lastBriefStartedAt: claimedAt },
+      previous ? { $set: { lastBriefStartedAt: previous } } : { $unset: { lastBriefStartedAt: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations
@@ -1616,6 +2097,7 @@ const RiskEvidenceSchema = new Schema(
 
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
+    freeQuestStartId: { type: String },
     username: { type: String, required: true, unique: true },
     name: { type: String, required: true },
     email: { type: String }, // uniqueness enforced via the partial index below (allows multiple emailless accounts)
@@ -1635,6 +2117,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
     adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
+    // Assigned through the admin permissions endpoint. Resolved into the `roleAdminPermissions` virtual per request.
+    adminRoleIds: { type: [Schema.Types.ObjectId], ref: 'AdminRole', default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
     planStorageLimit: { type: Number },
@@ -1651,6 +2135,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
     // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
     signupGrantHeldAt: { type: Date },
+    interventionHolds: { type: [InterventionHoldSchema], default: undefined },
     signupGrant: {
       type: new Schema(
         {
@@ -1715,9 +2200,32 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    nextBriefAt: { type: Date },
+    lastBriefStartedAt: { type: Date },
+    accountFilePurge: {
+      type: new Schema(
+        {
+          startedAt: Date,
+          leaseId: String,
+          leaseExpiresAt: Date,
+          initialized: Boolean,
+          throughAuditId: String,
+          afterAuditId: String,
+          complete: Boolean,
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     accountDataExportLease: {
       type: new Schema(
-        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        {
+          id: { type: String, required: true },
+          jobId: { type: String, required: false },
+          expiresAt: { type: Date, required: true },
+        },
         { _id: false }
       ),
       required: false,
@@ -1727,6 +2235,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
+    // An organization's service account (see IUser.serviceAccountOrganizationId). Set on insert only.
+    serviceAccountOrganizationId: { type: String },
+    serviceAccountRetiredAt: { type: Date },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },
@@ -1746,6 +2257,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     numReferralsAvailable: { type: Number, default: 0 },
     regInvites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     referredByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    referredViaLinkAt: { type: Date, default: null },
+    // No default: the unique index below only covers string values, so accounts without a code never collide.
+    referralCode: { type: String },
     signupInvite: {
       type: new Schema(
         {
@@ -2016,6 +2530,17 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSynthetic: { type: Boolean, required: false },
     // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
     isInternal: { type: Boolean, required: false },
+    // See IUser.accountSegment. No default: absent reads as customer.
+    accountSegment: { type: String, required: false, enum: [...USER_ACCOUNT_SEGMENTS] },
+    // See IUser.isPersona. Written only by the persona mint route.
+    isPersona: { type: Boolean, required: false },
+    personaExpiresAt: { type: Date, required: false },
+    // See IUser.mfaEnforcement. Written only by the e2e create-user route.
+    mfaEnforcement: { type: String, enum: ['force'], required: false },
+    personaName: { type: String, required: false },
+    personaOwnerId: { type: String, required: false },
+    personaLoginCodeHash: { type: String, required: false },
+    personaLoginCodeExpiresAt: { type: Date, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {
@@ -2028,6 +2553,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     },
   }
 );
+
+// The permissions the user's admin roles carry, resolved per request into $locals by
+// packages/server-utils/src/auth/adminRoles.ts. A virtual so toJSON() carries it to the self view
+// while save() never persists it; undefined when roles were not resolved for this read.
+UserSchema.virtual('roleAdminPermissions').get(function () {
+  return this.$locals.roleAdminPermissions;
+});
 
 // Dedupe key for an authProviders entry: strategy and id joined by a U+0000 delimiter, a
 // byte no legitimate strategy or id contains - nothing schema-level enforces this (the
@@ -2144,6 +2676,9 @@ UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fin
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+// Members of a role: the member count refused on delete and reported on edit, and access review.
+// Explicit name so migration 20261114140117 and autoIndex agree.
+UserSchema.index({ adminRoleIds: 1 }, { name: 'user_adminRoleIds' });
 // Serves the per-organization lookup of accounts an org invite unlocked.
 // Sparse: only those accounts carry the field. Explicit name so the migration
 // 20260921235968 and autoIndex (mongo.ts) agree.
@@ -2160,12 +2695,21 @@ UserSchema.index(
   { 'signupMeta.ip': 1 },
   { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
 );
+// Expiry stamping of graduated holds (apps/workers/src/cron/abuseAssessmentSweep.ts). Only accounts that
+// carry a hold: a null-equality filter would also match every account with no holds field.
+UserSchema.index(
+  { 'interventionHolds.expiresAt': 1 },
+  {
+    name: 'user_interventionHolds_expiresAt_held',
+    partialFilterExpression: { 'interventionHolds.expiresAt': { $exists: true } },
+  }
+);
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
 // Admin users list: the Signed up, Last active and Credits sorts and the built-in view counts
-// (apps/client/server/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
+// (packages/server-utils/src/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
 // adminUsersSort adds an _id tiebreak, and a sort only uses an index whose key it prefixes; each
 // serves both directions. The flag and band indexes are partial/sparse so they stay small. Built
 // by the ensure-user-admin-list-indexes migration.
@@ -2173,6 +2717,21 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// Serve findModerationReviewQueue, one per $or branch. Not partial: a partial index is only chosen when
+// the query provably implies its filter, which an $in does not; sparse keeps users with no moderation
+// state out. Built by the ensure-user-moderation-review-indexes migration.
+UserSchema.index({ 'moderation.status': 1 }, { sparse: true, name: 'user_moderation_status' });
+UserSchema.index({ 'moderation.hits.categories': 1 }, { sparse: true, name: 'user_moderation_hit_categories' });
+// The persona caps and expiry sweep read only persona accounts, a handful among all users.
+UserSchema.index(
+  { isPersona: 1, personaExpiresAt: 1 },
+  { partialFilterExpression: { isPersona: true }, name: 'user_isPersona_expiresAt' }
+);
+// Login-code redemption looks a persona up by the code's hash; only personas with a pending code carry one.
+UserSchema.index(
+  { personaLoginCodeHash: 1 },
+  { partialFilterExpression: { personaLoginCodeHash: { $type: 'string' } }, name: 'user_personaLoginCodeHash' }
+);
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
 // 20260921235956 byte-for-byte.
@@ -2197,10 +2756,21 @@ UserSchema.index(
 );
 // Serves the inviter's referral counts (invited, active). Built by the ensure-referral-inviter-indexes migration.
 UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
+// Resolves a share-link visit to its owner and keeps two accounts from minting the same code. Built by the
+// ensure-referral-code-index migration.
+UserSchema.index(
+  { referralCode: 1 },
+  { unique: true, partialFilterExpression: { referralCode: { $type: 'string' } }, name: 'user_referralCode' }
+);
 // Serves the account deletion purge job's scan for grace periods that have ended.
 UserSchema.index(
   { 'deletion.scheduledFor': 1 },
   { partialFilterExpression: { 'deletion.scheduledFor': { $type: 'date' } }, name: 'user_deletion_scheduledFor' }
+);
+// Serves the brief-schedule reconciler's due scan; only users with a schedule on carry the field.
+UserSchema.index(
+  { nextBriefAt: 1 },
+  { partialFilterExpression: { nextBriefAt: { $type: 'date' } }, name: 'user_nextBriefAt' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
@@ -2288,6 +2858,8 @@ function mfaAttemptPipeline(now: Date): PipelineStage.Set[] {
  * every write path, present and future. Deliberate MFA writes load the secrets first
  * (`findByIdWithMfaSecrets`) and therefore carry `totpSecret`, so they pass through unchanged;
  * deliberate teardowns pass `mfa: null` (falsy, not an object), which also passes through.
+ * A passkey-only user has no secret at all, so every write for them must be field-level (dotted)
+ * or a pipeline (see atomicEnablePasskeyMfa), never a whole `mfa` object.
  */
 function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
   const update = this.getUpdate() as Record<string, unknown> | null;

@@ -19,7 +19,7 @@ import {
 } from '@bike4mind/server-utils/auth/signupNetworkSignals';
 import { postMessageToSlackWithOutcome } from '@bike4mind/server-utils/integrations/slack/slack';
 import { sharedLinkKinds } from '@bike4mind/server-utils/security/accountLinkSignals';
-import { hostingNetworkOf } from './datacenterAsns';
+import { hostingNetworkOf } from '@bike4mind/server-utils/auth/datacenterAsns';
 
 /**
  * Signup network burst alerting: when several self-serve accounts sign up from one IP or one network

@@ -49,8 +49,8 @@ const job = {
 };
 
 const setStartDate = (value: string) => {
-  const input = screen.getByTestId('date-range-start-input').querySelector('input') as HTMLInputElement;
-  fireEvent.change(input, { target: { value } });
+  fireEvent.click(screen.getByTestId('date-range-start-input-set-btn'));
+  fireEvent.change(screen.getByTestId('date-range-start-input'), { target: { value } });
 };
 
 describe('EmailJobsPanel', () => {
@@ -107,6 +107,14 @@ describe('EmailJobsPanel', () => {
     expect(empty).toHaveTextContent('No campaigns yet');
     fireEvent.click(within(empty).getByTestId('email-campaigns-empty-create-btn'));
     expect(screen.getByTestId('email-job-detail-stub')).toHaveAttribute('data-job-id', 'new');
+  });
+
+  it('shows empty date labels and sends no date bounds until one is set', () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId('filter-campaigns-btn'));
+    expect(screen.getByTestId('date-range-start-input-empty')).toHaveTextContent('From any date');
+    expect(screen.getByTestId('date-range-end-input-empty')).toHaveTextContent('To any date');
+    expect(mocks.lastParams).toMatchObject({ startDate: undefined, endDate: undefined });
   });
 
   it('says when the filters match nothing and offers to clear them', () => {

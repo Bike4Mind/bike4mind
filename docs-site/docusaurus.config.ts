@@ -39,7 +39,6 @@ const config: Config = {
             '**/__tests__/**',
             'security/**',
             'developers/fleet-usage-export.md',
-            'admin/liveops-triage.md',
             'admin/data-lake-cost-governance.md',
             'features/optihashi.md',
             'features/libreoncology.md',
@@ -60,7 +59,10 @@ const config: Config = {
     [
       '@docusaurus/plugin-client-redirects',
       {
-        redirects: [{ from: '/admin/subscribers', to: '/admin/waitlist' }],
+        redirects: [
+          { from: '/admin/subscribers', to: '/admin/waitlist' },
+          { from: '/admin/llm-dashboard', to: '/admin/models' },
+        ],
       },
     ],
   ],

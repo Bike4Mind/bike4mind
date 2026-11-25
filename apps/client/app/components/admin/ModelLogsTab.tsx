@@ -1,154 +1,169 @@
 import React, { useEffect, useState } from 'react';
-import {
-  Box,
-  Card,
-  Stack,
-  Typography,
-  Button,
-  FormControl,
-  RadioGroup,
-  Radio,
-  LinearProgress,
-  Grid,
-  Alert,
-  Select,
-  Option,
-  Input,
-  Divider,
-} from '@mui/joy';
+import { Box, Button, Input, Stack, Typography } from '@mui/joy';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import SearchIcon from '@mui/icons-material/Search';
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 import { isValidSupportCase, SUPPORT_CASE_MAX_LENGTH } from '@client/shared/supportCase';
 import { useQueryClient } from '@tanstack/react-query';
-import dayjs from 'dayjs';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import InfoIcon from '@mui/icons-material/Info';
-import { DateFilterComponent } from './EventMetrics/UserActivity/filters/DateFilterComponent';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { useModelLogDetail, useModelLogs, ModelLogSummary } from '@client/app/hooks/useModelLogs';
+import { useModelLogs, type ModelLogSummary } from '@client/app/hooks/useModelLogs';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { ErrorState } from './shared';
 import {
-  MODEL_LOGS_MODEL_OPTIONS,
-  MODEL_LOGS_PAGE_SIZE_OPTIONS,
-  MODEL_LOGS_SEARCH_PARSERS,
-  type ModelLogsView,
-} from './modelLogsTabSearch';
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  FilterChip,
+  FilterInputLabel,
+  FilterToolbar,
+  SegmentedControl,
+  UpdatingBar,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { useDateDraft } from './EventMetrics/UserActivity/filters/DateFilterComponent';
+import {
+  DATE_PRESET_DAYS,
+  getActivePreset,
+  getPresetRange,
+  isCompleteDateRange,
+  today,
+  type DatePresetDays,
+  type DateRange,
+} from './EventMetrics/UserActivity/dateRange';
+import { MODEL_LOGS_MODEL_OPTIONS, MODEL_LOGS_SEARCH_PARSERS, type ModelLogsView } from './modelLogsTabSearch';
 import { useModelLogsView } from './useModelLogsView';
+import { formatCount, formatLogTime, ModelLogDrawer } from './ModelLogDrawer';
 
-const ALL_MODELS = 'all';
+const PRESET_OPTIONS = DATE_PRESET_DAYS.map(days => ({
+  value: String(days),
+  label: days === 1 ? 'Today' : `${days} days`,
+}));
 
 interface ModelLogsTabProps {
   loading?: boolean;
   onRefresh?: () => void;
 }
 
-const PaginationControls = ({
-  currentPage,
-  totalPages,
-  onPageChange,
-  itemsPerPage,
-  onItemsPerPageChange,
-  totalCount,
-}: {
-  currentPage: number;
-  totalPages: number;
-  onPageChange: (page: number) => void;
-  itemsPerPage: number;
-  onItemsPerPageChange: (size: number) => void;
-  totalCount: number;
-}) => (
-  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 2, mb: 2 }}>
-    <Stack direction="row" spacing={2} justifyContent="center" alignItems="center">
-      <Button
-        disabled={currentPage <= 1}
-        onClick={() => onPageChange(currentPage - 1)}
-        data-testid="model-logs-prev-page-btn"
-      >
-        Previous
-      </Button>
-      <Typography>
-        Page {currentPage} of {totalPages}
+const columns: DataColumn<ModelLogSummary>[] = [
+  {
+    id: 'time',
+    label: 'Time',
+    width: '11rem',
+    render: log => (
+      <Box component="span" sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+        {formatLogTime(log.timestamp)}
+      </Box>
+    ),
+  },
+  {
+    id: 'model',
+    label: 'Model',
+    render: log => (
+      <Typography level="body-sm" noWrap title={log.modelName} sx={{ color: 'admin.ink', fontWeight: 500 }}>
+        {log.modelName ?? '-'}
       </Typography>
-      <Button
-        disabled={currentPage >= totalPages}
-        onClick={() => onPageChange(currentPage + 1)}
-        data-testid="model-logs-next-page-btn"
-      >
-        Next
-      </Button>
-    </Stack>
+    ),
+  },
+  {
+    id: 'response',
+    label: 'Response time',
+    width: '8rem',
+    numeric: true,
+    render: log => (log.totalResponseTime === undefined ? '-' : `${formatCount(log.totalResponseTime)} ms`),
+  },
+  {
+    id: 'tokens',
+    label: 'Tokens in / out',
+    width: '9rem',
+    numeric: true,
+    render: log => `${formatCount(log.inputTokens) ?? '-'} / ${formatCount(log.outputTokens) ?? '-'}`,
+  },
+  {
+    id: 'context',
+    label: 'Files / history',
+    width: '8rem',
+    numeric: true,
+    render: log => `${formatCount(log.attachedFileCount)} / ${formatCount(log.messageHistoryLength) ?? '-'}`,
+  },
+  {
+    id: 'steps',
+    label: 'Steps',
+    width: '12rem',
+    render: log => (
+      <Box component="span" sx={{ whiteSpace: 'nowrap' }}>
+        {formatCount(log.completedStepCount)} completed
+        {log.failedStepCount > 0 && (
+          <Box component="span" sx={{ color: 'admin.danger' }}>
+            , {formatCount(log.failedStepCount)} failed
+          </Box>
+        )}
+      </Box>
+    ),
+  },
+  {
+    id: 'artifacts',
+    label: 'Artifacts',
+    width: '6rem',
+    numeric: true,
+    render: log => formatCount(log.artifacts.length),
+  },
+];
 
-    <Stack direction="row" spacing={2} alignItems="center">
-      <FormControl>
-        <RadioGroup
-          orientation="horizontal"
-          value={itemsPerPage}
-          onChange={e => onItemsPerPageChange(Number(e.target.value))}
-        >
-          {MODEL_LOGS_PAGE_SIZE_OPTIONS.map(value => (
-            <Radio
-              key={value}
-              value={value}
-              label={`${value} per page`}
-              size="sm"
-              sx={{ mr: 2 }}
-              slotProps={{ input: { 'data-testid': `model-logs-page-size-${value}-radio` } }}
-            />
-          ))}
-        </RadioGroup>
-      </FormControl>
-      <Typography level="body-sm" fontWeight={800}>
-        Total Logs: {totalCount}
-      </Typography>
-    </Stack>
-  </Stack>
-);
-
-// The full promptMeta is fetched only when expanded; the list response carries just the card fields.
-// It is the user's own prompt text, so it is a support read and needs a case.
-const ModelLogDetails = ({ id, supportCase }: { id: string; supportCase: string }) => {
-  const [expanded, setExpanded] = useState(false);
-  const hasSupportCase = isValidSupportCase(supportCase);
-  const detailQuery = useModelLogDetail(id, supportCase, expanded);
+/**
+ * Start and end date inputs plus the preset ranges. Emits only complete ranges; a partial date stays
+ * in the input's draft (see useDateDraft) because the server rejects it.
+ */
+const DateRangeFilter = ({ value, onChange }: { value: DateRange; onChange: (range: DateRange) => void }) => {
+  const { startDate, endDate } = value;
+  const startDraft = useDateDraft(startDate);
+  const endDraft = useDateDraft(endDate);
+  const emitIfComplete = (range: DateRange) => {
+    if (isCompleteDateRange(range)) onChange(range);
+  };
+  const activePreset = getActivePreset(value);
 
   return (
-    <Box>
-      <Button
+    <>
+      <Input
+        type="date"
         size="sm"
-        variant="plain"
-        color="neutral"
-        onClick={() => setExpanded(value => !value)}
-        aria-expanded={expanded}
-        disabled={!hasSupportCase}
-        data-testid="model-logs-details-toggle-btn"
-      >
-        {!hasSupportCase ? 'Enter a support case to show details' : expanded ? 'Hide details' : 'Show details'}
-      </Button>
-      {expanded &&
-        hasSupportCase &&
-        (detailQuery.isError ? (
-          <ErrorState message="Could not load log details." onRetry={() => detailQuery.refetch()} />
-        ) : detailQuery.data ? (
-          <Box
-            component="pre"
-            data-testid="model-logs-details"
-            sx={{
-              m: 0,
-              mt: 1,
-              maxHeight: 480,
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              fontFamily: 'code',
-              fontSize: 'xs',
-            }}
-          >
-            {JSON.stringify(detailQuery.data, null, 2)}
-          </Box>
-        ) : (
-          <LinearProgress sx={{ mt: 1 }} data-testid="model-logs-details-loading" />
-        ))}
-    </Box>
+        value={startDraft.draft}
+        startDecorator={<FilterInputLabel>From</FilterInputLabel>}
+        onChange={event => {
+          startDraft.setDraft(event.target.value);
+          emitIfComplete({ startDate: event.target.value, endDate });
+        }}
+        onFocus={startDraft.onFocus}
+        onBlur={startDraft.onBlur}
+        slotProps={{
+          input: { 'aria-label': 'Start date', max: endDate || today(), 'data-testid': 'model-logs-start-input' },
+        }}
+        sx={adminFocus}
+      />
+      <Input
+        type="date"
+        size="sm"
+        value={endDraft.draft}
+        startDecorator={<FilterInputLabel>To</FilterInputLabel>}
+        onChange={event => {
+          endDraft.setDraft(event.target.value);
+          emitIfComplete({ startDate, endDate: event.target.value });
+        }}
+        onFocus={endDraft.onFocus}
+        onBlur={endDraft.onBlur}
+        slotProps={{
+          input: { 'aria-label': 'End date', max: today(), min: startDate, 'data-testid': 'model-logs-end-input' },
+        }}
+        sx={adminFocus}
+      />
+      <SegmentedControl
+        options={PRESET_OPTIONS}
+        value={activePreset === null ? '' : String(activePreset)}
+        onChange={days => onChange(getPresetRange(Number(days) as DatePresetDays))}
+        aria-label="Date range"
+        data-testid="model-logs-preset"
+      />
+    </>
   );
 };
 
@@ -156,7 +171,6 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   const queryClient = useQueryClient();
   const [view, updateView] = useModelLogsView();
   const { page: currentPage, limit: itemsPerPage, startDate, endDate } = view;
-  const modelFilter = view.model ?? ALL_MODELS;
   const { value: searchQuery, debouncedValue: debouncedSearch, setValue: setSearchQuery } = useDebounceValue('');
   // Committed on blur or Enter, never on a debounce: every request carrying the case writes an audit
   // row under it, so a half-typed case must not reach the server.
@@ -165,6 +179,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   const commitSupportCase = () => setSupportCase(supportCaseInput.trim());
   // A text search matches users' prompt text, so the server refuses it without a case.
   const canSearch = isValidSupportCase(supportCase);
+  const [openLogId, setOpenLogId] = useState<string>();
 
   const modelLogsQuery = useModelLogs({
     startDate,
@@ -203,202 +218,142 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   }, [isPagePastEnd, lastPage, updateView]);
 
   const currentItems = modelLogsQuery.data?.logs ?? [];
+  const openLog = currentItems.find(log => log.id === openLogId);
 
   const isLoadingLogs = loading || modelLogsQuery.isLoading;
   // keepPreviousData leaves isLoading false on a refetch, so the old rows stay up under this.
   const isFetchingLogs = loading || modelLogsQuery.isFetching;
+  const showThirtyDays = getActivePreset({ startDate, endDate }) !== 30;
 
   return (
-    <Box>
-      <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: 1 }}>
-          <Typography level="h4">Model Response Logs</Typography>
-          <ContextHelpButton helpId="admin/model-logs" tooltipText="Model Logs Help" />
-        </Stack>
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          startDecorator={<RefreshIcon />}
-          onClick={handleRefresh}
-          disabled={isFetchingLogs}
-          data-testid="model-logs-refresh-btn"
-        >
-          Refresh
-        </Button>
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="admin-model-logs">
+      <AdminPageHeader
+        title="Model logs"
+        count={modelLogsQuery.data ? totalCount : undefined}
+        description="Each model response with its timing, token use, context and execution steps. Searching logs and reading a prompt are recorded against the support case you enter."
+        actions={
+          <Stack direction="row" alignItems="center" gap={1}>
+            <ContextHelpButton helpId="admin/model-logs" tooltipText="Model Logs Help" />
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              startDecorator={<RefreshIcon />}
+              onClick={handleRefresh}
+              disabled={isFetchingLogs}
+              data-testid="model-logs-refresh-btn"
+            >
+              Refresh
+            </Button>
+          </Stack>
+        }
+      />
+
+      {/* The filters never swap layout while loading: a remount would drop focus on every keystroke. */}
+      <Stack gap={1}>
+        <FilterToolbar data-testid="model-logs-toolbar">
+          <DateRangeFilter value={{ startDate, endDate }} onChange={setDateRange} />
+          <FilterChip
+            id="model-logs-model"
+            label="Model"
+            options={MODEL_LOGS_MODEL_OPTIONS}
+            value={view.model}
+            onChange={value => updateView({ model: MODEL_LOGS_SEARCH_PARSERS.modelLogsModel(value), page: 1 })}
+          />
+        </FilterToolbar>
+        <FilterToolbar data-testid="model-logs-support-toolbar">
+          <Input
+            size="sm"
+            placeholder="Support case, then Enter"
+            value={supportCaseInput}
+            startDecorator={<FilterInputLabel>Case</FilterInputLabel>}
+            slotProps={{
+              input: {
+                'data-testid': 'model-logs-support-case-input',
+                'aria-label': 'Support case',
+                maxLength: SUPPORT_CASE_MAX_LENGTH,
+              },
+            }}
+            onChange={e => setSupportCaseInput(e.target.value)}
+            onBlur={commitSupportCase}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commitSupportCase();
+            }}
+            sx={{ ...adminFocus, flex: '0 1 16rem', minWidth: '12rem' }}
+          />
+          <Input
+            size="sm"
+            placeholder={canSearch ? 'Search prompts' : 'Enter a support case to search'}
+            // Without a case the term is not sent, so showing it would read as an active filter.
+            value={canSearch ? searchQuery : ''}
+            disabled={!canSearch}
+            startDecorator={<SearchIcon sx={{ fontSize: 16, color: 'admin.inkMuted' }} />}
+            slotProps={{ input: { 'data-testid': 'model-logs-search-input', 'aria-label': 'Search prompts' } }}
+            onChange={e => handleSearchChange(e.target.value)}
+            sx={{ ...adminFocus, flex: '1 1 16rem', minWidth: '12rem', maxWidth: '26rem' }}
+          />
+        </FilterToolbar>
       </Stack>
 
-      <Card variant="outlined" sx={{ p: 2, mb: 3 }}>
-        <Stack spacing={2}>
-          <Grid container spacing={2}>
-            {/* Full row: two date inputs plus three range buttons overflow a narrower cell. */}
-            <Grid xs={12}>
-              <DateFilterComponent value={{ startDate, endDate }} onChange={setDateRange} />
-            </Grid>
-            <Grid xs={12} md={4}>
-              <FormControl>
-                <Select
-                  value={modelFilter}
-                  // The parser reads "All Models" (and anything unknown) as no model filter.
-                  onChange={(_, value) =>
-                    updateView({ model: MODEL_LOGS_SEARCH_PARSERS.modelLogsModel(value), page: 1 })
+      <Stack gap={1}>
+        <Box sx={{ position: 'relative' }}>
+          <UpdatingBar active={!isLoadingLogs && isFetchingLogs} placement="overlay" testId="model-logs-refetching" />
+          <DataTable
+            label="Model logs"
+            testId="model-logs-table"
+            rows={currentItems}
+            columns={columns}
+            getRowId={log => log.id}
+            rowTestId={log => `model-logs-row-${log.id}`}
+            loading={isLoadingLogs}
+            error={modelLogsQuery.isError ? 'Could not load model logs.' : undefined}
+            onRetry={() => void modelLogsQuery.refetch()}
+            onRowActivate={log => setOpenLogId(log.id)}
+            activeRowId={openLog?.id}
+            pagination={{
+              page: currentPage,
+              pageSize: itemsPerPage,
+              // Capped so Next stops at the last page the server will serve.
+              total: Math.min(totalCount, MODEL_LOGS_MAX_PAGE * itemsPerPage),
+              onPageChange: page => updateView({ page }),
+              onPageSizeChange: size => updateView({ limit: size, page: 1 }),
+            }}
+            minWidth="64rem"
+            maxHeight="none"
+            empty={
+              <Box data-testid="model-logs-empty">
+                <EmptyState
+                  title="No logs match these filters"
+                  description="Try a longer date range or another model."
+                  action={
+                    showThirtyDays ? (
+                      <Button
+                        variant="outlined"
+                        onClick={() => setDateRange(getPresetRange(30))}
+                        data-testid="model-logs-empty-30-days-btn"
+                      >
+                        Show the last 30 days
+                      </Button>
+                    ) : (
+                      <Button variant="outlined" onClick={handleRefresh} data-testid="model-logs-empty-refresh-btn">
+                        Refresh
+                      </Button>
+                    )
                   }
-                  placeholder="Filter by Model"
-                  data-testid="model-logs-model-select"
-                >
-                  <Option value={ALL_MODELS}>All Models</Option>
-                  {MODEL_LOGS_MODEL_OPTIONS.map(option => (
-                    <Option key={option.value} value={option.value}>
-                      {option.label}
-                    </Option>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid xs={12} md={4}>
-              <Input
-                placeholder="Support case, then Enter (required for search and details)"
-                value={supportCaseInput}
-                slotProps={{
-                  input: {
-                    'data-testid': 'model-logs-support-case-input',
-                    'aria-label': 'Support case',
-                    maxLength: SUPPORT_CASE_MAX_LENGTH,
-                  },
-                }}
-                onChange={e => setSupportCaseInput(e.target.value)}
-                onBlur={commitSupportCase}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') commitSupportCase();
-                }}
-              />
-            </Grid>
-            <Grid xs={12} md={4}>
-              <Input
-                placeholder={canSearch ? 'Search logs...' : 'Enter a support case to search'}
-                // Without a case the term is not sent, so showing it would read as an active filter.
-                value={canSearch ? searchQuery : ''}
-                disabled={!canSearch}
-                slotProps={{ input: { 'data-testid': 'model-logs-search-input' } }}
-                onChange={e => handleSearchChange(e.target.value)}
-              />
-            </Grid>
-          </Grid>
-        </Stack>
-      </Card>
-
-      <Alert variant="soft" color="neutral" startDecorator={<InfoIcon />} sx={{ mb: 2 }}>
-        View detailed logs of model responses, including performance metrics, token usage, and execution tracking.
-        Searching and opening a log&apos;s details read the user&apos;s own prompts, so each one is recorded against the
-        support case you enter.
-      </Alert>
-
-      {/* Only the results swap while loading: re-rendering the filters in another layout would
-          remount them and drop focus on every keystroke. */}
-      {!isLoadingLogs && isFetchingLogs && <LinearProgress sx={{ mb: 2 }} data-testid="model-logs-refetching" />}
-      {isLoadingLogs ? (
-        <LinearProgress data-testid="model-logs-loading" />
-      ) : modelLogsQuery.isError ? (
-        <Card variant="outlined" sx={{ p: 2 }} data-testid="model-logs-error">
-          <ErrorState message="Could not load model logs." onRetry={() => modelLogsQuery.refetch()} />
-        </Card>
-      ) : currentItems.length === 0 ? (
-        <Card variant="outlined" sx={{ p: 2 }} data-testid="model-logs-empty">
-          <Typography>No logs found for the selected filters.</Typography>
-        </Card>
-      ) : (
-        <>
-          <Stack spacing={2}>
-            {currentItems.map((log: ModelLogSummary) => (
-              <Card key={log.id} variant="outlined">
-                <Stack spacing={2}>
-                  <Grid container spacing={2}>
-                    <Grid xs={12} md={3}>
-                      <Typography level="body-sm" fontWeight="bold">
-                        Model
-                      </Typography>
-                      <Typography>{log.modelName}</Typography>
-                    </Grid>
-                    <Grid xs={12} md={3}>
-                      <Typography level="body-sm" fontWeight="bold">
-                        Timestamp
-                      </Typography>
-                      <Typography>{dayjs(log.timestamp).format('YYYY-MM-DD HH:mm:ss')}</Typography>
-                    </Grid>
-                    <Grid xs={12} md={3}>
-                      <Typography level="body-sm" fontWeight="bold">
-                        Response Time
-                      </Typography>
-                      <Typography>{log.totalResponseTime}ms</Typography>
-                    </Grid>
-                    <Grid xs={12} md={3}>
-                      <Typography level="body-sm" fontWeight="bold">
-                        Token Usage
-                      </Typography>
-                      <Typography>
-                        {log.inputTokens} in / {log.outputTokens} out
-                      </Typography>
-                    </Grid>
-                  </Grid>
-
-                  <Divider />
-
-                  <Grid container spacing={2}>
-                    <Grid xs={12} md={6}>
-                      <Typography level="body-sm" fontWeight="bold">
-                        Context
-                      </Typography>
-                      <Typography>
-                        Files: {log.attachedFileCount} | History: {log.messageHistoryLength}
-                      </Typography>
-                    </Grid>
-                    <Grid xs={12} md={6}>
-                      <Typography level="body-sm" fontWeight="bold">
-                        Execution Steps
-                      </Typography>
-                      <Typography>
-                        {log.completedStepCount} completed / {log.failedStepCount} failed
-                      </Typography>
-                    </Grid>
-                  </Grid>
-
-                  {log.artifacts.length > 0 && (
-                    <>
-                      <Divider />
-                      <Typography level="body-sm" fontWeight="bold">
-                        Artifacts ({log.artifacts.length})
-                      </Typography>
-                      <Stack spacing={1}>
-                        {log.artifacts.map((artifact, idx: number) => (
-                          <Typography key={idx} level="body-sm">
-                            {artifact.type}
-                          </Typography>
-                        ))}
-                      </Stack>
-                    </>
-                  )}
-
-                  <ModelLogDetails id={log.id} supportCase={supportCase} />
-                </Stack>
-              </Card>
-            ))}
-          </Stack>
-          {matchingPages > MODEL_LOGS_MAX_PAGE && (
-            <Alert color="neutral" sx={{ mt: 2 }} data-testid="model-logs-page-limit">
-              You can browse the first {MODEL_LOGS_MAX_PAGE.toLocaleString()} pages. Narrow the filters to see
-              additional logs.
-            </Alert>
-          )}
-          <PaginationControls
-            currentPage={currentPage}
-            totalPages={totalPages}
-            onPageChange={page => updateView({ page })}
-            itemsPerPage={itemsPerPage}
-            onItemsPerPageChange={size => updateView({ limit: size, page: 1 })}
-            totalCount={totalCount}
+                />
+              </Box>
+            }
           />
-        </>
-      )}
-    </Box>
+        </Box>
+        {matchingPages > MODEL_LOGS_MAX_PAGE && (
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="model-logs-page-limit">
+            You can browse the first {MODEL_LOGS_MAX_PAGE.toLocaleString()} pages. Narrow the filters to see additional
+            logs.
+          </Typography>
+        )}
+      </Stack>
+
+      <ModelLogDrawer log={openLog} supportCase={supportCase} onClose={() => setOpenLogId(undefined)} />
+    </Stack>
   );
 };

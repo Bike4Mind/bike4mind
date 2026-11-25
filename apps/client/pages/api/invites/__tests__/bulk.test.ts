@@ -26,11 +26,24 @@ const mocks = vi.hoisted(() => ({
   logEvent: vi.fn(),
   findProject: vi.fn(),
   sendToClient: vi.fn().mockResolvedValue(undefined),
+  resolveAddressedInvite: vi.fn(),
 }));
 vi.mock('@bike4mind/services', () => ({
-  sharingService: { acceptInvite: mocks.acceptInvite, refuseWholeInvite: mocks.refuseWholeInvite },
+  sharingService: {
+    acceptInvite: mocks.acceptInvite,
+    refuseWholeInvite: mocks.refuseWholeInvite,
+    resolveAddressedInvite: mocks.resolveAddressedInvite,
+  },
+}));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => false) }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: () => 1000,
 }));
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
+  adminSettingsRepository: {},
   inviteRepository: {},
   Organization: {},
   organizationRepository: {},
@@ -49,6 +62,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: mocks.logEvent }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://x' } } }));
+const reserveInviteAccept = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/inviteAcceptLimits', () => ({ reserveInviteAccept }));
 
 const payOrgInviteBonus = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus }));
@@ -58,6 +73,8 @@ import '@pages/api/invites/bulk';
 const ID_A = '65a1f77bcf86cd7994390001';
 const ID_B = '65a1f77bcf86cd7994390002';
 const TOKEN_C = 'q3Vx_9-TzW1sYbN2kLmPoR4uAeHcJdFgXiZt7nE8w0s';
+
+const accepted = (value: ReturnType<typeof invite>) => ({ invite: value, outcome: 'accepted' as const });
 
 const invite = (id: string, type = 'Session') => ({
   id,
@@ -78,7 +95,8 @@ const call = async (body: unknown) => {
 describe('POST /api/invites/bulk', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) => invite(id));
+    mocks.resolveAddressedInvite.mockResolvedValue(null);
+    mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) => accepted(invite(id)));
     mocks.refuseWholeInvite.mockImplementation(async (_user: unknown, { id }: { id: string }) => invite(id));
   });
 
@@ -111,7 +129,7 @@ describe('POST /api/invites/bulk', () => {
 
   it('pays the organization invite bonus for each accepted organization invite', async () => {
     mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) =>
-      invite(id, id === ID_A ? 'Organization' : 'Session')
+      accepted(invite(id, id === ID_A ? 'Organization' : 'Session'))
     );
     await call({ action: 'accept', ids: [ID_A, ID_B] });
     expect(payOrgInviteBonus).toHaveBeenCalledTimes(1);
@@ -119,7 +137,7 @@ describe('POST /api/invites/bulk', () => {
   });
 
   it('keeps a committed project accept successful when analytics throws', async () => {
-    mocks.acceptInvite.mockResolvedValueOnce(invite(ID_A, 'Project'));
+    mocks.acceptInvite.mockResolvedValueOnce(accepted(invite(ID_A, 'Project')));
     mocks.findProject.mockResolvedValueOnce({ id: 'project', name: 'Project' });
     mocks.logEvent.mockRejectedValueOnce(new Error('analytics unavailable'));
     const response = (await call({ action: 'accept', ids: [ID_A] }))._getJSONData();
@@ -133,7 +151,7 @@ describe('POST /api/invites/bulk', () => {
     mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) => {
       if (id === ID_B) throw forbidden;
       if (id === TOKEN_C) throw new Error('mongo exploded at host db-1');
-      return invite(id);
+      return accepted(invite(id));
     });
 
     const body = (await call({ action: 'accept', ids: [ID_A, ID_B, TOKEN_C] }))._getJSONData();
@@ -160,6 +178,20 @@ describe('POST /api/invites/bulk', () => {
     expect(body.okCount).toBe(1);
   });
 
+  it.each(['accept', 'refuse'])('reports a flag-off Space key as a not-found item error on %s', async action => {
+    mocks.resolveAddressedInvite.mockImplementation(async (key: string) =>
+      key === ID_A ? { id: ID_A, type: 'Space' } : null
+    );
+
+    const body = (await call({ action, ids: [ID_A, ID_B] }))._getJSONData();
+
+    expect(body.results[0]).toEqual({ id: ID_A, ok: false, error: 'Invite not found' });
+    expect(body.results[1]).toMatchObject({ id: ID_B, ok: true });
+    expect(mocks.acceptInvite).not.toHaveBeenCalledWith('u1', { id: ID_A }, expect.anything());
+    expect(mocks.refuseWholeInvite).not.toHaveBeenCalledWith(expect.anything(), { id: ID_A }, expect.anything());
+    expect(reserveInviteAccept).toHaveBeenCalledTimes(action === 'accept' ? 1 : 0);
+  });
+
   it('still returns the committed results when the refetch notification throws', async () => {
     mocks.sendToClient.mockRejectedValueOnce(new Error('Missing WEBSOCKET_MANAGEMENT_ENDPOINT'));
 
@@ -170,6 +202,23 @@ describe('POST /api/invites/bulk', () => {
     expect(body.okCount).toBe(2);
     expect(body.results.every((r: any) => r.ok)).toBe(true);
     expect(mocks.sendToClient).toHaveBeenCalledTimes(1);
+  });
+
+  it('charges each accept attempt and reports a spent window per invite without calling the service', async () => {
+    const { TooManyRequestsError } = await import('@bike4mind/utils');
+    reserveInviteAccept
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new TooManyRequestsError('Too many invite accepts. Try again later.'));
+    const res = await call({ action: 'accept', ids: [ID_A, ID_B] });
+    const body = res._getJSONData();
+    expect(reserveInviteAccept).toHaveBeenCalledTimes(2);
+    expect(mocks.acceptInvite).toHaveBeenCalledTimes(1);
+    expect(body.results[1]).toMatchObject({ id: ID_B, ok: false, error: 'Too many invite accepts. Try again later.' });
+  });
+
+  it('does not charge the accept window for a refuse', async () => {
+    await call({ action: 'refuse', ids: [ID_A] });
+    expect(reserveInviteAccept).not.toHaveBeenCalled();
   });
 
   it('skips the refetch when nothing succeeded', async () => {

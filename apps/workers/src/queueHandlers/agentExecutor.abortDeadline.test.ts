@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
   resolveThinkingVisibility: vi.fn(async () => 'raw'),
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
 }));
 import type { Context } from 'aws-lambda';
@@ -136,6 +136,7 @@ vi.mock('@bike4mind/database', async () => {
   // `false` skips the second (ArtifactEmissionPrompt) read entirely.
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
   vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 

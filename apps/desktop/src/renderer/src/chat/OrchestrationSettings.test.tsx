@@ -99,3 +99,15 @@ it('lets the user remove selected unavailable overrides and upgrades without a r
   await act(async () => el('orchestration-save-btn').click());
   expect(setRolePolicy).toHaveBeenLastCalledWith(inheritancePolicy());
 });
+
+it('allows the newest usable model of each routing family in one click, saved only on explicit save', async () => {
+  await themed.render(<OrchestrationSettings />);
+  await act(async () => el('orchestration-overrides-families-btn').click());
+  expect(setRolePolicy).not.toHaveBeenCalled();
+  expect(el('orchestration-overrides-families-btn').hasAttribute('disabled')).toBe(true);
+  await act(async () => el('orchestration-save-btn').click());
+  expect(setRolePolicy).toHaveBeenLastCalledWith({
+    ...inheritancePolicy(),
+    allowedOverrides: ['planner', 'current-sonnet'],
+  });
+});

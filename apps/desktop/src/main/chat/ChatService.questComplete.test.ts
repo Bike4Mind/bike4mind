@@ -11,9 +11,14 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 // The user's login-shell PATH is slow to resolve and irrelevant to what is under test.
 vi.mock('./tools/userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 

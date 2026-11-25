@@ -3,6 +3,8 @@ import type {
   CreateGrantPackageInput,
   GrantPackageReasonPolicy,
   IGrantPackageDocument,
+  IPartnerSignupRuleDocument,
+  IRegInviteDocument,
   PaginatedResponse,
   UpdateGrantPackageInput,
 } from '@bike4mind/common';
@@ -36,5 +38,20 @@ export const createGrantPackage = async (data: CreateGrantPackageInput & { reaso
 
 export const updateGrantPackage = async (id: string, data: UpdateGrantPackageInput & { reason?: string }) => {
   const response = await api.patch<IGrantPackageDocument>(`${BASE}/${id}`, data);
+  return response.data;
+};
+
+export type GrantPackageLinkPage<T> = { data: T[]; truncated: boolean };
+
+/** Codes and partner signup rules linked to one package, newest first. */
+export type GrantPackageLinks = {
+  invites: GrantPackageLinkPage<IRegInviteDocument>;
+  partnerRules: GrantPackageLinkPage<IPartnerSignupRuleDocument>;
+};
+
+export const grantPackageLinksQueryKey = (id: string) => [GRANT_PACKAGES_QUERY_KEY, id, 'links'] as const;
+
+export const fetchGrantPackageLinks = async (id: string) => {
+  const response = await api.get<GrantPackageLinks>(`${BASE}/${id}/links`);
   return response.data;
 };

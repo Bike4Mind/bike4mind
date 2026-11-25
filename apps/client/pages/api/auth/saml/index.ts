@@ -15,17 +15,25 @@ const handler = ipGatedApi.get(async (req, res) => {
     throw new BadRequestError('IDP parameter is required');
   }
 
+  // Outside the try below: an unknown or non-SAML IdP is caller input, answered 404/400 at warn by
+  // the shared error handler rather than logged as a setup failure.
+  let identityProvider: Awaited<ReturnType<typeof identityProviderRepository.findByIdWithSecrets>>;
   try {
-    const identityProvider = await identityProviderRepository.findByIdWithSecrets(idp);
+    identityProvider = await identityProviderRepository.findByIdWithSecrets(idp);
+  } catch (error) {
+    req.logger.error('SAML identity provider lookup failed', { error });
+    return res.redirect('/login?error=saml_setup_failed');
+  }
 
-    if (!identityProvider || !identityProvider.isActive) {
-      throw new NotFoundError('Identity provider not found or inactive');
-    }
+  if (!identityProvider || !identityProvider.isActive) {
+    throw new NotFoundError('Identity provider not found or inactive');
+  }
 
-    if (identityProvider.type !== 'saml' || !identityProvider.samlConfig) {
-      throw new BadRequestError('Invalid SAML configuration');
-    }
+  if (identityProvider.type !== 'saml' || !identityProvider.samlConfig) {
+    throw new BadRequestError('Invalid SAML configuration');
+  }
 
+  try {
     const strategyName = setupSamlStrategy({
       _id: identityProvider.id,
       emailDomain: identityProvider.emailDomain,
@@ -41,7 +49,6 @@ const handler = ipGatedApi.get(async (req, res) => {
     }
 
     // RelayState carries a caller-supplied redirectTo and is never logged.
-    console.log('Starting SAML authentication for IDP:', identityProvider.id);
 
     passport.authenticate(strategyName, <AuthenticateOptions>{
       successRedirect: undefined,
@@ -51,7 +58,7 @@ const handler = ipGatedApi.get(async (req, res) => {
       },
     })(req, res);
   } catch (error) {
-    console.error('SAML authentication error:', error);
+    req.logger.error('SAML authentication error', { error });
     return res.redirect('/login?error=saml_setup_failed');
   }
 });

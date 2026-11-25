@@ -5,11 +5,18 @@ import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { compileRule, parseRule, PermissionRuleSet } from '../permissions/rules';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInAuto } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const { memoizedExecFile } = await import('./execFileMemo.testHelper');
+  return { ...actual, execFile: memoizedExecFile(actual.execFile) };
+});
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 
@@ -50,7 +57,7 @@ describe('git rule and launcher review regressions', () => {
   it.each(['pnpm exec git f origin', 'npm x git f origin', 'npx git m other'])(
     'checks expanded launched options in %s',
     async command => {
-      expect((await promptFor(command)).askInAuto).toBe(true);
+      expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
     }
   );
   it.each(['npx printf git bang', 'pnpm exec printf git bang', 'pnpm exec printf node -e 1'])(
@@ -80,7 +87,7 @@ describe('git rule and launcher review regressions', () => {
     'for n in 1 2; do git commit; export EDITOR=vim; done',
     'f(){ export EDITOR=vim; }; f; git commit',
   ])('retains actual or uncertain fallback consumers in %s', async command => {
-    expect((await promptFor(command)).askInAuto).toBe(true);
+    expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
   });
 
   it.each([
@@ -121,7 +128,7 @@ describe('git rule and launcher review regressions', () => {
     'yarn exec git bang',
     'bunx git bang',
   ])('checks the executable launched by %s', async command => {
-    expect((await promptFor(command)).askInAuto).toBe(true);
+    expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
   });
 
   it.each([
@@ -146,6 +153,135 @@ describe('git rule and launcher review regressions', () => {
     'export EDITOR=vim; pnpm exec git commit',
     'export EDITOR=vim; npm x git commit',
   ])('retains the program/config check for %s', async command => {
-    expect((await promptFor(command)).askInAuto).toBe(true);
+    expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
+  });
+});
+
+const DELETE_REASON = 'Deletes files recursively or forcefully, which cannot be undone.';
+
+describe('recursive or forced deletes', () => {
+  it.each([
+    'rm -rf src',
+    'rm -r src',
+    'rm -R src',
+    'rm -fr src',
+    'rm -f src/a.txt',
+    'rm --recursive src',
+    'rm --force src/a.txt',
+    'sudo rm -rf src',
+    'find . -name x -delete',
+    'find . -delete',
+    'find . -exec rm {} \\;',
+    'find . -exec rm -rf {} +',
+    'ls | xargs rm -rf',
+    '/bin/rm -rf src',
+    'env X=1 rm -rf src',
+    'command rm -rf src',
+    'rm --rec src',
+    'rm src -rf',
+    'ls && rm -rf src',
+    'echo $(rm -rf src)',
+    'find . -execdir rm {} \\;',
+    'find . -ok rm {} \\;',
+    // Option words read as bash hands them over: quotes and backslashes inside the word, line continuations.
+    'rm "-"rf src',
+    'rm -"rf" src',
+    String.raw`rm \-rf src`,
+    String.raw`rm -\rf src`,
+    'rm --"recursive" src',
+    "rm '--force' src/a.txt",
+    'rm -r\\\nf src',
+    'rm \\\n-rf src',
+    // A word an expansion, glob or brace may turn into an option.
+    'rm -$X src',
+    'rm "$X" src',
+    'rm ${X:--rf} src',
+    'rm -{r,f} src',
+    'rm {-r,x} src',
+    'rm -[r]f src',
+    // Program words and wrappers.
+    String.raw`\rm -rf src`,
+    '"rm" -rf src',
+    'builtin rm -rf src',
+    'builtin command rm -rf src',
+    'exec rm -rf src',
+    'nohup rm -rf src',
+    'nice -n 5 rm -rf src',
+    'timeout 5 rm -rf src',
+    'gtimeout 5 rm -rf src',
+    'sudo -u root rm -rf src',
+    'env -i rm -rf src',
+    // Launchers and runners that start another command.
+    'pnpm exec rm -rf src',
+    'pnpm exec -- rm -rf src',
+    'pnpm --filter x exec rm -rf src',
+    'npm exec rm -rf src',
+    'npm x rm -rf src',
+    "npm exec -c 'rm -rf src'",
+    'npx rm -rf src',
+    'ls | parallel rm -rf',
+    "ls | parallel 'rm -rf {}'",
+    "eval 'rm -rf src'",
+    'eval rm -rf src',
+    "xargs sh -c 'rm -rf src'",
+    // find running rm past its wrappers, through xargs or a shell, or with operands of its own.
+    'find . -exec env rm {} \\;',
+    'find . -exec command rm {} \\;',
+    'find . -exec sudo rm {} \\;',
+    'find . -exec xargs rm -rf \\;',
+    'find . -exec rm -rf src {} +',
+    "find . -exec sh -c 'rm -rf {}' \\;",
+    // Other programs that delete trees.
+    'rimraf dist',
+    'npx rimraf dist',
+    'pnpm rimraf dist',
+    'git clean -fdx',
+    'git clean',
+    'git -C src clean -fd',
+    'git clean -fdx -evendor',
+    'git clean -fdx -e -n',
+    'git clean -fdx --exclude -n',
+    'rsync -a --delete src/ out/',
+    'rsync -a --delete-after src/ out/',
+    'rsync -a --remove-source-files src/ out/',
+  ])('gives %s a reason on the card', async command => {
+    const prompt = await promptFor(command);
+    expect(prompt.reasons).toContain(DELETE_REASON);
+    expect(prompt.detail).toContain(DELETE_REASON);
+  });
+
+  it.each([
+    'rm src/a.txt',
+    'rm -i src/a.txt',
+    'rm -v src/a.txt',
+    'rm -d src',
+    'rm --dir src',
+    'ls',
+    'find . -name x',
+    'find . -fprint out',
+    'pnpm test',
+    'echo rm -rf src',
+    'rm -- -rf',
+    'rm ./$X',
+    'grep rm -r .',
+    'grep -r "rm -rf" .',
+    'ls -rf',
+    'cp -r src out',
+    'pnpm rm -r foo',
+    'pnpm exec vitest run',
+    'npx tsc --noEmit',
+    'timeout 5 ls',
+    'gtimeout 5 ls',
+    'git status',
+    'git clean -n',
+    'git clean -fd --dry-run',
+    'git clean -fdn',
+    'git clean -fne.env',
+    'rsync -a src/ out/',
+    'eval ls',
+    'unlink src/a.txt',
+    'rmdir src',
+  ])('gives %s no delete reason', async command => {
+    expect((await promptFor(command)).reasons ?? []).not.toContain(DELETE_REASON);
   });
 });

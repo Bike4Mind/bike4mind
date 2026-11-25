@@ -2,6 +2,7 @@ import {
   activityRepository,
   fabFileRepository,
   Group,
+  spaceRepository,
   inviteRepository,
   organizationRepository,
   Project,
@@ -91,11 +92,15 @@ export async function removeProjectMember(
   return project;
 }
 
-const systemPromptAdapters = { db: { fabFiles: fabFileRepository, projects: projectRepository } };
+// Built per call, not at module load: route tests mock @bike4mind/database with only the
+// repositories they use, and reading one missing from that mock at import fails the whole file.
+const systemPromptAdapters = () => ({
+  db: { fabFiles: fabFileRepository, projects: projectRepository, users: userRepository, invites: inviteRepository },
+});
 
 export async function addProjectSystemPrompts(ctx: Ctx, projectId: string, fileIds: string[]) {
   const project = await withTransaction(() =>
-    projectService.addSystemPrompts(ctx.user, { projectId, fileIds }, systemPromptAdapters)
+    projectService.addSystemPrompts(ctx.user, { projectId, fileIds }, systemPromptAdapters())
   );
 
   await Promise.all(
@@ -116,7 +121,7 @@ export async function addProjectSystemPrompts(ctx: Ctx, projectId: string, fileI
 
 export async function removeProjectSystemPrompts(ctx: Ctx, projectId: string, fileIds: string[]) {
   const project = await withTransaction(() =>
-    projectService.removeSystemPrompts(ctx.user, { projectId, fileIds }, systemPromptAdapters)
+    projectService.removeSystemPrompts(ctx.user, { projectId, fileIds }, systemPromptAdapters())
   );
 
   await Promise.all(
@@ -138,7 +143,7 @@ export async function removeProjectSystemPrompts(ctx: Ctx, projectId: string, fi
 /** Flips the prompt when `enabled` is omitted (the SPA toggle), otherwise sets it. */
 export async function setProjectSystemPrompt(ctx: Ctx, projectId: string, fileId: string, enabled?: boolean) {
   return withTransaction(() =>
-    projectService.toggleSystemPrompt(ctx.user, { projectId, fileId, enabled }, systemPromptAdapters)
+    projectService.toggleSystemPrompt(ctx.user, { projectId, fileId, enabled }, systemPromptAdapters())
   );
 }
 
@@ -180,6 +185,7 @@ export async function createProjectInvite(ctx: Ctx, requestedProjectId: string, 
           projects: projectRepository,
           organizations: organizationRepository,
           groups: Group,
+          spaces: spaceRepository,
         },
       }
     )

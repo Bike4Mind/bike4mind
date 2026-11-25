@@ -5,6 +5,10 @@ import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { withTransaction } from '@bike4mind/database';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  isSlackConfigTokenAuthError,
+  SUBMITTED_CONFIG_TOKEN_REJECTED_MESSAGE,
+} from '@server/integrations/slack/slackConfigTokenErrors';
 
 /**
  * POST /api/admin/slack-app/reconnect
@@ -56,6 +60,11 @@ const handler = adminApi({
   }
 
   if (!slackData.ok) {
+    if (isSlackConfigTokenAuthError(slackData.error)) {
+      req.logger.warn('Slack rejected the submitted config token', { error: slackData.error, workspaceId });
+      throw new BadRequestError(`${SUBMITTED_CONFIG_TOKEN_REJECTED_MESSAGE} (Slack error: ${slackData.error})`);
+    }
+
     req.logger.error('Config token validation failed', {
       error: slackData.error,
       workspaceId,

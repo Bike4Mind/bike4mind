@@ -1,16 +1,19 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
-import { ApiKey, McpServer, SlackDevWorkspace, User, SecretRotation } from '@bike4mind/database';
+import { mfaService } from '@bike4mind/auth';
+import { TOTP_STEP_SECONDS, generateTOTPSecret, totpCode } from '@bike4mind/auth/mfaService/totp';
+import { ApiKey, McpServer, SlackDevWorkspace, User, SecretRotation, userRepository } from '@bike4mind/database';
 import {
   configureSecretsAtRest,
   decryptAtRest,
+  encryptAtRest,
   encryptSecret,
   generateEncryptionKey,
   isEncrypted,
 } from '@bike4mind/utils/security';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
-import { protectStoredCredentials } from './protect-stored-credentials-backfill';
+import { encryptLegacyTotpSecret, protectStoredCredentials } from './protect-stored-credentials-backfill';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -29,6 +32,7 @@ beforeEach(async () => {
   vi.stubEnv('MEMORY_KEY_SECRET', 'persistent-test-memory-master');
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
@@ -127,5 +131,117 @@ describe('credential backfill', () => {
 
     const mcpRow = await McpServer.collection.findOne({ _id: mcp.insertedId });
     expect(mcpRow!.envVariables[0].value.startsWith('v2:')).toBe(true);
+  });
+});
+
+describe('TOTP seed backfill', () => {
+  const seed = generateTOTPSecret();
+  const mfaOf = (id: unknown) => User.collection.findOne({ _id: id as never }).then(row => row?.mfa);
+  const seedUsers = async () => {
+    const encrypted = encryptAtRest('ALREADYENCRYPTEDSEED');
+    const plain = await User.collection.insertOne({
+      mfa: {
+        totpSecret: seed,
+        totpEnabled: true,
+        passkeyEnabled: false,
+        backupCodes: ['hash-a', 'hash-b'],
+        pendingBackupCodes: encryptAtRest('pending-codes'),
+        setupAt: new Date('2025-01-01'),
+        lastUsedAt: null,
+        failedAttempts: 2,
+      },
+    });
+    const done = await User.collection.insertOne({
+      mfa: { totpSecret: encrypted, totpEnabled: true, backupCodes: ['hash-c'], setupAt: new Date('2025-01-01') },
+    });
+    const none = await User.collection.insertOne({ email: 'none@example.com' });
+    const passkey = await User.collection.insertOne({
+      mfa: { passkeyEnabled: true, totpEnabled: false, backupCodes: ['hash-d'], setupAt: new Date('2025-01-01') },
+    });
+    return { plain: plain.insertedId, done: done.insertedId, none: none.insertedId, passkey: passkey.insertedId };
+  };
+
+  it('encrypts plaintext seeds and a real code still verifies', async () => {
+    const ids = await seedUsers();
+    await protectStoredCredentials();
+    const stored = (await mfaOf(ids.plain))!.totpSecret;
+    expect(stored).not.toBe(seed);
+    expect(isEncrypted(stored)).toBe(true);
+    expect(decryptAtRest(stored)).toBe(seed);
+
+    const user = await userRepository.findByIdWithMfaSecrets(String(ids.plain));
+    const result = await mfaService.verifyMFA(
+      { user: user!, token: totpCode(seed, Math.floor(Date.now() / 1000 / TOTP_STEP_SECONDS)) },
+      userRepository
+    );
+    expect(result.verified).toBe(true);
+  });
+
+  it('changes only mfa.totpSecret and leaves other users byte-identical', async () => {
+    const ids = await seedUsers();
+    const before = Object.fromEntries(
+      await Promise.all(Object.entries(ids).map(async ([k, id]) => [k, await User.collection.findOne({ _id: id })]))
+    );
+    await protectStoredCredentials();
+    const after = Object.fromEntries(
+      await Promise.all(Object.entries(ids).map(async ([k, id]) => [k, await User.collection.findOne({ _id: id })]))
+    );
+    const { totpSecret: _before, ...beforeRest } = before.plain!.mfa;
+    const { totpSecret: _after, ...afterRest } = after.plain!.mfa;
+    expect(afterRest).toEqual(beforeRest);
+    expect(after.plain!.mfa.backupCodes).toEqual(['hash-a', 'hash-b']);
+    expect(after.done).toEqual(before.done);
+    expect(after.none).toEqual(before.none);
+    expect(after.passkey).toEqual(before.passkey);
+    expect(after.passkey!.mfa).not.toHaveProperty('totpSecret');
+  });
+
+  it('is idempotent', async () => {
+    const ids = await seedUsers();
+    await protectStoredCredentials();
+    const first = await User.collection.find({ _id: { $in: Object.values(ids) } }).toArray();
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    await protectStoredCredentials();
+    expect(await User.collection.find({ _id: { $in: Object.values(ids) } }).toArray()).toEqual(first);
+    expect(info).toHaveBeenCalledWith('TOTP seeds encrypted: 0');
+  });
+
+  it('does not overwrite a seed that changed after it was read', async () => {
+    const row = await User.collection.insertOne({ mfa: { totpSecret: 'SEEDAAAA', totpEnabled: true } });
+    await User.collection.updateOne({ _id: row.insertedId }, { $set: { 'mfa.totpSecret': 'SEEDBBBB' } });
+    expect(await encryptLegacyTotpSecret(row.insertedId, 'SEEDAAAA')).toBe(false);
+    expect((await mfaOf(row.insertedId))!.totpSecret).toBe('SEEDBBBB');
+  });
+
+  it('leaves a seed replaced between the pass reading and writing it', async () => {
+    const row = await User.collection.insertOne({ mfa: { totpSecret: 'SEEDAAAA', totpEnabled: true } });
+    const original = User.collection.updateOne.bind(User.collection);
+    let raced = false;
+    vi.spyOn(User.collection, 'updateOne').mockImplementation(((...args: Parameters<typeof original>) => {
+      if (!raced) {
+        raced = true;
+        return original({ _id: row.insertedId }, { $set: { 'mfa.totpSecret': 'SEEDBBBB' } }).then(() =>
+          original(...args)
+        );
+      }
+      return original(...args);
+    }) as typeof original);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    await protectStoredCredentials();
+    expect(raced).toBe(true);
+    expect(info).toHaveBeenCalledWith('TOTP seeds encrypted: 0');
+    expect((await mfaOf(row.insertedId))!.totpSecret).toBe('SEEDBBBB');
+  });
+
+  it('reports counts only', async () => {
+    const ids = await seedUsers();
+    const spies = (['info', 'log', 'warn', 'error'] as const).map(level =>
+      vi.spyOn(console, level).mockImplementation(() => {})
+    );
+    await protectStoredCredentials();
+    const output = JSON.stringify(spies.flatMap(spy => spy.mock.calls));
+    expect(output).toContain('TOTP seeds encrypted: 1');
+    expect(output).not.toContain(seed);
+    for (const id of Object.values(ids)) expect(output).not.toContain(String(id));
   });
 });

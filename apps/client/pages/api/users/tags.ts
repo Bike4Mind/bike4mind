@@ -19,7 +19,7 @@ const handler = baseApi().get<Request>(async (req, res) => {
 
     return res.json({ tags });
   } catch (error) {
-    console.error('Error fetching user tags:', error);
+    req.logger.error('Error fetching user tags', { error });
     return res.status(500).json({ message: 'Internal Server Error' });
   }
 });

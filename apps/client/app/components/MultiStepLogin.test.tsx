@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   publicConfig: {
     data: { allowTrustedDevices: true } as { allowTrustedDevices: boolean; supportEmail?: string } | undefined,
     isLoading: false,
+    isPending: false,
   },
   sendOTC: vi.fn(),
   formToken: { data: 'form-tok-1' as string | undefined, refetch: vi.fn() },
@@ -135,43 +136,51 @@ vi.mock('@client/config/general', async importOriginal => ({
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderLogin = (props: React.ComponentProps<typeof MultiStepLogin> = {}) =>
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <MultiStepLogin {...props} />
-    </CssVarsProvider>
-  );
+const loginTree = (props: React.ComponentProps<typeof MultiStepLogin> = {}) => (
+  <CssVarsProvider theme={appTheme}>
+    <MultiStepLogin {...props} />
+  </CssVarsProvider>
+);
+const renderLogin = (props: React.ComponentProps<typeof MultiStepLogin> = {}) => render(loginTree(props));
+
+type User = ReturnType<typeof userEvent.setup>;
 
 const textboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('textbox');
 const checkboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('checkbox');
+
+// Per-keystroke typing re-renders the whole login tree; no test here asserts per-keystroke behaviour.
+const enterText = async (user: User, element: Element, text: string) => {
+  await user.click(element);
+  await user.paste(text);
+};
 
 // useJoinWaitlist passes the email as a history-state updater, never in the query string.
 const expectWaitlistNavigation = (source: string, email: string | undefined) => {
   expect(mocks.navigate).toHaveBeenCalledWith(
     expect.objectContaining({ to: '/subscribe', search: { source }, state: expect.any(Function) })
   );
-  const { state } = mocks.navigate.mock.calls.at(-1)[0];
+  const [{ state }] = mocks.navigate.mock.lastCall as [{ state: (prev: { key: string }) => unknown }];
   expect(state({ key: 'k' })).toEqual({ key: 'k', waitlistEmail: email });
 };
 
 // Drives the flow from the email step to the register-username step (email -> code ->
 // registrationRequired). Assumes mocks.verifyOTC's FIRST call resolves registrationRequired.
-const advanceToUsernameStep = async (user: ReturnType<typeof userEvent.setup>, email = 'new@test.com') => {
-  await user.type(textboxIn('login-email-input'), email);
+const advanceToUsernameStep = async (user: User, email = 'new@test.com') => {
+  await enterText(user, textboxIn('login-email-input'), email);
   await user.click(screen.getByTestId('login-continue-btn'));
   const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
-  await user.type(otcInput, '12345678');
+  await enterText(user, otcInput, '12345678');
   await user.click(screen.getByTestId('login-verify-btn'));
   await screen.findByTestId('login-register-username-input');
 };
 
 // The AUP/ToS + 18+ checkboxes gate the Create account button.
-const acceptInlinePolicies = async (user: ReturnType<typeof userEvent.setup>) => {
+const acceptInlinePolicies = async (user: User) => {
   await user.click(checkboxIn('login-register-aup-tos-checkbox'));
   await user.click(checkboxIn('login-register-age-checkbox'));
 };
 
-describe('MultiStepLogin — inline registration (new-user branch)', () => {
+describe('MultiStepLogin \u2014 inline registration (new-user branch)', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
@@ -196,7 +205,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     const user = userEvent.setup();
     renderLogin({ enableRegister: false });
 
-    await user.type(textboxIn('login-email-input'), ' new@test.com ');
+    await enterText(user, textboxIn('login-email-input'), ' new@test.com ');
     await user.click(screen.getByTestId('login-join-waitlist-link'));
 
     expectWaitlistNavigation('login_signup_closed', 'new@test.com');
@@ -217,9 +226,9 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     });
     renderLogin({ enableRegister: false });
 
-    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await enterText(user, textboxIn('login-email-input'), 'new@test.com');
     await user.click(screen.getByTestId('login-continue-btn'));
-    await user.type(within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
+    await enterText(user, within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
     await user.click(screen.getByTestId('login-verify-btn'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed', expect.anything()));
@@ -260,7 +269,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
 
     // Steps 1-2: email -> code -> registrationRequired; step 3: username + acceptance -> create
     await advanceToUsernameStep(user);
-    await user.type(textboxIn('login-register-username-input'), 'newbie');
+    await enterText(user, textboxIn('login-register-username-input'), 'newbie');
     await acceptInlinePolicies(user);
     await user.click(screen.getByTestId('login-register-username-btn'));
 
@@ -302,7 +311,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
 
     renderLogin();
     await advanceToUsernameStep(user);
-    await user.type(textboxIn('login-register-username-input'), 'newbie');
+    await enterText(user, textboxIn('login-register-username-input'), 'newbie');
 
     const createBtn = screen.getByTestId('login-register-username-btn');
     expect(createBtn).toBeDisabled();
@@ -325,7 +334,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     renderLogin();
     await advanceToUsernameStep(user);
     const usernameInput = textboxIn('login-register-username-input');
-    await user.type(usernameInput, 'newbie');
+    await enterText(user, usernameInput, 'newbie');
 
     // Enter-key implicit submission can bypass a disabled submit button in some browsers,
     // and acceptedPolicyVersion is sent unconditionally - submit the form directly to
@@ -348,7 +357,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
 
     renderLogin();
     await advanceToUsernameStep(user);
-    await user.type(textboxIn('login-register-username-input'), '---');
+    await enterText(user, textboxIn('login-register-username-input'), '---');
     await user.click(checkboxIn('login-register-aup-tos-checkbox'));
     await user.click(checkboxIn('login-register-age-checkbox'));
     await user.click(screen.getByTestId('login-register-username-btn'));
@@ -372,7 +381,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
 
     renderLogin();
     await advanceToUsernameStep(user);
-    await user.type(textboxIn('login-register-username-input'), 'newbie');
+    await enterText(user, textboxIn('login-register-username-input'), 'newbie');
     await acceptInlinePolicies(user);
     await user.click(screen.getByTestId('login-register-username-btn'));
 
@@ -383,7 +392,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     // no longer matches the rotated server-side nonce and would fail as "Invalid code."
     const usernameInput = textboxIn('login-register-username-input');
     await user.clear(usernameInput);
-    await user.type(usernameInput, 'newbie2');
+    await enterText(user, usernameInput, 'newbie2');
     await user.click(screen.getByTestId('login-register-username-btn'));
 
     await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalled());
@@ -425,7 +434,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     const user = userEvent.setup();
     renderLogin();
 
-    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await enterText(user, textboxIn('login-email-input'), 'new@test.com');
     await user.click(screen.getByTestId('login-continue-btn'));
 
     const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
@@ -442,7 +451,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     });
     renderLogin();
 
-    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await enterText(user, textboxIn('login-email-input'), 'new@test.com');
     await user.click(screen.getByTestId('login-continue-btn'));
 
     const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
@@ -479,7 +488,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
 
     renderLogin({ enableRegister: false });
     await advanceToUsernameStep(user, email);
-    await user.type(textboxIn('login-register-username-input'), 'partner-user');
+    await enterText(user, textboxIn('login-register-username-input'), 'partner-user');
     await acceptInlinePolicies(user);
     await user.click(screen.getByTestId('login-register-username-btn'));
 
@@ -514,9 +523,9 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
       });
     renderLogin({ enableRegister: false });
 
-    await user.type(textboxIn('login-email-input'), 'new@partner.example');
+    await enterText(user, textboxIn('login-email-input'), 'new@partner.example');
     await user.click(screen.getByTestId('login-continue-btn'));
-    await user.type(within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
+    await enterText(user, within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
     await user.click(screen.getByTestId('login-verify-btn'));
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed', expect.anything()));
 
@@ -543,11 +552,11 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
 
       renderLogin({ enableRegister });
 
-      await user.type(textboxIn('login-email-input'), 'new@test.com');
+      await enterText(user, textboxIn('login-email-input'), 'new@test.com');
       await user.click(screen.getByTestId('login-continue-btn'));
 
       const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
-      await user.type(otcInput, '12345678');
+      await enterText(user, otcInput, '12345678');
       await user.click(screen.getByTestId('login-verify-btn'));
 
       await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed', expect.anything()));
@@ -557,6 +566,89 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
       expect(mocks.setCurrentUser).not.toHaveBeenCalled();
     }
   );
+});
+
+// /login passes `allowOpenRegistration ?? false` before the public config loads, so on an open
+// instance the invite/waitlist line flashed before "Register now" on a cold load.
+describe('MultiStepLogin - sign-up line while the public config loads', () => {
+  const loadedConfig = { allowTrustedDevices: true };
+  // A pending query has no data yet; a settled one has the config (or none, on a failed request).
+  const setConfigState = (state: { isPending: boolean; isLoading: boolean }) =>
+    Object.assign(mocks.publicConfig, state, { data: state.isPending ? undefined : loadedConfig });
+  const expectNoSignUpLine = () => {
+    expect(screen.getByTestId('login-register-prompt')).toBeEmptyDOMElement();
+    expect(screen.queryByTestId('signup-text')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('login-join-waitlist-link')).not.toBeInTheDocument();
+    expect(screen.queryByText('Have an invite code?')).not.toBeInTheDocument();
+    expect(screen.queryByText('auth.registerNow')).not.toBeInTheDocument();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+  });
+  afterEach(() => {
+    setConfigState({ isPending: false, isLoading: false });
+  });
+
+  // One 14px line at Joy body-md's 1.5 line height, so the form does not shift when the text appears.
+  const expectLineHeightHeld = () =>
+    expect(screen.getByTestId('login-register-prompt')).toHaveStyle({ minHeight: '21px' });
+
+  it.each([false, true])(
+    'shows neither sign-up line while the config is fetched (enableRegister=%s)',
+    enableRegister => {
+      setConfigState({ isPending: true, isLoading: true });
+      renderLogin({ enableRegister });
+      expectNoSignUpLine();
+      expectLineHeightHeld();
+    }
+  );
+
+  // Under PersistQueryClientProvider the query is pending but not fetching while the IndexedDB cache
+  // restores, so isLoading is false then; the line must wait on isPending.
+  it('shows neither sign-up line while the persisted cache restores', () => {
+    setConfigState({ isPending: true, isLoading: false });
+    renderLogin({ enableRegister: false });
+    expectNoSignUpLine();
+  });
+
+  it('shows "Register now" and no waitlist once an open-registration config loads', () => {
+    setConfigState({ isPending: true, isLoading: true });
+    const { rerender } = renderLogin({ enableRegister: false });
+    expect(screen.queryByTestId('login-join-waitlist-link')).not.toBeInTheDocument();
+
+    setConfigState({ isPending: false, isLoading: false });
+    rerender(loginTree({ enableRegister: true }));
+
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('auth.registerNow');
+    expect(screen.queryByTestId('login-join-waitlist-link')).not.toBeInTheDocument();
+    expectLineHeightHeld();
+  });
+
+  it('shows the invite and waitlist line once a closed-registration config loads', () => {
+    setConfigState({ isPending: true, isLoading: true });
+    const { rerender } = renderLogin({ enableRegister: false });
+    expect(screen.queryByTestId('signup-text')).not.toBeInTheDocument();
+
+    setConfigState({ isPending: false, isLoading: false });
+    rerender(loginTree({ enableRegister: false }));
+
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
+    expect(screen.getByTestId('login-join-waitlist-link')).toHaveTextContent('auth.joinWaitlist');
+    expectLineHeightHeld();
+  });
+
+  it('falls back to the invite and waitlist line when the config request fails', () => {
+    setConfigState({ isPending: false, isLoading: false });
+    mocks.publicConfig.data = undefined;
+    renderLogin({ enableRegister: false });
+
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
+    expect(screen.getByTestId('login-join-waitlist-link')).toHaveTextContent('auth.joinWaitlist');
+    expectLineHeightHeld();
+  });
 });
 
 describe('MultiStepLogin - OAuth sign-in start', () => {
@@ -600,7 +692,7 @@ describe('MultiStepLogin - OAuth sign-in start', () => {
       })
     );
     renderLogin();
-    await user.type(textboxIn('login-email-input'), 'dev@test.com');
+    await enterText(user, textboxIn('login-email-input'), 'dev@test.com');
     await user.click(screen.getByTestId('login-continue-btn'));
     await waitFor(() => expect(mocks.startOAuthSignIn).toHaveBeenCalledWith('/api/auth/github'));
     expect(mocks.sendOTC).not.toHaveBeenCalled();
@@ -626,7 +718,7 @@ describe('MultiStepLogin - OAuth sign-in start', () => {
     );
     mocks.startOAuthSignIn.mockRejectedValue(new Error('Could not complete the verification check.'));
     renderLogin();
-    await user.type(textboxIn('login-email-input'), 'dev@test.com');
+    await enterText(user, textboxIn('login-email-input'), 'dev@test.com');
     await user.click(screen.getByTestId('login-continue-btn'));
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Could not complete the verification check.'));
     expect(screen.getByTestId('login-continue-btn')).toBeInTheDocument();
@@ -637,7 +729,7 @@ describe('MultiStepLogin - OAuth sign-in start', () => {
 // The "already logged in" bounce must gate on a LIVE session (currentUser + token), not on a
 // stale persisted currentUser alone - otherwise a broken session is trapped in a /login <->
 // /accept-policies loop (issue #386). See the isLoggedIn guard in MultiStepLogin.
-describe('MultiStepLogin — already-logged-in redirect guard', () => {
+describe('MultiStepLogin \u2014 already-logged-in redirect guard', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
@@ -774,7 +866,7 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
     renderLogin();
 
     const input = textboxIn('login-email-input');
-    await user.type(input, 'not-an-email');
+    await enterText(user, input, 'not-an-email');
     fireEvent.submit(input.closest('form')!);
 
     const alert = await screen.findByTestId('login-email-error');
@@ -789,7 +881,7 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
     renderLogin();
 
     const input = textboxIn('login-email-input');
-    await user.type(input, 'not-an-email');
+    await enterText(user, input, 'not-an-email');
     fireEvent.submit(input.closest('form')!);
     await screen.findByTestId('login-email-error');
 
@@ -807,7 +899,7 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
     });
     renderLogin();
 
-    await user.type(textboxIn('login-email-input'), 'someone@test.com');
+    await enterText(user, textboxIn('login-email-input'), 'someone@test.com');
     await user.click(screen.getByTestId('login-continue-btn'));
 
     const alert = await screen.findByTestId('login-rate-limit-alert');
@@ -829,7 +921,7 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
       });
       renderLogin();
 
-      await user.type(textboxIn('login-email-input'), 'someone@test.com');
+      await enterText(user, textboxIn('login-email-input'), 'someone@test.com');
       await user.click(screen.getByTestId('login-continue-btn'));
       await screen.findByTestId('login-resend-btn');
       await act(async () => {
@@ -859,7 +951,7 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
         .mockReturnValueOnce(new Promise(resolve => (finishResend = resolve)));
       renderLogin();
 
-      await user.type(textboxIn('login-email-input'), 'someone@test.com');
+      await enterText(user, textboxIn('login-email-input'), 'someone@test.com');
       await user.click(screen.getByTestId('login-continue-btn'));
       await screen.findByTestId('login-resend-btn');
       await act(async () => {
@@ -895,10 +987,10 @@ describe('MultiStepLogin - second-factor handoff', () => {
   });
 
   const submitCode = async (user: ReturnType<typeof userEvent.setup>) => {
-    await user.type(textboxIn('login-email-input'), 'a@test.com');
+    await enterText(user, textboxIn('login-email-input'), 'a@test.com');
     await user.click(screen.getByTestId('login-continue-btn'));
     const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
-    await user.type(otcInput, '12345678');
+    await enterText(user, otcInput, '12345678');
     await user.click(screen.getByTestId('login-verify-btn'));
   };
 
@@ -941,7 +1033,7 @@ describe('MultiStepLogin - second-factor handoff', () => {
     renderLogin();
 
     await advanceToUsernameStep(user);
-    await user.type(textboxIn('login-register-username-input'), 'newbie');
+    await enterText(user, textboxIn('login-register-username-input'), 'newbie');
     await acceptInlinePolicies(user);
     await user.click(screen.getByTestId('login-register-username-btn'));
 
@@ -1018,11 +1110,15 @@ describe('MultiStepLogin - OAuth registration_closed redirect', () => {
 
   describe('blocked-account notice', () => {
     afterEach(() => {
-      mocks.publicConfig = { data: { allowTrustedDevices: true }, isLoading: false };
+      mocks.publicConfig = { data: { allowTrustedDevices: true }, isLoading: false, isPending: false };
     });
 
     it('names the configured support address', async () => {
-      mocks.publicConfig = { data: { allowTrustedDevices: true, supportEmail: 'help@example.com' }, isLoading: false };
+      mocks.publicConfig = {
+        data: { allowTrustedDevices: true, supportEmail: 'help@example.com' },
+        isLoading: false,
+        isPending: false,
+      };
       window.history.replaceState({}, '', '/login?error=account_on_hold');
       renderLogin({ enableRegister: false });
 
@@ -1036,7 +1132,7 @@ describe('MultiStepLogin - OAuth registration_closed redirect', () => {
     });
 
     it('waits for the public config before showing it', async () => {
-      mocks.publicConfig = { data: undefined, isLoading: true };
+      mocks.publicConfig = { data: undefined, isLoading: true, isPending: true };
       window.history.replaceState({}, '', '/login?error=account_on_hold');
       renderLogin({ enableRegister: false });
 
@@ -1045,7 +1141,11 @@ describe('MultiStepLogin - OAuth registration_closed redirect', () => {
     });
 
     it('shows the notice without an address when none is configured', async () => {
-      mocks.publicConfig = { data: { allowTrustedDevices: true, supportEmail: '' }, isLoading: false };
+      mocks.publicConfig = {
+        data: { allowTrustedDevices: true, supportEmail: '' },
+        isLoading: false,
+        isPending: false,
+      };
       window.history.replaceState({}, '', '/login?error=account_on_hold');
       renderLogin({ enableRegister: false });
 
@@ -1071,7 +1171,7 @@ describe('MultiStepLogin - signup bot checks', () => {
   });
 
   const submitEmail = async (user: ReturnType<typeof userEvent.setup>) => {
-    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await enterText(user, textboxIn('login-email-input'), 'new@test.com');
     await user.click(screen.getByTestId('login-continue-btn'));
     await screen.findByTestId('login-otc-input');
   };
@@ -1085,7 +1185,7 @@ describe('MultiStepLogin - signup bot checks', () => {
   it('sends the honeypot value when it was filled', async () => {
     const user = userEvent.setup();
     renderLogin();
-    await user.type(screen.getByTestId('signup-honeypot-input'), 'spam');
+    await enterText(user, screen.getByTestId('signup-honeypot-input'), 'spam');
     await submitEmail(user);
     expect(mocks.sendOTC).toHaveBeenCalledWith(expect.objectContaining({ formExtra: 'spam' }));
   });
@@ -1116,7 +1216,7 @@ describe('MultiStepLogin - product hint from redirectTo', () => {
     const user = userEvent.setup();
     renderLogin();
     expect(screen.getByTestId('auth-redirect-product-hint')).toHaveTextContent('auth.signInToContinueTo');
-    await user.type(textboxIn('login-email-input'), 'someone@test.com');
+    await enterText(user, textboxIn('login-email-input'), 'someone@test.com');
     await user.click(screen.getByTestId('login-continue-btn'));
     await screen.findByTestId('login-otc-input');
     expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
@@ -1128,5 +1228,51 @@ describe('MultiStepLogin - product hint from redirectTo', () => {
     renderLogin();
     expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
     expect(screen.getByText('auth.signInOrCreate')).toBeInTheDocument();
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('auth.registerNow');
+    expect(screen.getByTestId('login-register-prompt')).toHaveTextContent('auth.noAccount');
+    expect(screen.queryByTestId('login-new-here-text')).toBeNull();
+  });
+
+  // The email step already says the code signs in or creates an account; a "Register now" link under
+  // it reads as a second, required step for a visitor sent here by a product link.
+  it('from a product link with registration open, says the email creates the account and offers no register link', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/login?redirectTo=%2Fproduct%2Frun');
+    renderLogin({ enableRegister: true });
+    expect(screen.getByText('auth.signInOrCreate')).toBeInTheDocument();
+    const prompt = screen.getByTestId('login-register-prompt');
+    expect(prompt).toHaveTextContent(/^auth\.newHereEmailCreates$/);
+    expect(within(prompt).getByTestId('login-new-here-text')).toBeInTheDocument();
+    expect(screen.queryByTestId('signup-text')).toBeNull();
+    expect(screen.queryByText(/auth\.noAccount|auth\.registerNow/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /register/i })).toBeNull();
+    expect(prompt).toHaveStyle({ minHeight: '21px' });
+  });
+
+  it('the new-here line matches the one-time-code line it sits under', () => {
+    expect(en.auth.newHereEmailCreates).toBe("New here? Enter your email above and we'll create your account.");
+    expect(en.auth.newHereEmailCreates).not.toMatch(/register/i);
+    expect(en.auth.signInOrCreate).toMatch(/create an account/i);
+  });
+
+  it('from a product link with registration closed, keeps the invite and waitlist line', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/login?redirectTo=%2Fproduct%2Frun');
+    renderLogin({ enableRegister: false });
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
+    expect(screen.getByTestId('login-join-waitlist-link')).toHaveTextContent('auth.joinWaitlist');
+    expect(screen.queryByTestId('login-new-here-text')).toBeNull();
+  });
+
+  it('from a product link, shows no sign-up line while the public config is pending', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/login?redirectTo=%2Fproduct%2Frun');
+    Object.assign(mocks.publicConfig, { isPending: true, isLoading: true });
+    try {
+      renderLogin({ enableRegister: true });
+      expect(screen.getByTestId('login-register-prompt')).toBeEmptyDOMElement();
+    } finally {
+      Object.assign(mocks.publicConfig, { isPending: false, isLoading: false });
+    }
   });
 });

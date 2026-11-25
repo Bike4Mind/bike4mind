@@ -1,14 +1,23 @@
 import type {
+  IncidentEscalationTrigger,
   IncidentOverridableReviewStatus,
   IncidentReviewStatus,
   IncidentSurface,
   ModerationLabelHit,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 const ENDPOINT = '/api/admin/moderation-incidents';
 export const MODERATION_INCIDENT_QUEUE_QUERY_KEY = ['admin-moderation-incident-queue'];
+export const MODERATION_INCIDENT_SUMMARY_QUERY_KEY = ['admin-moderation-incident-summary'];
+
+// A verdict or an escalation changes both the queue and its counts.
+const invalidateReviewPage = (queryClient: QueryClient) =>
+  Promise.all([
+    queryClient.invalidateQueries({ queryKey: MODERATION_INCIDENT_QUEUE_QUERY_KEY }),
+    queryClient.invalidateQueries({ queryKey: MODERATION_INCIDENT_SUMMARY_QUERY_KEY }),
+  ]);
 
 const QUEUE_LIST_LIMIT = 100;
 
@@ -21,6 +30,7 @@ type QueueIncidentJson = {
   labels?: ModerationLabelHit[];
   surface?: IncidentSurface;
   reviewStatus?: IncidentReviewStatus;
+  escalatedAt?: string;
 };
 
 export type ModerationIncidentRow = {
@@ -34,6 +44,8 @@ export type ModerationIncidentRow = {
   reviewStatus: IncidentReviewStatus;
   /** A claim left in confirmed_csam after an unknown submission outcome; not resolvable from this page. */
   stuck: boolean;
+  /** Moved to the second review step, by a reviewer or after waiting too long. */
+  escalated: boolean;
 };
 
 /** `open` is the work queue; `closed` lists past verdicts, newest first. */
@@ -54,6 +66,7 @@ const toRow = (incident: QueueIncidentJson, stuck: boolean): ModerationIncidentR
   surface: incident.surface,
   reviewStatus: incident.reviewStatus ?? 'pending_review',
   stuck,
+  escalated: Boolean(incident.escalatedAt),
 });
 
 const createdAtMs = (row: ModerationIncidentRow) => new Date(row.createdAt).getTime();
@@ -91,6 +104,28 @@ export function useModerationIncidentQueue(
   });
 }
 
+/** Counts for the review page; no incident, user or address. */
+export type ModerationIncidentSummary = {
+  /** Unreviewed incidents. */
+  needsReview: number;
+  /** Of needsReview, the ones held by the second review step. */
+  escalated: number;
+  /** Report submissions left in an unknown state. */
+  stuck: number;
+  closed: { noAction: number; falsePositive: number; reported: number };
+  oldestPendingCreatedAt: string | null;
+  /** Whether each reviewer list has at least one valid address. */
+  reviewersConfigured: boolean;
+  escalationReviewersConfigured: boolean;
+};
+
+export function useModerationIncidentSummary() {
+  return useQuery({
+    queryKey: MODERATION_INCIDENT_SUMMARY_QUERY_KEY,
+    queryFn: async () => (await api.get<ModerationIncidentSummary>(`${ENDPOINT}/summary`)).data,
+  });
+}
+
 export type ModerationIncidentView = {
   id: string;
   createdAt: string;
@@ -110,9 +145,23 @@ export type ModerationIncidentView = {
   ncmecReportId: string | null;
   /** Null when no reviewer alert was delivered. */
   alertedAt: string | null;
+  /** Set when the alert was queued for delivery; until alertedAt is set too, it is still in flight. */
+  alertQueuedAt: string | null;
+  /** When a reviewer's copy last failed; at or after alertQueuedAt, that round awaits a resend. */
+  alertFailedAt: string | null;
   lastReminderAt: string | null;
+  /** Null until the incident moves to the second review step. */
+  escalatedAt: string | null;
+  escalationTrigger: IncidentEscalationTrigger | null;
+  /** Null when no escalation email was delivered. */
+  escalationAlertedAt: string | null;
+  /** Same as alertQueuedAt, for the escalation email. */
+  escalationAlertQueuedAt: string | null;
+  /** Same as alertFailedAt, for the escalation email. */
+  escalationAlertFailedAt: string | null;
   reportedAt: string | null;
   falsePositiveAt: string | null;
+  noActionAt: string | null;
   image:
     | { availability: 'ready'; url: string; expiresAt: string }
     | { availability: 'unavailable'; reason: 'no_stored_image' | 'not_displayable' };
@@ -148,11 +197,41 @@ const verdictBody = (verdict: ModerationVerdict) => {
   }
 };
 
+// Both writes need a recently verified session: the api client's step-up interceptor prompts for it
+// and replays the request, as it does for the view.
 export function useModerationIncidentVerdict() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, verdict }: { id: string; verdict: ModerationVerdict }) =>
-      (await api.post<{ ok: true }>(`${ENDPOINT}/${encodeURIComponent(id)}/verdict`, verdictBody(verdict))).data,
-    onSettled: () => queryClient.invalidateQueries({ queryKey: MODERATION_INCIDENT_QUEUE_QUERY_KEY }),
+    mutationFn: async ({ id, verdict, reason }: { id: string; verdict: ModerationVerdict; reason: string }) =>
+      (
+        await api.post<{ ok: true }>(`${ENDPOINT}/${encodeURIComponent(id)}/verdict`, {
+          ...verdictBody(verdict),
+          reason,
+        })
+      ).data,
+    onSettled: () => invalidateReviewPage(queryClient),
+  });
+}
+
+/**
+ * Whether the escalation email went out: `queued` means it is waiting on the email-send worker,
+ * `no_recipients` means no escalation reviewer is configured.
+ */
+export type ModerationEscalationAlert = 'delivered' | 'queued' | 'no_recipients' | 'failed';
+
+export type ModerationEscalationResult = {
+  incident: Pick<
+    ModerationIncidentView,
+    'id' | 'reviewStatus' | 'escalatedAt' | 'escalationTrigger' | 'escalationAlertedAt' | 'escalationAlertQueuedAt'
+  >;
+  alert: ModerationEscalationAlert;
+};
+
+export function useModerationIncidentEscalation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) =>
+      (await api.post<ModerationEscalationResult>(`${ENDPOINT}/${encodeURIComponent(id)}/escalate`, { reason })).data,
+    onSettled: () => invalidateReviewPage(queryClient),
   });
 }

@@ -75,7 +75,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   }),
 }));
 
-vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: mockCreateLakeAccess,
 }));
 

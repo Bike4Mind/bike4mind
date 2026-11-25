@@ -6,6 +6,13 @@ const activePersistenceOps = new Map<string, Promise<void>>();
 // Whole persistArtifacts calls, including blocks still queued behind an earlier one.
 const activePersistenceBatches = new Set<Promise<unknown>>();
 
+/**
+ * Dispatched on window with `{ artifactId }` once a prompt has saved a new version of an
+ * existing artifact. The realtime artifact_versions event does not reliably reach the client, so
+ * this is what lets an open viewer refetch (see useRefreshArtifactOnNewVersion).
+ */
+export const ARTIFACT_VERSION_CREATED_EVENT = 'artifact-version-created';
+
 // LocalStorage keys
 const ARTIFACT_STORAGE_KEY = 'artifacts';
 const ARTIFACT_VERSION_STORAGE_KEY = 'artifact_versions';
@@ -134,6 +141,11 @@ export async function persistArtifact(
 
           await api.put(`/api/artifacts/${existingArtifactId}`, updatePayload);
           console.log(`✅ [ARTIFACTS] Successfully created new version of ${existingArtifactId}`);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent(ARTIFACT_VERSION_CREATED_EVENT, { detail: { artifactId: existingArtifactId } })
+            );
+          }
           return;
         } catch (versionError: any) {
           console.warn(`Failed to create version, falling back to new artifact:`, versionError);

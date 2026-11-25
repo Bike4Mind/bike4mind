@@ -1,29 +1,21 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
-import {
-  adminSettingsRepository,
-  apiKeyRepository,
-  rapidReplyMappingRepository,
-  rapidReplyResultRepository,
-  questRepository,
-  Connection,
-} from '@bike4mind/database';
-import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
+import { adminSettingsRepository, rapidReplyMappingRepository, questRepository, Connection } from '@bike4mind/database';
 import { StatusManager } from '@bike4mind/services/llm/StatusManager';
-import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
-import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
-import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
+import { ClientMessageSender } from '@bike4mind/utils';
+import {
+  generateRapidReply,
+  RAPID_REPLY_MAX_MESSAGE_CHARS,
+  saveRapidReplyResult,
+} from '@server/rapidReply/generateRapidReply';
 import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
 import { ChatModels, NotFoundError, isTerminalCreditRefusal } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
-// 4,000 chars (~1k tokens): the 50-token ack only needs the gist of the request, and the UI sends the
-// whole prompt, so truncate rather than reject.
-const RAPID_REPLY_MAX_MESSAGE_CHARS = 4_000;
 const rapidReplyMessageSchema = z.string().transform(m => m.slice(0, RAPID_REPLY_MAX_MESSAGE_CHARS));
 
 // OptiHashi sessions get the instant ack even when RapidReply is globally off. When no DB
@@ -101,7 +93,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       // so the sales surface gets the instant ack without turning RapidReply on platform-wide.
       const adminSettings = await adminSettingsRepository.getSettingsValue('EnableRapidReply');
       const rapidReplyEnabled = adminSettings === true;
-      const userPreference = (req.user as any).preferences?.experimentalFeatures?.rapidReply !== false;
+      const userPreference = req.user.preferences?.experimentalFeatures?.rapidReply !== false;
 
       if (!isOpti && (!rapidReplyEnabled || !userPreference)) {
         req.logger.info('⏭️ [RapidReply] Feature disabled');
@@ -118,7 +110,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
               id: 'opti-fallback',
               rapidModelId: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
               systemPrompt: OPTI_RAPID_SYSTEM_PROMPT,
-              // Capped to 50 below (Math.min(..., 50)); keep the mapping honest at 50.
+              // generateRapidReply caps at 50 anyway; keep the mapping honest at 50.
               maxTokens: 50,
               maxLatency: 2000,
             }
@@ -128,99 +120,32 @@ const handler = baseApi({ auth: 'jwtOnly' })
         return res.json({ success: false, reason: 'no_mapping' });
       }
 
-      // 3. Get API keys and check model availability
-      const dbAdapters = {
-        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-        getSettingsByNames,
-      };
-      // Through buildApiKeyTable, not a literal: getEffectiveLLMApiKeys returns a
-      // provider-keyed shape and getAvailableModels reads a backend-keyed one, and that
-      // helper is the ratchet that keeps every new provider from being silently absent here.
-      const apiKeyTable = buildApiKeyTable(await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters));
-      const models = await getAvailableModels(apiKeyTable);
-      // Degrades a rotted mapping to a reachable fast model instead of throwing; see
-      // resolveRapidModel for why a sunset rapid model must never fail the request.
-      const resolution = resolveRapidModel({
-        mappedModelId: rapidReplyMapping.rapidModelId,
-        models,
-        apiKeyTable,
-        logger: req.logger,
-        endUserId: userId,
-        mappingId: rapidReplyMapping.id,
-      });
-
-      if (resolution.status === 'unavailable') {
-        return res.json({ success: false, reason: 'model_unavailable' });
-      }
-
-      const { modelId: rapidModelId, llm: rapidLlm } = resolution;
-
-      // 5. Generate rapid reply
-      const rapidSystemPrompt =
-        rapidReplyMapping.systemPrompt ||
-        `IMPORTANT: Provide a quick, friendly acknowledgment (1 sentence max). ` +
-          `The main AI is loading full context and will provide the complete answer.`;
-
       const parsedMessage = rapidReplyMessageSchema.safeParse(req.body.message);
       if (!parsedMessage.success) {
         return res.json({ success: false, reason: 'invalid_message' });
       }
 
-      const rapidMessages = [
-        { role: 'system' as const, content: rapidSystemPrompt },
-        { role: 'user' as const, content: parsedMessage.data },
-      ];
-
-      // maxTokens, not max_tokens: the adapters only read the camelCase key, and the credit hold is
-      // sized from this same value.
-      const rapidOptions = {
-        maxTokens: Math.min(rapidReplyMapping.maxTokens || 50, 50),
-        temperature: 0.9,
-        stream: false,
-      };
-
-      const rapidStartTime = Date.now();
-
-      // 6. Generate completion
-      let accumulatedText = '';
-
-      // Admin-mapped model on platform keys: reserve before the call, settle after, refund on a throw.
-      const rapidModelInfo = models.find(m => m.id === rapidModelId);
-      if (!rapidModelInfo) {
-        return res.json({ success: false, reason: 'model_unavailable' });
-      }
-      const meteredRapidLlm = meterCompletionBackend(
-        rapidLlm,
-        createRequestCompletionMeter(req, 'rapid reply', { systemModel: true }),
-        rapidModelInfo
-      );
-
-      await meteredRapidLlm.complete(
-        rapidModelId as any,
-        rapidMessages,
-        rapidOptions,
-        async (rapidStreamedTexts: (string | null | undefined)[]) => {
-          const rapidText = rapidStreamedTexts[0];
-          if (!rapidText) {
-            return;
-          }
-          accumulatedText = rapidText;
+      // 3. Resolve the rapid model and generate the ack
+      const generation = await generateRapidReply({
+        mapping: rapidReplyMapping,
+        message: parsedMessage.data,
+        userId,
+        logger: req.logger,
+        meter: createRequestCompletionMeter(req, 'rapid reply', { systemModel: true }),
+      });
+      if (generation.status === 'skipped') {
+        if (generation.reason === 'empty_response') {
+          req.logger.warn('[RapidReply] Empty response');
         }
-      );
-
-      // 7. Save to database after completion
-      // The main quest processor will detect this and handle WebSocket notifications
-      if (accumulatedText.trim().length === 0) {
-        req.logger.warn('⚠️ [RapidReply] Empty response');
-        return res.json({ success: false, reason: 'empty_response' });
+        return res.json({ success: false, reason: generation.reason });
       }
+      const { modelId: rapidModelId, latency: rapidLatency, content: rapidContent } = generation;
 
       const rapidTtfvt = processStartTime ? Date.now() - processStartTime : Date.now() - startTime;
-      const rapidLatency = Date.now() - rapidStartTime;
 
       req.logger.info(`✅ [RapidReply] Generated in ${rapidLatency}ms (TTFVT: ${rapidTtfvt}ms)`);
 
-      // 8. Stream the rapid reply to the frontend via WebSocket
+      // 4. Stream the rapid reply to the frontend via WebSocket
       try {
         const clientMessageSender = new ClientMessageSender({ connections: Connection }, req.logger);
         const statusManager = new StatusManager(
@@ -231,7 +156,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         );
 
         await statusManager.sendRapidReplyUpdate(questId, sessionId, {
-          content: accumulatedText.trim(),
+          content: rapidContent,
           status: 'completed',
           ttfvt: rapidTtfvt,
           modelId: rapidModelId,
@@ -243,39 +168,23 @@ const handler = baseApi({ auth: 'jwtOnly' })
         req.logger.error('⚠️ [RapidReply] Failed to stream to frontend:', streamError);
       }
 
-      // 9. Save to database for persistence
+      // 5. Save to database for persistence
       try {
-        await rapidReplyResultRepository.create({
+        await saveRapidReplyResult({
           questId,
           sessionId,
           userId,
           mainModelId: mainModel,
-          rapidModelId: rapidModelId,
-          mappingId: rapidReplyMapping.id,
-          rapidResponse: {
-            content: accumulatedText.trim(),
-            tokenCount: accumulatedText.length,
-            latency: rapidLatency,
-            cost: 0,
-            ttfvt: rapidTtfvt,
-          },
-          userInteraction: {
-            wasShown: true,
-            wasReplaced: false,
-          },
-          metrics: {
-            totalLatency: rapidLatency,
-            latencySavings: Math.max(0, (rapidReplyMapping.maxLatency || 2000) - rapidLatency),
-            ttfvtSavings: 0,
-          },
-          status: 'success',
-        } as any);
+          mapping: rapidReplyMapping,
+          generation,
+          ttfvt: rapidTtfvt,
+        });
 
         req.logger.info(`✅ [RapidReply] Saved to database for quest ${questId}`);
       } catch (dbError) {
         // Benign on a "blank" rapid reply (questId null) when the rapidreplyresults
         // questId index isn't sparse on this DB: a prior null already exists. The ack was
-        // already streamed to the client (step 8), so swallow the dup-key instead of failing
+        // already streamed to the client (step 4), so swallow the dup-key instead of failing
         // the request. Proper fix is the sparse-index migration. Only swallow for the blank
         // (questId-less) case; a dup-key on a real quest-scoped reply is a genuine
         // persistence bug and must surface.

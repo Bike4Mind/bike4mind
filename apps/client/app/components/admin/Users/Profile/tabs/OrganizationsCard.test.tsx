@@ -7,10 +7,17 @@ import type { AdminUserProfile } from '../userProfileModel';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
+  getHome: vi.fn(),
   currentUser: { id: 'admin-1', isAdmin: true } as { id: string; isAdmin?: boolean },
 }));
 
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
+// The home-org pointer has its own mock so the org-list assertions below count only list requests.
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: {
+    get: (url: string, options?: unknown) =>
+      url.endsWith('/home-organization') ? mocks.getHome(url) : mocks.get(url, options),
+  },
+}));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 
 const USER_ID = 'test-user-1';
@@ -52,6 +59,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.currentUser = { id: 'admin-1', isAdmin: true };
   mocks.get.mockResolvedValue({ data: { data: orgs, hasMore: false, total: orgs.length } });
+  mocks.getHome.mockResolvedValue({ data: { organizationId: null, organizationName: null, isMember: false } });
 });
 
 describe('OrganizationsCard', () => {
@@ -70,8 +78,56 @@ describe('OrganizationsCard', () => {
       'href',
       `/admin?tab=organizations&orgId=${BETA}`
     );
-    expect(screen.getByTestId(`user-profile-org-${BETA}-active`)).toBeInTheDocument();
+    expect(screen.getByTestId(`user-profile-org-${BETA}-active`)).toHaveTextContent('Home org');
     expect(screen.queryByTestId(`user-profile-org-${ACME}-active`)).not.toBeInTheDocument();
+  });
+
+  it('offers Clear home org on the home org row only, with a note on what the home org pays for', async () => {
+    renderCard(buildProfile({ organizationId: { id: BETA, name: 'Beta' } as AdminUserProfile['organizationId'] }));
+
+    const row = await screen.findByTestId(`user-profile-org-${BETA}-row`);
+    expect(screen.getAllByTestId('user-profile-org-clear-home-btn')).toHaveLength(1);
+    expect(within(row).getByTestId('user-profile-org-clear-home-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('user-profile-home-org-note')).toHaveTextContent(/API keys and the CLI/);
+
+    fireEvent.click(within(row).getByTestId('user-profile-org-clear-home-btn'));
+    expect(await screen.findByTestId('org-clear-home-dialog')).toHaveTextContent(/instead of Beta/);
+  });
+
+  it('shows no clear action or note without a home org', async () => {
+    renderCard();
+
+    expect(await screen.findByTestId(`user-profile-org-${ACME}-row`)).toBeInTheDocument();
+    expect(screen.queryByTestId('user-profile-org-clear-home-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('user-profile-home-org-note')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a home org they are no longer a member of, which the profile serves as null', async () => {
+    mocks.get.mockResolvedValue({ data: { data: [], hasMore: false, total: 0 } });
+    mocks.getHome.mockResolvedValue({
+      data: { organizationId: 'stale-org', organizationName: 'Gone', isMember: false },
+    });
+    renderCard();
+
+    const line = await screen.findByTestId('user-profile-stray-home-org');
+    expect(mocks.getHome).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/home-organization`);
+    expect(line).toHaveTextContent('Home org is Gone, which they are not a member of.');
+    expect(screen.getByTestId('user-profile-home-org-note')).toBeInTheDocument();
+    fireEvent.click(within(line).getByTestId('user-profile-org-clear-home-btn'));
+    expect(await screen.findByTestId('org-clear-home-dialog')).toHaveTextContent(/instead of Gone/);
+  });
+
+  it('surfaces a home org that was deleted, next to the orgs they are in', async () => {
+    mocks.getHome.mockResolvedValue({
+      data: { organizationId: 'deleted-org', organizationName: null, isMember: false },
+    });
+    renderCard();
+
+    expect(await screen.findByTestId('user-profile-stray-home-org')).toHaveTextContent(
+      'Home org is an organization that no longer exists.'
+    );
+    expect(screen.getByTestId(`user-profile-org-${ACME}-row`)).toBeInTheDocument();
+    expect(screen.getByTestId('user-profile-home-org-note')).toBeInTheDocument();
   });
 
   it('opens the remove dialog for an org, blocked for the one they own', async () => {
@@ -149,7 +205,10 @@ describe('OrganizationsCard', () => {
     renderCard(buildProfile({ organizationId: { id: BETA, name: 'Beta' } as AdminUserProfile['organizationId'] }));
 
     expect(screen.getByTestId(`user-profile-org-${BETA}-link`)).toHaveTextContent('Beta');
+    expect(screen.getByTestId(`user-profile-org-${BETA}-active`)).toHaveTextContent('Home org');
     expect(screen.queryByTestId('user-profile-org-add-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('user-profile-org-clear-home-btn')).not.toBeInTheDocument();
     expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.getHome).not.toHaveBeenCalled();
   });
 });

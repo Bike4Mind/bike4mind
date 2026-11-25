@@ -60,6 +60,9 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'claude-3-5-sonnet-20241022': 'claude-sonnet-4-6',
   'claude-3-7-sonnet-20250219': 'claude-sonnet-4-6',
   'claude-sonnet-4-20250514': 'claude-sonnet-4-6',
+  // Mirrors the Bedrock Sonnet 4.5 entry above: Anthropic retires the direct snapshot on
+  // 2026-11-30 and names Sonnet 5.5 as the replacement, which is cheaper ($3/$15 -> $2/$10 per 1M).
+  'claude-sonnet-4-5-20250929': 'claude-sonnet-5-5',
   // Mirrors the Bedrock Opus 4 / 4.1 entries above. The catalog hides both snapshots, so an
   // agent still pinned to one finds no model and fails. Opus 4.8 is cheaper ($15/$75 -> $5/$25).
   'claude-opus-4-20250514': 'claude-opus-4-8',

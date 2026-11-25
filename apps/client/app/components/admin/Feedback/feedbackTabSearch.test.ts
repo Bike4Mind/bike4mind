@@ -85,6 +85,17 @@ describe('the type param', () => {
   });
 });
 
+describe('the reporter param', () => {
+  it('round-trips a user id and drops anything that is not one', () => {
+    const userId = 'b'.repeat(24);
+    expect(feedbackViewFromSearch({ feedbackUser: userId }).userId).toBe(userId);
+    expect(feedbackViewToSearch({ ...DEFAULT_FEEDBACK_VIEW, userId }).feedbackUser).toBe(userId);
+    expect(feedbackViewFromSearch({ feedbackUser: 'waitlist-abc' }).userId).toBeUndefined();
+    expect(feedbackViewToSearch({ ...DEFAULT_FEEDBACK_VIEW, userId: 'junk' }).feedbackUser).toBeUndefined();
+    expect(feedbackViewToSearch(DEFAULT_FEEDBACK_VIEW).feedbackUser).toBeUndefined();
+  });
+});
+
 describe('the limit param', () => {
   const parseLimit = FEEDBACK_SEARCH_PARSERS.feedbackLimit;
 
@@ -126,6 +137,58 @@ describe('the received param', () => {
 
   it.each([['90d'], ['24H'], [''], [7], [undefined]])('reads %j as any age', value => {
     expect(feedbackViewFromSearch({ feedbackReceived: value }).received).toBeUndefined();
+  });
+});
+
+describe('the custom created range', () => {
+  it('round-trips a closed range and an open-ended one', () => {
+    for (const range of [
+      { feedbackFrom: '2026-11-01', feedbackTo: '2026-11-08' },
+      { feedbackFrom: '2026-11-01' },
+      { feedbackTo: '2026-11-08' },
+    ]) {
+      const view = feedbackViewFromSearch(range);
+      expect(view.createdFrom).toBe(range.feedbackFrom);
+      expect(view.createdTo).toBe(range.feedbackTo);
+      expect(withoutUndefined(feedbackViewToSearch(view))).toEqual(range);
+    }
+  });
+
+  it('accepts a single-day range', () => {
+    const view = feedbackViewFromSearch({ feedbackFrom: '2026-11-01', feedbackTo: '2026-11-01' });
+    expect(view).toMatchObject({ createdFrom: '2026-11-01', createdTo: '2026-11-01' });
+  });
+
+  it('drops an inverted range rather than querying an empty one', () => {
+    const view = feedbackViewFromSearch({ feedbackFrom: '2026-11-08', feedbackTo: '2026-11-01' });
+    expect(view).toMatchObject({ createdFrom: undefined, createdTo: undefined });
+  });
+
+  it.each([['2026-02-30'], ['11/01/2026'], ['2026-11-01T00:00:00Z'], [20261101]])('drops %j', value => {
+    expect(feedbackViewFromSearch({ feedbackFrom: value }).createdFrom).toBeUndefined();
+  });
+
+  it('wins over a preset window, since the chip shows one or the other', () => {
+    const view = feedbackViewFromSearch({ feedbackReceived: '7d', feedbackFrom: '2026-11-01' });
+    expect(view.received).toBeUndefined();
+    expect(view.createdFrom).toBe('2026-11-01');
+    expect(feedbackViewToSearch({ ...view, received: '7d' }).feedbackReceived).toBeUndefined();
+  });
+
+  it('leaves a preset window alone when the range is invalid', () => {
+    expect(feedbackViewFromSearch({ feedbackReceived: '7d', feedbackFrom: 'soon' }).received).toBe('7d');
+  });
+});
+
+describe('the comment param', () => {
+  it.each(['with', 'without'] as const)('round-trips %s', comment => {
+    const view = feedbackViewFromSearch({ feedbackComment: comment });
+    expect(view.comment).toBe(comment);
+    expect(feedbackViewToSearch(view).feedbackComment).toBe(comment);
+  });
+
+  it.each([['yes'], [true], ['']])('reads %j as either', value => {
+    expect(feedbackViewFromSearch({ feedbackComment: value }).comment).toBeUndefined();
   });
 });
 
@@ -189,6 +252,10 @@ describe('feedbackViewToSearch', () => {
       subject: 'product',
       types: [FeedbackType.BUG, FeedbackType.THUMBS_DOWN],
       organizations: ['Acme', 'Globex'],
+      received: undefined,
+      createdFrom: '2026-11-01',
+      createdTo: '2026-11-08',
+      comment: 'with',
       sortAscending: true,
       page: 2,
       limit: 100,
@@ -201,6 +268,9 @@ describe('feedbackViewToSearch', () => {
       feedbackSubject: 'product',
       feedbackType: [FeedbackType.BUG, FeedbackType.THUMBS_DOWN],
       feedbackOrg: ['Acme', 'Globex'],
+      feedbackFrom: '2026-11-01',
+      feedbackTo: '2026-11-08',
+      feedbackComment: 'with',
       feedbackOrder: 'asc',
       feedbackPage: 2,
       feedbackLimit: 100,
@@ -211,15 +281,38 @@ describe('feedbackViewToSearch', () => {
   it('sets every default param to undefined so a write removes it from the URL', () => {
     expect(Object.keys(feedbackViewToSearch(DEFAULT_FEEDBACK_VIEW)).sort()).toEqual(
       [
+        'feedbackArea',
+        'feedbackComment',
+        'feedbackFrom',
+        'feedbackTo',
         'feedbackLimit',
         'feedbackOrder',
         'feedbackOrg',
         'feedbackPage',
         'feedbackReceived',
+        'feedbackResolution',
+        'feedbackSeverity',
         'feedbackStatus',
         'feedbackSubject',
         'feedbackType',
+        'feedbackUser',
       ].sort()
     );
+  });
+});
+
+describe('resolution/status URL consistency', () => {
+  it.each([undefined, 'New', 'New,Closed'])(
+    'normalizes resolution with status=%s to exactly Closed',
+    feedbackStatus => {
+      const view = feedbackViewFromSearch({ feedbackResolution: 'fixed', feedbackStatus });
+      expect(view.statusFilters).toEqual(statusFilters(FeedbackStatus.Closed));
+      expect(view.resolution).toBe('fixed');
+    }
+  );
+  it('ignores an invalid resolution without changing independent statuses', () => {
+    const view = feedbackViewFromSearch({ feedbackResolution: 'invalid', feedbackStatus: 'New,Closed' });
+    expect(view.resolution).toBeUndefined();
+    expect(view.statusFilters).toEqual(statusFilters(FeedbackStatus.New, FeedbackStatus.Closed));
   });
 });

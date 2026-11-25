@@ -76,7 +76,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 }));
 
 // The gate_response handler re-invokes the executor through here; the test plays the queue.
-vi.mock('@server/utils/dispatchAgentExecution', () => ({
+vi.mock('@bike4mind/server-utils/utils/dispatchAgentExecution', () => ({
   AgentExecutorRejectedError: class extends Error {},
   resolveAgentExecutorTarget: () => ({ kind: 'lambda', functionName: 'agent-executor' }),
   dispatchAgentExecution: async (payload: Record<string, unknown>) => {
@@ -236,7 +236,7 @@ describe('confidence gate, end to end', () => {
   it('pauses on a streak of low overrides, resumes through a gate response, and completes', async () => {
     const { agentExecutionRepository } = await import('@bike4mind/database');
     const { handler } = await import('./agentExecutor');
-    const { handleGateResponse } = await import('@server/websocket/agentExecute');
+    const { handleGateResponse } = await import('@bike4mind/server-utils/agentExecution/gateResponse');
     h.probeTurns = LOW_CONFIDENCE_STREAK_TO_PAUSE;
     const { executionId, userId, sessionId } = await seedRun(Array(LOW_CONFIDENCE_STREAK_TO_PAUSE).fill(0.1));
 
@@ -267,7 +267,7 @@ describe('confidence gate, end to end', () => {
 
     // The user answers the card: the real WS handler clears the gate and re-dispatches.
     await handleGateResponse(
-      { accessToken: 'unused', action: 'agent_execute', command: 'gate_response', executionId, decision: 'continue' },
+      { executionId, decision: 'continue' },
       userId,
       'conn-1',
       'https://ws.test/stage',
@@ -276,7 +276,7 @@ describe('confidence gate, end to end', () => {
     const resumed = await agentExecutionRepository.findById(executionId);
     expect(resumed?.status).toBe('continuing');
     expect(resumed?.pendingGate).toBeUndefined();
-    expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1' }]);
+    expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1', resumedBy: 'user' }]);
 
     // Invocation 2: the continuation picks up the checkpoint and the model answers. Its final
     // turn uses no tools, so the gate has nothing to score and the run completes.
@@ -325,14 +325,8 @@ describe('confidence gate, end to end', () => {
     });
 
     const respond = async (executionId: string, userId: string, decision: 'stop' | 'continue') => {
-      const { handleGateResponse } = await import('@server/websocket/agentExecute');
-      await handleGateResponse(
-        { accessToken: 'unused', action: 'agent_execute', command: 'gate_response', executionId, decision },
-        userId,
-        'conn-1',
-        'https://ws.test/stage',
-        logger as never
-      );
+      const { handleGateResponse } = await import('@bike4mind/server-utils/agentExecution/gateResponse');
+      await handleGateResponse({ executionId, decision }, userId, 'conn-1', 'https://ws.test/stage', logger as never);
     };
     const finalAnswerSteps = (execution: { checkpoint?: unknown } | null | undefined) =>
       ((execution?.checkpoint as { steps: Array<{ type: string }> } | undefined)?.steps ?? []).filter(
@@ -412,7 +406,7 @@ describe('confidence gate, end to end', () => {
 
       await Promise.all([respond(executionId, userId, 'continue'), respond(executionId, userId, 'continue')]);
 
-      expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1' }]);
+      expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1', resumedBy: 'user' }]);
     });
 
     it('Stop still writes the Quest and completes when the completed event cannot be delivered', async () => {
@@ -583,7 +577,7 @@ describe('confidence gate, end to end', () => {
         h.gateMode = 'iteration';
         const { agentExecutionRepository } = await import('@bike4mind/database');
         const { handler } = await import('./agentExecutor');
-        const { handleGateResponse } = await import('@server/websocket/agentExecute');
+        const { handleGateResponse } = await import('@bike4mind/server-utils/agentExecution/gateResponse');
         const run = await runToAnswer(0.1, undefined, streakTurns + 1);
         const { executionId, userId } = run;
 
@@ -593,9 +587,6 @@ describe('confidence gate, end to end', () => {
 
         await handleGateResponse(
           {
-            accessToken: 'unused',
-            action: 'agent_execute',
-            command: 'gate_response',
             executionId,
             decision: 'continue',
           },

@@ -3,7 +3,7 @@ import { SQSService } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { SlackClient } from '../SlackClient';
 import { ChatModels, IChatHistoryItem, IUserDocument, stripSearchResultCardFences } from '@bike4mind/common';
-import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
+import { ChatCompletionInvoke } from '@bike4mind/services-core/llm/ChatCompletionInvoke';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 
 /**
@@ -341,7 +341,6 @@ export class WorkflowStepHandler {
             dashboardDataSources: [],
           },
           questId, // Use existing quest instead of creating a new one
-          enableQuestMaster: false,
           enableMementos: false,
           enableArtifacts: false,
           enableAgents: false,

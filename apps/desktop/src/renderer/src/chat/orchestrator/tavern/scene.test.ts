@@ -9,11 +9,15 @@ import {
   NAME_LABEL_MAX_WIDTH,
   NAME_LABEL_MIN_WIDTH,
   OVERFLOW_POINTS,
+  QUEST_BOARD,
   TAVERN_SLOTS,
   assignCharacters,
   type CastSubject,
   hiddenByCounter,
   nameLabelLayout,
+  needsYouGroups,
+  noteCapacity,
+  pinNotes,
   placeAgents,
   poseFor,
   zoneFor,
@@ -24,6 +28,13 @@ import {
 import { CHARACTER_COUNT, characterSprite } from './tavernArt';
 import { TAVERN_LAYOUT, tavernLayoutSchema } from './tavernLayout';
 import layoutJson from '../../../assets/orchestrator/tavern/layout.json';
+import { joinAnnouncements } from './announcements';
+import type { ChatToolCall } from '@shared/chat';
+import type { ChatQuestion } from '@shared/questions';
+import { BUBBLE_OPTION_MAX, planForCall, planForQuestion } from './bubbleAnswer';
+import type { AgentActivity } from '../activity';
+import { innkeeperAct, innkeeperBubble } from './innkeeper';
+import { EMPTY_LEDGER, QUEST_DONE_LINGER_MS, questNotes, questTitle, takeDown, trackQuests } from './quests';
 
 // testUtils needs a DOM; placement only reads id and state.
 const agentFixture = (id: string, state: AgentState): AgentView => ({
@@ -75,6 +86,93 @@ describe('tavern layout data', () => {
     empty.slots.hearth = [];
     expect(tavernLayoutSchema.safeParse(empty).success).toBe(false);
     expect(tavernLayoutSchema.safeParse(layoutJson).success).toBe(true);
+  });
+
+  it('hangs the quest board inside the scene, above every seat and clear of the Innkeeper', () => {
+    const { left, top, width, height } = QUEST_BOARD;
+    expect(left + width).toBeLessThanOrEqual(100);
+    expect(top + height).toBeLessThanOrEqual(100);
+    // A sprite's box is 15% of the scene tall above its feet; none may reach up over the board.
+    const spriteTop = (point: SlotPoint) => point.y - 15;
+    const seats = [...Object.values(TAVERN_SLOTS).flat(), ...Object.values(OVERFLOW_POINTS), DOOR_POINT];
+    expect(seats.every(point => spriteTop(point) >= top + height)).toBe(true);
+    const innkeeperClear = INNKEEPER_POINT.x - 7.5 >= left + width || INNKEEPER_POINT.x + 7.5 <= left;
+    expect(innkeeperClear).toBe(true);
+  });
+
+  it('rejects a quest board that holds fewer than two notes', () => {
+    const tiny = structuredClone(layoutJson);
+    tiny.questBoard.notes = 1;
+    expect(tavernLayoutSchema.safeParse(tiny).success).toBe(false);
+  });
+});
+
+describe('pinNotes', () => {
+  it('pins everything when it fits', () => {
+    expect(pinNotes([1, 2, 3], 3)).toEqual({ pinned: [1, 2, 3], hidden: [] });
+  });
+
+  it('gives the last place to the "+N" note once the board is over full', () => {
+    expect(pinNotes([1, 2, 3, 4, 5], 3)).toEqual({ pinned: [1, 2], hidden: [3, 4, 5] });
+  });
+});
+
+describe('noteCapacity', () => {
+  // Board heights (px) as measured live in the desktop app, from a large scene down to a tiny one.
+  it.each([
+    [145, 3],
+    [109, 2],
+    [77, 2],
+    [70, 2],
+    [55, 2],
+    [39, 1],
+    [28, 1],
+  ])('fits three quests on a %ipx board as %i places', (height, places) => {
+    expect(noteCapacity(height, 3)).toBe(places);
+  });
+
+  it.each([
+    [145, 3],
+    [109, 3],
+    [77, 2],
+    [39, 1],
+  ])('puts the last place of a %ipx board to the "+N" note for six quests (%i places)', (height, places) => {
+    expect(noteCapacity(height, 6)).toBe(places);
+    const { pinned, hidden } = pinNotes([1, 2, 3, 4, 5, 6], noteCapacity(height, 6));
+    expect(pinned).toHaveLength(places - 1);
+    expect(pinned.length + hidden.length).toBe(6);
+  });
+
+  it('never reports a capacity of every quest unless the full stack fits, so a clipped last note gets a "+N"', () => {
+    const { pinned, hidden } = pinNotes([1, 2, 3], noteCapacity(109, 3));
+    expect(pinned).toHaveLength(1);
+    expect(hidden).toHaveLength(2);
+  });
+
+  it('gives no place at all once not even the "+N" note fits, so the board is not drawn', () => {
+    expect(noteCapacity(16, 3)).toBe(0);
+    expect(noteCapacity(7, 6)).toBe(0);
+    expect(noteCapacity(0, 6)).toBe(0);
+  });
+
+  it('never exceeds the layout count and never shrinks as the board grows', () => {
+    let last = 0;
+    for (let height = 0; height <= 400; height += 1) {
+      const places = noteCapacity(height, 10);
+      expect(places).toBeLessThanOrEqual(QUEST_BOARD.notes);
+      expect(places).toBeGreaterThanOrEqual(last);
+      last = places;
+    }
+  });
+
+  it('keeps every quest reachable: pinned notes plus the hidden ones are all of them', () => {
+    for (const height of [0, 20, 40, 60, 80, 100, 150]) {
+      for (const total of [1, 2, 3, 4, 9]) {
+        const items = Array.from({ length: total }, (_, index) => index);
+        const { pinned, hidden } = pinNotes(items, noteCapacity(height, total));
+        expect([...pinned, ...hidden]).toEqual(items);
+      }
+    }
   });
 });
 
@@ -372,6 +470,17 @@ describe('nameLabelLayout', () => {
     expect(hiddenByCounter({ x: 60, y: BAR_COUNTER.front - 0.1 }, 2)).toBe(100);
   });
 
+  it('keeps every label inside the scene, so a seat by the wall never has its name cut off', () => {
+    const points = allSeats();
+    const layout = nameLabelLayout(points);
+    for (const [id, label] of layout) {
+      const { x } = points.get(id)!;
+      expect(x - label.maxWidth / 2).toBeGreaterThanOrEqual(0);
+      expect(x + label.maxWidth / 2).toBeLessThanOrEqual(100);
+    }
+    expect(nameLabelLayout(new Map([['wall', { x: 95, y: 50 }]])).get('wall')?.maxWidth).toBeCloseTo(9);
+  });
+
   it('hides a label squeezed below the minimum rather than drawing an empty pill', () => {
     const points = new Map<string, SlotPoint>([
       ['left', { x: 50, y: 50 }],
@@ -384,5 +493,440 @@ describe('nameLabelLayout', () => {
     expect(layout.get('right')?.shown).toBe(false);
     expect(layout.get('left')?.maxWidth).toBeLessThan(NAME_LABEL_MIN_WIDTH);
     expect(overlapping(points, layout)).toEqual([]);
+  });
+});
+
+const needsYouBubbles = (seats: Parameters<typeof needsYouGroups>[0]) =>
+  new Map([...needsYouGroups(seats)].map(([id, group]) => [id, group.length]));
+
+describe('needsYouGroups', () => {
+  it('lists the agents a bubble speaks for left to right', () => {
+    expect(needsYouGroups([atBar('c', 2), atBar('a', 0), atBar('b', 1)])).toEqual(new Map([['b', ['a', 'b', 'c']]]));
+  });
+
+  const bar = TAVERN_SLOTS.bar;
+  const atBar = (id: string, slot: number) => ({ id, zone: 'bar' as const, point: bar[slot] });
+
+  it('gives a lone waiting agent its own bubble', () => {
+    expect(needsYouBubbles([atBar('a', 2)])).toEqual(new Map([['a', 1]]));
+  });
+
+  it('puts one bubble over the middle of a zone, speaking for everyone waiting there', () => {
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), atBar('c', 2)])).toEqual(new Map([['b', 3]]));
+  });
+
+  it('takes the leftmost of the two middle agents of an even group', () => {
+    expect(needsYouBubbles([atBar('b', 1), atBar('a', 0)])).toEqual(new Map([['a', 2]]));
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), atBar('c', 2), atBar('d', 3)])).toEqual(new Map([['b', 4]]));
+  });
+
+  it('keeps one bubble per zone', () => {
+    const bench = { id: 'e', zone: 'benches' as const, point: TAVERN_SLOTS.benches[0] };
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), bench])).toEqual(
+      new Map([
+        ['a', 2],
+        ['e', 1],
+      ])
+    );
+  });
+
+  it('draws no bubble when nobody is waiting', () => {
+    expect(needsYouBubbles([])).toEqual(new Map());
+  });
+});
+
+describe('announcements', () => {
+  describe('joinAnnouncements', () => {
+    it('speaks up to three updates in full', () => {
+      expect(joinAnnouncements(['A finished', 'B needs you', 'C failed'])).toBe('A finished. B needs you. C failed.');
+    });
+
+    it('folds the rest into a count past three', () => {
+      expect(joinAnnouncements(['A finished', 'B needs you', 'C failed', 'D finished'])).toBe(
+        'A finished. B needs you. C failed. 1 more update.'
+      );
+      expect(joinAnnouncements(['A finished', 'B needs you', 'C failed', 'D finished', 'E failed'])).toBe(
+        'A finished. B needs you. C failed. 2 more updates.'
+      );
+    });
+  });
+});
+
+describe('bubbleAnswer', () => {
+  const call = (extra: Partial<ChatToolCall> = {}): ChatToolCall => ({
+    id: 'c1',
+    name: 'bash',
+    input: { command: 'pnpm test' },
+    status: 'awaiting-approval',
+    approvalId: 'ap-1',
+    ...extra,
+  });
+
+  const question = (labels: string[], extra: Partial<ChatQuestion> = {}): ChatQuestion => ({
+    question: 'Which way?',
+    header: 'Decision',
+    options: labels.map(label => ({ label, description: `Pick ${label}` })),
+    ...extra,
+  });
+
+  const decision = { via: 'decision', decisionId: 'd-1' } as const;
+
+  describe('planForCall', () => {
+    it('offers Approve / Deny for a plain approval, naming the call', () => {
+      expect(planForCall(call())).toEqual({ kind: 'approve', approvalId: 'ap-1', summary: 'bash pnpm test' });
+    });
+
+    it('sends every approval that needs the full card to Open', () => {
+      expect(planForCall(call({ approvalIrreversible: true })).kind).toBe('open');
+      expect(planForCall(call({ name: 'request_directory', input: { path: '/x' } })).kind).toBe('open');
+      expect(planForCall(call({ approvalChoice: { options: [{ id: 'a', label: 'A', description: '' }] } })).kind).toBe(
+        'open'
+      );
+    });
+
+    it('is Open while nothing is parked yet', () => {
+      expect(planForCall(undefined)).toEqual({ kind: 'open' });
+    });
+
+    it('answers a one-question ask_user card through the approval it is parked on', () => {
+      const plan = planForCall(
+        call({ name: 'ask_user', input: { questions: [question(['Yes (Recommended)', 'No'])] } })
+      );
+      expect(plan).toMatchObject({
+        kind: 'choose',
+        target: { via: 'approval', approvalId: 'ap-1' },
+        options: [
+          { label: 'Yes (Recommended)', face: 'Yes', recommended: true },
+          { label: 'No', face: 'No', recommended: false },
+        ],
+      });
+    });
+
+    it('opens an ask_user card with more than one question', () => {
+      const questions = [question(['A', 'B']), { ...question(['C', 'D']), question: 'And?' }];
+      expect(planForCall(call({ name: 'ask_user', input: { questions } })).kind).toBe('open');
+    });
+  });
+
+  describe('planForQuestion', () => {
+    it('draws short single-choice options as buttons', () => {
+      expect(planForQuestion(question(['Ship it', 'Wait']), decision)).toMatchObject({
+        kind: 'choose',
+        prompt: 'Which way?',
+        target: decision,
+      });
+    });
+
+    it('falls back to Open for multi-select, long or destructive options', () => {
+      expect(planForQuestion(question(['A', 'B'], { multiSelect: true }), decision).kind).toBe('open');
+      expect(planForQuestion(question(['A', 'x'.repeat(BUBBLE_OPTION_MAX + 1)]), decision).kind).toBe('open');
+      expect(planForQuestion(question(['Keep the branch', 'Delete the branch']), decision)).toEqual({
+        kind: 'open',
+        prompt: 'Which way?',
+      });
+    });
+  });
+});
+
+describe('innkeeper', () => {
+  const agent = (id: string, state: AgentState): AgentView => ({
+    id,
+    title: `Agent ${id}`,
+    parentId: 'root',
+    depth: 1,
+    seedPrompt: '',
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    model: 'm',
+    state,
+  });
+
+  const tool = (name: string, target?: string): AgentActivity => ({ kind: 'tool', tool: name, detail: '', target });
+  const thinking: AgentActivity = { kind: 'phase', phase: 'thinking' };
+
+  describe('innkeeperAct', () => {
+    it('polishes the bar while the parent is not processing', () => {
+      expect(innkeeperAct({ status: 'done' }, [agent('a', 'working')])).toEqual({ pose: 'idle' });
+      expect(innkeeperAct({}, [])).toEqual({ pose: 'idle' });
+    });
+
+    it('writes while posting quests, and while thinking before any agent exists', () => {
+      expect(innkeeperAct({ status: 'processing', activity: tool('session_spawn') }, [agent('a', 'working')])).toEqual({
+        pose: 'writing',
+      });
+      expect(innkeeperAct({ status: 'processing', activity: thinking }, [])).toEqual({ pose: 'writing' });
+      expect(innkeeperAct({ status: 'processing' }, [])).toEqual({ pose: 'writing' });
+    });
+
+    it('walks to the agent a session_read or session_send names', () => {
+      const agents = [agent('a', 'working'), agent('b', 'done')];
+      expect(innkeeperAct({ status: 'processing', activity: tool('session_read', 'b') }, agents)).toEqual({
+        pose: 'walking',
+        target: 'b',
+      });
+      expect(innkeeperAct({ status: 'processing', activity: tool('session_send', 'a') }, agents)).toEqual({
+        pose: 'walking',
+        target: 'a',
+      });
+    });
+
+    it('does not walk to a session that is not in the roster', () => {
+      expect(
+        innkeeperAct({ status: 'processing', activity: tool('session_read', 'stranger') }, [agent('a', 'working')])
+      ).toEqual({ pose: 'idle' });
+    });
+
+    it('reads once every agent has settled and the parent is still processing', () => {
+      const settled = [agent('a', 'done'), agent('b', 'failed'), agent('c', 'stopped'), agent('d', 'idle')];
+      expect(innkeeperAct({ status: 'processing', activity: thinking }, settled)).toEqual({ pose: 'reading' });
+      expect(innkeeperAct({ status: 'processing' }, [...settled, agent('e', 'needs-you')])).toEqual({ pose: 'idle' });
+    });
+  });
+
+  describe('innkeeperBubble', () => {
+    it("shows the parent's live activity while busy, and asks for the user when it needs them", () => {
+      expect(innkeeperBubble({ status: 'processing', activity: tool('session_spawn') })).toBe('session_spawn');
+      expect(innkeeperBubble({ status: 'processing', activity: thinking })).toBe('Thinking');
+      expect(innkeeperBubble({ status: 'needs-action' })).toBe('Needs you!');
+      expect(innkeeperBubble({ status: 'done', activity: thinking })).toBeUndefined();
+      expect(innkeeperBubble({ status: 'processing' })).toBeUndefined();
+    });
+  });
+});
+
+describe('quests', () => {
+  // testUtils needs a DOM; these helpers only read id, title, state and workerTask.
+  const agent = (id: string, state: AgentState, extra: Partial<AgentView> = {}): AgentView => ({
+    id,
+    title: `Agent ${id}`,
+    parentId: 'root',
+    depth: 1,
+    seedPrompt: '',
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    model: 'm',
+    state,
+    ...extra,
+  });
+
+  const LATER = '2026-10-01T00:05:00.000Z';
+  /** An agent whose run ended and whose outcome has been stored, which updates its record. */
+  const ended = (id: string, state: AgentState, outcome: AgentView['outcome']) =>
+    agent(id, state, { outcome, updatedAt: LATER });
+
+  /** A worker task in the given state: only `state.status` and `accepted` matter to the board. */
+  const withTask = (status: string, accepted?: boolean) =>
+    ({
+      workerTask: { state: { status, ...(accepted === undefined ? {} : { accepted }) } },
+    }) as unknown as Partial<AgentView>;
+  /** A needs-you waiting on the user in the Task panel: the task already holds its own run's outcome. */
+  const waiting = (id: string, outcome: AgentView['outcome'], status = 'completed') =>
+    agent(id, 'needs-you', {
+      outcome,
+      updatedAt: LATER,
+      ...withTask(status, status === 'completed' ? false : undefined),
+    });
+  const accepted = (id: string) =>
+    agent(id, 'done', { outcome: 'finished', updatedAt: LATER, ...withTask('completed', true) });
+
+  const withOutcome = (outcome: string) => ({ workerTask: { contract: { outcome } } }) as unknown as Partial<AgentView>;
+
+  describe('questTitle', () => {
+    it("takes the first line of the task contract's outcome", () => {
+      expect(questTitle(agent('a', 'working', withOutcome('  Fix the login flow\nThen add tests')))).toBe(
+        'Fix the login flow'
+      );
+    });
+
+    it('falls back to the session title without a contract, or with a blank outcome', () => {
+      expect(questTitle(agent('a', 'working'))).toBe('Agent a');
+      expect(questTitle(agent('a', 'working', withOutcome('   ')))).toBe('Agent a');
+    });
+  });
+
+  describe('trackQuests', () => {
+    const track = (steps: AgentView[][]) =>
+      steps.reduce((ledger, agents, index) => trackQuests(ledger, agents, index * 100), EMPTY_LEDGER);
+
+    it('checks off an open quest the moment its agent turns done', () => {
+      const ledger = track([
+        [agent('a', 'working'), agent('b', 'needs-you')],
+        [agent('a', 'done'), agent('b', 'done')],
+      ]);
+      expect(ledger.finished).toEqual(
+        new Map([
+          ['a', 100],
+          ['b', 100],
+        ])
+      );
+      expect(ledger.open.size).toBe(0);
+    });
+
+    it('still checks it off when the agent reads idle between working and done', () => {
+      const ledger = track([[agent('a', 'working')], [agent('a', 'idle')], [agent('a', 'done')]]);
+      expect(ledger.finished).toEqual(new Map([['a', 200]]));
+    });
+
+    it("keeps a re-run open while it still reads as the previous run's outcome", () => {
+      for (const [state, outcome] of [
+        ['failed', 'failed'],
+        ['stopped', 'aborted'],
+      ] as const) {
+        const ledger = track([
+          [agent('a', 'working', { outcome })],
+          [agent('a', state, { outcome })],
+          [ended('a', 'done', 'finished')],
+        ]);
+        expect(ledger.finished).toEqual(new Map([['a', 200]]));
+      }
+    });
+
+    it("holds a re-run open while `done` is still the previous run's finished outcome, then drops it on failure", () => {
+      const ledger = track([
+        [agent('a', 'working', { outcome: 'finished' })],
+        [agent('a', 'done', { outcome: 'finished' })],
+      ]);
+      expect(ledger.finished.size).toBe(0);
+      expect(ledger.open.has('a')).toBe(true);
+      const failed = trackQuests(ledger, [ended('a', 'failed', 'failed')], 200);
+      expect(failed.open.size).toBe(0);
+      expect(failed.finished.size).toBe(0);
+    });
+
+    it('checks off a re-run once its done record is a new update', () => {
+      const ledger = track([
+        [agent('a', 'working', { outcome: 'finished' })],
+        [agent('a', 'done', { outcome: 'finished' })],
+        [ended('a', 'done', 'finished')],
+      ]);
+      expect(ledger.finished).toEqual(new Map([['a', 200]]));
+      expect(ledger.open.size).toBe(0);
+    });
+
+    it('checks off a run the user accepts while it waits on them, even with its record unchanged', () => {
+      const ledger = track([
+        [agent('a', 'working', { outcome: 'finished' })],
+        [waiting('a', 'finished')],
+        [accepted('a')],
+      ]);
+      expect(ledger.finished).toEqual(new Map([['a', 200]]));
+      expect(ledger.open.size).toBe(0);
+    });
+
+    it('checks off a held re-run that reaches needs-you and is then accepted', () => {
+      const ledger = track([
+        [agent('a', 'working', { outcome: 'finished' })],
+        [agent('a', 'done', { outcome: 'finished' })],
+        [waiting('a', 'finished')],
+        [accepted('a')],
+      ]);
+      expect(ledger.finished).toEqual(new Map([['a', 300]]));
+      expect(ledger.open.size).toBe(0);
+    });
+
+    it("still holds a done straight after working that reads as the previous run's outcome", () => {
+      const ledger = track([
+        [agent('a', 'needs-you', { outcome: 'finished' })],
+        [agent('a', 'working', { outcome: 'finished' })],
+        [agent('a', 'done', { outcome: 'finished' })],
+        [agent('a', 'done', { outcome: 'finished' })],
+      ]);
+      expect(ledger.finished.size).toBe(0);
+      expect(ledger.open.has('a')).toBe(true);
+    });
+
+    it('ends a run the user stops while it waits on them, even with its record unchanged', () => {
+      const ledger = track([[waiting('a', 'aborted', 'blocked')], [ended('a', 'stopped', 'aborted')]]);
+      expect(ledger.open.size).toBe(0);
+      expect(ledger.finished.size).toBe(0);
+    });
+
+    it('holds a re-run open at every step through a live approval and a stale done', () => {
+      for (const live of [{}, withTask('running')]) {
+        let ledger = EMPTY_LEDGER;
+        const steps = [
+          agent('a', 'working', { outcome: 'finished' }),
+          agent('a', 'needs-you', { outcome: 'finished', ...live }),
+          agent('a', 'done', { outcome: 'finished' }),
+          agent('a', 'working', { outcome: 'finished' }),
+        ];
+        steps.forEach((step, index) => {
+          ledger = trackQuests(ledger, [step], index * 100);
+          expect(ledger.finished.size).toBe(0);
+          expect(ledger.open.has('a')).toBe(true);
+        });
+      }
+    });
+
+    it('keeps a first run open when a live approval clears to idle with the record unchanged', () => {
+      const ledger = track([[agent('a', 'working')], [agent('a', 'needs-you')], [agent('a', 'idle')]]);
+      expect(ledger.open.has('a')).toBe(true);
+      expect(ledger.finished.size).toBe(0);
+    });
+
+    it('ends a re-run that fails again with the same outcome once the record updates', () => {
+      const ledger = track([[agent('a', 'working', { outcome: 'failed' })], [ended('a', 'failed', 'failed')]]);
+      expect(ledger.open.size).toBe(0);
+    });
+
+    it('never adds an agent already done, or one whose quest failed or stopped', () => {
+      const ledger = track([
+        [agent('a', 'done'), agent('b', 'working'), agent('c', 'idle'), agent('d', 'working')],
+        [agent('a', 'done'), ended('b', 'failed', 'failed'), agent('c', 'done'), ended('d', 'stopped', 'aborted')],
+        [agent('a', 'done'), agent('b', 'done'), agent('c', 'done'), agent('d', 'done')],
+      ]);
+      expect(ledger.finished.size).toBe(0);
+    });
+
+    it('keeps the first finish time, and forgets an agent that takes up a quest again or leaves', () => {
+      const ledger = track([
+        [agent('a', 'working'), agent('b', 'working'), agent('c', 'working')],
+        [agent('a', 'done'), agent('b', 'done'), agent('c', 'done')],
+        [agent('a', 'done'), agent('b', 'working')],
+      ]);
+      expect(ledger.finished).toEqual(new Map([['a', 100]]));
+      expect([...ledger.open.keys()]).toEqual(['b']);
+    });
+  });
+
+  describe('takeDown', () => {
+    it('drops a finished quest once it has lingered long enough', () => {
+      const finished = new Map([
+        ['old', 0],
+        ['new', 10],
+      ]);
+      expect(takeDown(finished, QUEST_DONE_LINGER_MS)).toEqual(new Map([['new', 10]]));
+    });
+  });
+
+  describe('questNotes', () => {
+    it('pins open quests, one on its way to done, and lingering finished ones, in roster order', () => {
+      const before = [agent('b', 'working'), agent('c', 'working'), agent('d', 'needs-you'), agent('f', 'working')];
+      const after = [
+        agent('a', 'done'),
+        agent('b', 'working'),
+        agent('c', 'idle'),
+        agent('d', 'needs-you'),
+        agent('e', 'idle', { outcome: 'no-reply' }),
+        agent('f', 'done'),
+      ];
+      const ledger = trackQuests(trackQuests(EMPTY_LEDGER, before, 0), after, 10);
+      expect(questNotes(after, ledger).map(note => [note.agent.id, note.done])).toEqual([
+        ['b', false],
+        ['c', false],
+        ['d', false],
+        ['f', true],
+      ]);
+      expect(questNotes(after, ledger).find(note => note.done)?.finishedAt).toBe(10);
+    });
+
+    it('drops a quest whose run ended with no reply', () => {
+      const ledger = trackQuests(
+        trackQuests(EMPTY_LEDGER, [agent('a', 'working')], 0),
+        [agent('a', 'idle', { outcome: 'no-reply' })],
+        10
+      );
+      expect(ledger.open.size).toBe(0);
+    });
   });
 });

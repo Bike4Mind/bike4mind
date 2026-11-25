@@ -36,6 +36,8 @@ import {
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
   LegalHoldError,
+  MAX_LAKE_FILE_TAG_NAME_LENGTH,
+  BadRequestError,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -68,6 +70,13 @@ const META_TAG_REGEX = new RegExp(`^${DATALAKE_TAG_PREFIX}`);
  * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
  */
 const NOT_META_TAG = { $not: META_TAG_REGEX };
+
+function assertTagRenameLength(name: string): void {
+  // tags is Mixed, so runValidators cannot enforce the shared name cap here.
+  if (name.length > MAX_LAKE_FILE_TAG_NAME_LENGTH) {
+    throw new BadRequestError(`A tag name cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`);
+  }
+}
 
 /**
  * The `$project` stage behind every MEMBERSHIP-dimension read, shared by the lake-wide scan
@@ -996,6 +1005,29 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return modelIds.filter((id): id is string => typeof id === 'string' && id.length > 0).sort();
   }
 
+  /**
+   * One page of ids of the live generated files that list `fileId` in their `derivedFrom`, newest
+   * first. No access check: the caller filters the ids through a read door. The `sourceType` and
+   * `deletedAt` conjuncts match the partial `derivedFrom.fileId` index.
+   */
+  async findDerivedChildIds(fileId: string, { limit, skip = 0 }: { limit: number; skip?: number }): Promise<string[]> {
+    const children = await this.fabFileModel
+      .find(
+        {
+          'derivedFrom.fileId': fileId,
+          sourceType: FabFileSourceType.TOOL_GENERATED,
+          deletedAt: null,
+          archivedAt: null,
+        },
+        { _id: 1 }
+      )
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    return children.map(child => String(child._id));
+  }
+
   async executeSearch(
     query: {
       filter: Record<string, unknown>;
@@ -1845,6 +1877,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     excludeIds: readonly string[] = []
   ): Promise<Pick<IFabFileDocument, 'id' | 'userId' | 'tags'> | null> {
     if (!tag) return null;
+    if (newTag) assertTagRenameLength(newTag);
     // The SAME anchored, escaped, case-insensitive match removeTagByUserId/updateTagsByUserId run,
     // so a claim and the bulk mop-up behind it can never act on different file sets.
     const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
@@ -3652,6 +3685,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number> {
     if (!tag || !newTag) return 0;
+    assertTagRenameLength(newTag);
     // Anchored and escaped for the same reason as removeTagByUserId: unanchored, renaming `q1`
     // also rewrote `q1-draft`.
     const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
@@ -4322,6 +4356,17 @@ FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 FabFileSchema.index(
   { organizationId: 1, deletedAt: 1 },
   { partialFilterExpression: { organizationId: { $type: 'string' } } }
+);
+FabFileSchema.index(
+  { organizationId: 1, deletedAt: 1, createdAt: 1, _id: 1 },
+  { name: 'retention_files_present', partialFilterExpression: { organizationId: { $exists: true } } }
+);
+FabFileSchema.index(
+  { 'sourceMetadata.retentionOrganizationId': 1, deletedAt: 1, createdAt: 1, _id: 1 },
+  {
+    name: 'retention_generated_files_present',
+    partialFilterExpression: { 'sourceMetadata.retentionOrganizationId': { $exists: true } },
+  }
 );
 
 // An org pool's recent client uploads (apps/client/server/files/pendingUploads.ts), including

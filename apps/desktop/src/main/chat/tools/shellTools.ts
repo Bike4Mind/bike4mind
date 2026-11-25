@@ -6,7 +6,6 @@ import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
 import { CappedOutput } from './cappedOutput';
 import { guardForm, isWithin, realpathNearest, resolveWithinRoots, withinGuarded } from './paths';
-import { writesOwnRepository } from './ownRepository';
 import {
   inUngrantedDistro,
   scanShell,
@@ -23,10 +22,16 @@ import {
   sessionScriptRun,
   shellCommandRan,
 } from './sessionScripts';
-import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
+import { commandEnv, launchCommand, spawnFailure, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
-import { protectionFor, secretPaths, type SandboxedCommand } from './sandbox';
-import { folderReaches, shellReachesProtected } from '../permissions/rules';
+import {
+  guardSpellingsForDecision,
+  protectionFor,
+  secretPaths,
+  type GuardSpellings,
+  type SandboxedCommand,
+} from './sandbox';
+import { folderReaches, namesRuleFile, shellReachesProtected } from '../permissions/rules';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
   MAX_TOOL_OUTPUT_CHARS,
@@ -35,7 +40,6 @@ import {
   requireString,
   type ApprovalPart,
   type ApprovalPrompt,
-  type PartAskKind,
   type ToolContext,
   type ToolDefinition,
 } from './types';
@@ -47,7 +51,7 @@ const MAX_TIMEOUT_MS = 300_000;
 const MIN_STREAMS_BUDGET = 2_000;
 
 /** Grace between asking the process group to stop and killing it outright. */
-const SIGKILL_DELAY_MS = 3_000;
+export const SIGKILL_DELAY_MS = 3_000;
 
 /** Long enough for the runner's final summary lines to land after the idle marker. */
 const WATCH_GRACE_MS = 1_500;
@@ -174,16 +178,23 @@ function runCommand(
   options: RunOptions = {}
 ): Promise<CommandOutcome> {
   return new Promise((resolve, reject) => {
-    const child = spawn(launch.executable, [...launch.args], {
-      cwd,
-      // Its own process group, so the timeout reaches the command's children too and the command
-      // can be moved to the background intact (see `moveToBackground`). `spawnsDetached` says why
-      // a WSL command is not detached.
-      detached: spawnsDetached(launch),
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env,
-    });
+    let child: ChildProcess;
+    try {
+      child = spawn(launch.executable, [...launch.args], {
+        cwd,
+        // Its own process group, so the timeout reaches the command's children too and the command
+        // can be moved to the background intact (see `moveToBackground`). `spawnsDetached` says why
+        // a WSL command is not detached.
+        detached: spawnsDetached(launch),
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+      });
+    } catch (err) {
+      // Node throws some spawn failures (ENOTDIR) synchronously instead of emitting 'error'.
+      reject(err instanceof Error ? spawnFailure(err, cwd, launch) : err);
+      return;
+    }
 
     const stdout = new CappedOutput();
     const stderr = new CappedOutput();
@@ -246,7 +257,7 @@ function runCommand(
     };
     const onError = (error: Error) => {
       finish();
-      reject(error);
+      reject(spawnFailure(error, cwd, launch));
     };
     const onClose = (closeCode: number | null, closeSignal: NodeJS.Signals | null) => {
       finish();
@@ -424,7 +435,8 @@ function reachesProtected(
   command: string,
   scan: ShellScan,
   protectedPaths: readonly string[],
-  permissionPaths: readonly string[]
+  permissionPaths: readonly string[],
+  spellings: GuardSpellings
 ): boolean {
   const named = [...(scan.paths ?? []), ...scan.writes].filter(
     path => !scan.readOnly || !CLAUDE_SETTINGS_NAME.test(path)
@@ -433,7 +445,7 @@ function reachesProtected(
   // The scan names a `.claude` folder itself when a write reaches it whole (`cp x .claude`, `find . -delete`).
   const replaced = [...scan.writes, ...scan.writtenTrees, ...(scan.readOnly ? [] : (scan.paths ?? []))];
   return (
-    named.some(path => withinGuarded(guarded, [path]) || protectionFor([path], 'write') !== undefined) ||
+    named.some(path => withinGuarded(guarded, [path]) || protectionFor([path], 'write', spellings) !== undefined) ||
     replaced.some(path => CLAUDE_FOLDER.test(path)) ||
     foldersReach(scan, guarded) ||
     shellReachesProtected({ script: command, ...scan, paths: named }, guarded)
@@ -441,41 +453,32 @@ function reachesProtected(
 }
 
 /** Whether a command may read what no tool reads in any mode: the app's own data or a secret store (sandbox.ts). */
-function readsSecret(scan: ShellScan, protectedPaths: readonly string[]): boolean {
+function readsSecret(scan: ShellScan, protectedPaths: readonly string[], spellings: GuardSpellings): boolean {
   const named = [...(scan.paths ?? []), ...scan.writes];
   return (
-    named.some(path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'read') !== undefined) ||
-    foldersReach(scan, [...protectedPaths, ...secretPaths()])
+    named.some(
+      path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'read', spellings) !== undefined
+    ) || foldersReach(scan, [...protectedPaths, ...secretPaths()])
   );
 }
 
 /** Why one part of a script needs a decision of its own, or undefined when the mode may decide it. */
-async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPart['ask']> {
-  const reasons: string[] = [];
-  const kinds: PartAskKind[] = [];
-  if (entry.unread) {
-    reasons.push('Desktop cannot follow what this part runs or where it acts.');
-    kinds.push('unread');
-  }
-  const target = entry.outbound?.target;
-  if (entry.outbound && !(target && (await writesOwnRepository(target).catch(() => false)))) {
-    reasons.push(`Can send data off this computer (${entry.outbound.reason}).`);
-    kinds.push('outbound');
-  }
-  if (entry.envFiles?.length) {
-    reasons.push(`Reads ${entry.envFiles.join(', ')}, which usually holds secrets.`);
-    kinds.push('env');
-  }
-  if (kinds.length === 0) return undefined;
-  return { mode: entry.unread ? 'full' : 'auto', reason: reasons.join(' '), kinds };
+function partAsk(entry: ShellScan['commands'][number]): ApprovalPart['ask'] {
+  if (!entry.envFiles?.length) return undefined;
+  // Only reading secrets stops 'auto' here.
+  return {
+    mode: 'auto',
+    reason: `Reads ${entry.envFiles.join(', ')}, which usually holds secrets.`,
+    kinds: ['env'],
+  };
 }
 
 /**
  * The prompt for a shell command, shared by bash_execute and bash_background.
  *
  * The script is parsed here rather than at decision time so the card can say what "always" will
- * cover, and so one reading of the command serves both. A script that does not parse, or a `cwd`
- * outside every granted root, is asked about even where commands otherwise run unasked.
+ * cover, and so one reading of the command serves both. A `cwd` outside every granted root is asked
+ * about even where commands otherwise run unasked; a script that does not parse is decided by `unreadApproval`.
  */
 export async function shellApproval(
   tool: 'bash_execute' | 'bash_background',
@@ -499,6 +502,9 @@ export async function shellApproval(
   // another, or from a 60-second run to leaving the same command running all afternoon. NUL
   // separates the fields because it is the one byte neither of them can contain.
   const key = `${tool}\x00${cwd}\x00${command}`;
+  // Left out of the key on purpose: the same command reworded is still the same command.
+  const described = typeof input.description === 'string' ? input.description.trim() : '';
+  const summary = described ? { summary: described } : {};
 
   let startDirectory: string;
   const directories: string[] = [];
@@ -512,7 +518,9 @@ export async function shellApproval(
   }
 
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
-  if (!scan) return unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]);
+  if (!scan) {
+    return { ...unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]), ...summary };
+  }
 
   // Recorded before the check, so a script written and run by this same command counts.
   for (const written of scan.writes) await recordSessionWrite(context, written);
@@ -524,8 +532,21 @@ export async function shellApproval(
   });
   const gitProgram = gitRunsConfiguredProgram(scan.commands) ?? scan.gitProgram ?? null;
   const protectedPaths = context.protectedPaths ?? [];
-  const touchesProtected = reachesProtected(command, scan, protectedPaths, context.uncoverablePaths ?? []);
-  const secret = readsSecret(scan, protectedPaths);
+  const spellings = guardSpellingsForDecision();
+  const touchesProtected = reachesProtected(command, scan, protectedPaths, context.uncoverablePaths ?? [], spellings);
+  const written = [...(scan.writtenPlaces ?? scan.paths ?? []), ...scan.writes, ...scan.writtenTrees];
+  // Reading a protected location stops a mode only for a secret (`secret`); what a command may write there stops it.
+  const writesProtected =
+    touchesProtected &&
+    (scan.writtenPlaces === undefined ||
+      reachesProtected(
+        command,
+        { ...scan, paths: scan.writtenPlaces },
+        protectedPaths,
+        context.uncoverablePaths ?? [],
+        spellings
+      ));
+  const secret = readsSecret(scan, protectedPaths, spellings);
   const writesWhileUnresolved = (context.unresolvedProtectedPaths?.length ?? 0) > 0 && !scan.readOnly;
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
   const named = unreachable.filter(
@@ -534,31 +555,55 @@ export async function shellApproval(
   // An `.env` read by redirect belongs to no one part.
   const partEnvFiles = new Set(scan.commands.flatMap(entry => entry.envFiles ?? []));
   const envScript = scan.envFiles.some(path => !partEnvFiles.has(path));
-  // A push or gh write to the folder's own origin still says so on the card, but does not stop
-  // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
-  const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
+  // A part that can send data out says so on the card but does not stop auto mode.
+  const parts = scan.commands.map(entry => partAsk(entry));
+  const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
+  const signingRisk = scan.gitSigningRisk === true || scan.commands.some(entry => entry.gitSigningRisk);
+  const opaque =
+    gitUnlisted.length > 0 ||
+    scan.unreadScript === true ||
+    (scan.unread === true && !scan.commands.some(entry => entry.refsMovedOnly)) ||
+    scan.commands.some(entry => entry.unread && !entry.refsMovedOnly);
+  const unchecked =
+    scan.unread === true ||
+    scan.unreadScript === true ||
+    scan.commands.some(entry => entry.unread || entry.gitUnlisted);
+  // The scan cannot rule out a protected write in what it cannot follow, but the command's own words can name one.
+  const uncheckedSettingsWrite = unchecked && !scan.readOnly && namesRuleFile(command);
+  const runsSessionCode = !!script || scriptCheckFailed;
   const scriptAsks =
+    signingRisk ||
+    opaque ||
     envScript ||
-    !!script ||
-    scriptCheckFailed ||
     !!gitProgram ||
     scan.gitPathUnplaced === true ||
     scan.remoteTree === true ||
     unreachable.length > 0 ||
-    touchesProtected ||
+    writesProtected ||
     secret ||
-    scan.unreadScript === true ||
+    uncheckedSettingsWrite ||
     writesWhileUnresolved;
   const scriptAsksInFull =
-    (touchesProtected && !scan.readOnly) || scan.unreadScript === true || secret || writesWhileUnresolved;
+    signingRisk ||
+    opaque ||
+    (writesProtected && !scan.readOnly) ||
+    uncheckedSettingsWrite ||
+    secret ||
+    writesWhileUnresolved ||
+    unreachable.length > 0;
   // A part that sets the environment changes what every later part runs, so none is decided alone.
-  const byPart = !scriptAsks && !scriptAsksInFull && !scan.setsEnvironment;
+  // A script unread as a whole has no part the scan can vouch for, so none is decided alone.
+  const byPart =
+    !scriptAsks && !scriptAsksInFull && !runsSessionCode && !scan.setsEnvironment && scan.unreadScript !== true;
   const reasons = [
     ...(scriptCheckFailed
-      ? ['Could not check whether it runs code written in this session, so it is asked each time.']
+      ? ['Could not check whether it runs code written in this session, so it can only be allowed once.']
       : []),
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
+    ...(scan.commands.some(entry => entry.deletes)
+      ? ['Deletes files recursively or forcefully, which cannot be undone.']
+      : []),
     ...(script && script.names.length > 0
       ? [
           `Runs code from ${script.names.join(', ')}, which ${script.untracked ? 'may have been' : 'was'} written in this session.`,
@@ -577,6 +622,12 @@ export async function shellApproval(
       : []),
     ...(scan.unread
       ? ['Runs a program or builds a path that Desktop cannot follow, so where it acts cannot be checked.']
+      : []),
+    ...(gitUnlisted.length > 0
+      ? [`Runs git in a form Desktop does not list as safe (${gitUnlisted.join(', ')}).`]
+      : []),
+    ...(uncheckedSettingsWrite
+      ? ['Names a permission or hook settings file in a command Desktop cannot follow, so it may write there.']
       : []),
     ...(writesWhileUnresolved
       ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']
@@ -598,19 +649,25 @@ export async function shellApproval(
   // not reaching outside the project, so it does not need that folder granted first.
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
-  const asks = scriptAsks || parts.some(ask => ask !== undefined);
-  const asksInFull = scriptAsksInFull || parts.some(ask => ask?.mode === 'full');
+  const writtenOutside = outside.filter(directory =>
+    written.some(place => isWithin(directory, place) || isWithin(place, directory))
+  );
+  const asks = scriptAsks || parts.some(ask => ask !== undefined && ask.mode !== 'ask');
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
   return {
     detail: [detail, ...reasons].join('\n\n'),
+    ...summary,
+    ...(reasons.length > 0 ? { reasons } : {}),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
-    ...(asksInFull ? { askInFull: true as const } : {}),
-    ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
-    ...(scan.contained ? { contained: true as const } : {}),
+    ...(scriptAsksInFull ? { askInFull: true as const } : {}),
+    ...(unchecked ? { unchecked: true as const } : {}),
+    ...(scan.potentialOutbound !== false ? { outbound: true as const } : {}),
+    // An answer given before signing came into play must not carry over to a call that signs.
+    ...(scriptCheckFailed || signingRisk ? { allowOnce: true as const } : {}),
     ...(byPart ? { byPart: true as const } : {}),
     always: {
       namespace: tool,
@@ -619,7 +676,8 @@ export async function shellApproval(
         return {
           text,
           pattern: always,
-          coverable,
+          // An exact "always" for code this session wrote lapses when it is written again (see runKey); a prefix would not.
+          coverable: coverable && !runsSessionCode,
           words,
           ...(expanded ? { expanded } : {}),
           ...(opaque ? { opaque } : {}),
@@ -627,6 +685,8 @@ export async function shellApproval(
         };
       }),
       directories: [...new Set([...directories, ...outside])],
+      // Data sent off this computer may come from any folder, so every one counts as reached.
+      writtenDirectories: [...new Set([...directories, ...(scan.outbound.length > 0 ? outside : writtenOutside)])],
       paths: scan.paths ?? [],
       ...(scan.globFolders ? { globFolders: scan.globFolders } : {}),
       ...(scan.dotlessGlobFolders ? { dotlessGlobFolders: scan.dotlessGlobFolders } : {}),
@@ -641,9 +701,8 @@ export async function shellApproval(
 export const UNREAD_WSL_COMMAND = 'a WSL distro this command may reach, which the scan could not read';
 
 /**
- * The prompt for a command the scan could not read. It asks in auto and full mode, and when the command
- * may reach a WSL distro - it names wsl or a share, or runs in or beside a WSL folder - it also
- * carries `ungranted`, so no rule or saved answer covers it: what it reaches was never checked.
+ * The prompt for a command the scan could not read. Every mode asks because its protected paths cannot
+ * be checked. A possible WSL target additionally carries `ungranted`, so no saved grant can cover it.
  */
 function unreadApproval(
   tool: string,
@@ -655,15 +714,27 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  if (!mayReachDistro) return { detail, key, askInAuto: true, askInFull: true };
-  return {
-    detail: [
+  // Drawn on the card only in Full access (see fullAccessStopReasons in ChatService); the card otherwise
+  // shows the command itself. The reason keeps the call off quick surfaces.
+  if (!mayReachDistro) {
+    return {
       detail,
-      'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.',
-    ].join('\n\n'),
+      key,
+      askInAuto: true,
+      askInFull: true,
+      reasons: ['Could not read this command, so where it acts cannot be checked.'],
+      unchecked: true,
+    };
+  }
+  const reason =
+    'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.';
+  return {
+    detail: [detail, reason].join('\n\n'),
+    reasons: [reason],
     key,
     askInAuto: true,
     askInFull: true,
+    unchecked: true,
     always: {
       namespace: tool,
       commands: [{ text: command, pattern: command, coverable: false, words: command }],
@@ -673,6 +744,12 @@ function unreadApproval(
     },
   };
 }
+
+/** The `description` input's schema text, shared with bash_background. */
+export const SHELL_DESCRIPTION_HINT =
+  'A few plain words on what this command does, in the active voice, for example "Lists the ' +
+  'changed files". Shown to the user above the command when they are asked to approve it, so ' +
+  'say what it does and do not repeat the command.';
 
 /** Exported so tests can shrink the grace period. */
 export const bashExecuteRunOptions: RunOptions = {};
@@ -771,6 +848,7 @@ export const bashExecute: ToolDefinition = {
           type: 'number',
           description: `Timeout in milliseconds. Default ${DEFAULT_TIMEOUT_MS}, maximum ${MAX_TIMEOUT_MS}.`,
         },
+        description: { type: 'string', description: SHELL_DESCRIPTION_HINT },
       },
       required: ['command'],
       additionalProperties: false,

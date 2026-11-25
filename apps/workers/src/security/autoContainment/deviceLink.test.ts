@@ -14,8 +14,10 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: vi.fn(),
 }));
-vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({ assessShadowDetection: vi.fn() }));
-vi.mock('@server/security/abuseAssessment/linkedAccountEvidence', () => ({ linkedAccountGroupEvidence: vi.fn() }));
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/abuseAssessment', () => ({ assessShadowDetection: vi.fn() }));
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence', () => ({
+  linkedAccountGroupEvidence: vi.fn(),
+}));
 vi.mock('./executor', () => ({
   applyAutoContainment: vi.fn(),
   liveAutoContainmentDeps: vi.fn(),
@@ -33,7 +35,10 @@ import {
   type DeviceLinkDeps,
 } from './deviceLink';
 import { loadAutoContainmentConfig } from './executor';
-import { evaluateDeviceLinks, toDeviceLinkAccount } from '@server/security/autoContainment/deviceLinkEvaluation';
+import {
+  evaluateDeviceLinks,
+  toDeviceLinkAccount,
+} from '@bike4mind/server-utils/security/autoContainment/deviceLinkEvaluation';
 
 const HOUR_MS = 60 * 60 * 1000;
 const NOW = new Date('2026-11-05T12:00:00Z');

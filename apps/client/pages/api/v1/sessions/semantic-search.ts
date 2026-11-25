@@ -20,14 +20,17 @@ import {
   isCreditsEnforced,
   reserveCompletionCredits,
   settleCompletion,
-} from '@server/billing/meterPlatformCompletion';
-import { resolveRequestBillingOrgId } from '@server/billing/reserveRequestCredits';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/reserveRequestCredits';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { type ContractRequest, nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   apiKeyRepository,
   adminSettingsRepository,
   organizationRepository,
   sessionRepository,
+  spendFreezeRepository,
 } from '@bike4mind/database';
 import { Quest } from '@bike4mind/database/content';
 import { computeCosineSimilarity, getSettingsByNames } from '@bike4mind/utils';
@@ -118,6 +121,10 @@ const handler = nextRouteForContract(searchSessionsContract).post(
     const billingOrgId = resolveRequestBillingOrgId(req);
     const billingOrg = billingOrgId ? await organizationRepository.findById(billingOrgId) : null;
     assertApiKeyOrgMembership({ billingOrg, billingUser: req.user, isApiKeyCaller: Boolean(req.apiKeyInfo) });
+    // With credits on or off: a freeze stops spend even where no balance is enforced.
+    await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, billingOrgId ?? null), {
+      db: { spendFreezes: spendFreezeRepository },
+    });
     // assertOwnerCanAfford's gate, inlined so the org read above is the only one.
     if (await isCreditsEnforced()) {
       if (billingOrg && creditService.isMemberAtOrOverCap(billingOrg, userId)) {

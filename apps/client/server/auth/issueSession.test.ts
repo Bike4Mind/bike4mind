@@ -9,7 +9,14 @@ vi.mock('./withAccountNotPurging', () => ({
 vi.mock('@bike4mind/services', () => ({
   authSessionService: { issueSession: (...args: unknown[]) => issueSession(...args) },
 }));
-vi.mock('@bike4mind/database', () => ({ authSessionRepository: {} }));
+const userDoc = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
+vi.mock('@bike4mind/database', () => ({
+  authSessionRepository: {},
+  User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(userDoc.value) }) }) },
+}));
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
+  ForbiddenError: class ForbiddenError extends Error {},
+}));
 vi.mock('./tokenGenerator', () => ({ authTokenGenerator: { signAccessToken: vi.fn() } }));
 vi.mock('./sessionDevice', () => ({ buildSessionDevice: () => ({ label: 'test' }) }));
 vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({ setRefreshCookie: vi.fn() }));
@@ -23,6 +30,7 @@ const req = { headers: {} };
 describe('issueSessionForRequest', () => {
   beforeEach(() => {
     issueSession.mockReset();
+    userDoc.value = { isPersona: false };
     guardedWrite.mockClear();
     recordLoginEvent.mockReset();
     issueSession.mockResolvedValue({ accessToken: 'a', refreshToken: 'r', sid: 's' });
@@ -51,4 +59,65 @@ describe('issueSessionForRequest', () => {
       expect(recordLoginEvent).not.toHaveBeenCalled();
     }
   );
+
+  describe('test personas', () => {
+    const future = () => new Date(Date.now() + 60_000);
+    const past = () => new Date(Date.now() - 60_000);
+
+    it('issues for an ordinary account whatever its origin', async () => {
+      await issueSessionForRequest(req, 'u1', { createdVia: 'otc', tokenVersion: 0 });
+      expect(issueSession).toHaveBeenCalled();
+    });
+
+    it('issues when the user is not found', async () => {
+      userDoc.value = null;
+      await issueSessionForRequest(req, 'u1', { createdVia: 'otc', tokenVersion: 0 });
+      expect(issueSession).toHaveBeenCalled();
+    });
+
+    it.each(['otc', 'otc-registration', 'oauth', 'okta', 'saml', 'emergency', 'legacy-migration'] as const)(
+      'refuses a %s session for a persona',
+      async createdVia => {
+        userDoc.value = { isPersona: true, personaExpiresAt: future() };
+        await expect(issueSessionForRequest(req, 'u1', { createdVia, tokenVersion: 0 })).rejects.toThrow(
+          'Test personas can only sign in through the persona mint endpoint or an OAuth client.'
+        );
+        expect(issueSession).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['oauth-token', 'ios', 'device'] as const)('issues a %s session for a live persona', async createdVia => {
+      userDoc.value = { isPersona: true, personaExpiresAt: future() };
+      await issueSessionForRequest(req, 'u1', { createdVia, tokenVersion: 0 });
+      expect(issueSession).toHaveBeenCalled();
+    });
+
+    it('refuses an oauth-token session for an expired persona', async () => {
+      userDoc.value = { isPersona: true, personaExpiresAt: past() };
+      await expect(issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0 })).rejects.toThrow(
+        'This test persona has expired.'
+      );
+      expect(issueSession).not.toHaveBeenCalled();
+    });
+
+    it('issues a persona-mint session for a live persona', async () => {
+      userDoc.value = { isPersona: true, personaExpiresAt: future() };
+      await issueSessionForRequest(req, 'u1', { createdVia: 'persona-mint', tokenVersion: 0 });
+      expect(issueSession).toHaveBeenCalled();
+    });
+
+    it('refuses a persona-mint session for an expired persona', async () => {
+      userDoc.value = { isPersona: true, personaExpiresAt: past() };
+      await expect(issueSessionForRequest(req, 'u1', { createdVia: 'persona-mint', tokenVersion: 0 })).rejects.toThrow(
+        'This test persona has expired.'
+      );
+      expect(issueSession).not.toHaveBeenCalled();
+    });
+
+    it('issues an impersonation session for a persona', async () => {
+      userDoc.value = { isPersona: true, personaExpiresAt: past() };
+      await issueSessionForRequest(req, 'u1', { createdVia: 'impersonation', tokenVersion: 0 });
+      expect(issueSession).toHaveBeenCalled();
+    });
+  });
 });

@@ -4,6 +4,7 @@ import { LAKE_CONFIG_AUDIT_RETENTION_DEFAULT_DAYS, LAKE_CONFIG_AUDIT_RETENTION_F
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { recordLakeConfigChange } from './recordLakeConfigChange';
 import type { LakeGrant, ManageActor } from './manageRule';
+import { Logger } from '@bike4mind/observability';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}) =>
   ({ id: 'lake1', createdByUserId: 'owner', ...overrides }) as IDataLakeDocument;
@@ -35,11 +36,32 @@ describe('recordLakeConfigChange', () => {
     expect(record).not.toHaveBeenCalled();
   });
 
+  it('returns the written event id, and passes target, leverChanges and admittedFabFileId through', async () => {
+    const record = vi.fn().mockResolvedValue({ id: 'evt-42' });
+    const { adapters: a } = adapters({ record });
+    const extras = {
+      target: { kind: 'proposal' as const, id: 'p1' },
+      leverChanges: [{ lever: 'minRelevance' as const, before: 0.6, after: 0.5 }],
+      admittedFabFileId: 'fab1',
+    };
+    await expect(
+      recordLakeConfigChange({ actor: actor(), lake: lake(), action: 'update', changes: [change], ...extras }, a)
+    ).resolves.toBe('evt-42');
+    expect(recordedInput(record)).toMatchObject(extras);
+  });
+
+  it('returns null when there is nothing to record', async () => {
+    const { adapters: a } = adapters();
+    await expect(
+      recordLakeConfigChange({ actor: actor(), lake: lake(), action: 'update', changes: [] }, a)
+    ).resolves.toBeNull();
+  });
+
   it('is a silent no-op when no event repository is wired', async () => {
     // Scripts and migrations reach these services without an audit trail; that must not throw.
     await expect(
       recordLakeConfigChange({ actor: actor(), lake: lake(), action: 'update', changes: [change] }, { db: {} })
-    ).resolves.toBeUndefined();
+    ).resolves.toBeNull();
   });
 
   it('records the lake org, the action, and the changes as given', async () => {
@@ -223,7 +245,7 @@ describe('recordLakeConfigChange', () => {
       });
       await expect(
         recordLakeConfigChange({ actor: actor(), lake: lake(), action: 'update', changes: [change] }, a)
-      ).resolves.toBeUndefined();
+      ).resolves.toBeNull();
       expect(error).toHaveBeenCalledWith(
         expect.stringContaining('audit event did not persist'),
         expect.objectContaining({ dataLakeId: 'lake1', action: 'update' })
@@ -255,8 +277,8 @@ describe('recordLakeConfigChange', () => {
       );
     });
 
-    it('falls back to console.error when no logger is wired, so it cannot go fully silent', async () => {
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    it('falls back to the global Logger when no logger is wired, so it cannot go fully silent', async () => {
+      const spy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
       const { adapters: a } = adapters({ record: vi.fn().mockRejectedValue(new Error('mongo down')) });
       await recordLakeConfigChange({ actor: actor(), lake: lake(), action: 'update', changes: [change] }, a);
       expect(spy).toHaveBeenCalledWith(expect.stringContaining('audit event did not persist'), expect.anything());

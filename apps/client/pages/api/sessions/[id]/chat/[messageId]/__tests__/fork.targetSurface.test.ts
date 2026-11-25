@@ -34,6 +34,7 @@ vi.mock('@bike4mind/services', () => ({ sessionService: { forkSession: h.forkSes
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},
   fabFileRepository: {},
+  organizationRepository: {},
   projectRepository: {},
   questRepository: {},
   sessionRepository: {},

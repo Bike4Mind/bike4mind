@@ -1,15 +1,102 @@
-import React from 'react';
-import { Box, Stack, Typography } from '@mui/joy';
-import { useTheme } from '@mui/joy/styles';
-import { ResponsivePie } from '@nivo/pie';
-import { ResponsiveBar } from '@nivo/bar';
-import { ResponsiveLine } from '@nivo/line';
+import React, { useMemo } from 'react';
+import { Box, Stack, Typography, useTheme } from '@mui/joy';
+import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useAnalyticsMetrics } from '@client/app/hooks/useAnalyticsMetrics';
 import { processChartData } from '../utils/chartDataProcessor';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { DonutChart } from '@client/app/components/Charts/DonutChart';
+import { TrendAreaChart } from '@client/app/components/Charts/TrendAreaChart';
+import { ChartTooltipCard } from '@client/app/components/Charts/chartStyle';
+import { INK, SURFACE } from '../../shared/chartParts';
+import { adminChartSeries, adminChartStyle, adminChartTextOn } from '../../EventMetrics/utils/chartTheme';
+import type { ChartData } from '../types';
 
-// Type assertion for Nivo components
-const ResponsiveLineChart = ResponsiveLine as any;
+// Past this many slices the opacity steps of the accent blur; switch to the chartSeries slots.
+const ACCENT_STEP_MAX = 6;
+
+/** Bars narrower or shorter than this, in px, carry no value label. */
+const BAR_LABEL_SKIP = 12;
+
+const ResponseTimeBarChart: React.FC<{ data: ChartData['performanceData'] }> = ({ data }) => {
+  const style = adminChartStyle;
+  const [color] = adminChartSeries(1);
+
+  return (
+    <Box data-testid="analytics-response-time-chart" sx={{ height: '100%', minWidth: 0 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        {/* recharts takes the gap on each side of a bar, so 20% leaves the bar 60% of its band. */}
+        <BarChart data={[...data]} margin={{ top: 30, right: 50, bottom: 0, left: 0 }} barCategoryGap="20%">
+          <CartesianGrid vertical={false} stroke={style.gridStroke} strokeDasharray={style.gridDash} />
+          <XAxis
+            dataKey="model"
+            interval={0}
+            angle={-45}
+            textAnchor="end"
+            height={80}
+            tick={style.tick}
+            tickLine={style.tickLine}
+            tickSize={5}
+            axisLine={false}
+            label={{ value: 'Event Type', position: 'insideBottom', offset: 25, style: style.axisLabel }}
+          />
+          <YAxis
+            width={80}
+            domain={[0, 'auto']}
+            tick={style.tick}
+            tickLine={style.tickLine}
+            tickSize={5}
+            axisLine={false}
+            label={{
+              value: 'Response Time (ms)',
+              angle: -90,
+              position: 'insideLeft',
+              offset: 30,
+              style: { ...style.axisLabel, textAnchor: 'middle' },
+            }}
+          />
+          <Tooltip
+            shared={false}
+            cursor={false}
+            content={({ active, payload }) => {
+              const row = payload?.[0]?.payload as ChartData['performanceData'][number] | undefined;
+              if (!active || !row) return null;
+              return (
+                <ChartTooltipCard
+                  testId="analytics-response-time-chart-tooltip"
+                  color={color}
+                  label={`avgResponseTime - ${row.model}`}
+                  value={row.avgResponseTime}
+                />
+              );
+            }}
+          />
+          <Bar dataKey="avgResponseTime" fill={color} isAnimationActive={false}>
+            <LabelList
+              dataKey="avgResponseTime"
+              content={({ x, y, width, height, value }) => {
+                const w = Number(width);
+                const h = Number(height);
+                if (w < BAR_LABEL_SKIP || h < BAR_LABEL_SKIP) return null;
+                return (
+                  <text
+                    x={Number(x) + w / 2}
+                    y={Number(y) + h / 2}
+                    fill={SURFACE}
+                    fontSize={11}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                  >
+                    {value}
+                  </text>
+                );
+              }}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </Box>
+  );
+};
 
 interface AnalyticsTabProps {
   filters?: {
@@ -22,41 +109,23 @@ interface AnalyticsTabProps {
 }
 
 export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
-  const theme = useTheme();
+  const [trendColor] = adminChartSeries(1);
 
   const { data: analyticsMetrics = [], isLoading } = useAnalyticsMetrics(filters);
   const { data: modelInfos = [] } = useModelInfo();
 
-  const chartData = processChartData(analyticsMetrics, modelInfos, true);
-
-  // Chart theme based on Joy UI colors
-  const chartTheme = {
-    axis: {
-      ticks: {
-        text: {
-          fill: theme.palette.text.tertiary,
-        },
-      },
-      legend: {
-        text: {
-          fill: theme.palette.text.primary,
-        },
-      },
-    },
-    grid: {
-      line: {
-        stroke: theme.palette.divider,
-      },
-    },
-    tooltip: {
-      container: {
-        background: theme.palette.background.surface,
-        color: theme.palette.text.primary,
-        boxShadow: theme.shadow.md,
-        borderRadius: theme.radius.md,
-      },
-    },
-  };
+  const chartData = useMemo(() => processChartData(analyticsMetrics, modelInfos, true), [analyticsMetrics, modelInfos]);
+  const seriesPalette = useTheme().palette.admin.chartSeries;
+  const sliceCount = chartData.modelUsageData.length;
+  const fitsAccentSteps = sliceCount <= ACCENT_STEP_MAX;
+  const donutColors = useMemo(
+    () =>
+      fitsAccentSteps
+        ? adminChartSeries(sliceCount)
+        : Array.from({ length: sliceCount }, (_, index) => seriesPalette[index % seriesPalette.length]),
+    [fitsAccentSteps, sliceCount, seriesPalette]
+  );
+  const timeLegend = chartData.granularity === 'hourly' ? 'Time' : 'Date';
 
   if (isLoading) {
     return (
@@ -75,22 +144,14 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
             Analytics Event Distribution
           </Typography>
           <Box sx={{ height: { xs: 220, sm: 300 } }}>
-            <ResponsivePie
+            <DonutChart
+              testId="analytics-event-distribution-chart"
               data={chartData.modelUsageData}
               margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
-              innerRadius={0.5}
-              padAngle={0.7}
-              cornerRadius={3}
-              activeOuterRadiusOffset={8}
-              borderWidth={1}
-              borderColor={{ from: 'color', modifiers: [['darker', 0.2]] }}
-              arcLinkLabelsSkipAngle={10}
-              arcLinkLabelsTextColor={theme.palette.text.primary}
-              arcLinkLabelsThickness={2}
-              arcLinkLabelsColor={{ from: 'color' }}
-              arcLabelsSkipAngle={10}
-              arcLabelsTextColor={{ from: 'color', modifiers: [['darker', 2]] }}
-              theme={chartTheme}
+              colors={donutColors}
+              valueColor={fitsAccentSteps ? index => adminChartTextOn(index, donutColors.length) : undefined}
+              labelColor={INK}
+              sliceStroke={SURFACE}
             />
           </Box>
         </Box>
@@ -101,38 +162,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
             Response Time by Event Type
           </Typography>
           <Box sx={{ height: { xs: 220, sm: 300 } }}>
-            <ResponsiveBar
-              data={chartData.performanceData}
-              keys={['avgResponseTime']}
-              indexBy="model"
-              margin={{ top: 30, right: 50, bottom: 80, left: 80 }}
-              padding={0.4}
-              colors={{ scheme: 'nivo' }}
-              borderColor={{ from: 'color', modifiers: [['darker', 1.6]] }}
-              axisTop={null}
-              axisRight={null}
-              axisBottom={{
-                tickSize: 5,
-                tickPadding: 5,
-                tickRotation: -45,
-                legend: 'Event Type',
-                legendPosition: 'middle',
-                legendOffset: 50,
-              }}
-              axisLeft={{
-                tickSize: 5,
-                tickPadding: 5,
-                tickRotation: 0,
-                legend: 'Response Time (ms)',
-                legendPosition: 'middle',
-                legendOffset: -40,
-              }}
-              labelSkipWidth={12}
-              labelSkipHeight={12}
-              labelTextColor={{ from: 'color', modifiers: [['darker', 1.6]] }}
-              enableLabel={true}
-              theme={chartTheme}
-            />
+            <ResponseTimeBarChart data={chartData.performanceData} />
           </Box>
         </Box>
       </Stack>
@@ -144,43 +174,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
         </Typography>
         <Box sx={{ height: 300 }}>
           {chartData.dailyTrends[0]?.data?.length > 1 ? (
-            <ResponsiveLineChart
-              data={chartData.dailyTrends}
-              theme={chartTheme}
-              margin={{ top: 20, right: 30, bottom: 70, left: 60 }}
-              xScale={{ type: 'point' }}
-              yScale={{
-                type: 'linear',
-                min: 'auto',
-                max: 'auto',
-              }}
-              curve="catmullRom"
-              axisTop={null}
-              axisRight={null}
-              axisBottom={{
-                tickSize: 5,
-                tickPadding: 5,
-                tickRotation: -45,
-                legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
-                legendPosition: 'middle',
-                legendOffset: 55,
-              }}
-              axisLeft={{
-                tickSize: 5,
-                tickPadding: 5,
-                tickRotation: 0,
-                legend: 'Events',
-                legendPosition: 'middle',
-                legendOffset: -40,
-              }}
-              pointSize={8}
-              pointColor={theme.palette.background.surface}
-              pointBorderWidth={2}
-              pointBorderColor={{ from: 'serieColor' }}
-              enableArea={true}
-              areaOpacity={0.15}
-              useMesh={true}
-              colors={[theme.palette.primary[500]]}
+            <TrendAreaChart
+              testId={`analytics-trend-${chartData.dailyTrends[0].id}`}
+              data={chartData.dailyTrends[0].data}
+              color={trendColor}
+              style={adminChartStyle}
+              xLegend={timeLegend}
+              yLegend="Events"
             />
           ) : chartData.dailyTrends[0]?.data?.length === 1 ? (
             <Box
@@ -234,43 +234,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
           </Typography>
           <Box sx={{ height: { xs: 220, sm: 300 } }}>
             {chartData.contextRetrievalTrends[0]?.data?.length > 1 ? (
-              <ResponsiveLineChart
-                data={chartData.contextRetrievalTrends}
-                theme={chartTheme}
-                margin={{ top: 20, right: 30, bottom: 70, left: 60 }}
-                xScale={{ type: 'point' }}
-                yScale={{
-                  type: 'linear',
-                  min: 'auto',
-                  max: 'auto',
-                }}
-                curve="catmullRom"
-                axisTop={null}
-                axisRight={null}
-                axisBottom={{
-                  tickSize: 5,
-                  tickPadding: 5,
-                  tickRotation: -45,
-                  legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
-                  legendPosition: 'middle',
-                  legendOffset: 55,
-                }}
-                axisLeft={{
-                  tickSize: 5,
-                  tickPadding: 5,
-                  tickRotation: 0,
-                  legend: 'Avg Context Time (ms)',
-                  legendPosition: 'middle',
-                  legendOffset: -40,
-                }}
-                pointSize={8}
-                pointColor={theme.palette.background.surface}
-                pointBorderWidth={2}
-                pointBorderColor={{ from: 'serieColor' }}
-                enableArea={true}
-                areaOpacity={0.15}
-                useMesh={true}
-                colors={[theme.palette.success[500]]}
+              <TrendAreaChart
+                testId={`analytics-trend-${chartData.contextRetrievalTrends[0].id}`}
+                data={chartData.contextRetrievalTrends[0].data}
+                color={trendColor}
+                style={adminChartStyle}
+                xLegend={timeLegend}
+                yLegend="Avg Context Time (ms)"
               />
             ) : chartData.contextRetrievalTrends[0]?.data?.length === 1 ? (
               <Box
@@ -322,43 +292,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
           </Typography>
           <Box sx={{ height: { xs: 220, sm: 300 } }}>
             {chartData.firstTokenTrends[0]?.data?.length > 1 ? (
-              <ResponsiveLineChart
-                data={chartData.firstTokenTrends}
-                theme={chartTheme}
-                margin={{ top: 20, right: 30, bottom: 70, left: 60 }}
-                xScale={{ type: 'point' }}
-                yScale={{
-                  type: 'linear',
-                  min: 'auto',
-                  max: 'auto',
-                }}
-                curve="catmullRom"
-                axisTop={null}
-                axisRight={null}
-                axisBottom={{
-                  tickSize: 5,
-                  tickPadding: 5,
-                  tickRotation: -45,
-                  legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
-                  legendPosition: 'middle',
-                  legendOffset: 55,
-                }}
-                axisLeft={{
-                  tickSize: 5,
-                  tickPadding: 5,
-                  tickRotation: 0,
-                  legend: 'Avg First Token Time (ms)',
-                  legendPosition: 'middle',
-                  legendOffset: -40,
-                }}
-                pointSize={8}
-                pointColor={theme.palette.background.surface}
-                pointBorderWidth={2}
-                pointBorderColor={{ from: 'serieColor' }}
-                enableArea={true}
-                areaOpacity={0.15}
-                useMesh={true}
-                colors={[theme.palette.warning[500]]}
+              <TrendAreaChart
+                testId={`analytics-trend-${chartData.firstTokenTrends[0].id}`}
+                data={chartData.firstTokenTrends[0].data}
+                color={trendColor}
+                style={adminChartStyle}
+                xLegend={timeLegend}
+                yLegend="Avg First Token Time (ms)"
               />
             ) : chartData.firstTokenTrends[0]?.data?.length === 1 ? (
               <Box
@@ -413,43 +353,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
           </Typography>
           <Box sx={{ height: { xs: 220, sm: 300 } }}>
             {chartData.processPickupTrends[0]?.data?.length > 1 ? (
-              <ResponsiveLineChart
-                data={chartData.processPickupTrends}
-                theme={chartTheme}
-                margin={{ top: 20, right: 30, bottom: 70, left: 60 }}
-                xScale={{ type: 'point' }}
-                yScale={{
-                  type: 'linear',
-                  min: 'auto',
-                  max: 'auto',
-                }}
-                curve="catmullRom"
-                axisTop={null}
-                axisRight={null}
-                axisBottom={{
-                  tickSize: 5,
-                  tickPadding: 5,
-                  tickRotation: -45,
-                  legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
-                  legendPosition: 'middle',
-                  legendOffset: 55,
-                }}
-                axisLeft={{
-                  tickSize: 5,
-                  tickPadding: 5,
-                  tickRotation: 0,
-                  legend: 'Avg Pickup Time (ms)',
-                  legendPosition: 'middle',
-                  legendOffset: -40,
-                }}
-                pointSize={8}
-                pointColor={theme.palette.background.surface}
-                pointBorderWidth={2}
-                pointBorderColor={{ from: 'serieColor' }}
-                enableArea={true}
-                areaOpacity={0.15}
-                useMesh={true}
-                colors={[theme.palette.neutral[500]]}
+              <TrendAreaChart
+                testId={`analytics-trend-${chartData.processPickupTrends[0].id}`}
+                data={chartData.processPickupTrends[0].data}
+                color={trendColor}
+                style={adminChartStyle}
+                xLegend={timeLegend}
+                yLegend="Avg Pickup Time (ms)"
               />
             ) : chartData.processPickupTrends[0]?.data?.length === 1 ? (
               <Box
@@ -500,43 +410,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
           </Typography>
           <Box sx={{ height: { xs: 220, sm: 300 } }}>
             {chartData.charactersPerSecondTrends[0]?.data?.length > 1 ? (
-              <ResponsiveLineChart
-                data={chartData.charactersPerSecondTrends}
-                theme={chartTheme}
-                margin={{ top: 20, right: 30, bottom: 70, left: 60 }}
-                xScale={{ type: 'point' }}
-                yScale={{
-                  type: 'linear',
-                  min: 'auto',
-                  max: 'auto',
-                }}
-                curve="catmullRom"
-                axisTop={null}
-                axisRight={null}
-                axisBottom={{
-                  tickSize: 5,
-                  tickPadding: 5,
-                  tickRotation: -45,
-                  legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
-                  legendPosition: 'middle',
-                  legendOffset: 55,
-                }}
-                axisLeft={{
-                  tickSize: 5,
-                  tickPadding: 5,
-                  tickRotation: 0,
-                  legend: 'Avg Chars/Second',
-                  legendPosition: 'middle',
-                  legendOffset: -40,
-                }}
-                pointSize={8}
-                pointColor={theme.palette.background.surface}
-                pointBorderWidth={2}
-                pointBorderColor={{ from: 'serieColor' }}
-                enableArea={true}
-                areaOpacity={0.15}
-                useMesh={true}
-                colors={[theme.palette.primary[300]]}
+              <TrendAreaChart
+                testId={`analytics-trend-${chartData.charactersPerSecondTrends[0].id}`}
+                data={chartData.charactersPerSecondTrends[0].data}
+                color={trendColor}
+                style={adminChartStyle}
+                xLegend={timeLegend}
+                yLegend="Avg Chars/Second"
               />
             ) : chartData.charactersPerSecondTrends[0]?.data?.length === 1 ? (
               <Box

@@ -172,6 +172,89 @@ function lineOf(error, url) {
   return match ? Number(match[1]) : undefined;
 }
 
+// Which lines of the model source built each shape, so a part picked in the viewer can be traced
+// back to its code (point-and-edit). Every manifold call made from the model records the model
+// lines on its stack (the call and the helper calls around it) plus the lines of the shapes it was
+// given, so a part's set covers its whole history. Only the outermost call records: manifold's own
+// JS calls into itself would otherwise pay for a stack each. Past MAX_TRACED_CALLS stacks are no
+// longer read, so a huge loop stays cheap; lines then only flow from the inputs.
+const MAX_TRACED_CALLS = 5000;
+const provenance = new WeakMap();
+let traceUrl = null;
+let tracedCalls = 0;
+let traceDepth = 0;
+
+function stackLines(url) {
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 40;
+  const stack = new Error().stack || '';
+  Error.stackTraceLimit = limit;
+  const lines = [];
+  let at = stack.indexOf(url + ':');
+  while (at >= 0) {
+    const match = /^:(\\d+):\\d+/.exec(stack.slice(at + url.length));
+    if (match) lines.push(Number(match[1]));
+    at = stack.indexOf(url + ':', at + url.length);
+  }
+  return lines;
+}
+
+function collectLines(value, into, depth) {
+  if (!value || typeof value !== 'object') return;
+  const known = provenance.get(value);
+  if (known) for (const line of known) into.add(line);
+  else if (Array.isArray(value) && depth < 2) for (const item of value) collectLines(item, into, depth + 1);
+}
+
+function recordLines(result, self, args) {
+  const shapes = Array.isArray(result) ? result : [result];
+  if (!shapes.some((shape) => shape instanceof m.Manifold || shape instanceof m.CrossSection)) return;
+  const lines = new Set();
+  if (tracedCalls < MAX_TRACED_CALLS) {
+    tracedCalls += 1;
+    for (const line of stackLines(traceUrl)) lines.add(line);
+  }
+  collectLines(self, lines, 0);
+  for (const arg of args) collectLines(arg, lines, 0);
+  for (const shape of shapes) if (shape && typeof shape === 'object') provenance.set(shape, lines);
+}
+
+function traceCalls(owner) {
+  for (const key of Object.getOwnPropertyNames(owner)) {
+    if (key === 'constructor' || key === 'prototype') continue;
+    const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+    if (!descriptor || typeof descriptor.value !== 'function' || !descriptor.writable) continue;
+    const original = descriptor.value;
+    owner[key] = function (...args) {
+      traceDepth += 1;
+      let result;
+      try {
+        result = original.apply(this, args);
+      } finally {
+        traceDepth -= 1;
+      }
+      if (traceDepth === 0 && traceUrl) recordLines(result, this, args);
+      return result;
+    };
+  }
+}
+
+// setup() leaves Manifold.prototype as a bare object; instances carry embind's real prototype,
+// so the methods to wrap are found on a throwaway sample.
+function traceManifold() {
+  for (const [cls, sample] of [[m.Manifold, () => m.Manifold.cube([1, 1, 1])], [m.CrossSection, () => m.CrossSection.square(1)]]) {
+    const instance = sample();
+    traceCalls(Object.getPrototypeOf(instance));
+    instance.delete();
+    traceCalls(cls);
+  }
+}
+
+function linesOf(shape) {
+  const lines = provenance.get(shape);
+  return lines && lines.size ? [...lines].sort((a, b) => a - b) : undefined;
+}
+
 function meshOf(shape) {
   const mesh = shape.getMesh();
   const count = mesh.vertProperties.length / mesh.numProp;
@@ -208,6 +291,8 @@ function partsOf(result, Manifold) {
     const name = entry instanceof Manifold || typeof entry.name !== 'string' ? 'part' + (index + 1) : entry.name;
     const color = entry instanceof Manifold || typeof entry.color !== 'string' ? PALETTE[index % PALETTE.length] : entry.color;
     const part = { name, color, ...meshOf(shape) };
+    const lines = linesOf(shape);
+    if (lines) part.lines = lines;
     // Checked as a tree in the renderer (partTreeError); here only passed through in plain form.
     if (!(entry instanceof Manifold)) {
       if (Array.isArray(entry.pivot)) part.pivot = entry.pivot.map(Number);
@@ -248,6 +333,7 @@ async function init(wasm) {
   try {
     m = await load(wasm);
     m.setup();
+    traceManifold();
     self.postMessage({ type: 'ready' });
   } catch (error) {
     self.postMessage({ type: 'failed', error: 'The model engine failed to start: ' + (error instanceof Error ? error.message : String(error)) });
@@ -258,6 +344,7 @@ self.onmessage = async (event) => {
   if (event.data.type === 'init') return init(event.data.wasm);
   const { source, params: overrides, print } = event.data;
   const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+  traceUrl = url;
   try {
     const mod = await import(url);
     if (typeof mod.default !== 'function') throw new Error('The model file must have a default export: export default function model({ m, p }) { ... }');

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AdminUsersQuerySchema } from '../../app/utils/adminUsersFilter';
+import { ACQUISITION_FOLDED_FIELD_LIMIT } from '../../lib/subscriptions/acquisitionLimits';
 import {
   adminUsersSort,
   buildAdminUsersMatch,
@@ -43,6 +44,18 @@ describe('buildAdminUsersMatch', () => {
 
     const [byText] = conditionsOf(buildAdminUsersMatch({ search: 'ab'.repeat(31) }, context));
     expect(JSON.stringify(byText)).not.toContain('providerEndUserId');
+  });
+
+  it('also matches the platform account behind a platform end-user digest', () => {
+    const digest = 'cd'.repeat(32);
+    const owner = '0123456789abcdef01234567';
+    const [byDigest] = conditionsOf(
+      buildAdminUsersMatch({ search: digest }, { ...context, platformEndUserOwnerIds: [owner, 'not-an-id'] })
+    );
+    expect((byDigest.$or as unknown[]).slice(-2)).toEqual([
+      { providerEndUserId: digest },
+      { _id: { $in: [{ objectId: owner }] } },
+    ]);
   });
 
   it('reads the Admin tag as the isAdmin flag', () => {
@@ -94,6 +107,12 @@ describe('buildAdminUsersMatch', () => {
       { emailVerified: { $ne: true } },
       { createdAt: { $gte: new Date('2026-10-27T11:00:00.000Z') } },
       { 'signupGrantAssessment.band': 'review' },
+    ]);
+  });
+
+  it('matches the holders of one admin role', () => {
+    expect(conditionsOf(buildAdminUsersMatch({ adminRole: '0123456789abcdef01234567' }, context))).toEqual([
+      { adminRoleIds: { objectId: '0123456789abcdef01234567' } },
     ]);
   });
 
@@ -149,7 +168,17 @@ describe('buildAdminUsersMatch analytics cohorts', () => {
     verdictUserIds: [id, 'not-an-object-id'],
     activeUserIds: ['d'.repeat(24)],
     funnelStepUserIds: [],
+    acquisitionUserIds: ['e'.repeat(24)],
   };
+
+  it('matches the resolved acquisition row by _id, and needs it resolved', () => {
+    expect(
+      conditionsOf(buildAdminUsersMatch({ acqUnattributed: 'true', createdFrom, createdTo }, resolved)).at(-1)
+    ).toEqual({ _id: { $in: [{ objectId: 'e'.repeat(24) }] } });
+    expect(() => buildAdminUsersMatch({ acqSource: 'ads', createdFrom, createdTo }, context)).toThrow(
+      'acquisitionUserIds'
+    );
+  });
 
   it('matches the resolved verdict cohort by _id inside the created window', () => {
     expect(conditionsOf(buildAdminUsersMatch({ verdict: 'legit', createdFrom, createdTo }, resolved))).toEqual([
@@ -259,6 +288,44 @@ describe('AdminUsersQuerySchema', () => {
     ]);
     expect(issuesOf({ activeFrom: '2026-02-30', activeTo: '2026-03-01' })).toHaveLength(1);
     expect(issuesOf({ activeFrom: '2026-10-03T00:00:00Z', activeTo: '2026-10-04' })).toHaveLength(1);
+  });
+
+  it('takes an acquisition row only with a created window of at most 93 days', () => {
+    expect(
+      AdminUsersQuerySchema.parse({
+        ...month,
+        acqTouch: 'last',
+        acqSource: ' ads ',
+        acqConverted: 'true',
+        acqWindow: '7',
+      })
+    ).toMatchObject({ acqTouch: 'last', acqSource: 'ads', acqConverted: 'true', acqWindow: '7' });
+    expect(issuesOf({ acqSource: 'ads' })).toEqual(['acqSource needs both createdFrom and createdTo']);
+    expect(issuesOf({ acqUnattributed: 'true' })).toEqual(['acqUnattributed needs both createdFrom and createdTo']);
+    expect(issuesOf({ createdFrom: '2026-01-01T00:00:00.000Z', createdTo: month.createdTo, acqSource: 'ads' })).toEqual(
+      [expect.stringContaining('93 days')]
+    );
+  });
+
+  it.each(['acqSource', 'acqMedium', 'acqCampaign'] as const)('bounds a folded %s without truncation', key => {
+    const value = 'i̇'.repeat(128);
+    const query = { ...month, acqSource: 'ads', [key]: value };
+    expect(AdminUsersQuerySchema.parse(query)[key]).toBe(value);
+    expect(issuesOf({ ...query, [key]: value + 'x' })).toHaveLength(1);
+  });
+
+  it('rejects an empty or over-long part, a stray acq key and an unattributed row with a source', () => {
+    expect(issuesOf({ ...month, acqSource: '   ' })).toHaveLength(1);
+    expect(issuesOf({ ...month, acqSource: 'a'.repeat(ACQUISITION_FOLDED_FIELD_LIMIT + 1) })).toHaveLength(1);
+    expect(issuesOf({ ...month, acqMedium: 'cpc' })).toEqual(['acqMedium needs acqSource or acqUnattributed']);
+    expect(issuesOf({ ...month, acqUnattributed: 'true', acqSource: 'ads' })).toEqual([
+      'acqUnattributed excludes acqSource',
+    ]);
+    expect(issuesOf({ ...month, acqUnattributed: 'true', acqCampaign: 'spring' })).toEqual([
+      'acqCampaign excludes acqUnattributed',
+    ]);
+    expect(issuesOf({ ...month, acqSource: 'ads', acqWindow: '14' })).toHaveLength(1);
+    expect(issuesOf({ ...month, acqUnattributed: 'yes' })).toHaveLength(1);
   });
 
   it('rejects unknown verdicts and funnel steps', () => {

@@ -9,6 +9,7 @@ import {
   resetConsumerLogsCacheForTests,
   resolveConsumerLogs,
   resolveConsumerLogsForSourceQueue,
+  resolveFunctionLogGroup,
   settleWithinBudget,
 } from './dlqConsumerLogs';
 
@@ -340,5 +341,51 @@ describe('settleWithinBudget', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('resolveFunctionLogGroup', () => {
+  beforeEach(() => {
+    lambdaMock.reset();
+    resetConsumerLogsCacheForTests();
+  });
+
+  it('uses the function LoggingConfig log group', async () => {
+    lambdaMock
+      .on(GetFunctionConfigurationCommand)
+      .resolves({ FunctionName: 'app-dev-Nightly', LoggingConfig: { LogGroup: '/sst/app/dev/Nightly-LogGroup' } });
+    await expect(resolveFunctionLogGroup('us-east-2', fnArn('app-dev-Nightly'))).resolves.toBe(
+      '/sst/app/dev/Nightly-LogGroup'
+    );
+    expect(lambdaMock.commandCalls(GetFunctionConfigurationCommand)[0].args[0].input).toEqual({
+      FunctionName: fnArn('app-dev-Nightly'),
+    });
+  });
+
+  it('falls back to /aws/lambda/<name> without a LoggingConfig', async () => {
+    lambdaMock.on(GetFunctionConfigurationCommand).resolves({});
+    await expect(resolveFunctionLogGroup('us-east-2', 'app-dev-Nightly')).resolves.toBe('/aws/lambda/app-dev-Nightly');
+    await expect(resolveFunctionLogGroup('us-east-2', fnArn('app-dev-Other'))).resolves.toBe(
+      '/aws/lambda/app-dev-Other'
+    );
+  });
+
+  it('resolves null on a failed lookup or a malformed region, and caches a result', async () => {
+    lambdaMock
+      .on(GetFunctionConfigurationCommand)
+      .rejects(Object.assign(new Error('no'), { name: 'AccessDeniedException' }));
+    await expect(resolveFunctionLogGroup('us-east-2', 'f')).resolves.toBeNull();
+    await expect(resolveFunctionLogGroup('us-east-2', 'f')).resolves.toBeNull();
+    await expect(resolveFunctionLogGroup('not a region', 'f')).resolves.toBeNull();
+    expect(lambdaMock.commandCalls(GetFunctionConfigurationCommand)).toHaveLength(1);
+  });
+
+  it('does not cache a throttled lookup', async () => {
+    lambdaMock
+      .on(GetFunctionConfigurationCommand)
+      .rejectsOnce(Object.assign(new Error('slow down'), { name: 'TooManyRequestsException' }))
+      .resolves({ FunctionName: 'f', LoggingConfig: { LogGroup: '/sst/f' } });
+    await expect(resolveFunctionLogGroup('us-east-2', 'f')).resolves.toBeNull();
+    await expect(resolveFunctionLogGroup('us-east-2', 'f')).resolves.toBe('/sst/f');
   });
 });

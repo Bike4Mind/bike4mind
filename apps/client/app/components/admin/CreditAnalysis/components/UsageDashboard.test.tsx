@@ -27,6 +27,7 @@ const responseWith = (overrides: Partial<IUsageDashboardResponse>): IUsageDashbo
   days: 30,
   overTime: [],
   byMember: [],
+  byProject: [],
   byModel: [],
   byFeature: [],
   byApiKey: [],
@@ -115,6 +116,30 @@ describe('UsageDashboard owner type', () => {
     setData({ byMember: [{ userId: 'u1', userName: 'Ada', requests: 3, cogsUsd: 0, creditsCharged: 9 }] });
     await renderAndSelectOrg();
     expect(await screen.findByTestId('usage-member-table')).toBeInTheDocument();
+  });
+
+  it('shows persisted project IDs and explicitly Unassigned history', async () => {
+    setData({
+      byProject: [
+        { projectId: 'project-1', requests: 2, cogsUsd: 0.1, creditsCharged: 20 },
+        { projectId: null, requests: 1, cogsUsd: 0.05, creditsCharged: 10 },
+      ],
+    });
+    await renderAndSelectOrg();
+    const table = screen.getByTestId('usage-project-table');
+    expect(within(table).getByText('project-1')).toBeInTheDocument();
+    expect(within(table).getByText('Unassigned')).toBeInTheDocument();
+    expect(screen.getByTestId('usage-export-btn')).toBeEnabled();
+  });
+
+  it('does not export cached data for a different selected period', () => {
+    setData({ days: 30 });
+    render(
+      <TestWrapper>
+        <UsageDashboard ownerType={CreditHolderType.Organization} ownerId="org-1" days={7} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('usage-export-btn')).toBeDisabled();
   });
 
   it('hides the by-member cut for a User owner and shows no org picker', () => {

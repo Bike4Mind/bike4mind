@@ -34,6 +34,7 @@ import {
   MCP_OAUTH_CLIENT_MODES,
   MCP_TOOL_APPROVAL_MODES,
   MCP_TOOL_STATES,
+  PLATFORM_MCP_OWNER,
   isValidMcpConnectionSlug,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
@@ -150,6 +151,7 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
       validate: { validator: isValidMcpConnectionSlug, message: 'This slug is reserved' },
     },
     displayName: { type: String, required: true, maxlength: MCP_CONNECTION_LIMITS.displayNameLength },
+    description: { type: String, maxlength: MCP_CONNECTION_LIMITS.descriptionLength },
     urlEnc: { type: String, required: true, select: false },
     displayUrl: { type: String, required: true },
     // Host-policy patterns are lowercase with no trailing dot, so store the host the same way:
@@ -271,8 +273,8 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
   }
 );
 
-// Writes after create cannot break this: the generic writers refuse the owner fields and the token
-// and lease writers filter on ownerType 'user'.
+// Writes after create cannot break this: the generic writers refuse the owner fields, the OAuth
+// and lease writers filter on ownerType 'user', and the API key writer refuses an org definition.
 McpConnectionSchema.pre('validate', function () {
   const problem = mcpConnectionOwnerProblem(this.toObject());
   if (problem) throw new McpConnectionOwnerError(problem);
@@ -294,6 +296,8 @@ export const McpConnection: IMcpConnectionModel =
 const SUMMARY_PROJECTION = { 'tools.inputSchema': 0 };
 
 const WITH_CREDENTIALS = MCP_CONNECTION_SECRET_PATHS.map(path => `+${path}`).join(' ');
+
+const PLATFORM_LAST_USED_INTERVAL_MS = 60_000;
 
 /** `create` returns the inserted values, which include any secrets the caller just wrote. */
 function stripSecrets<T extends IMcpConnectionDocument>(doc: T): T {
@@ -481,14 +485,36 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result?.toJSON() ?? null;
   }
 
-  async listForUser(userId: string, options: { slugs?: string[] } = {}): Promise<IMcpConnectionDocument[]> {
-    return this.find({
-      userId,
+  async listForUser(
+    userId: string,
+    options: { slugs?: string[]; platformIds?: readonly string[] } = {}
+  ): Promise<IMcpConnectionDocument[]> {
+    const offered = {
       enabled: true,
-      ownerType: 'user',
       status: 'connected',
       ...(options.slugs ? { slug: { $in: options.slugs } } : {}),
-    });
+    };
+    // A platform connector is off for each user until they switch it on, so none is listed by default.
+    const platformIds = (options.platformIds ?? []).filter(id => mongoose.isObjectIdOrHexString(id));
+    // Oldest first, so the same connectors survive the per-turn tool cap on every turn.
+    const oldestFirst = { sort: { createdAt: 1 } };
+    const [own, platform] = await Promise.all([
+      this.find({ userId, ownerType: 'user', ...offered }, oldestFirst),
+      platformIds.length > 0
+        ? this.find({ ...PLATFORM_MCP_OWNER, _id: { $in: platformIds }, ...offered }, oldestFirst)
+        : [],
+    ]);
+    if (platform.length === 0) return own;
+    // The user's own connection keeps a shared slug whatever its state, so switching it off never
+    // hands its `<slug>__<tool>` names to another server.
+    const held = new Set<string>(
+      await this.model.distinct('slug', {
+        ownerType: 'user',
+        ownerKey: userId,
+        slug: { $in: platform.map(connection => connection.slug) },
+      })
+    );
+    return [...own, ...platform.filter(connection => !held.has(connection.slug))];
   }
 
   async listAllForUser(userId: string): Promise<IMcpConnectionSummary[]> {
@@ -497,6 +523,14 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
 
   async countForUser(userId: string): Promise<number> {
     return this.model.countDocuments({ userId, ownerType: 'user' });
+  }
+
+  async listPlatform(): Promise<IMcpConnectionSummary[]> {
+    return this.findSummaries({ ...PLATFORM_MCP_OWNER });
+  }
+
+  async listPlatformSlugs(): Promise<string[]> {
+    return this.model.distinct('slug', { ...PLATFORM_MCP_OWNER });
   }
 
   async listForOrg(organizationId: string): Promise<IMcpConnectionSummary[]> {
@@ -581,7 +615,10 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     }
 
     const set: Record<string, unknown> = {};
+    const unset: Record<string, 1> = {};
     if (update.displayName !== undefined) set.displayName = update.displayName;
+    if (update.description) set.description = update.description;
+    else if (update.description === '') unset.description = 1;
     if (update.enabled !== undefined) set.enabled = update.enabled;
     const arrayFilters: Record<string, string>[] = [];
     const versionGuards: Record<string, unknown>[] = [];
@@ -599,12 +636,18 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     const ownerFilter = { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey };
     const filter = versionGuards.length > 0 ? { ...ownerFilter, $and: versionGuards } : ownerFilter;
     const touchesTools = arrayFilters.length > 0;
+    const hasSet = Object.keys(set).length > 0;
+    const hasUnset = Object.keys(unset).length > 0;
     const result =
-      Object.keys(set).length === 0
+      !hasSet && !hasUnset
         ? await this.model.findOne(filter)
         : await this.model.findOneAndUpdate(
             filter,
-            { $set: set, ...(touchesTools ? { $inc: { toolsRevision: 1 } } : {}) },
+            {
+              ...(hasSet ? { $set: set } : {}),
+              ...(hasUnset ? { $unset: unset } : {}),
+              ...(touchesTools ? { $inc: { toolsRevision: 1 } } : {}),
+            },
             { new: true, runValidators: true, ...(touchesTools ? { arrayFilters } : {}) }
           );
     if (result) return result.toJSON();
@@ -657,9 +700,9 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     owner: McpConnectionOwner,
     apiKey: McpApiKeyUpdate
   ): Promise<IMcpConnectionDocument | null> {
-    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType !== 'user') return null;
+    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType === 'org') return null;
     const result = await this.model.findOneAndUpdate(
-      { _id: id, ownerType: 'user', ownerKey: owner.ownerKey, 'auth.kind': 'api_key' },
+      { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey, 'auth.kind': 'api_key' },
       {
         $set: {
           'auth.apiKey.headerName': apiKey.headerName,
@@ -856,9 +899,18 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result?.toJSON() ?? null;
   }
 
+  /** Every user's calls land on a platform row, so it records at most one use a minute. */
   async markUsed(id: string): Promise<void> {
     if (!mongoose.isObjectIdOrHexString(id)) return;
-    await this.model.updateOne({ _id: id }, { $set: { lastUsedAt: new Date() } });
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - PLATFORM_LAST_USED_INTERVAL_MS);
+    await this.model.updateOne(
+      {
+        _id: id,
+        $or: [{ ownerType: { $ne: 'platform' } }, { lastUsedAt: null }, { lastUsedAt: { $lt: cutoff } }],
+      },
+      { $set: { lastUsedAt: now } }
+    );
   }
 
   /**

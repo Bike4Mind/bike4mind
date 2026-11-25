@@ -10,7 +10,7 @@ actor FakeStudioAPI: StudioAPI {
   private(set) var cancelled: [String] = []
   private(set) var edits: [ImageEditRequest] = []
   private(set) var generated: [GenerationRequest] = []
-  private(set) var sessionsCreated: [String] = []
+  private(set) var scenes: [SceneRequest] = []
   private var statuses: [String: [Result<GenerationStatus, APIError>]] = [:]
   var models: [GenerationKind: [GenerationModel]] = [:]
   var generateFailure: (any Error)?
@@ -24,15 +24,26 @@ actor FakeStudioAPI: StudioAPI {
 
   func models(for kind: GenerationKind) async throws -> [GenerationModel] { models[kind] ?? [] }
 
-  func generate(_ request: GenerationRequest) async throws -> GenerationHandle {
+  func generate(_ request: GenerationRequest) async throws -> [GenerationHandle] {
     if let generateFailure { throw generateFailure }
     generated.append(request)
-    return GenerationHandle(kind: request.kind, id: "gen-\(generated.count)", prompt: request.prompt, startedAt: Date())
+    return [
+      GenerationHandle(
+        kind: request.kind, id: "gen-\(generated.count)", prompt: request.prompt, startedAt: Date(),
+        modelID: request.modelID,
+        params: request.params)
+    ]
   }
 
   func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
     edits.append(request)
     return GenerationHandle(kind: .image, id: "edit-\(edits.count)", prompt: request.summaryPrompt, startedAt: Date())
+  }
+
+  func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
+    if let generateFailure { throw generateFailure }
+    scenes.append(request)
+    return GenerationHandle(kind: .scene, id: "scene-\(scenes.count)", prompt: request.label, startedAt: Date())
   }
 
   func status(of handle: GenerationHandle) async throws -> GenerationStatus {
@@ -46,11 +57,6 @@ actor FakeStudioAPI: StudioAPI {
   }
 
   func cancel(_ handle: GenerationHandle) async throws { cancelled.append(handle.id) }
-
-  func createSession(name: String) async throws -> String {
-    sessionsCreated.append(name)
-    return "session-new"
-  }
 }
 
 final class MemoryGenerationStore: GenerationStore, @unchecked Sendable {
@@ -136,21 +142,19 @@ final class StudioWireTests: XCTestCase {
       StudioWire.phase(jobState: "succeeded", progress: nil, errorCode: nil, availability: "ready"), .succeeded)
   }
 
-  func testQuestPollMapping() throws {
+  func testJobStatusMapsAnImageJob() throws {
     func poll(_ json: String) throws -> GenerationStatus {
-      StudioWire.status(of: try JSONDecoder().decode(StudioWire.QuestPoll.self, from: Data(json.utf8)))
+      StudioWire.status(of: try JSONDecoder().decode(StudioWire.Job.self, from: Data(json.utf8)))
     }
-    XCTAssertEqual(try poll(#"{"status":"pending","files":[]}"#).phase, .queued)
-    XCTAssertEqual(try poll(#"{"status":"running","files":[]}"#).phase, .running(progress: nil))
-    XCTAssertEqual(
-      try poll(#"{"status":"done","type":"error","errorCode":"insufficient_credits","files":[]}"#).phase,
-      .failed(.insufficientCredits))
-    XCTAssertEqual(try poll(#"{"status":"stopped","type":"message","files":[]}"#).phase, .failed(.other(code: nil)))
+    XCTAssertEqual(try poll(#"{"id":"j","state":"pending"}"#).phase, .queued)
+    XCTAssertEqual(try poll(#"{"id":"j","state":"storing"}"#).phase, .running(progress: nil))
+    XCTAssertEqual(try poll(#"{"id":"j","state":"blocked"}"#).phase, .failed(.blocked))
     let done = try poll(
-      #"{"status":"done","type":"message","files":[{"name":"a.png","url":"https://cdn.example.test/a.png","isImage":true},{"name":"t.txt","url":"https://cdn.example.test/t.txt","isImage":false}]}"#
+      #"{"id":"j","state":"succeeded","output":{"availability":"ready","url":"https://cdn.example.test/a.png","file_id":"f9"}}"#
     )
     XCTAssertEqual(done.phase, .succeeded)
     XCTAssertEqual(done.resultURLs, [URL(string: "https://cdn.example.test/a.png")!])
+    XCTAssertEqual(done.resultFileID, "f9")
   }
 
   func testJobFrame() {
@@ -181,37 +185,69 @@ final class StudioClientTests: XCTestCase {
     try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any])
   }
 
-  func testImageGenerationPostsALiteralPromptAndReturnsTheQuest() async throws {
+  func testImageGenerationPostsAJobAndReturnsItsHandle() async throws {
     let transport = FakeTransport { _ in
-      (200, Data(#"{"quest":{"id":"q1","sessionId":"s1"},"session":{"id":"s1"}}"#.utf8))
+      (202, Data(#"{"group_id":"g1","data":[{"id":"j1","state":"pending"}]}"#.utf8))
     }
     let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
 
-    let handle = try await client.generate(GenerationRequest(kind: .image, prompt: "a fox", modelID: "gpt-image-2"))
+    let handles = try await client.generate(
+      GenerationRequest(kind: .image, prompt: "a fox", modelID: "gpt-image-2"))
 
-    XCTAssertEqual(handle.id, "q1")
-    XCTAssertEqual(handle.kind, .image)
+    XCTAssertEqual(handles.map(\.id), ["j1"])
+    XCTAssertEqual(handles.first?.kind, .image)
     let requests = await transport.requests
     let request = try XCTUnwrap(requests.first)
-    XCTAssertEqual(request.url?.path(), "/api/v1/image-generations")
+    XCTAssertEqual(request.url?.path(), "/api/v1/image-jobs")
     let sent = try body(request)
     XCTAssertEqual(sent["prompt"] as? String, "a fox")
     XCTAssertEqual(sent["model"] as? String, "gpt-image-2")
-    XCTAssertEqual(sent["prompt_resolution"] as? String, "literal")
+    XCTAssertEqual(sent["mode"] as? String, "generate")
     XCTAssertTrue(sent["organization_id"] is NSNull, "an omitted key bills the home org, not personal credits")
+  }
+
+  func testSeveralImagesComeBackAsOneHandleEach() async throws {
+    let transport = FakeTransport { _ in
+      (
+        202,
+        Data(
+          #"{"group_id":"g1","data":[{"id":"j1","state":"pending"},{"id":"j2","state":"pending"}]}"#.utf8)
+      )
+    }
+    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+
+    let handles = try await client.generate(
+      GenerationRequest(
+        kind: .image, prompt: "a fox", modelID: "gpt-image-2", params: GenerationParams([.count: .number(2)])))
+
+    XCTAssertEqual(handles.map(\.id), ["j1", "j2"])
+  }
+
+  func testAnImageRefusalCarriesTheServerErrorCode() async {
+    let transport = FakeTransport { _ in
+      (422, Data(#"{"error":"Not enough credits","errorCode":"insufficient_credits"}"#.utf8))
+    }
+    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    do {
+      _ = try await client.generate(GenerationRequest(kind: .image, prompt: "x", modelID: "m"))
+      XCTFail("expected a refusal")
+    } catch {
+      XCTAssertEqual((error as? StudioRequestError)?.failure, .insufficientCredits)
+    }
   }
 
   func testMusicSendsOnlyDeclaredKeys() async throws {
     let transport = FakeTransport { _ in (202, Data(#"{"id":"m1","state":"pending"}"#.utf8)) }
     let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
 
-    _ = try await client.generate(GenerationRequest(kind: .music, prompt: "lofi", modelID: "m", instrumental: true))
-    _ = try await client.generate(GenerationRequest(kind: .video, prompt: "waves", modelID: "v", instrumental: true))
+    let instrumental = GenerationParams([.instrumental: .flag(true), .resolution: .text("720p")])
+    _ = try await client.generate(GenerationRequest(kind: .music, prompt: "lofi", modelID: "m", params: instrumental))
+    _ = try await client.generate(GenerationRequest(kind: .video, prompt: "waves", modelID: "v", params: instrumental))
 
     let requests = await transport.requests
     XCTAssertEqual(requests.map { $0.url?.path() }, ["/api/v1/music-generations", "/api/v1/video-generations"])
     XCTAssertEqual(Set(try body(requests[0]).keys), ["model", "prompt", "instrumental", "organization_id"])
-    XCTAssertEqual(Set(try body(requests[1]).keys), ["model", "prompt", "organization_id"])
+    XCTAssertEqual(Set(try body(requests[1]).keys), ["model", "prompt", "resolution", "organization_id"])
     XCTAssertTrue(try body(requests[0])["organization_id"] is NSNull)
   }
 
@@ -228,8 +264,10 @@ final class StudioClientTests: XCTestCase {
     }
   }
 
-  func testImageEditSendsRegionsVerticalAxisFirst() async throws {
-    let transport = FakeTransport { _ in (200, Data(#"{"id":"q9","sessionId":"s1"}"#.utf8)) }
+  func testImageEditSendsTheSourceFileAndRegionsVerticalAxisFirst() async throws {
+    let transport = FakeTransport { _ in
+      (202, Data(#"{"group_id":"g9","data":[{"id":"q9","state":"pending"}]}"#.utf8))
+    }
     let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
     let regions = [
       EditRegion(rect: CGRect(x: 0.25, y: 0.5, width: 0.5, height: 0.25), prompt: "a red door"),
@@ -237,28 +275,41 @@ final class StudioClientTests: XCTestCase {
     ]
 
     let handle = try await client.editImage(
-      ImageEditRequest(
-        imageURL: URL(string: "https://cdn.example.test/src.png?sig=1")!, sessionID: "s1", modelID: "flux-3-image",
-        regions: regions))
+      ImageEditRequest(sourceFileID: "664f1c2b9a1e4d0012ab34cd", modelID: "flux-3-image", regions: regions))
 
     XCTAssertEqual(handle.id, "q9")
     let requests = await transport.requests
     let request = try XCTUnwrap(requests.first)
-    XCTAssertEqual(request.url?.path(), "/api/v1/image-edits")
+    XCTAssertEqual(request.url?.path(), "/api/v1/image-jobs")
     let sent = try body(request)
-    XCTAssertEqual(sent["sessionId"] as? String, "s1")
-    XCTAssertEqual(sent["image"] as? String, "https://cdn.example.test/src.png?sig=1")
+    XCTAssertEqual(sent["mode"] as? String, "edit")
+    XCTAssertEqual(sent["model"] as? String, "flux-3-image")
+    XCTAssertEqual(Set(sent.keys), ["model", "mode", "prompt", "inputs", "edit_regions", "organization_id"])
+    let inputs = try XCTUnwrap(sent["inputs"] as? [[String: String]])
+    XCTAssertEqual(inputs, [["role": "edit_source", "file_id": "664f1c2b9a1e4d0012ab34cd"]])
     XCTAssertEqual(sent["prompt"] as? String, "a red door; blue sky")
     let sentRegions = try XCTUnwrap(sent["edit_regions"] as? [[String: Any]])
     XCTAssertEqual(sentRegions.first?["bbox"] as? [Double], [0.5, 0.25, 0.75, 0.75])
-    XCTAssertNil(sent["fabFileIds"], "FLUX 3 rejects a mask")
+    XCTAssertNil(sent["image"])
+    XCTAssertNil(sent["sessionId"])
     XCTAssertTrue(sent["organization_id"] is NSNull)
+  }
+
+  func testImageCancelPostsToTheImageJob() async throws {
+    let transport = FakeTransport { _ in (200, Data(#"{"id":"j1","state":"cancelled"}"#.utf8)) }
+    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+
+    try await client.cancel(handle("j1", .image))
+
+    let requests = await transport.requests
+    XCTAssertEqual(requests.map { $0.url?.path() }, ["/api/v1/image-jobs/j1/cancel"])
+    XCTAssertEqual(requests.first?.httpMethod, "POST")
   }
 
   func testStatusRoutesByKind() async throws {
     let transport = FakeTransport { request in
-      if request.url?.path() == "/api/v1/quests/q1" {
-        return (200, Data(#"{"status":"running","files":[]}"#.utf8))
+      if request.url?.path() == "/api/v1/image-jobs/q1" {
+        return (200, Data(#"{"id":"q1","state":"running"}"#.utf8))
       }
       return (
         200,
@@ -276,7 +327,7 @@ final class StudioClientTests: XCTestCase {
     XCTAssertEqual(video.phase, .succeeded)
     XCTAssertEqual(video.resultURLs, [URL(string: "https://cdn.example.test/v.mp4")!])
     let paths = await transport.requests.map { $0.url?.path() }
-    XCTAssertEqual(paths, ["/api/v1/quests/q1", "/api/v1/video-generations/v1"])
+    XCTAssertEqual(paths, ["/api/v1/image-jobs/q1", "/api/v1/video-generations/v1"])
   }
 
   func testAnUnsafeIDNeverReachesTheNetwork() async {
@@ -318,7 +369,7 @@ final class StudioClientTests: XCTestCase {
     XCTAssertEqual(models.map(\.id), ["gpt-image-2", "flux-3-image"])
   }
 
-  func testVideoModelsNeedTextToVideo() async throws {
+  func testVideoModelsKeepTheirModesForTheViewModelToFilter() async throws {
     let transport = FakeTransport { _ in
       (
         200,
@@ -329,15 +380,14 @@ final class StudioClientTests: XCTestCase {
     }
     let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
     let models = try await client.models(for: .video)
-    XCTAssertEqual(models.map(\.id), ["a"])
+    XCTAssertEqual(models.map(\.id), ["a", "b"])
+    XCTAssertEqual(
+      models.compactMap { model -> [String]? in
+        guard case .video(let capabilities)? = model.capabilities else { return nil }
+        return capabilities.modes
+      }, [["text_to_video"], ["image_to_video"]])
   }
 
-  func testCreateSessionReadsTheID() async throws {
-    let transport = FakeTransport { _ in (200, Data(#"{"id":"s7","name":"Studio edits"}"#.utf8)) }
-    let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
-    let id = try await client.createSession(name: "Studio edits")
-    XCTAssertEqual(id, "s7")
-  }
 }
 
 // MARK: - Tracker
@@ -468,7 +518,7 @@ final class GenerationTrackerTests: XCTestCase {
     XCTAssertEqual(tracker.generations.first?.phase, .queued)
   }
 
-  func testCancelOnlyAppliesToRunningJobs() async throws {
+  func testCancelOnlyAppliesToUnsettledJobs() async throws {
     let api = FakeStudioAPI()
     let tracker = GenerationTracker(
       api: api, realtime: nil, store: MemoryGenerationStore(), sleep: { _ in try await Task.sleep(for: .seconds(3600)) }
@@ -476,11 +526,11 @@ final class GenerationTrackerTests: XCTestCase {
     tracker.track(handle("img", .image))
     tracker.track(handle("v1"))
 
-    try await tracker.cancel("img")
+    try await tracker.cancel("v1")
     try await tracker.cancel("v1")
 
     let cancelled = await api.cancelled
-    XCTAssertEqual(cancelled, ["v1"])
+    XCTAssertEqual(cancelled, ["v1"], "a settled generation is not cancelled again")
     XCTAssertEqual(tracker.generations.first { $0.id == "v1" }?.phase, .cancelled)
     tracker.dismiss("v1")
     tracker.dismiss("img")
@@ -544,15 +594,16 @@ final class StudioCreateViewModelTests: XCTestCase {
     )
   }
 
-  func testSubmitStartsTrackingAndClearsThePrompt() async {
+  func testSubmitStartsTrackingAndClearsThePrompt() async throws {
     let api = FakeStudioAPI()
-    await api.setModels(.music, [GenerationModel(id: "m1", name: "M1"), GenerationModel(id: "m2", name: "M2")])
+    let m2 = GenerationModel(id: "m2", name: "M2", capabilities: .music(MusicCapabilities()))
+    await api.setModels(.music, [GenerationModel(id: "m1", name: "M1"), m2])
     let tracker = makeTracker(api)
     let model = StudioCreateViewModel(api: api, tracker: tracker)
     model.kind = .music
     await model.loadModels()
-    model.select(model: GenerationModel(id: "m2", name: "M2"))
-    model.instrumental = true
+    model.select(model: m2)
+    model.set(.flag(true), for: try XCTUnwrap(model.controls.first { $0.key == .instrumental }))
     model.prompt = "  rainy lofi  "
 
     let started = await model.submit()
@@ -561,7 +612,12 @@ final class StudioCreateViewModelTests: XCTestCase {
     XCTAssertEqual(model.prompt, "")
     let generated = await api.generated
     XCTAssertEqual(
-      generated, [GenerationRequest(kind: .music, prompt: "rainy lofi", modelID: "m2", instrumental: true)])
+      generated,
+      [
+        GenerationRequest(
+          kind: .music, prompt: "rainy lofi", modelID: "m2", params: GenerationParams([.instrumental: .flag(true)]))
+      ])
+    XCTAssertEqual(tracker.generations.first?.handle.modelID, "m2", "the handle keeps what it was made with")
     XCTAssertEqual(tracker.generations.map(\.handle.kind), [.music])
   }
 
@@ -609,7 +665,7 @@ final class RegionEditViewModelTests: XCTestCase {
 
   func testRegionsAreCappedAndEachNeedsAPrompt() {
     let api = FakeStudioAPI()
-    let model = RegionEditViewModel(item: image, api: api, media: FakeMediaAPI(), tracker: makeTracker(api))
+    let model = RegionEditViewModel(item: image, api: api, tracker: makeTracker(api))
     for _ in 0..<RegionGeometry.maximumRegions { model.addRegion(CGRect(x: 0, y: 0, width: 0.5, height: 0.5)) }
     XCTAssertNil(model.addRegion(CGRect(x: 0, y: 0, width: 0.5, height: 0.5)))
     XCTAssertFalse(model.canSubmit)
@@ -623,17 +679,10 @@ final class RegionEditViewModelTests: XCTestCase {
     XCTAssertEqual(model.selectedRegionID, model.regions.last?.id)
   }
 
-  func testSubmitUsesAFreshURLAndTheImagesOwnSession() async {
+  func testSubmitEditsTheImagesFilesEntry() async {
     let api = FakeStudioAPI()
-    let media = FakeMediaAPI()
-    let fresh = URL(string: "https://cdn.example.test/fresh.png")!
-    await media.setDetail([
-      MediaItem(
-        id: "f1", kind: .image, fileName: "a.png", mimeType: "image/png", createdAt: Date(), url: fresh,
-        sessionID: "s1")
-    ])
     let tracker = makeTracker(api)
-    let model = RegionEditViewModel(item: image, api: api, media: media, tracker: tracker)
+    let model = RegionEditViewModel(item: image, api: api, tracker: tracker)
     let region = model.addRegion(CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.3))!
     model.setPrompt("a hat", for: region.id)
 
@@ -641,27 +690,8 @@ final class RegionEditViewModelTests: XCTestCase {
 
     XCTAssertTrue(started)
     let edits = await api.edits
-    XCTAssertEqual(edits.first?.imageURL, fresh)
-    XCTAssertEqual(edits.first?.sessionID, "s1")
+    XCTAssertEqual(edits.first?.sourceFileID, image.id)
     XCTAssertEqual(edits.first?.modelID, "flux-3-image")
-    let created = await api.sessionsCreated
-    XCTAssertTrue(created.isEmpty)
     XCTAssertEqual(tracker.generations.map(\.id), ["edit-1"])
-  }
-
-  func testAnImageWithNoSessionGetsANewOne() async {
-    let api = FakeStudioAPI()
-    let media = FakeMediaAPI()
-    await media.setDetail([image])
-    let model = RegionEditViewModel(item: image, api: api, media: media, tracker: makeTracker(api))
-    let region = model.addRegion(CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.3))!
-    model.setPrompt("a hat", for: region.id)
-
-    await model.submit()
-
-    let created = await api.sessionsCreated
-    XCTAssertEqual(created, ["Studio edits"])
-    let edits = await api.edits
-    XCTAssertEqual(edits.first?.sessionID, "session-new")
   }
 }

@@ -86,7 +86,7 @@ type LakeMemoryHealthMock =
       memberCount: number;
     }
   | undefined;
-const useGetLakeMemoryHealth = vi.fn<[], { data: LakeMemoryHealthMock }>(() => ({ data: undefined }));
+const useGetLakeMemoryHealth = vi.fn<() => { data: LakeMemoryHealthMock }>(() => ({ data: undefined }));
 
 // The rebuild door's two selectors share one mutation hook, so the panel's only record of WHICH
 // door an owner opened is the argument it passes - which is what these capture.
@@ -101,7 +101,7 @@ type RebuildStatusMock =
       embeddingSpaceResolved?: boolean | null;
     }
   | undefined;
-const useUnderChunkedCount = vi.fn<[], { data: RebuildStatusMock }>(() => ({ data: undefined }));
+const useUnderChunkedCount = vi.fn<() => { data: RebuildStatusMock }>(() => ({ data: undefined }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
@@ -160,6 +160,8 @@ const noopProps = {
   armCounts: undefined,
   taxonomyBatch: undefined,
   onOpenSettings: vi.fn(),
+  onOpenResearch: vi.fn(),
+  onReviewProposals: vi.fn(),
   onOpenAccess: vi.fn(),
   onOpenFallbackSettings: vi.fn(),
   onReviewTaxonomy: vi.fn(),
@@ -881,5 +883,61 @@ describe('LakeInfoPanel - Start chat on a draft lake', () => {
     await clickStart({ ...draft, canManage: false } as ManagerLake);
     expect(screen.getByTestId('datalake-startchat-draft-anyway-btn')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-startchat-draft-publish-btn')).not.toBeInTheDocument();
+  });
+});
+
+describe('LakeInfoPanel research entry points', () => {
+  it('opens the Research tab from the Research action', async () => {
+    const user = userEvent.setup();
+    const onOpenResearch = vi.fn();
+    render(
+      <Wrapper>
+        <LakeInfoPanel lake={baseLake} {...noopProps} onOpenResearch={onOpenResearch} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-research-btn-lake-1'));
+
+    expect(onOpenResearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a pending-sources link only when proposals are waiting', async () => {
+    const user = userEvent.setup();
+    const onReviewProposals = vi.fn();
+    const { unmount } = render(
+      <Wrapper>
+        <LakeInfoPanel lake={baseLake} {...noopProps} onReviewProposals={onReviewProposals} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-review-proposals-btn-lake-1')).toBeNull();
+    unmount();
+
+    render(
+      <Wrapper>
+        <LakeInfoPanel
+          lake={{ ...baseLake, pendingProposalCount: 3 } as ManagerLake}
+          {...noopProps}
+          onReviewProposals={onReviewProposals}
+        />
+      </Wrapper>
+    );
+    const link = screen.getByTestId('datalake-review-proposals-btn-lake-1');
+    expect(link).toHaveTextContent('3 sources to review');
+    await user.click(link);
+    expect(onReviewProposals).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows neither to someone who cannot manage the lake', () => {
+    render(
+      <Wrapper>
+        <LakeInfoPanel
+          lake={{ ...baseLake, canManage: false, pendingProposalCount: 3 } as ManagerLake}
+          {...noopProps}
+        />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-research-btn-lake-1')).toBeNull();
+    expect(screen.queryByTestId('datalake-review-proposals-btn-lake-1')).toBeNull();
   });
 });

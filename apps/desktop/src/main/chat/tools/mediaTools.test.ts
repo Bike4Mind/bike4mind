@@ -17,6 +17,22 @@ vi.mock('../media/imageInput', async importOriginal => {
 
 const SESSION = 'f1a2b3c4-0000-4000-8000-000000000001';
 
+const IMAGE_JOB = {
+  id: 'job1',
+  object: 'image_generation' as const,
+  state: 'pending' as const,
+  model: 'gpt-image-1-mini',
+  mode: 'generate' as const,
+  prompt: 'a bicycle',
+  group_id: 'grp1',
+  source: 'agent' as const,
+  error: null,
+  output: null,
+  credits: { reserved: null, settled: null },
+  created_at: 'x',
+  updated_at: 'x',
+};
+
 /** Real PNG and JPEG signatures: the tools sniff the bytes, not the name. */
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
@@ -27,7 +43,6 @@ interface Harness {
   media: ChatMedia[];
   notices: ChatToolNotice[];
   progress: string[];
-  setRemote: ReturnType<typeof vi.fn>;
   /** Images attached for the model to see, by media type. */
   shown: string[];
   /** A granted folder, for the save tool. */
@@ -37,18 +52,22 @@ interface Harness {
 async function harness(
   options: {
     imageModels?: string[];
-    remoteSessionId?: string;
     vision?: boolean;
     generated?: 'png' | 'jpeg' | 'jpeg-as-png';
   } = {}
 ): Promise<Harness> {
   const client = {
-    generateImage: vi.fn().mockResolvedValue({ questId: 'q1', remoteSessionId: 'nb1' }),
-    getQuest: vi.fn().mockResolvedValue({
-      id: 'q1',
-      status: 'done',
-      sessionId: 'nb1',
-      files: [{ name: 'a.png', url: 'https://cdn.example/generated/a.png', isImage: true, isAudio: false }],
+    createImageJob: vi.fn().mockResolvedValue([IMAGE_JOB]),
+    getImageJob: vi.fn().mockResolvedValue({
+      ...IMAGE_JOB,
+      state: 'succeeded',
+      output: {
+        availability: 'ready',
+        url: 'https://cdn.example/generated/a.png',
+        expires_at: null,
+        content_type: 'image/png',
+        file_id: null,
+      },
     }),
     fetchGenerated: vi
       .fn()
@@ -71,19 +90,14 @@ async function harness(
   const media: ChatMedia[] = [];
   const notices: ChatToolNotice[] = [];
   const progress: string[] = [];
-  const setRemote = vi.fn().mockResolvedValue(undefined);
   const shown: string[] = [];
   const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-mediatools-root-')));
 
   const mediaContext: MediaContext = {
     client: client as unknown as MediaApiClient,
     store: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-mediatools-'))),
-    cdnUrl: '',
-    notebookName: 'New chat',
     listImageModels: async () => options.imageModels ?? ['gpt-image-2', 'gpt-image-1-mini'],
     listVideoModels: async () => [],
-    getRemoteSessionId: () => options.remoteSessionId,
-    setRemoteSessionId: setRemote,
   };
 
   return {
@@ -91,7 +105,6 @@ async function harness(
     media,
     notices,
     progress,
-    setRemote,
     shown,
     root,
     context: {
@@ -117,7 +130,6 @@ async function harness(
         notice: notice => notices.push(notice),
         label: () => undefined,
         moved: () => undefined,
-        ownContent: () => undefined,
         diff: () => undefined,
         detail: () => undefined,
         image: (_bytes, mimeType) => shown.push(mimeType),
@@ -126,9 +138,29 @@ async function harness(
   };
 }
 
+/** Runs generate_image with the gap before its first poll skipped rather than waited out. */
+async function runGeneration(h: Harness, prompt: string): Promise<string> {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    let settled = false;
+    const run = generateImageTool.run({ prompt }, h.context).finally(() => {
+      settled = true;
+    });
+    run.catch(() => undefined);
+    while (!settled) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The tool does real file I/O around the poll, which only a real turn of the loop lets finish.
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    return await run;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 /** Run a generation and return the id it reported, the way the model would read it back. */
 async function generate(h: Harness): Promise<string> {
-  await generateImageTool.run({ prompt: 'a lantern' }, h.context);
+  await runGeneration(h, 'a lantern');
   return h.media[0].url.split('/').pop() ?? '';
 }
 
@@ -184,7 +216,7 @@ describe('generate_image', () => {
 
   it('reports the image to the UI and attaches it for the model to see', async () => {
     const h = await harness();
-    const result = await generateImageTool.run({ prompt: 'a bicycle' }, h.context);
+    const result = await runGeneration(h, 'a bicycle');
 
     expect(h.media).toHaveLength(1);
     expect(h.media[0]).toMatchObject({ kind: 'image', caption: 'a bicycle' });
@@ -198,22 +230,12 @@ describe('generate_image', () => {
 
   it('tells a model that reads no images it was not shown the result, and not to describe it', async () => {
     const h = await harness({ vision: false });
-    const result = await generateImageTool.run({ prompt: 'a bicycle' }, h.context);
+    const result = await runGeneration(h, 'a bicycle');
 
     expect(h.media).toHaveLength(1);
     expect(h.shown).toEqual([]);
     expect(result).toMatch(/could not be shown the result: the current model does not accept images/);
     expect(result).toMatch(/Do not describe what you have not seen/);
-  });
-
-  it('remembers the notebook the server filed the first generation under', async () => {
-    const fresh = await harness();
-    await generateImageTool.run({ prompt: 'x' }, fresh.context);
-    expect(fresh.setRemote).toHaveBeenCalledWith('nb1');
-
-    const returning = await harness({ remoteSessionId: 'nb1' });
-    await generateImageTool.run({ prompt: 'x' }, returning.context);
-    expect(returning.setRemote).not.toHaveBeenCalled();
   });
 
   it('refuses without a signed-in session rather than failing at the network', async () => {

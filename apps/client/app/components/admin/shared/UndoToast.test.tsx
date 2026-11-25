@@ -3,7 +3,14 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-li
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { UNDO_TOAST_DURATION_MS, UndoToastProvider, type UndoToastOptions, useUndoToast } from './UndoToast';
+import {
+  UNDO_TOAST_DURATION_MS,
+  UndoToastProvider,
+  type UndoToastOptions,
+  useUndoToast,
+  useUndoToastIsCurrent,
+  useUndoToastOffersUndo,
+} from './UndoToast';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -75,6 +82,42 @@ describe('UndoToast', () => {
     expect(onViewAudit).toHaveBeenCalledTimes(1);
   });
 
+  it('opens an audit entry given by URL in a new tab, leaving the toast and its Undo here', () => {
+    render(<Trigger options={{ message: 'Audited', onUndo: vi.fn(), auditHref: '/admin/audit/entry-1' }} />, {
+      wrapper: TestWrapper,
+    });
+    fireEvent.click(screen.getByTestId('trigger-btn'));
+
+    const audit = screen.getByTestId('undo-toast-audit-btn');
+    expect(audit.tagName).toBe('A');
+    expect(audit).toHaveAttribute('href', '/admin/audit/entry-1');
+    expect(audit).toHaveAttribute('target', '_blank');
+    expect(audit).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('says whether the toast on screen offers Undo', () => {
+    const { result } = renderHook(() => ({ show: useUndoToast(), offersUndo: useUndoToastOffersUndo() }), {
+      wrapper: TestWrapper,
+    });
+    expect(result.current.offersUndo).toBe(false);
+
+    act(() => void result.current.show({ message: 'Changed', onUndo: vi.fn() }));
+    expect(result.current.offersUndo).toBe(true);
+    act(() => void result.current.show({ message: 'Undo: 1 model reverted.' }));
+    expect(result.current.offersUndo).toBe(false);
+  });
+
+  it('stops offering Undo once the toast is dismissed', async () => {
+    const { result } = renderHook(() => ({ show: useUndoToast(), offersUndo: useUndoToastOffersUndo() }), {
+      wrapper: TestWrapper,
+    });
+    act(() => void result.current.show({ message: 'Changed', onUndo: vi.fn() }));
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(result.current.offersUndo).toBe(false));
+    expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+  });
+
   it('shows one toast at a time: a new write replaces the previous offer', () => {
     const firstUndo = vi.fn();
     const secondUndo = vi.fn();
@@ -94,6 +137,41 @@ describe('UndoToast', () => {
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
     expect(secondUndo).toHaveBeenCalledTimes(1);
     expect(firstUndo).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failure off a newer toast that replaced the one being undone', async () => {
+    let failUndo: (error: Error) => void = () => undefined;
+    const firstUndo = vi.fn(() => new Promise<void>((_resolve, reject) => (failUndo = reject)));
+    render(
+      <>
+        <Trigger options={{ message: 'First write', onUndo: firstUndo }} testId="first-btn" />
+        <Trigger options={{ message: 'Second write', onUndo: vi.fn() }} testId="second-btn" />
+      </>,
+      { wrapper: TestWrapper }
+    );
+
+    fireEvent.click(screen.getByTestId('first-btn'));
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    fireEvent.click(screen.getByTestId('second-btn'));
+    await act(async () => failUndo(new Error('First write could not be reverted')));
+
+    expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Second write');
+    expect(screen.queryByTestId('undo-toast-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('undo-toast-undo-btn')).not.toBeDisabled();
+  });
+
+  it('says whether a toast is still the one on screen', () => {
+    const ids: number[] = [];
+    const { result } = renderHook(() => ({ show: useUndoToast(), isCurrent: useUndoToastIsCurrent() }), {
+      wrapper: TestWrapper,
+    });
+
+    act(() => void ids.push(result.current.show({ message: 'First write' })));
+    expect(result.current.isCurrent(ids[0])).toBe(true);
+    act(() => void ids.push(result.current.show({ message: 'Second write' })));
+    expect(result.current.isCurrent(ids[0])).toBe(false);
+    expect(result.current.isCurrent(ids[1])).toBe(true);
+    expect(result.current.isCurrent(null)).toBe(false);
   });
 
   it('dismisses itself after 30 seconds', () => {

@@ -1,4 +1,5 @@
-import { designTokens, emitJoyThemeFragment } from '@bike4mind/design-tokens';
+import { designTokens, emitJoyThemeFragment, type JoyThemeFragment } from '@bike4mind/design-tokens';
+import { shouldSkipGeneratingVar } from '@mui/joy/styles';
 import { adminPalette } from './admin';
 import { APP_NAME } from '@client/config/general';
 import {
@@ -22,6 +23,14 @@ import {
 } from './components';
 
 declare module '@mui/joy/styles' {
+  interface Theme {
+    motion: JoyThemeFragment['motion'];
+  }
+
+  interface CssVarsThemeOptions {
+    motion?: JoyThemeFragment['motion'];
+  }
+
   interface PaletteBackground {
     panel?: string;
   }
@@ -146,6 +155,9 @@ export const colorSchemes = {
  */
 export const typography = {
   fontFamily: joyTokens.fontFamily,
+  fontSize: joyTokens.fontSize,
+  fontWeight: joyTokens.fontWeight,
+  lineHeight: joyTokens.lineHeight,
 };
 
 /**
@@ -153,6 +165,10 @@ export const typography = {
  */
 export const shape = {
   borderRadius: joyTokens.borderRadius,
+  spacing: joyTokens.spacing,
+  radius: joyTokens.radius,
+  shadow: joyTokens.shadow,
+  motion: joyTokens.motion,
 };
 
 /**
@@ -238,6 +254,10 @@ export const components = {
   },
 };
 
+// `branding` (asset paths, flags) and this palette slot (a theme path, see commonTheme.dark) are
+// not CSS values: emitted as custom properties they make the whole theme stylesheet unparseable.
+const NON_CSS_PALETTE_KEY = 'palette.common.switchSelector.background';
+
 /**
  * Creates the base theme configuration with color schemes
  * This function can be memoized for performance optimization
@@ -248,4 +268,6 @@ export const getThemeConfig = () => ({
   ...shape,
   branding,
   components,
+  shouldSkipGeneratingVar: (keys: string[]) =>
+    keys[0] === 'branding' || keys.join('.') === NON_CSS_PALETTE_KEY || shouldSkipGeneratingVar(keys),
 });

@@ -2,11 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   IUserApiKeyDocument,
+  IUserApiKeyListItem,
   ApiKeyScopeValue,
   IEmbedBranding,
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
   type ApiKeyRateLimitUsage,
   type AdminApiKeyAccess,
+  type AdminApiKeyModerationException,
   type AdminApiKeyRequestCounts,
 } from '@bike4mind/common';
 import type { ApiKeyEligibilityResponse } from '@client/pages/api/user-api-keys/eligibility';
@@ -138,7 +140,7 @@ export interface RotateCallbackSigningSecretResponse {
  * one key would clobber each other's cache.
  */
 export function useGetUserApiKeys() {
-  return useQuery<IUserApiKeyDocument[]>({
+  return useQuery<IUserApiKeyListItem[]>({
     queryKey: ['user-api-keys'],
     queryFn: async () => {
       const response = await api.get('/api/user-api-keys', { params: { includeDisabled: true } });
@@ -273,6 +275,8 @@ export interface AdminUserApiKeysResponse {
   requests: Record<string, AdminApiKeyRequestCounts>;
   /** Where the user stands with the API key subscription gate. */
   access: AdminApiKeyAccess;
+  /** Keys with a moderation exception, by key id; absent keys have none. */
+  moderationExceptions?: Record<string, AdminApiKeyModerationException>;
 }
 
 export function useAdminGetUserApiKeys(userId: string | undefined, options?: { refetchInterval?: number }) {

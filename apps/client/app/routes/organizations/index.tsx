@@ -1,4 +1,4 @@
-import { IOrganizationDocument } from '@bike4mind/common';
+import { IOrganizationDocument, organizationMemberRole } from '@bike4mind/common';
 import { useCreateTeamModal } from '@client/app/components/organizations/CreateTeamModal';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserOrganizations, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -20,6 +20,7 @@ import {
   Button,
   Card,
   CardContent,
+  Link,
   Chip,
   Grid,
   Input,
@@ -49,15 +50,15 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
   const hasActiveSubscription = !!subscription && !subscription.canceledAt && !paymentIssue;
   const { currentSeats } = useOrganizationSeats(organization.id);
 
-  const isOwner = organization.userId === currentUser?.id;
-  const isManager = !!currentUser && (organization.adminUserIds ?? []).includes(currentUser.id) && !isOwner;
+  const role = currentUser ? organizationMemberRole(organization, currentUser.id) : null;
+  const isOwner = role === 'owner';
 
   return (
     <Card
       variant="outlined"
       data-testid="organization-card"
       data-org-id={organization.id}
-      sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined }}
+      sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined, position: 'relative' }}
     >
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
@@ -69,16 +70,21 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
             )}
           </AspectRatio>
           <Box sx={{ flex: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
               <Typography level="title-md">{organization.name}</Typography>
               {isOwner && (
                 <Chip size="sm" variant="solid" color="primary">
                   {t('organization.roles.owner')}
                 </Chip>
               )}
-              {isManager && (
+              {role === 'manager' && (
                 <Chip size="sm" variant="soft" color="primary">
                   {t('organization.roles.manager')}
+                </Chip>
+              )}
+              {role === 'billingManager' && (
+                <Chip size="sm" variant="soft" color="primary">
+                  {t('organization.roles.billingManager')}
                 </Chip>
               )}
             </Box>
@@ -122,16 +128,19 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
           </Chip>
         </Stack>
 
-        <Button
-          variant="outlined"
+        <Link
+          overlay
           color="neutral"
-          size="sm"
-          fullWidth
-          onClick={() => navigate({ to: `/organizations/${organization.id}` })}
+          href={`/organizations/${organization.id}`}
+          onClick={event => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            navigate({ to: `/organizations/${organization.id}` });
+          }}
           data-testid="organization-card-view-btn"
         >
-          {t('organization.view_details')}
-        </Button>
+          Open
+        </Link>
       </CardContent>
     </Card>
   );
@@ -175,6 +184,8 @@ const OrganizationListPage: FC = () => {
     data: memberOrganizations,
     isLoading: membersLoading,
     isFetching: membersFetching,
+    isError,
+    refetch,
   } = useGetUserOrganizations(currentUser?.id);
   const [searchQuery, setSearchQuery] = useState('');
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
@@ -270,11 +281,35 @@ const OrganizationListPage: FC = () => {
         )}
       </Grid>
 
-      {!isLoading && filteredOrganizations.length === 0 && (
+      {isError && (
+        <Stack alignItems="center" spacing={2} role="alert" data-testid="organizations-error-state">
+          <Typography>Could not load your teams.</Typography>
+          <Button onClick={() => refetch()} data-testid="organizations-retry-btn">
+            Retry
+          </Button>
+        </Stack>
+      )}
+      {!isError && !isLoading && filteredOrganizations.length === 0 && (
         <Box sx={{ textAlign: 'center', py: 8 }} data-testid="organizations-empty-state">
-          <Typography level="body-lg" color="neutral">
-            {t('organization.no_organizations')}
+          <Typography level="h3">{organizations.length === 0 ? 'Create your first team' : 'No matches'}</Typography>
+          <Typography sx={{ my: 2 }}>
+            {organizations.length === 0
+              ? 'Bring your teammates together in a shared workspace.'
+              : 'Try a different team name or clear your search.'}
           </Typography>
+          {organizations.length === 0 ? (
+            <Button
+              onClick={openCreateTeamModal}
+              disabled={!teamPlanAvailable}
+              data-testid="organizations-empty-create-btn"
+            >
+              Create team
+            </Button>
+          ) : (
+            <Button onClick={() => setSearchQuery('')} data-testid="organizations-clear-search-btn">
+              Clear search
+            </Button>
+          )}
         </Box>
       )}
     </Box>

@@ -46,7 +46,9 @@ vi.mock('../creditService/creditHold', () => ({
 import { holdCredits, releaseCreditHold, settleCreditHold } from '../creditService/creditHold';
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 const setup = (overrides: Partial<VideoJobDeps> = {}) => {
   let clock = new Date('2026-10-06T00:00:00Z');
@@ -354,6 +356,37 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.saveToGeneratedBucket).not.toHaveBeenCalled();
   });
 
+  it('keeps the clip in the bucket with a fresh signal when the step signal fired during the Files save', async () => {
+    const controller = new AbortController();
+    const t = setup({
+      saveToFiles: vi.fn(async () => {
+        controller.abort();
+        return { saved: false as const, reason: 'storage_limit' as const };
+      }),
+    });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const pending = t.jobOf(created);
+    const storing = {
+      ...pending,
+      state: 'storing' as const,
+      payload: {
+        ...pending.payload,
+        providerOutput: {
+          kind: 'inline' as const,
+          base64: Buffer.from('clip').toString('base64'),
+          contentType: 'video/mp4',
+        },
+      },
+    };
+
+    const result = await createVideoJobHandler(t.deps).store(storing, { signal: controller.signal });
+
+    expect(result).toMatchObject({ next: 'succeeded', payload: { output: { location: 'generated' } } });
+    const { signal } = vi.mocked(t.deps.saveToGeneratedBucket).mock.calls[0][0];
+    expect(signal).not.toBe(controller.signal);
+    expect(signal.aborted).toBe(false);
+  });
+
   it.each([
     ['video/webm', 'webm'],
     ['application/octet-stream', 'bin'],
@@ -582,6 +615,7 @@ describe('video job end to end with the test provider', () => {
       throw new ProviderSubmitError('gemini_omni_http_401', true, { error: { message: 'raw' } }, false);
     });
     const t = setup({ providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    const warn = vi.spyOn(t.deps.logger, 'warn');
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({
@@ -589,9 +623,73 @@ describe('video job end to end with the test provider', () => {
       attempts: 0,
       error: { code: 'provider_error', message: 'gemini_omni_http_401' },
     });
+    expect(warn).toHaveBeenCalledWith(
+      'video provider rejected the submit for good',
+      expect.objectContaining({ message: 'gemini_omni_http_401', raw: { error: { message: 'raw' } } })
+    );
     expect(submit).toHaveBeenCalledTimes(1);
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
+  it("logs the provider's own reason when a generation fails for good", async () => {
+    const raw = { status: 'failed', error: { code: 'internal', message: 'generation failed' } };
+    const t = setup({
+      providers: createVideoProviderRegistry([
+        stubProvider({ poll: async () => ({ status: 'failed', retryable: false, message: 'xai_failed', raw }) }),
+      ]),
+    });
+    const warn = vi.spyOn(t.deps.logger, 'warn');
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({
+      state: 'failed',
+      error: { code: 'provider_error', message: 'xai_failed' },
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'video provider failed the job',
+      expect.objectContaining({ message: 'xai_failed', raw })
+    );
+  });
+
+  it('truncates an oversized provider payload in the log and on the failed job', async () => {
+    const raw = { echoedRequest: 'x'.repeat(40 * 1024) };
+    const t = setup({
+      providers: createVideoProviderRegistry([
+        stubProvider({ poll: async () => ({ status: 'failed', retryable: false, message: 'xai_failed', raw }) }),
+      ]),
+    });
+    const warn = vi.spyOn(t.deps.logger, 'warn');
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    const stored = t.jobOf(created).rawProviderError;
+    expect(stored).toEqual(expect.stringMatching(/\.\.\.\[truncated, \d+ chars total\]$/));
+    expect((stored as string).length).toBeLessThan(17 * 1024);
+    const logged = warn.mock.calls.find(call => call[0] === 'video provider failed the job')?.[1] as { raw: string };
+    expect(logged.raw).toEqual(stored);
+  });
+
+  it.each([
+    ['ASCII', 'x'.repeat(40 * 1024)],
+    ['multibyte', '\u00e9'.repeat(10 * 1024)],
+    ['astral', '\u{1f600}'.repeat(10 * 1024)],
+  ])('bounds the logged and stored %s payload to 16 KiB including the marker', async (_name, text) => {
+    const t = setup({
+      providers: createVideoProviderRegistry([
+        stubProvider({
+          poll: async () => ({ status: 'failed', retryable: false, message: 'provider_failed', raw: { text } }),
+        }),
+      ]),
+    });
+    const warn = vi.spyOn(t.deps.logger, 'warn');
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    const stored = t.jobOf(created).rawProviderError;
+    expect(typeof stored).toBe('string');
+    if (typeof stored !== 'string') throw new Error('Expected a bounded payload string');
+    expect(Buffer.byteLength(stored, 'utf8')).toBeLessThanOrEqual(16 * 1024);
+    expect(stored).not.toContain('\ufffd');
+    expect(warn).toHaveBeenCalledWith('video provider failed the job', expect.objectContaining({ raw: stored }));
   });
 
   it('fails a job queued before its model was retired without submitting it', async () => {

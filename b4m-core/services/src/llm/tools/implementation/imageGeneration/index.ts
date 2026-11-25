@@ -5,7 +5,6 @@ import { ToolContext, ToolDefinition } from '../../base/types';
 import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
 import {
   ApiKeyType,
-  ImageModels,
   BFL_SAFETY_TOLERANCE,
   TOOL_SELECTABLE_IMAGE_QUALITIES,
   XAI_IMAGE_MODELS,
@@ -14,12 +13,14 @@ import {
   isGeminiImageModel,
   resolveImageDimensions,
   BFL_DIMENSION_BOUNDS,
-  rejectsTransparentBackground,
+  supportsTransparentBackgroundByCatalog,
+  transparentBackgroundUnsupportedMessage,
   isGPTImage25Model,
   isExtendedGptImageQuality,
   toNonWebpOutputFormat,
   type ImageOutputFormat,
   type OpenAIImageBackground,
+  type OpenAIImageQuality,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -40,12 +41,32 @@ import { ImageGenerateParams } from 'openai/resources/images';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
-import { v4 as uuidv4 } from 'uuid';
 import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { resolveImageArgs } from './resolveImageArgs';
 import { recordGeneratedImages } from '../../../recordGeneratedImages';
+import { IMAGE_JOB_BATCH_MAX } from '../../../../imageJobs/types';
+import {
+  buildGenerateJobRequest,
+  clampImageCount,
+  createImageJobsForTool,
+  imageSelectionOf,
+  isImageJobToolConfig,
+  reportImageJobs,
+  type ImageToolConfig,
+} from './imageJobTool';
+
+export {
+  buildEditJobRequest,
+  buildGenerateJobRequest,
+  clampImageCount,
+  isImageJobToolConfig,
+  type ImageJobRequestDraft,
+  type ImageLimitRefusal,
+  type ImageToolConfig,
+  type ImageToolJobsResult,
+} from './imageJobTool';
 
 /**
  * Validate that an image-generation provider's API key is present. Without
@@ -118,7 +139,7 @@ export async function processAndStoreImages(
 ): Promise<string[]> {
   await context.statusUpdate({}, 'Storing images...');
   // Unique file names for an n>1 batch, which would otherwise share the Date.now() suffix.
-  const batchId = uuidv4();
+  const batchId = crypto.randomUUID();
   return Promise.all(
     images.map(async (image, index) => {
       const buffer = await downloadImageAsBuffer(image);
@@ -128,7 +149,7 @@ export async function processAndStoreImages(
       // (rendering the image as a download chip instead of in the grid).
       const ext = fileType?.ext ?? 'png';
       const mimeType = fileType?.mime ?? 'image/png';
-      const filename = `${uuidv4()}.${ext}`;
+      const filename = `${crypto.randomUUID()}.${ext}`;
 
       // Block moderated content BEFORE upload - see moderateToolImage doc comment.
       await moderateToolImage(context, buffer, mimeType, model, provider);
@@ -177,6 +198,35 @@ function expectedFailureToolResult(error: unknown, logMessage: string): string |
   return `Error: ${error.message}`;
 }
 
+type GenerationToolArgs = {
+  prompt: string;
+  n?: number | null;
+  size?: string | null;
+  quality?: OpenAIImageQuality | null;
+  background?: OpenAIImageBackground | null;
+  output_format?: ImageOutputFormat | null;
+};
+
+// Billing is each job's own credit hold, so this path never calls context.onStart/onFinish.
+async function startGenerationJobs(
+  context: Omit<ToolContext, 'config'>,
+  config: ImageToolConfig,
+  selection: GenerateImageToolCall,
+  parameters: unknown
+): Promise<string> {
+  const args = parameters as GenerationToolArgs;
+  const request = buildGenerateJobRequest(selection, args.prompt, {
+    size: args.size,
+    quality: args.quality,
+    background: args.background,
+    outputFormat: args.output_format,
+  });
+  const { count, note } = clampImageCount(args.n ?? selection.n);
+  const result = await createImageJobsForTool(context, config, 'image_generation', request, count);
+  if (typeof result === 'string') return result;
+  return reportImageJobs(context, config, 'Image generation', result, note ? [note] : []);
+}
+
 export const imageGenerationTool: ToolDefinition = {
   name: 'image_generation',
   implementation: (context, config: unknown) => ({
@@ -184,7 +234,7 @@ export const imageGenerationTool: ToolDefinition = {
       // Get imageConfig from config (passed from client via imageConfig).
       // When no imageConfig is pre-set, signal via pendingAction so the caller
       // can handle model selection (e.g., show a picker UI).
-      const imageConfig = config as GenerateImageToolCall | undefined;
+      const imageConfig = imageSelectionOf(config);
       if (!imageConfig) {
         const { prompt } = val as { prompt?: string };
         await context.statusUpdate({
@@ -196,6 +246,7 @@ export const imageGenerationTool: ToolDefinition = {
         });
         return 'Image model selection required. A model picker has been presented to the user.';
       }
+      if (isImageJobToolConfig(config)) return startGenerationJobs(context, config, imageConfig, val);
 
       // Extract tool call arguments (LLM can still override via tool call)
       const {
@@ -230,14 +281,10 @@ export const imageGenerationTool: ToolDefinition = {
         quality: toolQuality,
       });
 
-      // Step any gpt-image-2 selection - default or explicit - down to gpt-image-1.5 when
-      // transparency is requested: gpt-image-2 rejects background: 'transparent' outright,
-      // so sending it there would silently turn a valid request into a 400.
-      // (OpenAIImageService.resolveGptImageOutputOptions is the last-resort backstop
-      // that strips 'transparent' if a gpt-image-2 request reaches it regardless.)
-      const wantsTransparent = background === 'transparent';
-      const model =
-        wantsTransparent && rejectsTransparentBackground(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
+      if (background === 'transparent' && !supportsTransparentBackgroundByCatalog(resolvedModel)) {
+        return `Error: ${transparentBackgroundUnsupportedMessage(resolvedModel)}`;
+      }
+      const model = resolvedModel;
       const refusal = await toolModelRefusal(
         context,
         await createToolModelAdmission(context),
@@ -492,7 +539,7 @@ export const imageGenerationTool: ToolDefinition = {
             // when it fits BFL's supported range - it is not OpenAI-exclusive, just
             // OpenAI-priced.
             description:
-              "The size of the image to generate: '1024x1024' square, '1536x1024' landscape, or '1024x1536' portrait. Ignored by providers that take an aspect ratio instead (Flux Ultra, Gemini), or that cannot produce the requested dimensions. Omit this field when the user does not ask for a specific shape, so their saved preference applies.",
+              "The size of the image to generate: '1024x1024' square, '1536x1024' landscape, or '1024x1536' portrait. Models that take an aspect ratio use its shape; models that cannot produce it ignore it. Omit this field when the user does not ask for a specific shape, so their saved preference applies.",
             enum: [...PRICEABLE_IMAGE_SIZES],
           },
           quality: {
@@ -500,13 +547,15 @@ export const imageGenerationTool: ToolDefinition = {
             description:
               "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
             // xhigh/max only for a 2.5 model, so the model is never offered a tier that renders as 'high'.
-            enum: isGPTImage25Model((config as GenerateImageToolCall | undefined)?.model)
+            enum: isGPTImage25Model(imageSelectionOf(config)?.model)
               ? [...TOOL_SELECTABLE_IMAGE_QUALITIES]
               : TOOL_SELECTABLE_IMAGE_QUALITIES.filter(quality => !isExtendedGptImageQuality(quality)),
           },
           n: {
             type: 'number',
-            description: 'Number of images to generate',
+            description: isImageJobToolConfig(config)
+              ? `Number of images to generate (1 to ${IMAGE_JOB_BATCH_MAX})`
+              : 'Number of images to generate',
           },
           safety_tolerance: {
             type: 'number',

@@ -35,10 +35,12 @@ const MINTING_HELPERS: Record<string, RegExp> = {
   issueSessionForRequest: /\bissueSessionForRequest\(/,
   issueBrowserSession: /\bissueBrowserSession\(/,
   completeMfaLogin: /\bcompleteMfaLogin\(/,
+  completeMfaEnrollment: /\bcompleteMfaEnrollment\(/,
   issueSession: /\.issueSession\(/,
   signAccessToken: /\.signAccessToken\(/,
   generateAuthCode: /\bgenerateAuthCode\(/,
   mintRefreshFamily: /\bmintRefreshFamily\(/,
+  mintDesktopWebSessionCode: /\bmintDesktopWebSessionCode\(/,
 };
 const SESSION_GRANT_MARKERS = [
   ...Object.values(MINTING_HELPERS),
@@ -105,6 +107,8 @@ describe('an API key cannot obtain a session token', () => {
     expect(found).toEqual(
       expect.arrayContaining([
         'oauth/code.ts',
+        'auth/desktop-web-session/index.ts',
+        'auth/desktop-web-session/redeem.ts',
         'oauth/device/verify.ts',
         'oauth/device/token.ts',
         'oauth/token.ts',

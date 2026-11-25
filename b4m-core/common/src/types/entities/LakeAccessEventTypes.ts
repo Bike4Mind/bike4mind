@@ -57,6 +57,8 @@ export const LAKE_ACCESS_SURFACES = [
   // `runLakeSemanticSearch` with the SPA route above but recorded under its own value so an
   // integrator's traffic can be told apart from the product UI's in the access history.
   'data-lake-api-v1-search',
+  // The public v1 proposals list; the SPA reads the same rows under 'data-lake-proposals'.
+  'data-lake-api-v1-proposals',
   'data-lake-articles',
   'data-lake-public-browse',
   'data-lake-sync-delta',
@@ -64,6 +66,13 @@ export const LAKE_ACCESS_SURFACES = [
   // metadata + URL read as the articles `?id=` deep link, reached through a different door, so it
   // gets its own value rather than reusing data-lake-articles and conflating the two entry points.
   'data-lake-file-fallback',
+  // Lake management reads: one value per route under /api/data-lakes/:id.
+  'data-lake-health',
+  'data-lake-proposals',
+  'data-lake-findings',
+  'data-lake-inconsistencies',
+  'data-lake-skipped-files',
+  'data-lake-membership-duplicates',
   'chat-kb-search',
   'chat-kb-search-scoped',
   'chat-kb-retrieve',

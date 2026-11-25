@@ -14,6 +14,9 @@ import {
 } from '@bike4mind/server-utils/auth/appleConfig';
 import { authenticateSelfServeProfile } from '@server/utils/auth/verifyCallback';
 import { appleOAuthStateStore } from './passportOAuthStateStore';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'appleStrategy' } });
 
 const APPLE_AUTHORIZATION_URL = `${APPLE_ISSUER}/auth/authorize`;
 const APPLE_TOKEN_URL = `${APPLE_ISSUER}/auth/token`;
@@ -125,7 +128,7 @@ export const createAppleVerifyCallback =
       if (!params.id_token) throw new Error('Apple token response carried no id_token');
       claims = await verifyIdToken(params.id_token);
     } catch (error) {
-      console.error('[AUTH] Apple id_token verification failed:', error);
+      logger.error('Apple id_token verification failed', { error });
       done(null, undefined, { code: 'internal' });
       return;
     }

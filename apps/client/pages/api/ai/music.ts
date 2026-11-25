@@ -1,4 +1,5 @@
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { resolveAudioVendorBackend } from '@bike4mind/common';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { randomUUID } from 'crypto';
 import {
   DEFAULT_MUSIC_MODEL_ID,
@@ -12,8 +13,11 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository, cacheRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateMusicCredits, ProviderBusyError, runElevenLabsWithCapacity } from '@bike4mind/services';
-import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { aiMusicService, getSettingsMap, getSettingsValue, ProviderQuotaExhaustedError } from '@bike4mind/utils';
+import {
+  reserveRequestCredits,
+  resolveRequestBillingOrgId,
+} from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
@@ -57,21 +61,24 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
 
-  await (await createModelAdmission(req.user!)).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID);
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: resolveRequestBillingOrgId(req) })
+  ).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID, { orgModelBackend: resolveAudioVendorBackend(provider) });
 
-  const apiKey = await apiKeyService.getEffectiveApiKey(
+  const effectiveKey = await apiKeyService.getEffectiveApiKeyWithSource(
     userId,
     { type: PROVIDER_API_KEY_TYPE[provider] },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
 
-  if (!apiKey) {
+  if (!effectiveKey) {
     // 503, not 401: the caller IS authenticated - the provider key is a server-side
     // capability gap. A 401 would tell an API-key caller to re-authenticate, which
     // never fixes a missing ElevenLabs key. The message survives to the CLI via the
     // arraybuffer error decode + mapApiError's server-message fallback.
     return res.status(503).json({ error: `No ${provider} API key configured` });
   }
+  const apiKey = effectiveKey.key;
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
@@ -112,6 +119,8 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
         model: modelId,
         // Matches this call's ledger write (deductCreditsWithOrgSupport).
         source,
+        // Only ElevenLabs is metered against a vendor plan (the admin ElevenLabs usage view).
+        ...(provider === 'elevenlabs' && { keySource: effectiveKey.source }),
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,
@@ -152,6 +161,13 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
       // Only a 429'd attempt reached the provider; a request that never got a slot made no call to record.
       if (error.reason === 'upstream_rate_limited') recordUsage('error', 0, 0);
       throw providerBusyHttpError(error);
+    }
+    if (error instanceof ProviderQuotaExhaustedError) {
+      // The account behind the shared key is out of credits: expected until it is topped up, so not a paging error.
+      req.logger.warn('Music generation unavailable: provider quota exhausted', { provider, status: error.status });
+      await reservation.refund();
+      recordUsage('error', 0, 0);
+      return res.status(503).json({ error: 'Music generation is temporarily unavailable. Please try again later.' });
     }
     req.logger.error('Music generation failed', {
       provider,

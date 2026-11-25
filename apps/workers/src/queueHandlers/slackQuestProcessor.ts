@@ -1,5 +1,7 @@
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import {
@@ -13,12 +15,12 @@ import {
   mongoose,
   adminSettingsRepository,
   userRepository,
-  questMasterPlanRepository,
   Connection,
   fabFileRepository,
   fabFileChunkRepository,
   projectRepository,
   organizationRepository,
+  spendFreezeRepository,
   mcpServerRepository,
   creditTransactionRepository,
   agentRepository,
@@ -43,6 +45,7 @@ import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitE
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { Logger } from '@bike4mind/observability';
 
 // Register global error handlers for enhanced observability of network errors
@@ -61,7 +64,7 @@ import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
+import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
 import { isTerminalCreditRefusal, IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
@@ -78,18 +81,26 @@ import {
 } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
-import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils/chatCompletionDefaults';
+import {
+  getSharedTokenizer,
+  publishModerationEscalation,
+  publishTelemetryAlertCallback,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import {
   buildSlackVideoToolConfig,
   type PendingSlackNotification,
 } from '@workers/videoGenerations/slackVideoToolConfig';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
+
+// Slack quests settle org credits; this entry does not load queueHandlers/utils.
+registerOrgAlertObserver();
 
 // Cache static ChatCompletion options that don't change between invocations
 type ChatCompletionOptions = ConstructorParameters<typeof ChatCompletionProcess>[0];
@@ -109,7 +120,6 @@ export const getStaticOptions = () => {
     db: {
       sessions: sessionRepository,
       quests: questRepository,
-      questMasterPlans: questMasterPlanRepository,
       users: userRepository,
       apiKeys: apiKeyRepository,
       adminSettings: adminSettingsRepository,
@@ -122,6 +132,7 @@ export const getStaticOptions = () => {
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,
+      spendFreezes: spendFreezeRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       recordLimitEvent: recordUserLimitEvent,
@@ -187,6 +198,7 @@ export const getStaticOptions = () => {
     getEntitlements: getUserEntitlements,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
+    notifyModerationEscalation: publishModerationEscalation,
     invokeCreateMemento: async (
       questId: string,
       sessionId: string,
@@ -402,6 +414,7 @@ export const handler = withEventContext(async (event, logger) => {
   logger.info(`[TIMING] User and session queries completed: ${Date.now() - queryStartTime}ms`);
 
   if (!user) throw new NotFoundError('User not found');
+  await resolveRoleAdminPermissions(user);
 
   logger.updateMetadata({
     userId: params.userId,
@@ -443,8 +456,7 @@ export const handler = withEventContext(async (event, logger) => {
     tokenizer: getSharedTokenizer(logger),
     sessionId: params.sessionId,
     user,
-    createCompletionMeter: ({ organizationId, featureLabel }) =>
-      createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
+    audioToolJobs: buildAudioToolJobs(),
   });
   logger.info(`[TIMING] ChatCompletionProcess instantiation: ${Date.now() - optionsStartTime}ms`);
 
@@ -476,6 +488,7 @@ export const handler = withEventContext(async (event, logger) => {
       logger,
       externalTools,
       videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
+      callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
     });
   } catch (processError) {
     // A credit or AI-access refusal fails identically on every retry, so it is an expected outcome, not a fault.

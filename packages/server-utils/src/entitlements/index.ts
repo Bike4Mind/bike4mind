@@ -29,13 +29,14 @@ import {
 } from '../lib/entitlements/registry';
 import type { EntitlementKey } from '../lib/entitlements/types';
 import {
+  getActiveSubscriptionsForOrganization,
   getActiveSubscriptionsForUser,
   getRequestActiveSubscriptions,
   type ActiveSubscriptionsRequest,
 } from './activeSubscriptions';
 import { partnerEntitlementsForEmail } from './partnerRules';
 import { resolvePaidStanding } from './paidStanding';
-import { PAID_PLAN_ENTITLEMENT_KEY, type IUserDocument } from '@bike4mind/common';
+import { PAID_PLAN_ENTITLEMENT_KEY, hasDeveloperUserTag, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -61,6 +62,8 @@ export interface EntitlementUser {
   emailVerified?: boolean | null;
   /** Set by a credit purchase, never by an admin grant alone; unlocks `plan:paid` (see paidStanding.ts). */
   lastCreditsPurchasedAt?: Date | null;
+  /** Set on an org's service account: its plan is the organization's (see activeSubscriptions.ts). */
+  serviceAccountOrganizationId?: string | null;
 }
 
 /** Projects an authenticated `IUserDocument` onto the fields `getUserEntitlements` reads. */
@@ -72,6 +75,7 @@ export function toEntitlementUser(user: IUserDocument): EntitlementUser {
     email: user.email,
     emailVerified: user.emailVerified,
     lastCreditsPurchasedAt: user.lastCreditsPurchasedAt,
+    serviceAccountOrganizationId: user.serviceAccountOrganizationId,
   };
 }
 
@@ -96,15 +100,22 @@ export async function getUserEntitlements(
   preloadedActiveSubscriptions?: readonly { priceId: string }[],
   options?: { requireComplete?: boolean }
 ): Promise<EntitlementKey[]> {
+  // An org service account holds its organization's plan (the same rule as getRequestActiveSubscriptions,
+  // strict on failure) and no partner grants: its address is a synthetic one, not a person's.
+  const serviceAccountOrgId = user.serviceAccountOrganizationId;
   // Both reads are independent - run them together to avoid serializing two round-trips.
   const [activeSubscriptions, partnerKeys] = await Promise.all([
     preloadedActiveSubscriptions ??
-      (options?.requireComplete
-        ? getActiveSubscriptionsForUser(user.id, { strict: true })
-        : getActiveSubscriptionsForUser(user.id)),
-    options?.requireComplete
-      ? partnerEntitlementsForEmail(user.email, user.emailVerified, { strict: true })
-      : partnerEntitlementsForEmail(user.email, user.emailVerified),
+      (serviceAccountOrgId
+        ? getActiveSubscriptionsForOrganization(serviceAccountOrgId)
+        : options?.requireComplete
+          ? getActiveSubscriptionsForUser(user.id, { strict: true })
+          : getActiveSubscriptionsForUser(user.id)),
+    serviceAccountOrgId
+      ? []
+      : options?.requireComplete
+        ? partnerEntitlementsForEmail(user.email, user.emailVerified, { strict: true })
+        : partnerEntitlementsForEmail(user.email, user.emailVerified),
   ]);
   // DB-backed partner rules (issue #293) union with the pure registry grants
   // (subscription + tag + env-domain). Additive so an env-configured domain
@@ -140,6 +151,16 @@ export async function getUserEntitlements(
   // An admin comps it with an `admin_grant` subscription row.
   const withoutPaidPlan = resolved.filter(key => key !== PAID_PLAN_ENTITLEMENT_KEY);
   return paidStanding.holdsPaidStanding ? [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY] : withoutPaidPlan;
+}
+
+/**
+ * The entitlement keys an organization's own principal holds: those its active plan confers, with no
+ * tags, email or bypass. The mint-time twin of `getRequestEntitlements` for an org service account
+ * (getRequestActiveSubscriptions resolves that account's rows from its org), so a product scope the
+ * org key picker offers is the one its routes later admit.
+ */
+export async function getOrganizationEntitlements(organizationId: string): Promise<EntitlementKey[]> {
+  return getUserEntitlements({ id: organizationId }, await getActiveSubscriptionsForOrganization(organizationId));
 }
 
 /**
@@ -214,8 +235,7 @@ export async function getCompleteRequestEntitlements(req: EntitlementRequest): P
  * user bypasses any entitlement" is a product-level affordance, not a sound
  * platform default for every future consumer (a paid entitlement may
  * legitimately want to charge developers). Call sites that want the client
- * `RestrictedPage` developer bypass add it explicitly with the shared
- * `hasDeveloperUserTag` predicate (`@bike4mind/common`).
+ * `RestrictedPage` developer bypass use `requestHasProductAccess`.
  */
 export async function requestHasEntitlement(req: EntitlementRequest, key: EntitlementKey): Promise<boolean> {
   // Fail closed at this shared choke point: every product gate funnels through here,
@@ -224,4 +244,14 @@ export async function requestHasEntitlement(req: EntitlementRequest, key: Entitl
   if (!req.user) return false;
   if (req.user.isAdmin) return true;
   return (await getRequestEntitlements(req)).includes(normalizeTag(key));
+}
+
+/**
+ * Product API gate for premium overlays: admins, developers, or holders of `key`. The server
+ * twin of the client `RestrictedPage` / `useEntitlementGate` bypass, so a staff user who can open
+ * a product's page can also call its API.
+ */
+export async function requestHasProductAccess(req: EntitlementRequest, key: EntitlementKey): Promise<boolean> {
+  if (!req.user) return false;
+  return hasDeveloperUserTag(req.user.tags) || requestHasEntitlement(req, key);
 }

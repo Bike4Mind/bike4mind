@@ -19,10 +19,12 @@
  */
 
 import { secrets } from './secrets';
+import { lambdaVpc } from './vpc';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { llmSpendLogSources } from './llmSpendLogGroups';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { sideAppHealthAlertsDLQ } from './sideAppHealthAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
@@ -33,14 +35,15 @@ import {
   generationCallbackQueueDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
   publishThumbnailQueueDLQ,
   generatedMediaPurgeQueueDLQ,
   dataLakeCleanupQueueDLQ,
@@ -54,7 +57,7 @@ import {
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
   generationJobDLQ,
-  liveOpsTriageQueueDLQ,
+  renderJobDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
   sreFixQueueDLQ,
@@ -69,6 +72,7 @@ import {
 } from './queues';
 import {
   telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
@@ -90,9 +94,14 @@ import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { organizationRetentionDeadLetter } from './organizationRetention';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
+import { refusedRequestRuleName, type RefusedRequestRuleKind } from './refusedRequestRules';
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -143,17 +152,32 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
   // A log group arn drops the API's trailing stream wildcard, so the policy names both forms.
   const spendLogSources = llmSpendLogSources();
   const spendLogGroupNames = spendLogSources.map(source => source.logGroupName);
-  const spendLogGroupArns = spendLogSources.flatMap(({ logGroupName, logGroupArn }) => {
-    const arn = logGroupArn ?? aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
+  const spendLogGroupArns = spendLogSources.flatMap(({ logGroupName }) => {
+    const arn = aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
     return [arn, $interpolate`${arn}:*`];
   });
-  dlqAlarmTopic!.subscribe(
+  // The refused-request burst alarm names its top IPs and paths from the rules it is built on
+  // (apps/workers/src/events/refusedRequestBurstDetail.ts, infra/refusedRequestAlarms.ts).
+  const refusedRequestRules: Record<RefusedRequestRuleKind, string> = {
+    'by-ip': refusedRequestRuleName($app.name, $app.stage, 'by-ip'),
+    'by-ip-path': refusedRequestRuleName($app.name, $app.stage, 'by-ip-path'),
+  };
+  const refusedRequestRuleArns = $util
+    .all([aws.getPartitionOutput().partition, aws.getRegionOutput().name, aws.getCallerIdentityOutput().accountId])
+    .apply(([partition, region, accountId]) =>
+      Object.values(refusedRequestRules).map(
+        name => `arn:${partition}:cloudwatch:${region}:${accountId}:insight-rule/${name}`
+      )
+    );
+  const triageSubscription = dlqAlarmTopic!.subscribe(
     {
+      vpc: lambdaVpc,
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [
         secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
         secrets.SLACK_ALARMS_WEBHOOK_URL,
         secrets.SLACK_COST_ALARMS_WEBHOOK_URL,
+        secrets.MONGODB_URI,
       ],
       // Room for the Logs Insights query (25 s budget) ahead of the Slack post.
       timeout: '60 seconds',
@@ -161,11 +185,17 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         ...DEFAULT_LAMBDA_ENVIRONMENT,
         ...mentionArgs.environment,
         LLM_SPEND_LOG_GROUPS: $util.all(spendLogGroupNames).apply(names => names.join(',')),
+        REFUSED_REQUEST_IP_RULE: refusedRequestRules['by-ip'],
+        REFUSED_REQUEST_IP_PATH_RULE: refusedRequestRules['by-ip-path'],
       },
       permissions: [
         ...mentionArgs.permissions,
+        { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+        dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
         { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
         { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
+        { actions: ['cloudwatch:GetInsightRuleReport'], resources: refusedRequestRuleArns },
       ],
     },
     {
@@ -176,6 +206,8 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
       },
     }
   );
+
+  dlqTriageRoleNames.push(triageSubscription.apply(subscription => subscription.nodes.function.nodes.role.name));
 
   // Out-of-band alarm for DlqAlarmHandlerDlq itself.
   // Cannot route to dlqAlarmTopic -- that would loop into the same failing Lambda.
@@ -310,13 +342,6 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: whatsNewGenerationQueueDLQ,
   },
   {
-    label: 'whats-new-highlights',
-    displayName: "What's New Highlights",
-    application: 'WhatsNewGeneration',
-    sourceQueue: 'whatsNewHighlightsQueue',
-    queue: whatsNewHighlightsQueueDLQ,
-  },
-  {
     label: 'notebook-curation',
     displayName: 'Notebook Curation',
     application: 'NotebookCuration',
@@ -352,6 +377,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: slackExportQueueDLQ,
   },
   {
+    label: 'callable-function-call',
+    displayName: 'Callable Function Call',
+    application: 'CallableFunctionCall',
+    sourceQueue: 'callableFunctionCallQueue',
+    queue: callableFunctionCallQueueDLQ,
+  },
+  {
     label: 'quest-export',
     displayName: 'Quest Export',
     application: 'QuestExport',
@@ -364,6 +396,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'AccountDataExport',
     sourceQueue: 'accountDataExportQueue',
     queue: accountDataExportQueueDLQ,
+  },
+  {
+    label: 'account-erasure',
+    displayName: 'Account Erasure',
+    application: 'AccountErasure',
+    sourceQueue: 'accountErasureQueue',
+    queue: accountErasureQueueDLQ,
   },
   {
     label: 'data-lake-cleanup',
@@ -457,11 +496,11 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: generationJobDLQ,
   },
   {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    queue: liveOpsTriageQueueDLQ,
+    label: 'render-job',
+    displayName: 'Studio Render Job',
+    application: 'GenerationJob',
+    sourceQueue: 'renderJobQueue',
+    queue: renderJobDLQ,
   },
   // SRE Agent DLQs
   {
@@ -609,6 +648,14 @@ function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
 }
 
 if (isMonitoredStage) {
+  if (dlqTriageSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'dlq-triage-sweep',
+      displayName: 'DLQ Triage Sweep',
+      application: 'LiveOps',
+      queue: dlqTriageSweepDeadLetter.queue,
+    });
+  }
   for (const dlq of ALARMED_DLQS) {
     createDlqAlarms(dlq);
   }
@@ -685,6 +732,22 @@ if (isMonitoredStage) {
     });
   }
 
+  if (organizationRetentionDeadLetter) {
+    createDlqAlarms({
+      label: 'organization-retention',
+      displayName: 'Organization Retention',
+      application: 'Organization',
+      queue: organizationRetentionDeadLetter.queue,
+    });
+  }
+
+  createDlqAlarms({
+    label: 'cloud-security-scan',
+    displayName: 'Cloud Security Scan',
+    application: 'Security',
+    queue: cloudSecurityScanDeadLetter.queue,
+  });
+
   // S3 invokes the Lambda directly; the registry exposes this DLQ without a replay destination.
   createDlqAlarms({
     label: 'fab-file-moderation',
@@ -701,6 +764,12 @@ if (isMonitoredStage) {
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
     queue: telemetryAlertDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    queue: moderationAlertsDeadLetter.queue,
   });
   createDlqAlarms({
     label: 'session-enrichment',
@@ -746,6 +815,15 @@ if (businessMetricAlertsDLQ && dlqAlarmTopic) {
     displayName: 'Business Metric Alerts',
     application: 'Analytics',
     queue: businessMetricAlertsDLQ,
+  });
+}
+
+if (sideAppHealthAlertsDLQ && dlqAlarmTopic) {
+  createDlqAlarms({
+    label: 'side-app-health-alerts',
+    displayName: 'Side App Health Alerts',
+    application: 'SideApps',
+    queue: sideAppHealthAlertsDLQ,
   });
 }
 

@@ -14,7 +14,8 @@ import {
 } from '../userService/signupGrantBudget';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError, type AddCreditsAdapters } from './addCredits';
 
-export type CreditRewardSource = 'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription';
+export type CreditRewardSource =
+  'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription' | 'referral_milestone';
 
 /** `source` is stamped on the ledger row as metadata.rewardSource; `reason` keeps each caller's existing label. */
 export type HeldCreditRewardInput = {
@@ -27,6 +28,8 @@ export type HeldCreditRewardInput = {
   metadata?: Record<string, unknown>;
   /** Stamped as the paid lot's stripeRef, so a refund take-back can find the lot (clawbackCreditLotsByStripeRef). */
   lotRef?: string;
+  /** After this the reward is voided instead of paid. */
+  expiresAt?: Date;
 };
 
 /** `paused` is a blocked account's reward, out of the queue until unblock restores it to `held`. */
@@ -234,7 +237,8 @@ async function payNow(
  */
 export async function payCreditReward(
   reward: HeldCreditRewardInput,
-  adapters: PayCreditRewardAdapters
+  adapters: PayCreditRewardAdapters,
+  { now = new Date() }: { now?: Date } = {}
 ): Promise<PayCreditRewardOutcome> {
   if (await adapters.db.creditTransactions.findOne({ transactionId: reward.transactionId }))
     return { outcome: 'duplicate' };
@@ -243,9 +247,12 @@ export async function payCreditReward(
   const [own] = await adapters.heldRewards.findByTransactionIds([reward.transactionId]);
   // A voided row was refused at release; answering 'duplicate' would read as claimed and loop the user.
   if (own) {
+    // releaseHeldCreditRewards voids a held row past its deadline.
+    if (own.status === 'held' && rewardExpired(own, now)) return { outcome: 'blocked' };
     if (own.status === 'held') return { outcome: 'queued' };
     return { outcome: own.status === 'void' || own.status === 'paused' ? 'blocked' : 'duplicate' };
   }
+  if (reward.expiresAt && reward.expiresAt.getTime() <= now.getTime()) return { outcome: 'blocked' };
 
   if (
     drawnInRefundScope(adapters, 'trickle', reward.transactionId) ||
@@ -287,10 +294,24 @@ export type ReleaseHeldCreditRewardsResult = {
   paidRewards: Array<{ source: CreditRewardSource; creditTransactionId: string }>;
 };
 
+/** Days after the payment hold ends before an unpaid referral subscription reward expires. */
+export const REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Historical rows without a deadline use queue entry time, which cannot precede the payment hold's end.
+const rewardExpired = (reward: HeldCreditRewardRow, now: Date): boolean => {
+  const expiresAt =
+    reward.expiresAt ??
+    (reward.source === 'referral_subscription'
+      ? new Date(reward.heldAt.getTime() + REFERRAL_SUBSCRIPTION_REWARD_TTL_DAYS * DAY_MS)
+      : null);
+  return !!expiresAt && expiresAt.getTime() <= now.getTime();
+};
+
 /** Pays queued rewards oldest first against today's trickle pool, stopping at the first that does not fit. */
 export async function releaseHeldCreditRewards(
   adapters: PayCreditRewardAdapters,
-  { limit }: { limit: number }
+  { limit, now = new Date() }: { limit: number; now?: Date }
 ): Promise<ReleaseHeldCreditRewardsResult> {
   const result: ReleaseHeldCreditRewardsResult = {
     scanned: 0,
@@ -309,6 +330,11 @@ export async function releaseHeldCreditRewards(
     try {
       if (await adapters.db.creditTransactions.findOne({ transactionId: reward.transactionId })) {
         await adapters.heldRewards.settle(reward.transactionId, 'paid');
+        continue;
+      }
+      if (rewardExpired(reward, now)) {
+        await adapters.heldRewards.settle(reward.transactionId, 'void');
+        result.voided++;
         continue;
       }
       const block = await partiesBlock(reward, adapters);

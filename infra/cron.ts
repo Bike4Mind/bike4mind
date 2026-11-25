@@ -4,11 +4,12 @@ import { computeHelpCorpusHash } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
+import { providerAdminKeyCronAccess, providerAdminKeyStore } from './providerAdminKeys';
+import { providerSpendScopeCronAccess } from './providerSpendScope';
 import { eventBus } from './bus';
 import {
   researchEngineQueue,
   agentProactiveMessageQueue,
-  liveOpsTriageQueue,
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
   fabFileChunkQueue,
@@ -19,8 +20,10 @@ import {
   generationCallbackQueue,
   generationJobQueue,
   riskEvidenceQueue,
+  secopsTriageQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
+import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
 import { appUrlForLambdaEnv, router, routerDistributionId } from './router';
 import {
   fabFileBucket,
@@ -37,8 +40,41 @@ import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
+import './sideAppHealthAlerts';
 import './imageModerationReviewSweep';
 import './adminMorningBrief';
+import './organizationRetention';
+import { secrets } from './secrets';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
+
+if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
+  const deadLetter = dlqTriageSweepDeadLetter;
+  const sweep = new sst.aws.Cron('dlqTriageSweep', {
+    schedule: 'cron(0 8 * * ? *)',
+    function: {
+      vpc: lambdaVpc,
+      handler: 'apps/workers/src/cron/dlqTriage.handler',
+      runtime: 'nodejs24.x',
+      timeout: '5 minutes',
+      retries: 0,
+      link: [secrets.MONGODB_URI, secrets.SLACK_ALARMS_WEBHOOK_URL, secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      permissions: [
+        deadLetter.sendPermission,
+        { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+        dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
+      ],
+      transform: deadLetter.functionTarget,
+    },
+    transform: { target: { ...deadLetter.ruleTarget.target, input: undefined } },
+  });
+  deadLetter.allowRules([$util.output(sweep)]);
+  dlqTriageRoleNames.push(sweep.nodes.function.nodes.role.name);
+}
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -239,6 +275,7 @@ const accountDeletionSweep =
           },
           permissions: [
             accountDeletionSweepDeadLetter.sendPermission,
+            { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
             {
               actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
               resources: [
@@ -410,45 +447,6 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
   },
 });
 
-/**
- * LiveOps Triage Dispatcher (Multi-Config)
- * Dispatches triage jobs to SQS for each enabled LiveOpsTriageConfig.
- *
- * Schedule: Every 6 hours at 2am, 8am, 2pm, 8pm CST (8, 14, 20, 2 UTC)
- * For each enabled config where shouldRunAtCurrentHour(config.runIntervalHours) is true:
- * - Publishes SQS message with { configId, dispatchedAt }
- *
- * Workers process jobs independently via SQS fan-out pattern.
- * Only enabled in production environment.
- */
-const liveopsTriageDispatcherCron = runsScheduledJobs
-  ? new sst.aws.Cron('liveopsTriageDispatcherCron', {
-      schedule: 'cron(0 2,8,14,20 * * ? *)', // Every 6 hours UTC
-      function: {
-        handler: 'apps/workers/src/cron/liveopsTriageDispatcher.handler',
-        vpc: lambdaVpc,
-        link: [...allSecrets, liveOpsTriageQueue],
-        timeout: '2 minutes',
-        runtime: 'nodejs24.x',
-        environment: {
-          ...DEFAULT_LAMBDA_ENVIRONMENT,
-        },
-        permissions: [
-          {
-            actions: ['cloudwatch:PutMetricData'],
-            resources: ['*'],
-          },
-          {
-            actions: ['sqs:SendMessage'],
-            resources: [liveOpsTriageQueue.arn],
-          },
-        ],
-      },
-      // Only enabled in production
-      enabled: $app.stage === 'production',
-    })
-  : undefined;
-
 // Telemetry TTL Cleanup — GDPR Article 5(1)(e) storage limitation
 // Removes contextTelemetry from Quest documents older than 90 days
 const telemetryCleanupCron = runsScheduledJobs
@@ -475,6 +473,22 @@ const signupIpRetentionCron = runsScheduledJobs
         handler: 'apps/workers/src/cron/signupIpRetention.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
+// Persona expiry sweep - bans every test persona past personaExpiresAt and revokes its sessions and keys.
+// With PersonaMintEnabled off it bans every live persona, which makes that setting the stage kill switch.
+const personaExpirySweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('personaExpirySweep', {
+      schedule: 'cron(5 * * * ? *)', // Hourly at :05
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/personaExpirySweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
         link: [...allSecrets],
         environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       },
@@ -546,7 +560,7 @@ const creditLotSweepCron = runsScheduledJobs
         handler: 'apps/workers/src/cron/creditLotSweep.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
-        link: [...allSecrets],
+        link: [...allSecrets, eventBus],
         environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       },
     })
@@ -578,6 +592,31 @@ const voiceHoldSweepCron = runsScheduledJobs
             resources: ['*'],
           },
         ],
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+// Brief Schedule Reconcile - starts the scheduled assistant briefs that have come due, through the same
+// brief.compose event as POST /api/v1/briefs (its rule carries the DLQ). Each due user is claimed by a
+// compare-and-set on nextBriefAt, so overlapping runs start a slot once. A start that throws hands its
+// slot back, so later runs retry it for up to an hour (RETRY_WINDOW_MS). Self-host twin:
+// apps/workers/src/selfhost/briefScheduleReconcile.ts; keep the schedules in step.
+const briefScheduleReconcileCron = runsScheduledJobs
+  ? new sst.aws.Cron('briefScheduleReconcile', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/briefScheduleReconcile.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        retries: 0,
+        link: [...allSecrets, eventBus],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
         logging: {
           retention: '1 week',
         },
@@ -733,53 +772,55 @@ const integrationHealthCheckCron = runsScheduledJobs
     })
   : undefined;
 
-// Cloud Security Scan - runs daily to evaluate baseline AWS configuration
+// Manual invokes also need this worker in stages without scheduled jobs.
+const cloudSecurityScanFunction = new sst.aws.Function('cloudSecurityScanFunction', {
+  vpc: lambdaVpc,
+  handler: 'apps/workers/src/security/cloudScan.handler',
+  runtime: 'nodejs24.x',
+  timeout: '5 minutes',
+  link: [...allSecrets, secopsTriageQueue],
+  environment: {
+    ...DEFAULT_LAMBDA_ENVIRONMENT,
+  },
+  transform: cloudSecurityScanDeadLetter.functionTarget,
+  permissions: [
+    cloudSecurityScanDeadLetter.sendPermission,
+    {
+      actions: ['iam:GetAccountSummary'],
+      resources: ['*'],
+    },
+    {
+      actions: ['s3:ListAllMyBuckets', 's3:GetBucketPublicAccessBlock', 's3:GetEncryptionConfiguration'],
+      resources: ['*'],
+    },
+    {
+      actions: ['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus'],
+      resources: ['*'],
+    },
+    {
+      actions: ['ec2:DescribeSecurityGroups'],
+      resources: ['*'],
+    },
+    {
+      actions: ['iam:GenerateCredentialReport', 'iam:GetCredentialReport', 'iam:ListPolicies', 'iam:GetPolicyVersion'],
+      resources: ['*'],
+    },
+    {
+      actions: ['secretsmanager:ListSecrets'],
+      resources: ['*'],
+    },
+  ],
+});
+
 const cloudSecurityScanCron = runsScheduledJobs
   ? new sst.aws.Cron('CloudSecurityScan', {
       schedule: 'rate(1 day)',
-      function: {
-        vpc: lambdaVpc,
-        handler: 'apps/workers/src/security/cloudScan.handler',
-        runtime: 'nodejs24.x',
-        timeout: '5 minutes',
-        link: [...allSecrets],
-        environment: {
-          ...DEFAULT_LAMBDA_ENVIRONMENT,
-        },
-        permissions: [
-          {
-            actions: ['iam:GetAccountSummary'],
-            resources: ['*'],
-          },
-          {
-            actions: ['s3:ListAllMyBuckets', 's3:GetBucketPublicAccessBlock', 's3:GetEncryptionConfiguration'],
-            resources: ['*'],
-          },
-          {
-            actions: ['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus'],
-            resources: ['*'],
-          },
-          {
-            actions: ['ec2:DescribeSecurityGroups'],
-            resources: ['*'],
-          },
-          {
-            actions: [
-              'iam:GenerateCredentialReport',
-              'iam:GetCredentialReport',
-              'iam:ListPolicies',
-              'iam:GetPolicyVersion',
-            ],
-            resources: ['*'],
-          },
-          {
-            actions: ['secretsmanager:ListSecrets'],
-            resources: ['*'],
-          },
-        ],
-      },
+      job: cloudSecurityScanFunction.arn,
+      transform: { target: cloudSecurityScanDeadLetter.ruleTarget.target },
     })
   : undefined;
+
+if (cloudSecurityScanCron) cloudSecurityScanDeadLetter.allowRules([$util.output(cloudSecurityScanCron)]);
 
 /**
  * Security Scan Scheduler
@@ -899,6 +940,35 @@ const attackSimulationCron = runsScheduledJobs
     })
   : undefined;
 
+function createModelPriceSnapshotBucket() {
+  const modelPriceSnapshotBucket = new sst.aws.Bucket('modelPriceSnapshotBucket', {
+    versioning: false,
+    transform: { publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS },
+  });
+  encryptBucketAtRest('modelPriceSnapshotBucket', modelPriceSnapshotBucket);
+  return modelPriceSnapshotBucket;
+}
+
+// Hand-off from model discovery (has Mongo) to the provider usage poll (has none); the poller's
+// own cron exists only where scheduled jobs run, and so does this.
+const modelPriceSnapshotBucket = runsScheduledJobs ? createModelPriceSnapshotBucket() : undefined;
+// Must match MODEL_PRICE_SNAPSHOT_KEY in @bike4mind/common.
+const MODEL_PRICE_SNAPSHOT_KEY = 'model-prices/per-token.json';
+const modelPriceSnapshotObjectArn = modelPriceSnapshotBucket
+  ? $interpolate`${modelPriceSnapshotBucket.arn}/${MODEL_PRICE_SNAPSHOT_KEY}`
+  : undefined;
+// Discovery writes the object, the poller reads it; each gets only that one key.
+interface ModelPriceSnapshotAccess {
+  environment: Record<string, $util.Output<string>>;
+  write: { actions: string[]; resources: $util.Output<string>[] }[];
+  read: { actions: string[]; resources: $util.Output<string>[] }[];
+}
+const modelPriceSnapshotAccess: ModelPriceSnapshotAccess = {
+  environment: modelPriceSnapshotBucket ? { MODEL_PRICE_SNAPSHOT_BUCKET: modelPriceSnapshotBucket.name } : {},
+  write: modelPriceSnapshotObjectArn ? [{ actions: ['s3:PutObject'], resources: [modelPriceSnapshotObjectArn] }] : [],
+  read: modelPriceSnapshotObjectArn ? [{ actions: ['s3:GetObject'], resources: [modelPriceSnapshotObjectArn] }] : [],
+};
+
 /**
  * Model Discovery
  *
@@ -923,12 +993,14 @@ const modelDiscoveryFunction = new sst.aws.Function('modelDiscoveryFunction', {
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...modelPriceSnapshotAccess.environment,
   },
   permissions: [
     {
       actions: ['cloudwatch:PutMetricData'],
       resources: ['*'],
     },
+    ...modelPriceSnapshotAccess.write,
     {
       actions: ['bedrock:ListFoundationModels', 'bedrock:GetFoundationModelAvailability'],
       resources: ['*'],
@@ -1014,12 +1086,15 @@ const dataLakeBatchReconcileCron = runsScheduledJobs
         // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
         // live status update. fabFileChunkQueue: the un-chunked rescue sweep re-enqueues
         // complete-but-never-chunked files for chunking. fabFileBucket: the moderation rescue sweep
-        // downloads stranded files to re-run the image scan.
-        link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket],
+        // downloads stranded files to re-run the image scan. eventBus: an incident that rescan records
+        // queues its reviewer alert as an email.send event.
+        link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket, eventBus],
         environment: {
+          ...mailBodyEnvironment(appFilesBucket),
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
         permissions: [
+          mailBodyPutPermission(appFilesBucket),
           {
             actions: ['cloudwatch:PutMetricData'],
             resources: ['*'],
@@ -1182,6 +1257,12 @@ const agentExecutionAbandonedSweepCron = runsScheduledJobs
     })
   : undefined;
 
+// Provider admin keys come from the secret store in infra/providerAdminKeys.ts where it exists; the
+// linked Config secrets remain the source for stages and self-host deploys without it.
+const providerAdminKeyAccess = providerAdminKeyCronAccess(providerAdminKeyStore);
+// Both spend crons read the same per-stage scope, so the hourly and nightly figures cover the same spend.
+const providerSpendScopeAccess = providerSpendScopeCronAccess();
+
 // Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
 // admin APIs and compares against internal COGS estimates.
 const spendReconciliationCron = runsScheduledJobs
@@ -1195,7 +1276,18 @@ const spendReconciliationCron = runsScheduledJobs
         link: [...allSecrets],
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
+          ...providerAdminKeyAccess.environment,
+          ...providerSpendScopeAccess.environment,
         },
+        // PutMetricData publishes the drift and nothing-reconciled metrics alarmed in infra/providerSpend.ts.
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+          ...providerAdminKeyAccess.permissions,
+          ...providerSpendScopeAccess.permissions,
+        ],
       },
     })
   : undefined;
@@ -1203,7 +1295,8 @@ const spendReconciliationCron = runsScheduledJobs
 // Provider Usage Poll - reads the previous complete hour from the Anthropic and OpenAI admin usage
 // reports, prices it with our model rates and publishes ProviderReportedUsd per provider; alarmed in
 // infra/providerSpend.ts. Minute 7 leaves room for the providers' ingestion lag. Enabled: production + dev.
-// No VPC, unlike its neighbours: it reaches only the provider APIs and CloudWatch, never Mongo.
+// No VPC, unlike its neighbours: it reaches only the provider APIs, CloudWatch and S3, never Mongo.
+// ModelPrice rows reach it as the snapshot model discovery writes to modelPriceSnapshotBucket.
 const providerUsagePollCron = runsScheduledJobs
   ? new sst.aws.Cron('providerUsagePoll', {
       schedule: 'cron(7 * * * ? *)',
@@ -1216,12 +1309,18 @@ const providerUsagePollCron = runsScheduledJobs
         link: [...allSecrets],
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
+          ...providerAdminKeyAccess.environment,
+          ...providerSpendScopeAccess.environment,
+          ...modelPriceSnapshotAccess.environment,
         },
         permissions: [
           {
             actions: ['cloudwatch:PutMetricData'],
             resources: ['*'],
           },
+          ...modelPriceSnapshotAccess.read,
+          ...providerAdminKeyAccess.permissions,
+          ...providerSpendScopeAccess.permissions,
         ],
       },
     })
@@ -1613,19 +1712,21 @@ export {
   abuseAssessmentSweep,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
-  liveopsTriageDispatcherCron,
   cloudSecurityScanCron,
+  cloudSecurityScanFunction,
   integrationHealthCheckCron,
   securityScanSchedulerCron,
   deepAgentWakeCron,
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   signupIpRetentionCron,
+  personaExpirySweepCron,
   signupRiskSweepCron,
   accountCampaignSweepCron,
   completionSequenceSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
+  briefScheduleReconcileCron,
   creditHoldSweepCron,
   referralRewardReleaseCron,
   sreStaleDispatchCron,

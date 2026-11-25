@@ -5,6 +5,7 @@ import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { isFreshSignIn, stepUpGate } from '@server/auth/stepUp';
+import { APP_ENROLLMENT_REFUSAL, refuseAppEnrollmentBeforeSecondFactor } from '@server/auth/appEnrollment';
 import { MfaEnrollmentEvents } from '@bike4mind/common';
 import { recordForcedEnrollmentStep } from '@server/auth/mfaEnrollmentFunnel';
 
@@ -42,6 +43,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
           return res.status(409).json({ error: 'MFA is already enabled for this account.' });
         }
 
+        if (refuseAppEnrollmentBeforeSecondFactor(req.user, freshUser)) {
+          return res.status(403).json({ error: APP_ENROLLMENT_REFUSAL });
+        }
+
         const result = await mfaService.setupMFA(
           { user: freshUser, appName: process.env.APP_NAME || '' },
           userRepository
@@ -51,7 +56,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
         res.json(result);
       } catch (error: any) {
-        console.error('Error setting up MFA:', error);
+        req.logger.error('Error setting up MFA', { error });
         res.status(400).json({ error: error.message || 'Failed to setup MFA' });
       }
     })

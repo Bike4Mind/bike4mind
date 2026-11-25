@@ -1,10 +1,15 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import type { BackgroundProcessInfo, BackgroundProcessStatus } from '@shared/chat';
+import {
+  backgroundJobLabel,
+  type BackgroundProcessInfo,
+  type BackgroundProcessStatus,
+  type SessionBackgroundJobs,
+} from '@shared/chat';
 import { parentWatchStdioIndex, wrapWithParentWatchdog } from './backgroundScript';
 import { OutputBuffer, type OutputStream } from './outputBuffer';
-import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
+import { commandEnv, launchCommand, spawnFailure, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree, signalCommandTreesSync, type CommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
 
@@ -142,7 +147,10 @@ export class BackgroundProcessRegistry {
   private readonly processes = new Map<string, Tracked>();
   private shuttingDown = false;
 
-  constructor(private readonly events: BackgroundProcessEvents) {}
+  constructor(
+    private readonly events: BackgroundProcessEvents,
+    private readonly stdioDrainMs = STDIO_DRAIN_MS
+  ) {}
 
   async start(request: StartRequest): Promise<BackgroundProcessInfo> {
     if (this.shuttingDown) throw new Error('The app is shutting down; no new commands can be started.');
@@ -170,7 +178,8 @@ export class BackgroundProcessRegistry {
       });
     } catch (err) {
       await launch.cleanup();
-      throw err;
+      // Node throws some spawn failures (ENOTDIR) synchronously instead of emitting 'error'.
+      throw err instanceof Error ? spawnFailure(err, request.cwd, launch) : err;
     }
 
     const tracked = this.track(info, child, child.pid ?? null, launch, request.wakeOnExit === true);
@@ -268,7 +277,7 @@ export class BackgroundProcessRegistry {
       };
       const ended = (): BackgroundProcessStatus => (tracked.info.status === 'killed' ? 'killed' : 'exited');
 
-      child.on('error', error => settle('failed', null, null, error.message));
+      child.on('error', error => settle('failed', null, null, spawnFailure(error, info.cwd, launch).message));
 
       // The better of the two when it comes: 'close' means the output has drained as well.
       child.on('close', (code, signal) => settle(ended(), code, signal));
@@ -280,7 +289,7 @@ export class BackgroundProcessRegistry {
       // ticking for the rest of the app's life, which is what made Stop look broken.
       child.on('exit', (code, signal) => {
         if (tracked.info.endedAt) return;
-        const drain = setTimeout(() => settle(ended(), code, signal), STDIO_DRAIN_MS);
+        const drain = setTimeout(() => settle(ended(), code, signal), this.stdioDrainMs);
         drain.unref?.();
       });
     });
@@ -325,6 +334,23 @@ export class BackgroundProcessRegistry {
       if (tracked.info.status === 'running') sessions.add(tracked.info.sessionId);
     }
     return sessions;
+  }
+
+  /**
+   * The session's running commands whose exit wakes it, labelled by the newest; undefined when none.
+   * Only these keep an agent waiting: a dependency install or anything else the app started is not
+   * work the agent will come back for. See SessionActivity.backgroundChanged.
+   */
+  wakingJobs(sessionId: string): SessionBackgroundJobs | undefined {
+    let running = 0;
+    let newest: BackgroundProcessInfo | undefined;
+    for (const tracked of this.processes.values()) {
+      const { info } = tracked;
+      if (info.sessionId !== sessionId || info.status !== 'running' || !tracked.wakeOnExit) continue;
+      running += 1;
+      if (!newest || info.startedAt >= newest.startedAt) newest = info;
+    }
+    return newest ? { running, label: backgroundJobLabel(newest.command) } : undefined;
   }
 
   list(sessionId: string): BackgroundProcessInfo[] {

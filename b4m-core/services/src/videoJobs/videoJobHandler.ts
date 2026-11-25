@@ -28,6 +28,7 @@ import {
 } from '@bike4mind/utils/videoProviders';
 import type { CreditLedgerEntry } from '../creditService/creditHold';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
+import { storeGeneratedOutput } from '../generationJobs/storeOutput';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
 import { isUsableApiKey, type VideoJobDeps } from './types';
 
@@ -36,10 +37,31 @@ const FEATURE_LABEL = 'video generation';
 type VideoJob = IGenerationJobDocumentOf<'video'>;
 type VideoStepResult = StepResult<'video'>;
 
+const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
+
+// The raw payload rides on the job document and into logs, and a provider can echo the request (a base64 image) into it.
+const boundRawPayload = (raw: unknown): unknown => {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(raw);
+  } catch {
+    return '[raw provider payload not serializable]';
+  }
+  if (json === undefined) return raw;
+  const bytes = Buffer.from(json, 'utf8');
+  if (bytes.byteLength <= MAX_RAW_PROVIDER_BYTES) return raw;
+  const marker = `...[truncated, ${json.length} chars total]`;
+  // Streaming decode omits a trailing partial UTF-8 character.
+  const prefix = new TextDecoder().decode(bytes.subarray(0, MAX_RAW_PROVIDER_BYTES - Buffer.byteLength(marker)), {
+    stream: true,
+  });
+  return prefix + marker;
+};
+
 const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): VideoStepResult => ({
   next: 'failed',
   error: { code, message },
-  rawProviderError,
+  rawProviderError: boundRawPayload(rawProviderError),
 });
 
 const noApiKey = (job: VideoJob) => fail('provider_error', `No API key configured for ${job.payload.providerId}`);
@@ -183,7 +205,12 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
         // the same request cannot help (ProviderSubmitError.retryable). See GenerationJobHandler.submit.
         if (!(error instanceof ProviderSubmitError) || !error.definitive) throw error;
         if (!error.retryable) {
-          deps.logger.warn('video provider rejected the submit for good', { jobId: job.id, message: error.message });
+          // rawProviderError is select: false and never read back, so the provider's own reason must be logged here.
+          deps.logger.warn('video provider rejected the submit for good', {
+            jobId: job.id,
+            message: error.message,
+            raw: boundRawPayload(error.raw),
+          });
           return fail('provider_error', error.message, error.raw);
         }
         deps.logger.warn('video provider rejected the submit; retrying', { jobId: job.id, message: error.message });
@@ -219,13 +246,17 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
           return {
             next: 'blocked',
             error: { code: 'content_blocked', message: 'The provider declined this request under its content policy' },
-            rawProviderError: result.raw,
+            rawProviderError: boundRawPayload(result.raw),
             ...(result.billed && { payload: { ...job.payload, billedBlock: true } }),
           };
         case 'failed':
-          return result.retryable
-            ? { next: 'retry', reason: result.message }
-            : fail('provider_error', result.message, result.raw);
+          if (result.retryable) return { next: 'retry', reason: result.message };
+          deps.logger.warn('video provider failed the job', {
+            jobId: job.id,
+            message: result.message,
+            raw: boundRawPayload(result.raw),
+          });
+          return fail('provider_error', result.message, result.raw);
       }
     },
 
@@ -260,37 +291,33 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
       const derivedFrom = videoRequestInputs(payload.request).flatMap(input =>
         'fileId' in input ? [{ fileId: input.fileId.toLowerCase(), role: input.role }] : []
       );
-      const files = await deps.saveToFiles({
-        userId: job.requestedBy,
-        bytes,
-        contentType,
-        generation: {
-          generator: 'video',
-          provider: payload.providerId,
-          modelId: payload.request.model,
-          jobId: job.id,
-          prompt: payload.request.prompt,
-          durationSeconds: common.durationSeconds,
-          request: payload.request,
-        },
-        ...(derivedFrom.length > 0 && { derivedFrom }),
-        ...(job.questId && { questId: job.questId }),
-        signal: context.signal,
-      });
-      let output: VideoJobOutput;
-      if (files.saved) {
-        output = { location: 'files', s3Key: files.s3Key, fileId: files.fileId, ...common };
-      } else {
-        deps.logger.warn('video saved outside Files', { jobId: job.id, reason: files.reason });
-        const key = `generated-video/${job.ownerId}/${job.id}.${extensionFor(contentType)}`;
-        const { s3Key } = await deps.saveToGeneratedBucket({
-          key,
+      const { location } = await storeGeneratedOutput(
+        {
+          job,
+          noun: 'video',
           bytes,
           contentType,
+          generation: {
+            generator: 'video',
+            provider: payload.providerId,
+            modelId: payload.request.model,
+            jobId: job.id,
+            prompt: payload.request.prompt,
+            durationSeconds: common.durationSeconds,
+            request: payload.request,
+          },
+          derivedFrom,
+          questId: job.questId,
+          bucketFolder: 'generated-video',
+          extension: extensionFor(contentType),
+          // The async store step is retried by the engine, so a throwing Files save is retried rather than
+          // bypassing Files for the bucket.
+          onFilesError: 'rethrow',
           signal: context.signal,
-        });
-        output = { location: 'generated', s3Key, ...common };
-      }
+        },
+        deps
+      );
+      const output: VideoJobOutput = { ...location, ...common };
       return { next: 'succeeded', payload: { ...withoutProviderOutput(payload), output } };
     },
 

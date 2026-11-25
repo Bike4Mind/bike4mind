@@ -2,8 +2,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { researchTaskService } from '@bike4mind/services';
 import { researchTaskJobs } from '@bike4mind/server-utils/utils/researchTasks';
-import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { assertOwnerCanAfford } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { researchTaskRepository, withTransaction } from '@bike4mind/database';
 
 const handler = baseApi({ auth: true }).post(

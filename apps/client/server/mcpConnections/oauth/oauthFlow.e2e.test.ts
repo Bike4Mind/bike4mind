@@ -54,8 +54,8 @@ vi.mock('@bike4mind/server-utils/mcpConnections/oauth/oauthFetch', () => ({
 
 const { startUserConnectionOAuth } = await import('./startOAuth');
 const { completeUserConnectionOAuth } = await import('./completeOAuth');
-const { getOAuthAccessToken } = await import('./tokenManager');
-const { invokeRemoteMcp } = await import('../invokeRemoteMcp');
+const { getOAuthAccessToken } = await import('@bike4mind/server-utils/mcpConnections/oauth/tokenManager');
+const { invokeRemoteMcp } = await import('@bike4mind/server-utils/mcpConnections/invokeRemoteMcp');
 const { disconnectUserConnectionOAuth, deleteUserConnection } = await import('../connectionService');
 
 const context: CustomMcpContext = {
@@ -133,6 +133,8 @@ beforeAll(async () => {
   vi.stubEnv('APP_URL', 'https://app.example.com');
   mongo = await createMongoServer();
   await mongoose.connect(mongo.getUri());
+  // The converge-on-one-client test depends on this collection's unique index.
+  await McpOAuthClientRegistration.init();
 });
 afterAll(async () => {
   await mongoose.disconnect();

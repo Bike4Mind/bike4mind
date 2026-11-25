@@ -3,13 +3,15 @@ import { authFailLogRepository, identityProviderRepository } from '@bike4mind/da
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { setupSamlStrategy } from '@server/auth/auth';
+import { samlResponseIssuer } from '@server/auth/samlResponseIssuer';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy, clientIdFromAuthorizeRedirect } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
-import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
+import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
+import { resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -22,8 +24,9 @@ import { Logger } from '@bike4mind/observability';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
-    // Extract IDP info from the SAML response/state (simplified; production may want session storage).
-    const RelayState = req.method === 'POST' ? req.body?.RelayState : req.query?.RelayState;
+    const rawRelayState: unknown = req.method === 'POST' ? req.body?.RelayState : req.query?.RelayState;
+    // A repeated parameter arrives as an array, which URLSearchParams below would throw on.
+    const RelayState = typeof rawRelayState === 'string' ? rawRelayState : undefined;
     let idpId: string | undefined;
     // Post-login path round-tripped via RelayState; sanitized client-side in
     // /auth/success, so carried through opaquely here.
@@ -34,36 +37,23 @@ const handleSamlCallback = async (req: any, res: any) => {
     // validity window by anyone who can read the logs.
     req.logger.debug('SAML callback received', { method: req.method });
 
-    // Try to extract IDP ID from RelayState or other mechanisms
     if (RelayState) {
       const params = new URLSearchParams(RelayState);
       idpId = params.get('idp') || undefined;
       redirectTo = params.get('redirectTo') || undefined;
     }
 
+    // RelayState is unsigned, so it only chooses which IdP validates the response: the SAML
+    // strategy refuses an assertion whose signed Issuer is not that IdP's. An IdP-initiated
+    // login carries no IdP in RelayState and is routed by the Issuer the response names.
     if (!idpId) {
-      // Fallback: try to get the IDP from query params (for testing)
-      idpId = req.query?.idp as string;
-      req.logger.debug('Falling back to IDP from query params', { idpId });
-    }
-
-    if (!idpId) {
-      // Another fallback: if we only have one SAML IDP, use it
-      req.logger.debug('No IDP ID found, looking for a single active SAML IDP');
-      const allIdps = await identityProviderRepository.findAll();
-      const samlIdps = allIdps.filter(idp => idp.type === 'saml' && idp.isActive);
-
-      if (samlIdps.length === 1) {
-        idpId = samlIdps[0]._id?.toString();
-        req.logger.debug('Using single active SAML IDP', { idpId });
-      } else {
-        req.logger.info('Cannot determine which active SAML IDP to use', { activeSamlIdps: samlIdps.length });
+      const issuer = samlResponseIssuer(req.method === 'POST' ? req.body?.SAMLResponse : req.query?.SAMLResponse);
+      const matches = issuer ? await identityProviderRepository.findActiveSamlIdpIdsByIssuer(issuer) : [];
+      if (matches.length !== 1) {
+        req.logger.info('Cannot determine which active SAML IDP to use', { matchingIdps: matches.length });
         return res.redirect('/login?error=missing_idp_context');
       }
-    }
-
-    if (!idpId) {
-      throw new BadRequestError('Missing IDP context');
+      idpId = matches[0];
     }
 
     const identityProvider = await identityProviderRepository.findByIdWithSecrets(idpId);
@@ -159,6 +149,20 @@ const handleSamlCallback = async (req: any, res: any) => {
           // mostly names no visit. Read anyway for the same-site case.
           visitId: readVisitId(req.headers.cookie),
         });
+      }
+
+      const secondFactor = await resolveSecondFactor(req, user, {
+        origin: { strategy: AuthStrategy.SAML, createdVia: 'saml' },
+        enterpriseIdp: true,
+      });
+      if (secondFactor.kind !== 'satisfied') {
+        const handoff = mfaHandoffFragment({
+          mfaToken: secondFactor.mfaToken,
+          userId: user.id,
+          mode: secondFactor.kind === 'enroll' ? 'setup' : 'verify',
+          passkeyAvailable: secondFactor.kind === 'challenge' && secondFactor.passkeyAvailable,
+        });
+        return res.redirect(`/auth/success${authSuccessRedirectQuery(redirectTo)}${handoff}`);
       }
 
       const { accessToken } = await issueBrowserSession(req, res, user.id, {

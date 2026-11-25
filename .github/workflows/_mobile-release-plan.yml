@@ -1,0 +1,62 @@
+name: Mobile release plan (Reusable)
+
+# The plan job shared by ios-testflight.yml and android-play-internal.yml (docs/mobile-release-train.md): parse
+# the tag or the manual inputs, apply the parity gate, and output the version and build number.
+on:
+  workflow_call:
+    inputs:
+      platform:
+        required: true
+        type: string
+      version:
+        required: false
+        type: string
+        default: ''
+      rc:
+        required: false
+        type: string
+        default: ''
+    outputs:
+      version:
+        value: ${{ jobs.plan.outputs.version }}
+      build_number:
+        value: ${{ jobs.plan.outputs.build_number }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Version and parity gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      build_number: ${{ steps.plan.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - name: Build @bike4mind/common
+        run: pnpm turbo build --filter=@bike4mind/common
+      - name: Plan the build
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+          PLATFORM: ${{ inputs.platform }}
+          VERSION: ${{ inputs.version }}
+          RC: ${{ inputs.rc }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            set -- --tag "$TAG"
+          else
+            set -- --version "$VERSION" --rc "$RC"
+          fi
+          pnpm --silent --filter @bike4mind/scripts mobile-release plan --platform "$PLATFORM" "$@" >> "$GITHUB_OUTPUT"

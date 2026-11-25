@@ -3,7 +3,7 @@ import {
   isModalArchived,
   partitionModals,
   getModalPriorityStatus,
-  getStatusChipColor,
+  getStatusTone,
   getStatusLabel,
   shouldShowWeeklyHighlights,
 } from '../AdminWhatsNewModalsTab.utils';
@@ -191,21 +191,21 @@ describe('AdminWhatsNewModalsTab.utils', () => {
     });
   });
 
-  describe('getStatusChipColor', () => {
-    it('returns "danger" for expired status', () => {
-      expect(getStatusChipColor('expired')).toBe('danger');
+  describe('getStatusTone', () => {
+    it('returns "bad" for expired status', () => {
+      expect(getStatusTone('expired')).toBe('bad');
     });
 
     it('returns "neutral" for disabled status', () => {
-      expect(getStatusChipColor('disabled')).toBe('neutral');
+      expect(getStatusTone('disabled')).toBe('neutral');
     });
 
-    it('returns "warning" for expiring-soon status', () => {
-      expect(getStatusChipColor('expiring-soon')).toBe('warning');
+    it('returns "warn" for expiring-soon status', () => {
+      expect(getStatusTone('expiring-soon')).toBe('warn');
     });
 
-    it('returns "success" for active status', () => {
-      expect(getStatusChipColor('active')).toBe('success');
+    it('returns "good" for active status', () => {
+      expect(getStatusTone('active')).toBe('good');
     });
   });
 
@@ -218,8 +218,8 @@ describe('AdminWhatsNewModalsTab.utils', () => {
       expect(getStatusLabel('disabled')).toBe('Disabled');
     });
 
-    it('returns "Expiring Soon" for expiring-soon status', () => {
-      expect(getStatusLabel('expiring-soon')).toBe('Expiring Soon');
+    it('returns "Expiring soon" for expiring-soon status', () => {
+      expect(getStatusLabel('expiring-soon')).toBe('Expiring soon');
     });
 
     it('returns "Active" for active status', () => {
@@ -229,21 +229,21 @@ describe('AdminWhatsNewModalsTab.utils', () => {
 });
 
 describe('shouldShowWeeklyHighlights', () => {
-  const env = (stage: string, isForkProduction = false) => ({ stage, isForkProduction });
+  const deployment = (stage: string, isForkProduction = false) => ({ stage, isForkProduction });
 
   it.each(['production', 'dev', 'pr6756'])('shows the card on the main stage %s', stage => {
-    expect(shouldShowWeeklyHighlights(env(stage))).toBe(true);
+    expect(shouldShowWeeklyHighlights(deployment(stage))).toBe(true);
   });
 
   it.each(['staging', 'shared-dev', 'john'])('hides the card on the non-main stage %s', stage => {
-    expect(shouldShowWeeklyHighlights(env(stage))).toBe(false);
+    expect(shouldShowWeeklyHighlights(deployment(stage))).toBe(false);
   });
 
   it('hides the card on a fork production deployment', () => {
-    expect(shouldShowWeeklyHighlights(env('production', true))).toBe(false);
+    expect(shouldShowWeeklyHighlights(deployment('production', true))).toBe(false);
   });
 
-  it('hides the card until the environment descriptor resolves', () => {
+  it('hides the card until the deployment descriptor resolves', () => {
     expect(shouldShowWeeklyHighlights(undefined)).toBe(false);
   });
 });

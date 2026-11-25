@@ -39,6 +39,48 @@ final class CaptureClientTests: XCTestCase {
     XCTAssertEqual(body["file_size"] as? Int, 42)
   }
 
+  func testDelegatePostsTheSnakeCaseBody() async throws {
+    let transport = FakeTransport { _ in (202, Data(#"{"id":"d1","status":"pending"}"#.utf8)) }
+    try await client(transport).delegate(
+      DelegationRequest(
+        intent: "handle this", url: URL(string: "https://example.test/a"), text: nil, fileIDs: ["f1", "f2"]))
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertEqual(request.httpMethod, "POST")
+    XCTAssertEqual(request.url?.path(), "/api/v1/delegations")
+    let body = try json(request)
+    XCTAssertEqual(body["intent"] as? String, "handle this")
+    XCTAssertEqual(body["url"] as? String, "https://example.test/a")
+    XCTAssertEqual(body["file_ids"] as? [String], ["f1", "f2"])
+    XCTAssertNil(body["text"])
+  }
+
+  func testDelegateOmitsEmptyFileIDs() async throws {
+    let transport = FakeTransport { _ in (202, Data("{}".utf8)) }
+    try await client(transport).delegate(DelegationRequest(intent: "x", url: nil, text: "hi", fileIDs: []))
+    let requests = await transport.requests
+    let body = try json(try XCTUnwrap(requests.first))
+    XCTAssertEqual(body["text"] as? String, "hi")
+    XCTAssertNil(body["file_ids"])
+  }
+
+  func testDelegateMapsRejectionAndOtherStatuses() async {
+    let rejecting = FakeTransport { _ in (422, Data(#"{"error":"intent is required"}"#.utf8)) }
+    do {
+      try await client(rejecting).delegate(DelegationRequest(intent: "x", url: nil, text: "t", fileIDs: []))
+      XCTFail("expected failure")
+    } catch {
+      XCTAssertEqual(error as? CaptureError, .rejected(message: "intent is required"))
+    }
+    let limited = FakeTransport { _ in (429, Data()) }
+    do {
+      try await client(limited).delegate(DelegationRequest(intent: "x", url: nil, text: "t", fileIDs: []))
+      XCTFail("expected failure")
+    } catch {
+      XCTAssertEqual(error as? APIError, APIError(status: 429))
+    }
+  }
+
   func testCreateUploadSurfacesAStorageRefusalWithTheServersMessage() async {
     let transport = FakeTransport { _ in
       (400, Data(#"{"error":"File size exceeds maximum file size","errorCode":"file_too_large"}"#.utf8))
@@ -92,7 +134,7 @@ final class CaptureClientTests: XCTestCase {
       (
         200,
         Data(
-          #"{"data":[{"id":"l1","name":"Research","slug":"research","file_count":3,"built_in":false},{"id":"l2","name":"Docs","slug":"docs","file_count":0,"built_in":true}],"next_cursor":"c2"}"#
+          #"{"data":[{"id":"l1","name":"Research","slug":"research","file_count":3,"built_in":false,"can_manage":true},{"id":"l2","name":"Docs","slug":"docs","file_count":0,"built_in":true,"can_manage":false}],"next_cursor":"c2"}"#
             .utf8)
       )
     }
@@ -101,7 +143,7 @@ final class CaptureClientTests: XCTestCase {
       page.items,
       [
         LakeSummary(id: "l1", name: "Research", fileCount: 3, isBuiltIn: false),
-        LakeSummary(id: "l2", name: "Docs", fileCount: 0, isBuiltIn: true),
+        LakeSummary(id: "l2", name: "Docs", fileCount: 0, isBuiltIn: true, canManage: false),
       ])
     XCTAssertEqual(page.nextCursor, "c2")
     let requests = await transport.requests

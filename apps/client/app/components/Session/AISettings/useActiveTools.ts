@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
+import { isComposerConnectionOn } from '@client/app/components/integrations/customMcp/customMcpModel';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -20,15 +21,12 @@ const PRIMARY_TOOLS = ['web_search', 'web_fetch', 'image_generation'] as const;
 export function useActiveTools(currentSession: ISessionDocument | null) {
   const { isFeatureEnabled } = useFeatureEnabled();
   const isAgentsFeatureEnabled = isFeatureEnabled('enableAgents');
-  const isQuestMasterFeatureEnabled = isFeatureEnabled('enableQuestMaster');
   const isLatticeFeatureEnabled = isFeatureEnabled('enableLattice');
 
   const [tools, toolMode, enabledMcpServers, skipAutoOffers, model, thinking] = useLLM(
     useShallow(s => [s.tools, s.toolMode, s.enabledMcpServers, s.skipAutoOffers, s.model, s.thinking])
   );
-  const [isQuestMasterEnabled, isAgentsEnabled, isLatticeEnabled] = useLLM(
-    useShallow(s => [s.isQuestMasterEnabled, s.isAgentsEnabled, s.isLatticeEnabled])
-  );
+  const [isAgentsEnabled, isLatticeEnabled] = useLLM(useShallow(s => [s.isAgentsEnabled, s.isLatticeEnabled]));
 
   // Presence-only availability of key-gated tools. Already mounted app-wide by
   // WebsocketConfigProvider with a 5-min staleTime, so this shares that cache
@@ -64,15 +62,16 @@ export function useActiveTools(currentSession: ISessionDocument | null) {
   // be agent-only, so "Only tools I pick" withholds them like any other integration.
   const { offered: customConnections } = useComposerMcpConnections();
   const disabledMcpConnections = useLLM(s => s.disabledMcpConnections) ?? [];
+  const enabledPlatformMcpConnections = useLLM(s => s.enabledPlatformMcpConnections) ?? [];
   const activeCustomConnectionCount = skipAutoOffers
     ? 0
-    : customConnections.filter(connection => !disabledMcpConnections.includes(connection.slug)).length;
-  // Feature-gated switches outside the `tools` array (Quest Master, Agent Detection,
-  // Lattice). Must stay in sync with pinnedCount's specialToolsCount in ToolsSection.
+    : customConnections.filter(connection =>
+        isComposerConnectionOn(connection, { disabledMcpConnections, enabledPlatformMcpConnections })
+      ).length;
+  // Feature-gated switches outside the `tools` array (Agent Detection, Lattice). Must stay in sync
+  // with pinnedCount's specialToolsCount in ToolsSection.
   const specialToolsCount =
-    (isQuestMasterFeatureEnabled && isQuestMasterEnabled ? 1 : 0) +
-    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) +
-    (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
+    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) + (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
   const otherActiveToolsCount =
     displayTools.filter(
       tool => !PRIMARY_TOOLS.includes(tool as unknown as (typeof PRIMARY_TOOLS)[number]) && tool !== 'dice_roll'

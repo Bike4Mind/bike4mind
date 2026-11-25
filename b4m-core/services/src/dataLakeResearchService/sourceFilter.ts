@@ -38,33 +38,51 @@ export type SourceVerdict = 'trusted' | 'review' | 'blocked' | 'unlisted_dropped
 export const isQueueableVerdict = (verdict: SourceVerdict): verdict is 'trusted' | 'review' =>
   verdict === 'trusted' || verdict === 'review';
 
+type SourceRules = {
+  trustedDomains: readonly string[];
+  reviewDomains: readonly string[];
+  blockedDomains: readonly string[];
+  unlistedSources: ResearchUnlistedSources;
+};
+
+export interface SourceMatch {
+  verdict: SourceVerdict;
+  /** The trusted-list entry that won, set only when `verdict` is `trusted`. */
+  entry?: string;
+}
+
 /**
- * Which tier a hit's URL falls in. A blocked match always wins, which is what lets a config say
- * "everything under example.com except its blog". Otherwise the longest matching entry across the
- * trusted and review lists wins, and a tie (the same entry in both) goes to review: the stricter tier.
- * A hit matching neither list follows `unlistedSources`. Routes by source only; never by score.
+ * Which tier a hit's URL falls in, and for a trusted hit the entry that put it there. A blocked
+ * match always wins, which is what lets a config say "everything under example.com except its
+ * blog". Otherwise the longest matching entry across the trusted and review lists wins, and a tie
+ * (the same entry in both) goes to review: the stricter tier. A hit matching neither list follows
+ * `unlistedSources`. Routes by source only; never by score.
  */
-export function classifySource(
-  url: string,
-  levers: {
-    trustedDomains: readonly string[];
-    reviewDomains: readonly string[];
-    blockedDomains: readonly string[];
-    unlistedSources: ResearchUnlistedSources;
-  }
-): SourceVerdict {
+export function matchSource(url: string, levers: SourceRules): SourceMatch {
   const hostname = sourceHostname(url);
   // An unparseable or non-http URL is reported as blocked rather than as its own verdict: from the
   // run's point of view the outcome is identical (dropped for free, before any spend), and the
   // queue is the one place that gets to name `unusable_source`.
-  if (!hostname) return 'blocked';
-  if (levers.blockedDomains.some(domain => hostMatchesDomain(hostname, domain))) return 'blocked';
+  if (!hostname) return { verdict: 'blocked' };
+  if (levers.blockedDomains.some(domain => hostMatchesDomain(hostname, domain))) return { verdict: 'blocked' };
 
   const longest = (domains: readonly string[]) =>
-    domains.reduce((best, domain) => (hostMatchesDomain(hostname, domain) ? Math.max(best, domain.length) : best), -1);
+    domains.reduce<{ length: number; entry?: string }>(
+      (best, domain) =>
+        hostMatchesDomain(hostname, domain) && domain.length > best.length
+          ? { length: domain.length, entry: domain }
+          : best,
+      { length: -1 }
+    );
   const trusted = longest(levers.trustedDomains);
   const review = longest(levers.reviewDomains);
-  if (trusted >= 0 || review >= 0) return trusted > review ? 'trusted' : 'review';
+  if (trusted.length >= 0 || review.length >= 0) {
+    return trusted.length > review.length ? { verdict: 'trusted', entry: trusted.entry } : { verdict: 'review' };
+  }
 
-  return levers.unlistedSources === 'review' ? 'review' : 'unlisted_dropped';
+  return { verdict: levers.unlistedSources === 'review' ? 'review' : 'unlisted_dropped' };
+}
+
+export function classifySource(url: string, levers: SourceRules): SourceVerdict {
+  return matchSource(url, levers).verdict;
 }

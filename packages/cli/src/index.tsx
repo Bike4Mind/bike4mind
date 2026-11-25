@@ -12,11 +12,11 @@ process.on('warning', warning => {
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
+import { fullscreenEnabled, renderFullscreen } from './fullscreen.js';
 import { randomBytes } from 'crypto';
 import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import {
   App,
   TrustLocationSelector,
@@ -45,7 +45,12 @@ import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
 import { RemoteSkillSource } from './storage/RemoteSkillSource.js';
 import { ReActAgent } from '@bike4mind/agents';
-import { ToolCatalog, type PermissionPromptKind, type PermissionPromptOptions } from './tools/gateway/index.js';
+import {
+  ToolCatalog,
+  wrapTools,
+  type PermissionPromptKind,
+  type PermissionPromptOptions,
+} from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
 import { whoamiReport } from './utils/whoami.js';
@@ -138,7 +143,6 @@ function renderBanner(startupLog: string[] = []): void {
 
 import { useCliStore } from './store';
 import { ServerLlmBackend } from './llm/ServerLlmBackend';
-import { WebSocketLlmBackend } from './llm/WebSocketLlmBackend';
 import { NotifyingLlmBackend } from './llm/NotifyingLlmBackend.js';
 import { MultiLlmBackend } from './llm/MultiLlmBackend.js';
 import { FallbackLlmBackend } from './llm/FallbackLlmBackend.js';
@@ -149,6 +153,7 @@ import { ApiClient } from './auth/ApiClient';
 import { warmFileCache } from './utils/fileSearch.js';
 import { runBangCommand, killRunningBangCommands } from './utils/runBangCommand.js';
 import { whenTurnIdle } from './session/whenTurnIdle.js';
+import { holdIdleSession, type IdleSessionClaim } from './session/holdIdleSession.js';
 import { isAxiosError } from 'axios';
 import { logger } from './utils/Logger';
 import { sanitizeTerminalText } from './utils/sanitizeTerminalText.js';
@@ -171,6 +176,7 @@ import { deferredToolRegistry } from './tools/deferredToolRegistry.js';
 import {
   createWriteTodosTool,
   createTodoStore,
+  resetTodoStore,
   createSkillTool,
   createFindDefinitionTool,
   createGetFileStructureTool,
@@ -222,7 +228,6 @@ import {
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
 import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
-import { runTurn } from './session/turnController.js';
 import { SESSION_RELEASE_TIMEOUT_MS, restartAfterSignIn } from './session/restartAfterSignIn.js';
 import { releaseSession, type SessionResources } from './session/releaseSession.js';
 import {
@@ -231,6 +236,11 @@ import {
   sessionBackgroundCallbacks,
 } from './session/backgroundCallbacks.js';
 import { settlePendingPrompts } from './session/pendingPrompts.js';
+import { runTurn, runPeerTurn, type TurnContext } from './session/turnController.js';
+import { PeerService } from './peers/PeerService.js';
+import { preparePeerRoot } from './peers/transport.js';
+import { createPeerIdentity, peerAccountId, peerAccountScope } from './peers/scope.js';
+import { createPeerTools, PEER_TOOL_NAMES, syncPeerTools } from './tools/peerTools.js';
 import {
   createFreshSession,
   resumeSession,
@@ -384,11 +394,66 @@ function CliApp() {
   const mcpApprovalResolvedRef = useRef(false);
   const detectedOllamaRef = useRef<BuildLlmBackendResult['detectedOllama']>(null);
   const initGenerationRef = useRef(0);
-  const todoStoreRef = useRef(createTodoStore());
+  const todoStoreRef = useRef(createTodoStore(items => useCliStore.getState().setPlan(items)));
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
   const postEditDiagnosticsRef = useRef(new PostEditDiagnostics({ workspaceRoot: process.cwd() }));
+  const peerServiceRef = useRef<PeerService | null>(null);
+  const peerConversationEpochRef = useRef(0);
+  const peerEnrollmentEpochRef = useRef(0);
+  const peerToolsBindingRef = useRef<((enabled: boolean) => void) | null>(null);
+  const peerStoppingRef = useRef(false);
+  const peerReadyRef = useRef<() => boolean>(() => false);
+  const peerTurnContextRef = useRef<() => TurnContext>(() => {
+    throw new Error('CLI not ready');
+  });
+  const peerScopeRef = useRef('');
+  const peerGenerationRef = useRef(0);
+  const currentPeerScope = JSON.stringify([
+    state.signedOutLocal ? state.config?.userId : (state.config?.auth?.userId ?? state.config?.userId),
+    state.signedOutLocal,
+    state.config?.apiConfig,
+    state.additionalDirectories,
+    state.config?.defaultModel,
+  ]);
+  const livePeerScopeRef = useRef(currentPeerScope);
+  livePeerScopeRef.current = currentPeerScope;
+
+  const stopPeers = async (reason?: string) => {
+    ++peerEnrollmentEpochRef.current;
+    const service = peerServiceRef.current;
+    peerServiceRef.current = null;
+    peerToolsBindingRef.current?.(false);
+    if (service && reason)
+      console.log(
+        `Peer messaging disabled: ${reason} Pending messages will not replay automatically. Use /peers on to re-enroll.`
+      );
+    if (service) await service.close();
+  };
+
+  useEffect(() => {
+    const unsubscribe = useCliStore.subscribe((next, previous) => {
+      if (next.session?.id !== previous.session?.id)
+        void stopPeers('the active conversation changed.').catch(error =>
+          console.error(`Peer cleanup failed: ${String(error)}`)
+        );
+      else if (next.session?.model !== previous.session?.model)
+        void stopPeers('the active model changed.').catch(error =>
+          console.error(`Peer cleanup failed: ${String(error)}`)
+        );
+    });
+    return () => {
+      unsubscribe();
+      void stopPeers().catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    if (peerServiceRef.current && peerScopeRef.current !== currentPeerScope) {
+      void stopPeers('the account, model, or granted folders changed.').catch(() => {});
+    }
+  }, [currentPeerScope]);
 
   // Use Zustand store for UI state. The session is the single source of truth;
   // handlers read the latest value via `useCliStore.getState().session` and
@@ -425,7 +490,9 @@ function CliApp() {
       featureRegistry: state.featureRegistry,
       wsManager: state.wsManager,
       clearWebSocketToolExecutor: () => setWebSocketToolExecutor(null),
-      stopBridgePresence: () => bridgePresence.stop(reason),
+      stopBridgePresence: async () => {
+        await Promise.allSettled([stopPeers(), bridgePresence.stop(reason)]);
+      },
       agent: state.agent,
       backgroundManager: state.backgroundManager,
       // The image store outlives a sign-in restart: init() does not open a new one.
@@ -435,7 +502,8 @@ function CliApp() {
 
   // Cleanup function to close all handles and allow natural process exit
   const performCleanup = useCallback(async () => {
-    await releaseSession(sessionResources('cli_exit'), 500);
+    peerStoppingRef.current = true;
+    await Promise.allSettled([stopPeers(), releaseSession(sessionResources('cli_exit'), 500)]);
     await settleSignInRefresh();
 
     // Force exit after a short delay if process hasn't exited naturally
@@ -644,6 +712,7 @@ function CliApp() {
       // A server that answers after a later init (e.g. /login from a signed-out session) must not
       // overwrite that init's model list.
       const generation = ++initGenerationRef.current;
+      useCliStore.getState().setPeerTurnActive(false);
       const sessionEnded = () => generation !== initGenerationRef.current;
       const backendInput = {
         config,
@@ -797,7 +866,7 @@ function CliApp() {
         newSession = resumed;
       } else {
         newSession = {
-          id: pinnedSessionId || uuidv4(),
+          id: pinnedSessionId || crypto.randomUUID(),
           name: `Session ${new Date().toLocaleString()}`,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -1040,7 +1109,7 @@ function CliApp() {
 
       // Create write_todos tool for task tracking
       const todoStore = todoStoreRef.current;
-      todoStore.todos = [];
+      resetTodoStore(todoStore);
       const writeTodosTool = createWriteTodosTool(todoStore);
 
       // Create durable workflow tools (Q-inspired agentic patterns)
@@ -1095,6 +1164,20 @@ function CliApp() {
           ? createWorkItemTools(new WorkItemsClient(apiClient))
           : [];
 
+      const peerTools = wrapTools(
+        createPeerTools(
+          () => peerServiceRef.current,
+          async (target, text) => {
+            const response = await reviewGateFn({
+              id: crypto.randomUUID(),
+              description: `Send this peer message to ${JSON.stringify(target)}? It may start model usage in the recipient.\n${JSON.stringify(text)}`,
+            });
+            return response.decision === 'approved';
+          }
+        ),
+        cliWrapDeps
+      );
+
       // Combine the CLI-specific tools (B4M and MCP tools arrive already wrapped).
       // Assembled before the feature registry so their names can be reserved against
       // plugin tool-name collisions (a duplicate tool name would 400 every completion).
@@ -1139,6 +1222,7 @@ function CliApp() {
           ...[...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name),
           ...deferredToolRegistry.getDirectoryNames(),
           'tool_search',
+          ...PEER_TOOL_NAMES,
         ],
       });
 
@@ -1213,6 +1297,10 @@ function CliApp() {
         additionalDirectories,
         featureModulePrompts: featureRegistry.getSystemPromptSections(),
       });
+      peerToolsBindingRef.current = enabled => {
+        syncPeerTools(agent, peerTools, enabled && !sessionEnded());
+        agentToolsRef.current = agent.getTools();
+      };
 
       // Hot-swap the system prompt when the user cycles into/out of plan mode (Shift+Tab).
       // The subscription self-cancels when the agent is replaced (e.g., on session reset).
@@ -1404,7 +1492,12 @@ function CliApp() {
    * Handle custom command execution with proper display
    * Shows concise user message but sends full template to agent
    */
-  const handleCustomCommandMessage = async (fullTemplate: string, displayMessage: string) => {
+  const handleCustomCommandMessage = async (
+    fullTemplate: string,
+    displayMessage: string,
+    sessionClaim: IdleSessionClaim
+  ) => {
+    sessionClaim.assertHeld();
     const session = useCliStore.getState().session;
     if (!state.agent || !session) {
       console.error('❌ CLI failed to initialize. Try restarting b4m.\n');
@@ -1414,10 +1507,8 @@ function CliApp() {
     // A sign-in restart replaced the session: nothing this command produces after that belongs in the new one.
     const replaced = () => initGenerationRef.current !== generation;
 
-    // Set thinking state to show loading indicator
+    // Custom dispatch owns the same claim across expansion, model override and this turn.
     useCliStore.getState().setIsThinking(true);
-    // Released in the finally below; this finalizes "the last message" from a snapshot.
-    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
@@ -1464,7 +1555,7 @@ function CliApp() {
 
       // Create user message with concise display
       const userMessage: Message = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         role: 'user',
         content: userMessageContent,
         timestamp: new Date().toISOString(),
@@ -1472,7 +1563,7 @@ function CliApp() {
 
       // Create a pending assistant message
       const pendingAssistantMessage: Message = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         role: 'assistant',
         content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
@@ -1512,6 +1603,7 @@ function CliApp() {
       // See: TavernModule.getSystemPromptSection() for the review gate instructions.
       let result;
       try {
+        peerServiceRef.current?.resetSendBudget();
         result = await state.agent.run(messageContent, {
           previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
           signal: abortController.signal,
@@ -1686,41 +1778,171 @@ function CliApp() {
       setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
       state.agent.off('thought', stepHandler);
       state.agent.off('action', stepHandler);
-      releaseSession();
     }
   };
 
   // Thin wrapper over the extracted turn lifecycle (session/turnController.ts,
   // issue #228). Builds a React-free TurnContext from the current render state;
   // all turn logic lives in runTurn so it can be tested without mounting Ink.
-  const handleMessage = (message: string): Promise<void> =>
-    runTurn(message, {
-      agent: state.agent,
-      sessionStore: state.sessionStore,
-      configStore: state.configStore,
-      customCommandStore: state.customCommandStore,
-      messageBuilder: state.messageBuilder,
-      config: state.config,
-      availableModels: state.availableModels,
-      agentStore: state.agentStore,
-      contextContent: state.contextContent,
-      additionalDirectories: state.additionalDirectories,
-      featureRegistry: state.featureRegistry,
-      backgroundManager: state.backgroundManager,
-      toolCatalog: state.toolCatalog,
-      todoStore: todoStoreRef.current,
+  const buildTurnContext = (): TurnContext => ({
+    peerSessionEpoch: () => peerConversationEpochRef.current,
+    onTurnStart: peer => peerServiceRef.current?.resetSendBudget(peer?.messageId),
+    agent: state.agent,
+    sessionStore: state.sessionStore,
+    configStore: state.configStore,
+    customCommandStore: state.customCommandStore,
+    messageBuilder: state.messageBuilder,
+    config: state.config,
+    availableModels: state.availableModels,
+    agentStore: state.agentStore,
+    contextContent: state.contextContent,
+    additionalDirectories: state.additionalDirectories,
+    featureRegistry: state.featureRegistry,
+    backgroundManager: state.backgroundManager,
+    toolCatalog: state.toolCatalog,
+    todoStore: todoStoreRef.current,
+    decisionStore: decisionStoreRef.current,
+    blockerStore: blockerStoreRef.current,
+    postEditDiagnostics: postEditDiagnosticsRef.current,
+    workflowStores: {
       decisionStore: decisionStoreRef.current,
       blockerStore: blockerStoreRef.current,
-      postEditDiagnostics: postEditDiagnosticsRef.current,
-      workflowStores: {
-        decisionStore: decisionStoreRef.current,
-        blockerStore: blockerStoreRef.current,
-        reviewGateStore: reviewGateStoreRef.current,
-      },
-      setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
-      sessionGeneration: () => initGenerationRef.current,
-    });
+      reviewGateStore: reviewGateStoreRef.current,
+    },
+    setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
+    sessionGeneration: () => initGenerationRef.current,
+  });
+  peerTurnContextRef.current = buildTurnContext;
+  peerReadyRef.current = () => {
+    const store = useCliStore.getState();
+    return (
+      isInitialized &&
+      !peerStoppingRef.current &&
+      peerGenerationRef.current === initGenerationRef.current &&
+      !exitInProgress &&
+      peerScopeRef.current === livePeerScopeRef.current &&
+      store.interactionMode === 'normal' &&
+      !store.turnInFlight &&
+      !store.peerTurnActive &&
+      store.sessionHolds === 0 &&
+      !store.isThinking &&
+      !store.inputValue &&
+      store.pastedContent === null &&
+      store.pendingMessages.length === 0 &&
+      store.messageQueue.length === 0 &&
+      !store.permissionPrompt &&
+      !store.userQuestionPrompt &&
+      !store.reviewGatePrompt &&
+      !store.exitHandoffPrompt &&
+      !store.showConfigEditor &&
+      !store.showMcpViewer &&
+      !store.exitRequested &&
+      !state.trustLocationSelector &&
+      !state.folderTrustPrompt &&
+      !state.mcpApprovalPrompt &&
+      !state.rewindSelector &&
+      !state.sessionSelector &&
+      !state.showLoginFlow &&
+      !state.showEnvironmentPicker &&
+      !state.showModelPicker
+    );
+  };
+  const handleMessage = (message: string): Promise<void> => {
+    return runTurn(message, buildTurnContext());
+  };
   handleMessageRef.current = handleMessage;
+
+  const enablePeers = async (name?: string) => {
+    if (!isInitialized || peerStoppingRef.current || !state.config) throw new Error('CLI is not ready.');
+    if (useCliStore.getState().peerTurnActive)
+      throw new Error('Wait for the active peer turn to finish before enabling a new peer session.');
+    if (process.platform === 'win32') throw new Error('Local peer messaging currently supports macOS and Linux.');
+    const enrollmentEpoch = peerEnrollmentEpochRef.current + 1;
+    await stopPeers();
+    if (enrollmentEpoch !== peerEnrollmentEpochRef.current) throw new Error('Peer enrollment was cancelled');
+    const session = useCliStore.getState().session;
+    if (!session) throw new Error('No active session.');
+    const scope = livePeerScopeRef.current;
+    const generation = initGenerationRef.current;
+    const config = await state.configStore.load();
+    const resolvedEndpoint = resolveApiEndpoint(config.apiConfig);
+    const { endpoint, userId } = peerAccountScope(
+      config,
+      resolvedEndpoint.status === 'configured' ? resolvedEndpoint.url : 'local-only',
+      state.signedOutLocal
+    );
+    const identity = await createPeerIdentity({
+      cwd: process.cwd(),
+      endpoint,
+      userId,
+      threadId: session.id,
+      name,
+      grantedDirectories: state.additionalDirectories,
+    });
+    const assertCurrentEnrollment = () => {
+      if (
+        enrollmentEpoch !== peerEnrollmentEpochRef.current ||
+        scope !== livePeerScopeRef.current ||
+        generation !== initGenerationRef.current ||
+        useCliStore.getState().session?.id !== session.id
+      )
+        throw new Error('Session changed or peer enrollment was cancelled; enable peers again.');
+    };
+    assertCurrentEnrollment();
+    const root = await preparePeerRoot(path.join(homedir(), '.bike4mind', 'peers'));
+    assertCurrentEnrollment();
+    peerScopeRef.current = scope;
+    peerGenerationRef.current = generation;
+    const service: PeerService = new PeerService({
+      root,
+      identity,
+      canDeliver: () => peerServiceRef.current === service && peerReadyRef.current(),
+      deliver: async (text, provenance) => {
+        const current = await state.configStore.load();
+        const resolved = resolveApiEndpoint(current.apiConfig);
+        const account = peerAccountScope(
+          current,
+          resolved.status === 'configured' ? resolved.url : 'local-only',
+          state.signedOutLocal
+        );
+        if (
+          peerServiceRef.current !== service ||
+          peerAccountId(account.endpoint, account.userId) !== identity.accountId ||
+          useCliStore.getState().session?.id !== identity.threadId ||
+          !peerReadyRef.current()
+        )
+          return { status: 'busy' as const };
+        return runPeerTurn(text, provenance, peerTurnContextRef.current());
+      },
+      notify: text => console.log(`[peers] ${JSON.stringify(text)}`),
+      onUnavailable: () => {
+        if (peerServiceRef.current === service) {
+          peerServiceRef.current = null;
+          peerToolsBindingRef.current?.(false);
+        }
+      },
+    });
+    peerServiceRef.current = service;
+    try {
+      await service.start();
+      assertCurrentEnrollment();
+      if (
+        scope !== livePeerScopeRef.current ||
+        generation !== initGenerationRef.current ||
+        peerServiceRef.current !== service ||
+        peerStoppingRef.current
+      ) {
+        await service.close();
+        throw new Error('Session changed while starting peer messaging.');
+      }
+      console.log(`Peer session: ${identity.id} (${JSON.stringify(identity.name)})`);
+      peerToolsBindingRef.current?.(true);
+    } catch (error) {
+      if (peerServiceRef.current === service) peerServiceRef.current = null;
+      await service.close();
+      throw error;
+    }
+  };
 
   // Builds a React-free SessionLifecycleContext from the current render state
   // (issue #228, phase 3). The create/resume/compact/rewind command handlers are
@@ -1737,7 +1959,15 @@ function CliApp() {
     reviewGateStore: reviewGateStoreRef.current,
     todoStore: todoStoreRef.current,
     onSessionReplaced: () => {
+      peerConversationEpochRef.current++;
+      if (useCliStore.getState().peerTurnActive) {
+        useCliStore.getState().setIsThinking(false);
+        abortControllerRef.current?.abort();
+        abortControllerRef.current = null;
+        setState(prev => ({ ...prev, abortController: null }));
+      }
       usageCache = null;
+      void stopPeers('the active conversation was replaced.').catch(() => {});
     },
     drainReviewGatePrompt: dequeueReviewGatePrompt,
   });
@@ -1755,6 +1985,12 @@ function CliApp() {
       }
     }
 
+    const idleStore = useCliStore.getState();
+    if (idleStore.peerTurnActive || idleStore.turnInFlight || idleStore.isThinking || idleStore.sessionHolds > 0) {
+      idleStore.setPendingBackgroundTrigger(true);
+      return;
+    }
+
     // Snapshot and hold with no await in between, so nothing appends to the session unseen.
     const session = useCliStore.getState().session;
     if (!state.agent || !session) {
@@ -1766,15 +2002,18 @@ function CliApp() {
     const stillThisSession = () =>
       initGenerationRef.current === startedGeneration && useCliStore.getState().session?.id === session.id;
 
-    // Set thinking state
+    const sessionClaim = holdIdleSession();
+    if (!sessionClaim) {
+      whenTurnIdle(() => useCliStore.getState().setPendingBackgroundTrigger(true));
+      return;
+    }
     useCliStore.getState().setIsThinking(true);
-    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
     setState(prev => ({ ...prev, abortController }));
 
-    const pendingId = uuidv4();
+    const pendingId = crypto.randomUUID();
     try {
       // Create a pending assistant message (no user message added to conversation)
       const pendingAssistantMessage: Message = {
@@ -1802,6 +2041,7 @@ function CliApp() {
       // The actual notification will be injected by NotifyingLlmBackend
       const cliConfig = await state.configStore.get();
 
+      peerServiceRef.current?.resetSendBudget();
       const result = await state.agent.run(backgroundPrompt, {
         previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
         signal: abortController.signal,
@@ -1820,7 +2060,7 @@ function CliApp() {
       // This works with Ink's Static component which doesn't re-render existing items
       const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
       const continuationMessage: Message = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         role: 'assistant',
         content: '---\n\n**Background Agent Results:**\n\n' + result.finalAnswer,
         ...(richContent ? { richContent } : {}),
@@ -1872,7 +2112,7 @@ function CliApp() {
       if (!stillThisSession()) {
         useCliStore.setState(prev => ({ pendingMessages: prev.pendingMessages.filter(m => m.id !== pendingId) }));
       }
-      releaseSession();
+      sessionClaim.release();
     }
   };
 
@@ -1908,14 +2148,14 @@ function CliApp() {
         if (!session || session.id !== sessionId) return;
 
         const userMessage: Message = {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           role: 'user',
           content: `$ ${command}`,
           timestamp: new Date().toISOString(),
         };
 
         const assistantMessage: Message = {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           role: 'assistant',
           content: isError ? `\u274c Error:\n${output}` : output.trim() || '(no output)',
           timestamp: new Date().toISOString(),
@@ -2113,16 +2353,26 @@ function CliApp() {
     source: 'llm' | 'local-fallback';
   } | null> => {
     if (!state.agent) return null;
+    if (useCliStore.getState().peerTurnActive) {
+      console.log('Wait for the active peer turn to finish before generating a handoff.');
+      return null;
+    }
 
     // buildHandoffPrompt returns '' for short sessions - single source of truth
     // for the threshold check.
     const prompt = buildHandoffPrompt(session);
     if (!prompt) return null;
 
+    if (useCliStore.getState().session !== session) return null;
+    const sessionClaim = holdIdleSession();
+    if (!sessionClaim) {
+      console.log('Wait for the current turn to finish before generating a handoff.');
+      return null;
+    }
     console.log('📝 Generating session handoff...');
     useCliStore.getState().setIsThinking(true);
-    const releaseSession = useCliStore.getState().holdSession();
     try {
+      peerServiceRef.current?.resetSendBudget();
       const result = await state.agent.run(prompt, { maxIterations: 1, streamText: false });
       const handoff = parseHandoffResponse(result.finalAnswer);
 
@@ -2153,7 +2403,7 @@ function CliApp() {
       return null;
     } finally {
       useCliStore.getState().setIsThinking(false);
-      releaseSession();
+      sessionClaim.release();
     }
   };
 
@@ -2180,7 +2430,7 @@ function CliApp() {
     // If the prompt times out, the user is treated as having declined and the
     // prompt is cleared from the store so the UI doesn't keep rendering it
     // during cleanup. See EXIT_HANDOFF_PROMPT_TIMEOUT_MS at module-level.
-    const promptId = uuidv4();
+    const promptId = crypto.randomUUID();
     let timer: NodeJS.Timeout | undefined;
     const wantsHandoff = await new Promise<boolean>(resolve => {
       let settled = false;
@@ -2311,6 +2561,11 @@ function CliApp() {
     // the point that actually executes - one derivation of the reserved set, not two.
     const customCommand = state.customCommandStore.getModelReachableCommand(command);
     if (customCommand) {
+      const sessionClaim = holdIdleSession();
+      if (!sessionClaim) {
+        console.log('Wait for the current turn to finish before running a custom command.');
+        return;
+      }
       try {
         // Show that the command is being executed
         const sourceIcon = customCommand.source === 'global' ? '🏠' : '📁';
@@ -2372,12 +2627,12 @@ function CliApp() {
           await runWithModelOverride(
             { applyModel: applyModelToSession, sessionStore: state.sessionStore },
             customCommand.model,
-            () => handleCustomCommandMessage(substitutedBody, displayMessage)
+            () => handleCustomCommandMessage(substitutedBody, displayMessage, sessionClaim)
           );
         } else {
           // Execute without model override
           console.log('🤖 Sending to agent...\n');
-          await handleCustomCommandMessage(substitutedBody, displayMessage);
+          await handleCustomCommandMessage(substitutedBody, displayMessage, sessionClaim);
         }
 
         return; // Custom command handled, exit
@@ -2387,6 +2642,8 @@ function CliApp() {
           error instanceof Error ? error.message : String(error)
         );
         return;
+      } finally {
+        sessionClaim.release();
       }
     }
 
@@ -2401,6 +2658,7 @@ function CliApp() {
       blockerStore: blockerStoreRef.current,
       reviewGateStore: reviewGateStoreRef.current,
       openConfigEditor: () => setShowConfigEditor(true),
+      peers: { enable: enablePeers, disable: stopPeers, get: () => peerServiceRef.current },
     });
     if (handledByRegistry) return;
 
@@ -2412,6 +2670,9 @@ function CliApp() {
     }
 
     // Handle built-in commands
+    if (['login', 'logout', 'set-api', 'reset-api', 'add-dir', 'remove-dir', 'trust', 'untrust'].includes(command)) {
+      await stopPeers();
+    }
     switch (command) {
       case 'exit':
       case 'quit':
@@ -2773,8 +3034,10 @@ function CliApp() {
       case 'new': {
         // Clear the terminal screen and re-render the banner so the fresh
         // session starts with the same header the user sees on startup.
-        console.clear();
-        renderBanner();
+        if (!fullscreenEnabled()) {
+          console.clear();
+          renderBanner();
+        }
 
         const newSession = await createFreshSession(buildLifecycleContext());
 
@@ -2784,6 +3047,10 @@ function CliApp() {
       }
 
       case 'rewind': {
+        if (useCliStore.getState().peerTurnActive) {
+          console.log('Wait for the active peer turn to finish before rewinding the conversation.');
+          break;
+        }
         const session = useCliStore.getState().session;
         if (!session) {
           console.log('No active session to rewind');
@@ -3206,6 +3473,10 @@ function CliApp() {
       }
 
       case 'compact': {
+        if (useCliStore.getState().peerTurnActive) {
+          console.log('Wait for the active peer turn to finish before compacting the conversation.');
+          break;
+        }
         await compactSession(buildLifecycleContext(), { userInstructions: args.join(' ') || undefined });
         break;
       }
@@ -3853,6 +4124,7 @@ function CliApp() {
           ...baseTools.map(t => t.toolSchema.name),
           ...deferredToolRegistry.getDirectoryNames(),
           'tool_search',
+          ...PEER_TOOL_NAMES,
         ],
       });
       const rebuiltRegistry = rebuilt.registry;
@@ -3879,7 +4151,11 @@ function CliApp() {
 
       // Hot-swap agent tools: remove old feature tools, add new ones
       const newFeatureTools = newFeatureRegistry.getAllTools();
-      state.agent.setTools([...baseTools, ...newFeatureTools]);
+      // A peer toggle or deferred tool search may have changed this array during registry loading.
+      // Publish from the current live list and retain its identity for tool_search.
+      const liveTools = state.agent.getTools();
+      const currentBaseTools = liveTools.filter(tool => !oldFeatureToolNames.has(tool.toolSchema.name));
+      liveTools.splice(0, liveTools.length, ...currentBaseTools, ...newFeatureTools);
 
       // Rebuild system prompt with new feature module sections
       const newFeaturePrompts = newFeatureRegistry.getSystemPromptSections();
@@ -3953,7 +4229,7 @@ function CliApp() {
 
     // Keep the LLM backend (stored in the agent's context) in sync
     if (state.agent) {
-      const backend = (state.agent as any).context.llm as ServerLlmBackend | WebSocketLlmBackend | MultiLlmBackend;
+      const backend = (state.agent as any).context.llm as ServerLlmBackend | MultiLlmBackend;
       if (backend) {
         backend.currentModel = modelId;
       }
@@ -4222,6 +4498,7 @@ function CliApp() {
             release: async () => {
               // Retires this session's callbacks before its background agents are cancelled.
               initGenerationRef.current++;
+              useCliStore.getState().setPeerTurnActive(false);
               const jobIds = state.backgroundManager?.listJobs().map(job => job.id) ?? [];
               const runIds = Object.keys(useCliStore.getState().liveSubagentUsage);
               settlePendingPrompts();
@@ -4269,6 +4546,7 @@ function CliApp() {
 
   return (
     <App
+      fullscreen={fullscreenEnabled()}
       onMessage={handleMessage}
       onBackgroundCompletion={handleBackgroundCompletion}
       onCommand={handleCommand}
@@ -4380,6 +4658,8 @@ warmFileCache();
 // the terminal's native mouse-wheel/scrollbar. Trade-off: Ink 7.0.1 has
 // a known resize-render bug where widening the terminal can leave ghost
 // frames in scrollback. Re-evaluate when upgrading Ink.
-render(<CliApp />, {
-  exitOnCtrlC: false,
-});
+if (fullscreenEnabled()) {
+  renderFullscreen(<CliApp />);
+} else {
+  render(<CliApp />, { exitOnCtrlC: false });
+}

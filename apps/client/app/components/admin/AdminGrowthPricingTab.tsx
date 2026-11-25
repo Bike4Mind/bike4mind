@@ -10,6 +10,7 @@ import {
   formatUsdPerCredit,
   isEnforceCreditsLocked,
   MIN_PRICE_PER_CREDIT_USD,
+  parseReferralMilestones,
   resolveTeamPlanSettings,
   SETTING_TABS,
   settingsMap,
@@ -20,7 +21,6 @@ import { SettingKeyRow } from './InviteCenter/shared/SettingKeyRow';
 import { SectionHeading } from './InviteCenter/shared/SettingBlocks';
 import { useStoredByKey } from './InviteCenter/shared/useStoredByKey';
 import { CheckoutCatalogPanel } from './CheckoutCatalogPanel';
-import { AdminTab } from './adminSidebarConfig';
 import {
   ADMIN_SETTINGS_SEARCH_PARAM,
   ADMIN_SETTINGS_SECTION_PARAM,
@@ -28,9 +28,8 @@ import {
   adminSearchForTab,
   type AdminSearch,
 } from './adminTabParams';
-import { useAdminModal } from './useAdminModal';
 import { useOpenSettingHome } from './useOpenSettingHome';
-import { useCreditAnalysisStore } from './CreditAnalysis/store';
+import { useModelsNavigation } from './Models/modelsNavigation';
 import { SettingsDraftProvider } from './SettingsDraftProvider';
 import { AdminPageHeader, ErrorState, LoadingState, SettingsSection } from './shared';
 import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
@@ -56,7 +55,8 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
   {
     id: 'credits',
     title: 'Credits and pricing',
-    description: 'How usage is metered and what credits cost.',
+    description:
+      'How usage is metered and what credits cost. Bill Operational Usage extends background model and embedding charges to paid accounts and organization pools; free accounts are billed whenever credits are enforced.',
     keys: ['enforceCredits', 'billOperationalUsage', 'pricePerCredit', 'lowCreditsThreshold'],
   },
   {
@@ -110,8 +110,8 @@ export const GROWTH_PRICING_LINKS = [
   {
     id: 'model-pricing',
     title: 'Model pricing',
-    description: 'Per-model token rates that turn usage into credits. Edited in the Credit Analytics pricing catalog.',
-    linkLabel: 'Open the model pricing catalog',
+    description: 'Per-model token rates that turn usage into credits. Edited in Models > Prices.',
+    linkLabel: 'Open model prices',
   },
   {
     id: 'rate-limits',
@@ -123,7 +123,7 @@ export const GROWTH_PRICING_LINKS = [
     id: 'invite-center-rewards',
     title: 'Referral rewards for inviters',
     description:
-      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. Edited in the Invite Center.',
+      'What an inviter earns when an invited friend becomes active or subscribes, plus milestones and the hold, starting-invite, share-link limit and alert settings. Edited in the Invite Center.',
     linkLabel: 'Open Invite Center rewards',
   },
 ] as const;
@@ -145,6 +145,13 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
     case 'ReferralSecondPaymentCredits':
       if (!Number.isFinite(amount)) return null;
       return `${amount.toLocaleString('en-US')} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
+    case 'ReferralMilestones': {
+      const milestones = typeof value === 'string' ? parseReferralMilestones(value) : null;
+      if (!milestones || milestones.length === 0) return null;
+      const total = milestones.reduce((sum, milestone) => sum + milestone.credits, 0);
+      const count = milestones.length === 1 ? '1 milestone' : `${milestones.length} milestones`;
+      return `${count}, ${total.toLocaleString('en-US')} credits per inviter in all = ${formatUsdAmount(creditsToUsdAtFloor(total))} at the ${floor}`;
+    }
     case 'pricePerCredit':
       return Number.isFinite(amount)
         ? `${formatUsdPerCredit(amount)} per credit (USD) - ${floor}`
@@ -157,15 +164,13 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
 const AdminGrowthPricingTab = () => {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const navigate = useNavigate();
-  const setAdminTab = useAdminModal(state => state.setActiveTab);
-  const setCreditAnalysisTab = useCreditAnalysisStore(state => state.setActiveTab);
   const openSettingHome = useOpenSettingHome();
+  const { openPrices } = useModelsNavigation();
 
-  // Already inside /admin, so each link is an in-console navigation, as in ModelLifecycleTab.
+  // Already inside /admin, so each link is an in-console navigation.
   const openLink: Record<GrowthPricingLinkId, () => void> = {
     'model-pricing': () => {
-      setCreditAnalysisTab('pricing');
-      setAdminTab(AdminTab.CreditAnalytics);
+      void openPrices();
     },
     // Navigate with the tab slug instead of setting the store: the store-to-URL mirror would
     // rebuild the search and drop the section and filter (see useAdminTabUrlSync).

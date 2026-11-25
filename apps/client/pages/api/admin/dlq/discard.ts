@@ -3,25 +3,46 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
-import { dlqReplayLogRepository } from '@bike4mind/database';
+import { acquireDlqMessagesById } from '@bike4mind/server-utils/utils/dlqMessages';
+import { adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
+import { visibleDlqSuggestion } from '@bike4mind/server-utils/admin/dlq/triage';
+import { triageActionSchema } from '@bike4mind/server-utils/admin/dlq/triagePolicy';
+import { discardDlqMessages } from '@server/admin/dlq/discardMessages';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
-const BodySchema = z.object({
-  queueLabel: z.string().min(1),
-  reason: z.unknown().optional(),
-  messages: z
-    .array(
-      z.object({
-        messageId: z.string().min(1),
-        receiptHandle: z.string().min(1),
-        body: z.string().min(1),
-      })
-    )
-    .min(1)
-    .max(100),
-});
+const MAX_BATCH_SIZE = 100;
+// Upper bound on receives while searching the DLQ for the requested message IDs.
+const TARGETED_MAX_RECEIVES = 20;
+// Seconds the searched-for messages stay hidden while they are retained and deleted.
+const TARGETED_VISIBILITY_SECONDS = 60;
+
+const BodySchema = z
+  .object({
+    queueLabel: z.string().min(1),
+    aiSuggestionId: z
+      .string()
+      .regex(/^[0-9a-f]{24}$/)
+      .optional(),
+    reason: z.unknown().optional(),
+    // Messages with receipt handles from a prior receive.
+    messages: z
+      .array(
+        z.object({
+          messageId: z.string().min(1),
+          receiptHandle: z.string().min(1),
+          body: z.string().min(1),
+        })
+      )
+      .min(1)
+      .max(MAX_BATCH_SIZE)
+      .optional(),
+    // Message IDs from a browse; the handler receives them itself to get fresh receipt handles.
+    messageIds: z.array(z.string().min(1)).min(1).max(MAX_BATCH_SIZE).optional(),
+  })
+  .refine(data => Boolean(data.messages) !== Boolean(data.messageIds), {
+    message: 'Specify exactly one of messages or messageIds',
+  });
 
 const handler = adminApi({
   auth: 'jwtOnly',
@@ -31,7 +52,7 @@ const handler = adminApi({
   const parsed = BodySchema.safeParse(req.body);
   if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
 
-  const { queueLabel, messages } = parsed.data;
+  const { queueLabel, messageIds } = parsed.data;
   const reason = parseAdminActionReason(parsed.data.reason);
   const adminUserId = req.user?.id;
   if (!adminUserId) throw new BadRequestError('Admin user ID is required');
@@ -39,70 +60,68 @@ const handler = adminApi({
   if (!entry) throw new BadRequestError(`Unknown DLQ: ${queueLabel}`);
   const dlqUrl = getDlqUrl(entry.label);
 
-  const results: Array<{
-    messageId: string;
-    status: 'discarded' | 'failed';
-    reason?: string;
-    historyPending?: boolean;
-  }> = [];
-  for (const message of messages) {
-    let logId: string;
-    try {
-      const log = await dlqReplayLogRepository.logReplay({
-        queueLabel,
-        messageId: message.messageId,
-        messageBody: message.body,
-        sourceQueue: entry.displayName,
-        operation: 'discard',
-        status: 'pending',
+  const aiSuggestionId = parsed.data.aiSuggestionId;
+  if (aiSuggestionId) {
+    if (parsed.data.messages || messageIds?.length !== 1)
+      throw new BadRequestError('Suggestion approval requires one message ID');
+    const suggestion = await visibleDlqSuggestion(queueLabel, messageIds[0]);
+    const action = triageActionSchema.safeParse(suggestion?.proposedAction);
+    if (
+      !suggestion ||
+      suggestion.id !== aiSuggestionId ||
+      !action.success ||
+      action.data.action !== 'discard' ||
+      action.data.queueLabel !== queueLabel ||
+      action.data.messageId !== messageIds[0]
+    )
+      throw new BadRequestError('Suggestion does not match this discard');
+    await withTransaction(async () => {
+      const decided = await adminAiSuggestionRepository.transition(aiSuggestionId, ['pending'], 'accepted', {
+        decidedBy: { userId: adminUserId, name: req.user!.name || req.user!.username },
+      });
+      if (!decided) throw new BadRequestError('Suggestion has already been decided');
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.dlq.triage.accepted',
+        target: { kind: 'system', id: queueLabel, displayName: 'DLQ triage' },
+        summary: 'approved a dead-letter discard recommendation',
         reason,
-        replayedBy: adminUserId,
+        details: { aiSuggestionId, queueLabel, messageId: messageIds[0] },
       });
-      logId = log.id;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      Logger.error('[DLQ Discard] Failed to retain message before deletion', {
-        messageId: message.messageId,
-        queueLabel,
-        error: errorMessage,
-      });
-      results.push({ messageId: message.messageId, status: 'failed', reason: errorMessage });
-      continue;
-    }
-
-    let deleteError: string | undefined;
-    try {
-      await deleteFromQueue(dlqUrl, message.receiptHandle);
-    } catch (error) {
-      deleteError = error instanceof Error ? error.message : String(error);
-      Logger.error('[DLQ Discard] Delete request failed', {
-        messageId: message.messageId,
-        queueLabel,
-        error: deleteError,
-      });
-    }
-
-    // An acknowledged deletion remains acknowledged even if the terminal history write fails.
-    const status = deleteError === undefined ? 'discarded' : 'failed';
-    let historyPending = false;
-    try {
-      await dlqReplayLogRepository.finalizeDiscard(logId, status, deleteError);
-    } catch (error) {
-      historyPending = true;
-      Logger.error('[DLQ Discard] History finalization is unconfirmed', {
-        messageId: message.messageId,
-        queueLabel,
-        observedStatus: status,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    results.push({
-      messageId: message.messageId,
-      status,
-      ...(deleteError !== undefined ? { reason: deleteError } : {}),
-      ...(historyPending ? { historyPending: true } : {}),
     });
   }
+
+  let messages = parsed.data.messages ?? [];
+  let notFound: string[] = [];
+  if (messageIds) {
+    const acquired = await acquireDlqMessagesById(dlqUrl, queueLabel, messageIds, {
+      maxReceives: TARGETED_MAX_RECEIVES,
+      visibilityTimeout: TARGETED_VISIBILITY_SECONDS,
+    });
+    messages = acquired.found.map(message => ({
+      messageId: message.MessageId!,
+      receiptHandle: message.ReceiptHandle!,
+      body: message.Body ?? '',
+    }));
+    notFound = acquired.notFound;
+    if (notFound.length > 0) {
+      Logger.warn(`[DLQ Discard] ${notFound.length} requested messageIds not found in DLQ`, {
+        queueLabel,
+        notFoundIds: notFound,
+      });
+    }
+  }
+
+  const results = await discardDlqMessages({
+    dlqUrl,
+    queueLabel,
+    sourceQueue: entry.displayName,
+    reason,
+    adminUserId,
+    aiSuggestionId,
+    messages,
+    // A message acquired by ID is hidden; release it so it reappears for a retry right away.
+    releaseUnretained: Boolean(messageIds),
+  });
 
   const discardedIds = results.filter(result => result.status === 'discarded').map(result => result.messageId);
   await recordAdminActionFromRequest(req, {
@@ -116,9 +135,16 @@ const handler = adminApi({
       failed: results.length - discardedIds.length,
       discardedMessageIds: discardedIds,
       historyPendingMessageIds: results.filter(result => result.historyPending).map(result => result.messageId),
+      notFoundMessageIds: notFound,
+      ...(aiSuggestionId ? { aiSuggestionId } : {}),
     },
   });
-  return res.json({ discarded: discardedIds.length, failed: results.length - discardedIds.length, results });
+  return res.json({
+    discarded: discardedIds.length,
+    failed: results.length - discardedIds.length,
+    notFound: notFound.length,
+    results,
+  });
 });
 
 export const config = { api: { externalResolver: true } };

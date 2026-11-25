@@ -28,7 +28,7 @@ vi.mock('@bike4mind/database', () => ({ FabFile: { findById: h.findById, updateO
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getMetadata: h.getMetadata }),
 }));
-vi.mock('@server/s3/moderationScan', () => ({
+vi.mock('@bike4mind/server-utils/s3/moderationScan', () => ({
   claimModerationScan: h.claim,
   recordLandedObject: h.reconcile,
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,

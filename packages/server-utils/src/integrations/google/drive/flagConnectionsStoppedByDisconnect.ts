@@ -41,7 +41,7 @@ async function orgConnectionsUsingRevokedToken(
 /**
  * Flag every Drive connection a revoke of `userId`'s Google grant stops, split by kind for the caller's
  * warning. Shared by the profile disconnect (pages/api/google-drive/disconnect.ts) and account deletion
- * (server/services/purgeDeletedUserData.ts); both revoke, so both owe the org the visible stop.
+ * (packages/server-utils/src/services/purgeDeletedUserData.ts); both revoke, so both owe the org the visible stop.
  *
  * ORG connections are matched on the revoked token (see orgConnectionsUsingRevokedToken). A PERSONAL
  * connection keeps no token of its own and syncs on this user's live grant, which the disconnect

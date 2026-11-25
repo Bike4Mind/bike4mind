@@ -53,13 +53,13 @@ const existing = { id: 'idp-1', name: 'Acme SSO', emailDomain: 'acme.com', type:
 const call = async (method: 'PUT' | 'DELETE', body?: Record<string, unknown>) => {
   const { req, res } = createMocks({ method, query: { id: 'idp-1' }, body });
   (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+  (req as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   await (handler as unknown as Route)(req, res);
   return { req, res };
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(console, 'error').mockImplementation(() => undefined);
   h.findById.mockResolvedValue(existing);
   h.findByEmailDomain.mockResolvedValue(null);
   h.updateIDP.mockResolvedValue({ ...existing, name: 'Acme Okta', isActive: false });

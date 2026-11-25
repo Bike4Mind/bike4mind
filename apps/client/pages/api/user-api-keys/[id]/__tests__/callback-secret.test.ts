@@ -100,6 +100,20 @@ describe('POST /api/user-api-keys/[id]/callback-secret', () => {
     expect(mockRefs.baseApiOptions).toMatchObject({ requiredScopes: [ApiKeyScope.AI_GENERATE] });
   });
 
+  it('refuses a key minted for a connected app and never calls the service', async () => {
+    const { req, res } = post('key-1');
+    (req as { apiKeyInfo?: unknown }).apiKeyInfo = {
+      scopes: [ApiKeyScope.AI_GENERATE],
+      oauthExchangeClientId: 'client-1',
+    };
+
+    const error = await mockRefs.handler!(req, res).catch(e => e);
+
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(error.message).toBe('Keys minted for a connected app cannot manage API keys');
+    expect(userApiKeyRepository.findByUserIdAndId).not.toHaveBeenCalled();
+  });
+
   it('rejects a missing key id with a 400 BadRequestError and never calls the service', async () => {
     const { req, res } = post(undefined);
 
@@ -202,5 +216,16 @@ describe('POST /api/user-api-keys/[id]/callback-secret', () => {
     await mockRefs.handler!(req, res);
 
     expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
+  });
+});
+
+describe('POST /api/user-api-keys/[id]/callback-secret - org service account', () => {
+  it('refuses a service-account caller without touching the key', async () => {
+    vi.clearAllMocks();
+    const { req, res } = post('key-1');
+    Object.assign(req, { user: { id: 'sa1', isSystem: true, serviceAccountOrganizationId: 'org-1' } });
+    await expect(mockRefs.handler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(userApiKeyRepository.findByUserIdAndId).not.toHaveBeenCalled();
+    expect(userApiKeyRepository.setCallbackSigningSecret).not.toHaveBeenCalled();
   });
 });

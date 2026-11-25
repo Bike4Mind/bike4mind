@@ -1,13 +1,20 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, Project } from '@bike4mind/database';
-import { buildListVisibilityFilter, buildListQuery, type ListQueryParams } from '@server/services/publish';
+import {
+  buildListVisibilityFilter,
+  buildListQuery,
+  excludeNonLiveOwners,
+  type ListQueryParams,
+} from '@server/services/publish';
 import { displayReplyTitle } from '@server/services/publish/plainTitle';
 import { signOwnerThumbnailUrl } from '@server/services/publish/thumbnailUrl';
 
 /**
  * GET /api/publish/artifacts - list artifacts visible to the caller.
  * Non-admins see their own + public + their org/project-visible artifacts
- * (buildListVisibilityFilter); admins see everything. Summary fields only.
+ * (buildListVisibilityFilter), minus other owners' rows whose owner is banned, suspended or gone
+ * (excludeNonLiveOwners, the check serve applies per request); admins see everything. Summary fields only.
  *
  * Query params (all optional):
  *   mine, sourceArtifactId  - scoping, as before
@@ -37,7 +44,10 @@ import { signOwnerThumbnailUrl } from '@server/services/publish/thumbnailUrl';
 const LEGACY_LIMIT = 200;
 const MAX_LIMIT = 200;
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).get(async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -141,7 +151,12 @@ const handler = baseApi().get(async (req, res) => {
   // one day hide is a narrowing clause clobbering the visibility filter - i.e. WIDENING the
   // authorized set, which buildListQuery says must be impossible. $and makes that structural, and a
   // top-level $and is flattened by the planner so index eligibility is unaffected.
-  const filter = Object.keys(match).length ? { $and: [scope, match] } : scope;
+  const narrowed = Object.keys(match).length ? { $and: [scope, match] } : scope;
+  // Browse listing only: the owner-scoped branches list the caller's own rows, and admins see all.
+  // Applied before paging so `total`, skip and limit count the same rows the page shows.
+  const browse = !sourceArtifactId && !sourceMessageId && !mine;
+  const ownerGate = browse && !isAdmin ? await excludeNonLiveOwners(narrowed, userId) : null;
+  const filter = ownerGate ? { $and: [narrowed, ownerGate] } : narrowed;
 
   // `versions` can grow unbounded, so compute its length server-side with $size and never
   // ship the array over the wire - the count drives the management tab's version chip and

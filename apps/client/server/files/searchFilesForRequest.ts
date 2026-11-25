@@ -10,8 +10,11 @@ import {
   userRepository,
   favoriteRepository,
 } from '@bike4mind/database';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import {
+  fileContentUrl,
+  signFabFileGet,
+  type FabFileSignOptions,
+} from '@bike4mind/server-utils/files/browserFileSigner';
 import type { Request } from 'express';
 
 /**
@@ -63,13 +66,9 @@ export async function searchFilesForRequest<Params, ResBody, ReqBody, Query>(
         adminSettings: adminSettingsRepository,
       },
       storage: {
-        generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) => {
           try {
-            return await getFilesStorage().getSignedUrl(path, 'get', {
-              expiresIn: expireInSeconds,
-              signingDate: options?.signingDate,
-              audience: 'browser',
-            });
+            return await signFabFileGet(path, expireInSeconds, options);
           } catch (e) {
             req.logger.error('Error generating signed URL for file', {
               error: e,

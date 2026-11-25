@@ -8,7 +8,7 @@
  * ChatCompletionProcess and the whole tool registry into its bundle, since
  * @vercel/nft follows files rather than used bindings.
  * Re-exported from ChatCompletionFeatures.ts, so the public surface is unchanged.
- * See services/src/index.closure.test.ts.
+ * See services/src/index.closure.repo.test.ts.
  */
 import { z } from 'zod';
 import {
@@ -17,17 +17,21 @@ import {
   DashboardParamsSchema,
   PromptMetaZodSchema,
   b4mLLMTools,
-  QuestMasterParamsSchema,
   ResearchModeParamsSchema,
   GenerateImageToolCallSchema,
   AudioGenerationToolCallSchema,
   PROMPT_TEXT_MAX,
   AuthOriginSchema,
+  CreditHolderType,
   type AuthOrigin,
   DEEP_RESEARCH_MAX_DEPTH,
   DEEP_RESEARCH_MAX_DURATION_MIN,
+  EnabledPlatformMcpConnectionsSchema,
 } from '@bike4mind/common';
 
+// Not strict: a body queued by an older server can still carry the retired QuestMaster fields
+// (enableQuestMaster, questMaster, questMasterStartId, questAdmittedAs). They are stripped on
+// parse and nothing reads them.
 export const QuestStartBodySchema = z
   .object({
     userId: z.string(),
@@ -39,7 +43,6 @@ export const QuestStartBodySchema = z
     fabFileIds: z.array(z.string()),
     params: ChatCompletionCreateInputSchema,
     dashboardParams: DashboardParamsSchema.optional(),
-    enableQuestMaster: z.boolean().optional(),
     enableMementos: z.boolean().optional(),
     enableArtifacts: z.boolean().optional(),
     /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
@@ -67,6 +70,11 @@ export const QuestStartBodySchema = z
      */
     apiKeyId: z.string().optional(),
     /**
+     * Whether that key bills its owner or an organization. Server-set like `apiKeyId`. No longer read by the spend
+     * freeze check, which keeps the acting user for every key.
+     */
+    apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
+    /**
      * The authenticating key lacks the admin scope, so the worker withholds the owner's admin role
      * on the user it reloads. Server-set like `apiKeyId`; absent means not withheld.
      */
@@ -86,9 +94,9 @@ export const QuestStartBodySchema = z
     mcpServers: z.array(z.string()).optional(),
     /** See ChatCompletionInvokeParamsSchema.disabledMcpConnections - must stay in sync with it. */
     disabledMcpConnections: z.array(z.string()).optional(),
+    enabledPlatformMcpConnections: EnabledPlatformMcpConnectionsSchema,
     projectId: z.string().optional(),
     organizationId: z.string().nullable().optional(),
-    questMaster: QuestMasterParamsSchema.optional(),
     toolPromptId: z.string().optional(),
     researchMode: ResearchModeParamsSchema.optional(),
     fallbackModel: z.string().optional(),

@@ -28,9 +28,13 @@ if (coreMigrations.length === 0) {
 
 export const AvailableMigrations: MigrationFile[] = [...coreMigrations, ...premiumMigrations];
 
-// Core ids are timestamps assigned by hand; overlay ids are timestamps assigned independently
-// in a private repo. Nothing else enforces they stay disjoint, so a collision would silently
-// pick whichever migration's id happens to sort first - fail loud instead.
+// Core ids are UTC timestamps stamped by `pnpm migrate generate`, never hand-picked or reused:
+// scripts/check-migration-ids.mjs rejects an added id that is not a fresh generated timestamp,
+// and index.test.ts checks core uniqueness on every push. There is no reason to slot an id below
+// the current max - MigrationManager.up() runs every id not yet applied (see selectPending), not
+// only ids above the highest applied one. Overlay ids are timestamps assigned independently in a
+// private repo, so a cross-repo collision is still possible; it would silently pick whichever
+// migration's id happens to sort first - fail loud instead.
 const duplicateIds = [
   ...AvailableMigrations.reduce(
     (counts, m) => counts.set(m.id, (counts.get(m.id) ?? 0) + 1),

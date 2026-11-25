@@ -1,3 +1,4 @@
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 import {
   appFilesBucket,
   fabFileBucket,
@@ -15,7 +16,7 @@ import {
   TEST_DECISION_PROVIDER_ENVIRONMENT,
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
-import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
+import { attackSimulationFunction, modelDiscoveryFunction, cloudSecurityScanFunction } from './cron';
 // web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
 // not import agentExecutor (the agent_execute route is declared the other way
 // round to break exactly that cycle).
@@ -39,9 +40,11 @@ import {
 import {
   eventBus,
   telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
+  emailSendSubscription,
   pushEventsDeadLetter,
   notebookEventsDeadLetter,
   completionEventsDeadLetter,
@@ -54,11 +57,15 @@ import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLe
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
+import { organizationRetentionDeadLetter } from './organizationRetention';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { sideAppHealthAlertsDLQ } from './sideAppHealthAlerts';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
+import { mailStatusEnvironment } from './mailTransport';
 import {
   fabFileChunkQueue,
   fabFileVectorizeQueue,
@@ -66,12 +73,15 @@ import {
   imageEditQueue,
   imageGenerationQueue,
   generationJobQueue,
+  renderJobQueue,
   researchEngineQueue,
   agentProactiveMessageQueue,
   slackExportQueue,
   githubWebhookQueue,
+  callableFunctionCallQueue,
   questExportQueue,
   accountDataExportQueue,
+  accountErasureQueue,
   publishThumbnailQueue,
   publishThumbnailQueueDLQ,
   generatedMediaPurgeQueue,
@@ -97,10 +107,8 @@ import {
   githubLakeRevokeQueue,
   githubLakeRevokeQueueDLQ,
   whatsNewGenerationQueue,
-  whatsNewHighlightsQueue,
   notebookCurationQueue,
   webhookDeliveryQueue,
-  liveOpsTriageQueue,
   // DLQ exports used by the dlqUrls Linkable (not directly linked to avoid IAM bloat).
   fabFileChunkQueueDLQ,
   fabFileModerationDLQ,
@@ -109,17 +117,18 @@ import {
   imageGenerationDLQ,
   imageEditDLQ,
   generationJobDLQ,
+  renderJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   slackExportQueueDLQ,
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
-  liveOpsTriageQueueDLQ,
+  accountErasureQueueDLQ,
   tavernHeartbeatQueue,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueue,
@@ -149,14 +158,15 @@ import {
   generationJobQueueSubscription,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,
-  whatsNewHighlightsQueueSubscription,
   notebookCurationQueueSubscription,
   agentProactiveMessageQueueSubscription,
   slackExportQueueSubscription,
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
+  callableFunctionCallQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
   publishThumbnailQueueSubscription,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
@@ -168,7 +178,6 @@ import {
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
   githubLakeRevokeQueueSubscription,
-  liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
   sreJobQueueSubscription,
@@ -188,6 +197,8 @@ import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
+import { callableFunctionDataForWeb } from './callableFunctionData';
 
 // Every queue this stage creates, by SST's physical-name prefix. SST keeps `${app}-${stage}-`
 // in front of a queue name only while app + stage + logical name + 2 fit in 71 characters (SQS's
@@ -221,23 +232,25 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     ...stageScopedQueueUrls({
       // Contributed entries go first so a core key always wins.
       ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
+      'cloud-security-scan': cloudSecurityScanDeadLetter.queue.url,
       'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
       'fab-file-chunk': fabFileChunkQueueDLQ.url,
       'generation-callback': generationCallbackQueueDLQ.url,
       'image-generation': imageGenerationDLQ.url,
       'image-edit': imageEditDLQ.url,
       'generation-job': generationJobDLQ.url,
+      'render-job': renderJobDLQ.url,
       'research-engine': researchEngineQueueDLQ.url,
       'release-notes': whatsNewGenerationQueueDLQ.url,
-      'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
       'notebook-curation': notebookCurationQueueDLQ.url,
       'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
       'slack-export': slackExportQueueDLQ.url,
       'github-webhook': githubWebhookQueueDLQ.url,
       'webhook-delivery': webhookDeliveryQueueDLQ.url,
+      'callable-function-call': callableFunctionCallQueueDLQ.url,
       'quest-export': questExportQueueDLQ.url,
       'account-data-export': accountDataExportQueueDLQ.url,
-      'liveops-triage': liveOpsTriageQueueDLQ.url,
+      'account-erasure': accountErasureQueueDLQ.url,
       'email-ingestion': emailIngestionQueueDLQ.url,
       'email-analysis': emailAnalysisQueueDLQ.url,
       'email-batch': emailBatchQueueDLQ.url,
@@ -266,6 +279,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       'generated-media-purge': generatedMediaPurgeQueueDLQ.url,
       'fab-file-moderation': fabFileModerationDLQ.url,
       'telemetry-alert-rule': telemetryAlertDeadLetter.queue.url,
+      'moderation-alerts': moderationAlertsDeadLetter.queue.url,
       'session-enrichment': sessionEnrichmentDeadLetter.queue.url,
       'billing-events': billingEventsDeadLetter.queue.url,
       'email-events': emailEventsDeadLetter.queue.url,
@@ -288,7 +302,10 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
         'subscription-reconciliation': subscriptionReconciliationDeadLetter.queue.url,
       }),
       ...(accountDeletionSweepDeadLetter && { 'account-deletion-sweep': accountDeletionSweepDeadLetter.queue.url }),
+      ...(dlqTriageSweepDeadLetter && { 'dlq-triage-sweep': dlqTriageSweepDeadLetter.queue.url }),
+      ...(organizationRetentionDeadLetter && { 'organization-retention': organizationRetentionDeadLetter.queue.url }),
       ...(businessMetricAlertsDLQ && { 'business-metric-alerts': businessMetricAlertsDLQ.url }),
+      ...(sideAppHealthAlertsDLQ && { 'side-app-health-alerts': sideAppHealthAlertsDLQ.url }),
     }),
     // This raw AWS queue retains its existing provider-assigned physical name.
     ...(dlqAlarmHandlerDlq && { 'alarm-handler': dlqAlarmHandlerDlq.url }),
@@ -302,12 +319,16 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
 const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
   properties: {
     attackSimulation: attackSimulationFunction.name,
+    cloudSecurityScan: cloudSecurityScanFunction.name,
     // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
     // function the discovery cron targets, with { trigger: 'manual' }.
     modelDiscovery: modelDiscoveryFunction.name,
     // The WebSocket `agent_execute` handler reaches the agent executor function
     // through its own link; the name is surfaced here for the frontend.
     agentExecutor: agentExecutor.name,
+    // Admin "Send test email" asks the worker that delivers mail to run the test
+    // (packages/server-utils/src/utils/mailer/testEmail.ts).
+    emailSend: emailSendSubscription.nodes.function.apply(fn => fn.name),
   },
 });
 
@@ -321,15 +342,16 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     imageGenerationQueue: imageGenerationQueue.url,
     imageEditQueue: imageEditQueue.url,
     generationJobQueue: generationJobQueue.url,
+    renderJobQueue: renderJobQueue.url,
     researchEngineQueue: researchEngineQueue.url,
     agentProactiveMessageQueue: agentProactiveMessageQueue.url,
     slackExportQueue: slackExportQueue.url,
     githubWebhookQueue: githubWebhookQueue.url,
+    callableFunctionCallQueue: callableFunctionCallQueue.url,
     questExportQueue: questExportQueue.url,
     accountDataExportQueue: accountDataExportQueue.url,
-    whatsNewHighlightsQueue: whatsNewHighlightsQueue.url,
+    accountErasureQueue: accountErasureQueue.url,
     whatsNewGenerationQueue: whatsNewGenerationQueue.url,
-    liveOpsTriageQueue: liveOpsTriageQueue.url,
     notebookCurationQueue: notebookCurationQueue.url,
     webhookDeliveryQueue: webhookDeliveryQueue.url,
     emailBatchQueue: emailBatchQueue.url,
@@ -437,6 +459,7 @@ export const web = new sst.aws.Nextjs(
       riskEvidenceQueue,
     ],
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:*'],
         resources: ['*'],
@@ -474,11 +497,17 @@ export const web = new sst.aws.Nextjs(
       },
       {
         // Invoked by name through the lambdaFunctionNames Linkable: admin "Run now" for the attack
-        // simulation and model discovery, and QuestMaster node dispatch. The other functions this
+        // simulation and model discovery, QuestMaster node dispatch, and the admin test email. The other functions this
         // Lambda invokes (mcpHandler, remoteMcpHandler, the two import-complete functions) are
         // linked above and carry their own invoke grant.
         actions: ['lambda:InvokeFunction'],
-        resources: [attackSimulationFunction.arn, modelDiscoveryFunction.arn, agentExecutor.arn],
+        resources: [
+          attackSimulationFunction.arn,
+          modelDiscoveryFunction.arn,
+          cloudSecurityScanFunction.arn,
+          agentExecutor.arn,
+          emailSendSubscription.nodes.function.apply(fn => fn.arn),
+        ],
       },
       {
         actions: ['events:PutEvents'],
@@ -538,7 +567,8 @@ export const web = new sst.aws.Nextjs(
       {
         // Admin DLQ "View logs": finds the Lambda consumers of a source queue. ListEventSourceMappings
         // has no resource-level permissions, so it cannot be scoped. GetFunctionConfiguration is
-        // granted per consumer by dlqConsumerLogsPolicy below.
+        // granted per consumer by dlqConsumerLogsPolicy below and per dead-letter rule target in
+        // infra/webDlqFunctionLogs.ts.
         actions: ['lambda:ListEventSourceMappings'],
         resources: ['*'],
       },
@@ -575,12 +605,18 @@ export const web = new sst.aws.Nextjs(
         ],
       },
       ...providerFederation.permissions,
+      // The dispatcher for callable functions: it stores data files and signs the runtime's read links. The bucket
+      // policy refuses these to every other principal (infra/callableFunctionDataPolicy.ts).
+      ...callableFunctionDataForWeb.permissions,
     ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
+      ...callableFunctionDataForWeb.environment,
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
       IMPERSONATION_TTL_MINUTES: process.env.IMPERSONATION_TTL_MINUTES || '60',
+      ...mailStatusEnvironment,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
       ...TEST_DECISION_PROVIDER_ENVIRONMENT,
       BEDROCK_COHERE_EMBED_MODEL_ID: process.env.BEDROCK_COHERE_EMBED_MODEL_ID?.trim() || '',
@@ -666,6 +702,14 @@ export const web = new sst.aws.Nextjs(
       ...($app.stage === 'production' && process.env.GA_MEASUREMENT_ID
         ? { NEXT_PUBLIC_GA_MEASUREMENT_ID: process.env.GA_MEASUREMENT_ID }
         : {}),
+      // A second GA4 property the app also reports to: the marketing site's, so that one property
+      // holds the whole funnel from the ad click on the marketing site to sign_up and purchase
+      // here (getGaMeasurementIds in apps/client/app/utils/gaConsentBootstrap.ts). Same rules as
+      // GA_MEASUREMENT_ID: production only, account-tied, no brand fallback. It only rides
+      // alongside GA_MEASUREMENT_ID, which stays the one switch for GA.
+      ...($app.stage === 'production' && process.env.GA_MEASUREMENT_ID && process.env.GA_MARKETING_MEASUREMENT_ID
+        ? { NEXT_PUBLIC_GA_MARKETING_MEASUREMENT_ID: process.env.GA_MARKETING_MEASUREMENT_ID }
+        : {}),
       // Reddit ads pixel: production-only for the same reason as GA4 above, and account-tied with
       // no brand fallback (empty == pixel disabled). Consent-deferred loading + the signup
       // conversion event live in apps/client/app/utils/redditPixel.ts / signupConversion.ts.
@@ -727,7 +771,7 @@ export const web = new sst.aws.Nextjs(
 // them, and '*' would expose every function's env vars. A managed policy keeps the ARN list out
 // of the server role's inline policy size budget. Consumers subscribed outside core (premium
 // overlays) are not listed; their queues show no logs link.
-const dlqConsumerFunctionArns = [
+export const dlqConsumerFunctionArns = [
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
   generationCallbackQueueSubscription,
@@ -736,14 +780,15 @@ const dlqConsumerFunctionArns = [
   generationJobQueueSubscription,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,
-  whatsNewHighlightsQueueSubscription,
   notebookCurationQueueSubscription,
   agentProactiveMessageQueueSubscription,
   slackExportQueueSubscription,
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
+  callableFunctionCallQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
   publishThumbnailQueueSubscription,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
@@ -755,7 +800,6 @@ const dlqConsumerFunctionArns = [
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
   githubLakeRevokeQueueSubscription,
-  liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
   sreJobQueueSubscription,
@@ -770,7 +814,7 @@ const dlqConsumerFunctionArns = [
   emailParserQueueSubscription,
   emailAnalyzerQueueSubscription,
   agentContinuationQueueSubscription,
-].map(subscription => subscription.nodes.function.arn);
+].flatMap(subscription => (subscription ? [subscription.nodes.function.arn] : []));
 
 if (web.nodes.server) {
   const dlqConsumerLogsPolicy = new aws.iam.Policy('WebDlqConsumerLogsPolicy', {
@@ -781,5 +825,25 @@ if (web.nodes.server) {
   new aws.iam.RolePolicyAttachment('WebDlqConsumerLogsPolicyAttachment', {
     role: web.nodes.server.nodes.role.name,
     policyArn: dlqConsumerLogsPolicy.arn,
+  });
+  // The admin DLQ listing reads a scheduled job's rule (state, schedule) to tell when a later run superseded it.
+  // SST's prefixName (naming.ts) names a rule <app>-<stage>-<name>, truncating the app name (possibly to
+  // nothing) or dropping it on long names; one exact prefix per form keeps other stages' rules out.
+  const stageRulePrefixes = [
+    $app.stage,
+    ...Array.from({ length: $app.name.length + 1 }, (_, n) => `${$app.name.slice(0, n)}-${$app.stage}`),
+  ];
+  const stageRuleArns = stageRulePrefixes.map(
+    prefix =>
+      $interpolate`arn:${aws.getPartitionOutput().partition}:events:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:rule/${prefix}-*`
+  );
+  const dlqScheduleRulePolicy = new aws.iam.Policy('WebDlqScheduleRulePolicy', {
+    policy: aws.iam.getPolicyDocumentOutput({
+      statements: [{ actions: ['events:DescribeRule', 'events:ListTargetsByRule'], resources: stageRuleArns }],
+    }).json,
+  });
+  new aws.iam.RolePolicyAttachment('WebDlqScheduleRulePolicyAttachment', {
+    role: web.nodes.server.nodes.role.name,
+    policyArn: dlqScheduleRulePolicy.arn,
   });
 }

@@ -5,7 +5,7 @@
 #
 # Inputs arrive as env, never interpolated into a run body: BASE_REF is a branch name, and git
 # permits `;`, `$()`, backticks, `|` and quotes in a ref.
-#   EVENT_BASE  pull_request.base.sha || merge_group.base_sha || push `before`
+#   EVENT_BASE  pull_request.base.sha || push `before`
 #   BASE_REF    pull_request.base.ref (empty outside pull_request)
 #
 # `pull_request.base.sha` is the base-branch head recorded when the PR was opened - NOT the fork
@@ -15,7 +15,7 @@
 #
 # The real base is the merge base of the base branch and the checkout. On a `pull_request` run the
 # checkout is the merge ref, so this resolves to the base-branch tip and the diff is exactly the
-# PR's net contribution. Falls back to EVENT_BASE for push / merge_group, and to the empty string
+# PR's net contribution. Falls back to EVENT_BASE for push, and to the empty string
 # if nothing resolves - callers treat empty as "scan everything", never "check nothing".
 set -euo pipefail
 

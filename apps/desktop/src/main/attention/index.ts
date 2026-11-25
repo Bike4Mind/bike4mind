@@ -1,8 +1,9 @@
 import { Notification, app, ipcMain } from 'electron';
-import { parseAttentionNotice, type AttentionOpenEvent } from '@shared/attention';
+import { parseAttentionNotice, parseNotifyScope, type AttentionOpenEvent, type NotifyScope } from '@shared/attention';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { appWindows } from '../windows';
 import { NeedsYouMonitor, type NeedsYouMonitorDeps } from './needsYouMonitor';
+import { NotifyScopeStore } from './NotifyScopeStore';
 
 /**
  * Windows learn of a status change within milliseconds of each other. A second claim for a session
@@ -11,6 +12,8 @@ import { NeedsYouMonitor, type NeedsYouMonitorDeps } from './needsYouMonitor';
 const CLAIM_WINDOW_MS = 2000;
 
 export type Attention = {
+  /** Raise the app window on a session, as clicking its notice does; reopens it if every window is closed. */
+  openSession(open: AttentionOpenEvent): void;
   /** Starts main's own needs-you watch, for when no window is open to run the renderer's. */
   watchNeedsYou(sources: Pick<NeedsYouMonitorDeps, 'listSessions' | 'sessionMessages'>): NeedsYouMonitor;
 };
@@ -24,9 +27,16 @@ export type Attention = {
  * never pops over the window the user is already looking at. Every announcer, each window and the
  * monitor, claims an entry first (`attentionClaim`), so a notice happens once, not per announcer.
  *
- * `openWindow` reopens the app window when a notice is clicked with none open.
+ * `openWindow` reopens the app window when a notice is clicked with none open; `notifyScopePath` is
+ * the file the notify scope is kept in.
  */
-export function registerAttention({ openWindow }: { openWindow(): void }): Attention {
+export function registerAttention({
+  openWindow,
+  notifyScopePath,
+}: {
+  openWindow(): void;
+  notifyScopePath: string;
+}): Attention {
   // Held so a notice is not garbage-collected before it is clicked, and so a session's newer notice
   // replaces its older one rather than stacking.
   const live = new Map<string, Notification>();
@@ -57,6 +67,21 @@ export function registerAttention({ openWindow }: { openWindow(): void }): Atten
     return taken;
   });
 
+  // Raises the app window on a session's stage, or reopens it there; shared by a notice click,
+  // the menu-bar item and the mini Tavern (main/watch), which all mean the same thing by it.
+  const openSession = (open: AttentionOpenEvent) => {
+    const window = appWindows()[0];
+    if (!window) {
+      pendingOpen = open;
+      openWindow();
+      return;
+    }
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    window.webContents.send(IPC_CHANNELS.attentionOpen, open);
+  };
+
   const showNotice = (payload: unknown) => {
     const notice = parseAttentionNotice(payload);
     if (!notice || !Notification.isSupported()) return;
@@ -69,16 +94,7 @@ export function registerAttention({ openWindow }: { openWindow(): void }): Atten
     const open: AttentionOpenEvent = { sessionId: notice.sessionId, rootId: notice.rootId };
     shown.on('click', () => {
       live.delete(notice.sessionId);
-      const window = appWindows()[0];
-      if (!window) {
-        pendingOpen = open;
-        openWindow();
-        return;
-      }
-      if (window.isMinimized()) window.restore();
-      window.show();
-      window.focus();
-      window.webContents.send(IPC_CHANNELS.attentionOpen, open);
+      openSession(open);
     });
     shown.on('close', () => {
       if (live.get(notice.sessionId) === shown) live.delete(notice.sessionId);
@@ -89,9 +105,27 @@ export function registerAttention({ openWindow }: { openWindow(): void }): Atten
 
   ipcMain.handle(IPC_CHANNELS.attentionNotify, (_event, payload: unknown) => showNotice(payload));
 
+  const notifyScope = new NotifyScopeStore(notifyScopePath);
+  // Read before any window can ask; until it lands the default stands, which is today's behaviour.
+  const scopeLoaded = notifyScope.load();
+  ipcMain.handle(IPC_CHANNELS.attentionGetNotifyScope, async (): Promise<NotifyScope> => {
+    await scopeLoaded;
+    return notifyScope.current();
+  });
+  ipcMain.handle(IPC_CHANNELS.attentionSetNotifyScope, async (_event, scope: unknown): Promise<NotifyScope> => {
+    await scopeLoaded;
+    const parsed = parseNotifyScope(scope);
+    if (!parsed) return notifyScope.current();
+    const saved = await notifyScope.set(parsed);
+    for (const window of appWindows()) window.webContents.send(IPC_CHANNELS.attentionNotifyScope, saved);
+    return saved;
+  });
+
+  // Linux shows the count only on launchers that support it (Unity and kin) and ignores it elsewhere.
+  // Windows has no count API; a taskbar overlay icon would be its equivalent.
   const setBadge = (count: number) => {
-    if (process.platform !== 'darwin') return;
-    app.dock?.setBadge(count > 0 ? String(count) : '');
+    if (process.platform === 'darwin') app.dock?.setBadge(count > 0 ? String(count) : '');
+    else if (process.platform === 'linux') app.setBadgeCount(count);
   };
 
   ipcMain.handle(IPC_CHANNELS.attentionSetBadge, (_event, count: unknown) => {
@@ -111,11 +145,13 @@ export function registerAttention({ openWindow }: { openWindow(): void }): Atten
   });
 
   return {
+    openSession,
     watchNeedsYou: sources => {
       if (monitor) return monitor;
       monitor = new NeedsYouMonitor({
         ...sources,
         hasWindow: () => appWindows().some(window => !window.isDestroyed()),
+        notifyScope: () => notifyScope.current(),
         claim,
         notify: showNotice,
         setBadge,

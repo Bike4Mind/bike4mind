@@ -1,12 +1,21 @@
-import type { ModelBuildReport, ModelLighting, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
+import type {
+  ModelBuildReport,
+  ModelLighting,
+  ModelPose,
+  ModelVersion,
+  ModelView,
+  ModelViewState,
+} from '@shared/model3d';
 import type { SpawnOptions, TaskAction } from '@shared/orchestration';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
 import type { McpServerState, McpServersState } from '@shared/mcp';
+import type { LoopResult, LoopStart, LoopState } from '@shared/loop';
 import type { PrActionResult, PrBindOutcome } from '@shared/pullRequest';
 import type {
   ChatApprovalOption,
+  ChatArtifact,
   ChatDiff,
   ChatToolDetail,
   ChatMedia,
@@ -44,18 +53,12 @@ import type { WebSearchTurn } from './webSearchLimits';
 export interface MediaContext {
   client: MediaApiClient;
   store: MediaStore;
-  /** Base for generated-file URLs, from serverConfig. Relative on self-host, absolute on a CDN. */
-  cdnUrl: string;
-  /** Names the notebook the server creates for this conversation's first generation. */
-  notebookName: string;
   /** Image models this deployment offers. Lazy: a turn with no image generation never asks. */
   listImageModels(): Promise<string[]>;
   /** Video models this caller can use; cached, and read at turn start to decide whether to offer the tool. */
   listVideoModels(): Promise<VideoModel[]>;
   /** Records and follows a created video job. Absent where nothing can follow one. */
   videoJobs?: Pick<VideoJobScheduler, 'track'>;
-  getRemoteSessionId(): string | undefined;
-  setRemoteSessionId(remoteSessionId: string): Promise<void>;
 }
 
 /**
@@ -112,7 +115,7 @@ export interface WebContext {
 export interface ToolReporter {
   /** Replaces the previous line. For work measured in tens of seconds. */
   progress(text: string): void;
-  /** Attach a generated image or audio clip to this call, for the UI only - not sent to the model. */
+  /** Attach an image or audio clip to this call, for the UI only - not sent to the model. */
   media(item: ChatMedia): void;
   /** Raise a cost or provider outcome to its own state; see ChatToolNotice. */
   notice(notice: ChatToolNotice): void;
@@ -136,12 +139,8 @@ export interface ToolReporter {
    * result text the model and the user both read.
    */
   moved(): void;
-  /**
-   * This call's result is text the user wrote or chose to load - a skill from their own folder or
-   * from a project they trusted - so reading it does not make the reply untrusted. See
-   * ChatToolCall.ownContent.
-   */
-  ownContent(): void;
+  /** The result comes from a trusted local skill rather than an imported body. */
+  ownContent?(): void;
 }
 
 /** One conversation's agent browser: a hidden window with its own cookie jar. */
@@ -182,6 +181,8 @@ export interface BrowserProvider {
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext;
   closeSession(sessionId: string): Promise<void>;
+  /** Reload, in place, any of the conversation's tabs showing one of these artifacts at an older version. */
+  refreshArtifacts?(sessionId: string, artifacts: readonly ChatArtifact[]): void;
 }
 
 /** One of a conversation's tabs, as browser_tabs lists it. */
@@ -235,6 +236,20 @@ export interface ImageContext {
    * read, which nativeImage does not for GIF and WebP. Injected so only main/chat imports Electron.
    */
   prepare(bytes: Buffer, mediaType: string, maxBytes: number): PreparedImage | null;
+  /**
+   * Keep `display` in the conversation's media folder for the transcript, once per distinct
+   * `source`: the same bytes read again return the copy already kept. Resolves undefined when
+   * there is nowhere to keep it or the write failed; reading the image goes on regardless.
+   */
+  keep?(source: Buffer, display: KeptImage, caption: string): Promise<ChatMedia | undefined>;
+}
+
+/** The fitted copy of an image a tool keeps for the transcript. Sizes are absent for a format the decoder cannot read. */
+export interface KeptImage {
+  bytes: Buffer;
+  mediaType: string;
+  width?: number;
+  height?: number;
 }
 
 /** A window or display, as screen_capture lists it. */
@@ -343,6 +358,8 @@ export interface ModelViewPort {
   /** An 8 s turntable clip of the current model, as WebM. */
   recordTurntable(lighting: ModelLighting): Promise<Uint8Array>;
   glbPath(): string | null;
+  /** This conversation's kept builds, oldest first (ModelVersionStore.ts). */
+  versions(): Promise<ModelVersion[]>;
 }
 
 export interface ModelContext {
@@ -382,6 +399,8 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /** Folders inside protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
   unresolvedProtectedPaths?: readonly string[];
   /**
@@ -435,8 +454,16 @@ export interface ToolContext {
   mcp?: McpToolContext;
   /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
   pullRequests?: PullRequestContext;
+  /** The calling session's /loop. Absent when no user is present; the `loop` tool then refuses. */
+  loop?: LoopContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
+  /**
+   * Stops the turn's time budget while a call blocks on something that is not the agent working
+   * (bash_output waiting on a background process), until the returned function is called. Absent
+   * outside the chat loop. See TurnClock in ../turnClock.
+   */
+  pauseTurnClock?: () => () => void;
   /**
    * The approval key this call was let through under, whether the user answered the card, a
    * standing answer covered it, or the mode did. Absent for a call that was never gated. Set by
@@ -461,6 +488,15 @@ export interface McpToolContext {
   removeServer(id: string): Promise<McpServersState>;
 }
 
+/** One session's loop, through the same start path as the user's /loop. See ChatService.startLoop. */
+export interface LoopContext {
+  /** Whether this turn is one of the session's own loop runs, which may not start another. */
+  inRun(): boolean;
+  start(request: LoopStart): Promise<LoopResult>;
+  current(): LoopState | null;
+  stop(): void;
+}
+
 /** One session's PR binding, as set_session_pull_request may change it. See PrMonitor. */
 export interface PullRequestContext {
   bind(target: string): Promise<PrBindOutcome>;
@@ -478,6 +514,12 @@ export interface PullRequestContext {
  */
 export interface SkillContext {
   available(): Promise<readonly CustomCommand[]>;
+  /**
+   * True when `name` exists but is withheld from the model by `disable-model-invocation`, so a
+   * refusal can say the user has to start it rather than that it is missing. Optional: without it
+   * the tool reports a plain miss.
+   */
+  isUserOnly?(name: string): Promise<boolean>;
 }
 
 /** What one session looks like to the host-control tools. */
@@ -492,9 +534,24 @@ export interface HostSessionView {
   spawnedBy?: string;
   /** Present-tense state, the same one the sidebar row draws. */
   status: 'processing' | 'needs-action' | 'done';
+  /** What a 'needs-action' session waits on; absent otherwise. */
+  waitingOn?: 'approval' | 'decision' | 'message';
   /** The project folder's name; absent for a conversation with no project. */
   project?: string;
+  /** The branch of a session in a worktree of its own. */
+  branch?: string;
+  /** How its last assistant turn ended, and a one-line excerpt of it; see summarizeSession. */
+  lastOutcome?: string;
+  lastSnippet?: string;
 }
+
+/**
+ * What session_rename got back. 'out-of-scope' covers a session outside this project as well as
+ * one in it that is neither the caller nor a child of it, so the model cannot probe either.
+ */
+export type HostRenameOutcome =
+  | { ok: true; session: HostSessionView }
+  | { ok: false; reason: 'out-of-scope' | 'user-title' };
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
 export interface SpawnRejected {
@@ -592,7 +649,12 @@ export interface HostContext {
    * Sessions newest first, flagging archived ones. 'project' is this one's project; 'all' is every
    * conversation of the signed-in account, which is as far as the session store reaches.
    */
-  listSessions(options: { includeArchived: boolean; scope: 'project' | 'all' }): Promise<HostSessionView[]>;
+  listSessions(options: {
+    includeArchived: boolean;
+    scope: 'project' | 'all';
+    /** Only the sessions the calling conversation started, in any project. */
+    childrenOnly?: boolean;
+  }): Promise<HostSessionView[]>;
   /**
    * One session's transcript as plain text. `ref` is an id, a unique id prefix or an exact title.
    * Outside this project only for a session the user mentioned here or that messaged this one:
@@ -602,6 +664,11 @@ export interface HostContext {
   readSession(ref: string): Promise<string>;
   /** Reversible; the row moves to the sidebar's Archived section. Null when not addressable. */
   setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
+  /**
+   * Retitle this conversation or one it started, and lock the title against the generator.
+   * Refused for any other session, and for a title the user chose by hand; see agentMayRetitle.
+   */
+  renameSession(sessionId: string, title: string): Promise<HostRenameOutcome>;
   /** Irreversible. False when the id names nothing this session may address. */
   deleteSession(sessionId: string): Promise<boolean>;
   /**
@@ -646,8 +713,11 @@ export interface QuestHost {
 export type QuestReadiness = { ready: false; reason: string } | { ready: true; note?: string };
 
 export interface DelegationHost {
-  /** Where a delegated child goes: the card's default choice, with the branch it would prefill. */
-  placement(title: string | undefined, prompt: string): Promise<SpawnPlacement>;
+  /**
+   * Where a delegated child goes: the parent's checkout, or with `isolate` a worktree of its own
+   * when the project is a repository.
+   */
+  placement(title: string | undefined, prompt: string, isolate: boolean): Promise<SpawnPlacement>;
 }
 
 export interface SpawnSuggestionTask {
@@ -671,6 +741,17 @@ export interface SpawnSuggestionHost {
 export interface ApprovalPrompt {
   /** Shown to the user verbatim. */
   detail: string;
+  /**
+   * The model's own few words on what a shell command does, shown beside `detail`. Display
+   * only: it can be wrong, so it never feeds `key`, `reasons`, rules or refusals.
+   */
+  summary?: string;
+  /**
+   * Why the gate stops for this call, each already a paragraph of `detail`. Kept apart as well so a
+   * surface that shows less than the full card (the menu bar, the mini window) can tell the call
+   * carries a reason it would otherwise drop.
+   */
+  reasons?: readonly string[];
   /** Identity for "always allow": two calls share a key only if they would do the same thing. */
   key: string;
   /**
@@ -695,17 +776,11 @@ export interface ApprovalPrompt {
   /**
    * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
    * default but has a specific reason to stop first: a shell command naming a path outside the
-   * project, a read of a `.env` file, or a command that can send data out.
+   * project, a read of a `.env` file, or a write to protected settings.
    */
   askInAuto?: true;
   /** An "always" on this card allows this call only and is never recorded. */
   allowOnce?: true;
-  /**
-   * Proven by the shell scan to keep to this computer or only read from GitHub (see
-   * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason
-   * to ask: steered or not, the call has nowhere to send what it reads.
-   */
-  contained?: true;
   /**
    * Asked in every mode, 'full' included, and so stronger than `askInAuto` - a call 'full' must
    * stop for is not one 'auto' may run. For a call whose risk is NOT the filesystem risk that
@@ -716,6 +791,10 @@ export interface ApprovalPrompt {
    * gave it, it just cannot be inherited from a mode they set for something else.
    */
   askInFull?: true;
+  /** The scan could not fully follow this shell command; diagnostic confidence, separate from mode approval. */
+  unchecked?: true;
+  /** The shell scan cannot positively prove every executed command keeps data local. */
+  outbound?: true;
   /**
    * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
    * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.
@@ -730,6 +809,11 @@ export interface ApprovalPrompt {
   mcp?: { server: string; tool: string };
   /** What "always allow" in this conversation covers, for a `key` broader than this one call. */
   alwaysCovers?: string;
+  /**
+   * What "Allow in this chat" is filed under when it stands for more than this one call. A write
+   * tool's `key` names the exact change, which the stale-file check needs; this names the file.
+   */
+  chatKey?: string;
 }
 
 /** One sub-command of a shell script, as a rule, a chat allowance or the mode decides it. */
@@ -741,14 +825,14 @@ export interface ApprovalPart {
   expanded?: string;
   opaque?: string;
   /**
-   * Why this part needs a decision even where commands run unasked: 'auto' asks in auto mode, 'full' in
-   * every mode. Only set on a prompt with `byPart`.
+   * Why this part asks, and the most permissive mode that still asks: 'ask' only in "Ask for approval",
+   * 'auto' there and in "Approve for me". Only set with `byPart`.
    */
-  ask?: { mode: 'auto' | 'full'; reason: string; kinds: readonly PartAskKind[] };
+  ask?: { mode: 'ask' | 'auto'; reason: string; kinds: readonly PartAskKind[] };
 }
 
 /** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */
-export type PartAskKind = 'unread' | 'outbound' | 'env';
+export type PartAskKind = 'env';
 
 export interface ApprovalAlways {
   /** The tool the patterns belong to: allowing `npm run dev *` for one tool is not allowing it for the other. */
@@ -760,6 +844,11 @@ export interface ApprovalAlways {
   commands: readonly ApprovalPart[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
+  /**
+   * The `directories` a command may write in, the only ones auto mode asks about; absent when the tool
+   * cannot tell, and then every one counts.
+   */
+  writtenDirectories?: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
   /** Folders a glob or an expanded operand reaches anything under (see ShellScan.globFolders). */

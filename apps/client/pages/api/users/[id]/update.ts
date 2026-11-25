@@ -1,3 +1,4 @@
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { emailSuspensionNoticeIfEnabled } from '@server/users/suspensionNoticeEmail';
@@ -26,6 +27,7 @@ import {
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
+import { normalizeTelemetryUserId } from '@server/utils/telemetryIdentity';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
@@ -52,6 +54,9 @@ import {
   requestAuditWriter,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { gradeDetectionsForStatusChange } from '@server/admin/shadowDetectionStatusVerdicts';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'userUpdate' } });
 
 const idParamSchema = z.object({ id: z.string() });
 
@@ -64,6 +69,8 @@ const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
       failed: z.array(z.object({ customerId: z.string(), subscriptionId: z.string().nullable(), reason: z.string() })),
     })
     .optional(),
+  // Present only when this request ran the telemetry opt-out deletion.
+  telemetryDeletion: z.object({ verified: z.boolean(), remainingCount: z.number().int().optional() }).optional(),
 });
 
 /** Fields that change how the account signs in; see the credential gates in the handler. */
@@ -108,56 +115,42 @@ function logConsentToggle(
     outcome: 'success',
     durationMs: 0,
     metadata: { previousLevel, newLevel, source: 'user_preferences' },
-  }).catch(err =>
-    console.warn('[TelemetryAudit] Failed to log consent toggle:', err instanceof Error ? err.message : 'Unknown error')
-  );
+  }).catch(err => logger.warn('Failed to log consent toggle', { error: err }));
 }
 
 /**
- * Handle telemetry consent changes: log the toggle and trigger deletion if opted out.
- * Deletion is awaited (GDPR Article 17 requires verified deletion).
- * On failure, preference is still set to 'none' (stops future collection) and failure is audited.
+ * Handle telemetry consent changes: log the toggle and run the opt-out deletion.
+ * The deletion runs when the level moves to 'none', and again on request (`rerunDeletion`) while it
+ * already is 'none', so an incomplete run can be repeated without leaving the tier.
+ * The preference is saved before this runs, so collection stops whatever the deletion outcome.
+ * Returns what the response reports, or undefined when no deletion ran.
  */
 async function handleTelemetryConsentChange(
   userId: string,
   previousLevel: string | undefined,
   newLevel: string,
-  req: { ip?: string; headers: Record<string, unknown> }
-) {
-  if (!previousLevel || previousLevel === newLevel) return;
-  logConsentToggle(userId, previousLevel, newLevel, req);
-  if (newLevel === 'none') {
-    try {
-      await triggerTelemetryDeletion(userId, req);
-    } catch (err) {
-      console.error(
-        '[Telemetry] Deletion failed, user preference still set to none:',
-        err instanceof Error ? err.message : 'Unknown error'
-      );
-      // Audit the failure so admins can monitor and manually retry
-      await TelemetryAuditLogModel.create({
-        action: 'delete',
-        userId,
-        questId: 'bulk-opt-out',
-        sourceIp: truncateIp(getClientIp(req as Parameters<typeof getClientIp>[0])),
-        userAgent: (req.headers['user-agent'] as string) ?? 'unknown',
-        outcome: 'failure',
-        durationMs: 0,
-        metadata: { error: err instanceof Error ? err.message : 'Unknown error', reason: 'user_opt_out' },
-      }).catch(() => {}); // Audit failure is truly non-blocking
-    }
-  }
+  req: { ip?: string; headers: Record<string, unknown> },
+  rerunDeletion: boolean
+): Promise<{ verified: boolean; remainingCount?: number } | undefined> {
+  if (!previousLevel) return undefined;
+  const changed = previousLevel !== newLevel;
+  if (changed) logConsentToggle(userId, previousLevel, newLevel, req);
+  if (newLevel !== 'none' || (!changed && !rerunDeletion)) return undefined;
+  const { verified, remainingCount } = await triggerTelemetryDeletion(userId, req);
+  return { verified, ...(remainingCount !== undefined && { remainingCount }) };
 }
 
 type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
   suspensionReasonCategory?: string | null;
   isModerated?: boolean;
   email?: string | null;
+  moderation?: { status?: string | null; throttledUntil?: Date | string | null } | null;
 };
 
 type AuditTargetSnapshot = {
   isAdmin?: boolean;
   adminPermissions?: string[];
+  adminRoleIds?: unknown[];
   isBanned?: boolean;
   isModerated?: boolean;
   currentCredits?: number;
@@ -185,6 +178,8 @@ const STATUS_FLAGS = [
     off: { action: 'user.restriction_lifted', summary: 'lifted the restriction' },
   },
 ] as const;
+
+const toIsoOrNull = (value: Date | string | null | undefined) => (value ? new Date(value).toISOString() : null);
 
 /**
  * The flags this body actually flips. Generic edits resend the whole user, so a flag sent with its
@@ -217,7 +212,8 @@ function adminEditSessionEndReason(
 
 const handler = baseApi().put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-    const { id: userId } = idParamSchema.parse(req.query);
+    const { id: rawUserId } = idParamSchema.parse(req.query);
+    const userId = normalizeTelemetryUserId(rawUserId);
     const currentUser = req.user;
 
     const isSelf = isSameUserId(currentUser.id, userId);
@@ -269,9 +265,10 @@ const handler = baseApi().put(
       }
 
       // Parse with the admin schema -- includes email, tags, credits, etc.
-      // Request flags, not user fields: deferLinkPropagation (see linked-suspend-propagation.ts) and
-      // undoSuspension (an Undo of the admin's own suspend; see gradeDetectionsForStatusChange).
-      const { deferLinkPropagation, undoSuspension, ...adminBody } = rawBody;
+      // Request flags, not user fields: deferLinkPropagation (see linked-suspend-propagation.ts),
+      // undoSuspension (an Undo of the admin's own suspend; see gradeDetectionsForStatusChange) and
+      // rerunTelemetryDeletion (see handleTelemetryConsentChange).
+      const { deferLinkPropagation, undoSuspension, rerunTelemetryDeletion, ...adminBody } = rawBody;
       // Zod strips unknown keys, so a misnamed admin field (e.g. `adminNote` instead of
       // `creditReason`) parses away
       // and the 200 reads as "fully applied" when a credit grant, tag, or role
@@ -293,7 +290,7 @@ const handler = baseApi().put(
       const body = userService.adminUpdateUserSchema.parse({ ...adminBody, id: userId });
 
       const targetBefore = (await User.findById(userId)
-        .select('isAdmin adminPermissions isBanned isModerated currentCredits name username email')
+        .select('isAdmin adminPermissions adminRoleIds isBanned isModerated currentCredits name username email')
         .lean()) as AuditTargetSnapshot | null;
       if (!targetBefore) return res.status(404).json({ error: 'User not found' });
       if (moderator) assertCanActOnAdminTarget(currentUser, targetBefore, 'suspend or restrict');
@@ -347,6 +344,7 @@ const handler = baseApi().put(
                 realtimeConnections: realtimeConnectionRepository,
                 creditTransactions: creditTransactionRepository,
               },
+              resolveAdminRoles: resolveRoleAdminPermissions,
             }
           );
 
@@ -377,6 +375,26 @@ const handler = baseApi().put(
                         after: updated?.suspensionReasonCategory ?? null,
                       },
                     ]
+                  : []),
+              ],
+            });
+          }
+          const moderationBefore = snapshot?.moderation?.status ?? 'active';
+          const moderationAfter = updated?.moderation?.status ?? 'active';
+          // Every moderation decision is recorded, including one that keeps the status: it re-arms the
+          // throttle and marks the account reviewed.
+          if (body.moderationStatus && updated) {
+            const throttledBefore = toIsoOrNull(snapshot?.moderation?.throttledUntil);
+            const throttledAfter = toIsoOrNull(updated.moderation?.throttledUntil);
+            await recordAdminActionFromRequest(req, {
+              action: 'user.moderation_status.changed',
+              target: auditTarget,
+              summary: `set the moderation status to ${moderationAfter}`,
+              reason: readAdminActionReason(body.statusChangeReason),
+              changes: [
+                { field: 'moderation.status', before: moderationBefore, after: moderationAfter },
+                ...(throttledBefore !== throttledAfter
+                  ? [{ field: 'moderation.throttledUntil', before: throttledBefore, after: throttledAfter }]
                   : []),
               ],
             });
@@ -484,9 +502,15 @@ const handler = baseApi().put(
       }
 
       // Log consent change only after successful update
-      if (incomingTelemetryLevel) {
-        await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
-      }
+      const telemetryDeletion = incomingTelemetryLevel
+        ? await handleTelemetryConsentChange(
+            userId,
+            previousTelemetryLevel,
+            incomingTelemetryLevel,
+            req,
+            rerunTelemetryDeletion === true
+          )
+        : undefined;
 
       const subscriptionCancellationBody = subscriptionCancellationResponse(cancellation);
 
@@ -505,13 +529,15 @@ const handler = baseApi().put(
             ...(appliedCreditDelta !== undefined && { appliedCreditDelta }),
             ...(ignoredFields.length > 0 && { ignoredFields }),
             ...subscriptionCancellationBody,
+            ...(telemetryDeletion && { telemetryDeletion }),
           }
         : null;
       return respond(res, updateUserResponseSchema.nullable(), responseBody);
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
-      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // rerunTelemetryDeletion is a request flag, not a user field (see handleTelemetryConsentChange).
+      const { rerunTelemetryDeletion, ...rawBody } = (req.body ?? {}) as Record<string, unknown>;
       // A non-admin key here (creditDelta, tags, isAdmin, ...) parses away silently
       // below -- surface it in the response so a 200 can't read as "fully applied"
       // when part of the request was discarded.
@@ -556,9 +582,15 @@ const handler = baseApi().put(
       }
 
       // Log consent change only after successful update
-      if (incomingTelemetryLevel) {
-        await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
-      }
+      const telemetryDeletion = incomingTelemetryLevel
+        ? await handleTelemetryConsentChange(
+            userId,
+            previousTelemetryLevel,
+            incomingTelemetryLevel,
+            req,
+            rerunTelemetryDeletion === true
+          )
+        : undefined;
 
       // Non-admin self-update: symmetric with the self view of GET /users/[id], which means
       // no userNotes. This branch's own schema cannot write them either, so nothing is lost.
@@ -569,7 +601,11 @@ const handler = baseApi().put(
       return respond(
         res,
         updateUserResponseSchema.nullable(),
-        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+        safeUser && {
+          ...safeUser,
+          ...(ignoredFields.length > 0 && { ignoredFields }),
+          ...(telemetryDeletion && { telemetryDeletion }),
+        }
       );
     }
   })

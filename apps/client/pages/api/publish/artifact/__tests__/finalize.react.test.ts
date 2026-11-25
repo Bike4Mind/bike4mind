@@ -41,6 +41,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  artifactRepository: { findOne: vi.fn(async () => null) },
   PublishedArtifact: {
     findOne: () => ({ select: () => ({ lean: () => Promise.resolve(mockFindOne()) }) }),
     findOneAndUpdate: (...a: unknown[]) => Promise.resolve(mockFindOneAndUpdate(...a)),
@@ -49,12 +50,16 @@ vi.mock('@bike4mind/database', () => ({
 
 // Keep the REAL buildReactArtifactBundle + validateBundle (that's what we're exercising); stub the
 // rest of the heavy publish-service surface so the handler reaches the transpile + upsert.
+// finalize reaches the quota check through planVersionedPublish, which imports it from this module.
+vi.mock('@server/services/publish/checkPublishQuota', async importOriginal => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, checkPublishQuota: () => Promise.resolve({ ok: true }) };
+});
 vi.mock('@server/services/publish', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
     checkScopePermission: () => Promise.resolve({ ok: true }),
-    checkPublishQuota: () => Promise.resolve({ ok: true }),
     resolveVisibility: (_tier: string, visibility: string) => ({ ok: true, visibility }),
     buildPublishS3KeyPrefix: () => 'user/owner1/counter/',
     buildPublishUrlPath: () => '/p/u/owner1/counter',

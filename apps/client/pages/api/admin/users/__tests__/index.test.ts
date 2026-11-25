@@ -11,10 +11,15 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () 
 const mockList = vi.fn();
 const mockGroups = vi.fn();
 const mockSummary = vi.fn();
-vi.mock('@server/admin/usersList/listAdminUsers', () => ({
+vi.mock('@bike4mind/server-utils/admin/usersList/listAdminUsers', () => ({
   listAdminUsers: (...args: unknown[]) => mockList(...args),
   adminUsersDomainGroups: (...args: unknown[]) => mockGroups(...args),
   adminUsersSummary: (...args: unknown[]) => mockSummary(...args),
+}));
+
+const mockAudit = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => mockAudit(...args),
 }));
 
 import handler from '../index';
@@ -37,6 +42,68 @@ describe('GET /api/admin/users', () => {
     vi.clearAllMocks();
     mockList.mockResolvedValue({ users: [], totalUsers: 0, page: 1, totalPages: 0 });
     mockGroups.mockResolvedValue({ groups: [], groupsTruncated: false, keysTruncated: false });
+    mockAudit.mockResolvedValue({});
+  });
+
+  describe('provider end-user identifier search', () => {
+    const DIGEST = 'cd'.repeat(32);
+
+    it.each(['ada', 'ada@example.com', 'ab'.repeat(12), ''])('does not audit the search %j', async search => {
+      await call(handler, { search });
+      expect(mockAudit).not.toHaveBeenCalled();
+    });
+
+    it('audits a 64-hex search against the single matched account', async () => {
+      mockList.mockResolvedValue({
+        users: [{ id: 'u1', username: 'ada', email: 'ada@example.com' }],
+        totalUsers: 1,
+        page: 1,
+        totalPages: 1,
+      });
+
+      const res = await call(handler, { search: DIGEST.toUpperCase() });
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.provider_id.resolved',
+          target: { kind: 'user', id: 'u1', displayName: 'ada@example.com' },
+          details: { providerEndUserId: DIGEST, source: 'users_list', matched: true, matchedCount: 1 },
+        })
+      );
+    });
+
+    it('counts matches across pages, not just the page returned', async () => {
+      mockList.mockResolvedValue({ users: [], totalUsers: 1, page: 2, totalPages: 1 });
+
+      await call(handler, { search: DIGEST, page: '2' });
+
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          target: expect.objectContaining({ kind: 'system' }),
+          details: { providerEndUserId: DIGEST, source: 'users_list', matched: true, matchedCount: 1 },
+        })
+      );
+    });
+
+    it('audits a 64-hex search with no match against the system target', async () => {
+      await call(handler, { search: DIGEST });
+
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          target: expect.objectContaining({ kind: 'system' }),
+          details: { providerEndUserId: DIGEST, source: 'users_list', matched: false, matchedCount: 0 },
+        })
+      );
+    });
+
+    it('fails the request when the audit write fails', async () => {
+      mockAudit.mockRejectedValue(new Error('audit down'));
+      await expect(call(handler, { search: DIGEST })).rejects.toThrow('audit down');
+    });
   });
 
   it('requires JWT auth with admin scope', () => {
@@ -164,6 +231,23 @@ describe('GET /api/admin/users', () => {
       expect(mockList.mock.calls[0][0]).toMatchObject({ ...month, verdict: 'legit', funnelStep: 'cameBack' });
       await call(handler, { ...month, funnelStep: 'paid', groupBy: 'emailDomain' });
       expect(mockGroups).toHaveBeenCalledWith(expect.objectContaining({ funnelStep: 'paid' }));
+    });
+
+    it('forwards an acquisition row and rejects one without a created window', async () => {
+      const row = {
+        ...month,
+        acqTouch: 'last',
+        acqSource: 'ads',
+        acqMedium: 'cpc',
+        acqConverted: 'true',
+        acqWindow: '7',
+      };
+      expect((await call(handler, row))._getStatusCode()).toBe(200);
+      expect(mockList.mock.calls[0][0]).toMatchObject(row);
+      mockList.mockClear();
+      await rejected({ acqUnattributed: 'true' }, /needs both createdFrom and createdTo/);
+      await rejected({ ...month, acqUnattributed: 'true', acqSource: 'ads' }, /excludes acqSource/);
+      expect(mockList).not.toHaveBeenCalled();
     });
 
     it('rejects a funnel step that is unknown, has no created window or spans too long', async () => {

@@ -14,6 +14,7 @@
 #   - When a route becomes jwtOnly (or is deleted), remove its entry. The gate
 #     prints an INFO line for entries that no longer need exemption.
 
+apps/client/pages/api/referrals/visit/[code].ts # Deliberately public auth:false share-link redirect; stores a referral cookie and returns no account data
 apps/client/pages/api/[...unmatchedApiPath].ts
 apps/client/pages/api/[type]/[id]/index.ts
 apps/client/pages/api/[type]/[id]/invites/index.ts
@@ -46,7 +47,6 @@ apps/client/pages/api/admin/context-telemetry/integration-status.ts
 apps/client/pages/api/admin/context-telemetry/metrics.ts
 apps/client/pages/api/admin/context-telemetry/test-config.ts
 apps/client/pages/api/admin/create-user.ts
-apps/client/pages/api/admin/credit-adjustments.ts
 apps/client/pages/api/admin/dlq/history.ts
 apps/client/pages/api/admin/dlq/messages.ts
 apps/client/pages/api/admin/dlq/queues.ts
@@ -88,12 +88,6 @@ apps/client/pages/api/admin/integration-audit-logs/index.ts
 apps/client/pages/api/admin/integration-health-dashboard.ts
 apps/client/pages/api/admin/integrations/demand/[integrationId]/requesters.ts
 apps/client/pages/api/admin/integrations/demand/index.ts
-apps/client/pages/api/admin/liveops-triage-configs/[id].ts
-apps/client/pages/api/admin/liveops-triage-configs/[id]/health.ts
-apps/client/pages/api/admin/liveops-triage-configs/[id]/trigger.ts
-apps/client/pages/api/admin/liveops-triage-configs/index.ts
-apps/client/pages/api/admin/liveops-triage-configs/runs.ts
-apps/client/pages/api/admin/liveops-triage-env.ts
 apps/client/pages/api/admin/llm-models/configurations.ts
 apps/client/pages/api/admin/mementos/reembed-ledger.ts
 apps/client/pages/api/admin/mementos/reembed.ts
@@ -279,6 +273,7 @@ apps/client/pages/api/artifacts/search.ts
 apps/client/pages/api/artifacts/types.ts
 apps/client/pages/api/auth/[strategy]/callback.ts
 apps/client/pages/api/auth/[strategy]/index.ts
+apps/client/pages/api/auth/desktop-web-session/redeem.ts  # deliberately unauthenticated (auth: false): the single-use code minted by POST /api/auth/desktop-web-session (jwtOnly) is the credential; stored hashed, 60-second expiry, bound to a live Desktop session, consumed atomically, cross-site refused, rate limited
 apps/client/pages/api/auth/github/authorize.ts
 apps/client/pages/api/auth/github/disconnect.ts
 apps/client/pages/api/auth/github/mcp-callback.ts
@@ -509,6 +504,7 @@ apps/client/pages/api/mcp-servers/notion/settings.ts
 apps/client/pages/api/mcp/confirm.ts
 apps/client/pages/api/mcp/delete-attachment.ts
 apps/client/pages/api/mcp/download-attachment.ts
+apps/client/pages/api/mcp/functions.ts  # deliberately accepts functions:invoke API keys: an MCP server (JSON-RPC over streamable HTTP) for the key owner's own live functions, not a REST operation, so kept out of the public OpenAPI; session callers refused in the handler, rate limited
 apps/client/pages/api/mcp/github/repositories.ts
 apps/client/pages/api/mcp/github/status.ts
 apps/client/pages/api/mementos/[id]/delete.ts
@@ -539,6 +535,7 @@ apps/client/pages/api/oauth/code.ts
 apps/client/pages/api/oauth/device/initiate.ts
 apps/client/pages/api/oauth/device/token.ts
 apps/client/pages/api/oauth/device/verify.ts
+apps/client/pages/api/oauth/end-session.ts  # deliberately unauthenticated (auth: false): RP-Initiated Logout must still redirect a browser with no session; it signs out only the Bearer session the first-party page forwards, rate limited
 apps/client/pages/api/oauth/federated-admin.ts
 apps/client/pages/api/oauth/jwks.ts
 apps/client/pages/api/oauth/openid-configuration.ts
@@ -586,6 +583,7 @@ apps/client/pages/api/otc/verify.ts
 apps/client/pages/api/overwatch/v1/events.ts
 apps/client/pages/api/overwatch/v1/hops.ts  # confined Overwatch ingest scope, like v1/events beside it, kept out of the public OpenAPI; server-to-server only, session callers refused in the handler
 apps/client/pages/api/partners/rewards/grant.ts  # confined, admin-provisioned partner scope (rewards:grant) kept out of the public OpenAPI; server-to-server only, session callers refused in the handler
+apps/client/pages/api/personas/redeem.ts  # deliberately unauthenticated (auth: false): the single-use login code minted by POST /api/v1/personas is the credential; persona accounts only, 5-minute expiry, consumed atomically, rate limited
 apps/client/pages/api/ping.ts
 apps/client/pages/api/projects/[id]/files.ts
 apps/client/pages/api/projects/[id]/index.ts
@@ -623,9 +621,6 @@ apps/client/pages/api/publish/widget.ts
 apps/client/pages/api/pyodide-sandbox.ts
 apps/client/pages/api/qa/runs.ts
 apps/client/pages/api/qa/uploads.ts
-apps/client/pages/api/quest-master-plans/[id]/index.ts
-apps/client/pages/api/quest-plans/[id]/export.ts
-apps/client/pages/api/quest-plans/[id]/progress.ts
 apps/client/pages/api/quests/[id]/check-timeout.ts
 apps/client/pages/api/quests/[id]/client-timing.ts
 apps/client/pages/api/quests/[id]/files.ts
@@ -646,9 +641,6 @@ apps/client/pages/api/research/agents/[id]/tasks/index.ts
 apps/client/pages/api/research/agents/index.ts
 apps/client/pages/api/research/data/files.ts
 apps/client/pages/api/roll.ts
-apps/client/pages/api/secret-rotations/[id]/index.ts
-apps/client/pages/api/secret-rotations/index.ts
-apps/client/pages/api/secret-rotations/renewed.ts
 apps/client/pages/api/security/api-usage.ts
 apps/client/pages/api/security/blocked-ips.ts
 apps/client/pages/api/security/blocked-ips/evaluate.ts
@@ -667,7 +659,6 @@ apps/client/pages/api/sessions/[id]/clone.ts
 apps/client/pages/api/sessions/[id]/favorite.ts
 apps/client/pages/api/sessions/[id]/files.ts
 apps/client/pages/api/sessions/[id]/index.ts
-apps/client/pages/api/sessions/[id]/questmaster-plans/index.ts
 apps/client/pages/api/sessions/[id]/summary.ts
 apps/client/pages/api/sessions/[id]/surface.ts
 apps/client/pages/api/sessions/[id]/tag.ts
@@ -698,6 +689,7 @@ apps/client/pages/api/slack/export/async.ts
 apps/client/pages/api/slack/export/channel-info.ts
 apps/client/pages/api/slack/export/channel.ts
 apps/client/pages/api/slack/export/status/[jobId].ts
+apps/client/pages/api/slack/feedback/status.ts  # deliberately unauthenticated: signed receiver callback, per-destination HMAC instead of user auth
 apps/client/pages/api/slack/interactive.ts
 apps/client/pages/api/slack/oauth/callback.ts
 apps/client/pages/api/slack/oauth/org-connect/callback.ts
@@ -738,6 +730,7 @@ apps/client/pages/api/test/admin-approval.ts  # deliberately unauthenticated (au
 apps/client/pages/api/test/cleanup.ts
 apps/client/pages/api/test/create-user.ts
 apps/client/pages/api/test/expire-account-deletion.ts  # deliberately unauthenticated (auth: false) like the other api/test routes: E2E stages only, gated by the x-e2e-cleanup-secret header and -e2e@test.com emails
+apps/client/pages/api/test/mfa-code.ts  # deliberately unauthenticated (auth: false) like the other api/test routes: E2E stages only, gated by the x-e2e-cleanup-secret header and -e2e@test.com emails
 apps/client/pages/api/test/otc-code.ts
 apps/client/pages/api/test/propose-lake-content.ts
 apps/client/pages/api/tools/weather.ts
@@ -759,7 +752,6 @@ apps/client/pages/api/user/accept-policies.ts
 apps/client/pages/api/users/[id]/activities/index.ts
 apps/client/pages/api/users/[id]/agents.ts
 apps/client/pages/api/users/[id]/collections/index.ts
-apps/client/pages/api/users/[id]/delete.ts
 apps/client/pages/api/users/[id]/docx-template.ts
 apps/client/pages/api/users/[id]/email-settings.ts
 apps/client/pages/api/users/[id]/friend-requests.ts
@@ -804,6 +796,8 @@ apps/client/pages/api/webhooks/jira/[token].ts
 apps/client/pages/api/webhooks/jira/config/index.ts
 apps/client/pages/api/webhooks/jira/subscriptions/[id].ts
 apps/client/pages/api/webhooks/jira/subscriptions/index.ts
+apps/client/pages/api/well-known/apple-app-site-association.ts  # public app site association fetched by iOS without credentials
+apps/client/pages/api/well-known/assetlinks.ts  # public Digital Asset Links statement fetched by Android without credentials
 apps/client/pages/api/work-items/[id]/index.ts
 apps/client/pages/api/work-items/graph.ts
 apps/client/pages/api/work-items/index.ts

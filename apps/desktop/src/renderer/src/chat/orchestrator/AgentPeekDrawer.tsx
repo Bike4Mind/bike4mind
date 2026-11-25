@@ -1,36 +1,49 @@
-import { TaskDecisionPanel } from './TaskDecisionPanel';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import ButtonGroup from '@mui/joy/ButtonGroup';
+import Dropdown from '@mui/joy/Dropdown';
+import Menu from '@mui/joy/Menu';
+import MenuButton from '@mui/joy/MenuButton';
+import MenuItem from '@mui/joy/MenuItem';
 import IconButton from '@mui/joy/IconButton';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
-import { snippetOf } from '@shared/agentOutcome';
-import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useTheme } from '@mui/joy/styles';
+import { isStoppableState } from '@shared/agentState';
+import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall, SendMessageResult } from '@shared/chat';
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
-import { groupToolCalls } from '../toolRows';
-import { pendingCallsIn } from '@shared/needsYou';
+import { MessageThread } from '../MessageThread';
+import { HeldRelayRow } from '../HeldRelayCard';
+import { useHeldRelays } from '../useHeldRelays';
+import { TaskDecisionPanel } from './TaskDecisionPanel';
+import { markSessionViewed } from '../markSessionViewed';
 import { activityLabel } from './activity';
+import { AgentPrIndicator } from './AgentPrIndicator';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
 import type { AgentView } from './roster';
 import type { AgentPersona } from '@shared/agentPersona';
 
-const RECENT_MESSAGES = 3;
-const MESSAGE_SNIPPET_MAX = 280;
 const QUEUED_NOTE = 'Queued - it will send when this agent finishes its current step.';
+
+export interface AgentDetailsSkin {
+  light: { background: string; border: string };
+  dark: { background: string; border: string };
+  /** The window's corner radius, for a scene whose own chrome is square. */
+  radius?: string;
+}
 
 interface AgentPeekDrawerProps {
   agent: AgentView;
   persona: AgentPersona | undefined;
   onClose(): void;
   actions: AgentActions;
-}
-
-function roleLabel(role: string): string {
-  if (role === 'assistant') return 'Agent';
-  if (role === 'user') return 'You';
-  return role.charAt(0).toUpperCase() + role.slice(1);
+  skin?: AgentDetailsSkin;
+  visible?: boolean;
+  /** Opens the in-app PR details, as the views' badges do. */
+  onOpenPr?(id: string): void;
 }
 
 function errorText(error: unknown): string {
@@ -40,29 +53,74 @@ function errorText(error: unknown): string {
 /**
  * The session's messages, refetched whenever `refreshKey` changes. getSession includes the reply in
  * flight, so a call parked at the approval gate is in here with its `approvalId`.
+ * `viewed` marks the session read; `enabled` false skips the fetch.
  */
 export function useSessionMessages(
   agentId: string,
-  refreshKey: string
+  refreshKey: string,
+  viewed = false,
+  enabled = true
 ): { messages: ChatMessage[]; loadError: string | null } {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let stale = false;
-    window.b4m.chat.getSession(agentId).then(
-      session => {
-        if (stale) return;
-        setLoadError(null);
-        setMessages(session ? session.messages : []);
-      },
-      (error: unknown) => {
-        if (!stale) setLoadError(errorText(error));
+    let loading = false;
+    let dirty = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = async () => {
+      if (loading) {
+        dirty = true;
+        return;
       }
-    );
+      loading = true;
+      dirty = false;
+      try {
+        const session = await window.b4m.chat.getSession(agentId, false);
+        if (!stale) {
+          setLoadError(null);
+          setMessages(session ? session.messages : []);
+        }
+      } catch (error: unknown) {
+        if (!stale) setLoadError(errorText(error));
+      } finally {
+        loading = false;
+        if (dirty && !stale) schedule();
+      }
+    };
+    const schedule = () => {
+      if (timer !== undefined || stale) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        void load();
+      }, 200);
+    };
+    const unsubscribe = window.b4m.chat.onStreamEvent(event => {
+      if (event.sessionId === agentId) schedule();
+    });
+    const unsubscribeQueue = window.b4m.chat.onQueueChanged(event => {
+      if (event.sessionId === agentId) schedule();
+    });
+    void load();
     return () => {
       stale = true;
+      clearTimeout(timer);
+      unsubscribe();
+      unsubscribeQueue();
     };
-  }, [agentId, refreshKey]);
+  }, [agentId, refreshKey, enabled]);
+  useEffect(() => {
+    if (!viewed) return;
+    const acknowledge = () => markSessionViewed(agentId);
+    acknowledge();
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => {
+      window.removeEventListener('focus', acknowledge);
+      document.removeEventListener('visibilitychange', acknowledge);
+    };
+  }, [agentId, viewed, messages, refreshKey]);
   return { messages, loadError };
 }
 
@@ -76,25 +134,12 @@ export function refreshKeyOf(agent: AgentView): string {
   return [agent.updatedAt, agent.state, waitingOn].join('\n');
 }
 
-/** One line for the message, or null when it has nothing to show. */
-function messageLine(message: ChatMessage): string | null {
-  if (message.content.trim()) return snippetOf(message.content, MESSAGE_SNIPPET_MAX);
-  const calls = message.toolCalls ?? [];
-  if (calls.length === 0) return null;
-  return snippetOf(
-    groupToolCalls(calls)
-      .map(group => group.label)
-      .join(', '),
-    MESSAGE_SNIPPET_MAX
-  );
-}
-
 /**
  * The agent's requests parked at the approval gate, drawn with the thread's own cards and answered
  * through the same `respondToApproval` call. An answered card goes at once rather than waiting for
  * the status push, so a second click can never answer it twice.
  */
-export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
+export function PendingRequests({ calls, onAnswered }: { calls: ChatToolCall[]; onAnswered?(): void }) {
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const open = calls.filter(call => call.approvalId && !answered.has(call.approvalId));
@@ -102,7 +147,7 @@ export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
   const respond = (approvalId: string, answer: ChatApprovalAnswer) => {
     setError(null);
     setAnswered(current => new Set(current).add(approvalId));
-    window.b4m.chat.respondToApproval(approvalId, answer).catch((caught: unknown) => {
+    window.b4m.chat.respondToApproval(approvalId, answer).then(onAnswered, (caught: unknown) => {
       setAnswered(current => {
         const next = new Set(current);
         next.delete(approvalId);
@@ -125,7 +170,7 @@ export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
   );
 }
 
-function ReplyBox({ agentId }: { agentId: string }) {
+function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionButton: ReactNode; onSent(): void }) {
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage | null>(null);
@@ -163,6 +208,7 @@ function ReplyBox({ agentId }: { agentId: string }) {
         return;
       }
       setText('');
+      onSent();
       const seen = latestQueue.current;
       const stillQueued = result.queued && (seen.version === versionBefore || seen.ids.has(result.message.id));
       setQueued(stillQueued ? result.message : null);
@@ -193,7 +239,7 @@ function ReplyBox({ agentId }: { agentId: string }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Textarea
-        minRows={2}
+        minRows={1}
         maxRows={6}
         placeholder="Reply to this agent"
         value={text}
@@ -212,7 +258,8 @@ function ReplyBox({ agentId }: { agentId: string }) {
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
+              color="neutral"
               data-testid="orchestrator-peek-queued-cancel-btn"
               onClick={() => void settleQueued('cancelQueuedMessage')}
             >
@@ -220,7 +267,8 @@ function ReplyBox({ agentId }: { agentId: string }) {
             </Button>
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
+              color="neutral"
               data-testid="orchestrator-peek-queued-send-now-btn"
               onClick={() => void settleQueued('sendQueuedMessageNow')}
             >
@@ -229,29 +277,54 @@ function ReplyBox({ agentId }: { agentId: string }) {
           </Box>
         </Box>
       )}
-      <Button
-        size="sm"
-        disabled={!text.trim() || sending}
-        data-testid="orchestrator-peek-send-btn"
-        onClick={() => void send()}
+      <Box
+        data-testid="orchestrator-peek-action-row"
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}
       >
-        Send
-      </Button>
+        {actionButton}
+        <Button
+          size="sm"
+          disabled={!text.trim() || sending}
+          data-testid="orchestrator-peek-send-btn"
+          onClick={() => void send()}
+        >
+          Send
+        </Button>
+      </Box>
     </Box>
   );
 }
 
-export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekDrawerProps) {
-  const { messages, loadError } = useSessionMessages(agent.id, refreshKeyOf(agent));
-  // The snapshot can trail the status push, so the state decides whether anything is still waiting.
-  const pending = agent.state === 'needs-you' ? pendingCallsIn(messages) : [];
-  const recent = messages
-    .flatMap(message => {
-      const line = messageLine(message);
-      return line === null ? [] : [{ id: message.id, role: message.role, line }];
-    })
-    .slice(-RECENT_MESSAGES);
-  const canStop = agent.state === 'working' || agent.state === 'needs-you';
+export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true, onOpenPr }: AgentPeekDrawerProps) {
+  const mode = useTheme().palette.mode;
+  const palette = skin?.[mode];
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [taskControlsState, setTaskControlsState] = useState<'unopened' | 'open' | 'closed'>('unopened');
+  const taskControlsId = useId();
+  useEffect(() => {
+    setTaskControlsState('unopened');
+  }, [agent.id]);
+  useEffect(() => {
+    if (!visible) setActionsOpen(false);
+  }, [visible]);
+  const [revision, setRevision] = useState(0);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const { messages, loadError } = useSessionMessages(agent.id, `${refreshKeyOf(agent)}\n${revision}`, visible);
+  const refresh = () => setRevision(value => value + 1);
+  const canStop = isStoppableState(agent.state);
+  const heldRelays = useHeldRelays(visible ? agent.id : null);
+
+  // Continue and Retry are also on the Needs-you strip; main refuses the second click as `busy`.
+  const rerun = (start: (sessionId: string) => Promise<SendMessageResult>) => {
+    setActionError(null);
+    void start(agent.id).then(
+      result => {
+        if (!result.ok && !result.busy) setActionError(result.error);
+        refresh();
+      },
+      error => setActionError(errorText(error))
+    );
+  };
 
   const drawerRef = useRef<HTMLDivElement>(null);
   // Focus moves in on open and back to the opener on close; a drawer swapped to another agent keeps its place.
@@ -259,7 +332,11 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     drawerRef.current?.focus();
     return () => {
-      if (opener && opener.isConnected) opener.focus();
+      if (
+        opener?.isConnected &&
+        (document.activeElement === document.body || drawerRef.current?.contains(document.activeElement))
+      )
+        opener.focus();
     };
   }, []);
 
@@ -270,39 +347,55 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
       aria-label={`Agent details: ${agent.title}`}
       tabIndex={-1}
       data-testid="orchestrator-peek-drawer"
+      data-agent-details-panel
       sx={{
         outline: 'none',
-        width: 340,
+        width: 320,
+        maxWidth: '100%',
+        height: 'min(680px, 100cqh - 24px)',
+        maxHeight: '100%',
+        minHeight: 0,
+        boxSizing: 'border-box',
+        pointerEvents: 'auto',
         flexShrink: 0,
-        overflowY: 'auto',
+        overflowY: 'hidden',
         overflowX: 'hidden',
         // Unbroken worktree paths in agent messages would otherwise widen the drawer.
         overflowWrap: 'anywhere',
         display: 'flex',
         flexDirection: 'column',
-        gap: 1.5,
-        p: 1.5,
-        borderLeft: '1px solid',
-        borderColor: 'divider',
-        bgcolor: 'background.surface',
+        gap: 1,
+        p: 1.25,
+        border: '1px solid',
+        borderRadius: skin?.radius ?? 'md',
+        borderColor: palette?.border ?? 'divider',
+        bgcolor: palette?.background ?? 'background.surface',
+        boxShadow: 'md',
+        '& > *': { flexShrink: 0 },
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography
-            level="title-md"
+            level="title-sm"
             sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             title={agent.title}
           >
             {agent.title}
           </Typography>
-          {persona && (
-            <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-peek-persona">
-              {`${persona.label} \u00B7 ${persona.shortTitle}`}
-            </Typography>
-          )}
         </Box>
-        <AgentStateChip state={agent.state} preparing={agent.preparing !== undefined} />
+        <AgentPrIndicator
+          agentId={agent.id}
+          pr={agent.pr}
+          onOpen={onOpenPr && (() => onOpenPr(agent.id))}
+          testId="orchestrator-peek-pr"
+        />
+        <AgentStateChip
+          state={agent.state}
+          preparing={agent.preparing !== undefined}
+          deciding={agent.decision !== undefined}
+          backgroundJobs={agent.background?.running}
+        />
         <IconButton
           size="sm"
           variant="plain"
@@ -314,70 +407,118 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         </IconButton>
       </Box>
 
-      <TaskDecisionPanel agent={agent} />
-      {pending.length > 0 && <PendingRequests calls={pending} />}
-
-      <Typography
-        level="body-xs"
-        sx={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-      >
-        {agent.seedPrompt}
-      </Typography>
-
-      {agent.activity && (
-        <Typography level="body-sm" color="primary" data-testid="orchestrator-peek-activity">
-          {activityLabel(agent.activity)}
+      {(loadError || actionError) && (
+        <Typography level="body-xs" color="danger" data-testid="orchestrator-peek-load-error">
+          {loadError || actionError}
         </Typography>
       )}
-
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-        {loadError && (
-          <Typography level="body-xs" color="danger" data-testid="orchestrator-peek-load-error">
-            {loadError}
-          </Typography>
-        )}
-        {recent.map(message => (
-          <Typography key={message.id} level="body-xs" data-testid="orchestrator-peek-message">
-            <b>{roleLabel(message.role)}</b>: {message.line}
-          </Typography>
-        ))}
-      </Box>
-
-      <ReplyBox agentId={agent.id} />
-
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        <Button
-          size="sm"
-          variant="outlined"
-          data-testid="orchestrator-peek-open-btn"
-          onClick={() => actions.open(agent.id)}
-        >
-          Open
-        </Button>
-        {canStop && (
+      {agent.workerTask && (
+        <Box sx={{ flex: '0 1 auto !important', minHeight: 0, maxHeight: '40%', overflowY: 'auto' }}>
           <Button
             size="sm"
-            variant="outlined"
-            color="danger"
-            data-testid="orchestrator-peek-stop-btn"
-            onClick={() => actions.stop(agent.id)}
+            variant="plain"
+            color="neutral"
+            aria-expanded={taskControlsState === 'open'}
+            aria-controls={taskControlsId}
+            data-testid="orchestrator-peek-task-toggle"
+            onClick={() => setTaskControlsState(current => (current === 'open' ? 'closed' : 'open'))}
           >
-            Stop
+            Review task
           </Button>
-        )}
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          data-testid="orchestrator-peek-archive-btn"
-          onClick={() => {
-            actions.archive(agent.id);
-            onClose();
-          }}
+          <Box
+            id={taskControlsId}
+            hidden={taskControlsState !== 'open'}
+            sx={{ display: taskControlsState === 'open' ? 'block' : 'none' }}
+            data-testid="orchestrator-peek-task-controls"
+          >
+            {taskControlsState !== 'unopened' && <TaskDecisionPanel key={agent.id} agent={agent} compact />}
+          </Box>
+        </Box>
+      )}
+      {heldRelays.held.length > 0 && (
+        <Box
+          data-testid="orchestrator-peek-held-relays"
+          sx={{ flex: '0 1 auto !important', minHeight: 0, maxHeight: '35%', overflowY: 'auto' }}
         >
-          Archive
-        </Button>
+          {heldRelays.held.map(entry => (
+            <HeldRelayRow key={entry.id} held={entry} onResolve={heldRelays.resolve} onOpenSession={actions.open} />
+          ))}
+        </Box>
+      )}
+      <Box
+        data-testid="orchestrator-peek-conversation"
+        sx={{
+          display: 'flex',
+          flex: '1 1 0 !important',
+          minHeight: 0,
+          overflow: 'hidden',
+          '& > *': { minWidth: 0 },
+          '& [data-testid="chat-thread"] > *': { px: 0.5, py: 1 },
+        }}
+      >
+        <MessageThread
+          messages={messages}
+          sessionId={agent.id}
+          streaming={agent.state === 'working'}
+          status={
+            agent.activity ? (
+              <Typography level="body-xs" color="primary">
+                {activityLabel(agent.activity)}
+              </Typography>
+            ) : undefined
+          }
+          onRespond={(approvalId, answer) => {
+            setActionError(null);
+            void window.b4m.chat
+              .respondToApproval(approvalId, answer)
+              .then(refresh, error => setActionError(errorText(error)));
+          }}
+          onContinue={() => rerun(window.b4m.chat.continueReply)}
+          // Only on a failed turn: regenerating a finished worker would set its task running again.
+          {...(agent.state === 'failed' && { onRegenerate: () => rerun(window.b4m.chat.regenerateReply) })}
+        />
       </Box>
+
+      <ReplyBox
+        agentId={agent.id}
+        onSent={refresh}
+        actionButton={
+          <Dropdown open={visible && actionsOpen} onOpenChange={(_event, open) => setActionsOpen(visible && open)}>
+            <ButtonGroup size="sm" variant="outlined" color="neutral" data-testid="orchestrator-peek-actions">
+              <Button data-testid="orchestrator-peek-open-btn" onClick={() => actions.open(agent.id)}>
+                Open
+              </Button>
+              <MenuButton
+                aria-label="More agent actions"
+                data-testid="orchestrator-peek-actions-menu-btn"
+                sx={{ px: 0.75 }}
+              >
+                <CaretDownIcon />
+              </MenuButton>
+            </ButtonGroup>
+            <Menu size="sm" placement="top-start" data-testid="orchestrator-peek-actions-menu">
+              {canStop && (
+                <MenuItem
+                  color="danger"
+                  data-testid="orchestrator-peek-stop-btn"
+                  onClick={() => void actions.stop(agent.id)}
+                >
+                  Stop
+                </MenuItem>
+              )}
+              <MenuItem
+                data-testid="orchestrator-peek-archive-btn"
+                onClick={() => {
+                  actions.archive(agent.id);
+                  onClose();
+                }}
+              >
+                Archive
+              </MenuItem>
+            </Menu>
+          </Dropdown>
+        }
+      />
     </Box>
   );
 }

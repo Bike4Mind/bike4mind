@@ -2,6 +2,11 @@ import { IAppFileDocument, IShareableDocument, IShareableStaticMethods } from '.
 import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
+import type { AssignableOrgRole } from '../../constants/orgRoles';
+import type { OrganizationRetentionPolicy } from './OrganizationRetention';
+import type { OrganizationSharingPolicy } from '../../organizationSharingPolicy';
+import type { IOrgBudgetAlerts } from './OrgAlertTypes';
+import type { AccountSegment } from './SpendExplorerTypes';
 
 export interface IUserDetails {
   id: string;
@@ -25,12 +30,20 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * only; defaults to empty = fail-closed. An org starts with no group types (org-groups #1172).
    */
   allowedGroupTypes: string[];
+
+  /** Set by an admin; absent reads as `customer`. Spend explorer splits cost by it. */
+  accountSegment?: AccountSegment;
   /**
    * User ids appointed as org admins by the billing owner or a platform admin. NOT a `Permission`
    * verb and NOT on the shared `users[]` ACL. The billing owner (`userId`) is implicitly an admin
    * and need not appear here.
    */
   adminUserIds: string[];
+  /**
+   * User ids holding the Billing manager role (constants/orgRoles.ts): billing and usage, no roster
+   * control. Like `adminUserIds`, an entry counts only with a `users[]` row; Manager wins on overlap.
+   */
+  billingManagerUserIds?: string[];
   description: string;
   billingContact: string;
   seats: number;
@@ -45,8 +58,10 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   logo?: IAppFileDocument | null;
   stripeCustomerId?: string | null;
 
-  /** Cumulative storage ceiling in decimal MB; unset or null means DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  /** Effective flat-pool storage ceiling in decimal MB, mirrored for legacy consumers. */
   storageLimit?: number | null;
+  storageLimitOverride?: number | null;
+  planStorageLimit?: number | null;
 
   /**
    * Bytes held by files this org OWNS (FabFile.organizationId), whoever uploaded them. Unset reads
@@ -71,11 +86,34 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   maxCreditsPerMember?: number | null;
 
   /**
+   * Id of this org's service account (constants/orgServiceAccount.ts), set when it is created. Not a
+   * member, so the per-member credit cap never applies to it (creditService/memberCreditCap.ts).
+   */
+  serviceAccountUserId?: string | null;
+
+  /**
    * When true, push notifications to members' first-party native clients carry category-generic
    * text instead of session names or message content (applied at delivery, apps/workers/src/events/sendPush.ts).
    * Applies to pushes for users whose active organization is this one.
    */
   redactPushContent?: boolean;
+
+  /**
+   * Allowlist of providers, models and built-in tools for this org's members (OrgModelPolicySchema).
+   * Absent or null is unrestricted; read it through readOrgModelPolicy, which fails closed on a bad row.
+   */
+  modelPolicy?: unknown;
+
+  sharingPolicy?: OrganizationSharingPolicy;
+  mfaPolicy?: {
+    required: boolean;
+    graceEndsAt: Date | null;
+  };
+
+  /** Pool budget and balance alerting for the org's owner and opted-in managers (OrgAlertTypes.ts). */
+  budgetAlerts?: IOrgBudgetAlerts | null;
+  retentionPolicy?: OrganizationRetentionPolicy;
+  retentionVersion?: number;
 }
 export interface IOrganizationDocument extends IOrganization, IShareableDocument {}
 
@@ -134,6 +172,9 @@ export interface IOrganizationRepository
   /** Seat counts keyed by Stripe customer id, in one query. */
   findSeatsByStripeCustomerIds(stripeCustomerIds: string[]): Promise<Map<string, number>>;
 
+  setPlanStorageLimit(organizationId: string, limitMb: number): Promise<boolean>;
+  setStorageLimitOverride(organizationId: string, limitMb: number | null): Promise<IOrganizationDocument | null>;
+
   /**
    * Atomically add `bytes` (negative to refund) to the org's storage counter, floored at 0.
    * Same contract as IUserRepository.incrementCurrentStorage.
@@ -175,7 +216,9 @@ export interface IOrganizationRepository
    */
   addMemberIfUnderCeiling(
     organizationId: string,
-    member: IOrganizationDocument['users'][number]
+    member: IOrganizationDocument['users'][number],
+    /** Seats held back for outstanding named invites, so a link join cannot take one. Defaults to 0. */
+    reservedSeats?: number
   ): Promise<IOrganizationDocument | null>;
 
   /**
@@ -212,9 +255,8 @@ export interface IOrganizationRepository
 
   /**
    * IDs of every organization where the user holds admin RIGHTS: billing owner (`userId`) OR a
-   * manager (`adminUserIds`), with or without a `users[]` row. Broader than `findIdsAdministeredBy`
-   * (which also requires the row) - deliberately a separate method so its consumers keep their own
-   * semantics. This is the org-admin set data-lake management
+   * manager (`adminUserIds` entry that also has a `users[]` row). Same set as `findIdsAdministeredBy`,
+   * kept as a separate name for its data-lake callers. This is the org-admin set data-lake management
    * consults: an org admin may manage any lake scoped to that org (see `canManageLake`). Returns a
    * bare id list, suitable for an `$in` filter or membership test.
    */
@@ -239,18 +281,15 @@ export interface IOrganizationRepository
    */
   ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
 
-  /** Remove a member from users/userDetails/adminUserIds (one targeted, idempotent update). */
+  /** Remove a member from users/userDetails and every role list (one targeted, idempotent update). */
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**
-   * Appoint one manager without rewriting the rest of `adminUserIds` (idempotent). Matches only while the
-   * user still holds a `users[]` row, so a concurrent removal cannot leave a manager outside the roster.
-   * Returns false when no such row exists.
+   * Give one member one assignable role, keeping `adminUserIds` and `billingManagerUserIds` disjoint
+   * (one atomic update; idempotent). Manager and Billing manager match only while the user holds a
+   * `users[]` row that confers membership. Returns false when nothing matched.
    */
-  addAdmin(organizationId: string, userId: string): Promise<boolean>;
-
-  /** Drop one manager from `adminUserIds` without rewriting the rest (idempotent). */
-  removeAdmin(organizationId: string, userId: string): Promise<void>;
+  setMemberRole(organizationId: string, userId: string, role: AssignableOrgRole): Promise<boolean>;
 
   /**
    * Set one member's monthly credit budget override (`userDetails[].maxCredits`; null inherits the

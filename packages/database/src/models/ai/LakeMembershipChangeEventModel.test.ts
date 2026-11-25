@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { RecordLakeMembershipChangeInput } from '@bike4mind/common';
 import { LAKE_MEMBERSHIP_CHANGE_AUDIT_RETENTION_DAYS } from '@bike4mind/common';
@@ -56,6 +57,18 @@ describe('LakeMembershipChangeEventModel / lakeMembershipChangeEventRepository.r
         action: 'removed',
         origin: 'connector',
       });
+    });
+
+    it('round-trips undoesEventId and causedByEventId', async () => {
+      const event = await repo.record(baseInput({ undoesEventId: 'e1', causedByEventId: 'e2' }));
+      const stored = await LakeMembershipChangeEventModel.findById(event.id).lean();
+      expect(stored).toMatchObject({ undoesEventId: 'e1', causedByEventId: 'e2' });
+    });
+
+    it('writes a pre-minted event id as the row id', async () => {
+      const eventId = new mongoose.Types.ObjectId().toHexString();
+      const event = await repo.record(baseInput({ eventId }));
+      expect(event.id).toBe(eventId);
     });
 
     it('rejects a value outside the vocabulary rather than storing it', async () => {

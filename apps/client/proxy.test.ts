@@ -96,6 +96,15 @@ describe('proxy CSP header', () => {
     expect(values).toContain('https://tile.openstreetmap.org');
   });
 
+  // Source chip favicons redirect from google.com to t*.gstatic.com. connect-src as well, for the
+  // same service-worker re-fetch as the map tiles.
+  it.each(['img-src', 'connect-src'])('%s allows the gstatic host the source chip favicons redirect to', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toContain('https://*.gstatic.com');
+  });
+
   // ElevenLabs hosts voice preview clips on regional hosts (api.us.elevenlabs.io). connect-src as
   // well, for the same service-worker re-fetch as the map tiles above.
   it.each(['media-src', 'connect-src'])('%s allows the ElevenLabs hosts that serve voice previews', directive => {
@@ -652,7 +661,11 @@ describe('proxy configured object-store origin', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubEnv('S3_PRESIGN_ENDPOINT', configured);
     expect(policy()).toBe(baseline);
-    expect(warn).toHaveBeenCalledExactlyOnceWith('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toMatchObject({
+      name: 'S3_PRESIGN_ENDPOINT',
+      message: '[csp] ignoring invalid deployment media origin',
+    });
   });
 
   it.each(['/api/files', '/p/example', '/embed/chat'])('preserves policy exclusions for %s', path => {

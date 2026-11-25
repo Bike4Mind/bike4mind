@@ -8,15 +8,28 @@ import type { ChatMessage, ChatReplyRound, ChatStreamEvent } from './chat';
  * would be showing, and the two cannot drift apart.
  */
 
-/** Open the reply a 'start' names: a fresh message, or a resumed one keeping its text and rows. */
+/**
+ * Open the reply a 'start' names: a fresh message, or a resumed one keeping its text and rows.
+ * A resumed reply drops the error its stop left: with the stop gone, the thread would draw that
+ * stale error as a live failure until the run settles.
+ */
 export function startReply(messages: readonly ChatMessage[], messageId: string): ChatMessage[] {
   return messages.some(message => message.id === messageId)
-    ? messages.map(message => (message.id === messageId ? { ...message, stopReason: undefined } : message))
+    ? messages.map(message =>
+        message.id === messageId ? { ...message, stopReason: undefined, error: undefined } : message
+      )
     : [...messages, { id: messageId, role: 'assistant', content: '', createdAt: new Date().toISOString() }];
 }
 
 /** The events a reply is built from while it streams. */
 export type LiveReplyEvent = Extract<ChatStreamEvent, { type: 'delta' | 'tool-start' | 'tool-end' | 'tool-progress' }>;
+
+type DeltaEvent = Extract<LiveReplyEvent, { type: 'delta' }>;
+
+/** One delta standing for `last` followed by `event`: the text joined, the newer seq kept. */
+export function mergeDelta(last: DeltaEvent, event: DeltaEvent): DeltaEvent {
+  return { ...last, text: last.text + event.text, seq: event.seq ?? last.seq };
+}
 
 /**
  * Merge runs of consecutive deltas for one message into a single delta, so a burst of tokens
@@ -28,7 +41,7 @@ export function coalesceLiveEvents(events: readonly LiveReplyEvent[]): LiveReply
   for (const event of events) {
     const last = merged[merged.length - 1];
     if (event.type === 'delta' && last?.type === 'delta' && last.messageId === event.messageId) {
-      merged[merged.length - 1] = { ...last, text: last.text + event.text };
+      merged[merged.length - 1] = mergeDelta(last, event);
     } else {
       merged.push(event);
     }

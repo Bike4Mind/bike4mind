@@ -138,6 +138,18 @@ describe('GET /api/data-lakes/:id/converge', () => {
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ convergeableCount: 2 }));
   });
 
+  it('wires admin settings and the request logger into the read gate so reader grants are honored', async () => {
+    await invoke('GET');
+    expect(h.assertLakeAccess).toHaveBeenCalledWith(
+      'lake1',
+      expect.anything(),
+      expect.objectContaining({
+        db: expect.objectContaining({ settings: expect.objectContaining({ getSettingsValue: h.getSettingsValue }) }),
+        logger: expect.anything(),
+      })
+    );
+  });
+
   // The read gate is deliberately WIDER than manage - it has a public arm that crosses orgs - while
   // the conflicting lakes the plan names are resolved by membership with no access filter at all.
   // So this exit has to redact, or a public lake becomes a directory of every private lake its
@@ -180,6 +192,7 @@ describe('POST /api/data-lakes/:id/converge', () => {
   it('gates on rebuild access', async () => {
     await invoke('POST');
     expect(h.assertLakeRebuildAccess).toHaveBeenCalled();
+    expect(h.assertLakeRebuildAccess.mock.calls[0][2].db).not.toHaveProperty('settings');
     // By id only: a slug skips a deleted lake and would resolve the next lake sharing it.
     expect(h.assertLakeRebuildAccess.mock.calls[0][3]).toEqual({ idOnly: true });
     expect(h.assertLakeRebuildAccess.mock.calls[1][3]).toEqual({ idOnly: true });

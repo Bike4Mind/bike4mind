@@ -59,6 +59,10 @@ const SAVE_EVERY = 25;
 const WATCH_SINCE_SLACK_MS = 2000;
 /** Focusing the window syncs web notebooks at most this often (ms). */
 const WEB_FOCUS_INTERVAL_MS = 60_000;
+/** While a window stays focused, look for new web notebooks this often (ms). There is no push from the web. */
+const WEB_POLL_INTERVAL_MS = 3 * 60_000;
+/** Each failed poll doubles the wait, up to this many doublings (3 min -> 48 min). */
+const WEB_POLL_MAX_BACKOFF_STEPS = 4;
 
 export interface ClaudeImportLogger {
   warn(message: string): void;
@@ -102,6 +106,11 @@ export class ClaudeImportService {
   private chatTimer: NodeJS.Timeout | null = null;
   private sessionsTimer: NodeJS.Timeout | null = null;
   private startTimer: NodeJS.Timeout | null = null;
+  private webPollTimer: NodeJS.Timeout | null = null;
+  private webPollFailures = 0;
+  private windowFocused = false;
+  /** Notebooks this run has to read and how many it has read; null between runs. */
+  private webProgress: { done: number; total: number } | null = null;
   /** Scopes whose existing copies were brought in line this launch; see tidyImports. */
   private readonly tidied = new Set<string>();
   private disposed = false;
@@ -154,9 +163,40 @@ export class ClaudeImportService {
 
   /** A window gained focus: catch up with the web, throttled, and never alongside a running sync. */
   onWindowFocus(): void {
+    this.windowFocused = true;
+    this.scheduleWebPoll();
     this.runBackground(() => this.detectHints());
     if (this.startTimer || this.webRun || Date.now() - this.webStartedAt < WEB_FOCUS_INTERVAL_MS) return;
     this.runBackground(() => this.autoSyncWeb());
+  }
+
+  /** No window of the app is focused any more (hidden, minimized or in the background): stop polling. */
+  onAppBlur(): void {
+    this.windowFocused = false;
+    if (this.webPollTimer) clearTimeout(this.webPollTimer);
+    this.webPollTimer = null;
+  }
+
+  /** One pending poll at most, and only while focused; a failed poll backs off, a good one resets. */
+  private scheduleWebPoll(): void {
+    if (this.webPollTimer || !this.windowFocused || this.disposed) return;
+    const delay = WEB_POLL_INTERVAL_MS * 2 ** this.webPollFailures;
+    this.webPollTimer = setTimeout(() => {
+      this.webPollTimer = null;
+      this.runBackground(() => this.pollWeb());
+    }, delay);
+    this.webPollTimer.unref?.();
+  }
+
+  private async pollWeb(): Promise<void> {
+    try {
+      // A run in flight, or one a focus just started, already covers this tick.
+      if (!this.windowFocused || this.webRun || Date.now() - this.webStartedAt < WEB_FOCUS_INTERVAL_MS) return;
+      await this.autoSyncWeb();
+      this.webPollFailures = this.webError ? Math.min(this.webPollFailures + 1, WEB_POLL_MAX_BACKOFF_STEPS) : 0;
+    } finally {
+      this.scheduleWebPoll();
+    }
   }
 
   private serializeSettings<T>(work: () => Promise<T>): Promise<T> {
@@ -167,7 +207,7 @@ export class ClaudeImportService {
 
   dispose(): void {
     this.disposed = true;
-    for (const timer of [this.codeTimer, this.chatTimer, this.sessionsTimer, this.startTimer]) {
+    for (const timer of [this.codeTimer, this.chatTimer, this.sessionsTimer, this.startTimer, this.webPollTimer]) {
       if (timer) clearTimeout(timer);
     }
     if (this.codePoll) clearInterval(this.codePoll);
@@ -209,6 +249,7 @@ export class ClaudeImportService {
       web: {
         settings: settings.web,
         running: !!this.webRun,
+        ...(this.webProgress ? { progress: { ...this.webProgress } } : {}),
         lastSyncAt: scope?.webLastSyncAt ?? null,
         lastSyncMs: scope?.webLastSyncMs ?? null,
         counts: webCount,
@@ -320,17 +361,17 @@ export class ClaudeImportService {
   }
 
   /**
-   * What the sidebar hints offer: Claude Code sessions counted by file name alone (never read),
-   * and one count request to the web. Only for a sync that is off; the Claude Code count runs once
-   * per launch, the web count once per account (retried, throttled, until it succeeds).
+   * Feeds the empty-sidebar import card's options: Claude Code sessions counted by file name alone
+   * (never read), and one count request to the web. Skipped once that card is dismissed or a sync
+   * is on; the Claude Code count runs once per launch, the web count once per account (throttled).
    */
   private async detectHints(): Promise<void> {
     const scopeKey = this.deps.scopeKey();
     if (!scopeKey) return;
     const settings = await this.states.readSettings();
     const dismissed = (await this.states.scope(scopeKey)).dismissedHints;
-    const wanted = (hint: 'claude-code' | 'web') => !dismissed.includes(hint) || !dismissed.includes('sidebar-empty');
-    if (!this.codeChecked && !settings.code.enabled && !settings.code.sourceFolder && wanted('claude-code')) {
+    const wanted = !dismissed.includes('sidebar-empty');
+    if (!this.codeChecked && !settings.code.enabled && !settings.code.sourceFolder && wanted) {
       this.codeChecked = true;
       const transcripts = await listTranscripts(this.defaultSourceFolder(), false);
       this.codeSessions = transcripts.filter(transcript => ranInClaudeWorktree(transcript.path)).length;
@@ -342,7 +383,7 @@ export class ClaudeImportService {
       !this.webNotebooks.has(scopeKey) &&
       Date.now() - triedAt >= WEB_FOCUS_INTERVAL_MS &&
       !settings.web.enabled &&
-      wanted('web')
+      wanted
     ) {
       this.webCountTriedAt.set(scopeKey, Date.now());
       try {
@@ -393,6 +434,7 @@ export class ClaudeImportService {
       } while (this.webRerun && !this.disposed);
     })().finally(() => {
       this.webRun = null;
+      this.webProgress = null;
       this.pushState();
     });
     this.pushState();
@@ -423,6 +465,8 @@ export class ClaudeImportService {
     const queue = listed.notebooks.filter(notebook => needsWebImport(notebook, scope.webNotebooks[notebook.id]));
     const pickModel = once(this.deps.pickModel);
     let done = 0;
+    this.webProgress = { done: 0, total: queue.length };
+    this.pushState();
     await runQueue(queue, IMPORT_CONCURRENCY, async notebook => {
       if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
       if (!(await this.states.readSettings()).web.enabled) return;
@@ -454,7 +498,9 @@ export class ClaudeImportService {
         };
         this.deps.logger.warn(`WEB IMPORT: could not import a notebook: ${String(error)}`);
       }
-      if (++done % SAVE_EVERY === 0) {
+      done++;
+      if (this.webProgress) this.webProgress.done = done;
+      if (done % SAVE_EVERY === 0) {
         await this.states.saveScope(scopeKey);
         this.pushState();
       }

@@ -1,6 +1,6 @@
 import { FC } from 'react';
 import { Box, Button, CircularProgress, LinearProgress, Stack, Typography } from '@mui/joy';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from '@client/app/utils/prettyBytes';
 import { useOrgStorageUsage } from '@client/app/hooks/data/useOrgStorageUsage';
 
 const percentOf = (bytes: number, totalBytes: number) => {

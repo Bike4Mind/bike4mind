@@ -1,3 +1,4 @@
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 /**
@@ -9,7 +10,7 @@ import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQ
  *
  * Production flow instead goes User -> Chat API -> EventBridge -> QuestProcessor Lambda
  * -> LLM -> Tools -> DB. EventBridge is preferred there: no API Gateway 29s timeout
- * pressure, supports long-running QuestMaster workflows, and has built-in LLM retry.
+ * pressure, supports long-running multi-step tool workflows, and has built-in LLM retry.
  * Always prefer the EventBridge pattern for complex/autonomous operations.
  */
 
@@ -26,7 +27,7 @@ import {
   resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { ChatModels, ForbiddenError, type IMessage, type ModelInfo } from '@bike4mind/common';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
@@ -344,7 +345,9 @@ const handler = baseApi({ auth: true }).post(
       if (candidates.length === 0) {
         throw new BadRequestError('No LLM models with tool support available.');
       }
-      const admission = await createModelAdmission(user, availableModels);
+      const admission = await createModelAdmission(user, availableModels, false, {
+        organizationId: resolveRequestBillingOrgId(req),
+      });
       let modelInfo: ModelInfo | undefined;
       for (const candidate of candidates) {
         if (await admission.admits(candidate.id)) {

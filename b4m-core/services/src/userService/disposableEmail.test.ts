@@ -8,6 +8,7 @@ import {
   REJECT_TIER_SOURCES,
   shouldBlockDisposableEmail,
 } from './disposableEmail';
+import { Logger } from '@bike4mind/observability';
 
 const adminSettingsWith = (settings: Record<string, unknown>) => {
   const findBySettingName = vi.fn(async (name: string) =>
@@ -199,23 +200,23 @@ describe('shouldBlockDisposableEmail with refreshed lists', () => {
   });
 
   it('records the reject-tier sources of every refusal, and a failing recorder does not unblock', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const log = vi.spyOn(Logger, 'info').mockImplementation(() => {});
     const { adminSettings } = adminSettingsWith({});
     const recordDisposableRefusal = vi.fn().mockRejectedValue(new Error('cloudwatch down'));
     const signupProtection = {
       ...protectionWith({ 'multi-burner.test': ['aggregate', 'curated', 'tompec'] }),
       recordDisposableRefusal,
     } as SignupProtection;
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     expect(await shouldBlockDisposableEmail('x@multi-burner.test', { adminSettings, signupProtection })).toBe(true);
     const refusal = { domain: 'multi-burner.test', sources: ['curated', 'tompec'] };
     expect(recordDisposableRefusal).toHaveBeenCalledExactlyOnceWith(refusal);
-    expect(log).toHaveBeenCalledWith(JSON.stringify({ event: 'disposable-email-refused', ...refusal }));
+    expect(log).toHaveBeenCalledWith('disposable-email-refused', { event: 'disposable-email-refused', ...refusal });
     vi.restoreAllMocks();
   });
 
   it('attributes static-list and admin-list refusals, and records nothing when allowed', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(Logger, 'info').mockImplementation(() => {});
     const recordDisposableRefusal = vi.fn();
     const signupProtection = { ...protectionWith({}), recordDisposableRefusal } as SignupProtection;
     const { adminSettings } = adminSettingsWith({ blockedEmailDomains: ['admin-blocked.test'] });

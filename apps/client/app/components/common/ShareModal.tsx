@@ -19,6 +19,9 @@ import {
   Permission,
   IFabFileDocument,
   ISessionDocument,
+  type OrganizationSharingPolicy,
+  PUBLIC_SHARING_BLOCKED,
+  EXTERNAL_SHARING_BLOCKED,
 } from '@bike4mind/common';
 import {
   Autocomplete,
@@ -137,6 +140,31 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
   const [currentInputValue, setCurrentInputValue] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [tabIndex, setTabIndex] = useState(1);
+  const [sharingPolicy, setSharingPolicy] = useState<OrganizationSharingPolicy | null>(null);
+  useEffect(() => {
+    if (!open || !id || (type !== InviteType.Session && type !== InviteType.Project)) return;
+    let active = true;
+    const resource = type === InviteType.Session ? 'sessions' : 'projects';
+    api
+      .get<{ policy: OrganizationSharingPolicy | null }>(`/api/${resource}/${id}/sharingPolicy`)
+      .then(response => {
+        if (active) setSharingPolicy(response.data?.policy ?? null);
+      })
+      .catch(() => {
+        /* Server enforcement remains authoritative if the hint cannot load. */
+      });
+    return () => {
+      active = false;
+      setSharingPolicy(null);
+    };
+  }, [open, id, type]);
+  const linkBlockedReason =
+    sharingPolicy &&
+    (!sharingPolicy.allowPublicLinks
+      ? PUBLIC_SHARING_BLOCKED
+      : !sharingPolicy.allowExternalSharing
+        ? EXTERNAL_SHARING_BLOCKED
+        : null);
   const [generatedLink, setGeneratedLink] = useState('');
   const [completedShares, setCompletedShares] = useState<number>(0);
   const [sharedUsers, setSharedUsers] = useState<IUserShare[]>(users || []);
@@ -273,6 +301,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
 
   const handleShareSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (tabIndex === 1 && linkBlockedReason) return;
     setLoading(true);
     setCompletedShares(0);
 
@@ -588,8 +617,9 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                 <GroupIcon /> By Users
               </Tab>
             </Tooltip>
-            <Tooltip title={'By Link'}>
+            <Tooltip title={linkBlockedReason || 'By Link'}>
               <Tab
+                data-testid="share-modal-link-tab"
                 sx={{
                   width: '33.33%',
                   borderRadius: '10px',
@@ -615,6 +645,20 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
           </TabList>
 
           <Box sx={{ padding: '2em' }}>
+            {linkBlockedReason && (
+              <Typography level="body-sm" color="warning" data-testid="share-modal-policy-explanation">
+                {linkBlockedReason}
+              </Typography>
+            )}
+            {sharingPolicy && !sharingPolicy.allowExternalSharing && (
+              <Typography level="body-sm">
+                Only organization members
+                {sharingPolicy.allowedDomains.length
+                  ? ` and recipients at ${sharingPolicy.allowedDomains.join(', ')}`
+                  : ''}{' '}
+                can receive this share.
+              </Typography>
+            )}
             <form onSubmit={handleShareSubmit}>
               <Box sx={{ display: 'grid', gap: '1em' }}>
                 {tabIndex !== 2 && (
@@ -802,7 +846,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                 <Button
                   className="share-modal-submit-button"
                   data-testid="share-modal-submit-button"
-                  disabled={loading}
+                  disabled={loading || (tabIndex === 1 && !!linkBlockedReason)}
                   type={'submit'}
                   sx={{ minWidth: { xs: 0, sm: '200px' }, flex: { xs: 1, sm: 'none' } }}
                   variant={'solid'}

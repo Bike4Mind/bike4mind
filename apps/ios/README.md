@@ -1,8 +1,21 @@
 # Bike4Mind iOS
 
 Native iPhone app (SwiftUI, Swift 6). `make build`, `make test`, `make format`, `make lint` (see the Makefile).
-Simulator-only until an Apple Developer team id is configured (`IOS_TEAM_ID`); see [DEVICE_TESTING.md](DEVICE_TESTING.md) for everything that
-needs a device or signing.
+`make device` builds, installs and launches on a connected iPhone (see below). The other targets run on the simulator; see
+[DEVICE_TESTING.md](DEVICE_TESTING.md) for everything that needs a device or signing.
+
+### Run on a connected iPhone
+
+```sh
+make device                       # the single connected, paired iPhone
+make device DEVICE="My iPhone"    # a device name or UDID, when several are connected
+```
+
+It builds the Debug configuration with automatic signing, installs over any existing copy (the app stays signed in) and
+launches it. It needs the personal signing config from [DEVICE_TESTING.md](DEVICE_TESTING.md) (`Config/Local.xcconfig` with
+`DEVELOPMENT_TEAM`), and exits with a message when no team is set or when zero or several devices are connected. What it cannot
+automate: Developer Mode on (Settings > Privacy & Security), the phone unlocked and trusted, and on the first launch trusting the
+developer certificate (Settings > General > VPN & Device Management).
 
 ## Feature map
 
@@ -20,6 +33,7 @@ needs a device or signing.
 ## Targets and packages
 
 - **Bike4Mind**: the app. **Widgets**: widget and Live Activity extension. **ShareExtension**: the share sheet target.
+- **ActivityIntents**: App Intents compiled into both the app and the widget extension (the Live Activity's approve and deny buttons), so the system runs them in the app's process.
 - **Packages/B4MKit**: everything that is not a view (API, auth, view models, wire formats); unit-tested on the simulator and the host.
 - **Packages/B4MClient**: the generated OpenAPI client (see below).
 - Screens never use generated types; `B4MKit` maps them to domain models behind `B4MAPI`.
@@ -52,7 +66,13 @@ update-required screen (`ClientUpgradeStatus`) without signing out. "Try again" 
 
 - **Committed output, no build plugin.** `Sources/B4MClient/Generated` is checked in, so a regeneration is a
   reviewable diff and building the app never fetches or compiles the generator.
-- **Snapshot.** `Packages/B4MClient/openapi.json` is a copy of `apps/client/public/openapi.json`.
+- **Snapshot.** `Packages/B4MClient/openapi.json` is a copy of `apps/client/public/openapi.json` with overlay-only enum
+  values stripped (`Scripts/strip_overlay_literals.py`). Refresh it with `make generate-client SPEC_REF=origin/main`.
+- **Drift signal.** The snapshot is not refreshed by server changes. `native-openapi-drift.yml` compares it (after the
+  overlay-literal stripping above) with `apps/client/public/openapi.json` on every PR that touches the spec or a
+  snapshot, and keeps one PR comment up to date with the per-client difference. It **warns and never blocks**: the
+  check stays green so an API change does not have to regenerate Swift and Kotlin in the same PR. Additive changes
+  still decode; regenerate before shipping a removed, renamed or retyped field.
 - **Filter.** `openapi-generator-config.yaml` lists the operations the app uses. The full spec generates
   ~140k lines; add an operation to the `filter.operations` list when a screen needs it.
   `sendChatMessage` is excluded: its request schema has both `max_tokens` and `maxTokens`, which collide and do not compile,
@@ -73,7 +93,8 @@ Screens never use generated types: `B4MKit` maps them to domain models behind th
 
 A DEBUG build launched with `B4M_UI_FIXTURES=1` skips sign-in and serves canned sessions, transcript,
 credits, media, widgets and capture (`Bike4Mind/Features/Debug/FixtureServices.swift`). `B4M_UI_FIXTURE_ACCOUNT=org-transfer`
-shows the delete-account 409 list and `pending` launches on the restore screen:
+shows the delete-account 409 list and `pending` launches on the restore screen. `B4M_UI_FIXTURE_LINK=<app link>`
+opens that link at launch, e.g. `https://app.bike4mind.com/notebooks/fixture-1` for a transcript with a code block:
 
 ```sh
 SIMCTL_CHILD_B4M_UI_FIXTURES=1 xcrun simctl launch booted com.bike4mind.app
@@ -113,12 +134,20 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
   no team. Nothing is gated. Once an Apple Developer team id is configured: set `DEVELOPMENT_TEAM`, enable the Push
   Notifications and Associated Domains capabilities on the App ID, and publish the AASA file on app.bike4mind.com.
   Until then, universal links open in Safari and APNs registration fails (logged, harmless) in the simulator.
+- **Signing config**: `Config/Signing.xcconfig` supplies the team, the three bundle ids and the three entitlements paths to every
+  target, with defaults equal to the team/CI values. It ends with an optional `#include? "Local.xcconfig"`; that file is gitignored,
+  so a developer overrides the values in it without touching the project. To build to a personal device, copy
+  `Config/Local.xcconfig.example` to `Config/Local.xcconfig` and set `DEVELOPMENT_TEAM`, `B4M_APP_BUNDLE_ID` and the personal
+  entitlements (`Config/Entitlements/*.personal.entitlements`, empty because a free team signs none of these capabilities); see
+  [DEVICE_TESTING.md](DEVICE_TESTING.md). `Tools/check-entitlements-parity.sh` checks the team entitlements against `B4MKit`, requires the
+  personal variants to declare nothing, and checks the xcconfig defaults point at the committed files. CI's `fastlane` passes
+  `DEVELOPMENT_TEAM` on the command line, which overrides the xcconfig.
 - Authorization: provisional (silent) on first signed-in moment; the system prompt appears once, when the user first
   opens a conversation (`PushRegistrationCoordinator.userDidReachValueMoment`).
 
 ## Widgets, App Intents and the media gallery
 
-- **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`.
+- **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`. The lock-screen decisions widget shows `GET /api/v1/pending-decisions`, which the app re-reads on foreground, when a turn settles, after the brief loads and after an approval is answered; counted approvals drop out of it 15 minutes after the count was read, since by then they have lapsed.
 - **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send. Ask and Capture note land on the home screen, the root of the stack.
 - **Settings** (`Bike4Mind/Features/Settings/`): the avatar on the home screen and the drawer's account row push Settings onto the stack, and `Route.settings` (deep links, the Credits widget) lands there too. The profile header reads the access token's claims (`AccountProfile`); there is no profile endpoint.
 - **Studio** (code name `media`, `Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the Studio gallery and the widgets show canned data.
@@ -145,16 +174,17 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
 - **Voice** records with `AVAudioRecorder` and transcribes through `POST /api/v1/transcriptions/uploads` + `POST /api/v1/transcriptions`.
 - **Shared access**: both targets carry the `group.com.bike4mind.app` App Group and the `$(AppIdentifierPrefix)com.bike4mind.shared`
   keychain group so the extension can read the app's refresh token. The team prefix is resolved at runtime; with no entitlement in
-  effect (an unsigned build) the keychain item stays private to the app, the App Group falls back to Application Support, and the
-  extension simply reports it is signed out. The share flow works end to end only on a signed build with both capabilities enabled.
+  effect (an unsigned build, or a signed build without Keychain Sharing) the keychain item stays private to the app, the App Group
+  falls back to Application Support, and the extension simply reports it is signed out. The share flow works end to end only on a
+  signed build with both capabilities enabled.
 - `B4M_UI_FIXTURES=1` swaps in fixture destinations, submission and transcription, in the app and in the extension.
 
 ## App icon and launch screen
 
-The icon is a generated **placeholder** (three connected nodes on a brand-blue gradient, no text) so builds look finished.
-Replace it with real artwork whenever it exists: drop a 1024x1024 PNG over
-`Bike4Mind/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png` and the launch mark in `LaunchMark.imageset`.
-To regenerate the placeholder: `swift Tools/GenerateAppIcon.swift`. The launch screen is `AppSupport/Info.plist` (`UILaunchScreen`:
+The app icon and launch mark are rendered from the official brand mark, `apps/client/public/images/logos/Colored_Favicon.svg`
+(the mark the web NotebookSplash shows), by `swift Tools/GenerateAppIcon.swift` (macOS 14+). The icon fills the square with the
+mark's own gradient so the disc's edge all but disappears; the launch mark is the disc as-is and doubles as the Chat home greeting and sign-in mark.
+Re-run the script when the brand SVG changes and commit the PNGs. The launch screen is `AppSupport/Info.plist` (`UILaunchScreen`:
 `LaunchBackground` colour plus the centered `LaunchMark` image).
 
 ## Privacy manifests and App Privacy answers
@@ -169,7 +199,7 @@ App Store Connect questionnaire (all data is **linked to the user**, **not used 
 |-----------|-----------|-----|
 | Contact Info: Email Address, Name | Yes | Account sign-in (completed in the web sign-in sheet) |
 | Identifiers: User ID, Device ID | Yes | Session identity; APNs token for push |
-| User Content: Photos or Videos, Audio Data, Other User Content | Yes | Chat messages, files, images and voice notes the user sends |
+| User Content: Photos or Videos, Audio Data, Other User Content | Yes | Chat messages, files, images and voice notes the user sends. Voice conversation audio is recognized by Apple Speech, on the device where the language has an on-device model (otherwise Apple may process the audio), and only the resulting text is sent to Bike4Mind |
 | Diagnostics (crash, performance), Usage Data, Location, Health, Financial, Browsing, Search | No | Not collected |
 
 Does the app track users across other companies' apps or sites: **No**. Account deletion is available in the app. Keep this table
@@ -177,9 +207,7 @@ in sync with the manifests and with what the build actually sends.
 
 ## fastlane and CI
 
-- `bundle install`, then `bundle exec fastlane test` (same as `make test`), `build` (simulator build) and `beta` (TestFlight).
-  **`beta` is a stub:** it refuses to run until `IOS_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_CONTENT_BASE64` are set,
-  and signing is not configured in the repo.
+- `bundle install`, then `bundle exec fastlane test` (same as `make test`), `build` (simulator build) and `beta` (TestFlight). `beta` refuses to run until `IOS_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_CONTENT_BASE64`, `B4M_MARKETING_VERSION` and `B4M_BUILD_NUMBER` are set. CI runs it from `.github/workflows/ios-testflight.yml` on a `mobile-v*` tag; the version scheme, parity gate and secrets are in [docs/mobile-release-train.md](../../docs/mobile-release-train.md).
 - `.github/workflows/ios.yml` runs on changes to `apps/ios/**`: the entitlements parity check (`Tools/check-entitlements-parity.sh`), `make lint`, `make test`,
   the generated-client reproducibility check (`make generate-client` then `git status --porcelain` must be empty) and `make build`, with SwiftPM cached.
   The workflow selects the newest installed Xcode 26.x and the first available iPhone simulator. The runner needs an Xcode that matches the project's SDK; adjust the runner image if it lags.

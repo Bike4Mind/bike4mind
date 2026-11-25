@@ -529,6 +529,7 @@ describe('CompletionSseErrorEventSchema', () => {
     for (const code of [
       'insufficient_credits',
       'spend_cap_exceeded',
+      'free_quest_limit_reached',
       'invalid_request',
       'provider_error',
       'provider_rejected',
@@ -544,8 +545,14 @@ describe('CompletionSseErrorEventSchema', () => {
   });
 
   // QUEST_ERROR_CODES is persisted on quests; the frame widens its own copy instead.
-  it('leaves the persisted quest vocabulary unwidened', () => {
-    expect([...QUEST_ERROR_CODES]).toEqual(['insufficient_credits', 'spend_cap_exceeded']);
+  it('keeps provider-only classifiers out of the persisted quest vocabulary', () => {
+    expect([...QUEST_ERROR_CODES]).toEqual([
+      'insufficient_credits',
+      'spend_cap_exceeded',
+      'spend_frozen',
+      'free_quest_limit_reached',
+      'run_budget_exhausted',
+    ]);
     expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
       ...QUEST_ERROR_CODES,
       'invalid_request',
@@ -717,5 +724,22 @@ describe('CompletionMessageSchema content blocks', () => {
       ],
     });
     expect(parsed.success).toBe(true);
+  });
+});
+
+describe('CompletionRequestSchema organization_id', () => {
+  const base = { model: 'm', messages: [{ role: 'user', content: 'hi' }] };
+
+  it.each([
+    [undefined, undefined],
+    [null, null],
+    [' org-2 ', 'org-2'],
+  ])('parses %j', (input, expected) => {
+    const parsed = CompletionRequestSchema.parse({ ...base, organization_id: input });
+    expect(parsed.organization_id).toBe(expected);
+  });
+
+  it.each(['', '   '])('rejects the blank value %j', value => {
+    expect(CompletionRequestSchema.safeParse({ ...base, organization_id: value }).success).toBe(false);
   });
 });

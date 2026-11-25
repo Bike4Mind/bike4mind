@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { SkillSummary } from '@shared/skills';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+import { CustomizeScreen, useCustomizeAttention } from './CustomizePanel';
 import { forgetSkillGroupExpansion } from './skillGroups';
 import { desktopTheme } from '../theme';
 
@@ -143,27 +143,24 @@ describe('the Customize screen', () => {
     ];
   });
 
-  it('orders Skills, MCP and Plugins and selects Skills by default', () => {
+  it('orders Skills, MCP and Plugins, selects Skills by default, and keeps a way out', () => {
     renderScreen();
-    const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
+    const tabs = [...container.querySelectorAll<HTMLElement>('[data-testid="customize-tab-row"] [role="tab"]')];
     expect(tabs.map(tab => tab.textContent)).toEqual(['Skills', 'MCP', 'Plugins']);
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
     expect(container.querySelector('h1')?.textContent).toBe('Customize');
     expect(isVisible(byTestId('skills-settings'))).toBe(true);
     expect(isVisible(byTestId('customize-plugins-grid'))).toBe(false);
+    expect(isVisible(byTestId('customize-close-btn'))).toBe(true);
+
+    // App preferences, the server and the updater stay in Settings.
+    expect(container.querySelector('[data-entry="appearance"]')).toBeNull();
+    expect(container.querySelector('[data-entry="prompt-suggestions"]')).toBeNull();
+    expect(byTestId('update-settings')).toBeNull();
+    expect(byTestId('environment-select-btn')).toBeNull();
   });
 
-  it('removes the extra tab-row border while retaining the selected tab', () => {
-    renderScreen();
-    const row = byTestId('customize-tab-row');
-    expect(row).not.toBeNull();
-    const style = getComputedStyle(row!);
-    expect(['', 'none']).toContain(style.borderBottomStyle);
-    const tab = byTestId('customize-skills-tab');
-    expect(tab?.getAttribute('aria-selected')).toBe('true');
-  });
-
-  it('selects Plugins and shows exactly four unavailable, inert cards', () => {
+  it('selects Plugins and shows exactly three unavailable, inert cards', () => {
     const onClose = vi.fn();
     const onOpenSkillMarket = vi.fn();
     renderNode(<CustomizeScreen onClose={onClose} onOpenSkillMarket={onOpenSkillMarket} />);
@@ -176,7 +173,7 @@ describe('the Customize screen', () => {
     expect(isVisible(byTestId('mcp-settings'))).toBe(false);
 
     const cards = allByTestId('customize-plugin-card');
-    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['DataLake', 'QuestMaster', 'Tavern', 'Studio']);
+    expect(cards.map(card => card.getAttribute('aria-label'))).toEqual(['DataLake', 'QuestMaster']);
     act(() => pluginsTab.focus());
     for (const card of cards) {
       expect(card.tagName).toBe('ARTICLE');
@@ -307,12 +304,15 @@ describe('the Customize screen', () => {
 
     act(() => theirs?.querySelector<HTMLElement>('[data-testid="customize-skill-update-btn"]')?.click());
     expect(onOpenSkillMarket).toHaveBeenLastCalledWith({ id: 'l1' });
+    act(() => byTestId('skills-discover-tab')?.click());
     act(() => byTestId('customize-skill-market-btn')?.click());
     expect(onOpenSkillMarket).toHaveBeenLastCalledWith();
-    const webBtn = mine?.querySelector<HTMLElement>('[data-testid="customize-skill-web-btn"]');
+    act(() => byTestId('skills-your-tab')?.click());
+    const remounted = allByTestId('customize-skill-row').find(row => text(row)?.includes('/web-summary'));
+    const webBtn = remounted?.querySelector<HTMLElement>('[data-testid="customize-skill-web-btn"]');
     expect(webBtn?.hasAttribute('title')).toBe(false);
     expect(webBtn?.getAttribute('aria-label')).toBe('Open /web-summary on the web');
-    expect(mine?.querySelector('[title]')).toBeNull();
+    expect(remounted?.querySelector('[title]')).toBeNull();
     act(() => webBtn?.click());
     expect(market.openOnWeb).toHaveBeenCalledWith({ kind: 'skill', id: 'a1' });
   });
@@ -326,18 +326,6 @@ describe('the Customize screen', () => {
     expect(byTestId('config-entry-btn')).toBeNull();
   });
 
-  it('leaves app preferences, the server, and the updater to Settings', () => {
-    renderScreen();
-    expect(container.querySelector('[data-entry="appearance"]')).toBeNull();
-    expect(container.querySelector('[data-entry="prompt-suggestions"]')).toBeNull();
-    expect(byTestId('update-settings')).toBeNull();
-    expect(byTestId('environment-select-btn')).toBeNull();
-  });
-
-  it('keeps a way out of the screen', () => {
-    renderScreen();
-    expect(isVisible(byTestId('customize-close-btn'))).toBe(true);
-  });
   it('offers Upload on local rows only, resolved by name in main, and opens the preview', async () => {
     skills.state.skills = [
       ...skills.state.skills,
@@ -354,8 +342,18 @@ describe('the Customize screen', () => {
     expect(document.querySelector('[data-testid="skill-upload-dialog"]')).not.toBeNull();
   });
 
+  it('shows a failed row upload on the Installed tab', async () => {
+    market.readLocalSkill.mockResolvedValueOnce({ ok: false, error: 'Could not read that skill.' } as never);
+    renderScreen();
+    const local = allByTestId('customize-skill-row').find(row => text(row)?.includes('/chrome-browser'));
+    await act(async () => local?.querySelector<HTMLElement>('[data-testid="skill-row-upload-btn"]')?.click());
+    expect(isVisible(byTestId('skill-upload-pick-error'))).toBe(true);
+    expect(text(byTestId('skill-upload-pick-error'))).toContain('Could not read that skill.');
+  });
+
   it('shows a failed pick inline', async () => {
     renderScreen();
+    act(() => byTestId('skills-discover-tab')?.click());
     await act(async () => byTestId('skill-upload-pick-btn')?.click());
     expect(text(byTestId('skill-upload-pick-error'))).toContain('No SKILL.md in that folder.');
   });
@@ -412,13 +410,20 @@ describe('the Customize skill groups', () => {
     expect(rowsIn(groupNamed('group-0'))).toHaveLength(2);
   });
 
-  it('opens collapsed above ten groups and renders no rows for collapsed groups', () => {
+  it('opens collapsed above ten groups, renders no rows for them, and remembers expanded ones on reopen', () => {
     skills.state.skills = manyGroups(11);
     renderScreen();
     expect(toggles()).toHaveLength(11);
     expect(toggles().every(toggle => toggle.getAttribute('aria-expanded') === 'false')).toBe(true);
     expect(allByTestId('customize-skill-row')).toEqual([]);
     expect(allByTestId('skills-group-list')).toEqual([]);
+
+    act(() => toggles()[2]?.click());
+    act(() => root.unmount());
+    renderScreen();
+    expect(toggles().map(toggle => toggle.getAttribute('aria-expanded'))).toEqual(
+      Array.from({ length: 11 }, (_, index) => (index === 2 ? 'true' : 'false'))
+    );
   });
 
   it('collapses and expands every group at once', () => {
@@ -441,8 +446,8 @@ describe('the Customize skill groups', () => {
     expect(allByTestId('customize-skill-row')).toHaveLength(7);
   });
 
-  it('shows only matches while filtering, expanding just the groups that have one', () => {
-    skills.state.skills = [...manyGroups(11), skill('lonely', 'solo')];
+  it('shows only matches of a name or description while filtering, expanding just the groups that have one', () => {
+    skills.state.skills = [...manyGroups(11), skill('lonely', 'solo', 'Read portable documents')];
     renderScreen();
     expect(allByTestId('customize-skill-row')).toHaveLength(1);
 
@@ -454,6 +459,10 @@ describe('the Customize skill groups', () => {
     expect(rowsIn(groupNamed('group-3'))).toEqual([expect.stringContaining('/beta-3')]);
     expect(allByTestId('skills-single-row')).toEqual([]);
 
+    typeFilter('portable');
+    expect(allByTestId('skills-single-row').map(row => text(row))).toEqual([expect.stringContaining('/solo')]);
+    expect(allByTestId('skill-group')).toEqual([]);
+
     typeFilter('nothing-matches-this');
     expect(text(byTestId('skills-filter-empty'))).toBe('No skills match.');
     expect(allByTestId('skill-group')).toEqual([]);
@@ -462,35 +471,15 @@ describe('the Customize skill groups', () => {
     expect(toggles()).toHaveLength(11);
     expect(toggles().every(toggle => toggle.getAttribute('aria-expanded') === 'false')).toBe(true);
   });
-
-  it('matches descriptions too', () => {
-    skills.state.skills = [skill('docs', 'pdf', 'Read portable documents'), skill('docs', 'xlsx', 'Spreadsheets')];
-    renderScreen();
-    typeFilter('portable');
-    expect(rowsIn(groupNamed('docs'))).toEqual([expect.stringContaining('/pdf')]);
-  });
-
-  it('remembers expanded groups when the screen is reopened', () => {
-    skills.state.skills = manyGroups(11);
-    renderScreen();
-    act(() => toggles()[2]?.click());
-    act(() => root.unmount());
-
-    renderScreen();
-    expect(toggles().map(toggle => toggle.getAttribute('aria-expanded'))).toEqual(
-      Array.from({ length: 11 }, (_, index) => (index === 2 ? 'true' : 'false'))
-    );
-  });
 });
 
-describe('the Customize nav row', () => {
-  it('opens the screen and keeps its stable hook', () => {
-    renderNode(<CustomizeNavItem onOpen={() => {}} />);
-    expect(isVisible(byTestId('chat-customize-btn'))).toBe(true);
-  });
+describe('the Customize attention the rail avatar reads', () => {
+  function Probe() {
+    return <span data-testid="customize-attention-probe">{useCustomizeAttention() ?? 'none'}</span>;
+  }
 
-  it('shows no attention badge when nothing needs attention', () => {
-    renderNode(<CustomizeNavItem onOpen={() => {}} />);
-    expect(byTestId('customize-attention-chip')).toBeNull();
+  it('reports nothing when no entry needs attention', () => {
+    renderNode(<Probe />);
+    expect(byTestId('customize-attention-probe')?.textContent).toBe('none');
   });
 });

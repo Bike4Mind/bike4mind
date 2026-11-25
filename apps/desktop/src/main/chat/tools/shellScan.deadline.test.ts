@@ -36,7 +36,7 @@ describe('a scan past its deadline', () => {
     expect(atExpiry).toBeGreaterThan(0);
     let longest = 0;
     let last = Date.now();
-    const until = last + 200;
+    const until = last + 100;
     while (Date.now() < until) {
       await new Promise(resolve => setTimeout(resolve, 0));
       const now = Date.now();

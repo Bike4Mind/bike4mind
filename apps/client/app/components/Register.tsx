@@ -1,9 +1,10 @@
 import { useUser } from '@client/app/contexts/UserContext';
+import { MFA_SETUP_SIGNED_OUT_TOAST } from '@client/app/utils/mfaSetupCopy';
 import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
 import OtcNoCodeHint from './OtcNoCodeHint';
-import RedirectProductHint from './RedirectProductHint';
+import RedirectProductHint, { useRedirectProduct } from './RedirectProductHint';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from './common/MFAModal';
@@ -14,6 +15,7 @@ import {
   Button,
   Container,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Stack,
@@ -75,6 +77,7 @@ const Register: React.FC = () => {
   const router = useRouter();
   const theme = useTheme();
   const { t } = useTranslation();
+  const redirectProduct = useRedirectProduct();
   const startOAuthSignIn = useStartOAuthSignIn();
   const { mutate: logEvent } = useLogEvent();
 
@@ -106,9 +109,7 @@ const Register: React.FC = () => {
       setOtcCode('');
       setPendingToken(null);
       if (mode === 'setup') {
-        toast.info(
-          'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
-        );
+        toast.info(MFA_SETUP_SIGNED_OUT_TOAST);
       } else {
         toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
       }
@@ -434,22 +435,26 @@ const Register: React.FC = () => {
             >
               {currentStep === 'form' ? t('welcome', { name: theme.branding.name }) : t('auth.checkYourEmail')}
             </Typography>
-            {currentStep === 'form' && <RedirectProductHint mode="signUp" />}
-            <Typography
-              className="register-subtitle"
-              variant="plain"
-              sx={{ textAlign: 'center', color: 'text.tertiary', fontSize: '14px', mt: '4px' }}
-            >
-              {currentStep === 'form' ? (
-                t('auth.createAccountDesc')
-              ) : (
-                <Trans
-                  i18nKey="auth.codeSentTo"
-                  values={{ email: submittedData?.email }}
-                  components={{ email: <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }} /> }}
-                />
-              )}
-            </Typography>
+            {currentStep === 'form' && <RedirectProductHint mode="signUp" item={redirectProduct} />}
+            {/* On the form, the product hint already says "Create an account to continue to <product>",
+                so the generic line would say it twice. */}
+            {(currentStep !== 'form' || !redirectProduct) && (
+              <Typography
+                className="register-subtitle"
+                variant="plain"
+                sx={{ textAlign: 'center', color: 'text.tertiary', fontSize: '14px', mt: '4px' }}
+              >
+                {currentStep === 'form' ? (
+                  t('auth.createAccountDesc')
+                ) : (
+                  <Trans
+                    i18nKey="auth.codeSentTo"
+                    values={{ email: submittedData?.email }}
+                    components={{ email: <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }} /> }}
+                  />
+                )}
+              </Typography>
+            )}
           </Box>
 
           {currentStep === 'form' && (
@@ -631,7 +636,9 @@ const Register: React.FC = () => {
                     </Stack>
 
                     <FormControl size="sm" required={registrationClosed} sx={{ mt: '16px' }}>
-                      <FormLabel htmlFor="register-invite-code">Invite code</FormLabel>
+                      <FormLabel htmlFor="register-invite-code">
+                        {registrationClosed ? t('auth.inviteCodeLabel') : t('auth.inviteCodeOptionalLabel')}
+                      </FormLabel>
                       <Input
                         data-testid="register-invite-input"
                         slotProps={{ input: { id: 'register-invite-code' } }}
@@ -639,6 +646,14 @@ const Register: React.FC = () => {
                         onChange={e => setInviteCode(e.target.value)}
                         sx={inputStyles}
                       />
+                      {!registrationClosed && (
+                        <FormHelperText
+                          data-testid="register-invite-optional-hint"
+                          sx={{ mt: '6px', color: 'text.tertiary' }}
+                        >
+                          {t('auth.inviteCodeOptionalHint')}
+                        </FormHelperText>
+                      )}
                       {registrationClosed && (
                         <Typography level="body-xs" sx={{ mt: '6px', color: 'text.tertiary' }}>
                           {t('auth.noInviteCode')}{' '}

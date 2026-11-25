@@ -1,9 +1,10 @@
 /** GET /api/v1/video-models - the video models this caller can use right now. */
 import { listVideoModelsContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getVideoJobDeps } from '@server/generationJobs/wiring';
+import { getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { listUsableVideoModels } from '@bike4mind/server-utils/videoGenerations/listUsableVideoModels';
-import { filterAdmittedMediaModels } from '@server/billing/assertMediaModelAdmission';
+import { filterAdmittedMediaModels } from '@bike4mind/server-utils/billing/assertMediaModelAdmission';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 
 const handler = nextRouteForContract(listVideoModelsContract, {
@@ -11,7 +12,11 @@ const handler = nextRouteForContract(listVideoModelsContract, {
   rateLimit: perUserRateLimit('GET /api/v1/video-models'),
 }).get(async (req, res) =>
   res.json({
-    models: await filterAdmittedMediaModels(req.user, await listUsableVideoModels(req.user.id, getVideoJobDeps())),
+    models: await filterAdmittedMediaModels(
+      req.user,
+      await listUsableVideoModels(req.user.id, getVideoJobDeps()),
+      await resolveMediaBillingOrgId(req, undefined)
+    ),
   })
 );
 

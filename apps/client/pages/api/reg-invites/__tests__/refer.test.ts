@@ -1,3 +1,4 @@
+import { User } from '@bike4mind/database';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -49,7 +50,17 @@ vi.mock('@bike4mind/database', () => ({
     })),
   },
 }));
+const mockReserveRecipientSendBudget = vi.fn<(...args: unknown[]) => Promise<{ retryAfter: number } | undefined>>(
+  async () => undefined
+);
+vi.mock('@server/utils/recipientSendLimits', () => ({
+  reserveRecipientSendBudget: (...a: unknown[]) => mockReserveRecipientSendBudget(...a),
+}));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({
+  TooManyRequestsError: class TooManyRequestsError extends Error {
+    statusCode = 429;
+  },
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: vi.fn(() => false),
 }));
@@ -227,6 +238,20 @@ describe('/api/reg-invites/refer — passwordless email content', () => {
     expect(body).toContain('href="https://signup.example.com/register?source=email&amp;campaign=invite"');
     expect(createRegInvite).not.toHaveBeenCalled();
   });
+
+  it('escapes quotes in the invite code and in the registration link attribute', async () => {
+    mockInviteFind.mockResolvedValue([{ code: `a"b'c`, userId: 'user-1', status: 'open' }]);
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({
+      RegistrationLink: `https://signup.example.com/register?x="1"&y='2'`,
+    });
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+
+    await invokeHandler(req, res);
+
+    const { body } = mockEmailPublish.mock.calls[0][0] as { body: string };
+    expect(body).toContain('Invite code: <strong>a&quot;b&#39;c</strong>');
+    expect(body).toContain('href="https://signup.example.com/register?x=&quot;1&quot;&amp;y=&#39;2&#39;"');
+  });
 });
 
 describe('/api/reg-invites/refer - duplicate addresses', () => {
@@ -376,18 +401,14 @@ describe('/api/reg-invites/refer - quota reservation', () => {
     const dbError = new Error('settle failed');
     mockSettleReferrals.mockRejectedValueOnce(dbError);
     const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    try {
-      await expect(invokeHandler(req, res)).rejects.toBe(dbError);
-      // The repair path needs to know which deliveries failed, so that report is logged
-      // before the settle failure is rethrown.
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to deliver referral email to friend@example.com')
-      );
-    } finally {
-      consoleError.mockRestore();
-    }
+    await expect(invokeHandler(req, res)).rejects.toBe(dbError);
+    // The repair path needs to know which deliveries failed, so that report is logged
+    // before the settle failure is rethrown.
+    expect((req as unknown as { logger: { error: unknown } }).logger.error).toHaveBeenCalledWith(
+      'Failed to deliver referral email',
+      expect.objectContaining({ target: 'friend@example.com' })
+    );
   });
 
   it('retains quota if publication throws synchronously after minting', async () => {
@@ -527,5 +548,49 @@ describe('/api/reg-invites/refer - Slack escaping', () => {
     expect(text).toContain('&lt;!channel&gt; &amp; co');
     expect(text).toContain('Hi &amp;lt;!here&amp;gt;');
     expect(text).not.toMatch(/<!(channel|here)>/);
+  });
+});
+
+describe('/api/reg-invites/refer - per-recipient limit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReserveReferrals.mockResolvedValue(true);
+    mockReserveRecipientSendBudget.mockResolvedValue(undefined);
+    process.env.APP_URL = 'https://app.test.local';
+  });
+  const verified = { id: 'user-1', emailVerified: true, authProviders: [], numReferralsAvailable: 3 };
+
+  it('answers 429 with Retry-After before charging a referral or publishing', async () => {
+    mockReserveRecipientSendBudget.mockResolvedValue({ retryAfter: 90 });
+    const { req, res } = makeReqRes(verified);
+
+    await expect(invokeHandler(req, res)).rejects.toMatchObject({ statusCode: 429 });
+
+    expect(mockReserveRecipientSendBudget).toHaveBeenCalledWith(['friend@example.com']);
+    expect(res.getHeader('Retry-After')).toBe(90);
+    expect(mockReserveReferrals).not.toHaveBeenCalled();
+    expect(mockEmailPublish).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('applies the same mailbox refusal when an existing account is %s', async existing => {
+    vi.mocked(User.find).mockReturnValueOnce({
+      select: () => ({ lean: async () => (existing ? [{ email: 'friend@example.com' }] : []) }),
+    } as unknown as ReturnType<typeof User.find>);
+    mockReserveRecipientSendBudget.mockImplementationOnce(async recipients =>
+      Array.isArray(recipients) && recipients.includes('friend@example.com') ? { retryAfter: 90 } : undefined
+    );
+    const { req, res } = makeReqRes(verified);
+    await expect(invokeHandler(req, res)).rejects.toMatchObject({ statusCode: 429 });
+    expect(mockReserveRecipientSendBudget).toHaveBeenCalledWith(['friend@example.com']);
+    expect(mockReserveReferrals).not.toHaveBeenCalled();
+    expect(mockEmailPublish).not.toHaveBeenCalled();
+  });
+
+  it('rejects more than 25 addresses in one request', async () => {
+    const { req, res } = makeReqRes(verified);
+    req.body.friendEmail = Array.from({ length: 26 }, (_, i) => `f${i}@example.com`);
+
+    await expect(invokeHandler(req, res)).rejects.toThrow();
+    expect(mockReserveReferrals).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from '@client/app/utils/prettyBytes';
 import {
   Box,
   Button,

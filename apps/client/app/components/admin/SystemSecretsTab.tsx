@@ -14,20 +14,16 @@ import {
   Box,
   Button,
   DialogContent,
-  Dropdown,
   FormControl,
   FormLabel,
   IconButton,
   Input,
   ListDivider,
-  Menu,
-  MenuButton,
   MenuItem,
   Stack,
   Tooltip,
   Typography,
 } from '@mui/joy';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import Refresh from '@mui/icons-material/Refresh';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
@@ -46,6 +42,7 @@ import {
   type DataTableGroup,
 } from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 interface SecretStatus {
   secretName: string;
@@ -55,6 +52,8 @@ interface SecretStatus {
   source: 'database' | 'sst' | null;
   maskedValue: string;
   isOverridable: boolean;
+  /** Not read on this stage. Listed only because an override is stored, so it can be removed. */
+  isUnused?: boolean;
   dbRecord: {
     id: string;
     source: string;
@@ -209,35 +208,24 @@ function SecretRowMenu({
   onDelete: (secret: SecretStatus) => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${secret.secretName}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`system-secrets-row-actions-${secret.secretName}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+    <RowActionsMenu
+      testId={`system-secrets-row-actions-${secret.secretName}`}
+      ariaLabel={`Actions for ${secret.secretName}`}
+    >
+      {!secret.isUnused && (
         <MenuItem onClick={() => onEdit(secret)} data-testid={`system-secrets-row-edit-${secret.secretName}`}>
           Edit value
         </MenuItem>
-        {secret.dbRecord && (
-          <>
-            <ListDivider />
-            <MenuItem onClick={() => onDelete(secret)} data-testid={`system-secrets-row-delete-${secret.secretName}`}>
-              Delete override
-            </MenuItem>
-          </>
-        )}
-      </Menu>
-    </Dropdown>
+      )}
+      {secret.dbRecord && (
+        <>
+          {!secret.isUnused && <ListDivider />}
+          <MenuItem onClick={() => onDelete(secret)} data-testid={`system-secrets-row-delete-${secret.secretName}`}>
+            Delete override
+          </MenuItem>
+        </>
+      )}
+    </RowActionsMenu>
   );
 }
 
@@ -272,6 +260,13 @@ const secretColumns: readonly DataColumn<SecretStatus>[] = [
     render: secret => (
       <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 0 }}>
         <TruncatedText text={secret.secretName} mono testId={`system-secrets-name-${secret.secretName}`} />
+        {secret.isUnused && (
+          <Tooltip title="This stage does not read this setting. The stored override can be deleted.">
+            <Box component="span" sx={{ flexShrink: 0 }}>
+              <StatusChip tone="neutral" label="Not used" data-testid={`system-secrets-unused-${secret.secretName}`} />
+            </Box>
+          </Tooltip>
+        )}
         {secret.warnings && secret.warnings.length > 0 && (
           <Tooltip title={secret.warnings.join(' ')}>
             <Box component="span" sx={{ flexShrink: 0 }}>

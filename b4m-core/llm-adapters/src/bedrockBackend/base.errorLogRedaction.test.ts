@@ -124,10 +124,7 @@ describe('BaseBedrockBackend error log redaction', () => {
     const backend = new TestBedrockBackend();
     // The outer turn sends a single message; the nested turn after the tool result sends three.
     // Only the nested body can produce the shape asserted below.
-    backend.payloadBodies = [
-      JSON.stringify({ messages: [{ role: 'user', content: SECRET_PROMPT }] }),
-      BODY,
-    ];
+    backend.payloadBodies = [JSON.stringify({ messages: [{ role: 'user', content: SECRET_PROMPT }] }), BODY];
     (backend as unknown as { _bedrockRuntime: { send: () => Promise<unknown> } })._bedrockRuntime = {
       send: async () => {
         if (callIndex++ === 0) return { body: new TextEncoder().encode(JSON.stringify(toolCallChunk())) };
@@ -150,5 +147,46 @@ describe('BaseBedrockBackend error log redaction', () => {
     const logged = JSON.stringify(errorSpy.mock.calls);
     expect(logged).toContain('"messageCount":3');
     expect(logged).toContain('"lastMessageBlocks":["tool_result"]');
+  });
+
+  it("puts the provider's validation reason in the error title, since the alert shows only the title", async () => {
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    const validation = Object.assign(new Error('messages.1.content.1: `tool_use` ids must be unique'), {
+      name: 'ValidationException',
+    });
+
+    await expect(
+      failingBackend(validation).complete(
+        'test-model' as ChatModels,
+        [{ role: 'user', content: SECRET_PROMPT }],
+        { stream: true } as Partial<ICompletionOptions>,
+        async () => {}
+      )
+    ).rejects.toThrow(/ids must be unique/);
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toBe(
+      '[BaseBedrockBackend] Error invoking model test-model: ValidationException: messages.1.content.1: `tool_use` ids must be unique'
+    );
+  });
+
+  it.each([
+    ['caps a long provider message', 'x'.repeat(400), `ValidationException: ${'x'.repeat(300)}`],
+    ['uses the name alone when the message is empty', '', 'ValidationException'],
+    ['uses the name alone when the message repeats it', 'ValidationException', 'ValidationException'],
+  ])('error title %s', async (_label, message, expectedReason) => {
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    const error = Object.assign(new Error(message), { name: 'ValidationException' });
+
+    await expect(
+      failingBackend(error).complete(
+        'test-model' as ChatModels,
+        [{ role: 'user', content: SECRET_PROMPT }],
+        { stream: true } as Partial<ICompletionOptions>,
+        async () => {}
+      )
+    ).rejects.toThrow();
+
+    expect(errorSpy.mock.calls[0][0]).toBe(`[BaseBedrockBackend] Error invoking model test-model: ${expectedReason}`);
   });
 });

@@ -10,8 +10,8 @@ import {
 } from '@bike4mind/server-utils/deepAgent/missions';
 import { canCreateMissions } from '@bike4mind/server-utils/deepAgent/missionAccess';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
-import { runMissionFirstWake } from '@server/deepAgent/firstWake';
-import { assertOwnerCanFundWake } from '@server/deepAgent/wakeMetering';
+import { runMissionFirstWake } from '@bike4mind/server-utils/deepAgent/firstWake';
+import { assertOwnerCanFundWake } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 
 /**
  * Chat-native missions - injected as externalTools into the agent executor so

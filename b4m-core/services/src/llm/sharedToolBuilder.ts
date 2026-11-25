@@ -12,6 +12,7 @@ import {
   resolveToolArtifactType,
   type IChatHistoryItemDocument,
   type ModelInfo,
+  type ReadOrgModelPolicy,
   type ThinkingVisibility,
 } from '@bike4mind/common';
 import { type BaseStorage } from '@bike4mind/utils';
@@ -39,12 +40,15 @@ import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coo
 import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { isVideoToolConfig } from './tools/implementation/videoGeneration';
 import { isMusicToolConfig } from './tools/implementation/musicGeneration';
+import { hasAudioToolJobs } from './tools/implementation/audioGeneration';
+import { PRODUCTION_TOOL_NAMES, isProductionToolConfig } from './tools/implementation/production';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
 import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
 import { JIRA_LIST_ATTACHMENTS, CONFLUENCE_LIST_ATTACHMENTS } from '@bike4mind/mcp/atlassian/constants';
 import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
+import { applyOrgToolPolicy } from './orgToolPolicy';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -336,6 +340,11 @@ export interface BuildSharedToolsOptions {
    * Callers pass the same wrapper they apply to the array this function returns for the parent.
    */
   wrapChildTools?: (tools: ICompletionOptionTools[]) => ICompletionOptionTools[];
+  /**
+   * The organization's tool policy (readOrgModelPolicy). Applied to `parentTools` for the same reason
+   * as `sessionDisabledTools`; callers still filter the returned array themselves.
+   */
+  orgToolPolicy?: ReadOrgModelPolicy;
 }
 
 /** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
@@ -437,6 +446,7 @@ export function buildSharedTools(
       sessionIncludeLibraryFiles,
       sessionPreauthorizedLakeIds,
       organizationId,
+      governingOrgModelPolicy: options.orgToolPolicy,
       authOrigin,
       apiKeyId,
       questId: callbacks.questId,
@@ -462,6 +472,7 @@ export function buildSharedTools(
       web_search: config.web_search,
       video_generation: config.video_generation,
       music_generation: config.music_generation,
+      ...Object.fromEntries(PRODUCTION_TOOL_NAMES.map(name => [name, config[name]])),
     },
     model,
     imageProcessorLambdaName,
@@ -480,6 +491,9 @@ export function buildSharedTools(
     ...toolAvailability,
     video_generation: isVideoToolConfig(config.video_generation),
     music_generation: isMusicToolConfig(config.music_generation),
+    // Also needs a usable key (toolAvailability); without the host's job functions every call is refused.
+    audio_generation: toolAvailability?.audio_generation !== false && hasAudioToolJobs(config.audio_generation),
+    ...Object.fromEntries(PRODUCTION_TOOL_NAMES.map(name => [name, isProductionToolConfig(config[name])])),
     // `decide` runs on its host's injected seam; a host that omits it must not offer a tool whose
     // every call would throw. Derived here, not in the deps literals, so no call site can forget.
     decide: toolAvailability?.decide !== false && deps.decide !== undefined,
@@ -626,9 +640,12 @@ export function buildSharedTools(
   // current_model_details is bound to the parent's serving model, so a subagent on another model
   // must not inherit it (its adapter keeps its own identity line).
   const childTools = [...tools, ...agentOnlyMcpTools];
-  const parentTools = (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
-    tool => !deniedToolNames.has(tool.toolSchema.name) && tool.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME
-  );
+  const parentTools = applyOrgToolPolicy(
+    (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
+      tool => !deniedToolNames.has(tool.toolSchema.name) && tool.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME
+    ),
+    options.orgToolPolicy
+  ).tools;
 
   const subagentModels = deps.subagentModels ?? deps.precomputed?.models;
   const subagentModelInfo = subagentModels?.find(m => m.id === model);

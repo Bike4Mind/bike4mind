@@ -9,9 +9,9 @@
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getImageGeneration } from '@server/imageGenerations/imageGeneration';
+import { getImageGeneration } from '@bike4mind/server-utils/imageGenerations/imageGeneration';
 import { generateImageContract, GenerateImageIvokeParams, redactSessionForClient } from '@bike4mind/common';
-import { getOrCreateSession } from '@server/managers/sessionManager';
+import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
@@ -22,6 +22,9 @@ import { assertReferenceImagesSupported } from '@server/utils/assertReferenceIma
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { isModelRequiresSubscriptionError } from '@bike4mind/services/llm/modelAdmission';
+import type { ImageGenerationRun } from '@bike4mind/services/llm/ImageGeneration';
+import { assertRunBudgetHeadroom } from '@bike4mind/server-utils/billing/runBudgetClaim';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 
 const handler = nextRouteForContract(generateImageContract).post(async (req, res) => {
   assertAiAccessAllowed(req.user);
@@ -61,13 +64,26 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     callbackUrl,
     prompt_resolution: resolutionMode,
     organization_id: _orgAlias,
+    run: requestedRun,
     ...invokeParams
   } = body;
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
-  // Before getOrCreateSession, so a refused payer never leaves behind a new, empty notebook.
-  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-  const effectiveOrgId = await resolveMediaBillingOrgId(req, requestedOrgId);
+  // Before getOrCreateSession, so a refused payer or someone else's run never leaves behind a new, empty
+  // notebook. The run's headroom is checked later, in invoke, once the render's price is known.
+  // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
+  // Otherwise an org-billed API key bills its org; null = personal, undefined = the caller's own org.
+  const paidRun = await resolvePaidCallRun(
+    { user: req.user, apiKeyInfo: req.apiKeyInfo },
+    requestedRun,
+    requestedOrgId
+  );
+  const effectiveOrgId = paidRun ? paidRun.billingOrganizationId : await resolveMediaBillingOrgId(req, requestedOrgId);
+  // The worker's credit hold claims the run budget; this only refuses up front what cannot fit.
+  const run: ImageGenerationRun | undefined = paidRun && {
+    attribution: paidRun.attribution,
+    assertHeadroom: credits => assertRunBudgetHeadroom(paidRun.attribution.runId, credits),
+  };
 
   const { sessionId, asyncPromises, session } = await getOrCreateSession({
     sessionId: reqSessionId,
@@ -145,8 +161,10 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     const quest = await getImageGeneration().invoke({
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       userId: req.user.id,
       body: enhancedBody,
+      run,
     });
 
     const endTime = performance.now();

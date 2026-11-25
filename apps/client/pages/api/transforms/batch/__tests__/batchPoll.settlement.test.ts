@@ -17,9 +17,12 @@ const m = vi.hoisted(() => ({
   settle: vi.fn(),
   catalog: vi.fn(),
   record: vi.fn(async () => undefined),
+  usageLine: vi.fn(),
   warn: vi.fn(),
+  options: null as unknown,
 }));
 
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
     get: (fn: (req: unknown, res: unknown) => unknown) => {
@@ -27,14 +30,26 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: unknown) => {
+      m.options = options;
+      return chain;
+    },
+  };
 });
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
+vi.mock('@server/billing/batchAnthropicKeys', () => ({
+  batchAnthropicKeys: async () => ['sk-test'],
+  firstKeyHolding: async (keys: string[], read: (key: string) => Promise<unknown>) => ({
+    key: keys[0],
+    value: await read(keys[0]),
+  }),
+}));
 vi.mock('@bike4mind/utils', () => ({
   NotFoundError: class extends Error {},
   usdToCreditsStochastic: (usd: number) => Math.round(usd * 1000),
 }));
-vi.mock('@server/billing/reserveRequestCredits', () => ({ settleHeldCredits: m.settle }));
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({ settleHeldCredits: m.settle }));
+vi.mock('@bike4mind/services/llm/llmUsageSettledLog', () => ({ logLlmUsageSettled: m.usageLine }));
 vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: {
     findByAnthropicBatchId: async () => m.batch,
@@ -58,13 +73,36 @@ vi.mock('@bike4mind/llm-adapters', () => ({
 await import('@pages/api/transforms/batch/[id]');
 
 const hold = { ownerId: 'u1', reservedCredits: 500 };
+const accountCreatedAt = new Date('2026-01-02T03:04:05Z');
 
 async function poll() {
   const { req, res } = createMocks({ method: 'GET', query: { id: 'msgbatch_1' } });
-  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: m.warn, error: vi.fn() } });
+  Object.assign(req, {
+    user: { id: 'u1', createdAt: accountCreatedAt },
+    logger: { info: vi.fn(), warn: m.warn, error: vi.fn() },
+  });
   await m.getHandler!(req, res);
   return JSON.parse(res._getData());
 }
+
+describe('GET /api/transforms/batch/[id] -- API key scope posture', () => {
+  it('declares ai:generate or admin and grandfathers legacy keys', () => {
+    expect(m.options).toEqual({ requiredScopes: ['ai:generate', 'admin:*'], grandfatherLegacyKeys: true });
+  });
+
+  it('refuses a key minted for a connected app and reads nothing', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'msgbatch_1' } });
+    Object.assign(req, {
+      user: { id: 'u1' },
+      apiKeyInfo: { scopes: ['ai:generate'], oauthExchangeClientId: 'client-1' },
+      logger: { info: vi.fn(), warn: m.warn, error: vi.fn() },
+    });
+    await m.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(m.getBatchResults).not.toHaveBeenCalled();
+  });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -130,6 +168,26 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     expect(m.record.mock.calls[0][0]).not.toHaveProperty('executedProvider');
   });
 
+  it('logs one settled-usage line for the batch at its provider cost', async () => {
+    m.claim.mockResolvedValue(m.batch);
+
+    await poll();
+
+    expect(m.usageLine).toHaveBeenCalledOnce();
+    expect(m.usageLine).toHaveBeenCalledWith({
+      backend: 'anthropic',
+      model: 'm1',
+      inputTokens: 110,
+      outputTokens: 55,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      usd: expect.closeTo(0.11, 6),
+      source: 'api',
+      userId: 'u1',
+      accountCreatedAt,
+    });
+  });
+
   it('prices items sharing a client_ref by their own customId model', async () => {
     m.getBatchResults.mockImplementation(async () => ({
       processingStatus: 'ended',
@@ -163,6 +221,14 @@ describe('GET /api/transforms/batch/:id settlement', () => {
       140,
       expect.objectContaining({ model: 'm1,m2', inputTokens: 110, outputTokens: 55 }),
       expect.anything()
+    );
+    // One line per model, so the spend metrics keep a single model per line.
+    expect(m.usageLine).toHaveBeenCalledTimes(2);
+    expect(m.usageLine).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'm1', inputTokens: 100, outputTokens: 50, usd: expect.closeTo(0.1, 6) })
+    );
+    expect(m.usageLine).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'm2', inputTokens: 10, outputTokens: 5, usd: expect.closeTo(0.04, 6) })
     );
   });
 
@@ -313,6 +379,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
 
     expect(m.settle).toHaveBeenCalledTimes(1);
     expect(m.record).not.toHaveBeenCalled();
+    expect(m.usageLine).not.toHaveBeenCalled();
   });
 
   it('still marks the hold settled when the sweep already refunded it', async () => {
@@ -323,6 +390,9 @@ describe('GET /api/transforms/batch/:id settlement', () => {
 
     expect(m.markSettled).toHaveBeenCalledWith('row1');
     expect(m.record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+    // The provider still billed the batch, so its spend line is written even though nothing was charged.
+    expect(m.usageLine).toHaveBeenCalledOnce();
+    expect(m.usageLine).toHaveBeenCalledWith(expect.objectContaining({ model: 'm1', usd: expect.closeTo(0.11, 6) }));
   });
 
   it('still settles and returns the results when the results write fails', async () => {
@@ -511,6 +581,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     expect(body.results).toHaveLength(3);
     expect(m.catalog).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
+    expect(m.usageLine).not.toHaveBeenCalled();
     expect(m.saveResults).toHaveBeenCalledOnce();
   });
 
@@ -548,6 +619,10 @@ describe('GET /api/transforms/batch/:id settlement', () => {
           executedProvider: 'anthropic',
           executedModel: 'm2',
         })
+      );
+      expect(m.usageLine).toHaveBeenCalledOnce();
+      expect(m.usageLine).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'm2', usd: expect.closeTo(0.011, 6), inputTokens: 110, outputTokens: 55 })
       );
     });
 

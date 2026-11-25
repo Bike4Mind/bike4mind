@@ -1,8 +1,12 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor, act } from '@testing-library/react';
+import { renderHook, waitFor as rtlWaitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+
+// renderHook mounts no DOM for waitFor's MutationObserver to watch, so every retry waits out the
+// full poll interval; 50ms by default, which dominated this file's run time.
+const waitFor: typeof rtlWaitFor = (callback, options) => rtlWaitFor(callback, { interval: 5, ...options });
 
 /**
  * Regression coverage for the batch upload orchestration: the offline fail-fast +
@@ -206,7 +210,7 @@ describe('useBatchUpload onError', () => {
   });
 
   it('translates a 422 into a friendly validation message and never surfaces raw zod text', async () => {
-    // The server returns zod-validation-error text on a 422; it must not reach the UI.
+    // The server returns formatZodError text on a 422; it must not reach the UI.
     const rawZod = 'Validation error: String must contain at least 2 character(s) at "slug"';
     apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: rawZod } } });
     seedWizardFile();

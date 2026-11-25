@@ -1,7 +1,10 @@
-import { type APIRequestContext, type Page } from '@playwright/test';
+import { expect, type APIRequestContext, type Page, type Response } from '@playwright/test';
 import { createHash } from 'crypto';
-import speakeasy from 'speakeasy';
-import { refreshTokenFromSetCookie } from './api';
+import { TOTP_STEP_SECONDS, totpCode } from '@bike4mind/auth/mfaService/totp';
+import { TIMEOUTS } from '../constants';
+import { BasePage } from '../pages/BasePage';
+import type { LoginPage } from '../pages/LoginPage';
+import { apiGetMfaCode, apiGetOtcCode, refreshTokenFromSetCookie } from './api';
 
 export interface MfaSetupResult {
   secret: string;
@@ -15,8 +18,6 @@ export interface MfaTokens {
   refreshToken: string;
 }
 
-const TOTP_STEP_SECONDS = 30;
-
 function currentTotpStep(): number {
   return Math.floor(Date.now() / 1000 / TOTP_STEP_SECONDS);
 }
@@ -29,7 +30,7 @@ function currentTotpStep(): number {
  */
 export function generateTotp(secretBase32: string, afterStep?: number): string {
   const step = afterStep === undefined ? currentTotpStep() : Math.max(currentTotpStep(), afterStep + 1);
-  return speakeasy.totp({ secret: secretBase32, encoding: 'base32', time: step * TOTP_STEP_SECONDS });
+  return totpCode(secretBase32, step);
 }
 
 /** POST /api/auth/mfa/setup - generates a TOTP secret + backup codes (not yet enabled). */
@@ -86,7 +87,7 @@ export async function enrollMfa(
 ): Promise<{ secret: string; backupCodes: string[]; tokens: MfaTokens; enrolledStep: number }> {
   const setup = await apiSetupMfa(request, accessToken);
   const enrolledStep = currentTotpStep();
-  const code = speakeasy.totp({ secret: setup.secret, encoding: 'base32', time: enrolledStep * TOTP_STEP_SECONDS });
+  const code = totpCode(setup.secret, enrolledStep);
   const tokens = await apiVerifyMfaSetup(request, accessToken, code);
   return { secret: setup.secret, backupCodes: setup.backupCodes, tokens, enrolledStep };
 }
@@ -99,40 +100,76 @@ export function trustedDeviceCookieName(userId: string): string {
   return `b4m_td_${createHash('sha256').update(userId).digest('hex').slice(0, 16)}`;
 }
 
-interface SettingRow {
-  settingName: string;
-  settingValue: unknown;
+/**
+ * Sign in through the login form with an emailed code and then a TOTP code. `totp` defaults to a
+ * code from /api/test/mfa-code; pass one to test what an authenticator app would show.
+ */
+export async function signInWithTotp(
+  loginPage: LoginPage,
+  request: APIRequestContext,
+  email: string,
+  totp?: string,
+  { rememberDevice = false }: { rememberDevice?: boolean } = {}
+): Promise<void> {
+  await loginPage.goto();
+  await loginPage.submitEmail(email);
+  await loginPage.expectOtcStep();
+  await loginPage.fillOtc(await apiGetOtcCode(request, email));
+  await loginPage.submitOtcExpectingMfa();
+  await loginPage.expectMfaChallenge();
+  await loginPage.fillMfaCode(totp ?? (await apiGetMfaCode(request, email)));
+  if (rememberDevice) {
+    await loginPage.checkMuiCheckbox(
+      loginPage.page.getByTestId('mfa-modal-remember-device-checkbox').getByRole('checkbox')
+    );
+  }
+  await loginPage.submitMfa();
 }
 
-const ENFORCE_MFA_ROW: SettingRow = { settingName: 'enforceMFA', settingValue: true };
-
-function isSettingRow(value: unknown): value is SettingRow {
-  return typeof value === 'object' && value !== null && 'settingName' in value;
-}
-
-function withEnforcedMfa(rows: unknown): SettingRow[] {
-  const kept = Array.isArray(rows) ? rows.filter(isSettingRow).filter(r => r.settingName !== 'enforceMFA') : [];
-  return [...kept, ENFORCE_MFA_ROW];
-}
+const MFA_SETUP_PATH = '/api/auth/mfa/setup';
 
 /**
- * Make this page's client see enforceMFA on, without touching the global admin setting: it is
- * stage-wide, and the server reads it through a settings cache, so flipping it would confine
- * every unenrolled session on a shared stage for a cache TTL after it is restored. The server
- * keeps enforcement off, so this covers MFAEnforcementWrapper, not the server's 403 gate.
- * Patches both sources the client merges: the public CDN artifact and /api/settings/fetch.
+ * For a sign-up driven through the UI. When the stage enforces MFA, /api/otc/verify answers a new
+ * account with `mfaSetupRequired` and the app opens the setup dialog instead of signing in. Call
+ * this before submitting the code (the setup call can land before the verify response is read),
+ * then pass the verify body to `enrollIfAsked`, which completes setup from the dialog and returns
+ * the new session's access token. It returns null when the stage asked for no setup.
  */
-export async function stubEnforcedMfaSetting(page: Page): Promise<void> {
-  await page.route('**/app-config/public-settings.json', async route => {
-    const response = await route.fetch().catch(() => null);
-    const body: unknown = response?.ok() ? await response.json().catch(() => null) : null;
-    const artifact = typeof body === 'object' && body !== null ? body : { version: 1, updatedAt: '' };
-    const settings = 'settings' in artifact ? artifact.settings : [];
-    await route.fulfill({ json: { ...artifact, settings: withEnforcedMfa(settings) } });
-  });
-  await page.route('**/api/settings/fetch**', async route => {
-    const response = await route.fetch();
-    if (!response.ok()) return route.fulfill({ response });
-    await route.fulfill({ response, json: withEnforcedMfa(await response.json()) });
-  });
+export function watchMfaSetup(page: Page) {
+  let secret: string | undefined;
+  const onResponse = async (res: Response) => {
+    if (res.request().method() !== 'POST' || new URL(res.url()).pathname !== MFA_SETUP_PATH || !res.ok()) return;
+    secret = ((await res.json()) as { secret: string }).secret;
+  };
+  page.on('response', onResponse);
+  const dispose = () => {
+    page.off('response', onResponse);
+  };
+
+  return {
+    dispose,
+    async enrollIfAsked(verifyBody: { mfaSetupRequired?: boolean }): Promise<{ accessToken: string } | null> {
+      try {
+        if (!verifyBody.mfaSetupRequired) return null;
+        await expect(page.getByTestId('mfa-modal-content')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+        await expect.poll(() => secret, { timeout: TIMEOUTS.ACTION }).toBeTruthy();
+        const verified = page.waitForResponse(
+          res => res.request().method() === 'POST' && new URL(res.url()).pathname === '/api/auth/mfa/verify-setup',
+          { timeout: TIMEOUTS.ACTION }
+        );
+        await new BasePage(page).fillMuiInput(
+          page.getByTestId('mfa-modal-code-input').locator('input'),
+          generateTotp(secret as string)
+        );
+        await page.getByTestId('mfa-modal-verify-btn').click();
+        const response = await verified;
+        expect(response.ok(), 'MFA verify-setup').toBe(true);
+        const { accessToken } = (await response.json()) as { accessToken: string };
+        await expect(page.getByTestId('mfa-modal-content')).toBeHidden({ timeout: TIMEOUTS.ACTION });
+        return { accessToken };
+      } finally {
+        dispose();
+      }
+    },
+  };
 }

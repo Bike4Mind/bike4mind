@@ -29,6 +29,7 @@ const {
   mockClaimCallbackDispatch,
   mockOrgFindById,
   mockOrgFindAccessibleById,
+  mockRunFindById,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -44,6 +45,7 @@ const {
   mockClaimCallbackDispatch: vi.fn(),
   mockOrgFindById: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
+  mockRunFindById: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -96,6 +98,10 @@ vi.mock('@bike4mind/database', async orig => {
       // reaches SQS/sst - dispatch mechanics are covered by dispatchQuestCallback.test.ts.
       claimCallbackDispatch: (...a: unknown[]) => mockClaimCallbackDispatch(...a),
     },
+    completionRunRepository: {
+      ...(actual.completionRunRepository as object),
+      findById: (...a: unknown[]) => mockRunFindById(...a),
+    },
     userApiKeyRepository: {
       ...(actual.userApiKeyRepository as object),
       findCallbackSigningSecret: (...a: unknown[]) => mockFindCallbackSigningSecret(...a),
@@ -124,11 +130,11 @@ vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async orig => ({
   assertUrlAllowed: (...a: unknown[]) => mockAssertUrlAllowed(...a),
 }));
 
-vi.mock('@server/managers/sessionManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
 
-vi.mock('@server/imageGenerations/imageGeneration', () => ({
+vi.mock('@bike4mind/server-utils/imageGenerations/imageGeneration', () => ({
   getImageGeneration: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
 }));
 
@@ -514,6 +520,17 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(legacyHandler).toBe(handler);
   });
 
+  // The sunset date is a promise to API clients; the /api/ai/generate-image alias shares this handler (asserted above).
+  it('sends Deprecation, Sunset (2027-02-17) and a Link to /api/v1/image-jobs', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Deprecation')).toBe('@1794873600');
+    expect(res.getHeader('Sunset')).toBe('Wed, 17 Feb 2027 00:00:00 GMT');
+    expect(res.getHeader('Link')).toBe('</api/v1/image-jobs>; rel="successor-version"');
+  });
+
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
     const { req, res } = fire({ apiKey: null });
     await handler(req, res);
@@ -785,6 +802,81 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       withHomeOrg(b.req);
       await handler(b.req, b.res);
       expect(queued[1]).toHaveProperty('organizationId', HOME_ORG);
+    });
+  });
+
+  describe('run (completion run budget)', () => {
+    const RUN_ID = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
+    const base = { prompt: 'a red bicycle', model: 'gpt-image-1', run: { runId: RUN_ID, role: 'worker' } };
+    const storedRun = (fields: Record<string, unknown> = {}) => ({
+      runId: RUN_ID,
+      userId: JWT_USER.id,
+      ownerType: CreditHolderType.User,
+      ownerId: JWT_USER.id,
+      ...fields,
+    });
+    const invoked = () => mockInvoke.mock.calls[0][0];
+    // Stands in for ImageGeneration.invoke's headroom check with a fixed render price.
+    const invokeCheckingHeadroom = (credits: number) =>
+      mockInvoke.mockImplementation(async (args: { run?: { assertHeadroom(c: number): Promise<void> } }) => {
+        await args.run?.assertHeadroom(credits);
+        return { id: 'quest-1', sessionId: 'sess-1', type: 'message' };
+      });
+
+    it("passes the run to the generation as a tool call and bills the run's account over the home org", async () => {
+      mockRunFindById.mockResolvedValue(storedRun());
+      const { req, res } = fire({ apiKey: null, body: base });
+      req.user = { ...JWT_USER, organizationId: HOME_ORG };
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invoked().run.attribution).toEqual({ runId: RUN_ID, role: 'worker', purpose: 'tool' });
+      expect(invoked().body.organizationId).toBeNull();
+      expect(invoked().body).not.toHaveProperty('run');
+    });
+
+    it("refuses another caller's run (404 run_not_found) before creating a session or enqueuing", async () => {
+      mockRunFindById.mockResolvedValue(storedRun({ userId: 'someone-else', ownerId: 'someone-else' }));
+      const { req, res } = fire({ apiKey: null, body: base });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'run_not_found' });
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('refuses a billing organization other than the account the run bills (403)', async () => {
+      mockRunFindById.mockResolvedValue(storedRun());
+      const { req, res } = fire({ apiKey: null, body: { ...base, organizationId: HOME_ORG } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'billing_organization_mismatch' });
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('answers 422 run_budget_exhausted when the run has too little left for the render', async () => {
+      mockRunFindById.mockResolvedValue(storedRun({ budgetCredits: 100, committedCredits: 70 }));
+      invokeCheckingHeadroom(40);
+      const { req, res } = fire({ apiKey: null, body: base });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'run_budget_exhausted' });
+    });
+
+    it('queues the render when the run has room, without claiming any of it', async () => {
+      mockRunFindById.mockResolvedValue(storedRun({ budgetCredits: 100, committedCredits: 60 }));
+      invokeCheckingHeadroom(40);
+      const { req, res } = fire({ apiKey: null, body: base });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRunFindById).toHaveBeenCalledTimes(2);
+    });
+
+    it('passes no run and reads none without one', async () => {
+      const { req, res } = fire({ apiKey: null, body: { prompt: 'a red bicycle', model: 'gpt-image-1' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invoked().run).toBeUndefined();
+      expect(mockRunFindById).not.toHaveBeenCalled();
     });
   });
 });

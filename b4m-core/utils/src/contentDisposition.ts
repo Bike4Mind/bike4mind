@@ -19,7 +19,7 @@
  *     here: a helper that infers safety from a stored MIME type can't know
  *     whether it is being called for a response header (app origin) or a
  *     storage-signed URL override (storage origin), and the two have different
- *     threat models.
+ *     threat models. Storage-origin signing uses `storageReadOverrides` below.
  *
  * Import from the lightweight subpath (`@bike4mind/utils/contentDisposition`),
  * not the package barrel - see the note on `escapeRegex`.
@@ -90,4 +90,55 @@ export function buildContentDisposition(fileName: string, options: ContentDispos
   const extended = NON_ASCII.test(safe) ? `; filename*=UTF-8''${encodeRfc5987(safe)}` : '';
 
   return `${disposition}; filename="${asciiName}"${extended}`;
+}
+
+/**
+ * Types a storage read may serve inline: media, plus PDF, whose embedded script (where a viewer runs
+ * it at all) stays inside the PDF viewer rather than the storage origin's DOM. SVG, HTML, XML and
+ * every text type stay out: each can run script in that origin or be sniffed into markup.
+ */
+const INLINE_SAFE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+  'application/pdf',
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+  'video/ogg',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/wav',
+  'audio/ogg',
+  'audio/webm',
+  'audio/aac',
+  'audio/flac',
+]);
+
+export interface StorageReadOverrides {
+  ResponseContentDisposition?: string;
+  ResponseContentType?: string;
+}
+
+/**
+ * Response overrides for a browser-facing signed GET of a user-uploaded object. An inline-safe
+ * type pins the response Content-Type, because the stored object type is whatever the uploader
+ * sent with the presigned PUT; anything else (including a missing type) downloads as an attachment.
+ */
+export function storageReadOverrides({
+  mimeType,
+  fileName,
+  key,
+}: {
+  mimeType?: string | null;
+  fileName?: string | null;
+  key?: string | null;
+}): StorageReadOverrides {
+  const normalized = (mimeType ?? '').split(';')[0].trim().toLowerCase();
+  if (INLINE_SAFE_MIME_TYPES.has(normalized)) return { ResponseContentType: normalized };
+  const keyName = key ? key.slice(key.lastIndexOf('/') + 1) : '';
+  return { ResponseContentDisposition: buildContentDisposition(fileName || keyName || 'download') };
 }

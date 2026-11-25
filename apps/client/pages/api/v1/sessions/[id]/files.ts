@@ -8,10 +8,13 @@ import {
 import { listSessionFilesContract } from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import {
+  fileContentUrl,
+  signFabFileGet,
+  type FabFileSignOptions,
+} from '@bike4mind/server-utils/files/browserFileSigner';
 
 /** `browser`: the SPA's legacy alias gets the stable app URL (browserFileSigner.ts); API callers keep a raw S3 link. */
 export const sessionFilesHandler = ({ browser }: { browser: boolean }) =>
@@ -37,12 +40,8 @@ export const sessionFilesHandler = ({ browser }: { browser: boolean }) =>
           adminSettings: adminSettingsRepository,
         },
         storage: {
-          generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
-            return await getFilesStorage().getSignedUrl(path, 'get', {
-              expiresIn: expireInSeconds,
-              signingDate: options?.signingDate,
-              audience: 'browser',
-            });
+          generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) => {
+            return await signFabFileGet(path, expireInSeconds, options);
           },
           ...(browser && { contentUrl: fileContentUrl }),
         },

@@ -1,4 +1,5 @@
 import {
+  videoModelProfile,
   isVideoModelEnabled,
   usdToCredits,
   VIDEO_INPUT_ROLES,
@@ -20,12 +21,15 @@ export const hasUsableKey = async (
 
 export const toPublicVideoModel = (id: VideoModelId): VideoModel => {
   const caps = VIDEO_MODEL_CATALOG[id];
+  const profile = videoModelProfile(id);
   const { duration, pricing } = caps;
   return {
     id,
     object: 'video_model',
     display_name: caps.displayName,
     provider: caps.provider,
+    provider_label: profile.providerLabel,
+    blurb: profile.blurb,
     modes: [...caps.modes],
     input_roles: VIDEO_INPUT_ROLES.flatMap(role => {
       const accepted = caps.inputs[role];
@@ -43,6 +47,10 @@ export const toPublicVideoModel = (id: VideoModelId): VideoModel => {
       resolution: caps.defaults.resolution,
     },
     audio: caps.audio,
+    keyframes: caps.keyframes ?? null,
+    draft: caps.draft
+      ? { resolutions: [...caps.draft.resolutions], credits_per_second: usdToCredits(caps.draft.usdPerSecond) }
+      : null,
     credits_per_second:
       pricing.unit === 'per_second'
         ? Object.fromEntries(

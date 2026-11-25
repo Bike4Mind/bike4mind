@@ -9,8 +9,7 @@ import {
   type Part,
 } from '@google/genai';
 import { Logger } from '@bike4mind/observability';
-import { ImageModels, type ImageOutputFormat } from '@bike4mind/common';
-import { v4 as uuidv4 } from 'uuid';
+import { ImageModels, reduceAspectRatio, type ImageOutputFormat } from '@bike4mind/common';
 import {
   ExpectedImageGenerationError,
   ImageInputRejectedError,
@@ -293,23 +292,7 @@ export class GeminiImageService extends AIImageService {
       return undefined;
     }
 
-    const gcd = (a: number, b: number): number => {
-      while (b !== 0) {
-        const temp = b;
-        b = a % b;
-        a = temp;
-      }
-      return a;
-    };
-
-    const divisor = gcd(dimensions.width, dimensions.height);
-    if (divisor === 0) {
-      return undefined;
-    }
-    const widthRatio = Math.round(dimensions.width / divisor);
-    const heightRatio = Math.round(dimensions.height / divisor);
-
-    return `${widthRatio}:${heightRatio}`;
+    return reduceAspectRatio(dimensions.width, dimensions.height);
   }
 
   // 'webp' never actually arrives here: every dispatch site that reaches Gemini runs
@@ -390,7 +373,7 @@ export class GeminiImageService extends AIImageService {
 
         if (textMessage) {
           // Return a clarification request instead of throwing an error
-          const clarificationId = uuidv4();
+          const clarificationId = crypto.randomUUID();
           this.logger.log('[DEBUG] Returning clarification request:', {
             clarificationId,
             questionPreview: textMessage.substring(0, 100) + '...',

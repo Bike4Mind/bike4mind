@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { NESTED_SECRET_PLACEHOLDER, isValidNestedSecretGroups } from './nestedSettingSecrets';
 import {
   allSettingDefinitions,
   API_SERVICE_GROUPS,
+  broadcastSafeSettingKeys,
   experimentalFeatureSettingKeys,
   getExperimentalFeatureSettingKeys,
   isRegisteredSettingKey,
   makeContributedBooleanSetting,
   makeContributedNumberSetting,
+  makeContributedObjectSetting,
   makeContributedStringSetting,
   publicSafeSettingKeys,
   redactSettingSecrets,
+  redactSettingSecretsForBroadcast,
   registerContributedSettings,
   resetContributedSettings,
   resolveSettingDefinition,
@@ -44,6 +49,21 @@ const token = makeContributedStringSetting({
   defaultValue: undefined,
   isSensitive: true,
   publicSafe: true,
+});
+
+const targetsSchema = z.object({
+  enabled: z.boolean().default(false),
+  targets: z.array(z.object({ id: z.string(), token: z.string().default('') })).default([]),
+});
+const nestedSecrets = [{ arrayKey: 'targets', identityFields: ['id'], secretFields: ['token'] }];
+
+const targets = makeContributedObjectSetting({
+  key: 'extensionTargets',
+  name: 'Extension targets',
+  description: 'A contributed object with a secret per item',
+  defaultValue: targetsSchema.parse({}),
+  schema: targetsSchema,
+  nestedSecrets,
 });
 
 afterEach(() => resetContributedSettings());
@@ -173,5 +193,95 @@ describe('settings helpers over contributed definitions', () => {
     const scoped = { ...flag, key: 'scopedFlag', scope: { settableAt: ['org'] } } as unknown as typeof flag;
     expect(registerContributedSettings([scoped]).rejected).toEqual(['scopedFlag']);
     expect(isRegisteredSettingKey('scopedFlag')).toBe(false);
+  });
+});
+
+describe('contributed settings with nested secret fields', () => {
+  it('registers an object definition that declares them', () => {
+    expect(registerContributedSettings([targets]).registered).toEqual(['extensionTargets']);
+    expect(resolveSettingDefinition('extensionTargets')?.nestedSecrets).toEqual(nestedSecrets);
+  });
+
+  it('accepts the stored JSON-string form like any other object setting', () => {
+    expect(targets.schema.parse('{"targets":[{"id":"a"}]}')).toEqual({
+      enabled: false,
+      targets: [{ id: 'a', token: '' }],
+    });
+  });
+
+  it('masks the declared fields on a read and on a broadcast', () => {
+    registerContributedSettings([targets]);
+    const doc: AdminSettingDoc = {
+      settingName: 'extensionTargets',
+      settingValue: { enabled: true, targets: [{ id: 'a', token: 'plain' }, { id: 'b' }] },
+    };
+    const expected = {
+      enabled: true,
+      targets: [
+        { id: 'a', token: NESTED_SECRET_PLACEHOLDER },
+        { id: 'b', token: '' },
+      ],
+    };
+    expect(redactSettingSecrets(doc).settingValue).toEqual(expected);
+    expect(redactSettingSecretsForBroadcast(doc).settingValue).toEqual(expected);
+    expect(JSON.stringify(redactSettingSecrets(doc))).not.toContain('plain');
+  });
+
+  it('still masks the declared fields of a stored value its schema no longer accepts', () => {
+    registerContributedSettings([targets]);
+    const redacted = redactSettingSecrets({
+      settingName: 'extensionTargets',
+      settingValue: { enabled: 'not-a-boolean', targets: [{ id: 'a', token: 'plain' }] },
+    });
+    expect(redacted.settingValue).toEqual({
+      enabled: 'not-a-boolean',
+      targets: [{ id: 'a', token: NESTED_SECRET_PLACEHOLDER }],
+    });
+  });
+
+  it('withholds a stored value that is not an object at all', () => {
+    registerContributedSettings([targets]);
+    const redacted = redactSettingSecrets({
+      settingName: 'extensionTargets',
+      settingValue: 'plain-text-with-a-secret',
+    });
+    expect(JSON.stringify(redacted)).not.toContain('plain-text');
+    const list = redactSettingSecrets({ settingName: 'extensionTargets', settingValue: [{ id: 'a', token: 'plain' }] });
+    expect(JSON.stringify(list)).not.toContain('plain');
+  });
+
+  it('keeps the setting off the live broadcast allowlist', () => {
+    registerContributedSettings([flag, targets]);
+    expect(broadcastSafeSettingKeys()).toContain('ExtensionFlag');
+    expect(broadcastSafeSettingKeys()).not.toContain('extensionTargets');
+  });
+
+  it('rejects malformed fields, fields on a non-object setting, and a default that holds a secret', () => {
+    const malformed = { ...targets, key: 'malformedTargets', nestedSecrets: [] };
+    const onScalar = { ...flag, key: 'FlagWithSecrets', nestedSecrets };
+    const seeded = makeContributedObjectSetting({
+      key: 'seededTargets',
+      name: 'Seeded targets',
+      description: 'x',
+      defaultValue: { enabled: false, targets: [{ id: 'a', token: 'plain' }] },
+      schema: targetsSchema,
+      nestedSecrets,
+    });
+    expect(registerContributedSettings([malformed, onScalar, seeded])).toEqual({
+      registered: [],
+      coreCollisions: [],
+      duplicates: [],
+      rejected: ['malformedTargets', 'FlagWithSecrets', 'seededTargets'],
+    });
+  });
+
+  it('holds every core definition to the same rules', () => {
+    const declaring = Object.values(settingsMap).filter(definition => definition.nestedSecrets !== undefined);
+    expect(declaring.length).toBeGreaterThan(0);
+    for (const definition of declaring) {
+      expect(definition.type, definition.key).toBe('object');
+      expect(definition.isSensitive, definition.key).not.toBe(true);
+      expect(isValidNestedSecretGroups(definition.nestedSecrets), definition.key).toBe(true);
+    }
   });
 });

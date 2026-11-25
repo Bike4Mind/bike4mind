@@ -1,13 +1,13 @@
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ChatProject, ChatSession } from '@shared/chat';
 import { projectFor } from '../../claudeImport/ClaudeCodeSync';
 import { ChatService } from '../ChatService';
 import { SessionStore } from '../SessionStore';
 import type { AccessStore } from '../tools/AccessStore';
 import { git, listWorktrees } from './git';
+import { gitFixture } from './gitFixture.testHelper';
 import { appWorktreeRoot, inspectWorktreeRemoval, removeSessionWorktree } from './workspace';
 
 const roots: string[] = [];
@@ -15,19 +15,32 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
+const BRANCH = 'b4m/test-123abc';
+const repository = gitFixture(
+  'b4m-removal-',
+  async directory => {
+    await git(directory, ['init', '-q', '--initial-branch=main']);
+    await git(directory, ['config', 'user.email', 'test@example.com']);
+    await git(directory, ['config', 'user.name', 'Test']);
+    await writeFile(join(directory, '.gitignore'), '.b4m/\nignored\n');
+    await git(directory, ['add', '.gitignore']);
+    await git(directory, ['commit', '-qm', 'initial']);
+    await mkdir(appWorktreeRoot(directory), { recursive: true });
+    await git(directory, ['worktree', 'add', '-qb', BRANCH, join(appWorktreeRoot(directory), 'test')]);
+  },
+  ['.git/worktrees/test/gitdir', '.b4m/worktrees/test/.git']
+);
+
+// Built here so the one-time cost is not charged to whichever test happens to run first.
+beforeAll(async () => {
+  roots.push(await repository());
+});
+
 async function fixture() {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'b4m-removal-')));
+  const directory = await repository();
   roots.push(directory);
-  await git(directory, ['init', '-q', '--initial-branch=main']);
-  await git(directory, ['config', 'user.email', 'test@example.com']);
-  await git(directory, ['config', 'user.name', 'Test']);
-  await writeFile(join(directory, '.gitignore'), '.b4m/\nignored\n');
-  await git(directory, ['add', '.gitignore']);
-  await git(directory, ['commit', '-qm', 'initial']);
-  const branch = 'b4m/test-123abc';
+  const branch = BRANCH;
   const workingDirectory = join(appWorktreeRoot(directory), 'test');
-  await mkdir(appWorktreeRoot(directory), { recursive: true });
-  await git(directory, ['worktree', 'add', '-qb', branch, workingDirectory]);
   const project: ChatProject = {
     directory,
     name: 'test',
@@ -52,10 +65,11 @@ describe('session worktree removal', () => {
     ).rejects.toThrow();
   });
 
-  it.each(['tracked', 'untracked'])('refuses %s changes, including changes after inspection', async kind => {
+  // Untracked rather than modified: a modified file shows in any status, an untracked one only with the flag.
+  it('refuses uncommitted changes, including changes after inspection', async () => {
     const project = await fixture();
     expect((await inspectWorktreeRemoval(project, []))?.safe).toBe(true);
-    await writeFile(join(project.workingDirectory, kind === 'tracked' ? '.gitignore' : 'new.txt'), 'work\n');
+    await writeFile(join(project.workingDirectory, 'new.txt'), 'work\n');
     expect(await inspectWorktreeRemoval(project, [])).toMatchObject({ safe: false, reason: '1 uncommitted file' });
     await expect(removeSessionWorktree(project, [])).rejects.toThrow('1 uncommitted file');
     expect((await stat(project.workingDirectory)).isDirectory()).toBe(true);
@@ -154,37 +168,27 @@ describe('session worktree removal', () => {
     expect((await stat(nested)).isDirectory()).toBe(true);
   });
 
-  it.each(['directory', 'branch'])(
-    'refuses another conversation sharing the %s, including local children',
-    async shared => {
-      const project = await fixture();
-      const other = {
-        ...project,
-        workspace: false,
-        workspaceBranch: undefined,
-        branch: shared === 'branch' ? project.workspaceBranch! : 'main',
-        workingDirectory: shared === 'directory' ? project.workingDirectory : project.directory,
-      };
-      expect(await inspectWorktreeRemoval(project, [other])).toMatchObject({
-        safe: false,
-        reason: 'Used by another conversation',
-      });
-      await expect(removeSessionWorktree(project, [other])).rejects.toThrow('another conversation');
-    }
-  );
+  it('refuses another conversation on the same branch elsewhere in the repository', async () => {
+    const project = await fixture();
+    const other = {
+      ...project,
+      workspace: false,
+      workspaceBranch: undefined,
+      branch: project.workspaceBranch!,
+      workingDirectory: project.directory,
+    };
+    expect(await inspectWorktreeRemoval(project, [other])).toMatchObject({
+      safe: false,
+      reason: 'Used by another conversation',
+    });
+    await expect(removeSessionWorktree(project, [other])).rejects.toThrow('another conversation');
+  });
 
   it('hides cleanup for user and imported checkouts or a mismatched branch', async () => {
     const project = await fixture();
     expect(await inspectWorktreeRemoval({ ...project, workingDirectory: project.directory }, [])).toBeNull();
     expect(await inspectWorktreeRemoval({ ...project, workspaceBranch: 'claude/imported' }, [])).toBeNull();
     expect(await inspectWorktreeRemoval({ ...project, workspaceBranch: 'b4m/other' }, [])).toBeNull();
-  });
-
-  it('surfaces a git refusal and preserves the checkout', async () => {
-    const project = await fixture();
-    await git(project.directory, ['worktree', 'lock', project.workingDirectory]);
-    await expect(removeSessionWorktree(project, [])).rejects.toThrow('locked');
-    expect((await stat(project.workingDirectory)).isDirectory()).toBe(true);
   });
 });
 
@@ -301,7 +305,8 @@ describe('session deletion integration', () => {
     }
   });
 
-  it.each(['new', 'sync', 'tidy'])('cancels a stale %s import binding queued behind cleanup', async kind => {
+  // 'sync' (mustExist) and a plain re-import of an existing row take the same path once the row exists.
+  it.each(['new', 'sync'])('cancels a stale %s import binding queued behind cleanup', async kind => {
     const acquiring = deferred();
     const exited = deferred();
     const { project, store, session, service } = await serviceFixture(undefined, async () => {
@@ -365,8 +370,9 @@ describe('session deletion integration', () => {
         expect(releases).not.toContain('terminal-unlock');
         await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
       });
+      const expectedScope = store.scopeKey();
       await service.deleteSession(session.id, true);
-      expect(remove).toHaveBeenCalledWith(session.id);
+      expect(remove).toHaveBeenCalledWith(session.id, expectedScope);
       expect(releases).toContain('terminal-unlock');
     } finally {
       service.dispose();

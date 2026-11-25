@@ -7,6 +7,19 @@ final class DeepLinkRouterTests: XCTestCase {
     DeepLinkRouter.route(url: URL(string: string)!)
   }
 
+  func testBriefURLRoutesToTheBrief() {
+    XCTAssertEqual(route("https://app.bike4mind.com/briefs/65f0c0ffee"), .brief(id: "65f0c0ffee"))
+  }
+
+  func testMalformedBriefURLFallsBackToTheWeb() {
+    let bad = "https://app.bike4mind.com/briefs/a%20b"
+    XCTAssertEqual(route(bad), .web(URL(string: bad)!))
+  }
+
+  func testBareBriefsURLOpensTheLatestBrief() {
+    XCTAssertEqual(route("https://app.bike4mind.com/briefs"), .brief(id: nil))
+  }
+
   func testSessionURLRoutesToSessionDetail() {
     XCTAssertEqual(route("https://app.bike4mind.com/sessions/65f0c0ffee"), .session(id: "65f0c0ffee"))
   }

@@ -1,7 +1,7 @@
 import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { respond } from '@server/utils/respond';
 import { loadBillingOverview } from '@server/admin/billingOverview/loadBillingOverview';
 import { BillingOverviewQuerySchema, BillingOverviewSchema } from '@client/app/utils/adminBillingOverview';

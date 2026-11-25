@@ -1,5 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { buildBundleScriptSrc, resolveDocOrigin } from '@bike4mind/server-utils/services/publish/viewerSecurity';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'artifactSandbox' } });
 
 /**
  * GET /api/artifact-sandbox - HTML iframe target for client-rendered artifacts.
@@ -44,7 +47,7 @@ function buildArtifactSandboxCsp(req: NextApiRequest): string {
       const url = new URL(cdn);
       if (url.protocol === 'https:' && !/[\s;,'"*\\]/.test(url.origin)) assetOrigins.push(url.origin);
     } catch {
-      console.warn('[artifact-sandbox] ignoring invalid CDN URL');
+      logger.warn('Ignoring invalid CDN URL');
     }
   }
   const assets = [...new Set(assetOrigins)].join(' ');

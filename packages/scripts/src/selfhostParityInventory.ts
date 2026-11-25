@@ -122,15 +122,36 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'sst.aws.SnsTopic', reason: 'Topic only; subscribe() is inventoried as snsSubscription.' },
   { shape: 'aws.sns.Topic', reason: 'Topic only; aws.sns.TopicSubscription is inventoried as snsSubscription.' },
   { shape: 'aws.cloudwatch.MetricAlarm', reason: 'Alarm only; delivery is inventoried at the topic subscription.' },
+  {
+    shape: 'aws.appautoscaling.Policy',
+    reason: 'Desired-count rule for an inventoried service, no compute of its own.',
+  },
   { shape: 'aws.cloudwatch.Dashboard', reason: 'Observability view, no compute.' },
   { shape: 'aws.cloudwatch.LogMetricFilter', reason: 'Metric extraction feeding alarms, no compute.' },
+  {
+    shape: 'aws.cloudwatch.ContributorInsightRule',
+    reason: 'Per-key log aggregation feeding alarms, no compute; self-host has no CloudWatch log group to evaluate.',
+  },
   { shape: 'aws.ssm.Parameter', reason: 'Secret storage for ECS task secrets, no compute.' },
   { shape: 'aws.cloudwatch.LogGroup', reason: 'Log storage, no compute.' },
+  { shape: 'aws.cloudwatch.LogResourcePolicy', reason: 'IAM grant for a log group, no compute.' },
+  { shape: 'aws.kms.Key', reason: 'Encryption key for hosted secret storage, no compute.' },
+  { shape: 'aws.kms.Alias', reason: 'Name for an aws.kms.Key, no compute.' },
+  { shape: 'aws.secretsmanager.Secret', reason: 'Secret storage read by inventoried schedules, no compute.' },
+  { shape: 'aws.secretsmanager.SecretPolicy', reason: 'IAM grant for an aws.secretsmanager.Secret, no compute.' },
   { shape: 'aws.lambda.Permission', reason: 'IAM grant for an inventoried trigger.' },
   { shape: 'aws.sqs.QueuePolicy', reason: 'IAM grant for an inventoried queue.' },
   { shape: 'aws.sns.TopicPolicy', reason: 'IAM grant for an inventoried topic.' },
   { shape: 'aws.iam.Policy', reason: 'IAM grant for a covered web surface, no compute.' },
   { shape: 'aws.iam.RolePolicyAttachment', reason: 'Attaches an aws.iam.Policy to a role, no compute.' },
+  { shape: 'aws.iam.Role', reason: 'Execution role for the not-covered aws.lambda.Function, no compute.' },
+  { shape: 'aws.iam.RolePolicy', reason: 'Inline IAM grant on an aws.iam.Role, no compute.' },
+  {
+    shape: 'aws.lambda.Function',
+    reason:
+      'Callable function runtime, invoked request/response (createLambdaCallableFunctionRunner), not a background ' +
+      'trigger; self-host spawns the same child on its own host instead (createInProcessCallableFunctionRunner).',
+  },
   { shape: 'aws.lambda.Invocation', reason: 'Deploy-time one-shot invoke; the invoked Function is inventoried.' },
   { shape: 'aws.ses.ReceiptRuleSet', reason: 'Container for the inventoried aws.ses.ReceiptRule.' },
   { shape: 'aws.ses.ActiveReceiptRuleSet', reason: 'Activation of the inventoried receipt rule set.' },
@@ -141,11 +162,23 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
     shape: 'aws.s3.BucketServerSideEncryptionConfiguration',
     reason: 'Storage encryption policy, not a compute trigger.',
   },
+  { shape: 'aws.s3.Bucket', reason: 'Storage only, no compute trigger.' },
+  { shape: 'aws.s3.BucketPublicAccessBlock', reason: 'Storage access setting for the aws.s3.Bucket, no compute.' },
+  { shape: 'aws.s3.BucketPolicy', reason: 'IAM grant for the aws.s3.Bucket, no compute.' },
   { shape: 'sst.aws.Vpc', reason: 'Network plumbing.' },
   { shape: 'sst.aws.Cluster', reason: 'Container host for inventoried sst.aws.Service declarations.' },
   { shape: 'aws.ec2.SecurityGroup', reason: 'Network plumbing.' },
+  { shape: 'aws.ec2.Vpc', reason: 'Network plumbing.' },
+  { shape: 'aws.ec2.Subnet', reason: 'Network plumbing.' },
+  { shape: 'aws.ec2.RouteTable', reason: 'Network plumbing.' },
+  { shape: 'aws.ec2.RouteTableAssociation', reason: 'Network plumbing.' },
   { shape: 'aws.ec2.SecurityGroupRule', reason: 'Network plumbing.' },
-  { shape: 'aws.ec2.VpcEndpoint', reason: 'Network plumbing.' },
+  {
+    shape: 'aws.ec2.VpcEndpoint',
+    reason: 'Network plumbing, the runtime Lambda S3 endpoint included; self-host runs functions in process.',
+  },
+  { shape: 'aws.acm.Certificate', reason: 'TLS certificate for a hosted load balancer listener, no compute.' },
+  { shape: 'aws.acm.CertificateValidation', reason: 'Waits for the certificate above to be issued, no compute.' },
   { shape: 'aws.servicediscovery.Service', reason: 'Service discovery plumbing.' },
   { shape: 'aws.servicediscovery.PrivateDnsNamespace', reason: 'Service discovery plumbing.' },
   { shape: 'aws.wafv2.WebAcl', reason: 'Hosted edge protection, no compute.' },
@@ -175,6 +208,11 @@ export const DATA_NAMED_QUEUES: readonly { file: string; name: string; reason: s
 
 const HOSTED_CONSTRUCTOR = /^(?:sst\.aws\.\w+|aws\.\w+\.\w+)$/;
 const TRIGGER_METHODS = new Set(['subscribe', 'subscribeQueue', 'notify']);
+// infra/previewQueueConsumers.ts: `subscribeUnlessPreview(gate, name, queue, ...subscribeArgs)` is
+// `queue.subscribe(...subscribeArgs)` on every stage but a preview, so it folds in like that call.
+// Its own body forwards to a parameter's subscribe(), which no declaration owns.
+const PREVIEW_GATED_SUBSCRIBE = 'subscribeUnlessPreview';
+const PREVIEW_GATED_RECEIVER_INDEX = 2;
 /** Option keys whose `<resource>.arn` value is the compute or queue a trigger delivers to. */
 const TARGET_KEYS = new Set(['job', 'function', 'destinationArn', 'endpoint', 'arn', 'queue']);
 /**
@@ -226,6 +264,14 @@ function parse(file: string, text: string): ts.SourceFile {
 function walk(node: ts.Node, visit: (node: ts.Node) => void): void {
   visit(node);
   ts.forEachChild(node, child => walk(child, visit));
+}
+
+/** True inside the body of the preview gate itself, whose generic forward has no owning declaration. */
+function insidePreviewGate(node: ts.Node): boolean {
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isFunctionDeclaration(current) && current.name?.text === PREVIEW_GATED_SUBSCRIBE) return true;
+  }
+  return false;
 }
 
 function canonical(node: ts.Node): string {
@@ -361,6 +407,8 @@ class InfraIndex {
   readonly resources = new Map<string, Resource>();
   readonly definitions = new Map<string, Definition>();
   private readonly aliases = new Map<string, string>();
+  // Identifiers bound to a NOT_COVERED constructor: valid targets that deliver to no function.
+  private readonly passive = new Set<string>();
 
   constructor(readonly parsed: ts.SourceFile[]) {
     const imports: { key: string; target: string }[] = [];
@@ -411,6 +459,7 @@ class InfraIndex {
   private register(file: string, name: string, node: ts.NewExpression): void {
     const type = resourceType(node.expression);
     if (type) this.resources.set(`${file}:${name}`, { type, file, node });
+    else if (NOT_COVERED.some(entry => entry.shape === node.expression.getText())) this.passive.add(`${file}:${name}`);
   }
 
   /** The alias-terminal key for an identifier, following re-exports and `const a = b`. */
@@ -443,6 +492,7 @@ class InfraIndex {
     const receiver = unwrap(value.expression);
     if (!ts.isIdentifier(receiver)) return undefined;
     const target = this.resolve(file, receiver.text);
+    if (!target && this.passive.has(this.terminal(file, receiver.text))) return undefined;
     if (!target) throw new Error(`${context}: unresolved target ${value.getText()}`);
     return target;
   }
@@ -546,18 +596,27 @@ function discoverMethodTriggers(index: InfraIndex, byNode: Map<ts.NewExpression,
   for (const source of index.parsed) {
     const file = source.fileName;
     walk(source, node => {
-      if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
-      const method = node.expression.name.text;
+      if (!ts.isCallExpression(node)) return;
+      const gated = ts.isIdentifier(node.expression) && node.expression.text === PREVIEW_GATED_SUBSCRIBE;
+      if (!gated && !ts.isPropertyAccessExpression(node.expression)) return;
+      if (!gated && insidePreviewGate(node)) return;
+      const method = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : 'subscribe';
       if (!TRIGGER_METHODS.has(method)) return;
-      const receiver = unwrap(node.expression.expression);
+      const receiverExpression = ts.isPropertyAccessExpression(node.expression)
+        ? node.expression.expression
+        : node.arguments[PREVIEW_GATED_RECEIVER_INDEX];
+      if (!receiverExpression) throw new Error(`${file}: ${PREVIEW_GATED_SUBSCRIBE}() without a queue`);
+      const receiver = unwrap(receiverExpression);
+      const args = gated ? node.arguments.slice(PREVIEW_GATED_RECEIVER_INDEX + 1) : node.arguments;
       const target = ts.isIdentifier(receiver) ? index.resolve(file, receiver.text) : undefined;
       if (!target) throw new Error(`${file}: unresolved subscription receiver ${receiver.getText()}`);
       const unsupported = () => new Error(`${file}: unsupported ${method}() on ${target.type} ${receiver.getText()}`);
+      if (gated && target.type !== 'Queue') throw unsupported();
       if (target.type === 'Queue') {
         const owner = byNode.get(target.node);
         if (method !== 'subscribe' || !owner) throw unsupported();
         owner.nodes.push(node);
-        if (node.arguments[0]) owner.subscribers.push(node.arguments[0]);
+        if (args[0]) owner.subscribers.push(args[0]);
       } else if (target.type === 'Bus') {
         if (method === 'notify') throw unsupported();
         const subscriber = node.arguments[1];

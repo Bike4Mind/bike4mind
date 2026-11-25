@@ -9,16 +9,23 @@ const mocks = vi.hoisted(() => ({
   latestBucketStart: vi.fn(),
   log: vi.fn(),
   warn: vi.fn(),
+  error: vi.fn(),
   evaluateSpend: vi.fn(),
+  runAutoPause: vi.fn(),
+  freezeSpend: vi.fn(),
   postAlarmToSlack: vi.fn(),
+  runMarginCheck: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: mocks.resource }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://example/%STAGE%' } }));
 vi.mock('@bike4mind/database', () => ({
   connectDB: mocks.connect,
+  adminAuditLogRepository: {},
   adminSettingsRepository: {},
   spendAlertRepository: {},
+  spendFreezeRepository: {},
+  withTransaction: async (run: () => unknown) => run(),
   spendRollupRepository: { rollupBucket: mocks.rollupBucket, latestBucketStart: mocks.latestBucketStart },
 }));
 vi.mock('../events/alarmSlackMessage', () => ({
@@ -31,6 +38,15 @@ vi.mock('@bike4mind/server-utils/lib/accounts/accountContext', () => ({ defaultA
 vi.mock('./spendMonitor/paidScopes', () => ({ defaultPaidScopeDeps: () => ({}) }));
 vi.mock('./spendMonitor/resolveScope', () => ({ defaultResolveScopeDeps: () => ({}) }));
 vi.mock('./spendMonitor/evaluate', () => ({ evaluateSpend: mocks.evaluateSpend }));
+vi.mock('./spendMonitor/marginCheck', async importOriginal => ({
+  ...(await importOriginal<typeof import('./spendMonitor/marginCheck')>()),
+  runMarginCheck: mocks.runMarginCheck,
+}));
+vi.mock('./spendMonitor/autoPause', () => ({ runAutoPause: mocks.runAutoPause }));
+vi.mock('@bike4mind/services', () => ({ spendFreezeService: { freezeSpend: mocks.freezeSpend } }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mocks.getSettingsMap,
   getSettingsValue: mocks.getSettingsValue,
@@ -38,7 +54,7 @@ vi.mock('@bike4mind/utils', () => ({
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     withMetadata() {
-      return { log: mocks.log, warn: mocks.warn, error: vi.fn() };
+      return { log: mocks.log, warn: mocks.warn, error: mocks.error };
     }
   },
 }));
@@ -68,6 +84,14 @@ const defaultSettings: Record<string, unknown> = {
   spendMonitorTrustedAccountIds: '',
   spendMonitorTrustedAccountSpikeFloorCredits: 20000,
   spendMonitorTrustedAccountCeilingCredits: 40000,
+  spendMonitorMarginEnabled: true,
+  spendMonitorMarginMinRatio: 1,
+  spendMonitorMarginWindowHours: 24,
+  spendMonitorMarginCostFloorUsd: 5,
+  spendMonitorAutoPauseMode: 'shadow',
+  spendMonitorAutoPauseStandardMinCredits: 10000,
+  spendMonitorAutoPausePaidMinCredits: 0,
+  spendMonitorAutoPauseTrustedMinCredits: 0,
 };
 
 const useSettings = (overrides: Record<string, unknown> = {}) => {
@@ -81,6 +105,8 @@ beforeEach(() => {
   useSettings();
   mocks.rollupBucket.mockResolvedValue({ docs: 3 });
   mocks.evaluateSpend.mockResolvedValue({ breaches: 0, posted: 0 });
+  mocks.runMarginCheck.mockResolvedValue({ checked: 0, flagged: 0 });
+  mocks.runAutoPause.mockResolvedValue({ shadow: 0, paused: 0 });
 });
 
 describe('spendMonitor handler', () => {
@@ -157,6 +183,76 @@ describe('spendMonitor handler', () => {
     expect(mocks.rollupBucket.mock.invocationCallOrder[1]).toBeLessThan(
       mocks.evaluateSpend.mock.invocationCallOrder[0]
     );
+  });
+
+  it('runs the automatic pause after evaluating, with its config read from settings', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T10:05:00.000Z'));
+    useSettings({ spendMonitorAutoPauseMode: 'enforce', spendMonitorAutoPausePaidMinCredits: 80000 });
+
+    await handler(event);
+
+    expect(mocks.runAutoPause).toHaveBeenCalledTimes(1);
+    const [now, deps, config] = mocks.runAutoPause.mock.calls[0];
+    expect(now).toEqual(new Date(event.time));
+    expect(config).toEqual({ mode: 'enforce', minCreditsByTier: { standard: 10000, paid: 80000, trusted: 0 } });
+    expect(deps.adminUrl).toBe('https://app.example.com/admin?tab=spend-monitor');
+    expect(mocks.evaluateSpend.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.runAutoPause.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("reports a freeze another actor applied as not this incident's", async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T10:05:00.000Z'));
+    mocks.freezeSpend.mockResolvedValue({
+      freeze: { id: 'freeze-0', actor: { kind: 'admin', userId: 'u' } },
+      created: false,
+    });
+    await handler(event);
+    const [, deps] = mocks.runAutoPause.mock.calls[0];
+
+    await expect(
+      deps.freeze({
+        scope: { scopeType: 'User', scopeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+        rule: 'account_ceiling',
+        spendAlertId: 'alert-1',
+        reason: 'Automatic pause',
+      })
+    ).resolves.toEqual({ freezeId: 'freeze-0', byThisIncident: false });
+  });
+
+  it('freezes as the automatic actor with a worker audit context', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T10:05:00.000Z'));
+    mocks.freezeSpend.mockResolvedValue({
+      freeze: { id: 'freeze-1', actor: { kind: 'automatic', rule: 'account_ceiling', spendAlertId: 'alert-1' } },
+      created: true,
+    });
+    await handler(event);
+    const [, deps] = mocks.runAutoPause.mock.calls[0];
+
+    const scope = { scopeType: 'User', scopeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' };
+    await expect(
+      deps.freeze({ scope, rule: 'account_ceiling', spendAlertId: 'alert-1', reason: 'Automatic pause' })
+    ).resolves.toEqual({ freezeId: 'freeze-1', byThisIncident: true });
+
+    expect(mocks.freezeSpend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope,
+        actor: { kind: 'automatic', rule: 'account_ceiling', spendAlertId: 'alert-1' },
+        reason: 'Automatic pause',
+        audit: {
+          actor: expect.objectContaining({ kind: 'system', name: 'spend-monitor-auto-pause' }),
+          context: { source: 'worker', route: 'cron/spendMonitor' },
+        },
+      }),
+      expect.anything()
+    );
+  });
+
+  it('fails the run on an unknown automatic pause mode', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T10:05:00.000Z'));
+    useSettings({ spendMonitorAutoPauseMode: 'on' });
+
+    await expect(handler(event)).rejects.toThrow(/spendMonitorAutoPauseMode/);
   });
 
   it('passes the trusted domains and account ids parsed from settings', async () => {
@@ -250,5 +346,80 @@ describe('spendMonitor handler', () => {
   it('throws on an event without a time', async () => {
     await expect(handler({})).rejects.toThrow();
     expect(mocks.connect).not.toHaveBeenCalled();
+  });
+});
+
+describe('spendMonitor handler margin check', () => {
+  const midnightEvent = { time: '2026-10-31T00:03:00Z' };
+
+  beforeEach(() => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T23:55:00.000Z'));
+  });
+
+  it('runs once a day on the midnight UTC tick with the admin thresholds', async () => {
+    useSettings({
+      spendMonitorMarginMinRatio: 1.1,
+      spendMonitorMarginWindowHours: 48,
+      spendMonitorMarginCostFloorUsd: 10,
+    });
+
+    await handler(midnightEvent);
+
+    expect(mocks.runMarginCheck).toHaveBeenCalledOnce();
+    const [deps, thresholds] = mocks.runMarginCheck.mock.calls[0];
+    expect(thresholds).toEqual({ minRatio: 1.1, windowHours: 48, costFloorUsd: 10 });
+    expect(deps.messageContext).toEqual({ creditUsd: expect.any(Number), stage: 'production' });
+  });
+
+  it('skips every other tick', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T09:55:00.000Z'));
+
+    await handler(event);
+
+    expect(mocks.runMarginCheck).not.toHaveBeenCalled();
+  });
+
+  it('skips when the margin check is disabled', async () => {
+    useSettings({ spendMonitorMarginEnabled: false });
+
+    await handler(midnightEvent);
+
+    expect(mocks.runMarginCheck).not.toHaveBeenCalled();
+  });
+
+  it('routes the digest through the Slack toggle, so a disabled integration only logs', async () => {
+    mocks.runMarginCheck.mockImplementation(async (deps: { post: (message: { text: string }) => Promise<void> }) => {
+      await deps.post({ text: 'margin digest' });
+      return { checked: 1, flagged: 1 };
+    });
+
+    await handler(midnightEvent);
+
+    expect(mocks.postAlarmToSlack).not.toHaveBeenCalled();
+    expect(mocks.log).toHaveBeenCalledWith('spend-monitor-slack-disabled', { text: 'margin digest' });
+  });
+
+  it('logs a failed margin check and still completes the handler', async () => {
+    const failure = new Error('rollup read failed');
+    mocks.runMarginCheck.mockRejectedValue(failure);
+
+    await expect(handler(midnightEvent)).resolves.toEqual({ status: 'ok', rolled: expect.any(Number) });
+
+    expect(mocks.error).toHaveBeenCalledWith('spend-monitor-margin-failed', { error: failure });
+  });
+
+  it('still runs the margin check when the automatic pause fails, then fails the run', async () => {
+    const failure = new AggregateError([new Error('slack down')], 'automatic pause failed');
+    mocks.runAutoPause.mockRejectedValue(failure);
+
+    await expect(handler(midnightEvent)).rejects.toBe(failure);
+
+    expect(mocks.runMarginCheck).toHaveBeenCalledOnce();
+  });
+
+  it('fails loudly when a margin threshold resolves to no value', async () => {
+    useSettings({ spendMonitorMarginWindowHours: undefined });
+
+    await expect(handler(midnightEvent)).rejects.toThrow('spendMonitorMarginWindowHours');
   });
 });

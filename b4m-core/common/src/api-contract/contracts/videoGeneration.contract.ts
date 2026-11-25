@@ -6,7 +6,12 @@ import {
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
-import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  MeteredBillingOrganizationForbiddenErrorSchema,
+  ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 import {
   CreateVideoGenerationBodySchema,
   ListVideoGenerationsQuerySchema,
@@ -98,24 +103,27 @@ export const createVideoGenerationContract = defineEndpoint({
       example: exampleJob,
     },
     403: {
-      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
-      schema: BillingOrganizationForbiddenErrorSchema,
+      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredBillingOrganizationForbiddenErrorSchema,
     },
     400: { description: BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION, schema: ApiErrorSchema },
     404: {
       description:
         'An `inputs` file (or `input_image_file_id`) does not name an image you own ' +
-        '(`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin ' +
+        '(`errorCode: input_image_not_found`), or the `run` does not exist or another user or billing owner ' +
+        'minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin ' +
         'caller; for anyone else it is `403`.',
       schema: VideoGenerationErrorResponseSchema,
     },
     422: {
       description:
         'The request cannot run: a body or capability violation (`errorCode` names it, e.g. ' +
-        '`unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an ' +
+        '`unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or ' +
+        '`unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An ' +
         'unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names ' +
         'the model to use instead), a model your ' +
-        'administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an ' +
+        'administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), a `run` budget ' +
+        'with too little left for the whole job (`run_budget_exhausted`), or an ' +
         'Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).',
       schema: VideoGenerationErrorResponseSchema,
     },

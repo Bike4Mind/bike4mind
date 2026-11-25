@@ -1,14 +1,15 @@
 import type { Request, Response } from 'express';
 import {
   apiCompletionObservationSchema,
+  SAFE_ERROR_CODE,
   type ApiCompletionOutcome,
   type ApiKeyCompletionSource,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import type { ApiKeyInfo } from '@server/cli/auth';
-import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
+import type { ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
+import { exchangeAttribution, resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 
 const CLIENT_CLOSED_REQUEST = 499;
 
@@ -19,7 +20,12 @@ type LogApiKeyUsageOnResponseParams = {
   endpoint: string;
   source: ApiKeyCompletionSource;
   startTime: number;
-  completion?: { requestId: string; requestedModel: string; outcome: () => ApiCompletionOutcome };
+  completion?: {
+    requestId: string;
+    requestedModel: string;
+    outcome: () => ApiCompletionOutcome;
+    failureCode?: () => string | undefined;
+  };
   logger: Logger;
   track: (promise: Promise<void>) => void;
 };
@@ -54,6 +60,7 @@ export function logApiKeyUsageOnResponse({
     method: req.method,
     source,
     ownerType: resolveApiKeyOwnerType(apiKey),
+    ...exchangeAttribution(apiKey),
     logger,
   };
   const started = captured
@@ -75,11 +82,11 @@ export function logApiKeyUsageOnResponse({
         if (logged) return;
         logged = true;
         const observed = completion?.outcome() ?? 'unknown';
+        const outcome = observed === 'unknown' && !res.writableFinished ? ('interrupted' as const) : observed;
+        const failureCode = outcome === 'failed' ? completion?.failureCode?.() : undefined;
+        const failureCodeValid = failureCode !== undefined && SAFE_ERROR_CODE.test(failureCode);
         const completionObservation = captured
-          ? {
-              ...captured,
-              outcome: observed === 'unknown' && !res.writableFinished ? ('interrupted' as const) : observed,
-            }
+          ? { ...captured, outcome, ...(failureCodeValid ? { failureCode } : {}) }
           : undefined;
         const statusCode = res.headersSent ? res.statusCode : CLIENT_CLOSED_REQUEST;
         if (completionObservation)

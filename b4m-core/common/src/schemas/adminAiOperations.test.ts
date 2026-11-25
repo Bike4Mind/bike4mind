@@ -60,5 +60,6 @@ describe('admin AI exact autonomy thresholds', () => {
     expect(adminAiDemotedMode('recommend', 89, 11, new Date('2026-01-11'), latest)).toBe('shadow');
     expect(adminAiDemotedMode('shadow', 0, 1, latest, null)).toBe('shadow');
     expect(adminAiDemotedMode('recommend', 0, 0, null, null)).toBe('recommend');
+    expect(adminAiDemotedMode('recommend', 0, 0, latest, null)).toBe('recommend');
   });
 });

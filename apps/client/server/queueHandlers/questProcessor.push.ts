@@ -1,6 +1,9 @@
 import type { LiveActivityPushEvent, PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { createLiveActivityThrottle, LIVE_ACTIVITY_STAGE_LABEL_MAX } from '@server/utils/liveActivityPush';
+import {
+  createLiveActivityThrottle,
+  LIVE_ACTIVITY_STAGE_LABEL_MAX,
+} from '@bike4mind/server-utils/utils/liveActivityPush';
 import {
   type ConnectionLookup,
   hasLiveConnection,
@@ -14,7 +17,7 @@ export type ChatCompletedPushDeps = {
     status?: string;
     type?: string;
     reply?: string | null;
-    pendingAction?: { tool: string } | null;
+    pendingAction?: { tool: string; ts?: number } | null;
   } | null>;
   sessionDeepLink(sessionId: string): string;
   /** Must not throw (publishPushNotification). */
@@ -25,8 +28,8 @@ export type ChatCompletedPushDeps = {
  * `chat_completed` push for a finished chat turn, sent only when the user has no live websocket
  * connection: a connected client already streamed the reply, so the push would only duplicate it.
  * A turn that ended parked on a Confirm card (an MCP write preview saved by ToolBuilder's
- * onPendingAction) sends `approval_needed` instead, with the same copy and collapse id as the agent
- * path (apps/workers/src/queueHandlers/agentExecutor.pendingAction.ts).
+ * onPendingAction) sends `approval_needed` instead, regardless of any live connection, with the same
+ * copy and collapse id as the agent path (apps/workers/src/queueHandlers/agentExecutor.pendingAction.ts).
  * API-key turns are skipped too; their caller polls or streams the result itself.
  * Slack turns are skipped because Slack delivers the reply itself. Never throws.
  */
@@ -44,10 +47,11 @@ export async function publishChatCompletedPush(
 ): Promise<void> {
   if (turn.apiKeyId || turn.enableSlackTools || !isPushDeliveryConfigured()) return;
   try {
-    if (await hasLiveConnection(turn.userId, deps.connections, logger)) return;
     const quest = await deps.findQuest(turn.questId);
     if (!quest || quest.status !== 'done' || quest.type === 'error') return;
 
+    // Approvals are exempt from the live-connection gate: an open tab on a desk the user has walked away
+    // from is the case the push exists for, and the tab shows the card but does not reach the user.
     if (quest.pendingAction) {
       await deps.publish({
         userId: turn.userId,
@@ -58,9 +62,12 @@ export async function publishChatCompletedPush(
         collapseId: `approval:${turn.questId}`,
         questId: turn.questId,
         sessionId: turn.sessionId,
+        pendingActionTs: quest.pendingAction.ts,
       });
       return;
     }
+
+    if (await hasLiveConnection(turn.userId, deps.connections, logger)) return;
 
     const sessionName = turn.sessionName?.trim();
     const replySnippet = quest.reply?.replace(/\s+/g, ' ').trim();

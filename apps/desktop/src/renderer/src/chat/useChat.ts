@@ -11,18 +11,24 @@ import type {
   ChatSession,
   ChatSessionStatus,
   ChatSessionSummary,
+  ChatStreamEvent,
   ContextNoticeKind,
   CreateCodeSessionRequest,
   ModelPhase,
   ReasoningEffortSetting,
+  SendMessageResult,
+  SessionBackgroundJobs,
   SessionSetupStep,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { carriedNotes, regenerableReply } from '@shared/threadRewind';
 import { summarizeSession } from '@shared/agentOutcome';
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
 import type { GenerationSettings } from '@shared/generation';
 import type { CreatedSession } from '@shared/ipc';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
+import { hostClient } from '../host/HostClient';
 import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
@@ -31,11 +37,18 @@ import { forgetSessionPrefs } from './orchestrator/orchestratorPrefs';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
-import { applyPreparingEvents, applyStatusEvents } from './sessionStatus';
+import { withPhase } from './replyStats';
+import {
+  applyBackgroundEvents,
+  applyPreparingEvents,
+  applyStatusEvents,
+  applyUnreadReplyEvents,
+} from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
+import { StreamResumeGate } from './streamResume';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
 const MAX_SETTLED_REREADS = 3;
@@ -45,6 +58,8 @@ export interface SessionsController {
   loading: boolean;
   reload: () => Promise<void>;
   create: (placement?: SessionPlacement) => Promise<string>;
+  /** Start the Studio place's own conversation, which no sidebar lists. */
+  createStudio: () => Promise<string>;
   /** Start a Code session. Resolves null when main refused; `codeError` then says why. */
   createCode: (request: CreateCodeSessionRequest, placement?: SessionPlacement) => Promise<string | null>;
   /** Set while a Code session is being created - resolving a worktree can take a moment. */
@@ -108,17 +123,24 @@ export function useSessions(): SessionsController {
   const [exportError, setExportError] = useState<string | null>(null);
 
   const latestReload = useRef(0);
+  const latestListing = useRef<Promise<void>>(Promise.resolve());
   const localEdits = useRef(0);
   // A listing that resolves after a newer listing, or after a local edit (create, pin, rename),
   // would put back the rows it read before them. Import syncs re-list often enough to hit this.
-  const reload = useCallback(async (): Promise<void> => {
+  // An overtaken reload still resolves only once the newer listing is applied: a caller that
+  // selects a session it just created (useSessionDraft) relies on the list holding it by then.
+  const reload = useCallback((): Promise<void> => {
     const ticket = ++latestReload.current;
     const editsBefore = localEdits.current;
-    const next = await window.b4m.chat.listSessions();
-    if (ticket !== latestReload.current) return;
-    if (editsBefore !== localEdits.current) return reload();
-    setSessions(next);
-    setLoading(false);
+    const listing = (async (): Promise<void> => {
+      const { sessions: next } = await hostClient.request(LOCAL_HOST_ID, 'session/list');
+      if (ticket !== latestReload.current) return latestListing.current;
+      if (editsBefore !== localEdits.current) return reload();
+      setSessions(next);
+      setLoading(false);
+    })();
+    latestListing.current = listing;
+    return listing;
   }, []);
   const editSessions = useCallback((update: (current: ChatSessionSummary[]) => ChatSessionSummary[]) => {
     localEdits.current++;
@@ -146,7 +168,8 @@ export function useSessions(): SessionsController {
   // window does not hold is ignored - the push reaches every window, including ones that have
   // not listed that session yet.
   useEffect(() => {
-    return window.b4m.chat.onSessionSummary(summary => {
+    return hostClient.onNotification('session/summaryChanged', ({ summary }, hostId) => {
+      if (hostId !== LOCAL_HOST_ID) return;
       editSessions(current => current.map(entry => (entry.id === summary.id ? summary : entry)));
     });
   }, []);
@@ -167,6 +190,12 @@ export function useSessions(): SessionsController {
     },
     [list]
   );
+
+  const createStudio = useCallback(async () => {
+    const created = await window.b4m.chat.createSession({ mode: 'studio' });
+    list(created, undefined);
+    return created.session.id;
+  }, [list]);
 
   const createCode = useCallback(
     async (request: CreateCodeSessionRequest, placement?: SessionPlacement) => {
@@ -262,6 +291,7 @@ export function useSessions(): SessionsController {
     loading,
     reload,
     create,
+    createStudio,
     createCode,
     creatingCode,
     codeError,
@@ -294,8 +324,11 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
 
 export interface SessionStatusFeed {
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  unreadReplies: ReadonlySet<string>;
   /** Busy sessions still being prepared, by setup step; a subset of the 'processing' ones in `statuses`. */
   preparing: ReadonlyMap<string, SessionSetupStep>;
+  /** Running wake-on-exit background jobs per session; independent of `statuses` (a 'done' session can have some). */
+  background: ReadonlyMap<string, SessionBackgroundJobs>;
   /** True once the first snapshot has been folded in, so `statuses` is a baseline rather than a gap. */
   loaded: boolean;
 }
@@ -304,7 +337,9 @@ export interface SessionStatusFeed {
 export function useSessionStatusFeed(): SessionStatusFeed {
   const [feed, setFeed] = useState<SessionStatusFeed>(() => ({
     statuses: new Map(),
+    unreadReplies: new Set(),
     preparing: new Map(),
+    background: new Map(),
     loaded: false,
   }));
 
@@ -315,24 +350,35 @@ export function useSessionStatusFeed(): SessionStatusFeed {
     // already stale for a session - so it is applied only to sessions no push has covered.
     const pushed = new Set<string>();
 
-    const unsubscribe = window.b4m.chat.onSessionStatus(event => {
+    const unsubscribe = hostClient.onNotification('session/statusChanged', ({ event }, hostId) => {
+      if (hostId !== LOCAL_HOST_ID) return;
       pushed.add(event.sessionId);
       setFeed(current => {
         const statuses = applyStatusEvents(current.statuses, [event]);
         const preparing = applyPreparingEvents(current.preparing, [event]);
+        const unreadReplies = applyUnreadReplyEvents(current.unreadReplies, [event]);
+        const background = applyBackgroundEvents(current.background, [event]);
         // Same object for a no-op push, so React skips re-rendering everything that reads the feed.
-        if (statuses === current.statuses && preparing === current.preparing) return current;
-        return { ...current, statuses, preparing };
+        if (
+          statuses === current.statuses &&
+          preparing === current.preparing &&
+          unreadReplies === current.unreadReplies &&
+          background === current.background
+        )
+          return current;
+        return { ...current, statuses, preparing, unreadReplies, background };
       });
     });
 
-    void window.b4m.chat.getSessionStatuses().then(snapshot => {
+    void hostClient.request(LOCAL_HOST_ID, 'session/statuses').then(({ statuses: snapshot }) => {
       if (!live) return;
       const unspoken = snapshot.filter(entry => !pushed.has(entry.sessionId));
       setFeed(current => ({
         loaded: true,
         statuses: applyStatusEvents(current.statuses, unspoken),
+        unreadReplies: applyUnreadReplyEvents(current.unreadReplies, unspoken),
         preparing: applyPreparingEvents(current.preparing, unspoken),
+        background: applyBackgroundEvents(current.background, unspoken),
       }));
     });
 
@@ -521,12 +567,20 @@ export interface ConversationController {
   notice: string | null;
   dismissNotice: () => void;
   /** False when main refused the turn; the text is already back in the composer. */
-  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<boolean>;
+  /** `notes` reach the model with this turn and are never drawn; see SendMessageRequest.notes. */
+  send: (text: string, attachments?: readonly ChatAttachment[], notes?: readonly string[]) => Promise<boolean>;
   /** Device-local: move a conversation whose model is not installed to the one a send would use. */
   settleLocalModel: () => Promise<void>;
   stop: () => void;
   /** Resume the last reply if the agent loop's budget cut it short. */
   continueReply: () => Promise<void>;
+  /**
+   * Replace a sent prompt with `text`, dropping every turn after it, and send it. False when main
+   * refused; the thread is put back and the reason is in `sendError`.
+   */
+  editMessage: (messageId: string, text: string) => Promise<boolean>;
+  /** Drop the last reply and run its prompt again. A refusal puts the reply back. */
+  regenerate: () => Promise<void>;
   /**
    * Run a slash command. Client-side actions only; nothing here reaches the model as a tool.
    * A refusal lands in `sendError`, which is where the user is already looking for one.
@@ -572,7 +626,7 @@ export interface ConversationController {
    */
   setApprovalMode: (mode: ChatApprovalMode) => Promise<void>;
   /** Turn Orchestrate on or off for this conversation; see ChatSessionMeta.orchestrate. */
-  setOrchestrate: (orchestrate: boolean) => Promise<void>;
+  setOrchestrate: (orchestrate: boolean, budgetCredits?: number) => Promise<void>;
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
   /**
@@ -638,6 +692,10 @@ export function useConversation(
 
   // The open chat's read in flight, done again if main writes that chat a summary meanwhile, as it may predate it.
   const openRead = useRef<SessionRead | null>(null);
+  // Holds the open chat's stream while its read is in flight; see StreamResumeGate.
+  const streamGate = useRef(new StreamResumeGate());
+  // The subscription's handler, so the session load can apply what the gate held. Set before any read can land.
+  const applyStreamEvent = useRef<(event: ChatStreamEvent, reflected?: boolean) => void>(() => {});
   // The chat the reset below last ran for. A share result that lands before then would be wiped by it.
   const resetFor = useRef<string | null>(null);
 
@@ -677,13 +735,20 @@ export function useConversation(
 
     let current = true;
     let settledRereads = 0;
+    const applyHeld = (events: readonly ChatStreamEvent[], reflected = false): void => {
+      for (const event of events) applyStreamEvent.current(event, reflected);
+    };
     const load = (): void => {
       const read: SessionRead = { sessionId, stale: false };
       openRead.current = read;
+      streamGate.current.hold(sessionId);
       const preparationBeforeRead = workspaceVersion.current;
       const historyBeforeRead = historyVersion.current;
       const failed = (error: unknown): void => {
         if (!current) return;
+        // No snapshot to cut against, so what arrived meanwhile applies as it would have unheld;
+        // ahead of the checks below, which may need the version bumps it makes.
+        applyHeld(streamGate.current.release());
         if (preparationBeforeRead !== workspaceVersion.current) return load();
         if (historyBeforeRead !== historyVersion.current) return load();
         if (read.stale) return load();
@@ -716,11 +781,20 @@ export function useConversation(
           openRead.current = null;
           setSession(loaded);
           setMessages(loaded?.messages ?? []);
+          const { unseen, reflected } = loaded
+            ? streamGate.current.resolve(loaded.eventCursor)
+            : { unseen: streamGate.current.release(), reflected: [] };
           // A started session opened while its worktree is still being cut: no event is coming
           // to say so, the 'workspace' one went out before this window was looking.
           setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
           setStreaming(!!live);
-          setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
+          setTurn(
+            live ? { startedAt: live.startedAt, tokens: null, messageId: live.messageId, requestAt: null } : null
+          );
+          // After the snapshot's own state, so each lands on top of the read it postdates. The
+          // snapshot holds a reflected event's transcript and turn but not its side effects.
+          applyHeld(reflected, true);
+          applyHeld(unseen);
         })
         .catch(failed);
     };
@@ -732,6 +806,9 @@ export function useConversation(
     });
     return () => {
       current = false;
+      // Applied rather than dropped: as events of a chat no longer open they still count settled
+      // turns and keep background notices, as they would have unheld.
+      applyHeld(streamGate.current.release());
     };
   }, [sessionId]);
 
@@ -778,8 +855,8 @@ export function useConversation(
   // The header reads the open conversation's own copy of the title, so the sidebar's patch is
   // not enough: without this, the row renames itself and the heading above the thread does not.
   useEffect(() => {
-    return window.b4m.chat.onSessionSummary(summary => {
-      if (summary.id !== activeSessionId.current) return;
+    return hostClient.onNotification('session/summaryChanged', ({ summary }, hostId) => {
+      if (hostId !== LOCAL_HOST_ID || summary.id !== activeSessionId.current) return;
       historyVersion.current++;
       // The project too: a worktree landing under an open session is pushed this way, and the
       // chips have to stop saying it is on its way.
@@ -833,9 +910,12 @@ export function useConversation(
       if (fallback !== undefined) clearTimeout(fallback);
       frame = undefined;
       fallback = undefined;
-      if (queued.length === 0) return;
-      const events = coalesceLiveEvents(queued);
+      // An event queued just before the open chat's read began can be one its snapshot already
+      // holds; that snapshot may have landed while the event waited for this frame.
+      const pending = queued.filter(event => !streamGate.current.reflects(event));
       queued = [];
+      if (pending.length === 0) return;
+      const events = coalesceLiveEvents(pending);
       setMessages(current =>
         current.map(message => events.reduce((folded, event) => applyLiveEvent(folded, event), message))
       );
@@ -855,15 +935,14 @@ export function useConversation(
       });
     };
 
-    const unsubscribe = window.b4m.chat.onStreamEvent(event => {
-      if (event.sessionId === activeSessionId.current) transcriptVersion.current++;
+    const apply = (event: ChatStreamEvent, reflected = false): void => {
       const live =
         event.type === 'delta' ||
         event.type === 'tool-start' ||
         event.type === 'tool-end' ||
         event.type === 'tool-progress';
       if (live) {
-        if (event.sessionId !== activeSessionId.current) return;
+        if (reflected || event.sessionId !== activeSessionId.current) return;
         // A folder the user just added has to show up in the chips at once - that row is where it
         // is revoked - and main pushes no summary for it.
         if (
@@ -883,7 +962,11 @@ export function useConversation(
           });
         }
         // The call has arrived, so the tool's own status takes over; the next round sends a phase anew.
-        if (event.type === 'tool-start') setPhase(null);
+        if (event.type === 'tool-start') {
+          setPhase(null);
+          const at = Date.now();
+          setTurn(current => (current ? withPhase(current, { kind: 'waiting' }, at) : current));
+        }
         queued.push(event);
         frame ??= requestAnimationFrame(flushLive);
         // rAF is paused in a hidden or occluded window; without this the reply stalls until the
@@ -902,6 +985,12 @@ export function useConversation(
         // background conversation spends from the same balance as this one.
         setSettledTurns(count => count + 1);
       }
+      if (event.type === 'context-notice-cleared') {
+        const keep = (list: ContextNotice[] | undefined) => (list ?? []).filter(item => item.kind !== event.kind);
+        if (event.sessionId === activeSessionId.current) setNotices(keep);
+        else backgroundNotices.set(event.sessionId, keep(backgroundNotices.get(event.sessionId)));
+        return;
+      }
       if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
         backgroundNotices.set(
           event.sessionId,
@@ -914,8 +1003,17 @@ export function useConversation(
       if (event.type === 'phase') {
         setPhase(event.phase);
         // A sign of life like any other frame: a thinking marker carries no text to stamp it.
-        setTurn(current => (current ? { ...current, lastEventAt: Date.now() } : current));
+        const at = Date.now();
+        setTurn(current => (current ? { ...withPhase(current, event.phase, at), lastEventAt: at } : current));
         return;
+      }
+
+      // A reflected event's transcript and turn are already in the snapshot; only what the
+      // snapshot cannot carry (notices, a compaction's progress) still runs.
+      if (reflected) {
+        if (event.type === 'start' || event.type === 'done' || event.type === 'error') setPhase(null);
+        if (event.type !== 'auto-compact' && event.type !== 'context-notice' && event.type !== 'context-trimmed')
+          return;
       }
 
       if (event.type === 'start') {
@@ -925,7 +1023,13 @@ export function useConversation(
         setStreaming(true);
         reasoning = '';
         const startedAt = Date.now();
-        setTurn({ startedAt, tokens: null, lastEventAt: startedAt });
+        setTurn({
+          startedAt,
+          tokens: null,
+          lastEventAt: startedAt,
+          messageId: event.messageId,
+          ...(event.baseUsage ? { continued: true } : {}),
+        });
         setMessages(current => startReply(current, event.messageId));
         return;
       }
@@ -1016,9 +1120,19 @@ export function useConversation(
             error: event.message,
             contextSnapshot: event.contextSnapshot,
             ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+            ...(event.stats ? { stats: event.stats } : {}),
           };
         });
       });
+    };
+    applyStreamEvent.current = apply;
+
+    const unsubscribe = window.b4m.chat.onStreamEvent(event => {
+      // Counted on arrival, held or not: an imported refresh must not land over it either way.
+      if (event.sessionId === activeSessionId.current) transcriptVersion.current++;
+      const admission = streamGate.current.admit(event);
+      if (admission === 'hold') return;
+      apply(event, admission === 'reflected');
     });
 
     return () => {
@@ -1030,7 +1144,11 @@ export function useConversation(
 
   const sessionProject = session?.project;
   const send = useCallback(
-    async (text: string, attachments: readonly ChatAttachment[] = []): Promise<boolean> => {
+    async (
+      text: string,
+      attachments: readonly ChatAttachment[] = [],
+      notes: readonly string[] = []
+    ): Promise<boolean> => {
       if (!sessionId) return true;
       const prompt = text.trim();
       // An attachment on its own is a turn; only a turn with neither is not.
@@ -1059,6 +1177,7 @@ export function useConversation(
             content: prompt,
             createdAt: new Date().toISOString(),
             ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+            ...(notes.length > 0 ? { notes: [...notes] } : {}),
           }
         : null;
       if (optimistic) setMessages(current => [...current, optimistic]);
@@ -1073,6 +1192,7 @@ export function useConversation(
           sessionId,
           text: prompt,
           ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+          ...(notes.length > 0 ? { notes: [...notes] } : {}),
         })
         .finally(() => {
           if (!goingOut) return;
@@ -1152,6 +1272,77 @@ export function useConversation(
     const read = openRead.current;
     if (read && read.sessionId === id) read.stale = true;
   }, []);
+
+  /**
+   * Both rewinds draw at once - the dropped turns leave the thread before the round trip, as a
+   * send's prompt appears before it - and put the thread back if main refuses. Main truncates
+   * the stored thread itself (SessionStore.truncateFrom), so a reload shows the same history.
+   */
+  const rewind = useCallback(
+    async (
+      next: (current: ChatMessage[]) => ChatMessage[],
+      call: (id: string) => Promise<SendMessageResult>
+    ): Promise<boolean> => {
+      if (!sessionId) return false;
+      transcriptVersion.current++;
+      outdateOpenRead(sessionId);
+      setSendError(null);
+      setNotice(null);
+      const before = messages;
+      setMessages(next(before));
+      const result = await call(sessionId);
+      if (activeSessionId.current !== sessionId) return result.ok;
+      if (!result.ok) {
+        setMessages(before);
+        setSendError(result.error);
+        return false;
+      }
+      if (!result.queued && result.notice) setNotice(result.notice);
+      const updated = await window.b4m.chat.getSession(sessionId);
+      if (updated) {
+        if (activeSessionId.current === sessionId)
+          setSession(current => (current?.id === sessionId ? updated : current));
+        onSummaryChanged(summarizeSession(updated));
+      }
+      return true;
+    },
+    [sessionId, messages, onSummaryChanged, outdateOpenRead]
+  );
+
+  const editMessage = useCallback(
+    async (messageId: string, text: string): Promise<boolean> => {
+      const prompt = text.trim();
+      if (!prompt) return false;
+      return rewind(
+        current => {
+          const at = current.findIndex(message => message.id === messageId);
+          if (at < 0) return current;
+          const { attachments } = current[at];
+          const notes = carriedNotes(current[at]);
+          return [
+            ...current.slice(0, at),
+            {
+              id: `${OPTIMISTIC_ID_PREFIX}${Date.now()}`,
+              role: 'user',
+              content: prompt,
+              createdAt: new Date().toISOString(),
+              ...(attachments?.length ? { attachments } : {}),
+              ...(notes.length ? { notes } : {}),
+            },
+          ];
+        },
+        id => window.b4m.chat.editMessage({ sessionId: id, messageId, text: prompt })
+      );
+    },
+    [rewind]
+  );
+
+  const regenerate = useCallback(async () => {
+    await rewind(
+      current => (regenerableReply(current) ? current.slice(0, -1) : current),
+      id => window.b4m.chat.regenerateReply(id)
+    );
+  }, [rewind]);
 
   // A summary main just wrote, folded into both the open conversation and the sidebar row. The
   // open conversation only when it is that session: a share can return after the user moved on.
@@ -1430,9 +1621,13 @@ export function useConversation(
   );
 
   const setOrchestrate = useCallback(
-    async (orchestrate: boolean) => {
+    async (orchestrate: boolean, budgetCredits?: number) => {
       if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate).catch((error: unknown) => {
+      const request =
+        budgetCredits === undefined
+          ? window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate)
+          : window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate, budgetCredits);
+      const updated = await request.catch((error: unknown) => {
         if (activeSessionId.current === sessionId) {
           setNotice(`Could not change Orchestrate. ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -1618,6 +1813,8 @@ export function useConversation(
     send,
     stop,
     continueReply,
+    editMessage,
+    regenerate,
     runCommand,
     commandProgress,
     queued,

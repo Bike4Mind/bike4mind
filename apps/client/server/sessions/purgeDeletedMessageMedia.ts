@@ -1,18 +1,18 @@
 import { Session } from '@bike4mind/database';
-import { enqueueGeneratedMediaPurge } from '@server/sessions/generatedMediaPurgeQueue';
+import { enqueueGeneratedMediaPurge } from '@bike4mind/server-utils/sessions/generatedMediaPurgeQueue';
 import {
   PURGE_BUDGET_MS,
   type PurgeRequestLogger,
   isGeneratedContentKey,
   runGeneratedMediaPurge,
-} from '@server/sessions/purgeDeletedNotebookMedia';
+} from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
  * After one message is deleted, remove the generated images and videos no other live message or live
- * file references and that its notebook's owner provably produced (findOwnedKeys), and invalidate
- * their `/generated/<key>` CDN paths. Call only once the delete has committed. Retention is per
+ * file references and that its notebook's owner provably produced (findOwnedKeys). Call only once the
+ * delete has committed. Retention is per
  * message, not per notebook: the notebook itself is still live. What the request budget does not
  * reach goes to the purge queue. Never throws; failures are logged.
  */

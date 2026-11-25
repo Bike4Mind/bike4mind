@@ -26,7 +26,7 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 const renderCard = () =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <TutorialModulesCard apiBase={BASE} />
+      <TutorialModulesCard apiBase={BASE} owner="core" />
     </CssVarsProvider>
   );
 
@@ -122,7 +122,7 @@ describe('TutorialModulesCard', () => {
     current.value = { data: [{ ...ROWS[0], revision: 1 }, ROWS[1]], isLoading: false, isError: false };
     view.rerender(
       <CssVarsProvider theme={appTheme}>
-        <TutorialModulesCard apiBase={BASE} />
+        <TutorialModulesCard apiBase={BASE} owner="core" />
       </CssVarsProvider>
     );
     expect(screen.getByTestId('mock-editor-alpha')).toBe(before);

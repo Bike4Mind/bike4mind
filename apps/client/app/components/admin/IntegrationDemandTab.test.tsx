@@ -162,6 +162,10 @@ describe('IntegrationDemandTab', () => {
     expect(m.useIntegrationRequesters).toHaveBeenCalledWith('hubspot');
     const panel = screen.getByTestId('admin-integration-demand-requesters');
     expect(panel).toHaveTextContent('Who requested HubSpot');
+    expect(screen.getByTestId('admin-integration-demand-requesters-table-frame')).toHaveAttribute(
+      'data-framed',
+      'false'
+    );
     const ada = screen.getByTestId('admin-integration-demand-requester-u1');
     expect(ada).toHaveTextContent('Ada Admin');
     expect(ada).toHaveTextContent('ada@example.com');

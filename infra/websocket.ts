@@ -1,5 +1,6 @@
 import { DEFAULT_LAMBDA_ENVIRONMENT, STAGE_LOG_RETENTION } from './constants';
 import { allSecrets } from './secrets';
+import { eventBus } from './bus';
 import { lambdaVpc } from './vpc';
 
 // Access logs carry client IPs; use the stage default instead of SST's flat 1 month.
@@ -10,7 +11,6 @@ const websocketApi = new sst.aws.ApiGatewayWebSocket('websocket', {
 // Memory is set per route so a change shows in review. The cold-start Mongoose + AWS SDK
 // init sets the floor: lifecycle handlers at 256 MB hit OOM and init timeouts on previews.
 const LIFECYCLE_MEMORY = '1024 MB';
-const STREAMING_MEMORY = '2048 MB';
 const DB_HANDLER_MEMORY = '512 MB';
 const RELAY_MEMORY = '256 MB';
 
@@ -97,31 +97,6 @@ const voiceEndedRoute = websocketApi.route('voice_session_ended', {
   },
 });
 
-// CLI Completions — streaming, long-running (bypasses CloudFront 20s timeout)
-// Its log group carries the same spend and overdraft lines as ChatCompletion: llmSpendLogGroups.ts
-// lists it for the spend metric filters and the young-account alarm relay's query.
-const cliCompletionRoute = websocketApi.route('cli_completion_request', {
-  handler: 'apps/client/server/websocket/cliCompletion.func',
-  runtime: 'nodejs24.x',
-  timeout: '10 minutes',
-  memory: STREAMING_MEMORY,
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi],
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['execute-api:ManageConnections'],
-      resources: ['*'],
-    },
-    {
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['*'],
-    },
-  ],
-});
-
 // CLI Tool Execution — request-response
 const cliToolRoute = websocketApi.route('cli_tool_request', {
   handler: 'apps/client/server/websocket/cliToolExecution.func',
@@ -129,7 +104,7 @@ const cliToolRoute = websocketApi.route('cli_tool_request', {
   timeout: '10 minutes',
   memory: DB_HANDLER_MEMORY,
   vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi],
+  link: [...allSecrets, websocketApi, eventBus],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
@@ -259,7 +234,6 @@ const ccAgentDisconnectRoute = websocketApi.route('cc_agent_disconnect', {
 
 export {
   websocketApi,
-  cliCompletionRoute,
   defaultRoute,
   connectRoute,
   disconnectRoute,

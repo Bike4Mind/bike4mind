@@ -60,7 +60,9 @@ vi.mock('@bike4mind/server-utils/middlewares/studioFeatureFlag', () => ({
     mocks.flag.open ? next() : res.status(403).json({ error: 'FEATURE_DISABLED' }),
 }));
 vi.mock('@bike4mind/services/imageJobs', () => ({ createImageJobs: mocks.createImageJobs }));
-vi.mock('@server/generationJobs/wiring', () => ({ getCreateImageJobsDeps: mocks.getCreateImageJobsDeps }));
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
+  getCreateImageJobsDeps: mocks.getCreateImageJobsDeps,
+}));
 vi.mock('@server/generations/listOwnGenerationJobs', () => ({ listOwnGenerationJobs: mocks.listOwnGenerationJobs }));
 vi.mock('@server/billing/resolveMediaBillingOrgId', () => ({
   resolveMediaBillingOrgId: mocks.resolveMediaBillingOrgId,
@@ -114,7 +116,7 @@ const jobDoc = (id: string) => ({
   },
 });
 
-const PUBLIC_JOB_KEYS = ['createdAt', 'error', 'groupId', 'id', 'output', 'request', 'state'];
+const PUBLIC_JOB_KEYS = ['createdAt', 'error', 'groupId', 'id', 'output', 'purpose', 'request', 'state'];
 
 describe('/api/studio/image-jobs', () => {
   beforeEach(() => {
@@ -157,6 +159,7 @@ describe('/api/studio/image-jobs', () => {
       expect(job).toEqual({
         id: 'j1',
         groupId: 'group-1',
+        purpose: null,
         state: 'succeeded',
         request: REQUEST,
         error: { code: 'provider_error', message: 'The provider failed to generate the image.' },
@@ -176,6 +179,19 @@ describe('/api/studio/image-jobs', () => {
       await expect(call({ method: 'POST', body: { count: 1, request: REQUEST } })).rejects.toThrow('AI access refused');
       expect(mocks.assertAiAccessAllowed).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
       expect(mocks.createImageJobs).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['null', null],
+      ['org-2', 'org-2'],
+      ['undefined', undefined],
+    ])('passes organization_id %s from the body to the billing resolver', async (_label, organizationId) => {
+      mocks.createImageJobs.mockResolvedValue({ ok: true, created: true, groupId: 'g', jobs: [] });
+      await call({
+        method: 'POST',
+        body: { count: 1, request: REQUEST, ...(organizationId !== undefined && { organization_id: organizationId }) },
+      });
+      expect(mocks.resolveMediaBillingOrgId).toHaveBeenCalledWith(expect.anything(), organizationId);
     });
 
     it('omits the idempotency key when the header is absent', async () => {

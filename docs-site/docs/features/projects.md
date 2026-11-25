@@ -52,6 +52,8 @@ Once you have at least one project, **Projects** appears in the sidebar:
 
 ---
 
+The Team Up gear requires another account with a verified email to have read access to a project you own. Ask your teammate to accept the invitation and verify their email, then return to Gears. Your own account must also meet the reward requirements shown there.
+
 ## Managing Notebooks in Projects
 
 ### Adding Notebooks

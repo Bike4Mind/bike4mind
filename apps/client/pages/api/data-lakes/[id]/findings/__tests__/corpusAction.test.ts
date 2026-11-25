@@ -34,7 +34,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => unknown) => next(),
 }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({ DATA_LAKE_WRITE_SCOPES: [] }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({ DATA_LAKE_WRITE_SCOPES: [] }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { applyCorpusAction: h.applyCorpusAction },
 }));

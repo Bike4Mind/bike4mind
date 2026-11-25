@@ -37,6 +37,11 @@ vi.mock('@bike4mind/database', async () => ({
       '../../../../../../packages/database/src/utils/ability'
     )
   ).applySharedShareableRules,
+  applyOrganizationShareableRules: (
+    await vi.importActual<typeof import('../../../../../../packages/database/src/utils/ability')>(
+      '../../../../../../packages/database/src/utils/ability'
+    )
+  ).applyOrganizationShareableRules,
   AdminSettings: class AdminSettings {},
   adminSettingsRepository: {},
   CounterLog: class CounterLog {},
@@ -58,10 +63,6 @@ vi.mock('@bike4mind/database', async () => ({
   Memento: class Memento {},
   Project: class Project {},
   QuestMasterPlan: class QuestMasterPlan {},
-}));
-
-vi.mock('@bike4mind/database/infra', () => ({
-  SecretRotation: class SecretRotation {},
 }));
 
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({

@@ -2,11 +2,14 @@ import { fabFileRepository } from '@bike4mind/database/content';
 import { userRepository } from '@bike4mind/database/auth';
 import { lakeAccessEventRepository } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { adminBypassLakeIds, grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
+import { adminBypassLakeIds, grantingLakes, resolveAccessibleLakes } from '@bike4mind/server-utils/dataLakes/index';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
-import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
+import {
+  fileContentUrl,
+  signFabFileGet,
+  type FabFileSignOptions,
+} from '@bike4mind/server-utils/files/browserFileSigner';
+import { holdsDataLakeReadScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { adminSettingsRepository } from '@bike4mind/database/infra';
 import type { IFabFileDocument } from '@bike4mind/common';
@@ -27,12 +30,8 @@ export async function listFilesByIds(req: Request, ids: string[], { browser = fa
   const adapter = {
     db: { fabFiles: fabFileRepository, users: userRepository, adminSettings: adminSettingsRepository },
     storage: {
-      generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
-        return await getFilesStorage().getSignedUrl(path, 'get', {
-          expiresIn: expireInSeconds,
-          audience: 'browser',
-          signingDate: options?.signingDate,
-        });
+      generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) => {
+        return await signFabFileGet(path, expireInSeconds, options);
       },
       ...(browser && { contentUrl: fileContentUrl }),
     },

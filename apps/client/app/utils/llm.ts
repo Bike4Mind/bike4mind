@@ -413,7 +413,7 @@ export type ModelCatalog = {
   models: ModelInfo[];
   /** Retired/superseded ids a session may still be pinned to. See SupersededModelInfo. */
   supersededModels: SupersededModelInfo[];
-  /** Paid-only models the picker shows a free account as locked; display only (see ModelInfo.access). */
+  /** Models the picker shows as locked (paid-only, or not allowed by the org); display only (see ModelInfo.access). */
   lockedModels: ModelInfo[];
   /** The model-list revision the server built this list under; see hooks/data/modelListRevision.ts. */
   modelListRevision: string | null;
@@ -421,9 +421,12 @@ export type ModelCatalog = {
   catalogUnavailable: boolean;
 };
 
-export const getModelCatalog = async (): Promise<ModelCatalog> => {
+/** `organizationId`: the active account-switcher org, whose model policy the server applies. */
+export const getModelCatalog = async (organizationId?: string | null): Promise<ModelCatalog> => {
   try {
-    const response = await api.get('/api/models');
+    const response = organizationId
+      ? await api.get('/api/models', { params: { organizationId } })
+      : await api.get('/api/models');
     const listed: ModelInfo[] = response.data.models;
     return {
       // Backstop: the server never sends a locked model in `models`.
@@ -447,6 +450,8 @@ export type SendMessageOptions = {
   isImageEdit?: boolean;
   isVariation?: boolean;
   image?: string; // Image to be edited
+  /** The FabFile behind `image`, when the chat shows one; an edit reuses it when it is the caller's own. */
+  imageFileId?: string;
   /**
    * Correct-and-retry: the quest whose answer the user says was wrong. Unlike `isRetry`, which
    * re-runs the flagged quest in place, this sends a NEW turn carrying the user's correction and

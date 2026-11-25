@@ -11,9 +11,11 @@ import {
   secureParameters,
   BadRequestError,
   NotFoundError,
+  withoutOrgApiKeyReach,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { distinctIdCount, mergeIds } from '../utils/objectIds';
+import { AttachableItem, assertCanAttachToProject } from './attachGate';
 
 const addFilesProjectSchema = z.object({
   projectId: z.string().nonempty(),
@@ -52,7 +54,7 @@ export const addFiles = async (
       : found
   ) as IProjectDocument;
 
-  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
+  const files = await db.fabFiles.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(user), fileIds);
 
   // BadRequestError, not a bare Error: an id the caller cannot reach is a client mistake, and a
   // bare Error is a 500 that pages LiveOps. Reachable now that the repository skips uncastable
@@ -60,6 +62,14 @@ export const addFiles = async (
   // DEDUPED list, since the reader returns distinct rows and a file sent twice is not one that
   // could not be reached.
   if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
+  // Attaching shares the file (read) with every member, so a read-only holder may not attach it. A
+  // file already in the project as a system prompt is already shared, as in addSystemPrompts.
+  assertCanAttachToProject(
+    files as unknown as AttachableItem[],
+    user,
+    [...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)],
+    'files'
+  );
 
   // The ids that RESOLVED, like addSessions: pushing the request list would store `ABC` alongside
   // an existing `abc` as if they were two different files. mergeIds, not uniq, because a row

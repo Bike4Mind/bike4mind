@@ -1,3 +1,4 @@
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { adminService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -71,8 +72,12 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:imp
         notify: {
           send: async () => undefined,
         },
+        resolveAdminRoles: resolveRoleAdminPermissions,
       }
     );
+
+    // Before the approval is redeemed and the session minted, so a role lookup failure leaves nothing to undo.
+    await resolveRoleAdminPermissions(targetUser);
 
     const needsApproval = policy.enabled && (initialNeedsApproval || canAccessAdmin(targetUser));
     const requestOnly = needsApproval && typeof approvalId !== 'string';

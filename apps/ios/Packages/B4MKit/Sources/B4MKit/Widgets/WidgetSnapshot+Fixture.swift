@@ -12,6 +12,7 @@ extension WidgetSnapshot {
       credits: .init(balance: 31_667, observedAt: now),
       latestGeneration: .init(
         mediaID: "fixture-media-0", title: "Lighthouse at dusk", createdAt: now.addingTimeInterval(-1_800),
-        thumbnailFileName: nil))
+        thumbnailFileName: nil),
+      pendingDecisions: .init(approvals: 1, briefDecisions: 2, observedAt: now))
   }
 }

@@ -10,7 +10,9 @@ import {
   supportsImageEditEndpoint,
   takesBflInputImageList,
 } from '../utils/modelHelpers';
-import { getImageModelCatalogEntry } from './catalog';
+import { MODEL_TIERS } from '../generation/modelRanking';
+import { MAX_BFL_EDIT_REGIONS } from '../llm';
+import { getImageModelCatalogEntry, supportsTransparentBackgroundByCatalog } from './catalog';
 import { validateImageRequest, type ImageCapabilityRequest } from './validate';
 
 // The catalog is declared separately from the predicate-derived block GET /api/models advertises, which is
@@ -86,11 +88,20 @@ describe('gemini image-to-image', () => {
 });
 
 describe('transparent background', () => {
-  it('is declared unsupported on every model the request path steps down', () => {
-    const steppedDown = IMAGE_MODELS.filter(model => rejectsTransparentBackground(model));
-    expect(steppedDown).toContain(ImageModels.GPT_IMAGE_2);
-    for (const model of steppedDown) expect(getImageModelCatalogEntry(model).transparentBackground).toBe(false);
+  it('is declared unsupported on every model gpt-image-2 rejects, and supported on the 2.5 models', () => {
+    const rejecting = IMAGE_MODELS.filter(model => rejectsTransparentBackground(model));
+    expect(rejecting).toContain(ImageModels.GPT_IMAGE_2);
+    for (const model of rejecting) expect(getImageModelCatalogEntry(model).transparentBackground).toBe(false);
     expect(getImageModelCatalogEntry(ImageModels.GPT_IMAGE_2_5_FLARE).transparentBackground).toBe(true);
+  });
+
+  it('derives supportsTransparentBackgroundByCatalog from the catalog for every model', () => {
+    for (const model of IMAGE_MODELS) {
+      expect(supportsTransparentBackgroundByCatalog(model)).toBe(
+        getImageModelCatalogEntry(model).transparentBackground
+      );
+    }
+    expect(supportsTransparentBackgroundByCatalog('not-a-model')).toBe(false);
   });
 });
 
@@ -121,5 +132,45 @@ describe('FLUX 3 edit mode', () => {
     expect(edit?.inputs.edit_source).toEqual({ max: 1 });
     expect(edit?.inputs.mask).toBeUndefined();
     expect(edit?.inputs.reference?.max).toBe((generate?.inputs.reference?.max ?? 0) - 1);
+  });
+});
+
+// rankImageModels orders by these, so a model without them would rank by accident.
+describe('IMAGE_MODEL_CATALOG standing', () => {
+  it.each(IMAGE_MODELS)('declares a tier, a real release date and a preview flag for %s', model => {
+    const { tier, releasedAt, preview } = getImageModelCatalogEntry(model);
+    expect(MODEL_TIERS).toContain(tier);
+    expect(releasedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(new Date(`${releasedAt}T00:00:00Z`).toISOString().slice(0, 10)).toBe(releasedAt);
+    expect(typeof preview).toBe('boolean');
+  });
+
+  it.each(IMAGE_MODELS)('marks %s preview exactly when its provider id says so', model => {
+    expect(getImageModelCatalogEntry(model).preview).toBe(model.endsWith('-preview'));
+  });
+});
+
+describe('FLUX 3 edit regions', () => {
+  it.each(FLUX3_MODELS)('%s takes up to MAX_BFL_EDIT_REGIONS regions when editing, none when generating', model => {
+    const { edit, generate } = getImageModelCatalogEntry(model).modes;
+    expect(edit?.editRegions).toEqual({ max: MAX_BFL_EDIT_REGIONS });
+    expect(generate?.editRegions).toBeUndefined();
+  });
+});
+
+describe('job-only model catalog entries', () => {
+  it('resolves the test model to the free test provider in both modes', () => {
+    const entry = getImageModelCatalogEntry('test-image');
+    expect(entry.provider).toBe('test');
+    expect(entry.modes.generate?.maxOutputs).toBe(1);
+    expect(entry.modes.edit?.inputs.edit_source).toEqual({ max: 1 });
+  });
+
+  it('resolves every local-image checkpoint to one dimensions-sized, generate-only entry', () => {
+    const entry = getImageModelCatalogEntry('local-image/sdxl');
+    expect(entry.provider).toBe('local');
+    expect(entry.sizing.kind).toBe('dimensions');
+    expect(entry.modes.edit).toBeUndefined();
+    expect(getImageModelCatalogEntry('local-image/other')).toBe(entry);
   });
 });

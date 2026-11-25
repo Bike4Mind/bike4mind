@@ -3,14 +3,11 @@ import {
   Box,
   Button,
   DialogContent,
-  Dropdown,
   FormControl,
   FormHelperText,
   FormLabel,
   IconButton,
   Input,
-  Menu,
-  MenuButton,
   MenuItem,
   Option,
   Select,
@@ -21,7 +18,6 @@ import {
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import PlayArrowIcon from '@mui/icons-material/PlayArrowRounded';
 import StopIcon from '@mui/icons-material/StopRounded';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -39,7 +35,8 @@ import {
   LoadingState,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 interface VoiceAgentsListResponse {
   agents: IAgent[];
@@ -338,43 +335,30 @@ const VoiceSettingsTab: FC = () => {
             onRowActivate={openEdit}
             rowTestId={agent => `voice-settings-row-${agent.id}`}
             rowActions={agent => (
-              <Dropdown>
-                <MenuButton
-                  slots={{ root: IconButton }}
-                  slotProps={{
-                    root: {
-                      size: 'sm',
-                      variant: 'plain',
-                      'aria-label': `Actions for ${agent.name}`,
-                      loading: downloadingId === agent.id,
-                      sx: { ...adminFocus, color: 'admin.inkMuted' },
-                    },
-                  }}
-                  data-testid={`voice-settings-row-actions-${agent.id}`}
+              <RowActionsMenu
+                testId={`voice-settings-row-actions-${agent.id}`}
+                ariaLabel={`Actions for ${agent.name}`}
+                loading={downloadingId === agent.id}
+              >
+                <MenuItem
+                  disabled={downloadingId === agent.id}
+                  onClick={() => downloadConfig(agent)}
+                  data-testid={`voice-settings-download-${agent.id}`}
                 >
-                  <MoreHorizIcon sx={{ fontSize: 18 }} />
-                </MenuButton>
-                <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-                  <MenuItem
-                    disabled={downloadingId === agent.id}
-                    onClick={() => downloadConfig(agent)}
-                    data-testid={`voice-settings-download-${agent.id}`}
-                  >
-                    Download ElevenLabs config
-                  </MenuItem>
-                  <MenuItem onClick={() => openEdit(agent)} data-testid={`voice-settings-edit-${agent.id}`}>
-                    Edit voice agent
-                  </MenuItem>
-                  <MenuItem
-                    color="danger"
-                    disabled={deleteMutation.isPending}
-                    onClick={() => setDeleting(agent)}
-                    data-testid={`voice-settings-delete-${agent.id}`}
-                  >
-                    Delete voice agent
-                  </MenuItem>
-                </Menu>
-              </Dropdown>
+                  Download ElevenLabs config
+                </MenuItem>
+                <MenuItem onClick={() => openEdit(agent)} data-testid={`voice-settings-edit-${agent.id}`}>
+                  Edit voice agent
+                </MenuItem>
+                <MenuItem
+                  color="danger"
+                  disabled={deleteMutation.isPending}
+                  onClick={() => setDeleting(agent)}
+                  data-testid={`voice-settings-delete-${agent.id}`}
+                >
+                  Delete voice agent
+                </MenuItem>
+              </RowActionsMenu>
             )}
             pagination={false}
             minWidth="44rem"

@@ -7,7 +7,7 @@ import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAcce
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { agentRepository } from '@bike4mind/database';
 import { generateAgentDescription } from '@server/agents/authoring/generateAgentDescription';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { HTTPError, isTerminalCreditRefusal } from '@bike4mind/common';
 
 interface AgentDescriptionResponse {

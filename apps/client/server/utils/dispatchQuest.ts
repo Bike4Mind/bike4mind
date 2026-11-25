@@ -1,4 +1,10 @@
 import { Resource } from 'sst';
+import { chatCompletionBaseUrl } from './chatCompletionBaseUrl';
+import {
+  QUEST_DISPATCH_SIGNATURE_HEADER,
+  QUEST_DISPATCH_TIMESTAMP_HEADER,
+  signQuestDispatch,
+} from './questDispatchSignature';
 import type { z } from 'zod';
 import type { QuestStartBodySchema } from '@bike4mind/services/llm';
 import type { Logger } from '@bike4mind/observability';
@@ -32,8 +38,13 @@ const RETRY_BACKOFF_MS = 300;
  * per-environment branching - the only difference is how the URL/secret resolve.
  */
 export async function dispatchQuest(params: QuestStartBody, logger: Logger): Promise<void> {
-  const url = `${Resource.ChatCompletion.url}/process`;
+  const url = `${chatCompletionBaseUrl()}/process`;
   const body = JSON.stringify(params);
+  const { timestamp, signature } = signQuestDispatch(
+    Resource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+    { questId: params.questId, userId: params.userId, sessionId: params.sessionId },
+    body
+  );
   const deadline = Date.now() + DISPATCH_TIMEOUT_MS;
   let lastError: Error | undefined;
 
@@ -51,6 +62,8 @@ export async function dispatchQuest(params: QuestStartBody, logger: Logger): Pro
           // Dedicated internal shared-secret bearer (NOT the AES encryption key) proving this
           // dispatch is the frontend; must match the check in chatCompletion/internal/route.ts.
           authorization: `Bearer ${Resource.CHAT_COMPLETION_INTERNAL_SECRET.value}`,
+          [QUEST_DISPATCH_TIMESTAMP_HEADER]: timestamp,
+          [QUEST_DISPATCH_SIGNATURE_HEADER]: signature,
         },
         body,
         signal: controller.signal,

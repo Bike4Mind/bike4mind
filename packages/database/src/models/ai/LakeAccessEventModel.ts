@@ -19,6 +19,7 @@ import {
 import BaseRepository from '@bike4mind/db-core';
 import { DataLakeModel } from './DataLakeModel';
 import { LakeAccessQueryTextModel } from './LakeAccessQueryTextModel';
+import { Logger } from '@bike4mind/observability';
 
 const ModelName = 'LakeAccessEvent';
 
@@ -153,9 +154,10 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
     // mismatch drops scores entirely rather than risk a silent wrong pairing. Sliced through the
     // SAME cap as returnedChunkIds, never independently.
     if (input.scores && input.scores.length !== chunkIds.length) {
-      console.warn(
-        `[lakeAccessEvent] scores.length (${input.scores.length}) !== chunkIds.length (${chunkIds.length}) - dropping scores`
-      );
+      Logger.warn('[lakeAccessEvent] scores.length !== chunkIds.length - dropping scores', {
+        scoresLength: input.scores.length,
+        chunkIdsLength: chunkIds.length,
+      });
     }
     const scores =
       input.scores && input.scores.length === chunkIds.length
@@ -172,9 +174,9 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         ? supersededCollapsed
         : undefined;
     if (supersededCollapsed !== undefined && filesSupersededCollapsed === undefined) {
-      console.warn(
-        `[lakeAccessEvent] filesSupersededCollapsed (${supersededCollapsed}) is not a non-negative integer - dropping it`
-      );
+      Logger.warn('[lakeAccessEvent] filesSupersededCollapsed is not a non-negative integer - dropping it', {
+        filesSupersededCollapsed: supersededCollapsed,
+      });
     }
 
     const adminBypassLakeIds = (input.adminBypassLakeIds ?? []).filter(id => input.resolvedLakeIds.includes(id));
@@ -334,7 +336,7 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
       } as Partial<ILakeAccessQueryTextDocument>);
       return true;
     } catch (err) {
-      console.warn('[lakeAccessEvent] failed to write query-text sibling', err);
+      Logger.warn('[lakeAccessEvent] failed to write query-text sibling', { error: err });
       return false;
     }
   }

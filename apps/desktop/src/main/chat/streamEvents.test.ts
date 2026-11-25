@@ -24,6 +24,19 @@ describe('usage parsing', () => {
       credits: { used: 12, usdCost: 0.03 },
     });
   });
+
+  it('keeps the thinking tokens', () => {
+    const event = parseStreamEvent({
+      type: 'tool_use',
+      tools: [],
+      usage: { outputTokens: 900, reasoningTokens: 700, cacheCreationInputTokens: 40 },
+    });
+    expect(foldUsage(undefined, event!)).toEqual({
+      outputTokens: 900,
+      reasoningTokens: 700,
+      cacheCreationInputTokens: 40,
+    });
+  });
 });
 
 describe('foldUsage', () => {
@@ -65,6 +78,21 @@ describe('addUsage', () => {
     });
   });
 
+  it('sums thinking tokens, absent staying absent', () => {
+    expect(addUsage({ outputTokens: 10, reasoningTokens: 6 }, { outputTokens: 20, reasoningTokens: 15 })).toEqual({
+      outputTokens: 30,
+      reasoningTokens: 21,
+    });
+    expect(addUsage({ outputTokens: 1 }, { outputTokens: 2 })).toEqual({ outputTokens: 3 });
+  });
+
+  it("sums a self-hosted server's cached prompt count across requests", () => {
+    expect(addUsage({ inputTokens: 900, cachedPromptTokens: 850 }, { inputTokens: 950 })).toEqual({
+      inputTokens: 1850,
+      cachedPromptTokens: 850,
+    });
+  });
+
   it('sums a local server rate beside the token counts', () => {
     expect(
       addUsage(
@@ -92,5 +120,30 @@ describe('the local rate on a frame', () => {
 
   it('is stripped from a hosted server frame by parsing', () => {
     expect(foldUsage(undefined, parseStreamEvent(frame)!)).toEqual({ outputTokens: 12 });
+  });
+});
+
+describe('run attribution events', () => {
+  it('keeps the request id the meta event echoes', () => {
+    expect(parseStreamEvent({ type: 'meta', requestId: 'req-1' })).toEqual({ type: 'meta', requestId: 'req-1' });
+  });
+
+  it('parses the settled charge', () => {
+    expect(
+      parseStreamEvent({ type: 'settled', requestId: 'req-1', creditsCharged: 12, usdCost: 0.03, runId: 'run-1' })
+    ).toEqual({ type: 'settled', requestId: 'req-1', creditsCharged: 12, usdCost: 0.03, runId: 'run-1' });
+  });
+
+  it('skips a settled event missing its charge rather than failing the turn', () => {
+    expect(parseStreamEvent({ type: 'settled', requestId: 'req-1' })).toBeNull();
+  });
+
+  it('still tolerates an event type it does not know', () => {
+    expect(parseStreamEvent({ type: 'something_new', value: 1 })).toBeNull();
+  });
+
+  it('leaves usage alone on a settled event', () => {
+    const usage = { creditsUsed: 4 };
+    expect(foldUsage(usage, parseStreamEvent({ type: 'settled', requestId: 'r', creditsCharged: 9 })!)).toBe(usage);
   });
 });

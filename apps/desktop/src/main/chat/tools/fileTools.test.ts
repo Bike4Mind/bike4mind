@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChatMedia } from '@shared/chat';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { PathAccessDenied } from './paths';
 import { MAX_TOOL_IMAGE_BYTES } from './toolImages';
@@ -10,6 +11,7 @@ import {
   MAX_FILE_READ_OUTPUT_CHARS,
   MAX_TOOL_OUTPUT_CHARS,
   outputCapFor,
+  type KeptImage,
   type PreparedImage,
   type ToolContext,
 } from './types';
@@ -134,6 +136,86 @@ describe('file tools', () => {
         };
         return { reported, shown, prepare };
       }
+
+      const KEPT: ChatMedia = {
+        kind: 'image',
+        url: 'b4m-media://media/s1/00000000-0000-4000-8000-000000000000.png',
+        mimeType: 'image/png',
+        byteLength: 5,
+        caption: '',
+      };
+      const FITTED: PreparedImage = {
+        bytes: Buffer.from('small'),
+        mediaType: 'image/png',
+        width: 1568,
+        height: 980,
+        sourceWidth: 2880,
+        sourceHeight: 1800,
+      };
+
+      function keepingContext(vision: boolean, prepared: PreparedImage | null, kept: ChatMedia | null = KEPT) {
+        const shown: { bytes: Buffer; mimeType: string }[] = [];
+        const media: ChatMedia[] = [];
+        const prepare = vi.fn((_bytes: Buffer, _type: string, _max: number) => prepared);
+        const keep = vi.fn(async (_source: Buffer, _display: KeptImage, _caption: string) => kept ?? undefined);
+        const reported: ToolContext = {
+          ...context,
+          images: { vision, prepare, keep },
+          report: {
+            image: (bytes: Buffer, mimeType: string) => shown.push({ bytes, mimeType }),
+            media: (item: ChatMedia) => media.push(item),
+          } as never,
+        };
+        return { reported, shown, media, keep };
+      }
+
+      it('keeps the fitted image on the row for the user, keyed by the bytes it read', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const { reported, shown, media, keep } = keepingContext(true, FITTED);
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+
+        expect(media).toEqual([KEPT]);
+        expect(keep).toHaveBeenCalledTimes(1);
+        const [source, display, caption] = keep.mock.calls[0];
+        expect(source.equals(png)).toBe(true);
+        expect(display).toMatchObject({ bytes: FITTED.bytes, mediaType: 'image/png', width: 1568, height: 980 });
+        expect(caption).toBe(join(root, 'shot.png'));
+        expect(shown).toEqual([{ bytes: FITTED.bytes, mimeType: 'image/png' }]);
+        expect(result).toContain('shown to you at 1568x980');
+        expect(result).toContain('The user sees it in the chat');
+      });
+
+      it('still shows the user an image the model cannot read, and says only the user sees it', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const { reported, shown, media } = keepingContext(false, FITTED);
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+
+        expect(media).toEqual([KEPT]);
+        expect(shown).toEqual([]);
+        expect(result).toMatch(/not shown: the current model does not accept images/);
+        expect(result).toContain('The user sees it in the chat');
+      });
+
+      it('does not claim the user sees an image that could not be kept', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const { reported, shown, media } = keepingContext(true, FITTED, null);
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+
+        expect(media).toEqual([]);
+        expect(shown).toHaveLength(1);
+        expect(result).not.toContain('The user sees it');
+      });
+
+      it('keeps nothing for an image that does not decode', async () => {
+        await writeFile(join(root, 'broken.png'), png);
+        const { reported, media, keep } = keepingContext(true, null);
+        const result = await fileRead.run({ path: join(root, 'broken.png') }, reported);
+
+        expect(keep).not.toHaveBeenCalled();
+        expect(media).toEqual([]);
+        expect(result).toMatch(/not shown: it could not be decoded/);
+        expect(result).not.toContain('The user sees it');
+      });
 
       it('shows the model a PNG, downscaled, and says what it was', async () => {
         await writeFile(join(root, 'shot.png'), png);

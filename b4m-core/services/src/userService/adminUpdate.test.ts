@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { adminUpdateUser, adminUpdateUserSchema } from './adminUpdate';
+import { updateUserSchema } from './update';
 import { checkStorageLimit } from '@bike4mind/utils';
 import { CreditHolderType } from '@bike4mind/common';
 
+vi.mock('@bike4mind/db-core', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/db-core')>()),
+  withTransaction: <T>(fn: () => Promise<T>) => fn(),
+}));
 vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
 
 const ADMIN_ID = 'admin-1';
@@ -860,6 +865,16 @@ describe('adminUpdateUser - users:moderate delegate', () => {
     }
   );
 
+  it('counts a role-held users:moderate on the re-read actor through resolveAdminRoles', async () => {
+    const { adapters, update } = withActor({ isAdmin: false, adminPermissions: [], adminRoleIds: ['a'.repeat(24)] });
+    const resolveAdminRoles = vi.fn(async (user: object) => ({ ...user, roleAdminPermissions: ['users:moderate'] }));
+
+    await adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, { ...adapters, resolveAdminRoles });
+
+    expect(resolveAdminRoles).toHaveBeenCalledWith(expect.objectContaining({ id: MODERATOR_ID }));
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: TARGET_ID, isBanned: true }));
+  });
+
   it('refuses a delegate any field outside moderation', async () => {
     const { adapters, update, incrementCredits } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
     await expect(
@@ -874,5 +889,16 @@ describe('adminUpdateUser - users:moderate delegate', () => {
     await expect(adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
       'Unauthorized'
     );
+  });
+});
+
+describe('mfaEnforcement is not writable through user updates', () => {
+  // Only POST /api/test/create-user may set it (IUser.mfaEnforcement); a self or admin update must drop it.
+  it.each([
+    ['the self-service schema', updateUserSchema],
+    ['the admin schema', adminUpdateUserSchema],
+  ])('%s strips it', (_label, schema) => {
+    expect(Object.keys(schema.shape)).not.toContain('mfaEnforcement');
+    expect(schema.parse({ id: TARGET_ID, mfaEnforcement: 'force' })).not.toHaveProperty('mfaEnforcement');
   });
 });

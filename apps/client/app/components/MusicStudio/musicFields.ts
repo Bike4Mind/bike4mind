@@ -1,12 +1,27 @@
 import { MUSIC_PROMPT_MAX_LENGTH, type PublicMusicModel } from '@bike4mind/common';
-import type { CapabilityControl, CapabilityField } from '@client/app/components/Studio/capabilityFields';
+import { flagged, type CapabilityControl, type CapabilityField } from '@client/app/components/Studio/capabilityFields';
+import { musicFieldProblems, type MusicFieldProblems } from './musicCreateV2';
 import { LYRIC_SECTION_TAGS, acceptsLyrics, lyricsProblem, type MusicFormState } from './musicForm';
 
 type Update = (patch: Partial<MusicFormState>) => void;
 
-const instrumentalField = (model: PublicMusicModel, form: MusicFormState, update: Update): CapabilityControl =>
+// `legacy`: the Studio tabs, where a model switch has already moved every value onto the model. `createV2`: a
+// switch keeps the values, so one the model does not take is shown marked, with its reason and a fix.
+export type MusicFieldsLayout = 'legacy' | 'createV2';
+
+const instrumentalField = (
+  model: PublicMusicModel,
+  form: MusicFormState,
+  update: Update,
+  problems: MusicFieldProblems
+): CapabilityControl =>
   model.vocals === 'never'
-    ? { kind: 'note', id: 'instrumental', label: 'This model makes instrumental music only.' }
+    ? {
+        ...flagged(problems.instrumental, update),
+        kind: 'note',
+        id: 'instrumental',
+        label: 'This model makes instrumental music only.',
+      }
     : {
         kind: 'switch',
         id: 'instrumental',
@@ -15,10 +30,17 @@ const instrumentalField = (model: PublicMusicModel, form: MusicFormState, update
         onChange: instrumental => update({ instrumental }),
       };
 
-const lyricsFields = (model: PublicMusicModel, form: MusicFormState, update: Update): CapabilityControl[] => {
+const lyricsFields = (
+  model: PublicMusicModel,
+  form: MusicFormState,
+  update: Update,
+  problems: MusicFieldProblems
+): CapabilityControl[] => {
   if (model.vocals === 'never') return [];
   if (!acceptsLyrics(model) || !model.lyrics) {
-    return [{ kind: 'note', id: 'lyrics', label: 'This model writes its own lyrics.' }];
+    return [
+      { ...flagged(problems.lyrics, update), kind: 'note', id: 'lyrics', label: 'This model writes its own lyrics.' },
+    ];
   }
   const problem = lyricsProblem(form, model);
   return [
@@ -40,25 +62,35 @@ const lyricsFields = (model: PublicMusicModel, form: MusicFormState, update: Upd
   ];
 };
 
-const durationField = (model: PublicMusicModel, form: MusicFormState, update: Update): CapabilityControl => {
+const durationField = (
+  model: PublicMusicModel,
+  form: MusicFormState,
+  update: Update,
+  problems: MusicFieldProblems
+): CapabilityControl => {
   const { duration } = model;
-  if (duration.control === 'fixed' || form.durationSeconds === null) {
-    const seconds = duration.control === 'fixed' ? duration.seconds : duration.default;
-    return { kind: 'note', id: 'duration', label: `Songs are ${seconds}s long.` };
+  if (duration.control === 'fixed') {
+    return {
+      ...flagged(problems.duration, update),
+      kind: 'note',
+      id: 'duration',
+      label: `Songs are ${duration.seconds}s long.`,
+    };
   }
+  // null only after a fixed-length model in Create v2, which keeps values across a switch; the slider starts at the
+  // model's default and the request leaves the length to the model until the user moves it.
+  const seconds = form.durationSeconds ?? duration.default;
   // An approximate model steers the length through the prompt, so the song can run shorter or longer.
-  const label =
-    duration.control === 'approximate'
-      ? `Duration: about ${form.durationSeconds}s`
-      : `Duration: ${form.durationSeconds}s`;
+  const label = duration.control === 'approximate' ? `Duration: about ${seconds}s` : `Duration: ${seconds}s`;
   return {
+    ...flagged(problems.duration, update),
     kind: 'range',
     id: 'duration',
     label,
     min: duration.min,
     max: duration.max,
     step: 1,
-    value: form.durationSeconds,
+    value: seconds,
     onChange: durationSeconds => update({ durationSeconds }),
   };
 };
@@ -70,8 +102,11 @@ export const formatRenderTime = (seconds: number): string =>
 export function musicCapabilityFields(
   model: PublicMusicModel,
   form: MusicFormState,
-  update: Update
+  update: Update,
+  layout: MusicFieldsLayout = 'legacy'
 ): CapabilityField[] {
+  // A legacy form never holds a value the model does not take: its model switch clamps.
+  const problems = layout === 'createV2' ? musicFieldProblems(model, form) : {};
   return [
     {
       kind: 'text',
@@ -82,9 +117,9 @@ export function musicCapabilityFields(
       maxLength: MUSIC_PROMPT_MAX_LENGTH,
       onChange: prompt => update({ prompt }),
     },
-    instrumentalField(model, form, update),
-    ...lyricsFields(model, form, update),
-    durationField(model, form, update),
+    instrumentalField(model, form, update, problems),
+    ...lyricsFields(model, form, update, problems),
+    durationField(model, form, update, problems),
     {
       kind: 'note',
       id: 'render-time',

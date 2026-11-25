@@ -7,12 +7,12 @@ reason cites the assessment and the evidence.
 
 ## Pieces
 
-| File | Role |
-|------|------|
-| `policy.ts` | Pure decision: `decideContainment(assessment, detection, config)` -> contain or skip-with-reason. |
-| `executor.ts` | `applyAutoContainment`: config, idempotent decision record, hourly cap, then shadow or enforce. |
-| `strongLink.ts` | On signup, a new account whose signup IP matches a blocked account within the window gets a `signupIpLinkedToBlocked` detection, assessed and decided at once. |
-| `apps/client/server/security/abuseAssessment/linkedAccountEvidence.ts` | The `groupEvidence` producer the assessment sees (linked accounts, landing notebook, settlement over hold, signup method and network). |
+| File                                                                          | Role                                                                                                                                                           |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `policy.ts`                                                                   | Pure decision: `decideContainment(assessment, detection, config)` -> contain or skip-with-reason.                                                              |
+| `executor.ts`                                                                 | `applyAutoContainment`: config, idempotent decision record, hourly cap, then shadow or enforce.                                                                |
+| `strongLink.ts`                                                               | On signup, a new account whose signup IP matches a blocked account within the window gets a `signupIpLinkedToBlocked` detection, assessed and decided at once. |
+| `packages/server-utils/src/security/abuseAssessment/linkedAccountEvidence.ts` | The `groupEvidence` producer the assessment sees (linked accounts, landing notebook, settlement over hold, signup method and network).                         |
 
 ## Decision API
 
@@ -23,20 +23,20 @@ verdict, so the assessment stays advisory everywhere else.
 
 ## Gates (setting `autoContainmentConfig`)
 
-| Field | Default | Why |
-|-------|---------|-----|
-| `mode` | `shadow` | `off` / `shadow` (record only) / `enforce`. |
-| `minConfidence` | 0.9 | Only near-certain `abuse` verdicts act. |
-| `maxPerHour` | 5 | Fixed one-hour window per mode, so shadow measures the real cap without spending enforce's first hour after a flip; over it the decision is recorded `capped` and re-evaluated once the window resets. |
-| `maxAccountsPerDetection` | 5 | A larger cohort always goes to an admin. |
-| `blockEmailDomains` | false | Owned domains only; public mailbox providers are never blocked. It refuses every new signup on the domain, so one false positive on a shared corporate or campus network blocks the whole domain: leave it off until shadow precision is known. |
-| `strongLinkWindowHours` | 72 | 0 turns the signup rule off. |
+| Field                     | Default  | Why                                                                                                                                                                                                                                             |
+| ------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                    | `shadow` | `off` / `shadow` (record only) / `enforce`.                                                                                                                                                                                                     |
+| `minConfidence`           | 0.9      | Only near-certain `abuse` verdicts act.                                                                                                                                                                                                         |
+| `maxPerHour`              | 5        | Fixed one-hour window per mode, so shadow measures the real cap without spending enforce's first hour after a flip; over it the decision is recorded `capped` and re-evaluated once the window resets.                                          |
+| `maxAccountsPerDetection` | 5        | A larger cohort always goes to an admin.                                                                                                                                                                                                        |
+| `blockEmailDomains`       | false    | Owned domains only; public mailbox providers are never blocked. It refuses every new signup on the domain, so one false positive on a shared corporate or campus network blocks the whole domain: leave it off until shadow precision is known. |
+| `strongLinkWindowHours`   | 72       | 0 turns the signup rule off.                                                                                                                                                                                                                    |
 
 Only detections whose `wouldAction` is contain or suspend, with no admin verdict yet, are
 eligible, and the verdict is re-read right before the Contain runs (a late ruling records
 `withdrawn`).
 
-Each (detection, revision) is decided once (unique pair in `AutoContainmentDecision`). A campaign
+Each revision has one shared graduated claim and one independent Contain claim in `AutoContainmentDecision`. A campaign
 detection that gains members after a decision is decided again for the new members only. The run
 claims the decision (`pending`) before it takes an hourly slot, so losing the claim spends nothing.
 The bulk call carries `auto-containment:<detectionId>:<revision>` as its idempotency key.
@@ -64,3 +64,17 @@ Contain removes a positive balance and keeps a negative one. Writing the debt of
 be a credit grant (counted against the batch credit cap, audited as a grant, handed back
 on unsuspend) and would erase the record of the shortfall, so the dialog copy now says
 what the code does instead.
+
+Graduated and Contain decisions retain separate ids and lifecycle metadata. Committed per-account
+Contain receipts release the matching graduated holds transactionally; partial results preserve the
+remaining holds and their ordinary release paths. Older cached results without account receipts keep
+holds until a later explicit release or expiry.
+
+Apply the tier-separated claim migration before enabling graduated tiers. It normalizes legacy
+Contain rows, creates the replacement uniqueness guard before retiring the recognized old guards,
+and preserves the existing retention and serving indexes. Missing and null claim classes share
+Contain's unique slot, so pre-tier writers remain deduplicated during deployment.
+
+Keep every graduated tier off until all upgraded callers are deployed and pre-tier worker invocations
+have completed. Contain may remain enabled during this rollout. The compatible index protects
+Contain insertion across versions; graduated activation follows deployment and worker drain.

@@ -65,7 +65,7 @@ Paid standalone plans and organization seats qualify. An organization-billed key
 when its billing organization has a paid subscription. Administrators, developer-tagged users
 and keys provisioned by an administrator are exempt from this access switch.
 
-An administrator can change **Admin Settings > SecOps > API Rate Limiting > API Key Access**:
+An administrator can change **Admin Settings > Security > API Rate Limiting > API Key Access**:
 `all` opens access, `paid` requires a subscription, and `disabled` permits only the exemptions.
 Self-hosted installations default to `all`. Changes apply within 30 seconds and also affect
 existing keys and CLI/desktop sessions.

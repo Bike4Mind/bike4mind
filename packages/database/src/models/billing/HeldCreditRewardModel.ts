@@ -1,6 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 
-export type CreditRewardSource = 'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription';
+export type CreditRewardSource =
+  'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription' | 'referral_milestone';
 /** `paused` is a blocked account's reward: out of the queue, its heldAt kept so unblock restores its place. */
 export type HeldCreditRewardStatus = 'held' | 'paid' | 'void' | 'paused';
 
@@ -14,6 +15,8 @@ export type HeldCreditReward = {
   description: string;
   metadata?: Record<string, unknown>;
   lotRef?: string;
+  /** After this the reward is voided instead of paid. */
+  expiresAt?: Date;
   heldAt: Date;
   status: HeldCreditRewardStatus;
   paidAt?: Date | null;
@@ -29,7 +32,7 @@ const heldCreditRewardSchema = new Schema<HeldCreditRewardDoc>(
     credits: { type: Number, required: true, min: 1 },
     source: {
       type: String,
-      enum: ['gear', 'referral_first_answer', 'preference_arena', 'referral_subscription'],
+      enum: ['gear', 'referral_first_answer', 'preference_arena', 'referral_subscription', 'referral_milestone'],
       required: true,
     },
     reason: { type: String, required: true },
@@ -37,6 +40,7 @@ const heldCreditRewardSchema = new Schema<HeldCreditRewardDoc>(
     metadata: { type: Schema.Types.Mixed },
     // Stamped as the paid lot's stripeRef so a refund take-back finds the lot.
     lotRef: { type: String },
+    expiresAt: { type: Date },
     heldAt: { type: Date, required: true },
     status: { type: String, enum: ['held', 'paid', 'void', 'paused'], required: true, default: 'held' },
     paidAt: { type: Date, default: null },

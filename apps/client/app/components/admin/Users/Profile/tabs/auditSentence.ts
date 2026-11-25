@@ -28,6 +28,7 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.api_key.generated': 'Generated an API key',
   'user.api_key.rate_limit_updated': 'Changed API key rate limits',
   'user.api_key.rate_limit_reset': 'Reset API key rate limits',
+  'user.api_key.moderation_exception_updated': 'Changed an API key moderation exception',
   'user.api_key_trust.approved': 'Approved API key trust',
   'user.api_key_trust.revoked': 'Revoked API key trust',
   'user.new_account_spend_cap.lifted': 'Lifted the new-account spend cap',
@@ -35,10 +36,14 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.file_embedding_window.reset': 'Reset the file indexing window',
   'user.internal.marked': 'Marked as an internal account',
   'user.internal.unmarked': 'Stopped marking as an internal account',
+  'user.segment.changed': 'Changed the account segment',
   'user.role.admin_granted': 'Granted the Super Admin role',
   'user.role.admin_revoked': 'Revoked the Super Admin role',
   'user.storage.recalculated': 'Recalculated storage',
   'user.created': 'Created the account',
+  'user.persona.created': 'Created the test persona',
+  'user.persona.deleted': 'Deleted the test persona',
+  'user.persona.expired': 'Disabled the expired test persona',
   'user.credits.grant_blocked': 'Blocked signup credit grants and rewards',
   'user.credits.grant_unblocked': 'Resumed signup credit grants and rewards',
 };
@@ -52,6 +57,7 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   currentCredits: 'Credits',
   isAdmin: 'Super Admin',
   isInternal: 'Internal account',
+  accountSegment: 'Account segment',
   moderationStatus: 'Moderation status',
   name: 'Name',
   email: 'Email',
@@ -132,9 +138,16 @@ const orgMembershipSentence = (entry: AuditEntry): string | null => {
       return `Added to ${org}`;
     case 'org.member.removed':
       return `Removed from ${org}`;
+    case 'user.home_org.cleared':
+      return `Cleared ${org} as home org`;
+    case 'org.member.content_reassigned':
+      return `Transferred content in ${org}`;
+    // Two writers: the admin console targets the user; the team's own role route targets the organization
+    // (the member is in details.memberUserId). Both carry the new role in changes.
     case 'org.member.role_changed': {
       const after = entry.changes?.find(change => change.field === 'role')?.after;
       if (after === 'manager') return `Made a manager of ${org}`;
+      if (after === 'billingManager') return `Made a billing manager of ${org}`;
       if (after === 'member') return `Made a member of ${org}`;
       return `Changed role in ${org}`;
     }

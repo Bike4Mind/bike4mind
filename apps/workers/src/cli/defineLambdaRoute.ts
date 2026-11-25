@@ -14,7 +14,7 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
-import { resolveContractAuth, type ContractAuthResult } from '@server/cli/resolveContractAuth';
+import { resolveContractAuth, type ContractAuthResult } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { authInfraFailureHeaders, isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 export type LambdaRouteContext<C extends EndpointContract> = {

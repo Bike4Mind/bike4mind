@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { setClipPlane } from './section';
 
 /** How long one part takes to print in, in ms. */
 const PART_MS = 650;
@@ -64,9 +65,7 @@ export function startBuildIn(root: THREE.Object3D, names: ReadonlySet<string>, n
     const margin = (box.max.y - box.min.y) * 0.01 + 1e-6;
     // Keeps what is below the plane: a downward normal clips where -y + constant < 0.
     const plane = new THREE.Plane(new THREE.Vector3(0, -1, 0), box.min.y - margin);
-    material.clippingPlanes = [plane];
-    material.clipShadows = true;
-    material.needsUpdate = true;
+    setClipPlane(material, plane, true);
     return {
       material,
       plane,
@@ -78,9 +77,8 @@ export function startBuildIn(root: THREE.Object3D, names: ReadonlySet<string>, n
     };
   });
   const complete = (part: Printing) => {
-    part.material.clippingPlanes = null;
+    setClipPlane(part.material, part.plane, false);
     part.material.emissive.copy(part.emissive);
-    part.material.needsUpdate = true;
     part.done = true;
   };
   return {

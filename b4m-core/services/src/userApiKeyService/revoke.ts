@@ -1,4 +1,9 @@
-import { IOrganizationRepository, IRealtimeConnectionRepository, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  IOrganizationRepository,
+  IRealtimeConnectionRepository,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
@@ -15,15 +20,23 @@ interface RevokeUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository & Pick<Required<IUserApiKeyRepository>, 'revokeIfNotDisabled'>;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
-    // Optional only so existing overlay callers keep compiling; when omitted, the realtime sweep
-    // ends the key's connections on its next run instead. In-repo callers always pass it.
+    // When omitted, the caller ends the key's connections itself (a caller revoking inside a
+    // transaction does it after commit), or the realtime sweep ends them on its next run.
     realtimeConnections?: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
 }
 
 export interface RevokeUserApiKeyResult {
+  id: string;
   /** The revoked key's name, so callers can log a real name instead of a placeholder. */
   name: string;
+  keyPrefix: string;
+  /** The account holding the key; differs from the caller when an org admin revoked it. */
+  holderUserId: string;
+  /** Set when the key is billed to an org. */
+  organizationId?: string;
+  /** False when the key was already disabled, so nothing changed. */
+  didRevoke: boolean;
 }
 
 /**
@@ -45,10 +58,17 @@ export const revokeUserApiKey = async (
     throw new NotFoundError('API key not found');
   }
 
-  await db.userApiKeys.revokeIfNotDisabled(apiKey.id, userId, params.reason);
+  const didRevoke = await db.userApiKeys.revokeIfNotDisabled(apiKey.id, userId, params.reason);
   if (db.realtimeConnections) {
     await endRealtimeConnections({ apiKeyId: apiKey.id }, { db: { realtimeConnections: db.realtimeConnections } });
   }
 
-  return { name: apiKey.name };
+  return {
+    id: apiKey.id,
+    name: apiKey.name,
+    keyPrefix: apiKey.keyPrefix,
+    holderUserId: apiKey.userId,
+    organizationId: apiKey.billingOwnerType === CreditHolderType.Organization ? apiKey.organizationId : undefined,
+    didRevoke,
+  };
 };

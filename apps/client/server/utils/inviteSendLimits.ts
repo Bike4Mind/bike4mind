@@ -1,6 +1,7 @@
 import { cacheRepository, User } from '@bike4mind/database';
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
+import { reserveRecipientSendBudget } from './recipientSendLimits';
 import { MAX_INVITE_MESSAGE_LENGTH, MAX_INVITE_RECIPIENTS } from '@client/types/api';
 
 export { MAX_INVITE_MESSAGE_LENGTH, MAX_INVITE_RECIPIENTS };
@@ -14,12 +15,23 @@ export { MAX_INVITE_MESSAGE_LENGTH, MAX_INVITE_RECIPIENTS };
 // an account.
 const INVITE_RECIPIENTS_PER_HOUR = 200;
 const TYPED_ADDRESS_INVITES_PER_HOUR = 20;
+// An organization manager onboarding a team pastes many addresses at once (the bulk-invite route
+// caps a request at 100 rows), so that route charges its own typed-address bucket instead.
+const ORG_BULK_TYPED_ADDRESS_INVITES_PER_HOUR = 100;
 const HOUR_MS = 60 * 60 * 1000;
 
 // Shared by both routes and every type, so the budget cannot be multiplied by switching either.
 const recipientBudgetKey = (userId: string) => `rate-limit:${userId}:invite-recipients`;
 // Legacy project-only key name, kept so counters survive the move to this shared helper.
 const typedAddressBudgetKey = (userId: string) => `rate-limit:${userId}:project-invite-typed-address`;
+const orgBulkTypedAddressBudgetKey = (userId: string) => `rate-limit:${userId}:org-bulk-typed-address`;
+
+export type TypedAddressBucket = 'default' | 'orgBulk';
+
+const TYPED_ADDRESS_BUCKETS: Record<TypedAddressBucket, { key: (userId: string) => string; limit: number }> = {
+  default: { key: typedAddressBudgetKey, limit: TYPED_ADDRESS_INVITES_PER_HOUR },
+  orgBulk: { key: orgBulkTypedAddressBudgetKey, limit: ORG_BULK_TYPED_ADDRESS_INVITES_PER_HOUR },
+};
 
 const MAX_EMAILED_NAME_LENGTH = 60;
 
@@ -54,12 +66,16 @@ async function reserve(key: string, amount: number, limit: number): Promise<Invi
  * reservation if creation fails. `chargeTypedAddresses` applies to project and organization invites, which may
  * name an address with no account (sharingService/create.ts);
  * every other type refuses or drops such an address, so charging it there would only fail bulk
- * shares to existing users.
+ * shares to existing users. `typedAddressBucket` picks which typed-address budget is charged; the
+ * shared recipient budget is charged either way.
  */
 export async function reserveInviteSendBudget(
   userId: string,
   recipients: string[] | undefined,
-  { chargeTypedAddresses }: { chargeTypedAddresses: boolean }
+  {
+    chargeTypedAddresses,
+    typedAddressBucket = 'default',
+  }: { chargeTypedAddresses: boolean; typedAddressBucket?: TypedAddressBucket }
 ): Promise<InviteBudgetReservation> {
   const recipientList = recipients ?? [];
   const recipientReservation = await reserve(
@@ -71,20 +87,23 @@ export async function reserveInviteSendBudget(
   if (!chargeTypedAddresses) return recipientReservation;
 
   const typedAddressCount = recipientList.filter(recipient => recipient.includes('@')).length;
-  const typedReservation = await reserve(
-    typedAddressBudgetKey(userId),
-    typedAddressCount,
-    TYPED_ADDRESS_INVITES_PER_HOUR
-  );
+  const bucket = TYPED_ADDRESS_BUCKETS[typedAddressBucket];
+  const typedReservation = await reserve(bucket.key(userId), typedAddressCount, bucket.limit);
   if (!typedReservation) {
     await recipientReservation.release();
     throw new TooManyRequestsError('Too many email invitations. Try again later.');
   }
-  return {
-    release: async () => {
-      await Promise.all([recipientReservation.release(), typedReservation.release()]);
-    },
+  const release = async () => {
+    await Promise.all([recipientReservation.release(), typedReservation.release()]);
   };
+  const perRecipient = await reserveRecipientSendBudget(recipientList.filter(recipient => recipient.includes('@')));
+  if (perRecipient) {
+    await release();
+    throw new TooManyRequestsError('Too many email invitations to this address. Try again later.', {
+      retryAfter: perRecipient.retryAfter,
+    });
+  }
+  return { release };
 }
 
 /**

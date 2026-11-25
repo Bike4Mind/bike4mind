@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { findMarketplaceListing } from './ClaudeCodeMarketplaceTab';
 import ClaudeCodeExportDialog, { type ClaudeCodeExportDialogProps } from './ClaudeCodeExportDialog';
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -24,8 +25,15 @@ const publicConfig = vi.hoisted(() => ({
   refetch: vi.fn(),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({ usePublicConfig: () => publicConfig }));
+const useSkillBundles = vi.hoisted(() =>
+  vi.fn((_owner: unknown) => ({
+    data: { bundles: [], listings: [], canEdit: false },
+    isPending: false,
+    isError: false,
+  }))
+);
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
-  useSkillBundles: () => ({ data: { bundles: [], listings: [], canEdit: false }, isPending: false, isError: false }),
+  useSkillBundles,
   useSaveSkillBundle: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteSkillBundle: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -54,6 +62,41 @@ beforeEach(() => {
 });
 
 const ORG_ID = '65f0aabbccddeeff00112233';
+const SPACE_ID = '65f0aabbccddeeff00112244';
+
+describe('findMarketplaceListing', () => {
+  const orgs = [{ id: ORG_ID, name: 'Acme Labs' }];
+  const spaces = [{ id: SPACE_ID, name: 'Platform' }];
+  const listing = (over: Record<string, unknown>) =>
+    ({
+      sourceSkillId: 's1',
+      status: 'approved',
+      hiddenByReports: false,
+      currentApprovedVersionId: 'v1',
+      claudePluginName: 'foo-a1b2c3',
+      name: 'Foo',
+      ...over,
+    }) as never;
+
+  it('admits a Space listing for a Space the user belongs to', () => {
+    const l = listing({ visibility: 'space', spaceId: SPACE_ID });
+    expect(findMarketplaceListing([l], 's1', orgs, spaces)?.owner).toEqual({
+      kind: 'space',
+      id: SPACE_ID,
+      name: 'Platform',
+    });
+    expect(findMarketplaceListing([l], 's1', orgs, [])).toBeUndefined();
+  });
+
+  it('still admits an org listing', () => {
+    const l = listing({ visibility: 'organization', organizationId: ORG_ID });
+    expect(findMarketplaceListing([l], 's1', orgs, spaces)?.owner).toEqual({
+      kind: 'organization',
+      id: ORG_ID,
+      name: 'Acme Labs',
+    });
+  });
+});
 
 describe('ClaudeCodeExportDialog', () => {
   it('copies an install command stamped with the source page and version', async () => {
@@ -120,18 +163,43 @@ describe('ClaudeCodeExportDialog', () => {
   });
 
   it('warns where the key is stored and never to commit it', () => {
-    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'foo-a1b2c3' } });
+    renderDialog({
+      marketplace: { owner: { kind: 'organization', id: ORG_ID, name: 'Acme Labs' }, pluginName: 'foo-a1b2c3' },
+    });
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     expect(screen.getByText(/known_marketplaces\.json/)).toBeInTheDocument();
     const warning = screen.getByTestId('skill-claude-code-key-warning');
     expect(warning).toHaveTextContent("never to a project's .claude/settings.json");
     expect(warning).toHaveTextContent('headersHelper');
+    expect(warning).toHaveTextContent('JSON object');
+    expect(warning).toHaveTextContent('{"Authorization": "Bearer <key>"}');
     // A member who can't edit and sees no bundles gets no bundles section.
     expect(screen.queryByTestId('skill-claude-code-bundles')).not.toBeInTheDocument();
   });
 
+  it('builds a Space marketplace entry with the Space feed URL and name', () => {
+    renderDialog({
+      marketplace: { owner: { kind: 'space', id: SPACE_ID, name: 'Platform' }, pluginName: 'foo-a1b2c3' },
+    });
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+
+    const settings = JSON.parse(screen.getByTestId('skill-claude-code-marketplace-settings').textContent ?? '');
+    expect(Object.keys(settings.extraKnownMarketplaces)).toEqual([`b4m-space-${SPACE_ID}`]);
+    expect(settings.extraKnownMarketplaces[`b4m-space-${SPACE_ID}`].source.url).toBe(
+      `https://canonical.example.test/api/v1/skills/market/claude-marketplace.json?spaceId=${SPACE_ID}`
+    );
+    expect(screen.getByTestId('skill-claude-code-marketplace-install')).toHaveTextContent(
+      `/plugin install foo-a1b2c3@b4m-space-${SPACE_ID}`
+    );
+    expect(screen.getByText(/Platform's approved Skill Market skills/)).toBeInTheDocument();
+    expect(useSkillBundles).toHaveBeenCalledWith({ spaceId: SPACE_ID });
+    expect(useSkillBundles).not.toHaveBeenCalledWith({ orgId: SPACE_ID });
+  });
+
   it('builds the team marketplace settings and mints a skills:read key into them', async () => {
-    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'foo-a1b2c3' } });
+    renderDialog({
+      marketplace: { owner: { kind: 'organization', id: ORG_ID, name: 'Acme Labs' }, pluginName: 'foo-a1b2c3' },
+    });
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
 
     const settings = () => JSON.parse(screen.getByTestId('skill-claude-code-marketplace-settings').textContent ?? '');
@@ -146,6 +214,7 @@ describe('ClaudeCodeExportDialog', () => {
     expect(screen.getByTestId('skill-claude-code-marketplace-install')).toHaveTextContent(
       '/plugin install foo-a1b2c3@b4m-org-65f0aabbccddeeff00112233'
     );
+    expect(useSkillBundles).toHaveBeenCalledWith({ orgId: ORG_ID });
 
     fireEvent.click(screen.getByTestId('skill-claude-code-create-key'));
     expect(createKey.mutate).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['skills:read'] }));
@@ -160,7 +229,7 @@ describe('ClaudeCodeExportDialog', () => {
 
   it('waits for the canonical address before offering marketplace settings or key creation', () => {
     publicConfig.isPending = true;
-    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' } } });
+    renderDialog({ marketplace: { owner: { kind: 'organization', id: ORG_ID, name: 'Acme Labs' } } });
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     expect(screen.getByText('Loading marketplace settings...')).toBeInTheDocument();
     expect(screen.queryByTestId('skill-claude-code-create-key')).not.toBeInTheDocument();
@@ -168,7 +237,7 @@ describe('ClaudeCodeExportDialog', () => {
 
   it('offers retry when the canonical address cannot be loaded', () => {
     publicConfig.data.apiUrl = '';
-    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' } } });
+    renderDialog({ marketplace: { owner: { kind: 'organization', id: ORG_ID, name: 'Acme Labs' } } });
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     expect(screen.getByText('Could not load the marketplace address.')).toBeInTheDocument();
     expect(screen.queryByTestId('skill-claude-code-create-key')).not.toBeInTheDocument();
@@ -177,7 +246,7 @@ describe('ClaudeCodeExportDialog', () => {
   });
 
   it('omits the install line when the listing has no stored plugin name', () => {
-    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' } } });
+    renderDialog({ marketplace: { owner: { kind: 'organization', id: ORG_ID, name: 'Acme Labs' } } });
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     expect(screen.queryByTestId('skill-claude-code-marketplace-install')).not.toBeInTheDocument();
     expect(screen.getByText(/to browse every skill/)).toBeInTheDocument();
@@ -187,13 +256,19 @@ describe('ClaudeCodeExportDialog', () => {
     const { unmount } = renderDialog();
     expect(screen.getByTestId('skill-claude-code-title')).toHaveTextContent('Use /review-pr in Claude Code');
     unmount();
-    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'foo-a1b2c3' } });
+    renderDialog({
+      marketplace: { owner: { kind: 'organization', id: ORG_ID, name: 'Acme Labs' }, pluginName: 'foo-a1b2c3' },
+    });
     expect(screen.getByTestId('skill-claude-code-title')).toHaveTextContent(/^Use in Claude Code$/);
   });
 
   it('explains marketplace setup, the plugin invocation and manual updates', () => {
     renderDialog({
-      marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'hello-team-abc123', skillName: 'Hello Team' },
+      marketplace: {
+        owner: { kind: 'organization', id: ORG_ID, name: 'Acme Labs' },
+        pluginName: 'hello-team-abc123',
+        skillName: 'Hello Team',
+      },
     });
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     const setup = screen.getByTestId('skill-claude-code-marketplace-setup');
@@ -213,13 +288,17 @@ describe('ClaudeCodeExportDialog', () => {
   });
 
   it('omits the invocation without a skill name', () => {
-    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'hello-team-abc123' } });
+    renderDialog({
+      marketplace: { owner: { kind: 'organization', id: ORG_ID, name: 'Acme Labs' }, pluginName: 'hello-team-abc123' },
+    });
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     expect(screen.queryByTestId('skill-claude-code-marketplace-invoke')).not.toBeInTheDocument();
   });
 
   it('omits the invocation without a stored plugin name', () => {
-    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, skillName: 'Hello Team' } });
+    renderDialog({
+      marketplace: { owner: { kind: 'organization', id: ORG_ID, name: 'Acme Labs' }, skillName: 'Hello Team' },
+    });
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     expect(screen.queryByTestId('skill-claude-code-marketplace-invoke')).not.toBeInTheDocument();
     expect(screen.getByTestId('skill-claude-code-marketplace-update')).toHaveTextContent(

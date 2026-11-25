@@ -4,7 +4,7 @@ vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   assertOutboundActionAllowed: async () => undefined,
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
 }));
 
@@ -46,7 +46,9 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
   meterCompletionBackend: (llm: unknown) => llm,
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createRequestCompletionMeter: () => vi.fn(),
+}));
 vi.mock('@client/server/agents/systemPromptRateLimit', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/server/agents/systemPromptRateLimit')>()),
   assertSystemPromptGenerationAllowed: h.assertAllowed,

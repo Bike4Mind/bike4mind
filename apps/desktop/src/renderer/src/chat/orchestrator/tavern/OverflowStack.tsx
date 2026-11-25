@@ -6,7 +6,9 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import { useLayoutEffect, useRef } from 'react';
 import { AGENT_STATE_LABEL, type AgentView } from '../roster';
-import { STATE_LAMP, poseFor, type SlotPoint, type TavernZone } from './scene';
+import { AgentPrIndicator } from '../AgentPrIndicator';
+import { poseFor, type SlotPoint, type TavernZone } from './scene';
+import { stateLampColor } from '../statePalette';
 import { characterSprite, type CharacterId } from './tavernArt';
 
 const ZONE_PLACE: Record<TavernZone, string> = {
@@ -34,12 +36,14 @@ export function OverflowStack({
   stacked,
   selectedId,
   onSelect,
+  onOpenPr,
 }: {
   zone: TavernZone;
   point: SlotPoint;
   stacked: readonly StackedAgent[];
   selectedId: string | null;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
 }) {
   const needing = stacked.filter(({ agent }) => agent.state === 'needs-you').length;
   const urgent = needing > 0;
@@ -63,6 +67,7 @@ export function OverflowStack({
       <MenuButton
         ref={buttonRef}
         data-testid={`orchestrator-tavern-overflow-${zone}`}
+        data-agent-avatar={holdsSelection ? selectedId : undefined}
         data-urgent={urgent || undefined}
         aria-label={`${count} more ${ZONE_PLACE[zone]}${needsYou}; list them`}
         variant="plain"
@@ -100,7 +105,7 @@ export function OverflowStack({
                 borderRadius: '50%',
                 overflow: 'hidden',
                 bgcolor: '#2a1d10',
-                border: `2px solid ${STATE_LAMP[agent.state]}`,
+                border: `2px solid ${stateLampColor(agent.state)}`,
                 boxShadow:
                   agent.id === selectedId
                     ? '0 0 0 2px #f5c542, 0 2px 0 rgba(0, 0, 0, 0.45)'
@@ -131,7 +136,7 @@ export function OverflowStack({
           sx={{
             px: '0.5em',
             borderRadius: '999px',
-            bgcolor: urgent ? '#f5c542' : 'rgba(20, 12, 6, 0.85)',
+            bgcolor: urgent ? stateLampColor('needs-you') : 'rgba(20, 12, 6, 0.85)',
             color: urgent ? '#2a1d10' : '#fbe9c8',
             outline: holdsSelection ? '2px solid #f5c542' : 'none',
             fontWeight: 700,
@@ -164,12 +169,13 @@ export function OverflowStack({
                 sx={{
                   width: 8,
                   height: 8,
-                  bgcolor: STATE_LAMP[agent.state],
-                  boxShadow: `0 0 4px ${STATE_LAMP[agent.state]}`,
+                  bgcolor: stateLampColor(agent.state),
+                  boxShadow: `0 0 4px ${stateLampColor(agent.state)}`,
                 }}
               />
             </ListItemDecorator>
             <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>{name}</Box>
+            <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact />
           </MenuItem>
         ))}
       </Menu>

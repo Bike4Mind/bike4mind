@@ -18,8 +18,8 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useShallow } from 'zustand/react/shallow';
 import { INFINITE_VALUE } from '../FibonacciSlider';
 import { useAdvancedAISettings } from './AdvancedAISettings';
-import { handleImageEditCommand, handleImageGenerationCommand } from '../commands/ImageGenerationCommand';
-import { CommandHandlers, CommandKey, extractCommandAndParams, handleCommand } from '@client/app/utils/commands';
+import { dispatchSend } from './chatImageSend';
+import { CommandHandlers, CommandKey, chatImageSendMode, extractCommandAndParams } from '@client/app/utils/commands';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useSearch } from '@tanstack/react-router';
 import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionContext';
@@ -92,9 +92,9 @@ const ScrollToBottomButton = memo(
           variant="plain"
           sx={theme => ({
             borderRadius: '50%',
-            '--IconButton-size': '34px',
-            minWidth: '34px',
-            minHeight: '34px',
+            '--IconButton-size': '32px',
+            minWidth: '32px',
+            minHeight: '32px',
             '--Icon-fontSize': '18px',
             color: 'text.primary',
             // Glass: the transcript stays visible through the button, blurred. The solid
@@ -140,8 +140,6 @@ ScrollToBottomButton.displayName = 'ScrollToBottomButton';
 
 const commandHandlers: CommandHandlers = {
   '/llm': handleLLMCommand,
-  '/gen_image': handleImageGenerationCommand,
-  '/edit_image': handleImageEditCommand,
 };
 
 const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, emptySessionSplash }) => {
@@ -176,7 +174,6 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     prompt_upsampling,
     seed,
     output_format,
-    isQuestMasterEnabled,
     isMementosEnabled,
     isArtifactsEnabled,
     tools,
@@ -184,6 +181,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     thinking,
     enabledMcpServers,
     disabledMcpConnections,
+    enabledPlatformMcpConnections,
     imageModel,
   ] = useLLM(
     useShallow(s => [
@@ -199,7 +197,6 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       s.prompt_upsampling,
       s.seed,
       s.output_format,
-      s.isQuestMasterEnabled,
       s.isMementosEnabled,
       s.isArtifactsEnabled,
       s.tools,
@@ -207,6 +204,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       s.thinking,
       s.enabledMcpServers,
       s.disabledMcpConnections,
+      s.enabledPlatformMcpConnections,
       s.imageModel,
     ])
   );
@@ -330,31 +328,25 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       };
 
       const enabledFiles = workBenchFiles.map(file => file.fileName);
-      const [command, params] = extractCommandAndParams(
-        liveAI,
-        model,
-        historyLines,
-        messageData?.prompt,
-        enabledFiles,
-        isImageEdit
-      );
+      const [command, params] = extractCommandAndParams(liveAI, model, historyLines, messageData?.prompt, enabledFiles);
+      const imageSendMode = chatImageSendMode(liveAI, model, messageData.prompt, isImageEdit);
       const userId = currentUser!.id;
 
-      if (commandHandlers[command as CommandKey]) {
+      if (imageSendMode || commandHandlers[command as CommandKey]) {
         if (!currentSession) return;
 
         const promptFileIds = messageData?.fabFileIds || ([] as string[]);
-        handleCommand(commandHandlers, {
+        dispatchSend(commandHandlers, imageSendMode, {
           userId,
           command,
-          params,
+          // An image send takes the prompt as typed, without the /llm history and context prefixes.
+          params: imageSendMode ? messageData.prompt : params,
           currentSession,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           model: model as any,
           workBenchFiles,
           sendJsonMessage,
           promptFileIds,
-          enableQuestMaster: isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
           // A correction is a new turn, never a re-run of the flagged quest: passing its id as
@@ -369,6 +361,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           questId: isVariation || correctsQuestId ? undefined : messageData?.id,
           correctsQuestId,
           image: options?.image,
+          imageFileId: options?.imageFileId,
           queryClient,
           tools,
           projectId,
@@ -383,6 +376,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           imageConfig: imageConfig,
           mcpServers: enabledMcpServers ?? undefined,
           disabledMcpConnections,
+          enabledPlatformMcpConnections,
         });
       }
     }

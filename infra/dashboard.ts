@@ -28,7 +28,8 @@ const isMonitoredStage = MONITORED_STAGES.includes($app.stage) || process.env.EN
 
 let whatsNewDashboard: aws.cloudwatch.Dashboard | undefined;
 
-if (isMonitoredStage) {
+// The subscription is undefined on a preview (infra/previewQueueConsumers.ts).
+if (isMonitoredStage && whatsNewGenerationQueueSubscription) {
   /**
    * Dashboard body with Pulumi Outputs properly handled
    *
@@ -318,7 +319,7 @@ if (isMonitoredStage) {
               // IMPORTANT: Query format uses \n| for line separation
               // The \n in the JavaScript string becomes \\n in JSON automatically via JSON.stringify()
               // Always include time filter to limit scan scope and reduce costs
-              query: `SOURCE '/aws/lambda/${functionName}'\n| fields @timestamp, @message, correlationId\n| filter @timestamp > ago(1h)\n| filter severity = "error" or @message like /ERROR/\n| sort @timestamp desc\n| limit 20`,
+              query: `SOURCE '/aws/lambda/${functionName}'\n| fields @timestamp, kind, @message, correlationId\n| filter @timestamp > ago(1h)\n| filter severity = "error" or @message like /ERROR/\n| sort @timestamp desc\n| limit 20`,
               region: region,
               title: 'Recent Errors (Last Hour)',
               view: 'table',

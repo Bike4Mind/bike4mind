@@ -10,12 +10,18 @@ import type { IExtendedFeedbackDocument } from './types';
 
 const mocks = vi.hoisted(() => ({
   getFeedbackByIdFromServer: vi.fn(),
+  getFeedbackReporterSummaryFromServer: vi.fn(),
   openHelpPanel: vi.fn(),
   helpPanelOpen: false,
   copyTextWithToast: vi.fn(),
 }));
 
-vi.mock('@client/app/utils/feedbackAPICalls', () => ({ getFeedbackByIdFromServer: mocks.getFeedbackByIdFromServer }));
+vi.mock('@client/app/utils/feedbackAPICalls', () => ({
+  getFeedbackByIdFromServer: mocks.getFeedbackByIdFromServer,
+  getFeedbackReporterSummaryFromServer: mocks.getFeedbackReporterSummaryFromServer,
+}));
+vi.mock('./FeedbackHistory', () => ({ default: () => <div data-testid="feedback-history-stub" /> }));
+vi.mock('./FeedbackSimilarReports', () => ({ default: () => <div data-testid="feedback-similar-stub" /> }));
 vi.mock('@client/app/hooks/useHelpPanel', () => ({
   openHelpPanel: mocks.openHelpPanel,
   useHelpPanel: <T,>(selector: (state: { open: boolean }) => T) => selector({ open: mocks.helpPanelOpen }),
@@ -26,10 +32,24 @@ import FeedbackDetailDrawer, { type FeedbackDetailDrawerProps } from './Feedback
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
+const REPORTER_ID = 'b'.repeat(24);
+
+const reporterSummary = (overrides: Record<string, unknown> = {}) => ({
+  reporter: {
+    userId: REPORTER_ID,
+    exists: true,
+    plan: 'Pro',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    isBanned: false,
+    earlierReports: 2,
+    ...overrides,
+  },
+});
+
 const makeRecord = (overrides: Partial<IExtendedFeedbackDocument> = {}): IExtendedFeedbackDocument => ({
   id: 'fb-1',
   _id: 'fb-1',
-  userId: 'user-1',
+  userId: REPORTER_ID,
   status: FeedbackStatus.New,
   username: 'reporter',
   userEmail: 'reporter@example.com',
@@ -64,6 +84,7 @@ const renderDrawer = (props: Partial<FeedbackDetailDrawerProps> = {}) => {
 describe('FeedbackDetailDrawer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getFeedbackReporterSummaryFromServer.mockResolvedValue(reporterSummary());
   });
 
   it('stays closed without a feedback id', () => {
@@ -97,6 +118,115 @@ describe('FeedbackDetailDrawer', () => {
     expect(link).toHaveTextContent('Open conversation at this turn');
     expect(link).toHaveAttribute('href', '/notebooks/sess-1?questId=quest-1');
     expect(link).toHaveAttribute('target', '_blank');
+  });
+
+  it('links a duplicate resolution back to the original report', async () => {
+    mocks.getFeedbackByIdFromServer.mockResolvedValue(
+      makeRecord({ resolution: 'duplicate', resolutionDuplicateId: 'original-report' })
+    );
+    renderDrawer();
+    expect(await screen.findByTestId('feedback-detail-duplicate-link')).toHaveAttribute(
+      'href',
+      '/admin?tab=feedback&feedbackId=original-report'
+    );
+  });
+
+  describe('reporter facts', () => {
+    it('shows plan, account age, status and the earlier-reports action', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      const onShowReporterReports = vi.fn();
+
+      renderDrawer({ onShowReporterReports });
+
+      expect(await screen.findByTestId('feedback-detail-reporter-plan')).toHaveTextContent('Pro');
+      expect(screen.getByTestId('feedback-detail-reporter-age')).toHaveTextContent(/ago/);
+      expect(screen.getByTestId('feedback-detail-reporter-status')).toHaveTextContent('Active');
+      expect(mocks.getFeedbackReporterSummaryFromServer).toHaveBeenCalledWith('fb-1');
+      const earlier = screen.getByTestId('feedback-detail-earlier-reports-btn');
+      expect(earlier).toHaveTextContent('2 earlier reports');
+      await userEvent.click(earlier);
+      expect(onShowReporterReports).toHaveBeenCalledWith(REPORTER_ID);
+    });
+
+    it('reads Free without a plan, Suspended when banned, and singular for one earlier report', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      mocks.getFeedbackReporterSummaryFromServer.mockResolvedValue(
+        reporterSummary({ plan: null, isBanned: true, earlierReports: 1 })
+      );
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      expect(await screen.findByTestId('feedback-detail-reporter-plan')).toHaveTextContent('Free');
+      expect(screen.getByTestId('feedback-detail-reporter-status')).toHaveTextContent('Suspended');
+      expect(screen.getByTestId('feedback-detail-earlier-reports-btn')).toHaveTextContent('1 earlier report');
+    });
+
+    it('hides the earlier-reports action on a first report', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      mocks.getFeedbackReporterSummaryFromServer.mockResolvedValue(reporterSummary({ earlierReports: 0 }));
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      expect(await screen.findByTestId('feedback-detail-reporter-plan')).toBeInTheDocument();
+      expect(screen.queryByTestId('feedback-detail-earlier-reports-btn')).not.toBeInTheDocument();
+    });
+
+    it('renders no facts and no error when the summary read is refused', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      mocks.getFeedbackReporterSummaryFromServer.mockRejectedValue(new Error('Forbidden'));
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      expect(await screen.findByTestId('feedback-detail-reporter')).toHaveTextContent('reporter@example.com');
+      await waitFor(() => expect(mocks.getFeedbackReporterSummaryFromServer).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByTestId('feedback-detail-reporter-loading')).not.toBeInTheDocument());
+      expect(screen.queryByTestId('feedback-detail-reporter-plan')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('feedback-detail-reporter-status')).not.toBeInTheDocument();
+    });
+
+    it('keeps only name and email for a legacy waitlist userId', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord({ userId: 'waitlist-abc' }));
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      expect(await screen.findByTestId('feedback-detail-reporter')).toHaveTextContent('reporter@example.com');
+      expect(screen.queryByTestId('feedback-detail-reporter-profile-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('admin-user-id-chip')).not.toBeInTheDocument();
+      expect(screen.getByTestId('feedback-detail-reporter')).not.toHaveTextContent('waitlist-abc');
+      expect(mocks.getFeedbackReporterSummaryFromServer).not.toHaveBeenCalled();
+    });
+
+    it('omits the plan when the summary carries none for this caller', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      mocks.getFeedbackReporterSummaryFromServer.mockResolvedValue(reporterSummary({ plan: undefined }));
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      expect(await screen.findByTestId('feedback-detail-reporter-status')).toHaveTextContent('Active');
+      expect(screen.queryByTestId('feedback-detail-reporter-plan')).not.toBeInTheDocument();
+    });
+
+    it('drops the profile link for a deleted reporter', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      mocks.getFeedbackReporterSummaryFromServer.mockResolvedValue(reporterSummary({ exists: false }));
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      expect(await screen.findByTestId('feedback-detail-reporter-status')).toHaveTextContent('Deleted');
+      expect(screen.queryByTestId('feedback-detail-reporter-profile-btn')).not.toBeInTheDocument();
+    });
+
+    it('drops the profile link and user id when the summary names no reporter', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      mocks.getFeedbackReporterSummaryFromServer.mockResolvedValue({ reporter: null });
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      await waitFor(() => expect(mocks.getFeedbackReporterSummaryFromServer).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByTestId('feedback-detail-reporter-profile-btn')).not.toBeInTheDocument());
+      expect(screen.queryByTestId('admin-user-id-chip')).not.toBeInTheDocument();
+      expect(screen.getByTestId('feedback-detail-reporter')).toHaveTextContent('reporter@example.com');
+    });
   });
 
   describe('emailing the reporter', () => {
@@ -253,6 +383,23 @@ describe('FeedbackDetailDrawer', () => {
 
     await userEvent.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('supports j/k and i/c/e on the fetched report without a list row', async () => {
+    const record = makeRecord();
+    mocks.getFeedbackByIdFromServer.mockResolvedValue(record);
+    const onNext = vi.fn();
+    const onPrevious = vi.fn();
+    const { onStatusChange } = renderDrawer({ onNext, onPrevious });
+    const email = await screen.findByTestId('feedback-detail-email-reporter-btn');
+    const emailClick = vi.spyOn(email, 'click').mockImplementation(() => {});
+    expect(screen.getByTestId('feedback-detail-close-btn')).toHaveFocus();
+    await userEvent.keyboard('jkice');
+    expect(onNext).toHaveBeenCalledOnce();
+    expect(onPrevious).toHaveBeenCalledOnce();
+    expect(onStatusChange).toHaveBeenCalledWith(record, FeedbackStatus.InProgress);
+    expect(onStatusChange).toHaveBeenCalledWith(record, FeedbackStatus.Closed);
+    expect(emailClick).toHaveBeenCalledOnce();
   });
 
   it('changes the status from the drawer', async () => {

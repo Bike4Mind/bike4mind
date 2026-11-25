@@ -19,6 +19,8 @@ import {
   ICreditTransactionRepository,
   IUsageEventRepository,
   CreditHolderType,
+  CompletionRunAttributionSchema,
+  type ApiKeyBillingOwnerType,
   IOrganizationRepository,
   ImageModerationIncident as ImageModerationIncidentInput,
   ImageOutputFormatSchema,
@@ -26,12 +28,14 @@ import {
   IFabFileDocument,
   usdToCreditsStochastic,
   type PersistedCreditHold,
+  type ISpendFreezeRepository,
 } from '@bike4mind/common';
 import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  rejectsTransparentBackground,
+  supportsTransparentBackgroundByCatalog,
+  transparentBackgroundUnsupportedMessage,
   isFlux2ImageModel,
   isFlux3ImageModel,
   getMaxEditReferenceImages,
@@ -39,7 +43,6 @@ import {
   supportsImageEditEndpoint,
   EDIT_SUPPORTED_IMAGE_MODELS,
   IMAGES_PER_EDIT_REQUEST,
-  ImageModels,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -67,14 +70,16 @@ import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
-import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
-import { fromZodError } from 'zod-validation-error';
 import type { ImageCreditHolds } from './imageCreditHolds';
+import type { ImageGenerationRun } from './ImageGeneration';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import { moderateImageOrThrow } from './imageModerationGate';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 import { estimateImageCredits } from '../imageCost';
-import { getQuestErrorCode } from '@bike4mind/common';
+import { formatZodError, getQuestErrorCode } from '@bike4mind/common';
 import { recordGeneratedImages } from './recordGeneratedImages';
 import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
 
@@ -115,6 +120,13 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   adminRoleWithheld: z.boolean().optional(),
   /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
   apiKeyId: z.string().optional(),
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
+  /** The completion run this edit bills against, its owner checked by the route; the hold claims its budget. */
+  run: CompletionRunAttributionSchema.optional(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
   // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
@@ -152,11 +164,19 @@ interface IImageEditServiceOptions {
     usageEvents?: IUsageEventRepository;
     organizations: IOrganizationRepository;
     imageModerationIncidents?: { record(input: ImageModerationIncidentInput): Promise<unknown> };
+    /** Checked before the provider call when credits are off; the credit hold checks it otherwise. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   } & GetEffectiveApiKeyAdapters['db'];
   startImageEditProcess: (body: ImageEditBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
   creditHolds: ImageCreditHolds;
-  assertModelAdmission: (user: string | IUserDocument, modelId: string, adminRoleWithheld?: boolean) => Promise<void>;
+  /** organizationId is the org this request bills, so its model policy applies. */
+  assertModelAdmission: (
+    user: string | IUserDocument,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ) => Promise<void>;
   deleteFabFile: (userId: string, fileId: string) => Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
@@ -228,46 +248,49 @@ export class ImageEditService {
     userId,
     adminRoleWithheld,
     apiKeyId,
+    apiKeyBillingOwnerType,
+    run,
   }: {
     adminRoleWithheld?: boolean;
     apiKeyId?: string;
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
     body: z.infer<typeof EditImageRequestBodySchema>;
     userId: string;
+    run?: ImageGenerationRun;
   }) {
     const now = new Date();
 
     const {
       sessionId,
       prompt,
-      model: requestedModel,
+      model,
       questId,
       fabFileIds,
       organizationId,
+      run: _bodyRun,
       ...rest
     } = EditImageRequestBodySchema.parse(body);
-    if (rest.edit_regions?.length && !isFlux3ImageModel(requestedModel))
+    if (rest.edit_regions?.length && !isFlux3ImageModel(model))
       throw new BadRequestError('edit_regions are only supported on FLUX 3 models');
     // Native FLUX edits take the source image and optional references, without a mask.
-    if (isFlux2ImageModel(requestedModel) || isFlux3ImageModel(requestedModel)) {
+    if (isFlux2ImageModel(model) || isFlux3ImageModel(model)) {
       if (fabFileIds.length > 0)
         throw new BadRequestError(
-          `${isFlux3ImageModel(requestedModel) ? 'FLUX 3' : 'FLUX.2'} edits take no mask; omit fabFileIds`
+          `${isFlux3ImageModel(model) ? 'FLUX 3' : 'FLUX.2'} edits take no mask; omit fabFileIds`
         );
     } else if (fabFileIds.length === 0) {
       throw new BadRequestError('No fabFileIds provided');
     }
 
-    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
-    // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
-    // promptMeta is built, so the persisted model matches what actually renders and bills.
-    const model =
-      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
-        ? ImageModels.GPT_IMAGE_1_5
-        : requestedModel;
-
-    await this.assertModelAdmission(userId, model, adminRoleWithheld);
+    // Fail rather than quietly render opaque or on a different model than the caller picked.
+    if (rest.background === 'transparent' && !supportsTransparentBackgroundByCatalog(model)) {
+      throw new BadRequestError(transparentBackgroundUnsupportedMessage(model));
+    }
+    await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
+    // Before the quest exists, so the common refusal is the route's own 422 rather than a failed quest.
+    if (run) await this.assertRunHeadroom(run, userId, model, { size: rest.size ?? undefined, quality: rest.quality });
 
     const promptMeta: Partial<PromptMeta> = {
       model: {
@@ -338,15 +361,17 @@ export class ImageEditService {
           sessionId: session.id,
           fabFileIds,
           organizationId,
-          generationId: uuidv4(),
+          generationId: crypto.randomUUID(),
           adminRoleWithheld,
           apiKeyId,
+          apiKeyBillingOwnerType,
+          run: run?.attribution,
         })
       );
     } catch (error) {
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
-        errorMessage = fromZodError(error).message;
+        errorMessage = formatZodError(error);
       } else if (error instanceof Error) {
         errorMessage = error.message;
       }
@@ -362,6 +387,26 @@ export class ImageEditService {
     }
 
     return quest;
+  }
+
+  /**
+   * Checks a run has room for the cheapest form of this edit: the source image alone, without the references the
+   * worker resolves and bills later, so it never refuses an edit the worker's claim would admit.
+   */
+  private async assertRunHeadroom(
+    run: ImageGenerationRun,
+    userId: string,
+    model: string,
+    imageParams: Pick<ImageEditBody, 'size' | 'quality'>
+  ) {
+    const settings = await getSettingsMap(this.db, { skipCache: true });
+    if (!getSettingsValue('enforceCredits', settings)) return;
+    const { requiredCredits } = await this.estimateCredits(userId, model, {
+      size: imageParams.size,
+      quality: imageParams.quality,
+      inputImageCount: 1,
+    });
+    await run.assertHeadroom(requiredCredits);
   }
 
   /** Prices an edit; the balance and member-cap checks happen atomically in creditHolds.hold. */
@@ -486,8 +531,9 @@ export class ImageEditService {
       userId,
       adminRoleWithheld,
       apiKeyId,
+      apiKeyBillingOwnerType,
       prompt,
-      model: requestedModel,
+      model,
       safety_tolerance,
       prompt_upsampling,
       seed,
@@ -502,16 +548,8 @@ export class ImageEditService {
       organizationId,
       generationId,
       edit_regions,
+      run,
     } = ImageEditBodySchema.parse(body);
-    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
-    // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
-    // silently turn a valid request into an opaque image. Resolved before billing so
-    // credits key off the model actually used.
-    const model =
-      background === 'transparent' && rejectsTransparentBackground(requestedModel)
-        ? ImageModels.GPT_IMAGE_1_5
-        : requestedModel;
-
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
     const quest = await this.db.quests.findById(questId);
@@ -547,6 +585,10 @@ export class ImageEditService {
     let stopHeartbeat: (() => void) | undefined;
     // Cleared once settled; the finally returns a hold still set (a failure or an early return).
     let creditHold: PersistedCreditHold | undefined;
+    // A redelivery that found this request's hold already taken: settling it is safe (settlement
+    // claims the row once), but releasing it could refund a hold the first delivery is still rendering
+    // under, so a failure leaves it to that delivery or the expired-hold sweep.
+    let holdReused = false;
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-edit-heartbeat');
@@ -557,7 +599,7 @@ export class ImageEditService {
         organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
       ]);
       if (!user) throw new NotFoundError('User not found');
-      await this.assertModelAdmission(user, model, adminRoleWithheld);
+      await this.assertModelAdmission(user, model, adminRoleWithheld, organizationId);
 
       // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
       // and this host may outlive the admin's write to either.
@@ -652,15 +694,31 @@ export class ImageEditService {
           inputImageCount: 1 + new Set(referenceImageFabFileIds ?? []).size,
         });
         // An atomic decrement, not a balance read: concurrent runs cannot all pass on one balance.
-        creditHold = await this.creditHolds.hold({
+        const held = await this.creditHolds.hold({
           userId,
           organizationId: organization ? organization.id : null,
           requiredCredits,
           featureLabel: IMAGE_EDIT_FEATURE_LABEL,
           logger,
+          apiKeyId,
+          apiKeyBillingOwnerType,
+          ...(run && { run }),
+          holdKey: `image_edit:${questId}`,
         });
+        creditHold = held;
+        holdReused = held.reused === true;
+        if (holdReused) logger.warn('Image edit reusing the credit hold of an earlier delivery', { questId });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
+      } else {
+        await assertSpendNotFrozen(
+          spendFreezeSubjectForHold({
+            userId,
+            organizationId: organization ? organization.id : null,
+            apiKeyId,
+          }),
+          { db: { spendFreezes: this.db.spendFreezes } }
+        );
       }
 
       // Encode the prompt to tokens
@@ -680,8 +738,12 @@ export class ImageEditService {
           statusMessage: 'Checking prompt...',
         });
         // Only moderate if using OpenAI (BFL models have their own safety_tolerance)
-        if (provider !== 'bfl' && apiKeyTable.openai) {
-          await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(prompt);
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable.openai,
+          getSettingsValue('openaiDemoKey', settings)
+        );
+        if (provider !== 'bfl' && moderationOpenaiKey) {
+          await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(prompt);
         }
       }
 
@@ -888,7 +950,7 @@ export class ImageEditService {
 
       const buffer = await downloadImageAsBuffer(result);
       const fileType = await fileTypeFromBuffer(buffer);
-      const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
+      const filename = `${crypto.randomUUID()}.${fileType?.ext ?? 'png'}`;
 
       await moderateImageOrThrow({
         service: this.imageModerationService,
@@ -972,7 +1034,7 @@ export class ImageEditService {
         const creditsCharged = await this.creditHolds.settle(
           creditHold,
           settlement.credits,
-          { type: 'image_edit_usage', sessionId, questId, model, apiKeyId },
+          { type: 'image_edit_usage', sessionId, questId, model, apiKeyId, ...(run && { run }) },
           { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger }
         );
         creditHold = undefined;
@@ -1072,7 +1134,8 @@ export class ImageEditService {
       // Always stop the running-status heartbeat, on success or error. The terminal write above
       // owns the final status.
       stopHeartbeat?.();
-      if (creditHold) await this.creditHolds.release(creditHold, { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger });
+      if (creditHold && !holdReused)
+        await this.creditHolds.release(creditHold, { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger });
       // Clean up the mask fab files in finally block to ensure they're always deleted.
       // Awaited, not fire-and-forget: this runs in a queue Lambda, which freezes as soon as process()
       // resolves, so a dropped delete never finishes and the mask stays in the user's files.

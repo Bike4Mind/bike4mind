@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MfaEnrollmentEvents, type IUserDocument } from '@bike4mind/common';
 
-const { mockReadEnforceMfa, mockLogEvent } = vi.hoisted(() => ({
-  mockReadEnforceMfa: vi.fn(),
+const { mockEnrollmentRequired, mockLogEvent } = vi.hoisted(() => ({
+  mockEnrollmentRequired: vi.fn(),
   mockLogEvent: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled },
+  mfaService: {
+    isMfaEnforcementExempt: (user: IUserDocument) => user.isPersona === true,
+    userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled,
+  },
 }));
 vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
-  readEnforceMfa: (...a: unknown[]) => mockReadEnforceMfa(...a),
+  isMfaEnrollmentRequired: (...a: unknown[]) => mockEnrollmentRequired(...a),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: (...a: unknown[]) => mockLogEvent(...a),
@@ -24,29 +27,42 @@ const logger = { error: vi.fn() };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockReadEnforceMfa.mockResolvedValue(true);
+  mockEnrollmentRequired.mockResolvedValue(true);
   mockLogEvent.mockResolvedValue(undefined);
 });
 
 describe('forcedEnrollmentSurface', () => {
   it('is the sign-in modal for a pending token without a factor, without reading the setting', async () => {
     expect(await forcedEnrollmentSurface(unenrolled, { mfaPending: true })).toBe('signin');
-    expect(mockReadEnforceMfa).not.toHaveBeenCalled();
+    expect(mockEnrollmentRequired).not.toHaveBeenCalled();
   });
 
-  it('is the enforcement screen for a full session owing enrollment, through the cached setting', async () => {
+  it('is the enforcement screen for a full session owing enrollment, through the shared requirement check', async () => {
     expect(await forcedEnrollmentSurface(unenrolled, {})).toBe('session');
-    expect(mockReadEnforceMfa).toHaveBeenCalledWith({ skipCache: false });
+    expect(mockEnrollmentRequired).toHaveBeenCalledWith(unenrolled);
   });
 
   it('is not forced when enforcement is off (voluntary setup from the profile)', async () => {
-    mockReadEnforceMfa.mockResolvedValue(false);
+    mockEnrollmentRequired.mockResolvedValue(false);
     expect(await forcedEnrollmentSurface(unenrolled, {})).toBeNull();
+  });
+
+  it('records a forced account as forced on the enforcement screen while the setting is off', async () => {
+    mockEnrollmentRequired.mockResolvedValue(false);
+    const forced = { ...unenrolled, mfaEnforcement: 'force' } as IUserDocument;
+    expect(await forcedEnrollmentSurface(forced, {})).toBe('session');
+    expect(mockEnrollmentRequired).not.toHaveBeenCalled();
   });
 
   it('is not forced for a user who already has a factor, or an impersonating admin', async () => {
     expect(await forcedEnrollmentSurface(enrolled, { mfaPending: true })).toBeNull();
     expect(await forcedEnrollmentSurface(unenrolled, { impersonatedBy: 'admin', mfaPending: true })).toBeNull();
+  });
+
+  it('is not forced for a test persona, which is exempt from enforcement', async () => {
+    const persona = { id: 'p1', mfa: null, isPersona: true } as unknown as IUserDocument;
+    expect(await forcedEnrollmentSurface(persona, {})).toBeNull();
+    expect(mockEnrollmentRequired).not.toHaveBeenCalled();
   });
 });
 
@@ -72,7 +88,7 @@ describe('recordForcedEnrollmentStep', () => {
   });
 
   it('records nothing outside forced enrollment', async () => {
-    mockReadEnforceMfa.mockResolvedValue(false);
+    mockEnrollmentRequired.mockResolvedValue(false);
     expect(await recordForcedEnrollmentStep({ logger, user: {} } as never, unenrolled, MfaEnrollmentEvents.SHOWN)).toBe(
       false
     );
@@ -80,7 +96,7 @@ describe('recordForcedEnrollmentStep', () => {
   });
 
   it('never throws when the setting read fails', async () => {
-    mockReadEnforceMfa.mockRejectedValue(new Error('db down'));
+    mockEnrollmentRequired.mockRejectedValue(new Error('db down'));
     expect(
       await recordForcedEnrollmentStep({ logger, user: {} } as never, unenrolled, MfaEnrollmentEvents.COMPLETED)
     ).toBe(false);

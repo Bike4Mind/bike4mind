@@ -7,6 +7,11 @@ const mockResource = vi.hoisted(() => ({
 vi.mock('sst', () => ({ Resource: mockResource }));
 
 import { dispatchQuest } from './dispatchQuest';
+import {
+  QUEST_DISPATCH_SIGNATURE_HEADER,
+  QUEST_DISPATCH_TIMESTAMP_HEADER,
+  verifyQuestDispatch,
+} from './questDispatchSignature';
 
 // Minimal QuestStartBody - dispatchQuest only forwards it as the JSON body, so the exact
 // shape doesn't matter here (the service validates it). Cast through unknown.
@@ -45,6 +50,33 @@ describe('dispatchQuest', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('http://chat-completion.internal/process');
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer test-shared-secret');
+  });
+
+  it('signs the dispatch over the exact body it sends', async () => {
+    fetchMock.mockResolvedValueOnce(res(202));
+    await dispatchQuest(params, logger);
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init.headers as Record<string, string>;
+    const provided = {
+      timestamp: headers[QUEST_DISPATCH_TIMESTAMP_HEADER],
+      signature: headers[QUEST_DISPATCH_SIGNATURE_HEADER],
+    };
+    const identity = { questId: 'q1', sessionId: 's1', userId: 'u1' };
+    expect(verifyQuestDispatch('test-shared-secret', identity, init.body as string, provided)).toBe(true);
+    expect(
+      verifyQuestDispatch('test-shared-secret', { ...identity, userId: 'u2' }, init.body as string, provided)
+    ).toBe(false);
+  });
+
+  it('posts to a single-slash path when the linked URL ends in a slash', async () => {
+    mockResource.ChatCompletion.url = 'https://chat-origin.app.example.test/';
+    fetchMock.mockResolvedValueOnce(res(202));
+    try {
+      await dispatchQuest(params, logger);
+    } finally {
+      mockResource.ChatCompletion.url = 'http://chat-completion.internal';
+    }
+    expect(fetchMock.mock.calls[0][0]).toBe('https://chat-origin.app.example.test/process');
   });
 
   it('does NOT retry on a 401 (deterministic auth failure)', async () => {

@@ -9,7 +9,7 @@ import { z } from 'zod';
  */
 
 export const PUSH_TOKEN_KINDS = ['device', 'liveActivity'] as const;
-export const PUSH_TOKEN_PLATFORMS = ['ios'] as const;
+export const PUSH_TOKEN_PLATFORMS = ['ios', 'android'] as const;
 export const PUSH_TOKEN_ENVIRONMENTS = ['sandbox', 'production'] as const;
 
 const MAX_TOKEN_LENGTH = 4096;
@@ -21,7 +21,10 @@ export const PushTokenRegisterRequestSchema = z.object({
   /** `device` is a per-install token; `liveActivity` is scoped to one activity. */
   kind: z.enum(PUSH_TOKEN_KINDS),
   platform: z.enum(PUSH_TOKEN_PLATFORMS),
-  /** Which push gateway the token was issued for; a token only works against its own. */
+  /**
+   * Which APNs gateway the token was issued for; a token only works against its own. Android (FCM) has
+   * no such split: the value is stored but not used, and clients send `production`.
+   */
   environment: z.enum(PUSH_TOKEN_ENVIRONMENTS),
   /** Live activity tokens: the activity the token drives. */
   activityId: z.string().min(1).max(MAX_LABEL_LENGTH).optional(),

@@ -20,6 +20,8 @@ import {
   Permission,
   hasAdminPermission,
   hasDeveloperUserTag,
+  readableGroupIds,
+  ORG_MEMBERSHIP_ACL_PERMISSIONS,
 } from '@bike4mind/common';
 
 export type Ability = MongoAbility;
@@ -27,8 +29,66 @@ export type Ability = MongoAbility;
 /** The `can` of an `AbilityBuilder(createMongoAbility)`, which is what both callers hold. */
 type AllowFn = AbilityBuilder<MongoAbility>['can'];
 
+type ShareableSubject = Parameters<AllowFn>[1];
+
 /**
- * The shared user/group share arm, applied to every shareable resource.
+ * Who may READ a shareable. `shared` is every share arm (owner, user and group shares, isGlobalRead).
+ * `membership` is owner plus a users[] row that confers membership - the same predicate as
+ * OrganizationModel's orgMembershipFilter / orgAclRowConfersMembership, which the REST org routes
+ * scope by. Write, delete and share arms are the same for both.
+ */
+type ReadScope = 'shared' | 'membership';
+
+function applyShareableArms(
+  allow: AllowFn,
+  user: Pick<IUserDocument, 'id' | 'groups'>,
+  resource: ShareableSubject,
+  readScope: ReadScope
+) {
+  const ownDocumentPermission: MongoQuery = { userId: user.id };
+
+  allow(Permission.create, resource);
+
+  if (readScope === 'shared') {
+    allow(Permission.read, resource, { isGlobalRead: true });
+  }
+  allow(Permission.update, resource, { isGlobalWrite: true });
+
+  [Permission.read, Permission.update, Permission.delete, Permission.share].forEach(permission => {
+    allow(permission, resource, ownDocumentPermission);
+
+    if (permission === Permission.read && readScope === 'membership') {
+      allow(permission, resource, {
+        users: { $elemMatch: { userId: user.id, permissions: { $in: [...ORG_MEMBERSHIP_ACL_PERMISSIONS] } } },
+      });
+      return;
+    }
+
+    // $elemMatch on both arms so the id and the permission must hold on the SAME entry. Dotted
+    // `{ 'users.userId': ..., 'users.permissions': ... }` lets the two conditions be satisfied by
+    // different array elements: a doc shared with alice (share only) and bob (read) would grant
+    // alice read. The group arm has the same shape of cross-entry over-grant. Mirrors the
+    // $elemMatch the fabFile search query already uses (fabFileSearchQuery.ts).
+    const userWithPermissions: MongoQuery = {
+      users: { $elemMatch: { userId: user.id, permissions: permission } },
+    };
+    // Read also honours an org-owned key's granted groups (readableGroupIds); every other
+    // permission keeps the account's own memberships, so a key grant never confers write.
+    const groupIds = permission === Permission.read ? readableGroupIds(user) : (user.groups ?? []);
+    const groupWithPermissions: MongoQuery = {
+      groups: { $elemMatch: { groupId: { $in: groupIds }, permissions: permission } },
+    };
+    allow(permission, resource, userWithPermissions);
+
+    if (groupIds.length) {
+      allow(permission, resource, groupWithPermissions);
+    }
+  });
+}
+
+/**
+ * The shared user/group share arm, applied to every shareable resource except Organization (see
+ * applyOrganizationShareableRules).
  *
  * Called from BOTH ability builders - this one and packages/server-utils/src/auth/ability.ts - so the two
  * cannot drift. They previously kept hand-copied duplicates, which is how a cross-entry over-grant
@@ -43,38 +103,22 @@ type AllowFn = AbilityBuilder<MongoAbility>['can'];
 export function applySharedShareableRules(
   allow: AllowFn,
   user: Pick<IUserDocument, 'id' | 'groups'>,
-  resources: readonly Parameters<AllowFn>[1][]
+  resources: readonly ShareableSubject[]
 ) {
-  const ownDocumentPermission: MongoQuery = { userId: user.id };
+  resources.forEach(resource => applyShareableArms(allow, user, resource, 'shared'));
+}
 
-  resources.forEach(resource => {
-    allow(Permission.create, resource);
-
-    // Globals apply to every shareable type.
-    allow(Permission.read, resource, { isGlobalRead: true });
-    allow(Permission.update, resource, { isGlobalWrite: true });
-
-    [Permission.read, Permission.update, Permission.delete, Permission.share].forEach(permission => {
-      allow(permission, resource, ownDocumentPermission);
-
-      // $elemMatch on both arms so the id and the permission must hold on the SAME entry. Dotted
-      // `{ 'users.userId': ..., 'users.permissions': ... }` lets the two conditions be satisfied by
-      // different array elements: a doc shared with alice (share only) and bob (read) would grant
-      // alice read. The group arm has the same shape of cross-entry over-grant. Mirrors the
-      // $elemMatch the fabFile search query already uses (fabFileSearchQuery.ts).
-      const userWithPermissions: MongoQuery = {
-        users: { $elemMatch: { userId: user.id, permissions: permission } },
-      };
-      const groupWithPermissions: MongoQuery = {
-        groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: permission } },
-      };
-      allow(permission, resource, userWithPermissions);
-
-      if (user.groups?.length) {
-        allow(permission, resource, groupWithPermissions);
-      }
-    });
-  });
+/**
+ * Organization's share arms: the same as applySharedShareableRules except that read is
+ * membership-only (no isGlobalRead, no group share), matching the REST org routes. Called from both
+ * ability builders with the Organization model each one imported.
+ */
+export function applyOrganizationShareableRules(
+  allow: AllowFn,
+  user: Pick<IUserDocument, 'id' | 'groups'>,
+  organization: ShareableSubject
+) {
+  applyShareableArms(allow, user, organization, 'membership');
 }
 
 export function defineAbilitiesFor(user: IUserDocument | undefined) {
@@ -128,7 +172,8 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow<MongoQuery>('read', AdminSettings, { isAdmin: false });
     }
 
-    applySharedShareableRules(allow, user, [Session, FabFile, Organization, Project]);
+    applySharedShareableRules(allow, user, [Session, FabFile, Project]);
+    applyOrganizationShareableRules(allow, user, Organization);
 
     // Additional permissions for specific resources:
     allow('export', Session, ownDocumentPermission);

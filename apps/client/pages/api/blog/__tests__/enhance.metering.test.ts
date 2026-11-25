@@ -9,7 +9,7 @@ import { createMocks } from 'node-mocks-http';
 import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError, insufficientCreditsError } from '@bike4mind/common';
 
 const quotaAdmission = vi.hoisted(() => vi.fn().mockResolvedValue({ release: async () => {} }));
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -43,7 +43,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: {},
   apiKeyRepository: {},
   usageEventRepository: { record: m.record },
@@ -59,7 +59,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@bike4mind/services', async () => ({
   meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
     .meterCompletionBackend,
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {
@@ -89,12 +94,14 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
 
 const { default: handler } = await import('@pages/api/blog/enhance');
 
+const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+
 async function call() {
   const { req, res } = createMocks({
     method: 'POST',
     body: { content: 'A post about bikes.', currentTitle: '', currentSummary: '', enhancementType: 'title' },
   });
-  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() } });
+  Object.assign(req, { user: { id: 'u1' }, logger: log });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
   return res;
@@ -120,7 +127,7 @@ describe('POST /api/blog/enhance metering', () => {
   });
 
   it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    log.error.mockClear();
     m.hold.mockRejectedValue(
       new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
         errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
@@ -129,8 +136,7 @@ describe('POST /api/blog/enhance metering', () => {
     );
 
     await expect(call()).rejects.toMatchObject({ statusCode: 429 });
-    expect(consoleError).not.toHaveBeenCalled();
-    consoleError.mockRestore();
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('charges a funded caller the priced usage once', async () => {

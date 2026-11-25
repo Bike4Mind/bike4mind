@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ModelIdSchema } from './modelId';
 import { BillingOrganizationIdSchema } from './billingOrganization';
+import { CompletionRunAttributionSchema } from './cliCompletions';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { GENERATION_OUTPUT_AVAILABILITIES } from '../generation/types';
 import { MAX_MUSIC_LYRICS_CHARS, MUSIC_OUTPUT_FORMATS } from '../music/types';
@@ -24,6 +25,8 @@ export const MUSIC_GENERATION_API_ERROR_CODES = [
   'insufficient_credits',
   'idempotency_key_reused',
   'invalid_idempotency_key',
+  'run_not_found',
+  'run_budget_exhausted',
   'not_cancellable',
 ] as const satisfies readonly ApiErrorCode[];
 export type MusicGenerationApiErrorCode = (typeof MUSIC_GENERATION_API_ERROR_CODES)[number];
@@ -45,6 +48,8 @@ export function toPublicMusicJobErrorCode(code: GenerationJobErrorCode): MusicJo
     case 'enqueue_failed':
     // A music job takes no input image; the code is video-only.
     case 'input_image_not_found':
+    // A music job reads no input files.
+    case 'unsupported_input':
       return 'provider_error';
     case 'content_blocked':
     case 'provider_timeout':
@@ -90,6 +95,11 @@ export const CreateMusicGenerationBodySchema = z.strictObject({
     .optional()
     .describe("Whole seconds. Defaults to the model's default; see the model's `duration` for how it is honoured."),
   organization_id: BillingOrganizationIdSchema,
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this job is made for. Its whole estimated cost is claimed against that run's budget " +
+      'before the job is queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. ' +
+      "The job bills the run's account."
+  ),
 });
 export type CreateMusicGenerationBody = z.infer<typeof CreateMusicGenerationBodySchema>;
 
@@ -143,6 +153,19 @@ export const PublicMusicModelSchema = z.object({
   object: z.literal('music_model'),
   display_name: z.string(),
   provider: z.string(),
+  // Optional so a client still parses a server from before these fields.
+  provider_label: z
+    .string()
+    .optional()
+    .describe(
+      'The provider as shown to people (`Google`, `ElevenLabs`), where `provider` is the id. Display text. Always sent by current servers.'
+    ),
+  blurb: z
+    .string()
+    .optional()
+    .describe(
+      'How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Always sent by current servers.'
+    ),
   vocals: z.enum(['optional', 'never']).describe('`never`: instrumental only.'),
   lyrics: z
     .object({ max_chars: z.number(), max_line_chars: z.number().nullable() })

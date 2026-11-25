@@ -119,7 +119,7 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
             <FormHelperText>
               {/* Joy's FormHelperText and Alert roots are both flex with no wrap, so text interleaved
                   with an inline element lays out as side-by-side columns instead of one sentence. A
-                  single wrapping child keeps it prose. Same trap as PartnerSignupRulesTab's helper. */}
+                  single wrapping child keeps it prose. Same trap as PartnerSignupRuleFormDialog's helper. */}
               <span>
                 Matched as a plain string prefix, not by path segment, so <code>/api/chat</code> also matches{' '}
                 <code>/api/chatbots</code>.

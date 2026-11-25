@@ -20,6 +20,8 @@ import { useMemo } from 'react';
 import { useMobileHeaderStore } from '@client/app/hooks/useMobileHeader';
 import { gearsMenuDot, useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
 import { inviteBlue, rewardGreen } from '@client/app/components/common/gearRewardStyles';
+import { SessionHandoffButton } from '@client/app/components/Session/SessionHandoff';
+import { coachTopBar } from '@client/app/components/tutorial/coachCover';
 
 const NotebookHeader = () => {
   const [openSideNav, setOpenSideNav, showMessageCounts] = useNotebookLayout(
@@ -54,6 +56,7 @@ const NotebookHeader = () => {
     <Sheet
       component="header"
       className="notebook-header-container"
+      {...coachTopBar}
       sx={{
         display: { xs: 'flex', sm: 'none' },
         alignItems: 'center',
@@ -136,6 +139,7 @@ const NotebookHeader = () => {
             sx={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}
           >
             <SearchBarWithToggle handleChange={setSearch} placeHolder={t('search')} />
+            <SessionHandoffButton compact key={headerSession.id} sessionId={headerSession.id} />
 
             {/* New Note Button */}
             <IconButton

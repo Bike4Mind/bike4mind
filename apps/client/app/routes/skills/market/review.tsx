@@ -100,7 +100,7 @@ const VersionReviewCard: FC<{ item: ReviewQueueVersionItem; mode: 'pending' | 'a
             <Chip size="sm" variant="outlined">
               v{version.version}
             </Chip>
-            <VisibilityChip visibility={listing.visibility} />
+            <VisibilityChip visibility={listing.visibility} spaceId={listing.spaceId} />
             <TierChip tier={version.riskTier} />
           </Stack>
           <Typography level="body-xs" textColor="text.tertiary">
@@ -294,6 +294,7 @@ const ReportsQueue: FC = () => {
               </Typography>
               <Chip size="sm" color="danger" variant="soft">
                 {item.count} report{item.count > 1 ? 's' : ''}
+                {item.countingCount < item.count ? ` (${item.countingCount} count toward auto-hide)` : ''}
               </Chip>
               {item.listing.hiddenByReports ? (
                 <Chip size="sm" color="warning" variant="soft">

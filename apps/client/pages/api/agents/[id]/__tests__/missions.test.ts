@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: userFindById },
 }));
 const assertOwnerCanAfford = vi.hoisted(() => vi.fn());
-vi.mock('@server/deepAgent/wakeMetering', () => ({
+vi.mock('@bike4mind/server-utils/deepAgent/wakeMetering', () => ({
   assertOwnerCanFundWake: assertOwnerCanAfford,
   isInsufficientCredits: () => false,
 }));
@@ -50,7 +50,7 @@ vi.mock('@bike4mind/server-utils/deepAgent/missions', () => ({
 }));
 vi.mock('@bike4mind/server-utils/deepAgent/store', () => ({ MongoDeepAgentStore: class MongoDeepAgentStore {} }));
 const runMissionFirstWake = vi.hoisted(() => vi.fn());
-vi.mock('@server/deepAgent/firstWake', () => ({ runMissionFirstWake }));
+vi.mock('@bike4mind/server-utils/deepAgent/firstWake', () => ({ runMissionFirstWake }));
 
 vi.mock('@server/agents/agentScopes', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/agents/agentScopes')>();
@@ -62,8 +62,9 @@ vi.mock('@server/agents/agentScopes', async importOriginal => {
 });
 
 import '@pages/api/agents/[id]/missions';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, spendFrozenError } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
+import { AI_ACCESS_PENDING_REVIEW_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { assertAgentsReadScope, assertAgentsWriteScope } from '@server/agents/agentScopes';
 
 const SHARED_AGENT = { id: 'a1', userId: 'owner', users: [{ userId: 'u1' }] };
@@ -215,6 +216,28 @@ describe('POST /api/agents/[id]/missions', () => {
     const { res, run } = invoke('POST', developer);
     await run();
     expect(res._getStatusCode()).toBe(500);
+  });
+
+  it('lets a first wake refused by a spend freeze reach the shared 403 handler, discarding the mission', async () => {
+    enrollMissionForAgent.mockResolvedValue({ missionId: 'm1' });
+    discardEnrolledMission.mockResolvedValue(undefined);
+    runMissionFirstWake.mockRejectedValue(
+      spendFrozenError({ scopeType: 'User', frozenAt: new Date('2026-11-16T00:00:00Z') })
+    );
+    const { run } = invoke('POST', developer);
+    await expect(run()).rejects.toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
+    expect(discardEnrolledMission).toHaveBeenCalledWith('m1');
+  });
+
+  it("answers a restricted owner's first-wake refusal with its 403, not a 500", async () => {
+    enrollMissionForAgent.mockResolvedValue({ missionId: 'm1' });
+    discardEnrolledMission.mockResolvedValue(undefined);
+    runMissionFirstWake.mockRejectedValue(new ForbiddenError(AI_ACCESS_PENDING_REVIEW_MESSAGE));
+    const { res, run } = invoke('POST', developer);
+    await run();
+    expect(discardEnrolledMission).toHaveBeenCalledWith('m1');
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toEqual({ error: AI_ACCESS_PENDING_REVIEW_MESSAGE });
   });
 
   it('answers an unrelated enroll failure with a 500', async () => {

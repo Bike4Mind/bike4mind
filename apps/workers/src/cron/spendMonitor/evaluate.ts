@@ -28,6 +28,7 @@ import { resolveScopes, scopeMapKey, type ResolvedScope, type ResolveScopeDeps, 
 import { buildSpendAlertMessage, type SpendAlertMessageInput } from './slackMessage';
 import { resolvePaidScopes, scopePayers, type PaidScopeDeps } from './paidScopes';
 import { resolveTrustedScopes, type SpendTrustConfig } from './trust';
+import { resolveTopAccountContexts, type TopAccountContext, type TopAccountContextDeps } from './topAccountContext';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WINDOWS_PER_DAY = DAY_MS / SPEND_WINDOW_MS;
@@ -42,11 +43,15 @@ const MONGO_DUPLICATE_KEY = 11000;
 type SpendLogger = { log: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
 
 export type EvaluateDeps = {
-  rollups: Pick<ISpendRollupRepository, 'sumWindow' | 'windowSeries' | 'latestBucketStart' | 'sourceMix'>;
+  rollups: Pick<
+    ISpendRollupRepository,
+    'sumWindow' | 'windowSeries' | 'latestBucketStart' | 'sourceMix' | 'ownerModelActivity'
+  >;
   alerts: Pick<ISpendAlertRepository, 'findActive' | 'create' | 'update' | 'applyEvaluation'>;
   resolveScopeDeps: ResolveScopeDeps;
   paidScopeDeps: PaidScopeDeps;
   accountContextDeps: AccountContextDeps;
+  topAccountContextDeps: TopAccountContextDeps;
   /** Posting is best effort; a disabled Slack integration passes a no-op, which counts as success. */
   post: (message: SlackAlarmMessage) => Promise<void>;
   messageContext: Pick<SpendAlertMessageInput, 'creditUsd' | 'stage' | 'appUrl' | 'mention'>;
@@ -428,6 +433,34 @@ async function sourceMixByScope(
   return mix;
 }
 
+const TOP_ACCOUNT_CONTEXT_TIMEOUT_MS = 5000;
+
+/**
+ * Age, funding and activity for the platform breakdown's top accounts. Best effort and time-boxed: a
+ * failed or slow lookup is logged and the alert goes out with the plain account lines.
+ */
+async function topAccountContexts(
+  keys: ScopeKey[],
+  window: EvaluatedWindow,
+  deps: EvaluateDeps
+): Promise<Map<string, TopAccountContext>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`timed out after ${TOP_ACCOUNT_CONTEXT_TIMEOUT_MS}ms`)),
+      TOP_ACCOUNT_CONTEXT_TIMEOUT_MS
+    );
+  });
+  try {
+    return await Promise.race([resolveTopAccountContexts(keys, window, deps), timeout]);
+  } catch (error) {
+    deps.logger.error('spend-monitor-top-account-context-failed', { error });
+    return new Map();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Platform criticals first, then other criticals, then warnings and resolves. */
 function notificationRank({ kind, alert }: Notification): number {
   if (kind === 'resolve' || alert.severity !== 'critical') return 2;
@@ -450,10 +483,15 @@ async function buildMessages(
     .filter(n => n.kind !== 'resolve')
     .map(n => ({ scopeType: n.alert.scopeType, scopeId: n.alert.scopeId }));
   const sourceMix = await sourceMixByScope(announcedKeys, window, deps);
+  const accountContexts = platform
+    ? await topAccountContexts(platform.accountKeys, window, deps)
+    : new Map<string, TopAccountContext>();
 
+  // Until here each top account's label is its scope key.
   const topAccounts = platform?.breakdown.topAccounts?.map(account => ({
     ...account,
     label: resolved.get(account.label)?.label ?? account.label,
+    account: accountContexts.get(account.label),
   }));
 
   const ordered = notifications

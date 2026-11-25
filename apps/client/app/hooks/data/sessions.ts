@@ -743,7 +743,7 @@ export const useSubscribeToSession = (sessionId?: string) => {
     [queryClient, endJob, isJobRunning]
   );
 
-  const query = useMemo(() => (sessionId ? { _id: sessionId } : null), [sessionId]);
+  const query = useMemo(() => (sessionId && !isOptimisticId(sessionId) ? { _id: sessionId } : null), [sessionId]);
 
   useSubscribeCollection('sessionmodels', query, callback);
 };
@@ -827,7 +827,8 @@ export const useCreateNewSession = (callbacks?: {
         workBenchFiles.map(file => file.id),
         workBenchAgents.map(agent => agent.id),
         projectIdParam,
-        model
+        model,
+        useUser.getState().currentUser?.organizationId ?? undefined
       );
 
       return newSession;

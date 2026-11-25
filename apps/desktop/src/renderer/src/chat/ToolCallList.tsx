@@ -21,18 +21,23 @@ import { own } from '@shared/ownKeys';
 import { WEB_FETCH_TOOL_NAME } from '@shared/webSearch';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { describeApproval } from './approvalAttribution';
+import { ClippedBlock } from './ClippedBlock';
+import { useRevealFindTarget } from './ThreadFindContext';
+import { toolScope } from './threadFind';
+import { BLOCK_COPY_BUTTON_CLASS, CopyMessageButton, revealBlockCopyButtonSx } from './CopyMessageButton';
 import { DiffView } from './DiffView';
 import { DirectoryRequestCard } from './DirectoryRequestCard';
 import { McpServerRequestCard } from './McpServerRequestCard';
 import { ChevronIcon } from './icons';
 import { MediaAttachments } from './MediaAttachment';
-import { thinScrollbarSx } from './layout';
 import { QuestionCard, QuestionSummary } from './QuestionCard';
 import { VideoJobsForCall } from './VideoJobCard';
 import { WebResultCount, WebToolDetail, useWebSearchHits } from './WebResults';
 import {
   diffTotals,
+  displayStatus,
   groupToolCalls,
+  isModelRequestRefusal,
   summarizeInput,
   toolDuration,
   toolRowLabel,
@@ -51,7 +56,14 @@ const HOST_QUESTION: Record<string, string> = {
   session_send: 'Send this to that conversation? It runs there on its own and costs credits.',
   session_archive: 'Archive this conversation?',
   session_delete: 'Delete this conversation for good?',
+  loop: 'Start this loop? Each run is a turn that costs credits.',
 };
+
+function deleteManyQuestion(call: ChatToolCall): string | undefined {
+  if (call.name !== 'session_delete' || !Array.isArray(call.input.session_ids)) return undefined;
+  const count = new Set(call.input.session_ids).size;
+  return count > 1 ? `Delete these ${count} conversations for good?` : undefined;
+}
 
 /** Read-only tools that still stop at the gate; "Run this command?" would misname them. */
 const READ_QUESTION: Record<string, string> = {
@@ -238,6 +250,16 @@ function ApprovalParts({ parts }: { parts: NonNullable<ChatToolCall['approvalPar
   );
 }
 
+const MAX_DESCRIPTION_CHARS = 140;
+
+const SHELL_TOOLS = new Set(['bash_execute', 'bash_background']);
+
+/** The model's description as one capped line, or '' when there is nothing to show. */
+function approvalDescriptionLine(description: string | undefined): string {
+  const flat = (description ?? '').replace(/\s+/g, ' ').trim();
+  return flat.length <= MAX_DESCRIPTION_CHARS ? flat : `${flat.slice(0, MAX_DESCRIPTION_CHARS - 3).trimEnd()}...`;
+}
+
 /**
  * The consent prompt for a tool that has not run yet.
  *
@@ -262,6 +284,9 @@ function ApprovalPrompt({
   const irreversible = call.approvalIrreversible === true;
   const noAlways = irreversible || call.approvalOnceOnly === true;
   const choice = call.approvalChoice;
+  const description = approvalDescriptionLine(call.approvalDescription);
+  const argument = summarizeInput(call);
+  const approvalText = call.approvalDetail ?? argument;
 
   return (
     <Sheet
@@ -276,7 +301,8 @@ function ApprovalPrompt({
           ? diffs.length > 1
             ? `Apply this patch to ${diffs.length} files?`
             : APPROVAL_QUESTION[diff.operation]
-          : (own(HOST_QUESTION, call.name) ??
+          : (deleteManyQuestion(call) ??
+            own(HOST_QUESTION, call.name) ??
             own(READ_QUESTION, call.name) ??
             (isGeneration(call.name)
               ? 'Generate this? It costs credits.'
@@ -285,6 +311,17 @@ function ApprovalPrompt({
                 : 'Run this command?'))}
       </Typography>
 
+      {!diff && description && (
+        <Typography
+          level="body-xs"
+          textColor="text.secondary"
+          sx={{ mt: 0.5, overflowWrap: 'anywhere' }}
+          data-testid="chat-tool-approval-summary"
+        >
+          {`Agent's summary: ${description}`}
+        </Typography>
+      )}
+
       {diff ? (
         <Stack spacing={0.75} sx={{ mt: 0.75 }}>
           {diffs.map(each => (
@@ -292,26 +329,33 @@ function ApprovalPrompt({
           ))}
         </Stack>
       ) : (
-        <Box
-          sx={{
-            mt: 0.75,
-            p: 1,
-            borderRadius: 'sm',
-            bgcolor: 'background.surface',
-            maxHeight: 200,
-            overflowY: 'auto',
-            ...thinScrollbarSx,
-          }}
+        <Stack
+          direction="row"
+          spacing={0.5}
+          alignItems="flex-start"
+          sx={{ mt: 0.75, p: 1, borderRadius: 'sm', bgcolor: 'background.surface', ...revealBlockCopyButtonSx }}
         >
-          <Typography
-            level="body-sm"
-            fontFamily="monospace"
-            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'normal', overflowWrap: 'anywhere' }}
-            data-testid="chat-tool-approval-detail"
-          >
-            {call.approvalDetail ?? summarizeInput(call)}
-          </Typography>
-        </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <ClippedBlock maxHeight={200} measureKey={approvalText} testId="chat-tool-approval-detail-clip">
+              <Typography
+                level="body-sm"
+                fontFamily="monospace"
+                sx={{ whiteSpace: 'pre-wrap', wordBreak: 'normal', overflowWrap: 'anywhere' }}
+                data-testid="chat-tool-approval-detail"
+              >
+                {approvalText}
+              </Typography>
+            </ClippedBlock>
+          </Box>
+          <CopyMessageButton
+            // The card shows display text (`$ cmd`, its folder, why it asks); the clipboard gets the
+            // bare argument, as the detail view's input button does.
+            text={argument || approvalText}
+            label={inputCopyLabel(call)}
+            className={BLOCK_COPY_BUTTON_CLASS}
+            testId="chat-tool-approval-copy-btn"
+          />
+        </Stack>
       )}
       {!diff && call.approvalParts && call.approvalParts.length > 0 && <ApprovalParts parts={call.approvalParts} />}
 
@@ -334,7 +378,9 @@ function ApprovalPrompt({
               data-testid="chat-tool-approve-once"
             >
               {irreversible
-                ? 'Delete it'
+                ? deleteManyQuestion(call)
+                  ? 'Delete them'
+                  : 'Delete it'
                 : diff
                   ? 'Apply this change'
                   : isGeneration(call.name)
@@ -344,7 +390,7 @@ function ApprovalPrompt({
             {!noAlways && (
               <Button
                 size="sm"
-                variant="soft"
+                variant="outlined"
                 color="neutral"
                 onClick={() => onRespond(approvalId, { decision: 'always' })}
                 data-testid="chat-tool-approve-always"
@@ -355,7 +401,7 @@ function ApprovalPrompt({
             {!noAlways && call.approvalProjectRules && call.approvalProjectRules.length > 0 && (
               <Button
                 size="sm"
-                variant="soft"
+                variant="outlined"
                 color="neutral"
                 title={call.approvalProjectRules.join('\n')}
                 onClick={() => onRespond(approvalId, { decision: 'always', project: true })}
@@ -367,7 +413,7 @@ function ApprovalPrompt({
             {!noAlways && call.approvalRules && call.approvalRules.length > 0 && (
               <Button
                 size="sm"
-                variant="soft"
+                variant="outlined"
                 color="neutral"
                 title={call.approvalRules.join('\n')}
                 onClick={() => onRespond(approvalId, { decision: 'always', everywhere: true })}
@@ -378,13 +424,15 @@ function ApprovalPrompt({
             )}
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
               color="neutral"
               onClick={() => onRespond(approvalId, { decision: 'deny' })}
               data-testid="chat-tool-deny"
             >
               {irreversible
-                ? 'Keep it'
+                ? deleteManyQuestion(call)
+                  ? 'Keep them'
+                  : 'Keep it'
                 : diff
                   ? "Don't change it"
                   : isGeneration(call.name)
@@ -399,14 +447,30 @@ function ApprovalPrompt({
   );
 }
 
+/** The copy button's name for what a call was given: a shell call's input is its command. */
+function inputCopyLabel(call: ChatToolCall): string {
+  return call.name === 'bash_execute' || call.name === 'bash_background' ? 'Copy command' : 'Copy input';
+}
+
 /** One call's full detail, behind the disclosure: what it was given, and what it returned. */
 function ToolCallDetail({ call }: { call: ChatToolCall }) {
   // The diff names the file in its own header, so repeating the path above it is the same
   // string twice in three lines - and a write has no other argument worth a line of its own.
   const diffs = call.diffs ?? (call.diff ? [call.diff] : []);
   const argument = diffs.length > 0 ? '' : summarizeInput(call);
+  // Read from the input, so a call that never stopped at the gate (an imported session's) shows it too.
+  const description = SHELL_TOOLS.has(call.name)
+    ? approvalDescriptionLine(typeof call.input.description === 'string' ? call.input.description : undefined)
+    : '';
   // The list stands in for the raw text it was parsed from; the model still got that text.
   const listsHits = useWebSearchHits(call).length > 0;
+  const output = call.error ?? call.preview ?? call.progress;
+  // Expanding the clip, not just scrolling inside it, so the match is read in its context.
+  const [revealOutput, setRevealOutput] = useState(0);
+  useRevealFindTarget(
+    target => target.callId === call.id && target.part === 'output',
+    target => setRevealOutput(target.seq)
+  );
 
   const asked = call.name === ASK_USER_TOOL_NAME ? parseQuestions(call.input.questions) : null;
   if (asked && 'questions' in asked && call.status === 'done') {
@@ -430,16 +494,34 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
 
   return (
     <Box data-testid="chat-tool-detail">
-      {argument && (
-        <Typography
-          level="body-sm"
-          fontFamily="monospace"
-          textColor="text.tertiary"
-          sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
-          data-testid="chat-tool-detail-input"
-        >
-          {argument}
+      {description && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="chat-tool-detail-summary">
+          {`Agent's summary: ${description}`}
         </Typography>
+      )}
+      {argument && (
+        <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={revealBlockCopyButtonSx}>
+          <Typography
+            level="body-sm"
+            fontFamily="monospace"
+            textColor="text.tertiary"
+            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1, minWidth: 0 }}
+            data-testid="chat-tool-detail-input"
+            data-find-scope={toolScope(call.id, 'input')}
+          >
+            {argument}
+          </Typography>
+          <CopyMessageButton
+            text={argument}
+            label={inputCopyLabel(call)}
+            className={BLOCK_COPY_BUTTON_CLASS}
+            testId="chat-tool-detail-input-copy-btn"
+          />
+        </Stack>
+      )}
+
+      {INLINE_MEDIA_TOOL_NAMES.has(call.name) && (
+        <MediaAttachments media={call.media ?? []} nameHint="image" variant="thumbnail" />
       )}
 
       {/* `diff`, never `approvalDiff`: this row is a record of a turn that has happened, and
@@ -455,22 +537,35 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
       <WebToolDetail call={call} />
 
       {!listsHits && (
-        <Typography
-          level="body-xs"
-          fontFamily="monospace"
-          sx={{
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            maxHeight: 260,
-            overflowY: 'auto',
-            mt: 0.5,
-            ...thinScrollbarSx,
-          }}
-          textColor={call.error ? 'danger.400' : 'text.tertiary'}
-          data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
-        >
-          {call.error ?? call.preview ?? call.progress ?? 'Running...'}
-        </Typography>
+        <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ mt: 0.5, ...revealBlockCopyButtonSx }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <ClippedBlock
+              maxHeight={260}
+              measureKey={output ?? ''}
+              testId="chat-tool-detail-output-clip"
+              revealKey={revealOutput}
+            >
+              <Typography
+                level="body-xs"
+                fontFamily="monospace"
+                sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                textColor={call.error && !isModelRequestRefusal(call) ? 'danger.400' : 'text.tertiary'}
+                data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
+                data-find-scope={toolScope(call.id, 'output')}
+              >
+                {output ?? 'Running...'}
+              </Typography>
+            </ClippedBlock>
+          </Box>
+          {output && (
+            <CopyMessageButton
+              text={output}
+              label={call.error ? 'Copy error' : 'Copy output'}
+              className={BLOCK_COPY_BUTTON_CLASS}
+              testId="chat-tool-detail-output-copy-btn"
+            />
+          )}
+        </Stack>
       )}
     </Box>
   );
@@ -515,6 +610,10 @@ function DiffStat({ totals }: { totals: DiffTotals }) {
  */
 function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boolean; onMove?: MoveCallToBackground }) {
   const [open, setOpen] = useState(false);
+  useRevealFindTarget(
+    target => target.callId === call.id,
+    () => setOpen(true)
+  );
   const totals = diffTotals([call]);
 
   return (
@@ -536,7 +635,7 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
           listStyle: 'none',
           px: 1,
           py: 0.5,
-          color: ROW_TONE[call.status],
+          color: ROW_TONE[displayStatus(call)],
           '&::-webkit-details-marker': { display: 'none' },
           '&:hover': { opacity: 0.85 },
         }}
@@ -582,6 +681,10 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
  */
 function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCallToBackground }) {
   const [open, setOpen] = useState(false);
+  useRevealFindTarget(
+    target => group.calls.some(call => call.id === target.callId),
+    () => setOpen(true)
+  );
   const running = group.status === 'running';
   const single = group.calls.length === 1;
   // On the summary only when there is no ambiguity about which command it would move; a group
@@ -677,10 +780,12 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
       {group.calls.map(call => (
         <Box key={call.id}>
           {call.notice && <NoticeBanner notice={call.notice} />}
-          <MediaAttachments
-            media={call.media ?? []}
-            nameHint={SCREENSHOT_TOOL_NAMES.has(call.name) ? 'screenshot' : 'image'}
-          />
+          {!INLINE_MEDIA_TOOL_NAMES.has(call.name) && (
+            <MediaAttachments
+              media={call.media ?? []}
+              nameHint={SCREENSHOT_TOOL_NAMES.has(call.name) ? 'screenshot' : 'image'}
+            />
+          )}
           {call.name === GENERATE_VIDEO_TOOL_NAME && <VideoJobsForCall callId={call.id} />}
         </Box>
       ))}
@@ -720,6 +825,11 @@ function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
 
 const GENERATE_VIDEO_TOOL_NAME = 'generate_video';
 const SCREENSHOT_TOOL_NAMES: ReadonlySet<string> = new Set(['browser_screenshot', 'screen_capture']);
+/**
+ * A file the agent read is part of the call's detail, like its text result, so it shows in the
+ * row's body when the row is opened rather than under the row the way a capture does.
+ */
+const INLINE_MEDIA_TOOL_NAMES: ReadonlySet<string> = new Set(['file_read']);
 
 export function ToolCallList({
   calls,

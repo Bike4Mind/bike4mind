@@ -1,12 +1,12 @@
 /**
- * Scroll-to-message bridge between the QuestMaster plan board and the
+ * Scroll-to-message bridge between components outside the chat tree and the
  * virtualized chat history.
  *
  * The chat list is a react-virtuoso list owned by ChatHistory; messages
  * scrolled out of view have no DOM node, so DOM queries cannot reach them.
  * ChatHistory registers a handler that scrolls via Virtuoso's index API;
- * other components (e.g. the plan board in the Knowledge Viewer, which
- * renders in a separate tree) request scrolls through this module.
+ * other components (e.g. ones in the Knowledge Viewer, which renders in a
+ * separate tree) request scrolls through this module.
  */
 type ScrollToMessageHandler = (messageId: string) => boolean;
 

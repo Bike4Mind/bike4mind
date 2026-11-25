@@ -27,7 +27,6 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
         setLLM: vi.fn(),
         selectSessionModel: vi.fn(),
         tools: [],
-        isQuestMasterEnabled: false,
       };
       return selector ? selector(state) : state;
     },
@@ -70,7 +69,6 @@ vi.mock('@client/app/utils/userAPICalls', () => ({
 const mockUserSettings = {
   settings: {
     experimentalFeatures: {
-      enableQuestMaster: false,
       enableMementos: false,
       enableArtifacts: false, // raw setting is false - user never explicitly enabled it
       enableAgents: false,
@@ -79,7 +77,6 @@ const mockUserSettings = {
       enableDeepResearch: false,
       enableRapidReply: false,
       enableResearchEngine: false,
-      enableBmPi: false,
       enableLattice: false,
     },
   },

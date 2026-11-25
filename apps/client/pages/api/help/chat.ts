@@ -1,3 +1,4 @@
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -38,7 +39,7 @@ import {
   resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 /** Max tokens for the LLM response */
 const MAX_RESPONSE_TOKENS = 1000;
@@ -158,7 +159,9 @@ const handler = baseApi()
         if (candidates.length === 0) {
           throw new BadRequestError('No AI model available. Please check your API keys.');
         }
-        const admission = await createModelAdmission(req.user, models);
+        const admission = await createModelAdmission(req.user, models, false, {
+          organizationId: resolveRequestBillingOrgId(req),
+        });
         let modelInfo: ModelInfo | undefined;
         for (const candidate of candidates) {
           if (await admission.admits(candidate.id)) {

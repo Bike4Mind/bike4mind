@@ -66,8 +66,18 @@ describe('publishChatCompletedPush connection gating', () => {
   it('does not push a user whose client is connected and already streamed the reply', async () => {
     const deps = makeDeps({ connections: [liveWebRow] });
     await publishChatCompletedPush(turn, deps, logger);
-    expect(deps.findQuest).not.toHaveBeenCalled();
     expect(deps.publish).not.toHaveBeenCalled();
+  });
+
+  it('still sends approval_needed to a user with a live connection', async () => {
+    const deps = makeDeps({
+      connections: [liveWebRow],
+      quest: { status: 'done', type: 'chat', pendingAction: { tool: 'create_issue', ts: 1234 } },
+    });
+    await publishChatCompletedPush(turn, deps, logger);
+    expect(deps.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'approval_needed', pendingActionTs: 1234, collapseId: 'approval:quest-1' })
+    );
   });
 
   it('treats an unreadable connection table as offline and still pushes', async () => {
@@ -103,7 +113,12 @@ describe('publishChatCompletedPush connection gating', () => {
 
   it('sends approval_needed instead of chat_completed for a turn parked on a Confirm card', async () => {
     const deps = makeDeps({
-      quest: { status: 'done', type: 'chat', reply: 'Preview ready.', pendingAction: { tool: 'github_create_issue' } },
+      quest: {
+        status: 'done',
+        type: 'chat',
+        reply: 'Preview ready.',
+        pendingAction: { tool: 'github_create_issue', ts: 456 },
+      },
     });
     await publishChatCompletedPush(turn, deps, logger);
     expect(deps.publish).toHaveBeenCalledExactlyOnceWith({
@@ -115,6 +130,7 @@ describe('publishChatCompletedPush connection gating', () => {
       collapseId: 'approval:quest-1',
       questId: 'quest-1',
       sessionId: 'session-1',
+      pendingActionTs: 456,
     });
   });
 

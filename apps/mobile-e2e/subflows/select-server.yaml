@@ -1,0 +1,26 @@
+appId: com.bike4mind.app
+---
+# Debug builds sign in to production by default on iOS; point both platforms at the staging server.
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          id: signin-debug-server-btn
+      - tapOn: "Custom"
+      - tapOn:
+          id: debug-server-url-input
+      - inputText: ${B4M_E2E_SERVER_URL}
+      - tapOn:
+          id: debug-server-apply-btn
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          id: debug-server-url-input
+      - eraseText: 200
+      - inputText: ${B4M_E2E_SERVER_URL}
+      - hideKeyboard
+      - tapOn:
+          id: debug-server-apply-btn

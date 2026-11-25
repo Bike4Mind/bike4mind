@@ -20,8 +20,13 @@ import {
   feedbackRollupRoute,
   dataLakesRoute,
   integrationsRoute,
+  legacyQaRunRoute,
+  legacyQaSegmentlessRoutes,
+  legacyQaStatusRoute,
+  legacyQaTestRoute,
   newRoute,
   notebooksIndexRoute,
+  oauthLogoutRoute,
   router,
   studioRoute,
   subscriptionsIndexRoute,
@@ -32,6 +37,13 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 // The consent guard bootstraps a session over the network; the redirect tests below are about what
 // adminRoute does after it, so it passes here.
 vi.mock('./utils/consentGuard', () => ({ enforceConsentRedirect: async () => undefined }));
+
+// Pass-through, so a test can stub one bootstrap without changing the guards the other tests run.
+vi.mock('./utils/sessionBootstrap', async importOriginal => {
+  const actual = await importOriginal<typeof import('./utils/sessionBootstrap')>();
+  return { ...actual, bootstrapSession: vi.fn(actual.bootstrapSession) };
+});
+vi.mock('./routes/oauth/logout', () => ({ default: () => <div data-testid="oauth-logout-page-stub" /> }));
 
 // Hoisted: router.tsx calls startPageBeacon() while it is being imported.
 const pageBeacon = vi.hoisted(() => ({ startPageBeacon: vi.fn(), beaconPage: vi.fn() }));
@@ -97,6 +109,51 @@ describe('adminRoute validateSearch', () => {
 // validateSearch is what makes a bare /feedback/rollup URL load at all (see the route's own
 // comment) - rollup.test.tsx mocks '@client/app/router' wholesale, so this is the only place the
 // fallback branches actually run.
+describe('oauthLogoutRoute (RP-Initiated Logout)', () => {
+  it('renders outside the notebook layout', () => {
+    const ids = router.matchRoutes('/oauth/logout', {}).map(m => m.routeId);
+    expect(ids).toContain('/oauth/logout');
+    expect(ids).not.toContain('/layout');
+  });
+
+  it('keeps the four logout params as strings and drops anything else', () => {
+    expect(
+      oauthLogoutRoute.options.validateSearch({
+        client_id: 'b4m_example_rp_00000000',
+        post_logout_redirect_uri: 'https://rp.example.test/signed-out',
+        state: 's1',
+        id_token_hint: 'a.b.c',
+        redirect_uri: 'https://evil.example.test/',
+      })
+    ).toEqual({
+      client_id: 'b4m_example_rp_00000000',
+      post_logout_redirect_uri: 'https://rp.example.test/signed-out',
+      state: 's1',
+      id_token_hint: 'a.b.c',
+    });
+    expect(oauthLogoutRoute.options.validateSearch({ client_id: 42 })).toEqual({
+      client_id: '42',
+      post_logout_redirect_uri: undefined,
+      state: undefined,
+      id_token_hint: undefined,
+    });
+  });
+
+  it('restores the session before the page loads, without the consent redirect', async () => {
+    const { bootstrapSession } = await import('./utils/sessionBootstrap');
+    vi.mocked(bootstrapSession).mockResolvedValueOnce(undefined);
+    const beforeLoad = oauthLogoutRoute.options.beforeLoad as unknown as () => Promise<void>;
+    await beforeLoad();
+    expect(bootstrapSession).toHaveBeenCalled();
+  });
+
+  it('lazy-loads the logout page', async () => {
+    const Page = oauthLogoutRoute.options.component as unknown as () => JSX.Element;
+    render(<Page />);
+    expect(await screen.findByTestId('oauth-logout-page-stub')).toBeTruthy();
+  });
+});
+
 describe('feedbackRollupRoute validateSearch', () => {
   it('fills both bounds from the default window when the search is empty', () => {
     const fallback = defaultFeedbackRollupWindow();
@@ -159,14 +216,73 @@ describe('Data Lake article deep link keeps ?passage=', () => {
 describe('QA status routes', () => {
   const chain = (path: string) => router.matchRoutes(path, {}).map(m => m.routeId);
 
-  it.each(['/status', '/status/runs/abc', '/status/tests/a%2Fb'])('%s renders outside the notebook layout', path => {
+  it.each(['/admin/qa', '/admin/qa/runs/abc', '/admin/qa/tests/a%2Fb'])('%s renders in the admin layout', path => {
     const ids = chain(path);
-    expect(ids).toContain('/qa-status-layout');
+    expect(ids).toContain('/admin-layout');
     expect(ids).not.toContain('/layout');
   });
 
   it('keeps regular app pages inside the notebook layout', () => {
     expect(chain('/new')).toContain('/layout');
+  });
+});
+
+describe('legacy /status redirects', () => {
+  const run = (route: { options: { beforeLoad?: unknown } }, ctx: Record<string, unknown>) => {
+    try {
+      (route.options.beforeLoad as (c: unknown) => void)(ctx);
+    } catch (e) {
+      return (e as { options: Record<string, unknown> }).options;
+    }
+    throw new Error('did not redirect');
+  };
+  const key = 'notebook.spec.ts > saves (100% ok)/x?y#z';
+
+  it('sends /status with QA search keys to /admin/qa with the search kept', () => {
+    const search = { product: 'x', range: '7d' };
+    expect(run(legacyQaStatusRoute, { search })).toMatchObject({ to: '/admin/qa', search, replace: true });
+  });
+
+  it('sends bare /status to /admin/qa', () => {
+    expect(run(legacyQaStatusRoute, { search: {} })).toMatchObject({ to: '/admin/qa', replace: true });
+  });
+
+  it('sends /status/runs/<id> to the admin run page with params and search kept', () => {
+    expect(run(legacyQaRunRoute, { params: { id: 'r1' }, search: { product: 'x' } })).toMatchObject({
+      to: '/admin/qa/runs/$id',
+      params: { id: 'r1' },
+      search: true,
+      replace: true,
+    });
+  });
+
+  it('sends /status/tests/<key> to the admin test page', () => {
+    expect(run(legacyQaTestRoute, { params: { testKey: key }, search: {} })).toMatchObject({
+      to: '/admin/qa/tests/$testKey',
+      params: { testKey: key },
+      search: true,
+      replace: true,
+    });
+  });
+
+  it.each(legacyQaSegmentlessRoutes.map(route => [route.path, route] as const))(
+    'sends %s with no segment to /admin/qa',
+    (_path, route) => {
+      expect(run(route, {})).toMatchObject({ to: '/admin/qa', replace: true });
+    }
+  );
+
+  it('matches the old URLs and decodes the test key from one segment', () => {
+    const m = router.matchRoutes(`/status/tests/${encodeURIComponent(key)}`, {});
+    expect(m.at(-1)).toMatchObject({ routeId: '/status/tests/$testKey', params: { testKey: key } });
+    expect(router.matchRoutes('/status/runs/abc', {}).at(-1)?.routeId).toBe('/status/runs/$id');
+    expect(router.matchRoutes('/status/runs', {}).at(-1)?.routeId).toBe('/status/runs');
+    expect(router.matchRoutes('/status/', {}).at(-1)?.routeId).toBe('/status');
+  });
+
+  it('round-trips a test key through the redirect target', () => {
+    const { pathname } = router.buildLocation({ to: '/admin/qa/tests/$testKey', params: { testKey: key } });
+    expect(router.matchRoutes(pathname, {}).at(-1)).toMatchObject({ params: { testKey: key } });
   });
 });
 

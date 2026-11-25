@@ -35,6 +35,12 @@ async function load(queues: unknown[], core?: CoreNames) {
   return import('./dlqRegistry');
 }
 
+// Each reload builds fresh `describe` closures and toEqual compares functions by reference, so
+// entries from two loads are compared on their data, with `describe` checked for presence only.
+function comparable<T extends { describe?: unknown }>({ describe: describer, ...rest }: T) {
+  return { ...rest, hasDescribe: typeof describer === 'function' };
+}
+
 const NO_CORE_NAMES: CoreNames = { coreResourceNames: null, coreEnvNames: null, coreDlqLabels: null };
 
 describe('contributed DLQ registry', () => {
@@ -75,8 +81,38 @@ describe('contributed DLQ registry', () => {
   it('registers a contributed entry without queue help', async () => {
     const entry = (await load([QUEUE])).getDlqByLabel('example-job');
     expect(entry).toBeDefined();
-    expect(entry!.description).toBeUndefined();
-    expect(entry!.replay).toBeUndefined();
+    for (const key of ['description', 'replay', 'replayNote', 'owner']) expect(entry).not.toHaveProperty(key);
+  });
+
+  it('copies declared queue help into the entry, as a core entry carries it', async () => {
+    const help = {
+      description: 'Runs the example job.',
+      replay: 'side-effects',
+      replayNote: 'A replay can send the notice again.',
+      owner: 'Example',
+    };
+    const entry = (await load([{ ...QUEUE, ...help, dlqVisibilityTimeout: '15 minutes' }])).getDlqByLabel(
+      'example-job'
+    );
+    expect(entry).toEqual({
+      label: 'example-job',
+      displayName: 'Example Job',
+      application: 'Example',
+      sourceQueue: 'exampleJobQueue',
+      ...help,
+    });
+  });
+
+  it('copies only the help fields a pair declares', async () => {
+    const entry = (await load([{ ...QUEUE, replay: 'safe' }])).getDlqByLabel('example-job');
+    expect(entry?.replay).toBe('safe');
+    for (const key of ['description', 'replayNote', 'owner']) expect(entry).not.toHaveProperty(key);
+  });
+
+  it('drops a pair whose help text is malformed, like any other invalid field', async () => {
+    const registry = await load([{ ...QUEUE, description: 'Runs\nthe job.' }]);
+    expect(registry.getDlqRegistry().map(d => d.label)).toEqual(baseline);
+    expect(() => registry.contributedDlqLabel('example-job')).toThrow('not registered');
   });
 
   it('appends contributed entries and leaves the core labels and order alone', async () => {
@@ -103,7 +139,7 @@ describe('contributed DLQ registry', () => {
         ...(d.sourceQueue ? [{ ...QUEUE, name: d.sourceQueue, label: `redeclared-${i}` }] : []),
       ])
     );
-    expect(registry.getDlqRegistry()).toEqual(core);
+    expect(registry.getDlqRegistry().map(comparable)).toEqual(core.map(comparable));
     for (const d of core) expect(() => registry.contributedDlqLabel(d.label)).toThrow('not registered');
     expect(() => registry.contributedDlqLabel('redeclared-0')).toThrow('not registered');
   });
@@ -118,7 +154,8 @@ describe('contributed DLQ registry', () => {
       coreDlqLabels: actual.coreDlqLabels!.filter(label => label !== first.label),
     });
     expect(registry.getDlqRegistry().map(d => d.label)).toEqual(baseline);
-    expect(registry.getDlqByLabel(first.label)).toEqual(first);
+    const found = registry.getDlqByLabel(first.label);
+    expect(found && comparable(found)).toEqual(comparable(first));
     expect(() => registry.contributedDlqLabel('example-job')).toThrow('not registered');
   });
 

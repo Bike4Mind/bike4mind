@@ -31,6 +31,12 @@ export const TERMINAL_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.Sta
   'incomplete_expired',
 ]);
 
+/**
+ * Statuses under which a subscription grants its plan's storage allowance. Trialing counts: Stripe
+ * has not charged yet, but the plan's access is already live.
+ */
+export const PLAN_STORAGE_GRANTING_STATUSES: ReadonlySet<Stripe.Subscription.Status> = new Set(['active', 'trialing']);
+
 export const isCancellableSubscriptionStatus = (status: Stripe.Subscription.Status): boolean =>
   !TERMINAL_SUBSCRIPTION_STATUSES.has(status);
 
@@ -178,6 +184,12 @@ export interface ISubscription {
   /** When the owner was emailed that dunning cancelled the subscription; the once-only claim. */
   nonPaymentCancelNotifiedAt?: Date;
   /**
+   * Once-only claims for the confirm-payment and unpaid notices, newest last and capped.
+   * Confirm-payment is `payment_action_required:<invoiceId>`, so a later invoice still sends;
+   * unpaid is `unpaid:<subscriptionId>`, released when the subscription recovers.
+   */
+  billingNoticeKeys?: string[];
+  /**
    * Mirror of the Stripe subscription, written through `stripeMirrorFields` (./stripeMirror.ts)
    * by every path that syncs from a Stripe subscription object. Absent on admin grants and on
    * rows not yet synced or backfilled. `currency` is the billed currency and `unitAmount` is per
@@ -195,6 +207,8 @@ export interface ISubscription {
    * date (which leaves `cancelAtPeriodEnd` false), so this is the "will end" signal.
    */
   cancelAt?: Date | null;
+  /** Actual Stripe termination time, distinct from the cancellation request. */
+  endedAt?: Date | null;
   trialEndsAt?: Date | null;
   stripeCustomerId?: string;
   /**
@@ -258,6 +272,8 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
     ownerIds: readonly string[]
   ): Promise<ISubscription[]>;
 
+  hasLapsedSubscriptionsByOwners(ownerType: SubscriptionOwnerType, ownerIds: readonly string[]): Promise<boolean>;
+
   /**
    * Every non-terminal subscription an owner has - deliberately a deny-list, because a
    * `past_due` owner still has a row to act on (fix the card, or cancel), and a status
@@ -319,4 +335,9 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
   claimNonPaymentCancelNotice(subscriptionId: string): Promise<boolean>;
 
   releaseNonPaymentCancelNotice(subscriptionId: string): Promise<void>;
+
+  /** Same contract as claimPaymentFailureNotice, for a notice identified by `key` (see `billingNoticeKeys`). */
+  claimBillingNotice(subscriptionId: string, key: string): Promise<boolean>;
+
+  releaseBillingNotice(subscriptionId: string, key: string): Promise<void>;
 }

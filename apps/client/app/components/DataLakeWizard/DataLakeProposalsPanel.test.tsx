@@ -55,6 +55,72 @@ describe('DataLakeProposalsPanel', () => {
     expect(screen.getByTestId('datalake-proposal-tag')).toHaveTextContent('finance');
   });
 
+  it('names the feed a proposal came from by origin and path only', () => {
+    renderPanel({
+      proposals: [
+        proposal({
+          provenance: {
+            producer: 'research_run',
+            retrievedAt: new Date('2026-08-01'),
+            feedUrl: 'https://example.com/news/feed.xml',
+          },
+        }),
+      ],
+    });
+    expect(screen.getByTestId('datalake-proposal-feed-source').textContent).toBe(
+      'from feed https://example.com/news/feed.xml'
+    );
+  });
+
+  describe('review reason line', () => {
+    const withReason = (reviewReason: NonNullable<IDataLakeProposalDocument['provenance']['reviewReason']>) =>
+      renderPanel({
+        proposals: [
+          proposal({
+            provenance: { producer: 'research_run', retrievedAt: new Date('2026-08-01'), reviewReason },
+          }),
+        ],
+      });
+
+    it('names the rule condition that matched, quoting and joining several with a comma', () => {
+      withReason({ kind: 'rule_match', conditions: ['it is a press release', 'the author is an employee'] });
+      expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
+        'Sent to review: matched "it is a press release", "the author is an employee"'
+      );
+    });
+
+    it('says which condition could not be checked', () => {
+      withReason({ kind: 'rule_undetermined', conditions: ['the author is an employee'] });
+      expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
+        'Sent to review: could not tell whether "the author is an employee" applies'
+      );
+    });
+
+    it('joins several undetermined conditions with "or"', () => {
+      withReason({ kind: 'rule_undetermined', conditions: ['it is a press release', 'the author is an employee'] });
+      expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
+        'Sent to review: could not tell whether "it is a press release" or "the author is an employee" applies'
+      );
+    });
+
+    it('says the rule check failed without naming a condition', () => {
+      withReason({ kind: 'rule_check_failed' });
+      expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
+        'Sent to review: the rule check failed'
+      );
+    });
+
+    it('shows no reason line for a proposal that was not sent by a rule', () => {
+      renderPanel();
+      expect(screen.queryByTestId('datalake-proposal-review-reason')).toBeNull();
+    });
+  });
+
+  it('shows no feed line for a proposal that did not come from a feed', () => {
+    renderPanel();
+    expect(screen.queryByTestId('datalake-proposal-feed-source')).toBeNull();
+  });
+
   // `producer` is free-form by design, so an unmapped one must still say something rather than
   // rendering blank.
   it('falls back to the raw producer token for a producer it has no name for', () => {
@@ -98,6 +164,12 @@ describe('DataLakeProposalsPanel', () => {
     fireEvent.click(screen.getByTestId('datalake-proposal-decline-confirm-btn'));
 
     expect(onDecline).toHaveBeenCalledWith('prop-1', 'paywalled');
+  });
+
+  it('lets the decline row wrap so it fits a phone', () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    expect(screen.getByTestId('datalake-proposal-decline-row')).toHaveStyle({ flexWrap: 'wrap' });
   });
 
   it('declines with no reason when the reviewer gives none', () => {
@@ -203,6 +275,9 @@ describe('DataLakeProposalsPanel', () => {
     renderPanel({ proposals: [] });
 
     expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(/Nothing is waiting for review/);
+    expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(
+      /unless a research configuration adds results from its trusted sites automatically/
+    );
   });
 
   it('flags a source a reviewer previously declined rather than hiding it', () => {

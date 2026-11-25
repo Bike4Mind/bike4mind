@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
+import { ARTIFACT_EMISSION_PROMPT, CALLABLE_FUNCTIONS_PROMPT_NOTE } from '@bike4mind/common';
 import {
   inheritedArtifactFields,
   resolveAgentArtifactEmissionPrompt,
@@ -101,6 +101,68 @@ describe('resolveAgentArtifactEmissionPrompt', () => {
     await expect(resolveAgentArtifactEmissionPrompt({ artifactsEnabled: true, readPromptSetting })).resolves.toBe(
       'CUSTOM PROMPT'
     );
+  });
+
+  it('leaves the prompt unchanged when no Python data origin is listed', async () => {
+    await expect(
+      resolveAgentArtifactEmissionPrompt({
+        artifactsEnabled: true,
+        readPromptSetting: async () => undefined,
+        readDataOriginsSetting: async () => [],
+      })
+    ).resolves.toBe(ARTIFACT_EMISSION_PROMPT);
+  });
+
+  it('names the listed Python data origins, as the chat path does', async () => {
+    const prompt = await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: true,
+      readPromptSetting,
+      readDataOriginsSetting: async () => ['https://data.example.org'],
+    });
+    expect(prompt).toMatch(/^CUSTOM PROMPT\n\nPYTHON DATA ORIGINS: .*https:\/\/data\.example\.org/);
+  });
+
+  it('never reads the data origins when it is going to withhold the prompt', async () => {
+    const readDataOriginsSetting = vi.fn(async () => ['https://data.example.org']);
+    await resolveAgentArtifactEmissionPrompt({ artifactsEnabled: false, readPromptSetting, readDataOriginsSetting });
+    expect(readDataOriginsSetting).not.toHaveBeenCalled();
+  });
+
+  it('appends the callable-function note after the data origins when callable functions are on', async () => {
+    const prompt = await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: true,
+      readPromptSetting,
+      readDataOriginsSetting: async () => ['https://data.example.org'],
+      readCallableFunctionsEnabled: async () => true,
+    });
+    expect(prompt).toMatch(/^CUSTOM PROMPT\n\nPYTHON DATA ORIGINS: [^\n]*\n\nCALLABLE FUNCTIONS: /);
+    expect(prompt?.endsWith(CALLABLE_FUNCTIONS_PROMPT_NOTE)).toBe(true);
+  });
+
+  it('leaves the prompt unchanged when callable functions are off', async () => {
+    await expect(
+      resolveAgentArtifactEmissionPrompt({
+        artifactsEnabled: true,
+        readPromptSetting,
+        readCallableFunctionsEnabled: async () => false,
+      })
+    ).resolves.toBe('CUSTOM PROMPT');
+  });
+
+  it('never asks about callable functions when it is going to withhold the prompt', async () => {
+    const readCallableFunctionsEnabled = vi.fn(async () => true);
+    await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: false,
+      readPromptSetting,
+      readCallableFunctionsEnabled,
+    });
+    await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: true,
+      isNewExecution: false,
+      readPromptSetting,
+      readCallableFunctionsEnabled,
+    });
+    expect(readCallableFunctionsEnabled).not.toHaveBeenCalled();
   });
 });
 

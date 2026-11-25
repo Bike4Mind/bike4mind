@@ -1,3 +1,4 @@
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { Request, Response } from 'express';
 import { z } from 'zod';
@@ -21,22 +22,22 @@ import {
   usesGeminiThinkingOutputCap,
 } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_QUERY_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_QUERY_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
 import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';
-import { resolveAccessibleLakes } from '@server/dataLakes';
+import { resolveAccessibleLakes } from '@bike4mind/server-utils/dataLakes/index';
 import {
   completionUsd,
   createModelAdmission,
   reserveCompletionCredits,
   resolveShadowSubstitute,
   settleCompletion,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { HARD_TIMEOUT_MS, PER_CALL_REPL_TIMEOUT_MS, SUB_LLM_HTTP_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 /**
@@ -220,7 +221,9 @@ async function handleRlmAnswer(req: Request, res: Response) {
 
   // --- Resolve the root LLM backend ---
   const models = await getAvailableModels(apiKeyTable);
-  const admission = await createModelAdmission(req.user, models);
+  const admission = await createModelAdmission(req.user, models, false, {
+    organizationId: resolveRequestBillingOrgId(req),
+  });
   let modelInfo: ModelInfo | undefined;
   if (parsed.model) {
     // Unrestricted callers run the requested model; restricted ones run the substitute resolved below.

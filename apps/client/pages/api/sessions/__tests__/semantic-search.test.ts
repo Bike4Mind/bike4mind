@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
 }));
 
@@ -61,6 +61,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsByNames: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: mockGetSettingsValue },
   sessionRepository: { find: vi.fn(async () => []) },
@@ -74,7 +75,7 @@ vi.mock('@bike4mind/database', () => ({
     personalSpendSince: async () => [],
   },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   isCreditsEnforced: async () => false,
   createRequestCompletionMeter: vi.fn(),
   reserveCompletionCredits: async () => ({ refund: vi.fn() }),

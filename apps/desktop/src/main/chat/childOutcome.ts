@@ -28,7 +28,7 @@ export function childOutcomeDisplay(child: ChatSession): string {
     case 'failed':
       return `${name} stopped with an error: ${last?.error ?? 'it did not say what went wrong'}`;
     case 'turn-budget':
-      return `${name} stopped early after too many steps, so its work may be incomplete.`;
+      return `${name} paused at its turn budget before finishing, so its work is incomplete. Send it a message to carry on.`;
     case 'context-limit':
       return `${name} stopped early because it ran out of room, so its work may be incomplete.`;
     case 'max-tokens':

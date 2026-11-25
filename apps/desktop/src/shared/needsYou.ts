@@ -1,4 +1,6 @@
 import { assignPersonas } from './agentPersona';
+import { DEFAULT_NOTIFY_SCOPE, type NotifyScope } from './attention';
+import { deriveTaskAgentState } from './agentState';
 import type { ChatMessage, ChatSessionStatus, ChatSessionSummary, ChatToolCall } from './chat';
 import { descendantsOf } from './spawnTree';
 import { describeToolInput } from './toolDetail';
@@ -27,32 +29,75 @@ export function enteredNeedsYou(
 
 /**
  * Sessions whose needs-you entries alert: a parent with agents, and every agent its stage shows.
- * Plain sessions stay quiet (the alerts and the chime setting are about agents), and so do archived
- * ones and anything under an archived agent, by the same rule the roster hides them with.
+ * With the `all` scope every other session alerts too; with `agents` (the default) plain sessions
+ * stay quiet. Archived sessions and anything under an archived one never alert, by the same rule
+ * the roster hides them with.
  */
-export function alertableSessions(sessions: readonly ChatSessionSummary[]): ReadonlySet<string> {
-  const archived = new Set(sessions.filter(session => session.archived).map(session => session.id));
-  const roots = new Set(sessions.filter(session => session.origin).map(session => rootSessionOf(sessions, session.id)));
-  const alertable = new Set<string>();
-  for (const root of roots) {
-    if (archived.has(root)) continue;
-    const agents = descendantsOf(sessions, root).map(({ session }) => session.id);
-    if (agents.length === 0) continue;
-    alertable.add(root);
-    for (const id of agents) alertable.add(id);
+export function alertableSessions(
+  sessions: readonly ChatSessionSummary[],
+  scope: NotifyScope = DEFAULT_NOTIFY_SCOPE
+): ReadonlySet<string> {
+  const alertable = new Set(agentTreeSessions(sessions));
+  if (scope === 'all') {
+    const byId = new Map(sessions.map(session => [session.id, session]));
+    for (const session of sessions) if (!underArchived(byId, session.id)) alertable.add(session.id);
   }
   return alertable;
 }
 
-/** Alertable sessions waiting on the user; deleted ones are not listed, so they never count. */
+/** Sessions in an orchestration: a parent with agents, and every agent its stage shows. */
+function agentTreeSessions(sessions: readonly ChatSessionSummary[]): ReadonlySet<string> {
+  const archived = new Set(sessions.filter(session => session.archived).map(session => session.id));
+  const roots = new Set(sessions.filter(session => session.origin).map(session => rootSessionOf(sessions, session.id)));
+  const inTree = new Set<string>();
+  for (const root of roots) {
+    if (archived.has(root)) continue;
+    const agents = descendantsOf(sessions, root).map(({ session }) => session.id);
+    if (agents.length === 0) continue;
+    inTree.add(root);
+    for (const id of agents) inTree.add(id);
+  }
+  return inTree;
+}
+
+/** `sessionId` or any session above it in its spawn chain is archived. */
+function underArchived(byId: ReadonlyMap<string, ChatSessionSummary>, sessionId: string): boolean {
+  const visited = new Set<string>();
+  let current = byId.get(sessionId);
+  while (current && !visited.has(current.id)) {
+    if (current.archived) return true;
+    visited.add(current.id);
+    const parentId = current.origin?.parentSessionId;
+    current = parentId ? byId.get(parentId) : undefined;
+  }
+  return false;
+}
+
+/**
+ * Alertable sessions waiting on the user, by deriveTaskAgentState's rule: a live approval or question,
+ * or a worker task waiting on a decision. Deleted sessions are not listed, so they never count.
+ */
 export function needsYouCount(
+  statuses: ReadonlyMap<string, ChatSessionStatus>,
+  sessions: readonly ChatSessionSummary[],
+  scope: NotifyScope = DEFAULT_NOTIFY_SCOPE
+): number {
+  const alertable = alertableSessions(sessions, scope);
+  return sessions.filter(
+    session => alertable.has(session.id) && deriveTaskAgentState(session, statuses.get(session.id)) === 'needs-you'
+  ).length;
+}
+
+/**
+ * The dock badge: every session waiting on the user, whatever the notify scope. The scope decides
+ * who may interrupt (notices, the chime); the badge answers whether anything is waiting at all, so a
+ * plain session parked on an approval must show on it too. Archived and deleted sessions still never count.
+ */
+export function needsYouBadgeCount(
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   sessions: readonly ChatSessionSummary[]
 ): number {
-  const alertable = alertableSessions(sessions);
-  let count = 0;
-  for (const [sessionId, status] of statuses) if (status === 'needs-action' && alertable.has(sessionId)) count += 1;
-  return count;
+  return needsYouCount(statuses, sessions, 'all');
 }
 
 /** The top of `sessionId`'s spawn chain among the listed sessions; itself when it was not spawned. */

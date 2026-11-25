@@ -1,4 +1,8 @@
 import { sharingService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { isDisabledSpaceInviteKey } from '@server/managers/inviteManager';
+import { reserveInviteAccept } from '@server/utils/inviteAcceptLimits';
 import {
   inviteRepository,
   organizationRepository,
@@ -6,17 +10,22 @@ import {
   projectRepository,
   fabFileRepository,
   userRepository,
+  spaceRepository,
+  adminSettingsRepository,
   Project,
   Group,
   fileTagRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { foldTagName, InviteType, ProjectEvents } from '@bike4mind/common';
+import { foldTagName, InviteType, NotFoundError, ProjectEvents } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { payOrgInviteBonus } from '@server/credits/orgInviteBonus';
 import type { Request } from 'express';
 import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'inviteResponses' } });
 
 // Accept/refuse side effects shared by POST /api/invites/[id]/{accept,refuse} and POST /api/invites/bulk.
 type InviteResponder = Pick<Request, 'user' | 'ability' | 'apiKeyInfo' | 'logger'>;
@@ -60,18 +69,29 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
       });
     }
   } catch (error) {
-    console.warn(`Failed to transfer tags from file ${fileId} to user ${userId}:`, error);
+    logger.warn('Failed to transfer tags from shared file to user', { fileId, userId, error });
   }
 };
 
 export async function acceptInviteForUser(req: InviteResponder, id: string) {
   const user = req.user!;
+  if (await isDisabledSpaceInviteKey(id)) throw new NotFoundError('Invite not found');
+  // Charged before the lookup and outside the transaction, so a refused or rolled-back accept still counts.
+  await reserveInviteAccept(user.id);
   // Wrap in a transaction so the invite mutation and the document/user writes it
   // drives (e.g. org membership + user.organizationId in the Organization path) commit
   // atomically. Without it, a failure between the two writes could leave a user in an
   // org with organizationId still null. Mirrors the add-member handler, which already
   // wraps organizationService.addMember.
-  const invite = await withTransaction(() =>
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    {
+      names: ['SpaceMaxMembers'],
+    }
+  );
+  const spaceMaxMembers = getSettingsValue('SpaceMaxMembers', settings);
+  const spacesEnabled = await isFeatureEnabled('EnableSpaces');
+  const { invite, outcome } = await withTransaction(() =>
     sharingService.acceptInvite(
       user.id,
       { id },
@@ -84,7 +104,9 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
           groups: Group,
           organization: organizationRepository,
           users: userRepository,
+          spaces: spaceRepository,
         },
+        limits: { spaceMaxMembers: spaceMaxMembers ?? 1000, spacesEnabled },
       }
     )
   );
@@ -124,10 +146,11 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
     await transferFileTagsToUser(invite.documentId, user.id);
   }
 
-  return invite;
+  return { invite, outcome };
 }
 
 export async function refuseInviteForUser(req: InviteResponder, id: string) {
+  if (await isDisabledSpaceInviteKey(id)) throw new NotFoundError('Invite not found');
   // Public-ness (link vs email invite) is derived from invite state in the service;
   // no client-supplied flag is trusted for the recipient check. Revoking the whole
   // invite (rather than just the caller's own slot) needs the share-authority
@@ -143,6 +166,7 @@ export async function refuseInviteForUser(req: InviteResponder, id: string) {
         projects: projectRepository,
         organizations: organizationRepository,
         groups: Group,
+        spaces: spaceRepository,
       },
     }
   );

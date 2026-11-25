@@ -3,28 +3,35 @@ import { act, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { AuthState } from '@shared/auth';
+import type { RailAccountContext } from '../chat/rail/PlaceRail';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Home } from './Home';
 import { setLocalChatActive } from './localChatMode';
 
 const navigate = vi.hoisted(() => vi.fn());
+
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 
 // The real shell pulls in the whole chat stack; what matters here is whether Home keeps it
 // mounted, which a draft held in its own state shows directly.
 vi.mock('../chat/ChatShell', () => ({
-  ChatShell: ({ account }: { account?: (status: null) => ReactNode }) => {
+  ChatShell: ({ account }: { account?: (context: RailAccountContext) => ReactNode }) => {
     const [draft, setDraft] = useState('');
     return (
       <>
         <textarea data-testid="composer-input" value={draft} onChange={event => setDraft(event.target.value)} />
-        {account?.(null)}
+        {account?.({ status: null, onOpenCustomize: () => {}, onOpenModels: () => {} })}
       </>
     );
   },
 }));
-vi.mock('../auth/SignedInPanel', () => ({ SignedInPanel: () => null }));
+// The signed-in menu has its own tests; the local one is what these drive.
+vi.mock('../auth/RailAccount', async importOriginal => ({
+  ...(await importOriginal<typeof import('../auth/RailAccount')>()),
+  SignedInRailAccount: () => null,
+}));
 vi.mock('../chat/UpdateNotice', () => ({ AppUpdateNotice: () => null }));
+vi.mock('../chat/useAppUpdate', () => ({ useAppUpdate: () => ({}) }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -173,8 +180,10 @@ it.each(['signed-out', 'unconfigured'] as const)('opens local chat without signi
   act(() => byTestId('auth-local-chat-btn')?.click());
   expect(byTestId('composer-input')).not.toBeNull();
   expect(signIn).not.toHaveBeenCalled();
+  act(() => byTestId('place-rail-account-btn')?.click());
   act(() => byTestId('local-chat-settings-btn')?.click());
   expect(navigate).toHaveBeenCalledWith({ to: '/settings' });
+  act(() => byTestId('place-rail-account-btn')?.click());
   act(() => byTestId('local-chat-signin-btn')?.click());
   expect(byTestId('composer-input')).toBeNull();
   expect(byTestId('auth-local-chat-btn')).not.toBeNull();
@@ -184,6 +193,7 @@ it('returns to local chat after Home unmounts for Settings and mounts again', as
   await mount();
   act(() => push({ ...base, status: 'signed-out', user: undefined }));
   act(() => byTestId('auth-local-chat-btn')?.click());
+  act(() => byTestId('place-rail-account-btn')?.click());
   act(() => byTestId('local-chat-settings-btn')?.click());
   act(() => root?.unmount());
   host?.remove();

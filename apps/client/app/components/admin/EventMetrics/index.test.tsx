@@ -81,6 +81,25 @@ beforeEach(() => {
 });
 
 describe('EventMetricsTab views', () => {
+  it('preserves adoption filters while switching through the raw views', async () => {
+    const router = await renderTab(
+      '/admin?tab=event-metrics&eventsView=by-user&adoptionAccounts=internal&adoptionClient=desktop&adoptionDays=28&adoptionEnd=2026-06-14&adoptionFeature=chat'
+    );
+    fireEvent.click(await screen.findByTestId('event-metrics-view-events'));
+    await screen.findByTestId('overview-tab');
+    fireEvent.click(screen.getByTestId('event-metrics-view-adoption'));
+    await screen.findByTestId('feature-adoption-view');
+    expect(router.state.location.search).toMatchObject({
+      eventsView: 'adoption',
+      adoptionAccounts: 'internal',
+      adoptionClient: 'desktop',
+      adoptionDays: '28',
+      adoptionEnd: '2026-06-14',
+      adoptionFeature: 'chat',
+    });
+    expect(screen.getByTestId('adoption-audience-internal')).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('opens the By user grid from a deep link', async () => {
     await renderTab('/admin?tab=event-metrics&eventsView=by-user');
     expect(await screen.findByTestId('user-activity-view')).toBeInTheDocument();
@@ -205,7 +224,9 @@ describe('EventMetricsTab filters', () => {
     await act(() => new Promise(resolve => setTimeout(resolve, SEARCH_TERM_URL_DEBOUNCE_MS + 50)));
     vi.useFakeTimers();
     try {
+      fireEvent.click(screen.getByTestId('event-metrics-date-from-set-btn'));
       fireEvent.change(screen.getByTestId('event-metrics-date-from'), { target: { value: '2026-10-01' } });
+      fireEvent.click(screen.getByTestId('event-metrics-date-to-set-btn'));
       fireEvent.change(screen.getByTestId('event-metrics-date-to'), { target: { value: '2026-10-31' } });
       act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS - 1));
       expect(lastFilters()?.dateFrom).toBeUndefined();
@@ -227,7 +248,9 @@ describe('EventMetricsTab filters', () => {
     await act(() => new Promise(resolve => setTimeout(resolve, SEARCH_TERM_URL_DEBOUNCE_MS + 50)));
     vi.useFakeTimers();
     try {
+      fireEvent.click(screen.getByTestId('event-metrics-date-from-set-btn'));
       fireEvent.change(screen.getByTestId('event-metrics-date-from'), { target: { value: '2026-10-31' } });
+      fireEvent.click(screen.getByTestId('event-metrics-date-to-set-btn'));
       fireEvent.change(screen.getByTestId('event-metrics-date-to'), { target: { value: '2026-10-01' } });
       act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
       expect(lastFilters()).toMatchObject({

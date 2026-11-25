@@ -8,9 +8,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { appFileCdnPath, invalidateRouterPaths } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 
 /**
@@ -22,7 +22,7 @@ const handler = baseApi().post(
     const { user } = req;
 
     // Owner or manager only: the upload replaces (and deletes) the current logo for every member.
-    await verifyOrgAccess(user, orgId);
+    await verifyOrgPermission(user, orgId, 'managePolicies');
 
     const organization = await Organization.findById(orgId).populate('logo');
     if (!organization) throw new NotFoundError('Organization not found');
@@ -45,7 +45,7 @@ const handler = baseApi().post(
         await Organization.updateOne({ _id: orgId }, { $unset: { logoFileId: 1 } }).session(session);
       }
 
-      const fileKey = `organizations/${orgId}/${uuidv4()}.${ext}`;
+      const fileKey = `organizations/${orgId}/${crypto.randomUUID()}.${ext}`;
 
       const file = new AppFile({
         userId: req.user.id,
@@ -78,6 +78,14 @@ const handler = baseApi().post(
       // invalidate whenever the delete ran, committed or not.
       const retiredCdnPath = retiredLogoDeleted && organization.logo ? appFileCdnPath(organization.logo.path) : null;
       if (retiredCdnPath) await invalidateRouterPaths([retiredCdnPath], { label: 'org-logo', logger: req.logger });
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'org.logo.updated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: 'replaced the team logo',
+      changes: [{ field: 'logoFileId', before: organization.logo?.id ?? null, after: result.fileId }],
     });
 
     return res.json(result);

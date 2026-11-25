@@ -11,7 +11,7 @@ import {
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { adminApi } from '@server/middlewares/adminApi';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireStepUp } from '@server/auth/stepUp';
 import {
@@ -86,8 +86,9 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
         if (changes.length === 0 && !changesEmail) throw new BadRequestError('Change the name, username or email.');
 
         if (changesEmail) {
-          // Whoever confirms the new address can sign in as this user, so this is held to the same
-          // bar as any credential change: a recently re-verified session.
+          // Whoever confirms the new address can sign in as this user, so this needs the impersonation
+          // grant and the same bar as any credential change: a recently re-verified session.
+          requireAdminPermission(req, 'users:impersonate');
           await requireStepUp(req);
           if (await userRepository.existsOtherUserWithEmail(email, user.id)) {
             throw new ConflictError(userService.EMAIL_IN_USE_MESSAGE, { field: 'email' });

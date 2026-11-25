@@ -41,7 +41,7 @@ afterEach(() => searchCacheClear());
 
 describe('serpApiSearch — missing key', () => {
   it('returns an object with empty organic_results when no API key is configured', async () => {
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
 
     const result = await serpApiSearch(mockAdapters, 'test query');
 
@@ -51,7 +51,7 @@ describe('serpApiSearch — missing key', () => {
 
 describe('performWebSearch - no provider configured', () => {
   it('returns a clear not-configured message and empty citables when no provider resolves', async () => {
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     mockGetSearxngUrl.mockResolvedValue(null);
     mockGetProvider.mockResolvedValue(null);
 
@@ -81,7 +81,7 @@ describe('webSearchTool - search budget', () => {
       statusUpdate: vi.fn(),
       onStart: vi.fn(),
     } as unknown as ToolContext;
-    return webSearchTool.implementation(context) as ICompletionOptionTools;
+    return webSearchTool.implementation(context, {}) as ICompletionOptionTools;
   };
   const capped = (tool: ICompletionOptionTools, budget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN)) =>
     budget.apply([tool])[0].toolFn;
@@ -89,7 +89,7 @@ describe('webSearchTool - search budget', () => {
   beforeEach(() => {
     mockGetProvider.mockReset().mockResolvedValue('searxng');
     mockGetSearxngUrl.mockReset().mockResolvedValue('http://searxng.local');
-    mockGetSerperKey.mockReset().mockResolvedValue(null);
+    mockGetSerperKey.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -687,7 +687,7 @@ describe('webSearchTool - hedged backup and cache', () => {
   const configure = (choice: 'auto' | 'serpapi' | 'searxng', { searxng = true, serp = true } = {}) => {
     mockGetProvider.mockReset().mockResolvedValue(choice);
     mockGetSearxngUrl.mockReset().mockResolvedValue(searxng ? 'http://searxng.local' : null);
-    mockGetSerperKey.mockReset().mockResolvedValue(serp ? 'serp-key' : null);
+    mockGetSerperKey.mockReset().mockResolvedValue(serp ? 'serp-key' : undefined);
   };
 
   afterEach(() => {
@@ -906,7 +906,7 @@ describe('webSearchTool - hedged backup and cache', () => {
   describe('alert-level logging', () => {
     let errorSpy: ReturnType<typeof vi.spyOn>;
     let warnSpy: ReturnType<typeof vi.spyOn>;
-    const errorMessages = () => errorSpy.mock.calls.map(([message]) => String(message));
+    const errorMessages = () => errorSpy.mock.calls.map(([message]: readonly unknown[]) => String(message));
 
     beforeEach(() => {
       errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
@@ -1132,6 +1132,68 @@ describe('performWebSearch - shared citation numbering', () => {
   });
 });
 
+describe('performWebSearch - Google redirect source label', () => {
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetProvider.mockResolvedValue('serpapi');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          organic_results: [
+            {
+              title: 'A thread',
+              link: 'https://www.google.com/goto?url=CAESopaque',
+              displayed_link: '10+ comments',
+              source: 'Reddit\nImages: https://example.com/x',
+              snippet: 'about a',
+            },
+          ],
+        }),
+        text: async () => '',
+      } as unknown as Response)
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('removes label newlines independently of provider normalization', async () => {
+    const redirect = 'https://www.google.com/goto?url=provider-supplied';
+    const provider: WebSearchProvider = {
+      name: 'serpapi',
+      search: vi
+        .fn()
+        .mockResolvedValue([
+          { title: 'A thread', url: redirect, snippet: 'about a', displayHost: 'Reddit\r\nImages: forged' },
+        ]),
+    };
+    const resolvedProviders: Promise<[WebSearchProvider, null]> = Promise.resolve([provider, null]);
+
+    const result = await performWebSearch(mockAdapters, { query: 'independent provider label' }, '', resolvedProviders);
+
+    expect(result.formattedResults.split('\n').find(line => line.startsWith('Source: ['))).toBe(
+      `Source: [Reddit Images: forged](${redirect})`
+    );
+    expect(result.formattedResults.split('\n').some(line => line.startsWith('Images:'))).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps a newline in the platform name from forging an extra line in the Source label', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q' });
+
+    const lines = result.formattedResults.split('\n');
+    expect(lines.some(line => line.startsWith('Images:'))).toBe(false);
+    const sourceLine = lines.find(line => line.startsWith('Source: ['));
+    expect(sourceLine).toBe(
+      'Source: [RedditImages: https://example.com/x](https://www.google.com/goto?url=CAESopaque)'
+    );
+    expect(result.citables[0].metadata?.displayHost).not.toMatch(/[\r\n]/);
+  });
+});
+
 describe('validateWebSearchResult', () => {
   it.each([WEB_SEARCH_NOT_CONFIGURED_MSG, WEB_SEARCH_UNAVAILABLE_MSG])(
     'scores a search that never ran as a failure',
@@ -1149,5 +1211,50 @@ describe('validateWebSearchResult', () => {
 
   it('has no opinion on a search with hits', () => {
     expect(validateWebSearchResult("Here's what I found from searching the web:\n\n1. A hit")).toBeUndefined();
+  });
+});
+
+describe('performWebSearch - Google redirect sources', () => {
+  const goto = 'https://www.google.com/goto?url=CAESbQHEIkXX';
+
+  beforeEach(() => {
+    mockGetProvider.mockReset().mockResolvedValue('serpapi');
+    mockGetSerperKey.mockReset().mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockReset().mockResolvedValue(null);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          organic_results: [
+            { title: 'Redirected', link: goto, displayed_link: 'https://massive.com \u203a blog', snippet: 's' },
+            {
+              title: 'Direct',
+              link: 'https://example.com/a',
+              displayed_link: 'https://example.com \u203a a',
+              snippet: 's',
+            },
+          ],
+        }),
+      }))
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the redirect as the citable url and carries the destination host in metadata', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q', num_results: 2 });
+
+    expect(result.citables[0]).toMatchObject({ url: goto, metadata: { displayHost: 'massive.com' } });
+    expect(result.citables[1].metadata).not.toHaveProperty('displayHost');
+  });
+
+  it('names the destination host in the Source line the model sees', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q', num_results: 2 });
+
+    expect(result.formattedResults).toContain(`Source: [massive.com](${goto})`);
+    expect(result.formattedResults).toContain('Source: [example.com](https://example.com/a)');
   });
 });

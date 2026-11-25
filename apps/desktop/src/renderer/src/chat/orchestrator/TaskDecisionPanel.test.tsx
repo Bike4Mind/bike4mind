@@ -66,6 +66,17 @@ it('renders effective catalog names and acceptance evidence, then sends a concre
   expect(el('agent-task-state').textContent).toContain('accepted');
 });
 
+it('shows a canceled task as closed and offers no restart controls', async () => {
+  const agent = agentFixture('child', 'stopped', {
+    model: 'worker',
+    workerTask: { ...task(), state: { status: 'canceled', reason: 'Closing out: the work is finished.' } },
+  });
+  await themed.render(<TaskDecisionPanel agent={agent} />);
+  expect(el('agent-task-state').textContent).toContain('canceled');
+  expect(el('agent-task-closed-note').textContent).toContain('You can still chat in this conversation');
+  expect(document.querySelector('[data-testid="agent-task-revise-btn"]')).toBeNull();
+});
+
 it('preserves an assessment draft across an unchanged task IPC refresh', async () => {
   const agent = agentFixture('child', 'needs-you', { model: 'worker', workerTask: task() });
   await themed.render(<TaskDecisionPanel agent={agent} />);
@@ -116,8 +127,14 @@ it('shows disproven assumptions and denies an upgrade without starting another a
       },
     },
   });
-  await themed.render(<TaskDecisionPanel agent={agent} />);
+  await themed.render(<TaskDecisionPanel agent={agent} compact />);
   expect(document.body.textContent).toContain('Observed the incompatible signature');
+  const details = el('agent-task-details') as HTMLDetailsElement;
+  expect(details.open).toBe(false);
+  expect(document.querySelector('[data-testid="agent-task-state"]')).toBeNull();
+  for (const id of ['agent-task-upgrade-btn', 'agent-task-deny-btn', 'agent-task-cancel-btn']) {
+    expect(details.contains(el(id))).toBe(false);
+  }
   await act(async () => el('agent-task-deny-btn').click());
   expect(taskAction).toHaveBeenCalledTimes(1);
   expect(taskAction).toHaveBeenLastCalledWith('child', {
@@ -125,7 +142,8 @@ it('shows disproven assumptions and denies an upgrade without starting another a
     decisionId: 'decision-one',
     reason: 'User declined the model upgrade.',
   });
-  expect(el('agent-task-state').textContent).toContain('blocked');
+  expect(document.body.textContent).toContain('User declined the model upgrade.');
+  expect(document.querySelector('[data-testid="agent-task-upgrade-btn"]')).toBeNull();
 });
 
 it.each(['blocked', 'escalation-requested', 'completed'] as const)(
@@ -152,7 +170,10 @@ it.each(['blocked', 'escalation-requested', 'completed'] as const)(
       activity: new Map(),
       prSummaries: new Map(),
     };
-    expect(agentStates(input.sessions, input.statuses, input.rootId)).toEqual(['needs-you']);
-    expect(buildRoster(input)[0].state).toBe('needs-you');
+    expect(agentStates(input.sessions, input.statuses, input.rootId)).toEqual(['done']);
+    expect(buildRoster(input)[0].state).toBe('done');
+    const waiting = { ...input, statuses: new Map([[session.id, 'needs-action' as const]]) };
+    expect(agentStates(waiting.sessions, waiting.statuses, waiting.rootId)).toEqual(['needs-you']);
+    expect(buildRoster(waiting)[0].state).toBe('needs-you');
   }
 );

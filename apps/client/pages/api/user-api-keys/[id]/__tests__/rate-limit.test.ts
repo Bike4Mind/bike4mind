@@ -131,3 +131,13 @@ describe('PATCH /api/user-api-keys/[id]/rate-limit - analytics is best effort', 
     expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
 });
+
+describe('PATCH /api/user-api-keys/[id]/rate-limit - org service account', () => {
+  it('refuses a service-account caller without changing the limit', async () => {
+    vi.clearAllMocks();
+    const { req, res } = patch('key-1', { requestsPerMinute: 600 });
+    Object.assign(req, { user: { id: 'sa1', isSystem: true, serviceAccountOrganizationId: 'org-1' } });
+    await expect(mockRefs.patchHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(updateApiKeyRateLimit).not.toHaveBeenCalled();
+  });
+});

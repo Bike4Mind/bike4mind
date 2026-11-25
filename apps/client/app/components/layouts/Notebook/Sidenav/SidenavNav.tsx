@@ -11,6 +11,7 @@ import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
+import WidgetsOutlinedIcon from '@mui/icons-material/WidgetsOutlined';
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
@@ -23,7 +24,9 @@ import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.g
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
+import { useSpacesEnabled } from '@client/app/hooks/useSpacesEnabled';
 import { useUser } from '@client/app/contexts/UserContext';
+import { userIsDeveloper } from '@client/app/utils/user';
 import { useOptiVisible } from '@client/app/hooks/data/opti';
 import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
@@ -106,6 +109,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const navigate = useNavigate();
   const location = useLocation();
   const currentUser = useUser(s => s.currentUser);
+  const isAdmin = useUser(s => s.isAdmin);
   const { isFeatureEnabled } = useFeatureEnabled();
   const { open: fileBrowserOpen, setOpen: setFileBrowserOpen } = useFileBrowser();
   const isMobile = useIsMobile();
@@ -115,6 +119,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const [moreOpen, setMoreOpen] = useState(false);
 
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
+  // Hidden until the authenticated settings land: EnableSpaces is not in the public projection.
+  const { enabled: isSpacesEnabled } = useSpacesEnabled();
   // Mirror the footer gating: entitlement-aware opti access (admin/developer/OptiHashi Pro, plus
   // email-domain grantees) sees OptiHashi without flipping the feature flag, unless the user hid
   // the workspace in Settings (display only; /opti itself stays reachable).
@@ -128,16 +134,16 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const isTavernEnabled = tavernRouteExists && canAccessTavern(currentUser);
   // Bob (premium overlay) is a codegen-mounted `/bob` route contributed as a
   // premium nav item. Surface it in the main sidebar only when the overlay contributes it
-  // AND the user's entitlements make it visible - reusing filterVisiblePremiumNavItems so the
-  // gate matches ProfileMenu's source (STRICT: no admin/developer bypass) and open-core builds
+  // AND filterVisiblePremiumNavItems shows it (the same gate as ProfileMenu); open-core builds
   // (no overlay -> empty premiumNavItems) hide the row instead of dead-ending on a missing route.
+  const isStaff = isAdmin || userIsDeveloper(currentUser);
   const { data: entitlements } = useEntitlements();
-  const visibleNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
+  const visibleNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags, isStaff);
   const bobNavItem = visibleNavItems.find(item => item.path === '/bob');
   // The row uses the icon the overlay contributes with its nav item (the same one ProfileMenu
   // renders), falling back to a stock glyph when it contributes none.
   const BobIcon = bobNavItem?.icon;
-  // Nav items an overlay opts into the sidebar (`sidebar: true`), under the same STRICT gate as Bob
+  // Nav items an overlay opts into the sidebar (`sidebar: true`), under the same gate as Bob
   // and drawn the same way. Bob keeps its dedicated row, so its path is skipped rather than drawn twice.
   // Keyed by path, prefixed so a contributed row can never collide with a core row's key or test id.
   // Paths that differ only in punctuation map to one key, so the first such item wins rather than
@@ -208,6 +214,25 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               closeOnMobile();
               // @ts-expect-error - /opti is a premium route, not in static route tree
               navigate({ to: '/opti' });
+            },
+          },
+        ]
+      : []),
+    ...(isSpacesEnabled
+      ? [
+          {
+            key: 'spaces',
+            priority: 2,
+            label: t('sidenav.spaces', 'Spaces'),
+            icon: (
+              <NavIcon>
+                <Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
+            isActive: location.pathname.startsWith('/spaces'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/spaces' });
             },
           },
         ]
@@ -348,6 +373,22 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
+    {
+      // Everything the user saved as an artifact (notebook, project or API), published or not.
+      key: 'artifacts',
+      priority: 4,
+      label: t('sidenav.artifacts', 'Artifacts'),
+      icon: (
+        <NavIcon>
+          <WidgetsOutlinedIcon sx={{ fontSize: '18px' }} />
+        </NavIcon>
+      ),
+      isActive: location.pathname === '/artifacts' || location.pathname.startsWith('/artifacts/'),
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/artifacts' });
+      },
+    },
     {
       // Live Artifacts (published shares) are the product's lead-gen surface -
       // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).

@@ -1,6 +1,7 @@
 import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import type { SkillMention } from '@shared/skills';
+import type { CodeRange } from './composerMarkdown';
 
 export type HighlightColor = 'primary' | 'warning' | 'neutral';
 
@@ -26,6 +27,37 @@ const MIRRORED_STYLES = [
   'tabSize',
 ] as const;
 
+type Part = { text: string; token?: HighlightToken; code?: CodeRange['kind'] };
+
+/**
+ * The draft cut into plain runs, token pills and code ranges. Code wins where a token overlaps
+ * it, since two marks over one glyph would paint twice. A block takes the newline after it:
+ * it renders as a display:block element, and a block's own trailing newline adds no line, so
+ * the text after it starts on the next line exactly as it does in the textarea.
+ */
+function splitParts(text: string, tokens: readonly HighlightToken[], code: readonly CodeRange[]): Part[] {
+  const marks: { start: number; end: number; token?: HighlightToken; code?: CodeRange['kind'] }[] = [
+    ...code.map(range => {
+      const end = range.kind === 'block' && text[range.end] === '\n' ? range.end + 1 : range.end;
+      return { start: range.start, end, code: range.kind };
+    }),
+    ...tokens
+      .filter(token => !code.some(range => token.start < range.end && range.start < token.end))
+      .map(token => ({ start: token.start, end: token.end, token })),
+  ].sort((a, b) => a.start - b.start);
+
+  const parts: Part[] = [];
+  let cursor = 0;
+  for (const mark of marks) {
+    if (mark.start < cursor) continue;
+    if (mark.start > cursor) parts.push({ text: text.slice(cursor, mark.start) });
+    parts.push({ text: text.slice(mark.start, mark.end), token: mark.token, code: mark.code });
+    cursor = mark.end;
+  }
+  parts.push({ text: text.slice(cursor) });
+  return parts;
+}
+
 /**
  * A soft pill behind each skill token in the composer.
  *
@@ -42,10 +74,13 @@ const MIRRORED_STYLES = [
 export function ComposerHighlight({
   text,
   tokens,
+  code = [],
   textareaRef,
 }: {
   text: string;
   tokens: readonly HighlightToken[];
+  /** Code spans and fenced blocks, painted with the same soft background code has in replies. */
+  code?: readonly CodeRange[];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   const mirrorRef = useRef<HTMLDivElement | null>(null);
@@ -83,14 +118,7 @@ export function ComposerHighlight({
     };
   }, [text, textareaRef]);
 
-  const parts: { text: string; token?: HighlightToken }[] = [];
-  let cursor = 0;
-  for (const token of tokens) {
-    if (token.start > cursor) parts.push({ text: text.slice(cursor, token.start) });
-    parts.push({ text: text.slice(token.start, token.end), token });
-    cursor = token.end;
-  }
-  parts.push({ text: text.slice(cursor) });
+  const parts = splitParts(text, tokens, code);
 
   return (
     <Box
@@ -111,7 +139,27 @@ export function ComposerHighlight({
       style={box ?? undefined}
     >
       {parts.map((part, index) =>
-        part.token ? (
+        part.code ? (
+          <Box
+            key={index}
+            component="mark"
+            data-code-kind={part.code}
+            sx={theme => {
+              const palette = theme.vars.palette.neutral;
+              return part.code === 'block'
+                ? // No padding or margin: either would move the glyphs out of line with the textarea's.
+                  { display: 'block', color: 'transparent', bgcolor: palette.softBg, borderRadius: '6px' }
+                : {
+                    color: 'transparent',
+                    bgcolor: palette.softBg,
+                    borderRadius: '4px',
+                    boxShadow: `0 0 0 2px ${palette.softBg}`,
+                  };
+            }}
+          >
+            {part.text}
+          </Box>
+        ) : part.token ? (
           <Box
             key={index}
             component="mark"

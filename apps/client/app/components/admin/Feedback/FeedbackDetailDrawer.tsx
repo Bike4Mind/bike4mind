@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import {
   Alert,
   Box,
@@ -21,9 +21,15 @@ import LinkIcon from '@mui/icons-material/Link';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import PersonIcon from '@mui/icons-material/Person';
-import { useQuery } from '@tanstack/react-query';
-import { adminUserProfilePath, FeedbackStatus } from '@bike4mind/common';
-import { getFeedbackByIdFromServer } from '@client/app/utils/feedbackAPICalls';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import {
+  adminUserProfilePath,
+  FeedbackStatus,
+  FEEDBACK_RESOLUTION_LABELS,
+  type FeedbackReporterSummary,
+} from '@bike4mind/common';
+import FeedbackHistory from './FeedbackHistory';
+import { getFeedbackByIdFromServer, getFeedbackReporterSummaryFromServer } from '@client/app/utils/feedbackAPICalls';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import { openHelpPanel, useHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { Fact, SectionCard, StatusChip } from '../shared';
@@ -31,12 +37,16 @@ import { adminFocus, adminFocusScope } from '../shared/adminStyles';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import UserIdChip from '../Users/UserIdChip';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
-import { feedbackRecordQueryKey } from './queryKeys';
+import { parseObjectId } from '../adminSearchValues';
+import { feedbackRecordQueryKey, feedbackReporterQueryKey } from './queryKeys';
 import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
 import ClientContextChips from './ClientContextChips';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS } from './constants';
 import { summarizePromptMeta } from './promptMetaSummary';
+import FeedbackAiPanel from './FeedbackAiPanel';
+import { useFeedbackKeyboard } from './hooks/useFeedbackKeyboard';
+import FeedbackSimilarReports from './FeedbackSimilarReports';
 
 const STATUS_TONES: Record<FeedbackStatus, AdminStatusTone> = {
   [FeedbackStatus.New]: 'info',
@@ -67,6 +77,8 @@ export interface FeedbackDetailDrawerProps {
   onNext?: () => void;
   onClose: () => void;
   onStatusChange: (feedbackItem: IExtendedFeedbackDocument, status: FeedbackStatus | null) => Promise<void>;
+  /** Filters the list to this reporter's reports; absent hides the earlier-reports action. */
+  onShowReporterReports?: (userId: string) => void;
 }
 
 /**
@@ -83,6 +95,7 @@ const FeedbackDetailDrawer = ({
   onNext,
   onClose,
   onStatusChange,
+  onShowReporterReports,
 }: FeedbackDetailDrawerProps) => {
   const recordQuery = useQuery({
     queryKey: feedbackRecordQueryKey(feedbackId ?? ''),
@@ -95,6 +108,24 @@ const FeedbackDetailDrawer = ({
 
   const record = recordQuery.data ?? undefined;
   const missing = recordQuery.isError || (recordQuery.isSuccess && !recordQuery.data);
+  const keyboardRef = useRef<HTMLDivElement>(null);
+  useFeedbackKeyboard({
+    rootRef: keyboardRef,
+    enabled: Boolean(feedbackId) && !helpPanelOpen,
+    drawer: true,
+    onPrevious,
+    onNext,
+    onAction: key => {
+      if (!record || missing) return;
+      if (key === 'e') {
+        keyboardRef.current
+          ?.querySelector<HTMLAnchorElement>('[data-testid="feedback-detail-email-reporter-btn"]')
+          ?.click();
+      } else {
+        void onStatusChange(record, key === 'i' ? FeedbackStatus.InProgress : FeedbackStatus.Closed);
+      }
+    },
+  });
 
   return (
     <Drawer
@@ -121,7 +152,7 @@ const FeedbackDetailDrawer = ({
       }}
       data-testid="feedback-detail-drawer"
     >
-      <Stack sx={{ height: '100%', minHeight: 0, ...adminFocusScope }}>
+      <Stack ref={keyboardRef} sx={{ height: '100%', minHeight: 0, ...adminFocusScope }}>
         <Stack
           direction="row"
           alignItems="center"
@@ -182,6 +213,7 @@ const FeedbackDetailDrawer = ({
           )}
           <Tooltip title="Close">
             <IconButton
+              autoFocus
               size="sm"
               variant="plain"
               aria-label="Close"
@@ -214,6 +246,7 @@ const FeedbackDetailDrawer = ({
               record={record}
               promptMetaLoading={recordQuery.isPlaceholderData && Boolean(record.questId || record.sessionId)}
               onStatusChange={onStatusChange}
+              onShowReporterReports={onShowReporterReports}
             />
           )}
         </Box>
@@ -222,20 +255,94 @@ const FeedbackDetailDrawer = ({
   );
 };
 
+/** Plan, account age, suspension and earlier reports. Renders nothing when the read is refused or fails. */
+const ReporterFacts = ({
+  summaryQuery,
+  onShowReporterReports,
+}: {
+  summaryQuery: UseQueryResult<FeedbackReporterSummary>;
+  onShowReporterReports?: FeedbackDetailDrawerProps['onShowReporterReports'];
+}) => {
+  if (summaryQuery.isPending) {
+    return (
+      <Fact label="Account">
+        <CircularProgress size="sm" data-testid="feedback-detail-reporter-loading" />
+      </Fact>
+    );
+  }
+  const reporter = summaryQuery.data?.reporter;
+  if (!reporter) return null;
+  const { earlierReports } = reporter;
+  return (
+    <>
+      {reporter.exists ? (
+        <>
+          {reporter.plan !== undefined && (
+            <Fact label="Plan" data-testid="feedback-detail-reporter-plan">
+              {reporter.plan ?? 'Free'}
+            </Fact>
+          )}
+          <Fact label="Account age" data-testid="feedback-detail-reporter-age">
+            {reporter.createdAt ? relativeTimeFormat(new Date(reporter.createdAt)) : undefined}
+          </Fact>
+          <Fact label="Account status">
+            <StatusChip
+              tone={reporter.isBanned ? 'bad' : 'good'}
+              label={reporter.isBanned ? 'Suspended' : 'Active'}
+              data-testid="feedback-detail-reporter-status"
+            />
+          </Fact>
+        </>
+      ) : (
+        <Fact label="Account status">
+          <StatusChip tone="neutral" label="Deleted" data-testid="feedback-detail-reporter-status" />
+        </Fact>
+      )}
+      {earlierReports > 0 && onShowReporterReports && (
+        <Fact label="Earlier reports">
+          <Button
+            size="sm"
+            variant="plain"
+            sx={adminFocus}
+            onClick={() => onShowReporterReports(reporter.userId)}
+            data-testid="feedback-detail-earlier-reports-btn"
+          >
+            {earlierReports} earlier {earlierReports === 1 ? 'report' : 'reports'}
+          </Button>
+        </Fact>
+      )}
+    </>
+  );
+};
+
 const FeedbackDetailBody = ({
   record,
   promptMetaLoading,
   onStatusChange,
+  onShowReporterReports,
 }: {
   record: IExtendedFeedbackDocument;
   promptMetaLoading: boolean;
   onStatusChange: FeedbackDetailDrawerProps['onStatusChange'];
+  onShowReporterReports?: FeedbackDetailDrawerProps['onShowReporterReports'];
 }) => {
   const conversationPath = feedbackConversationPath(record);
   const helpSlug = record.helpContext?.surface === 'article' ? record.helpContext.slug : undefined;
   const organization = record.organization && record.organization !== 'Unknown' ? record.organization : undefined;
   const turn = summarizePromptMeta(record.promptMeta);
   const reporterMailto = feedbackReporterMailto(record);
+  // Legacy waitlist rows carry a non-id userId: no profile, no user facts.
+  const reporterId = parseObjectId(record.userId);
+  const summaryQuery = useQuery({
+    queryKey: feedbackReporterQueryKey(record._id),
+    queryFn: () => getFeedbackReporterSummaryFromServer(record._id),
+    enabled: !!reporterId,
+    retry: false,
+  });
+  // A refused or failed read keeps the id-based links; a summary that names no reporter, or a deleted one, drops them.
+  const summaryReporter = summaryQuery.isSuccess ? summaryQuery.data.reporter : undefined;
+  const showUserId = !!reporterId && summaryReporter !== null;
+  const showProfile = showUserId && summaryReporter?.exists !== false;
 
   return (
     <Stack gap={2}>
@@ -315,11 +422,14 @@ const FeedbackDetailBody = ({
         </Stack>
       )}
 
+      <FeedbackAiPanel key={record._id} feedbackId={record._id} />
+      <FeedbackSimilarReports key={`similar-${record._id}`} feedbackId={record._id} />
+
       <SectionCard
         title="Reporter"
         data-testid="feedback-detail-reporter"
         action={
-          record.userId || reporterMailto ? (
+          showProfile || reporterMailto ? (
             <Stack direction="row" flexWrap="wrap" gap={0.5}>
               {reporterMailto && (
                 <Button
@@ -334,12 +444,12 @@ const FeedbackDetailBody = ({
                   Email reporter
                 </Button>
               )}
-              {record.userId && (
+              {showProfile && reporterId && (
                 <Button
                   size="sm"
                   variant="plain"
                   component="a"
-                  href={adminUserProfilePath(record.userId)}
+                  href={adminUserProfilePath(reporterId)}
                   target="_blank"
                   rel="noopener noreferrer"
                   startDecorator={<PersonIcon sx={{ fontSize: 16 }} />}
@@ -356,7 +466,8 @@ const FeedbackDetailBody = ({
         <Fact label="Name">{record.username}</Fact>
         <Fact label="Email">{record.userEmail}</Fact>
         <Fact label="Organization">{organization}</Fact>
-        <Fact label="User id">{record.userId ? <UserIdChip userId={record.userId} /> : undefined}</Fact>
+        <Fact label="User id">{showUserId && reporterId ? <UserIdChip userId={reporterId} /> : undefined}</Fact>
+        {reporterId && <ReporterFacts summaryQuery={summaryQuery} onShowReporterReports={onShowReporterReports} />}
       </SectionCard>
 
       {(turn || promptMetaLoading) && (
@@ -372,6 +483,22 @@ const FeedbackDetailBody = ({
       )}
 
       <SectionCard title="Status" data-testid="feedback-detail-status">
+        {record.resolution && (
+          <Fact label="Resolution">
+            {FEEDBACK_RESOLUTION_LABELS[record.resolution]}
+            {record.resolutionDuplicateId && (
+              <Button
+                component="a"
+                href={`/admin?tab=feedback&feedbackId=${record.resolutionDuplicateId}`}
+                variant="plain"
+                size="sm"
+                data-testid="feedback-detail-duplicate-link"
+              >
+                Open original report
+              </Button>
+            )}
+          </Fact>
+        )}
         <Fact label="Status">
           <Select
             size="sm"
@@ -399,6 +526,7 @@ const FeedbackDetailBody = ({
           {record.updatedAt ? formatDateTime(record.updatedAt) : undefined}
         </Fact>
       </SectionCard>
+      <FeedbackHistory key={record._id} id={record._id} />
     </Stack>
   );
 };

@@ -1,17 +1,19 @@
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
 import { transformBatchRepository } from '@bike4mind/database';
 import { AnthropicBatchService, getAvailableModels, type BatchTransformRequest } from '@bike4mind/llm-adapters';
-import { BadRequestError, ModelBackend, type IMessage, type ModelInfo } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, ModelBackend, type IMessage, type ModelInfo } from '@bike4mind/common';
 import {
   completionCeilingUsd,
   createModelAdmission,
   isCreditsEnforced,
   reserveCompletionCredits,
   resolveShadowSubstitute,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { ANTHROPIC_BATCH_RATE, batchHoldModel } from '@server/billing/anthropicBatchPricing';
+import { batchAnthropicKeys } from '@server/billing/batchAnthropicKeys';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
@@ -72,19 +74,27 @@ const BATCH_CREDIT_HOLD_TTL_MS = 29 * 24 * 60 * 60_000;
 
 // 32mb covers a full maxPerBatch payload of large transform prompts. Both the
 // Next bodyParser (below) and baseApi's own content-length guard must be raised.
-const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res) => {
+const handler = baseApi({
+  maxBodySize: 32 * 1024 * 1024,
+  requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).post(async (req, res) => {
+  // Connected-app keys hold ai:generate but reach only the routes pinned in exchangeKeyRouteInventory.
+  if (refuseExchangeKey(req, res)) return;
   const body = BatchSubmitSchema.parse(req.body);
   // The provider queues this work; its lifetime is independent of the HTTP request.
   await admitRequestCompletion(req, { holdSlot: false });
 
-  const apiKey = Config.ANTHROPIC_API_KEY;
-  if (!apiKey || apiKey === 'not-configured') {
+  const [apiKey] = await batchAnthropicKeys();
+  if (!apiKey) {
     return res.status(503).json({ error: 'Anthropic API key not configured', request_id: req.requestId });
   }
 
   const modelIds = [...new Set(body.requests.map(r => r.model))];
   const catalog = await getAvailableModels({ anthropic: apiKey });
-  const admission = await createModelAdmission(req.user, catalog);
+  const admission = await createModelAdmission(req.user, catalog, false, {
+    organizationId: resolveRequestBillingOrgId(req),
+  });
   for (const modelId of modelIds) await admission.assert(modelId);
   const modelInfos = new Map<string, ModelInfo>(catalog.filter(m => modelIds.includes(m.id)).map(m => [m.id, m]));
   const unpriced = modelIds.filter(id => !modelInfos.has(id));

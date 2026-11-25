@@ -76,6 +76,12 @@ describe('useLastSession', () => {
     expect(restoring.at(-1)).toBe(false);
   });
 
+  it('never remembers a Studio session as the conversation to reopen', () => {
+    writeLastSession({ id: 'a', mode: 'chat' });
+    render({ loading: false, sessions: [summary('a'), summary('s', 'studio')], activeId: 's', onRestore: vi.fn() });
+    expect(readLastSession()).toEqual({ id: 'a', mode: 'chat' });
+  });
+
   it('falls back and clears a remembered conversation that was deleted', () => {
     writeLastSession({ id: 'gone', mode: 'code' });
     const onRestore = vi.fn();

@@ -27,6 +27,14 @@ export type DataColumn<Row> = {
   numeric?: boolean;
   /** CSS width of the column, e.g. '8rem'. */
   width?: string;
+  /**
+   * Body cells are one line and end in an ellipsis by default, so a long value never runs into the
+   * next column. `true` lets this column wrap instead (summaries, stacked lines); long unbroken
+   * strings still break inside the cell. `numeric` columns never truncate; give them a `width`.
+   */
+  wrap?: boolean;
+  /** Lets the header label wrap onto a second line instead of ending in an ellipsis. */
+  wrapHeader?: boolean;
 };
 export type DataTableSort = { columnId: string; direction: 'asc' | 'desc' };
 /** Server pagination: `rows` is already the current page. `page` is 1-based. */
@@ -54,6 +62,10 @@ export type DataTableProps<Row> = {
   empty?: ReactNode;
   selection?: AdminSelection;
   onSelectionChange?: (selection: AdminSelection) => void;
+  /** Keeps the current selection but stops changes to it, for rows that are not yet the ones the filters match. */
+  selectionDisabled?: boolean;
+  /** Rows that cannot be selected get a disabled checkbox and are left out of "Select page". */
+  isRowSelectable?: (row: Row) => boolean;
   onRowActivate?: (row: Row) => void;
   /** Single-key commands on a focused row (A accept, O override); same modifier and IME guards as X. */
   rowShortcuts?: (row: Row) => Partial<Record<DataTableRowShortcut, () => void>>;
@@ -70,6 +82,13 @@ export type DataTableProps<Row> = {
   groups?: readonly DataTableGroup[];
   /** Ghost controls in a trailing cell, shown while the row is hovered or holds focus. */
   rowActions?: (row: Row) => ReactNode;
+  /** Renders the row in muted ink, for a row kept for the record that no longer needs attention. */
+  isRowMuted?: (row: Row) => boolean;
+  /**
+   * Width of the row-action column. The default fits one `sm` icon button or one "..." menu, which is
+   * all a row should carry (DESIGN_GUIDE.md, Tables). Count it in `minWidth`. Wider content is clipped.
+   */
+  actionsWidth?: string;
   /** Below this width the table scrolls sideways instead of squeezing columns. */
   minWidth?: string;
   /** Cap with an inner scroll; `none` lets the page scroll instead. */
@@ -81,7 +100,11 @@ export type DataTableProps<Row> = {
    * (`body="custom"`): the card is then the one surface (DESIGN_GUIDE.md, Cards).
    */
   framed?: boolean;
+  /** Shades alternate body rows, for long uniform logs. */
+  stripe?: 'odd' | 'even';
 };
+/** One `sm` icon button (32 px) plus the cell's 12 px padding on each side. */
+export const ROW_ACTIONS_WIDTH = '3.5rem';
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
 
 function nextDirection(current: DataTableSort | undefined, columnId: string): DataTableSort {
@@ -101,6 +124,8 @@ export function DataTable<Row>({
   empty,
   selection,
   onSelectionChange,
+  selectionDisabled = false,
+  isRowSelectable,
   onRowActivate,
   rowShortcuts,
   activeRowId,
@@ -112,10 +137,13 @@ export function DataTable<Row>({
   pagination: paginationProp,
   groups,
   rowActions,
+  isRowMuted,
+  actionsWidth = ROW_ACTIONS_WIDTH,
   minWidth = '40rem',
   maxHeight = '65vh',
   alwaysShowScrollbar = false,
   framed = true,
+  stripe,
 }: DataTableProps<Row>) {
   const [localSort, setLocalSort] = useState<DataTableSort>();
   const [localPage, setLocalPage] = useState(0);
@@ -160,10 +188,13 @@ export function DataTable<Row>({
   const sections = groupSections(pageRows, getRowId, groups);
   const visibleRows = sections.flatMap(section => section.rows);
   const visibleIds = visibleRows.map(getRowId);
+  const selectableVisibleIds = isRowSelectable
+    ? visibleRows.filter(row => isRowSelectable(row)).map(getRowId)
+    : visibleIds;
 
   const selectable = selection !== undefined && onSelectionChange !== undefined;
   const isSelected = (id: string) => selection?.mode === 'allMatching' || (selection?.ids.includes(id) ?? false);
-  const selectedVisible = visibleIds.filter(isSelected).length;
+  const selectedVisible = selectableVisibleIds.filter(isSelected).length;
   const toggleRows = (ids: readonly string[], checked: boolean) => {
     // Deselecting from all-matching converts the loaded rows to an explicit selection.
     const previousIds = selection?.mode === 'allMatching' ? rows.map(getRowId) : (selection?.ids ?? []);
@@ -180,7 +211,11 @@ export function DataTable<Row>({
     rangeAnchor.current = id;
     if (!extendRange || anchorIndex < 0) return toggleRows([id], checked);
     const [from, to] = anchorIndex < index ? [anchorIndex, index] : [index, anchorIndex];
-    toggleRows(visibleIds.slice(from, to + 1), checked);
+    const range = new Set(visibleIds.slice(from, to + 1));
+    toggleRows(
+      selectableVisibleIds.filter(rangeId => range.has(rangeId)),
+      checked
+    );
   };
 
   const changeSort = (columnId: string) => {
@@ -196,6 +231,7 @@ export function DataTable<Row>({
     const all = Array.from(bodyRef.current?.querySelectorAll<HTMLElement>('tr[data-row-id]') ?? []);
     all[all.indexOf(row) + step]?.focus();
   };
+  const canSelect = (row: Row) => selectable && !selectionDisabled && (isRowSelectable?.(row) ?? true);
   const onRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, row: Row, id: string) => {
     if (event.target !== event.currentTarget) return;
     const plainKey =
@@ -205,7 +241,7 @@ export function DataTable<Row>({
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       focusSiblingRow(event.currentTarget, event.key === 'ArrowDown' ? 1 : -1);
-    } else if (event.key.toLowerCase() === 'x' && selectable && plainKey) {
+    } else if (event.key.toLowerCase() === 'x' && canSelect(row) && plainKey) {
       event.preventDefault();
       toggleRow(id, !isSelected(id), event.shiftKey);
     } else if (shortcut) {
@@ -218,7 +254,7 @@ export function DataTable<Row>({
   };
   const rowKeyShortcuts = (row: Row): string | undefined => {
     const keys = [
-      ...(selectable ? ['x'] : []),
+      ...(canSelect(row) ? ['x'] : []),
       ...Object.entries(rowShortcuts?.(row) ?? {}).flatMap(([key, run]) => (run !== undefined ? [key] : [])),
     ];
     return keys.length ? keys.join(' ') : undefined;
@@ -227,6 +263,8 @@ export function DataTable<Row>({
     const target = event.target as HTMLElement;
     // Portalled cell content (a menu, a popover) bubbles here through React but sits outside the row.
     if (!event.currentTarget.contains(target) || target.closest(CELL_CONTROLS)) return;
+    // A disabled checkbox input swallows the click, so it lands on the wrapper, which CELL_CONTROLS does not match.
+    if (target.closest('[data-selection-cell]')) return;
     onRowActivate?.(row);
   };
 
@@ -307,6 +345,7 @@ export function DataTable<Row>({
         <Table
           stickyHeader
           hoverRow
+          stripe={stripe}
           size="sm"
           aria-label={label}
           aria-busy={loading || undefined}
@@ -320,7 +359,16 @@ export function DataTable<Row>({
             '& th, & td': { borderColor: 'admin.border', color: 'admin.ink', verticalAlign: 'middle' },
             // No block padding: a sortable header's 32 px skinned `sm` button would otherwise push the row to 42.
             '& thead th': { height: 38, py: 0, color: 'admin.inkMuted', fontSize: 12, fontWeight: 500 },
-            '& tbody tr[data-row-id] td': { height: 56 },
+            '& tbody tr[data-row-id] td': { height: 56, minWidth: 0, overflow: 'hidden' },
+            // A text-overflow ellipsis only shows on the box that clips, so a Typography child clips too.
+            '& tbody td[data-cell-truncate], & tbody td[data-cell-truncate] > .MuiTypography-root': {
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            },
+            '& tbody td[data-cell-wrap]': { whiteSpace: 'normal', overflowWrap: 'anywhere' },
+            // A cut-off number reads as a different number, so a numeric cell never clips: size its column.
+            '& tbody tr[data-row-id] td[data-cell-numeric]': { whiteSpace: 'nowrap', overflow: 'visible' },
             '& tbody tr[data-row-id]:focus-visible': {
               outline: '2px solid var(--joy-palette-admin-accent)',
               outlineOffset: -2,
@@ -328,6 +376,8 @@ export function DataTable<Row>({
             '& [data-row-actions]': { opacity: 0, transition: 'opacity 120ms' },
             '& tr:hover [data-row-actions], & tr:focus-within [data-row-actions]': { opacity: 1 },
             '@media (hover: none)': { '& [data-row-actions]': { opacity: 1 } },
+            '& tr[data-row-muted] > td': { color: 'admin.inkMuted' },
+            '& tr[data-row-muted] > td *': { color: 'inherit' },
           }}
         >
           <thead>
@@ -338,10 +388,10 @@ export function DataTable<Row>({
                     size="sm"
                     aria-label="Select page"
                     data-testid="admin-table-select-page"
-                    checked={visibleRows.length > 0 && selectedVisible === visibleRows.length}
-                    indeterminate={selectedVisible > 0 && selectedVisible < visibleRows.length}
-                    disabled={loading}
-                    onChange={event => toggleRows(visibleIds, event.target.checked)}
+                    checked={selectableVisibleIds.length > 0 && selectedVisible === selectableVisibleIds.length}
+                    indeterminate={selectedVisible > 0 && selectedVisible < selectableVisibleIds.length}
+                    disabled={loading || selectionDisabled || selectableVisibleIds.length === 0}
+                    onChange={event => toggleRows(selectableVisibleIds, event.target.checked)}
                   />
                 </th>
               )}
@@ -357,7 +407,11 @@ export function DataTable<Row>({
                         : 'none'
                       : undefined
                   }
-                  style={{ textAlign: column.numeric ? 'right' : 'left', width: column.width }}
+                  style={{
+                    textAlign: column.numeric ? 'right' : 'left',
+                    width: column.width,
+                    ...(column.wrapHeader && { whiteSpace: 'normal' }),
+                  }}
                 >
                   {isSortable(column) ? (
                     <Button
@@ -397,7 +451,7 @@ export function DataTable<Row>({
                   )}
                 </th>
               ))}
-              {rowActions && <th style={{ width: '3.5rem' }} aria-label="Row actions" />}
+              {rowActions && <th style={{ width: actionsWidth }} aria-label="Row actions" />}
             </tr>
           </thead>
           <tbody ref={bodyRef}>
@@ -426,8 +480,10 @@ export function DataTable<Row>({
                         <tr
                           key={id}
                           data-row-id={id}
+                          data-row-muted={isRowMuted?.(row) ? '' : undefined}
                           tabIndex={onRowActivate || selectable || rowShortcuts ? 0 : undefined}
                           aria-keyshortcuts={rowKeyShortcuts(row)}
+                          aria-current={activeRowId === id ? true : undefined}
                           aria-selected={selectable ? isSelected(id) : activeRowId === id}
                           data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
                           onClick={event => onRowClick(event, row)}
@@ -435,12 +491,13 @@ export function DataTable<Row>({
                           style={{ cursor: onRowActivate ? 'pointer' : undefined }}
                         >
                           {selectable && (
-                            <td>
+                            <td data-selection-cell>
                               <Checkbox
                                 size="sm"
                                 aria-label={`Select ${id}`}
                                 data-testid={`admin-table-select-${id}`}
                                 checked={isSelected(id)}
+                                disabled={selectionDisabled || (isRowSelectable ? !isRowSelectable(row) : false)}
                                 onChange={event =>
                                   toggleRow(
                                     id,
@@ -454,6 +511,10 @@ export function DataTable<Row>({
                           {columns.map(column => (
                             <td
                               key={column.id}
+                              data-cell-truncate={column.wrap || column.numeric ? undefined : ''}
+                              data-cell-wrap={column.wrap && !column.numeric ? '' : undefined}
+                              data-cell-numeric={column.numeric ? '' : undefined}
+                              onMouseEnter={column.wrap || column.numeric ? undefined : titleClippedText}
                               style={{
                                 textAlign: column.numeric ? 'right' : 'left',
                                 fontVariantNumeric: column.numeric ? 'tabular-nums' : undefined,
@@ -463,7 +524,10 @@ export function DataTable<Row>({
                             </td>
                           ))}
                           {rowActions && (
-                            <td style={{ textAlign: 'right' }}>
+                            <td
+                              style={{ textAlign: 'right', whiteSpace: 'nowrap' }}
+                              data-testid="admin-table-row-actions"
+                            >
                               <Box data-row-actions sx={{ display: 'inline-flex', gap: 0.5 }}>
                                 {rowActions(row)}
                               </Box>
@@ -544,6 +608,21 @@ export function DataTable<Row>({
       )}
     </Box>
   );
+}
+
+const isClipped = (element: Element) => element.scrollWidth > element.clientWidth;
+
+/**
+ * Shows a truncated cell's full text as a native tooltip. Set on hover rather than at render, so a
+ * cell that fits gets no redundant tooltip; a cell whose content sets its own title keeps it.
+ */
+function titleClippedText(event: MouseEvent<HTMLTableCellElement>) {
+  const cell = event.currentTarget;
+  if (cell.querySelector('[title]')) return;
+  const clipped = isClipped(cell) || Array.from(cell.querySelectorAll(':scope > .MuiTypography-root')).some(isClipped);
+  const text = cell.textContent?.trim();
+  if (clipped && text) cell.title = text;
+  else cell.removeAttribute('title');
 }
 
 type Section<Row> = { id: string; header?: ReactNode; rows: Row[] };

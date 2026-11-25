@@ -8,7 +8,7 @@ import {
   type RekognitionClient,
 } from '@aws-sdk/client-rekognition';
 import { Logger } from '@bike4mind/observability';
-import { extractAnimationFrames, MAX_SAMPLED_FRAMES, sampleFrameIndices } from './animatedFrames';
+import { extractAnimationFrames, MAX_MODERATED_FRAMES } from './animatedFrames';
 import {
   EXPLICIT_NUDITY_CONFIDENCE,
   ImageModerationBlockedError,
@@ -17,6 +17,8 @@ import {
   RekognitionImageModerationService,
   UnsupportedImageFormatError,
 } from './index';
+import { jimpFromRgba } from './jimpBitmap';
+import { decodeWebp, isWebp } from './webpDecode';
 
 // Encoded by Pillow, an independent encoder, with the real-world delta encoding: after the first
 // frame each frame only covers the region that changed. Frames are white, then the top half red,
@@ -134,16 +136,20 @@ describe('RekognitionImageModerationService.checkImage - animated images', () =>
     await expect(service.checkImage(bytes, 'image/png')).rejects.toThrow(ImageModerationBlockedError);
     expect(send.mock.calls.some(([command]) => Buffer.from(command.input.Image!.Bytes!).equals(bytes))).toBe(true);
 
+    // The poster, then one white frame: the second white frame repeats the first and is not rescanned.
     const frames = await extractAnimationFrames(bytes);
-    expect(frames).toHaveLength(3);
+    expect(frames).toHaveLength(2);
     expect(frames![0]).toEqual(bytes);
     for (const frame of frames!.slice(1)) {
       expect(await fullyRed(frame)).toBe(false);
     }
   });
 
-  it('blocks an animated WebP when only a later frame is flagged', async () => {
-    const flagged = (await extractAnimationFrames(fixture('keyframes.webp')))![2];
+  it('blocks an animated WebP when only a later frame is flagged, sending each frame as JPEG', async () => {
+    // Rekognition rejects WebP, so each frame reaches it as the JPEG transcode of that frame.
+    const frame = (await extractAnimationFrames(fixture('keyframes.webp')))![2];
+    const { data, width, height } = await decodeWebp(frame);
+    const flagged = Buffer.from(await (await jimpFromRgba(data, width, height)).getBuffer('image/jpeg'));
     const send = vi.fn(async (command: DetectModerationLabelsCommand) => ({
       ModerationLabels: Buffer.from(command.input.Image!.Bytes!).equals(flagged)
         ? [{ Name: 'Explicit', ParentName: '', Confidence: EXPLICIT_NUDITY_CONFIDENCE + 1 }]
@@ -156,6 +162,7 @@ describe('RekognitionImageModerationService.checkImage - animated images', () =>
     await expect(service.checkImage(fixture('keyframes.webp'), 'image/webp')).rejects.toThrow(
       ImageModerationBlockedError
     );
+    for (const [command] of send.mock.calls) expect(isWebp(Buffer.from(command.input.Image!.Bytes!))).toBe(false);
   });
 
   it.each(['over-cap.gif', 'delta.webp'])('blocks %s as unsupported without calling Rekognition', async name => {
@@ -215,13 +222,16 @@ const frameIndexOf = async (bytes: Buffer) => {
   return Math.round(((image.getPixelColor(2, 2) >>> 24) & 0xff) / 4);
 };
 
-const countedGif = async (count: number) => {
+const range = (count: number) => Array.from({ length: count }, (_, i) => i);
+
+// An 8x8 GIF of full-canvas frames; frame n shows the image of `sequence[n]`.
+const countedGif = async (sequence: number[]) => {
   // @ts-expect-error omggif ships no type declarations
   const { GifWriter } = await import('omggif');
   const out = Buffer.alloc(64 * 1024);
   const palette = Array.from({ length: 64 }, (_, i) => frameRed(i) << 16);
   const writer = new GifWriter(out, 8, 8, { loop: 0, palette });
-  for (let i = 0; i < count; i++) writer.addFrame(0, 0, 8, 8, new Uint8Array(64).fill(i), { disposal: 1 });
+  for (const i of sequence) writer.addFrame(0, 0, 8, 8, new Uint8Array(64).fill(i), { disposal: 1 });
   return out.subarray(0, writer.end());
 };
 
@@ -231,8 +241,9 @@ const pngChunk = (type: string, data: Buffer) => {
   return Buffer.concat([length, Buffer.from(type, 'latin1'), data, Buffer.alloc(4)]); // CRC is not checked
 };
 
-// An 8x8 APNG of `count` full-canvas frames; with `poster`, a separate default image precedes them.
-const countedApng = (count: number, poster: boolean) => {
+// An 8x8 APNG of full-canvas frames, frame n showing the image of `sequence[n]`; with `poster`, a
+// separate default image precedes them.
+const countedApng = (sequence: number[], poster: boolean) => {
   const pixels = (red: number) =>
     deflateSync(
       Buffer.concat(
@@ -247,7 +258,7 @@ const countedApng = (count: number, poster: boolean) => {
   ihdr[8] = 8;
   ihdr[9] = 6; // RGBA
   const actl = Buffer.alloc(8);
-  actl.writeUInt32BE(count, 0);
+  actl.writeUInt32BE(sequence.length, 0);
   const fctl = () => {
     const data = Buffer.alloc(26);
     data.writeUInt32BE(8, 4);
@@ -256,17 +267,17 @@ const countedApng = (count: number, poster: boolean) => {
   };
   const chunks = [pngChunk('IHDR', ihdr), pngChunk('acTL', actl)];
   if (poster) chunks.push(pngChunk('IDAT', pixels(250)));
-  for (let i = 0; i < count; i++) {
+  for (const [n, i] of sequence.entries()) {
     chunks.push(fctl());
-    if (i === 0 && !poster) chunks.push(pngChunk('IDAT', pixels(frameRed(i))));
+    if (n === 0 && !poster) chunks.push(pngChunk('IDAT', pixels(frameRed(i))));
     else chunks.push(pngChunk('fdAT', Buffer.concat([Buffer.alloc(4), pixels(frameRed(i))])));
   }
   chunks.push(pngChunk('IEND', Buffer.alloc(0)));
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ...chunks]);
 };
 
-// keyframes.webp with its ANMF frames repeated to `count` frames.
-const repeatedWebp = (count: number) => {
+// keyframes.webp's three ANMF frames rearranged: frame n is its frame `sequence[n]`.
+const sequencedWebp = (sequence: number[]) => {
   const bytes = fixture('keyframes.webp');
   const head: Buffer[] = [];
   const anmf: Buffer[] = [];
@@ -276,88 +287,162 @@ const repeatedWebp = (count: number) => {
     (chunk.subarray(0, 4).toString('latin1') === 'ANMF' ? anmf : head).push(chunk);
     p += chunk.length;
   }
-  const body = Buffer.concat([
-    Buffer.from('WEBP', 'latin1'),
-    ...head,
-    ...Array.from({ length: count }, (_, i) => anmf[i % anmf.length]),
-  ]);
+  const body = Buffer.concat([Buffer.from('WEBP', 'latin1'), ...head, ...sequence.map(i => anmf[i])]);
   const riff = Buffer.alloc(8);
   riff.write('RIFF', 0, 'latin1');
   riff.writeUInt32LE(body.length, 4);
   return Buffer.concat([riff, body]);
 };
 
-describe('sampleFrameIndices', () => {
-  it.each([
-    [1, [0]],
-    [2, [0, 1]],
-    [10, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]],
-    [11, [0, 1, 2, 3, 4, 6, 7, 8, 9, 10]],
-    [60, [0, 7, 13, 20, 26, 33, 39, 46, 52, 59]],
-  ])('picks evenly spaced frames of %i, first and last included, without duplicates', (count, expected) => {
-    const indices = sampleFrameIndices(count);
+const recordingService = (flagged?: (frameIndex: number) => boolean) => {
+  const scanned: number[] = [];
+  const send = vi.fn(async (command: DetectModerationLabelsCommand) => {
+    const index = await frameIndexOf(Buffer.from(command.input.Image!.Bytes!));
+    scanned.push(index);
+    return {
+      ModerationLabels: flagged?.(index)
+        ? [{ Name: 'Explicit', ParentName: '', Confidence: EXPLICIT_NUDITY_CONFIDENCE + 1 }]
+        : [],
+    };
+  });
+  const service = new RekognitionImageModerationService(Logger.globalInstance, {
+    send,
+  } as unknown as RekognitionClient);
+  return { send, service, scanned };
+};
 
-    expect(indices).toEqual(expected);
-    expect(indices[0]).toBe(0);
-    expect(indices.at(-1)).toBe(count - 1);
-    expect(new Set(indices).size).toBe(indices.length);
-    expect(indices.length).toBeLessThanOrEqual(MAX_SAMPLED_FRAMES);
+// keyframes.webp's own frames, as standalone WebP; a rearranged animation splits into these same bytes.
+const webpKeyframes = async () => (await extractAnimationFrames(fixture('keyframes.webp')))!;
+
+// The JPEG the detector receives for a WebP frame (Rekognition rejects WebP, so it is transcoded).
+const detectorJpeg = async (webp: Buffer) => {
+  const { data, width, height } = await decodeWebp(webp);
+  return Buffer.from(await (await jimpFromRgba(data, width, height)).getBuffer('image/jpeg'));
+};
+
+describe('every distinct frame is moderated', () => {
+  it('scans each frame of a 60-frame GIF and reserves one detector call per frame', async () => {
+    const { send, service, scanned } = recordingService();
+    const reserveDetectorCalls = vi.fn(async () => true);
+    const onDetectorCall = vi.fn();
+
+    await service.checkImage(await countedGif(range(MAX_MODERATED_FRAMES)), 'image/gif', {
+      reserveDetectorCalls,
+      onDetectorCall,
+    });
+
+    expect(reserveDetectorCalls).toHaveBeenCalledExactlyOnceWith(MAX_MODERATED_FRAMES);
+    expect(send).toHaveBeenCalledTimes(MAX_MODERATED_FRAMES);
+    expect(onDetectorCall).toHaveBeenCalledTimes(MAX_MODERATED_FRAMES);
+    expect(scanned.sort((a, b) => a - b)).toEqual(range(MAX_MODERATED_FRAMES));
   });
 
-  it('honours an explicit cap', () => {
-    expect(sampleFrameIndices(5, 3)).toEqual([0, 2, 4]);
-  });
-});
+  it.each([3, 30, 58])('blocks a 60-frame GIF when only frame %i is flagged', async flaggedFrame => {
+    const { service } = recordingService(i => i === flaggedFrame);
 
-describe('frame sampling', () => {
-  it('moderates only the sampled frames of a 60-frame GIF, composited in order', async () => {
-    const send = vi.fn(async (_command: DetectModerationLabelsCommand) => ({ ModerationLabels: [] }));
+    await expect(service.checkImage(await countedGif(range(60)), 'image/gif')).rejects.toThrow(
+      ImageModerationBlockedError
+    );
+  });
+
+  it.each([3, 30, 58])('blocks a 60-frame APNG when only frame %i is flagged', async flaggedFrame => {
+    const { service } = recordingService(i => i === flaggedFrame);
+
+    await expect(service.checkImage(countedApng(range(60), false), 'image/png')).rejects.toThrow(
+      ImageModerationBlockedError
+    );
+  });
+
+  it('blocks a 60-frame animated WebP when only one frame in the middle is flagged', async () => {
+    const flagged = await detectorJpeg((await webpKeyframes())[2]);
+    const send = vi.fn(async (command: DetectModerationLabelsCommand) => ({
+      ModerationLabels: Buffer.from(command.input.Image!.Bytes!).equals(flagged)
+        ? [{ Name: 'Explicit', ParentName: '', Confidence: EXPLICIT_NUDITY_CONFIDENCE + 1 }]
+        : [],
+    }));
     const service = new RekognitionImageModerationService(Logger.globalInstance, {
       send,
     } as unknown as RekognitionClient);
-    const onDetectorCall = vi.fn();
-    const reserveDetectorCalls = vi.fn(async () => true);
+    // Frames alternate between the first two images; frame 32 alone shows the third.
+    const sequence = range(60).map(n => (n === 32 ? 2 : n % 2));
 
-    await service.checkImage(await countedGif(60), 'image/gif', { reserveDetectorCalls, onDetectorCall });
-
-    expect(send).toHaveBeenCalledTimes(MAX_SAMPLED_FRAMES);
-    expect(reserveDetectorCalls).toHaveBeenCalledWith(MAX_SAMPLED_FRAMES);
-    expect(onDetectorCall).toHaveBeenCalledTimes(MAX_SAMPLED_FRAMES);
-    const scanned = await Promise.all(
-      send.mock.calls.map(([command]) => frameIndexOf(Buffer.from(command.input.Image!.Bytes!)))
+    await expect(service.checkImage(sequencedWebp(sequence), 'image/webp')).rejects.toThrow(
+      ImageModerationBlockedError
     );
-    expect(scanned.sort((a, b) => a - b)).toEqual(sampleFrameIndices(60));
   });
 
-  it('keeps every frame of a GIF at the sampling cap', async () => {
-    const frames = await extractAnimationFrames(await countedGif(MAX_SAMPLED_FRAMES));
+  it('keeps every frame of a 60-frame animated WebP whose consecutive frames differ', async () => {
+    const keyframes = await webpKeyframes();
+    const sequence = range(60).map(n => n % 3);
+    const frames = await extractAnimationFrames(sequencedWebp(sequence));
 
-    expect(await Promise.all(frames!.map(frameIndexOf))).toEqual(sampleFrameIndices(MAX_SAMPLED_FRAMES));
+    expect(frames).toEqual(sequence.map(i => keyframes[i]));
   });
 
-  it('samples an APNG, counting a separate default image as frame 0', async () => {
-    const bytes = countedApng(20, true);
+  it('keeps every APNG frame after a separate default image, which is scanned too', async () => {
+    const bytes = countedApng(range(59), true);
     const frames = await extractAnimationFrames(bytes);
 
-    expect(frames).toHaveLength(MAX_SAMPLED_FRAMES);
+    expect(frames).toHaveLength(60);
     expect(frames![0]).toEqual(bytes);
-    // Combined index k is animation frame k - 1.
-    const expected = sampleFrameIndices(21)
-      .slice(1)
-      .map(k => k - 1);
-    expect(await Promise.all(frames!.slice(1).map(frameIndexOf))).toEqual(expected);
+    expect(await Promise.all(frames!.slice(1).map(frameIndexOf))).toEqual(range(59));
+  });
+});
+
+describe('frames identical to the last scanned frame', () => {
+  // Runs of repeated images, ending on an image seen earlier but not just before.
+  const sequence = [0, 0, 0, 1, 1, 2, 2, 2, 2, 0];
+  const distinct = [0, 1, 2, 0];
+
+  it('skips them in a GIF and spends no allowance on them', async () => {
+    const { send, service, scanned } = recordingService();
+    const reserveDetectorCalls = vi.fn(async () => true);
+    const onDetectorCall = vi.fn();
+
+    await service.checkImage(await countedGif(sequence), 'image/gif', { reserveDetectorCalls, onDetectorCall });
+
+    expect(reserveDetectorCalls).toHaveBeenCalledExactlyOnceWith(distinct.length);
+    expect(send).toHaveBeenCalledTimes(distinct.length);
+    expect(onDetectorCall).toHaveBeenCalledTimes(distinct.length);
+    expect(scanned.sort((a, b) => a - b)).toEqual([...distinct].sort((a, b) => a - b));
+    expect(await Promise.all((await extractAnimationFrames(await countedGif(sequence)))!.map(frameIndexOf))).toEqual(
+      distinct
+    );
   });
 
-  it('samples an APNG whose default image is its first frame', async () => {
-    const frames = await extractAnimationFrames(countedApng(30, false));
+  it('skips them in an APNG', async () => {
+    const frames = await extractAnimationFrames(countedApng(sequence, false));
 
-    expect(await Promise.all(frames!.map(frameIndexOf))).toEqual(sampleFrameIndices(30));
+    expect(await Promise.all(frames!.map(frameIndexOf))).toEqual(distinct);
   });
 
-  it('samples an animated WebP by picking frames', async () => {
-    const frames = await extractAnimationFrames(repeatedWebp(25));
+  it('skips them in an animated WebP', async () => {
+    const keyframes = await webpKeyframes();
+    const frames = await extractAnimationFrames(sequencedWebp(sequence));
 
-    expect(frames).toHaveLength(MAX_SAMPLED_FRAMES);
+    expect(frames).toEqual(distinct.map(i => keyframes[i]));
+  });
+
+  it('scans a 60-frame animation of one repeated image once', async () => {
+    const { send, service } = recordingService();
+    const reserveDetectorCalls = vi.fn(async () => true);
+
+    await service.checkImage(await countedGif(range(60).map(() => 5)), 'image/gif', { reserveDetectorCalls });
+
+    expect(reserveDetectorCalls).toHaveBeenCalledExactlyOnceWith(1);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks the allowance only for the distinct frames and makes no call when it is declined', async () => {
+    const { send, service } = recordingService();
+
+    const error = await service
+      .checkImage(await countedGif(sequence), 'image/gif', { reserveDetectorCalls: async () => false })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ModerationBudgetExceededError);
+    expect((error as ModerationBudgetExceededError).calls).toBe(distinct.length);
+    expect(send).not.toHaveBeenCalled();
   });
 });
 

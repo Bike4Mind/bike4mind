@@ -19,11 +19,31 @@ This page covers the concepts. Use the in-app reference for field names, types a
 POST https://app.bike4mind.com/api/ai/v1/completions
 ```
 
-Send a JSON body with a `model` and a `messages` array. Other options (tools, extended thinking, token limits) are listed in the in-app reference. Message `content` can be a string or an array of parts, including images.
+Send a JSON body with a `model` and a `messages` array. Other options (tools, extended thinking, token limits) are listed in the in-app reference. Message `content` can be a string or an array of parts, including images. To attribute requests to a run, send an optional `run` object; see [Runs](./streaming.md#runs).
 
 ## Authentication
 
 Send your API key as `Authorization: Bearer b4m_live_<key>`, or with the legacy `x-api-key: b4m_live_<key>` header. The two are equivalent. The key needs the `ai:chat` or `ai:generate` scope. See [Authentication](./authentication.md) for how to create a key (Profile menu -> More -> API Keys).
+
+## End users of your product
+
+If you call the API from your own product on behalf of many end users, one key normally looks to the model provider like a single end user. A key that an administrator has granted the `ai:end-user-id` scope can attribute each request to one of your end users by sending `end_user_id` (on models served directly by OpenAI or Anthropic; other providers receive no end-user identifier):
+
+```json
+{
+  "model": "claude-opus-4-8",
+  "messages": [{ "role": "user", "content": "How do I reset my password?" }],
+  "end_user_id": "customer_42"
+}
+```
+
+- `end_user_id` is your own opaque identifier for the end user: 1 to 64 characters, letters, digits, `_`, `:` and `-` only. Never send an email address or other personal data; a value containing `@` is rejected.
+- For models served directly by OpenAI or Anthropic, the provider receives an identifier derived from your account and this value, not the value itself, so your end users never collide with each other or with another account's. Other providers receive no end-user identifier.
+- Billing, rate limits and every other check still apply to your key and account, not to the end user.
+- A value that breaks the format rules returns `400` with `errorCode: "invalid_end_user_id"`, whatever the credential. Sending `end_user_id` with a key that lacks `ai:end-user-id`, or with a signed-in session instead of a key, returns `400` with `errorCode: "end_user_id_not_allowed"`; the field is never silently ignored.
+- `POST /api/ai/tts` accepts the same field under the same rules.
+
+To get the scope on a key, ask your Bike4Mind administrator. You cannot add it yourself when you create a key.
 
 ## Choosing a model
 
@@ -64,6 +84,7 @@ Each API key has a per-minute and a per-day request limit; the in-app reference 
 
 Anything checked before the model provider is called fails with a JSON body and a real HTTP status, and no stream opens:
 
+- 400: with `errorCode: "invalid_end_user_id"`, `end_user_id` broke the format rules; with `errorCode: "end_user_id_not_allowed"`, the request sent `end_user_id` on a credential that may not send it (see [End users of your product](#end-users-of-your-product)).
 - 401: missing or invalid credentials.
 - 403: with `required_scopes` in the body, the API key lacks a scope. Without it, the account may be suspended or under a dispute (contact support), or a JWT caller may need to enroll in MFA in the web app.
 - 422: the body failed schema validation, or insufficient credits (see above).

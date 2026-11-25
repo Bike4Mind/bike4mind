@@ -3,19 +3,34 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { AdminTab } from './adminSidebarConfig';
 import { InviteCenterShell } from './InviteCenterShell';
-import { useAdminModal } from './useAdminModal';
 
 const routerMock = vi.hoisted(() => ({
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
+  isAdmin: true,
+}));
+
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { isAdmin: routerMock.isAdmin, adminPermissions: ['credits:adjust'] } }),
+}));
+
+vi.mock('./InviteCenter/Pending/HeldGrantActions', () => ({
+  default: () => <div data-testid="held-grant-actions-stub" />,
 }));
 
 vi.mock('./InviteCenter/Packages/GrantPackagesTab', () => ({
   default: ({ embedded }: { embedded?: boolean }) => (
     <div data-testid="grant-packages-tab-stub" data-embedded={String(embedded)} />
   ),
+}));
+
+vi.mock('./InviteCenter/Partners/PartnerRulesSection', () => ({
+  default: () => <div data-testid="partner-signup-rules-tab-stub" />,
+}));
+
+vi.mock('./InviteCenter', () => ({
+  default: () => <div data-testid="invite-center-body-stub" />,
 }));
 
 vi.mock('./InviteCenter/Pending/PendingSection', () => ({
@@ -44,14 +59,27 @@ const renderShell = () =>
 describe('InviteCenterShell', () => {
   beforeEach(() => {
     routerMock.search = {};
+    routerMock.isAdmin = true;
     routerMock.navigate.mockClear();
-    useAdminModal.setState(useAdminModal.getInitialState());
   });
 
   it('shows the header and the waitlist by default', () => {
     renderShell();
     expect(screen.getByText('Invite Center')).toBeInTheDocument();
     expect(screen.getByTestId('invite-center-section-waitlist')).toContainElement(screen.getByTestId('waitlist-child'));
+  });
+
+  it('mounts only the retained held controls for a delegated credits admin', () => {
+    routerMock.isAdmin = false;
+    routerMock.search = { inviteSection: 'packages' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-pending')).toContainElement(
+      screen.getByTestId('held-grant-actions-stub')
+    );
+    expect(screen.queryByTestId('waitlist-child')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('grant-packages-tab-stub')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-section-stub')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invite-center-sections')).not.toBeInTheDocument();
   });
 
   it('falls back to the waitlist for an unknown section', () => {
@@ -124,13 +152,27 @@ describe('InviteCenterShell', () => {
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
   });
 
-  it.each([
-    ['packages', 'invite-center-open-invites-btn', AdminTab.RegistrationInvites],
-    ['packages', 'invite-center-open-partner-signups-btn', AdminTab.PartnerSignupRules],
-  ])('on %s, %s opens its admin tab', (id, testId, tab) => {
-    routerMock.search = { inviteSection: id };
+  it('hosts the bulk invite and codes body in the invites section', () => {
+    routerMock.search = { inviteSection: 'invites' };
     renderShell();
-    fireEvent.click(screen.getByTestId(testId));
-    expect(useAdminModal.getState().activeTab).toBe(tab);
+    expect(screen.getByTestId('invite-center-section-invites')).toContainElement(
+      screen.getByTestId('invite-center-body-stub')
+    );
+  });
+
+  // Rules with no package (entitlements, plans, org joins, backfill, delete) are managed only here.
+  it('hosts the full partner signup rules list in the partners section', () => {
+    routerMock.search = { inviteSection: 'partners' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-partners')).toContainElement(
+      screen.getByTestId('partner-signup-rules-tab-stub')
+    );
+  });
+
+  it('on packages, links out to neither Invites nor Partner signups since both are edited in the package form', () => {
+    routerMock.search = { inviteSection: 'packages' };
+    renderShell();
+    expect(screen.queryByTestId('invite-center-open-invites-btn')).toBeNull();
+    expect(screen.queryByTestId('invite-center-open-partner-signups-btn')).toBeNull();
   });
 });

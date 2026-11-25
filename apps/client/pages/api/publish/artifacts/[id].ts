@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
@@ -9,6 +10,7 @@ import {
   EMBED_ORIGINS_MAX,
   PublishTagsSchema,
   normalizePublishTags,
+  ApiKeyScope,
 } from '@bike4mind/common';
 import {
   loadLiveOwner,
@@ -108,7 +110,10 @@ function toPublicArtifact(artifact: Record<string, unknown>): Record<string, unk
   return out;
 }
 
-const handler = baseApi()
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   .get(async (req, res) => {
     const publicId = String(req.query.id);
     // Exclude the share-token capability: this GET is reachable by ANY viewer of a public
@@ -192,6 +197,7 @@ const handler = baseApi()
         return res.status(400).json({ error: viz.error, code: viz.code });
       }
       artifact.visibility = parsed.data.visibility;
+      if (artifact.visibility === 'public') await assertPublicationPublicLink(artifact);
     }
     if (parsed.data.accessGate !== undefined) {
       if (parsed.data.accessGate === null) {

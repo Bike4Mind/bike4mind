@@ -169,7 +169,7 @@ export const tavernWorldRepository = {
           undoPointer: 0,
         },
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, runValidators: true }
     ).lean()) as unknown as ITavernWorldDoc;
     return doc;
   },
@@ -253,7 +253,7 @@ export const tavernWorldRepository = {
           version: doc.version,
         },
       },
-      { new: true }
+      { new: true, runValidators: true }
     ).lean()) as unknown as ITavernWorldDoc | null;
 
     return result;

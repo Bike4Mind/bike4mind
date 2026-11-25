@@ -1,17 +1,25 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
+import { pauseExecFileMemo, resumeExecFileMemo } from './execFileMemo.testHelper';
+import { runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const { memoizedExecFile } = await import('./execFileMemo.testHelper');
+  return { ...actual, execFile: memoizedExecFile(actual.execFile) };
+});
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 
@@ -35,6 +43,7 @@ describe('shell commands that reach a protected location', () => {
   let permissionRoots: readonly string[];
 
   beforeAll(async () => {
+    pauseExecFileMemo();
     base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-protected-')));
     home = join(base, 'home');
     userData = join(home, '.config', 'Bike4Mind');
@@ -77,8 +86,12 @@ describe('shell commands that reach a protected location', () => {
     await symlink('/proc/self/cwd/../.config', join(proj, 'pl', 'pc'));
     await writeFile(join(proj, 'home.txt'), `${join(home, '.config')}\n`);
     // repo tracks no .claude path and repo2 tracks sub/.claude; `dirty` targets add or change one, `clean` targets do not.
-    const git = (repo: string, ...args: string[]): void => {
-      execFileSync('git', ['-C', join(proj, repo), '-c', 'core.hooksPath=/dev/null', ...args], {
+    const runFile = (file: string, args: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string } = {}) =>
+      new Promise<void>((done, fail) => {
+        execFile(file, args, options, error => (error ? fail(error) : done()));
+      });
+    const git = (repo: string, ...args: string[]): Promise<void> =>
+      runFile('git', ['-C', join(proj, repo), '-c', 'core.hooksPath=/dev/null', ...args], {
         env: {
           ...process.env,
           GIT_AUTHOR_NAME: 't',
@@ -87,63 +100,70 @@ describe('shell commands that reach a protected location', () => {
           GIT_COMMITTER_EMAIL: 't@t',
         },
       });
+    const commit = async (repo: string, message: string): Promise<void> => {
+      await git(repo, 'add', '-A');
+      await git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', message);
     };
-    const commit = (repo: string, message: string): void => {
-      git(repo, 'add', '-A');
-      git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', message);
-    };
-    for (const repo of ['repo', 'repo2']) {
+    const branches = async ([repo, clean, dirty, settings]: readonly [string, string, string, string]) => {
       await mkdir(join(proj, repo, 'src'), { recursive: true });
-      execFileSync('git', ['init', '-q', '-b', 'main', join(proj, repo)]);
+      await runFile('git', ['init', '-q', '-b', 'main', join(proj, repo)]);
       await writeFile(join(proj, repo, 'src', 'x'), 'x');
-    }
-    await mkdir(join(proj, 'repo2', 'sub', '.claude'), { recursive: true });
-    await writeFile(join(proj, 'repo2', 'sub', '.claude', 'settings.json'), '{}');
-    await writeFile(join(proj, 'repo2', '.gitignore'), 'settings.local.json\n');
-    for (const [repo, clean, dirty, settings] of [
-      ['repo', 'clean', 'dirty', '.claude/settings.local.json'],
-      ['repo2', 'clean2', 'dirty2', 'sub/.claude/settings.json'],
-    ] as const) {
-      commit(repo, 'first');
-      git(repo, 'checkout', '-qb', clean);
+      if (repo === 'repo2') {
+        await mkdir(join(proj, 'repo2', 'sub', '.claude'), { recursive: true });
+        await writeFile(join(proj, 'repo2', 'sub', '.claude', 'settings.json'), '{}');
+        await writeFile(join(proj, 'repo2', '.gitignore'), 'settings.local.json\n');
+      }
+      await commit(repo, 'first');
+      await git(repo, 'checkout', '-qb', clean);
       await writeFile(join(proj, repo, 'src', 'y'), 'y');
-      commit(repo, 'clean');
-      git(repo, 'checkout', '-q', 'main');
-      git(repo, 'checkout', '-qb', dirty);
+      await commit(repo, 'clean');
+      await git(repo, 'checkout', '-q', 'main');
+      await git(repo, 'checkout', '-qb', dirty);
       await mkdir(join(proj, repo, dirname(settings)), { recursive: true });
       await writeFile(join(proj, repo, settings), '{"x":1}');
-      commit(repo, 'dirty');
-      git(repo, 'checkout', '-q', 'main');
-    }
-    git('repo2', 'config', 'branch.main.remote', '.');
-    git('repo2', 'config', 'branch.main.merge', 'refs/heads/clean2');
-    await writeFile(join(proj, 'repo2', 'sub', '.claude', 'settings.local.json'), '{}');
-    // frepo configures programs git runs on file contents, and a stat-dirty file that a refreshing diff would hash.
-    await mkdir(join(proj, 'frepo', 'src'), { recursive: true });
-    execFileSync('git', ['init', '-q', '-b', 'main', join(proj, 'frepo')]);
-    await writeFile(join(proj, 'frepo', 'src', 'x'), 'x');
-    await writeFile(join(proj, 'frepo', '.gitattributes'), '* filter=x diff=x\n');
-    await symlink('../lk/v', join(proj, 'frepo', 'tl'));
-    commit('frepo', 'first');
-    git('frepo', 'checkout', '-qb', 'clean');
-    await writeFile(join(proj, 'frepo', 'src', 'y'), 'y');
-    commit('frepo', 'clean');
-    git('frepo', 'checkout', '-q', 'main');
-    for (const key of ['filter.x.clean', 'filter.x.smudge', 'diff.x.textconv', 'diff.external']) {
-      git('frepo', 'config', key, `touch ${join(base, 'ran')}; cat`);
-    }
-    await utimes(join(proj, 'frepo', 'src', 'x'), new Date(2001, 1, 1), new Date(2001, 1, 1));
-    await mkdir(join(proj, 'mods'));
-    await symlink('../src', join(proj, 'mods', 'pkg'));
-    for (const args of [
-      ['-cf', 'clean.tar', 'src'],
-      ['-cf', 'evil.tar', '.claude/settings.json'],
-      ['-cf', 'link.tar', 'lk'],
-      ['-cPf', 'abs.tar', join(proj, 'a')],
-      ['-cPf', 'up.tar', '../proj/a'],
-    ]) {
-      execFileSync('tar', args, { cwd: proj });
-    }
+      await commit(repo, 'dirty');
+      await git(repo, 'checkout', '-q', 'main');
+    };
+    // The repositories and archives are independent of one another, so they are laid out side by side.
+    await Promise.all([
+      branches(['repo', 'clean', 'dirty', '.claude/settings.local.json']),
+      (async () => {
+        await branches(['repo2', 'clean2', 'dirty2', 'sub/.claude/settings.json']);
+        await git('repo2', 'config', 'branch.main.remote', '.');
+        await git('repo2', 'config', 'branch.main.merge', 'refs/heads/clean2');
+        await writeFile(join(proj, 'repo2', 'sub', '.claude', 'settings.local.json'), '{}');
+      })(),
+      (async () => {
+        // frepo configures programs git runs on file contents, and a stat-dirty file that a refreshing diff would hash.
+        await mkdir(join(proj, 'frepo', 'src'), { recursive: true });
+        await runFile('git', ['init', '-q', '-b', 'main', join(proj, 'frepo')]);
+        await writeFile(join(proj, 'frepo', 'src', 'x'), 'x');
+        await writeFile(join(proj, 'frepo', '.gitattributes'), '* filter=x diff=x\n');
+        await symlink('../lk/v', join(proj, 'frepo', 'tl'));
+        await commit('frepo', 'first');
+        await git('frepo', 'checkout', '-qb', 'clean');
+        await writeFile(join(proj, 'frepo', 'src', 'y'), 'y');
+        await commit('frepo', 'clean');
+        await git('frepo', 'checkout', '-q', 'main');
+        for (const key of ['filter.x.clean', 'filter.x.smudge', 'diff.x.textconv', 'diff.external']) {
+          await git('frepo', 'config', key, `touch ${join(base, 'ran')}; cat`);
+        }
+        await utimes(join(proj, 'frepo', 'src', 'x'), new Date(2001, 1, 1), new Date(2001, 1, 1));
+      })(),
+      (async () => {
+        await mkdir(join(proj, 'mods'));
+        await symlink('../src', join(proj, 'mods', 'pkg'));
+        for (const args of [
+          ['-cf', 'clean.tar', 'src'],
+          ['-cf', 'evil.tar', '.claude/settings.json'],
+          ['-cf', 'link.tar', 'lk'],
+          ['-cPf', 'abs.tar', join(proj, 'a')],
+          ['-cPf', 'up.tar', '../proj/a'],
+        ]) {
+          await runFile('tar', args, { cwd: proj });
+        }
+      })(),
+    ]);
     await mkdir(join(proj, 'repo', '.config', 'Bike4Mind'), { recursive: true });
     await writeFile(
       join(proj, 'evil.diff'),
@@ -170,6 +190,7 @@ describe('shell commands that reach a protected location', () => {
       if (rule) compiled.push(rule);
     }
     rules = new PermissionRuleSet(compiled, () => permissionRoots);
+    resumeExecFileMemo();
   });
 
   afterAll(async () => {
@@ -194,8 +215,9 @@ describe('shell commands that reach a protected location', () => {
       permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
     ).catch(() => null);
     return {
-      auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
-      full: !prompt.askInFull,
+      // Like `runsCheckedInFull`: a listed git form after a ref change runs unchecked in both modes.
+      auto: !prompt.askInAuto && !prompt.unchecked && (prompt.always?.directories ?? []).length === 0,
+      full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
   };
@@ -204,29 +226,33 @@ describe('shell commands that reach a protected location', () => {
   const scenarios: Scenario[] = ['P', 'H'];
 
   describe('a write the permission-protected set or the project settings guard', () => {
-    it.each(scenarios)('asks before a GLOBIGNORE glob onto the project settings (%s)', async scenario => {
+    it.concurrent.each(scenarios)('asks before a GLOBIGNORE glob onto the project settings (%s)', async scenario => {
       expect(await judge('export GLOBIGNORE=x; cp evil.json */settings.local.json', scenario)).toEqual(
         refusedEverywhere
       );
     });
 
-    it.each([
-      "grep -r '' ~/.claude",
-      'rg . ~/.claude',
-      'ls -R ~/.claude',
-      'cat ~/.claude/*',
-      'du -a ~/.claude',
-      'tree ~/.claude',
-      "grep -r '' ~/.config",
-    ])('asks in auto mode before %s, a read of a protected folder', async command => {
-      const verdict = await judge(command, 'H');
-      expect(verdict.auto).toBe(false);
-      expect(verdict.allowed).toBe(false);
-    });
+    it.each(["grep -r '' ~/.claude", 'rg . ~/.claude', 'cat ~/.claude/*', "grep -r '' ~/.config"])(
+      'asks in auto mode before %s, which reads the files of a protected folder',
+      async command => {
+        const verdict = await judge(command, 'H');
+        expect(verdict.auto).toBe(false);
+        expect(verdict.allowed).toBe(false);
+      }
+    );
+
+    it.each(['ls -R ~/.claude', 'du -a ~/.claude', 'tree ~/.claude'])(
+      'runs %s in auto mode, which lists only the names in a protected folder',
+      async command => {
+        const verdict = await judge(command, 'H');
+        expect(verdict.auto).toBe(true);
+        expect(verdict.allowed).toBe(false);
+      }
+    );
   });
 
   describe('an operand the scan cannot read', () => {
-    it.each([
+    it.concurrent.each([
       'D=.claude; cp evil.json $D/settings.local.json',
       'cp evil.json ${X:-.claude}/settings.local.json',
       'cp evil.json ${X:=.claude}/settings.local.json',
@@ -235,6 +261,31 @@ describe('shell commands that reach a protected location', () => {
       'IFS=,; v=.cl,aude; cp -r payload/. $v',
     ])('asks in every mode before %s', async command => {
       expect(await judge(command, 'P')).toEqual(refusedEverywhere);
+    });
+
+    it('asks about an opaque write even when its words do not name the settings', async () => {
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command: 'cp evil.json "$(printf .cl%sude a)"/settings.json', cwd: proj },
+        { roots: [proj], workingDirectory: proj, signal: new AbortController().signal, protectedPaths: [userData] }
+      );
+      expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull, unchecked: prompt.unchecked }).toEqual({
+        askInAuto: true,
+        askInFull: true,
+        unchecked: true,
+      });
+    });
+
+    it('asks in auto and full access before an unchecked write whose words name the settings', async () => {
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command: 'D=.claude; cp evil.json "$D/settings.json"', cwd: proj },
+        { roots: [proj], workingDirectory: proj, signal: new AbortController().signal, protectedPaths: [userData] }
+      );
+      expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull }).toEqual({
+        askInAuto: true,
+        askInFull: true,
+      });
     });
 
     it('asks before a brace list too long to read', async () => {
@@ -268,7 +319,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('xargs with a replace string', () => {
-    it.each([
+    it.concurrent.each([
       'ls -A | xargs -I{} cp evil.json {}/settings.local.json',
       "find . -maxdepth 1 -name '.c*' -print0 | xargs -0 -I{} rm -rf {}",
       'ls -A | xargs -i cp evil.json {}/settings.local.json',
@@ -313,7 +364,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a write only the in-place scan names', () => {
-    it.each(['git apply evil.diff', 'patch -p1 -i evil.diff'])(
+    it.concurrent.each(['git apply evil.diff', 'patch -p1 -i evil.diff'])(
       'is allowed by no rule when %s targets the project settings',
       async command => {
         for (const scenario of scenarios) {
@@ -324,7 +375,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a read of a secret in full mode', () => {
-    it.each(['cat ~/.claude/settings.json', 'cat ~/.ssh/id_rsa', 'cat ~/.config/Bike4Mind/vault.json'])(
+    it.concurrent.each(['cat ~/.claude/settings.json', 'cat ~/.ssh/id_rsa', 'cat ~/.config/Bike4Mind/vault.json'])(
       'asks in full mode before %s',
       async command => {
         expect(await judge(command, 'H')).toMatchObject({ auto: false, full: false });
@@ -348,7 +399,7 @@ describe('shell commands that reach a protected location', () => {
       expect(verdict.allowed).toBe(false);
     });
 
-    it.each(['git config user.name x', 'git config --get core.pager', 'git config get core.editor'])(
+    it.concurrent.each(['git config user.name x', 'git config --get core.pager', 'git config get core.editor'])(
       'leaves %s to the mode',
       async command => {
         expect(await judge(command, 'P')).toEqual({ auto: true, full: true, allowed: true });
@@ -367,14 +418,14 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, 'P', join(proj, folder))).toEqual(refusedEverywhere);
     });
 
-    it.each(['ls -A | xargs cat', 'xargs cat < t.txt', 'find ~ -name settings.json | xargs cat'])(
+    it.concurrent.each(['ls -A | xargs cat', 'xargs cat < t.txt', 'find ~ -name settings.json | xargs cat'])(
       'asks in auto mode before %s, a read of names it cannot list',
       async command => {
         expect((await judge(command, 'H')).auto).toBe(false);
       }
     );
 
-    it.each([
+    it.concurrent.each([
       "find src -name 'x*' | xargs cat",
       'find src -type f -print0 | xargs -0 wc -l',
       'rg -l x src | xargs cat',
@@ -384,7 +435,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a wrapper that moves the command to another folder', () => {
-    it.each([
+    it.concurrent.each([
       'env -C ~/.config cp ~/proj/evil.json Bike4Mind/vault.json',
       'env --chdir=.. cp proj/evil.json .config/Bike4Mind/vault.json',
       'env -iC.. cp proj/evil.json .config/Bike4Mind/vault.json',
@@ -415,7 +466,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a bash construct that can move the shell or rebind home', () => {
-    it.each([
+    it.concurrent.each([
       "shopt -s expand_aliases; alias ls='cd ~'\nls\ncp evil.json .con*/Bike*/vault.json",
       "trap 'cd ~' DEBUG; cp evil.json .con*/Bike*/vault.json",
       "mapfile -C 'cd ~' -c 1 a < t.txt; cp evil.json .con*/Bike*/vault.json",
@@ -434,7 +485,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('an archive or checkout that writes outside its folder or plants links', () => {
-    it.each([
+    it.concurrent.each([
       'tar -xPf a.tar -C build',
       'tar xPf a.tar -C build',
       'tar --absolute-names -xf a.tar -C build',
@@ -462,7 +513,7 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge('git apply --cached evil.diff && git checkout-index -af', 'P')).toEqual(refusedEverywhere);
     });
 
-    it.each([
+    it.concurrent.each([
       'git checkout main',
       'git switch main',
       'git reset --hard HEAD~1',
@@ -479,7 +530,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a read or write the scan cannot follow', () => {
-    it.each([
+    it.concurrent.each([
       'uniq evil.json .claude/settings.local.json',
       'uniq -f 1 evil.json .clau*/settings.local.json',
       'cd ~; cp proj/evil.json /proc/self/cwd/.con*/Bike*/vault.json',
@@ -490,16 +541,17 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, 'H')).toEqual(refusedEverywhere);
     });
 
-    it.each(['cat /proc/self/root/etc/hostname', 'cat /proc/thread-self/cwd/x', 'find ~ -name settings.json'])(
-      'asks in auto mode before %s',
-      async command => {
-        expect((await judge(command, 'H')).auto).toBe(false);
-      }
-    );
+    it.concurrent.each([
+      'cat /proc/self/root/etc/hostname',
+      'cat /proc/thread-self/cwd/x',
+      'find ~ -name settings.json',
+    ])('asks in auto mode before %s', async command => {
+      expect((await judge(command, 'H')).auto).toBe(false);
+    });
   });
 
   describe('a for loop over static words', () => {
-    it.each([
+    it.concurrent.each([
       'for f in src/*; do cat "$f"; done',
       'for f in *.ts; do cat "$f"; done',
       'for f in src/*; do wc -l "$f" "$f.bak"; done',
@@ -509,15 +561,24 @@ describe('shell commands that reach a protected location', () => {
       }
     });
 
-    it.each([
+    it.concurrent.each([
       'for f in .cl*; do cp evil.json "$f"; done',
       'for f in ../*; do cp x "$f"; done',
       'for f in src/*; do f=.claude; cp evil.json "$f"/settings.local.json; done',
       'for f in src/*; do cd ..; cp -r payload/. "$f"; done',
-      'for f in src; do rm -rf $f; done',
+      "for f in 'src*'; do rm -rf $f; done",
       'for f in "$X"; do cat "$f"; done',
     ])('asks in auto mode before %s', async command => {
       expect((await judge(command, 'P')).auto).toBe(false);
+    });
+
+    // Only the scan's verdicts: a saved rule matches a written-out command, never a loop header, so `allowed` differs.
+    it('judges an unquoted plain loop value as the command written out', async () => {
+      for (const scenario of scenarios) {
+        const { auto, full } = await judge('for f in src; do rm -rf $f; done', scenario);
+        const written = await judge('rm -rf src', scenario);
+        expect({ auto, full }, scenario).toEqual({ auto: written.auto, full: written.full });
+      }
     });
 
     it('reads the top level as unknown once git is pointed elsewhere', async () => {
@@ -576,7 +637,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a copy or move that carries links', () => {
-    it.each([
+    it.concurrent.each([
       'mkdir -p s && cp evil.json s/v && cp -r s/. lk/',
       'cp -a lk d && cp evil.json d/v',
       'cp -a lk d && cat d/in/Bike4Mind/vault.json',
@@ -595,7 +656,7 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, scenario)).toEqual(refusedEverywhere);
     });
 
-    it.each(['cp -r src out', 'cp -a src out && cat out/x', 'mv a b', 'rsync -a src/ out/', 'cp -rL src d'])(
+    it.concurrent.each(['cp -r src out', 'cp -a src out && cat out/x', 'mv a b', 'rsync -a src/ out/', 'cp -rL src d'])(
       'leaves %s to the mode',
       async command => {
         expect(await judge(command, 'P')).toMatchObject({ full: true, allowed: true });
@@ -604,7 +665,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a loop whose body may rebind its variable', () => {
-    it.each([
+    it.concurrent.each([
       'g() { f=../.config/Bike4Mind/vault.json; }; for f in a; do g; echo {} > "$f"; done',
       'g() { read f < names.txt; }; for f in a; do g; echo {} > "$f"; done',
       'g() { IFS= read -r f; }; for f in a; do g < names.txt; echo {} > "$f"; done',
@@ -615,7 +676,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a name spelled with a brace expansion', () => {
-    it.each([
+    it.concurrent.each([
       'export C{D,}PATH=~; cd .config; echo {} > Bike4Mind/vault.json',
       'C{D,}PATH=~ cd .config; echo {} > Bike4Mind/vault.json',
       'read H{O,}ME < home.txt; cd; echo {} > Bike4Mind/vault.json',
@@ -632,14 +693,14 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, 'P')).toEqual(refusedEverywhere);
     });
 
-    it.each(['curl -s ftp://example.com/x', 'curl -s "dict://example.com"', 'curl -s http://[::1'])(
+    it.concurrent.each(['curl -s ftp://example.com/x', 'curl -s "dict://example.com"', 'curl -s http://[::1'])(
       'asks in every mode before %s',
       async command => {
         expect(await judge(command, 'P')).toEqual(refusedEverywhere);
       }
     );
 
-    it.each(['curl -s https://example.com', 'curl -sL example.com/x', 'curl -s HTTP://example.com'])(
+    it.concurrent.each(['curl -s https://example.com', 'curl -sL example.com/x', 'curl -s HTTP://example.com'])(
       'leaves %s to the mode',
       async command => {
         expect(await judge(command, 'P')).toMatchObject({ full: true, allowed: true });
@@ -705,7 +766,7 @@ describe('shell commands that reach a protected location', () => {
       }
     });
 
-    it.each([
+    it.concurrent.each([
       "sh''opt -s dot''glob; cp evil.json */settings.local.json",
       "export GLOB''IGNORE=x; cp evil.json */settings.local.json",
     ])('asks in every mode before %s', async command => {
@@ -714,7 +775,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('xargs fed by a lister the scan cannot follow', () => {
-    it.each([
+    it.concurrent.each([
       'find -L lk -name vault.json | xargs cat',
       'find -H lk/in -name vault.json | xargs cat',
       'find -P .config -name vault.json | xargs cat',
@@ -782,7 +843,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('an archive the scan reads by its prefixes and switches', () => {
-    it.each([
+    it.concurrent.each([
       'tar --extr -f a.tar -C build; cp evil.json build/h/x',
       '7z -y x a.7z -obuild; cp evil.json build/h/x',
       '7z x -spf2 a.7z -obuild',
@@ -792,7 +853,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a link inside a granted folder', () => {
-    it.each([
+    it.concurrent.each([
       'cat lk/*/Bike4Mind/vault.json',
       'cp evil.json lk/*/Bike4Mind/vault.json',
       'grep -R x lk',
@@ -807,7 +868,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a process link reached through a parent folder', () => {
-    it.each([
+    it.concurrent.each([
       'cd ~; cp proj/evil.json /proc/../proc/self/cwd/.config/Bike4Mind/vault.json',
       'cd /proc; cp ~/proj/evil.json self/cwd/x',
     ])('asks in every mode before %s', async command => {
@@ -829,6 +890,10 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('git asked what a command would write', () => {
+    // Each row needs git to stat the touched file again, which is when a configured filter would run.
+    beforeEach(pauseExecFileMemo);
+    afterEach(resumeExecFileMemo);
+
     it.each([
       'git checkout clean',
       'git checkout -f clean',
@@ -855,7 +920,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a program that find runs', () => {
-    it.each([
+    it.concurrent.each([
       ["find src -maxdepth 0 -exec sh -c 'cd ..; cp proj/evil.json .config/Bike4Mind/vault.json' \\;", 'H'],
       ["find src -exec bash -c 'cp evil.json ../.config/Bike4Mind/vault.json' \\;", 'H'],
       ['find . -name settings.json -exec cp evil.json {} \\;', 'P'],
@@ -869,7 +934,7 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, scenario)).toEqual(refusedEverywhere);
     });
 
-    it.each([
+    it.concurrent.each([
       'find src -name x -exec cat {} +',
       'find src -name x -exec wc -l {} \\;',
       'find src -name x -exec grep -l x {} +',
@@ -882,12 +947,13 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a lister over a tree that holds links', () => {
-    it.each(['find src mods -name x | xargs cat', 'find mods -name x | xargs wc -l', 'rg -l x src mods | xargs cat'])(
-      'leaves %s to the mode',
-      async command => {
-        expect(await judge(command, 'P')).toMatchObject({ full: true, allowed: true });
-      }
-    );
+    it.concurrent.each([
+      'find src mods -name x | xargs cat',
+      'find mods -name x | xargs wc -l',
+      'rg -l x src mods | xargs cat',
+    ])('leaves %s to the mode', async command => {
+      expect(await judge(command, 'P')).toMatchObject({ full: true, allowed: true });
+    });
 
     it.each([
       ['git ls-files .. | xargs cat', 'frepo/src'],
@@ -907,14 +973,15 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a clone from another computer', () => {
-    it.each(['git clone https://github.com/o/r', 'git clone host:o/r', 'git clone https://github.com/o/r out'])(
-      'asks in auto mode only before %s',
-      async command => {
-        expect(await judge(command, 'P')).toEqual({ auto: false, full: true, allowed: true });
-      }
-    );
+    it.concurrent.each([
+      'git clone https://github.com/o/r',
+      'git clone host:o/r',
+      'git clone https://github.com/o/r out',
+    ])('asks in auto mode only before %s', async command => {
+      expect(await judge(command, 'P')).toEqual({ auto: false, full: true, allowed: true });
+    });
 
-    it.each(['git clone https://github.com/o/r .', 'git clone host:o/r ~/proj'])(
+    it.concurrent.each(['git clone https://github.com/o/r .', 'git clone host:o/r ~/proj'])(
       'asks in every mode before %s into the session folder',
       async command => {
         expect(await judge(command, 'P')).toEqual(refusedEverywhere);
@@ -923,14 +990,17 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('an archive unpacked into a folder holding settings', () => {
-    it.each(['tar -xf evil.tar', 'tar -xf link.tar', 'tar -xf abs.tar', 'tar -xf up.tar', 'tar -xf nope.tar'])(
-      'asks in every mode before %s',
-      async command => {
-        expect(await judge(command, 'P')).toEqual(refusedEverywhere);
-      }
-    );
+    it.concurrent.each([
+      'tar -xf evil.tar',
+      'tar -xf link.tar',
+      'tar -xf abs.tar',
+      'tar -xf up.tar',
+      'tar -xf nope.tar',
+    ])('asks in every mode before %s', async command => {
+      expect(await judge(command, 'P')).toEqual(refusedEverywhere);
+    });
 
-    it.each(['tar -xf clean.tar', 'tar xf clean.tar', 'tar -xf clean.tar -C .'])(
+    it.concurrent.each(['tar -xf clean.tar', 'tar xf clean.tar', 'tar -xf clean.tar -C .'])(
       'leaves %s to the mode',
       async command => {
         expect(await judge(command, 'P')).toMatchObject({ full: true, allowed: true });
@@ -952,7 +1022,7 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, scenario, join(proj, folder))).toEqual(refusedEverywhere);
     });
 
-    it.each([
+    it.concurrent.each([
       "curl -s -w '%{http_code}' https://example.com",
       'curl -sw x https://example.com',
       'curl -b a=b https://example.com',
@@ -977,7 +1047,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a sed or awk script that writes or runs something', () => {
-    it.each([
+    it.concurrent.each([
       "sed -n 'w out' a",
       "sed 's/a/b/w out' a",
       "sed 's/a/date/e' a",
@@ -990,9 +1060,12 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, 'P')).toEqual(refusedEverywhere);
     });
 
-    it.each(['sed -n 1p a', "sed 's/a/b/g' a", "awk '{print $1}' a"])('leaves %s to the mode', async command => {
-      expect(await judge(command, 'P')).toMatchObject({ full: true, allowed: true });
-    });
+    it.concurrent.each(['sed -n 1p a', "sed 's/a/b/g' a", "awk '{print $1}' a"])(
+      'leaves %s to the mode',
+      async command => {
+        expect(await judge(command, 'P')).toMatchObject({ full: true, allowed: true });
+      }
+    );
   });
 
   describe('git moving a ref before it writes a tree', () => {
@@ -1013,7 +1086,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a directory change through a link', () => {
-    it.each([
+    it.concurrent.each([
       'cd lk/in/..; cp evil.json ../../.config/Bike4Mind/vault.json',
       'cd -P lk/in/..; cp proj/evil.json .config/Bike4Mind/vault.json',
       'set -P; cd lk/in/..; cp proj/evil.json .config/Bike4Mind/vault.json',
@@ -1024,7 +1097,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a glob followed by more parent steps than it has folders', () => {
-    it.each(['cat s*/../../.config/Bike4Mind/vault.json', 'cat sr?/../../.config/Bike4Mind/vault.json'])(
+    it.concurrent.each(['cat s*/../../.config/Bike4Mind/vault.json', 'cat sr?/../../.config/Bike4Mind/vault.json'])(
       'asks in every mode before %s',
       async command => {
         expect(await judge(command, 'H')).toEqual(refusedEverywhere);
@@ -1033,7 +1106,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('a link made by a hard link or cpio', () => {
-    it.each([
+    it.concurrent.each([
       'ln lk/v hv && cat hv',
       'ln lk/in hin && cat hin/Bike4Mind/vault.json',
       'ln -P lk/in hin && cp evil.json hin/Bike4Mind/vault.json',
@@ -1072,7 +1145,7 @@ describe('shell commands that reach a protected location', () => {
   });
 
   describe('everyday commands', () => {
-    it.each([
+    it.concurrent.each([
       'rm -rf ./build/*',
       'rm -rf dist',
       'grep -r x src',

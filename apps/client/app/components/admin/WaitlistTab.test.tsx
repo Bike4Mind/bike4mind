@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mocks.post } }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { isAdmin: true } }),
+}));
 vi.mock('@client/app/utils/grantPackageAPICalls', () => ({
   fetchGrantPackages: mocks.fetchGrantPackages,
   GRANT_PACKAGES_QUERY_KEY: 'admin-grant-packages',
@@ -53,7 +56,8 @@ const SUBSCRIBER = {
 
 const openInviteDialog = async () => {
   render(<WaitlistTab />, { wrapper: Wrapper });
-  fireEvent.click(await screen.findByRole('button', { name: /generate invite/i }));
+  fireEvent.click(await screen.findByTestId('waitlist-row-actions-sub-1'));
+  fireEvent.click(await screen.findByTestId('waitlist-generate-invite-sub-1'));
   return screen.getByTestId('waitlist-invite-dialog-confirm-btn');
 };
 
@@ -126,6 +130,15 @@ describe('WaitlistTab Invite Center', () => {
     const section = screen.getByTestId('invite-center-section-waitlist');
     expect(await screen.findByText('ada@example.com')).toBeInTheDocument();
     expect(section).toContainElement(screen.getByText('ada@example.com'));
+  });
+
+  it('opens with the shared page header as the only h1 once the waitlist has loaded', async () => {
+    mocks.fetchSubscribers.mockResolvedValue({ data: [SUBSCRIBER], meta: { total: 1 } });
+    const { container } = render(<WaitlistTab />, { wrapper: Wrapper });
+
+    expect(await screen.findByText('ada@example.com')).toBeInTheDocument();
+    expect(container.firstElementChild?.firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    expect(screen.getAllByRole('heading', { level: 1 }).map(h => h.textContent)).toEqual(['Invite Center']);
   });
 });
 

@@ -106,6 +106,8 @@ export const AdminAiSuggestionSchema: Schema<IAdminAiSuggestionDocument> = new S
 
 AdminAiSuggestionSchema.index({ feature: 1, entityId: 1, inputHash: 1, policyVersion: 1 }, { unique: true });
 AdminAiSuggestionSchema.index({ feature: 1, status: 1, createdAt: -1 });
+AdminAiSuggestionSchema.index({ feature: 1, actionClass: 1, policyVersion: 1, status: 1, decidedAt: -1 });
+AdminAiSuggestionSchema.index({ status: 1, decidedAt: -1 });
 AdminAiSuggestionSchema.index({ entityType: 1, entityId: 1, createdAt: -1 });
 AdminAiSuggestionSchema.index({ feature: 1, entityId: 1, createdAt: -1, _id: -1 });
 
@@ -161,6 +163,12 @@ const isDuplicateKeyError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === DUPLICATE_KEY;
 
 export class AdminAiSuggestionRepository {
+  async findById(id: string): Promise<AdminAiSuggestionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await AdminAiSuggestionModel.findById(id).lean<LeanAdminAiSuggestion>();
+    return doc ? toItem(doc) : null;
+  }
+
   async findByKey(key: AdminAiSuggestionKey): Promise<AdminAiSuggestionItem | null> {
     const { feature, entityId, inputHash, policyVersion } = key;
     const doc = await AdminAiSuggestionModel.findOne({
@@ -187,6 +195,20 @@ export class AdminAiSuggestionRepository {
         if (attempt >= 1) throw error;
       }
     }
+  }
+
+  /** Rows for any of these (entityId, inputHash) pairs, across policy versions; may over-match pairs. */
+  async findForEntities(
+    feature: AdminAiFeature,
+    keys: { entityId: string; inputHash: string }[]
+  ): Promise<AdminAiSuggestionItem[]> {
+    if (keys.length === 0) return [];
+    const docs = await AdminAiSuggestionModel.find({
+      feature,
+      entityId: { $in: [...new Set(keys.map(key => key.entityId))] },
+      inputHash: { $in: [...new Set(keys.map(key => key.inputHash))] },
+    }).lean<LeanAdminAiSuggestion[]>();
+    return docs.map(toItem);
   }
 
   async findLatestForEntity(feature: AdminAiFeature, entityId: string): Promise<AdminAiSuggestionItem | null> {

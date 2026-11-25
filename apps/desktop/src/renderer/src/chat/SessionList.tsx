@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type SyntheticEvent,
 } from 'react';
@@ -38,15 +39,26 @@ import {
   type ChatSessionStatus,
   type ChatSessionSummary,
 } from '@shared/chat';
+import { useHasComposerDraft } from './composerDrafts';
 import { useLocalHistory } from './localHistory';
 import { refLabel } from '@shared/githubRefs';
 import { findSessionsByRef } from './sessionRefSearch';
+import { prAttentionRank } from '@shared/prAttention';
 import type { PrSummary } from '@shared/pullRequest';
+import { pendingDecisionOf } from '@shared/orchestration';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
-import { descendantsOf, groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
+import {
+  descendantsOf,
+  groupSessions,
+  orderedSessions,
+  parentHints,
+  type CustomGroup,
+  type ProjectGroup,
+} from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
+import { usePrAttentionSort } from './prAttentionSort';
 import { keepMenuOpen } from './keepMenuOpen';
 import { MessageSessionDialog } from './MessageSessionDialog';
 import {
@@ -54,7 +66,7 @@ import {
   ArtifactIcon,
   CheckIcon,
   ChevronIcon,
-  ModelsIcon,
+  MissionControlIcon,
   MoreIcon,
   PanelLeftIcon,
   PlusIcon,
@@ -62,12 +74,14 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { foldedParents, toggleFolded, useFoldedParents, useNestedSessions } from './nestedSessions';
-import { ModeSwitcher } from './ModeSwitcher';
+import { matchSessionShortcut } from './rail/shortcuts';
 import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
 import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
+import { WORKING_COLOR_VAR } from './sessionStatus';
 import { PREPARING_WORKTREE } from './chipState';
+import { SESSION_DRAG_TYPE } from './sessionDrag';
 import {
   clampSidebarWidth,
   readSidebarWidth,
@@ -146,7 +160,9 @@ export function NavItem({
  * px each level of sub-session steps in. With the list's 8px inset and a 14px badge, a parent's
  * badge is centred 15px in, and its rail drops from there to the child's badge one step right.
  */
-const NEST_INDENT = 18;
+const NEST_INDENT = 14;
+/** Levels that still step right; a deeper session stays at this indent and wears a "level N" chip. */
+const MAX_NEST_DEPTH = 3;
 const BADGE_CENTER = 15;
 /** The gap SESSION_LIST_SX leaves between rows, which a rail has to bridge to stay unbroken. */
 const ROW_GAP = 2;
@@ -173,6 +189,8 @@ interface NestProps {
    * siblings below, so its rail runs straight through this row.
    */
   nestGuides?: string;
+  /** The real spawn depth when it is past MAX_NEST_DEPTH, so the row can say how deep it sits. */
+  nestDeeper?: number;
   /** Sessions anywhere under this one; 0 or absent on a row with none. */
   subCount?: number;
   /** The loudest state among them, which the fold pill wears while they are folded away. */
@@ -180,6 +198,8 @@ interface NestProps {
   subFolded?: boolean;
   /** False while a search holds every branch open, when folding could not show. */
   subFoldable?: boolean;
+  /** Title of the parent a spawned session is drawn away from, shown as "from X". */
+  hintTitle?: string;
 }
 
 type SubActivity = 'needs-action' | 'processing' | undefined;
@@ -189,11 +209,15 @@ type SubActivity = 'needs-action' | 'processing' | undefined;
  * rounded elbow from the parent's badge into this one. Drawn on the ListItem's pseudo-elements
  * so they cost no DOM, and outside the button so its hover and selected fill start at the indent.
  */
-function railSx(depth: number, first: boolean, last: boolean, guides: string) {
+function railSx(depth: number, first: boolean, last: boolean, guides: string, heat: SubActivity, elbow: boolean) {
   const indent = depth * NEST_INDENT;
   const straight = [...guides].flatMap((guide, level) => (guide === '1' ? [level] : []));
-  if (!last) straight.push(depth - 1);
+  if (!last && elbow) straight.push(depth - 1);
   const line = `linear-gradient(${RAIL_COLOR}, ${RAIL_COLOR})`;
+  // The elbow into a branch holding working or waiting sessions lights up in the fold pill's colours,
+  // so a deep tree shows where the activity is, even folded, and every ancestor on the path glows.
+  const elbowColor =
+    heat === 'needs-action' ? 'var(--joy-palette-warning-400)' : heat === 'processing' ? WORKING_COLOR_VAR : RAIL_COLOR;
   return {
     marginInlineStart: `${indent}px`,
     // Above the button, so a selected or hovered row's fill does not paint over its own elbow.
@@ -212,7 +236,7 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string) {
       backgroundPosition: straight.map(level => `${level * NEST_INDENT + BADGE_CENTER}px 0`).join(', '),
     },
     // The first child reaches on up through the parent row to just under the parent's badge.
-    '&::after': {
+    '&::after': elbow && {
       content: '""',
       position: 'absolute',
       zIndex: 1,
@@ -221,9 +245,13 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string) {
       height: `calc(50% + ${first ? FIRST_RAIL_REACH : ROW_GAP}px)`,
       left: BADGE_CENTER - NEST_INDENT,
       width: NEST_INDENT - BADGE_CENTER + ELBOW_END,
-      borderLeft: `1px solid ${RAIL_COLOR}`,
-      borderBottom: `1px solid ${RAIL_COLOR}`,
+      borderLeft: `1px solid ${elbowColor}`,
+      borderBottom: `1px solid ${elbowColor}`,
       borderBottomLeftRadius: '7px',
+      ...(heat === 'processing' && {
+        animation: `${pulse} 1.2s ease-in-out infinite`,
+        '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+      }),
     },
   };
 }
@@ -336,6 +364,28 @@ interface RowProps extends NestProps {
   refChip?: string;
 }
 
+/** The right-aligned letter that runs a row menu item while the menu is open; see onRowMenuKeyDown. */
+function MenuShortcut({ letter }: { letter: string }) {
+  return (
+    <Typography aria-hidden level="body-xs" textColor="text.tertiary" sx={{ ml: 3, fontFamily: 'monospace' }}>
+      {letter}
+    </Typography>
+  );
+}
+
+/**
+ * A bare letter runs the item whose data-shortcut it is, by clicking it so the item's own handler
+ * decides what happens (closing, switching view). Marked handled so Joy's type-to-focus stays out.
+ */
+function onRowMenuKeyDown(event: ReactKeyboardEvent<HTMLElement> & { defaultMuiPrevented?: boolean }) {
+  if (event.metaKey || event.ctrlKey || event.altKey || !/^[a-z]$/i.test(event.key)) return;
+  const item = event.currentTarget.querySelector<HTMLElement>(`[data-shortcut="${event.key.toUpperCase()}"]`);
+  if (!item || item.getAttribute('aria-disabled') === 'true') return;
+  event.preventDefault();
+  event.defaultMuiPrevented = true;
+  item.click();
+}
+
 /** Shown in place of the main menu items, not as a flyout: Joy has no nested menu. */
 function MoveToItems({
   session,
@@ -357,7 +407,7 @@ function MoveToItems({
         <ListItemDecorator>
           <ArrowLeftIcon />
         </ListItemDecorator>
-        Move to
+        Move to section
       </MenuItem>
       <ListDivider />
       {userSections.map(section => (
@@ -424,6 +474,10 @@ const isolate = (event: SyntheticEvent) => event.stopPropagation();
  *
  * Keydown stops here, which is also what keeps SessionList's window-level Cmd shortcuts away
  * while typing: React's handler runs at the root, before the event reaches window.
+ *
+ * Focus and blur stop here too: the input sits inside the row's ListItemButton, which would take
+ * the input's focus as its own keyboard focus and keep its focus ring once the input unmounts,
+ * since an unmounted node sends no blur.
  */
 function RenameInput({ title, onDone }: { title: string; onDone: (next: string | null) => void }) {
   const [draft, setDraft] = useState(title);
@@ -451,7 +505,11 @@ function RenameInput({ title, onDone }: { title: string; onDone: (next: string |
       size="sm"
       value={draft}
       onChange={event => setDraft(event.target.value)}
-      onBlur={save}
+      onFocus={isolate}
+      onBlur={event => {
+        event.stopPropagation();
+        save();
+      }}
       onKeyDown={event => {
         event.stopPropagation();
         if (event.key === 'Enter') save();
@@ -493,19 +551,28 @@ const SessionRow = memo(function SessionRow({
   nestFirst = false,
   nestLast = false,
   nestGuides = '',
+  nestDeeper = 0,
   subCount = 0,
   subActivity,
   subFolded = false,
   subFoldable = true,
+  hintTitle,
   refChip,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
   const [editing, setEditing] = useState(false);
-  const needsAction = status === 'needs-action';
+  const nestHeat: SubActivity =
+    status === 'needs-action' || subActivity === 'needs-action'
+      ? 'needs-action'
+      : status === 'processing' || subActivity === 'processing'
+        ? 'processing'
+        : undefined;
   // Main pushes the project once the worktree exists, which is what ends this.
   const preparing = status === 'processing' && awaitsWorktree(session.project);
   const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
+  // The open conversation's draft is in the composer in front of the user; only others are marked.
+  const showDraft = useHasComposerDraft(session.id) && !selected && !editing;
 
   const onRenameDone = (next: string | null) => {
     setEditing(false);
@@ -515,8 +582,10 @@ const SessionRow = memo(function SessionRow({
   return (
     <ListItem
       data-nest-depth={nestDepth || undefined}
+      data-nest-guides={nestGuides || undefined}
+      data-nest-heat={nestDepth > 0 ? nestHeat : undefined}
       sx={{
-        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides)),
+        ...(nestDepth > 0 && railSx(nestDepth, nestFirst, nestLast, nestGuides, nestHeat, nestDeeper === 0)),
         ...(editing
           ? { '--ListItem-endActionWidth': '0px' }
           : {
@@ -562,7 +631,7 @@ const SessionRow = memo(function SessionRow({
               >
                 <MoreIcon />
               </MenuButton>
-              <Menu size="sm" placement="bottom-end">
+              <Menu size="sm" placement="bottom-end" onKeyDown={onRowMenuKeyDown} sx={{ minWidth: 200 }}>
                 {menuView === 'move' ? (
                   <MoveToItems
                     session={session}
@@ -576,8 +645,14 @@ const SessionRow = memo(function SessionRow({
                   />
                 ) : (
                   <>
-                    <MenuItem onClick={() => actions.togglePin(session)} data-testid="chat-pin-session-btn">
-                      {session.pinned ? 'Unpin' : 'Pin'}
+                    <MenuItem
+                      onClick={() => actions.togglePin(session)}
+                      data-testid="chat-pin-session-btn"
+                      data-shortcut="P"
+                      aria-keyshortcuts="P"
+                    >
+                      <Box sx={{ flex: 1 }}>{session.pinned ? 'Unpin' : 'Pin'}</Box>
+                      <MenuShortcut letter="P" />
                     </MenuItem>
                     <MenuItem
                       onClick={() => {
@@ -587,40 +662,65 @@ const SessionRow = memo(function SessionRow({
                         setEditing(true);
                       }}
                       data-testid="chat-rename-session-btn"
+                      data-shortcut="R"
+                      aria-keyshortcuts="R"
                     >
-                      Rename
+                      <Box sx={{ flex: 1 }}>Rename</Box>
+                      <MenuShortcut letter="R" />
                     </MenuItem>
                     <MenuItem
                       disabled={!!session.archived}
                       onClick={() => actions.message(session)}
                       data-testid="session-row-message-action"
+                      data-shortcut="M"
+                      aria-keyshortcuts="M"
                     >
-                      Message session...
+                      <Box sx={{ flex: 1 }}>Message session...</Box>
+                      <MenuShortcut letter="M" />
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => actions.download(session)}
+                      data-testid="chat-download-session-btn"
+                      data-shortcut="L"
+                      aria-keyshortcuts="L"
+                    >
+                      <Box sx={{ flex: 1 }}>Download</Box>
+                      <MenuShortcut letter="L" />
                     </MenuItem>
                     {!session.pinned && !session.archived && (
-                      <MenuItem
-                        onClick={event => {
-                          keepMenuOpen(event);
-                          setMenuView('move');
-                        }}
-                        data-testid="chat-move-session-btn"
-                      >
-                        <Box sx={{ flex: 1 }}>Move to</Box>
-                        <ChevronIcon open={false} />
-                      </MenuItem>
+                      <>
+                        <ListDivider />
+                        <MenuItem
+                          onClick={event => {
+                            keepMenuOpen(event);
+                            setMenuView('move');
+                          }}
+                          data-testid="chat-move-session-btn"
+                        >
+                          <Box sx={{ flex: 1 }}>Move to section</Box>
+                          <ChevronIcon open={false} />
+                        </MenuItem>
+                      </>
                     )}
-                    <MenuItem onClick={() => actions.download(session)} data-testid="chat-download-session-btn">
-                      Download
-                    </MenuItem>
-                    <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
-                      {session.archived ? 'Unarchive' : 'Archive'}
+                    <ListDivider />
+                    <MenuItem
+                      onClick={() => actions.toggleArchived(session)}
+                      data-testid="chat-archive-session-btn"
+                      data-shortcut="A"
+                      aria-keyshortcuts="A"
+                    >
+                      <Box sx={{ flex: 1 }}>{session.archived ? 'Unarchive' : 'Archive'}</Box>
+                      <MenuShortcut letter="A" />
                     </MenuItem>
                     <MenuItem
                       color="danger"
                       onClick={() => actions.remove(session.id)}
                       data-testid="chat-delete-session-btn"
+                      data-shortcut="D"
+                      aria-keyshortcuts="D"
                     >
-                      Delete
+                      <Box sx={{ flex: 1 }}>Delete</Box>
+                      <MenuShortcut letter="D" />
                     </MenuItem>
                   </>
                 )}
@@ -632,6 +732,7 @@ const SessionRow = memo(function SessionRow({
     >
       <ListItemButton
         selected={selected}
+        aria-current={selected ? 'true' : undefined}
         onClick={editing ? undefined : () => actions.select(session.id)}
         aria-expanded={subCount > 0 ? !subFolded : undefined}
         onKeyDown={event => {
@@ -659,14 +760,18 @@ const SessionRow = memo(function SessionRow({
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
           transition: 'padding-inline-end 120ms',
-          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-solidBg)' }),
         }}
         data-testid="chat-session-item"
         data-session-status={status}
         data-session-pr-state={pr?.state}
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
-          <SessionBadge status={status} pr={pr} />
+          <SessionBadge
+            status={status}
+            pr={pr}
+            outcome={session.lastOutcome}
+            deciding={pendingDecisionOf(session.workerTask) !== undefined}
+          />
           {editing ? (
             <RenameInput title={session.title} onDone={onRenameDone} />
           ) : (
@@ -692,6 +797,42 @@ const SessionRow = memo(function SessionRow({
               data-testid="chat-session-title-text"
             >
               {session.title}
+            </Typography>
+          )}
+          {showDraft && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.6875rem', fontStyle: 'italic' }}
+              title="Unsent text in the composer"
+              data-testid="chat-session-draft-marker"
+            >
+              Draft
+            </Typography>
+          )}
+          {!editing && hintTitle && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 1000, minWidth: 0, fontSize: '0.75rem', fontWeight: 'normal' }}
+              title={`from ${hintTitle}`}
+              data-testid="chat-session-parent-hint"
+            >
+              from {hintTitle}
+            </Typography>
+          )}
+          {!editing && nestDeeper > 0 && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.6875rem' }}
+              title={`level ${nestDeeper + 1} of the tree`}
+              data-testid="chat-session-depth-chip"
+            >
+              level {nestDeeper + 1}
             </Typography>
           )}
           {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
@@ -951,9 +1092,6 @@ function CappedSessionRows({
   );
 }
 
-/** A type of our own, so a drag of text, a link or files (see useFileDrop) is never taken for a row. */
-const SESSION_DRAG_TYPE = 'application/x-b4m-session';
-
 /** Where a dragged row would land: a section by id, or the default groups, out of any section. */
 type DropTarget = { kind: 'section'; sectionId: string } | { kind: 'default' };
 
@@ -961,18 +1099,15 @@ type DropTarget = { kind: 'section'; sectionId: string } | { kind: 'default' };
 const OWN_CONTEXT_TARGETS = '[data-testid="chat-session-item"], input, textarea, [role="menu"]';
 
 /**
- * The sidebar: primary nav, a pinned section, then the sessions for the current mode - Code
- * sessions under a header per project, Chat sessions in one flat list - and the account strip.
+ * The sidebar of the Chat and Code places: primary nav, a pinned section, then the sessions for
+ * the current mode - Code sessions under a header per project, Chat sessions in one flat list.
  *
- * Adapted from Claude Code desktop's layout, with its nav entries dropped rather than shipped
- * as dead links: "Customize" and "More" were removed on the user's instruction. "Artifacts"
- * came back once replies started producing them, and "Customize" once there was an app setting
- * to put in it. New behaves identically in both modes.
+ * Configuration (Customize, Models) and the account live in the rail's avatar menu, not here:
+ * this column lists where the user works. New behaves identically in both modes.
  */
 export function SessionList({
   sessions,
   mode,
-  onModeChange,
   loading,
   activeId,
   statuses,
@@ -982,6 +1117,7 @@ export function SessionList({
   onSelect,
   onCreate,
   onOpenArtifacts,
+  onOpenMissionControl,
   onCreateInProject,
   onCreateInSection,
   onDelete,
@@ -997,14 +1133,10 @@ export function SessionList({
   onDismissSectionError,
   userSections,
   sectionActions,
-  customize,
-  onOpenModels,
   syncHints,
-  footer,
 }: {
   sessions: ChatSessionSummary[];
   mode: ChatSessionMode;
-  onModeChange: (mode: ChatSessionMode) => void;
   loading: boolean;
   activeId: string | null;
   /** What each session is doing, pushed from main. Absent means idle. */
@@ -1016,6 +1148,8 @@ export function SessionList({
   onSelect: (sessionId: string) => void;
   onCreate: () => void;
   onOpenArtifacts: () => void;
+  /** Every orchestration at a glance (missionControl/MissionControl.tsx). */
+  onOpenMissionControl?: () => void;
   onCreateInProject: (directory: string) => void;
   /** New session that starts inside the user section with this id. */
   onCreateInSection: (sectionId: string) => void;
@@ -1035,16 +1169,12 @@ export function SessionList({
   /** The user's own sections and which sessions sit in them; see useSidebarSections. */
   userSections: SidebarSectionsState;
   sectionActions: SidebarSectionActions;
-  /** The Customize nav row, which carries its own attention badge. */
-  customize?: ReactNode;
-  onOpenModels?: () => void;
   /** The sidebar's sync hint; `fallback` is the plain empty-list line, for it to replace or keep. */
   syncHints?: (empty: boolean, fallback: ReactNode) => ReactNode;
-  footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
   const { results: historyResults, error: historyError } = useLocalHistory(query, sessions);
-  // Declared above the collapsed rail's early return, so collapsing and re-expanding comes back
+  // Declared above the collapsed early return, so collapsing and re-expanding comes back
   // to the width the user set rather than to the default.
   const [width, setWidth] = useState(readSidebarWidth);
   const [dragging, setDragging] = useState(false);
@@ -1075,6 +1205,9 @@ export function SessionList({
   const [importedOpen, setImportedOpen] = useState(false);
   const [importedInline] = useImportedInline();
   const [nested] = useNestedSessions();
+  const sortByAttention = usePrAttentionSort(state => state.sortByAttention);
+  // Only a dependency while the sort is on, so PR updates do not regroup the default sidebar.
+  const rankedPrs = sortByAttention ? prSummaries : null;
   const foldedIds = useFoldedParents();
 
   // `section` is set when the right-click landed in a user section, which then offers a new session in
@@ -1091,10 +1224,21 @@ export function SessionList({
 
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
-    const grouped = groupSessions(matching, mode, userSections, importedInline, nested);
+    // A search lists matches flat: a tree would hide a match inside a parent that did not match.
+    const attentionRank = rankedPrs
+      ? (session: ChatSessionSummary) => prAttentionRank(rankedPrs.get(session.id))
+      : undefined;
+    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching, attentionRank);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
-  }, [matching, mode, userSections, searching, importedInline, nested]);
+  }, [matching, mode, userSections, searching, importedInline, nested, rankedPrs]);
+
+  // Strings, not the hint objects, reach the memoised rows, so an unrelated session update leaves them be.
+  // No hints with nesting off: the setting brings back the plain flat list.
+  const hints = useMemo(
+    () => (nested ? parentHints(sessions, sections.children) : new Map<string, string>()),
+    [nested, sessions, sections.children]
+  );
 
   const descendants = useMemo(() => {
     const cache = new Map<string, ChatSessionSummary[]>();
@@ -1216,19 +1360,33 @@ export function SessionList({
   );
 
   /**
-   * The modifier plus 1-9 opens the nth row, counted the way the sidebar draws them and
-   * filtered the way the search box currently has them. Nothing advertises this any more -
-   * the numbered badges were dropped and the More panel that documented it was removed - but
-   * the bindings themselves still work. Bound on the window rather than the sidebar, because
-   * a user reaching for it is almost always typing in the composer at the time.
+   * Ctrl+1-9 on macOS (Alt+1-9 elsewhere) opens the nth row, counted the way the sidebar draws
+   * them and filtered the way the search box currently has them; the primary modifier plus a
+   * digit picks a place on the rail (see rail/shortcuts.ts). Bound on the window rather than the
+   * sidebar, because a user reaching for it is almost always typing in the composer at the time.
+   * Mod+B is the shell's, since it must work in places that have no session list.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
-
-      if (event.key === 'b' || event.key === 'B') {
+      const nth = matchSessionShortcut(event);
+      if (nth !== null) {
+        const session = target.current.ordered[nth - 1];
+        if (!session) return;
         event.preventDefault();
-        target.current.onToggleCollapsed();
+        target.current.onSelect(session.id);
+        return;
+      }
+
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+
+      // Mod+Shift+F as well as Mod+K: it is where find-across-everything sits in an editor, and
+      // Mod+F alone finds in the open conversation. The orchestrator's focus toggle takes the
+      // chord first while that view is up (see ViewSwitcher), and marks it handled.
+      if (event.shiftKey) {
+        if (event.code !== 'KeyF' || event.defaultPrevented) return;
+        event.preventDefault();
+        if (target.current.collapsed) target.current.onToggleCollapsed();
+        setFocusRequest(request => request + 1);
         return;
       }
 
@@ -1238,18 +1396,7 @@ export function SessionList({
         event.preventDefault();
         if (target.current.collapsed) target.current.onToggleCollapsed();
         setFocusRequest(request => request + 1);
-        return;
       }
-
-      // `event.code` rather than `event.key`: on several non-US layouts the digit row only
-      // produces a digit with a modifier already applied, and `key` is then a symbol.
-      const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
-      if (!digit) return;
-
-      const session = target.current.ordered[Number(digit) - 1];
-      if (!session) return;
-      event.preventDefault();
-      target.current.onSelect(session.id);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -1277,7 +1424,7 @@ export function SessionList({
     const children = sections.children.get(session.id) ?? [];
     const under = descendants(session);
     const folded = isFolded(session.id);
-    const childGuides = depth > 0 ? guides + (last ? '0' : '1') : '';
+    const childGuides = depth > 0 && depth <= MAX_NEST_DEPTH ? guides + (last ? '0' : '1') : guides;
     return [
       <SessionRow
         key={session.id}
@@ -1288,7 +1435,8 @@ export function SessionList({
         userSections={userSections.sections}
         sectionId={sectionOf(userSections, session.id)}
         actions={actions}
-        nestDepth={depth}
+        nestDepth={Math.min(depth, MAX_NEST_DEPTH)}
+        nestDeeper={depth > MAX_NEST_DEPTH ? depth : 0}
         nestFirst={first}
         nestLast={last}
         nestGuides={guides}
@@ -1296,6 +1444,7 @@ export function SessionList({
         subActivity={loudestActivity(under, statuses)}
         subFolded={folded}
         subFoldable={!searching}
+        hintTitle={hints.get(session.id)}
       />,
       ...(folded
         ? []
@@ -1316,6 +1465,7 @@ export function SessionList({
       sectionId={sectionOf(userSections, session.id)}
       actions={actions}
       subFoldable={false}
+      hintTitle={hints.get(session.id)}
       refChip={refLabel(match.ref)}
     />
   );
@@ -1437,34 +1587,8 @@ export function SessionList({
     else sectionActions.rename(nameRequest.sectionId, name);
   };
 
-  if (collapsed) {
-    return (
-      <Stack
-        sx={{
-          width: 44,
-          flexShrink: 0,
-          alignItems: 'center',
-          borderRight: '1px solid',
-          borderColor: 'divider',
-          bgcolor: 'background.level1',
-          height: '100%',
-          pt: 1,
-        }}
-        data-testid="sidebar-rail"
-      >
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          aria-label="Show sidebar"
-          onClick={onToggleCollapsed}
-          data-testid="sidebar-toggle-btn"
-        >
-          <PanelLeftIcon />
-        </IconButton>
-      </Stack>
-    );
-  }
+  // Collapsed, the place rail beside this is all that shows; state above is kept for re-expanding.
+  if (collapsed) return null;
 
   return (
     <Stack
@@ -1496,8 +1620,9 @@ export function SessionList({
         sx={{ right: -2 }}
       />
       <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1.5, pt: 1.5, pb: 1 }}>
-        <ModeSwitcher mode={mode} onChange={onModeChange} />
-        <Box sx={{ flex: 1 }} />
+        <Typography level="title-sm" sx={{ flex: 1, pl: 0.5 }} data-testid="sidebar-place-title">
+          {mode === 'code' ? 'Code' : 'Chat'}
+        </Typography>
         <IconButton
           size="sm"
           variant="plain"
@@ -1517,9 +1642,13 @@ export function SessionList({
         {/* Not scoped to the open session: the list is the server's, so it spans machines and
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
-        {customize}
-        {onOpenModels && (
-          <NavItem icon={<ModelsIcon />} label="Models" onClick={onOpenModels} testId="chat-models-btn" />
+        {onOpenMissionControl && (
+          <NavItem
+            icon={<MissionControlIcon />}
+            label="Mission Control"
+            onClick={onOpenMissionControl}
+            testId="sidebar-mission-control-btn"
+          />
         )}
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
@@ -1804,8 +1933,6 @@ export function SessionList({
       )}
 
       {messageTarget && <MessageSessionDialog session={messageTarget} onClose={() => setMessageTarget(null)} />}
-
-      {footer}
     </Stack>
   );
 }

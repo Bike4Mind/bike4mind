@@ -1,6 +1,7 @@
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { IMongoDocument } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 export type SocialConnectionStatus = 'active' | 'error' | 'requires_reauth' | 'revoked';
 
@@ -135,36 +136,6 @@ class OverwatchSocialConnectionRepository extends BaseRepository<IOverwatchSocia
     return result?.toJSON() ?? null;
   }
 
-  /** Upserts a connection; on E11000 duplicate key, retries once as an update. */
-  async upsertConnection(
-    productId: string,
-    platform: string,
-    data: Partial<IOverwatchSocialConnectionDocument>
-  ): Promise<IOverwatchSocialConnectionDocument & IMongoDocument> {
-    try {
-      const result = await this.model.findOneAndUpdate(
-        { productId, platform },
-        { $set: { ...data, productId, platform } },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
-      return result!.toJSON();
-    } catch (err: unknown) {
-      const mongoErr = err as { code?: number };
-      if (mongoErr.code === 11000) {
-        // Race: document was inserted by another Lambda - retry as plain update.
-        // Mirror primary path: override productId/platform so caller-supplied data can't corrupt partition keys.
-        const result = await this.model.findOneAndUpdate(
-          { productId, platform },
-          { $set: { ...data, productId, platform } },
-          { new: true }
-        );
-        if (!result) throw new Error('upsertConnection: document disappeared after E11000');
-        return result.toJSON();
-      }
-      throw err;
-    }
-  }
-
   async setStatus(id: string, status: SocialConnectionStatus, lastError?: string): Promise<void> {
     const update: Record<string, unknown> = { status };
     // Use dot notation to avoid replacing the entire metadata object (would destroy
@@ -173,7 +144,12 @@ class OverwatchSocialConnectionRepository extends BaseRepository<IOverwatchSocia
     await this.model.updateOne({ _id: id }, { $set: update });
     // Structured log - enables CloudWatch metric filters for connection health monitoring
     // without requiring a code deploy at go-live.
-    console.log(JSON.stringify({ metric: 'overwatch.connection.status_change', connectionId: id, status, lastError }));
+    Logger.info('overwatch.connection.status_change', {
+      metric: 'overwatch.connection.status_change',
+      connectionId: id,
+      status,
+      lastError,
+    });
   }
 
   /**
@@ -191,12 +167,18 @@ class OverwatchSocialConnectionRepository extends BaseRepository<IOverwatchSocia
     // distinct no-op signal rather than a misleading 'status_change' that asserts a transition
     // which never happened.
     if (result.matchedCount === 0) {
-      console.warn(
-        JSON.stringify({ metric: 'overwatch.connection.revoke_noop', connectionId: id, reason: 'no matching document' })
-      );
+      Logger.warn('overwatch.connection.revoke_noop', {
+        metric: 'overwatch.connection.revoke_noop',
+        connectionId: id,
+        reason: 'no matching document',
+      });
       return;
     }
-    console.log(JSON.stringify({ metric: 'overwatch.connection.status_change', connectionId: id, status: 'revoked' }));
+    Logger.info('overwatch.connection.status_change', {
+      metric: 'overwatch.connection.status_change',
+      connectionId: id,
+      status: 'revoked',
+    });
   }
 
   /**
@@ -239,13 +221,9 @@ class OverwatchSocialConnectionRepository extends BaseRepository<IOverwatchSocia
     const truncated = results.length > limit;
     if (truncated) {
       results.pop();
-      console.warn(
-        JSON.stringify({
-          metric: 'overwatch.active_connections.truncated',
-          limit,
-          message:
-            'Result set hit hard limit — some connections may have been skipped. Cursor pagination required before token-refresh cron ships (#8080).',
-        })
+      Logger.warn(
+        'Result set hit hard limit - some connections may have been skipped. Cursor pagination required before token-refresh cron ships (#8080).',
+        { metric: 'overwatch.active_connections.truncated', limit }
       );
     }
     return results.map(doc => doc.toJSON());
@@ -286,13 +264,11 @@ class OverwatchSocialConnectionRepository extends BaseRepository<IOverwatchSocia
     const result = await this.model.deleteMany({ productId });
     const deletedCount = result.deletedCount ?? 0;
     if (deletedCount > 0) {
-      console.log(
-        JSON.stringify({
-          metric: 'overwatch.connection.deleted_by_product',
-          productId,
-          deletedCount,
-        })
-      );
+      Logger.info('overwatch.connection.deleted_by_product', {
+        metric: 'overwatch.connection.deleted_by_product',
+        productId,
+        deletedCount,
+      });
     }
     return deletedCount;
   }

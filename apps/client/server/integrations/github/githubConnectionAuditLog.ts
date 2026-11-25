@@ -9,18 +9,13 @@
  */
 
 import { Logger } from '@bike4mind/observability';
+import { recordOrganizationAuditEventSafe } from '@bike4mind/server-utils/utils/organizationAudit';
 
 /**
  * Audit event types for GitHub connection operations
  */
 export type GitHubConnectionAuditEvent =
-  | 'created'
-  | 'updated'
-  | 'deleted'
-  | 'key_rotated'
-  | 'pat_rotated'
-  | 'enabled_changed'
-  | 'test_executed';
+  'created' | 'updated' | 'deleted' | 'key_rotated' | 'pat_rotated' | 'enabled_changed' | 'test_executed';
 
 /**
  * Context for a GitHub connection audit log entry
@@ -74,17 +69,26 @@ const auditLogger = new Logger({ metadata: { component: 'GitHubConnectionAudit' 
  * @param context - Context about the connection and actor
  * @param changes - Optional changes made (no sensitive data)
  */
-export function logGitHubConnectionAudit(
+export async function logGitHubConnectionAudit(
   event: GitHubConnectionAuditEvent,
   context: GitHubConnectionAuditContext,
   changes?: GitHubConnectionAuditChanges
-): void {
+): Promise<void> {
   const entry: GitHubConnectionAuditEntry = {
     event,
     context,
     changes,
     timestamp: new Date().toISOString(),
   };
+  if (event !== 'test_executed') {
+    await recordOrganizationAuditEventSafe({
+      organizationId: context.organizationId,
+      actorUserId: context.actorUserId,
+      targetId: context.connectionId,
+      action:
+        event === 'created' ? 'connector.connected' : event === 'deleted' ? 'connector.disconnected' : 'policy.updated',
+    });
+  }
 
   // Log with structured data for easy querying in CloudWatch/log aggregation
   auditLogger.info('[GITHUB-CONNECTION-AUDIT]', {
@@ -101,8 +105,8 @@ export function logGitHubConnectionAudit(
 /**
  * Log connection created event
  */
-export function logConnectionCreated(context: GitHubConnectionAuditContext, allowedReposCount?: number): void {
-  logGitHubConnectionAudit('created', context, { allowedReposCount });
+export function logConnectionCreated(context: GitHubConnectionAuditContext, allowedReposCount?: number): Promise<void> {
+  return logGitHubConnectionAudit('created', context, { allowedReposCount });
 }
 
 /**
@@ -112,8 +116,8 @@ export function logConnectionUpdated(
   context: GitHubConnectionAuditContext,
   changedFields: string[],
   changes?: Pick<GitHubConnectionAuditChanges, 'previousEnabled' | 'newEnabled' | 'allowedReposCount'>
-): void {
-  logGitHubConnectionAudit('updated', context, {
+): Promise<void> {
+  return logGitHubConnectionAudit('updated', context, {
     changedFields,
     ...changes,
   });
@@ -122,22 +126,22 @@ export function logConnectionUpdated(
 /**
  * Log connection deleted event
  */
-export function logConnectionDeleted(context: GitHubConnectionAuditContext): void {
-  logGitHubConnectionAudit('deleted', context);
+export function logConnectionDeleted(context: GitHubConnectionAuditContext): Promise<void> {
+  return logGitHubConnectionAudit('deleted', context);
 }
 
 /**
  * Log private key rotated event (GitHub App)
  */
-export function logKeyRotated(context: GitHubConnectionAuditContext): void {
-  logGitHubConnectionAudit('key_rotated', context);
+export function logKeyRotated(context: GitHubConnectionAuditContext): Promise<void> {
+  return logGitHubConnectionAudit('key_rotated', context);
 }
 
 /**
  * Log PAT rotated event (Service Account)
  */
-export function logPatRotated(context: GitHubConnectionAuditContext): void {
-  logGitHubConnectionAudit('pat_rotated', context);
+export function logPatRotated(context: GitHubConnectionAuditContext): Promise<void> {
+  return logGitHubConnectionAudit('pat_rotated', context);
 }
 
 /**
@@ -147,8 +151,8 @@ export function logEnabledChanged(
   context: GitHubConnectionAuditContext,
   previousEnabled: boolean,
   newEnabled: boolean
-): void {
-  logGitHubConnectionAudit('enabled_changed', context, {
+): Promise<void> {
+  return logGitHubConnectionAudit('enabled_changed', context, {
     previousEnabled,
     newEnabled,
   });

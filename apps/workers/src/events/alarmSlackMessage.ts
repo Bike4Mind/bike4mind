@@ -31,8 +31,11 @@ export type AlarmCategory = 'cost' | 'abuse' | 'jobs' | 'infra' | 'security';
 
 export const ALARM_CATEGORIES: readonly AlarmCategory[] = ['cost', 'abuse', 'jobs', 'infra', 'security'];
 
-/** Extra data the relay loads before posting; see youngAccountSpendDetail.ts. */
-export type AlarmDetailKind = 'young-account-spend';
+/**
+ * Extra data the relay loads before posting; see youngAccountSpendDetail.ts, providerSpendDetail.ts
+ * and refusedRequestBurstDetail.ts.
+ */
+export type AlarmDetailKind = 'young-account-spend' | 'provider-spend' | 'refused-request-burst';
 
 export type AlarmLinkKey =
   | 'ai-advisory'
@@ -41,14 +44,14 @@ export type AlarmLinkKey =
   | 'signup-activity'
   | 'waf-block-list'
   | 'dlq-replay'
-  | 'live-ops-triage'
   | 'agent-executions'
   | 'integration-health'
   | 'system-secrets'
   | 'rate-limits'
   | 'spend-monitor'
   | 'moderation-review'
-  | 'moderation-settings';
+  | 'moderation-settings'
+  | 'model-prices';
 
 export interface AlarmCatalogEntry {
   title: string;
@@ -67,6 +70,8 @@ export interface AlarmCatalogEntry {
   linkPaths?: Partial<Record<AlarmLinkKey, string>>;
   /** Data the relay fetches for the breaching window and passes in as FormatOptions.details. */
   detail?: AlarmDetailKind;
+  /** Who triages it and what the other on-call does; defaults to CATEGORY_OWNER for the category. */
+  owner?: string;
 }
 
 export interface FormatOptions {
@@ -97,7 +102,6 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'signup-activity': { label: 'Signup activity', path: '/admin?tab=users&signedUp=hour' },
   'waf-block-list': { label: 'WAF block list', path: '/admin?tab=security-dashboard' },
   'dlq-replay': { label: 'DLQ replay', path: adminDlqReplayPath() },
-  'live-ops-triage': { label: 'LiveOps triage', path: '/admin?tab=live-ops-triage' },
   'agent-executions': { label: 'Agent executions', path: '/admin?tab=agent-executions' },
   'integration-health': { label: 'Integration health', path: '/admin?tab=integration-health' },
   'system-secrets': { label: 'System secrets', path: '/admin?tab=system-secrets' },
@@ -105,12 +109,16 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'spend-monitor': { label: 'Credit analytics', path: '/admin?tab=credit-analytics' },
   'moderation-review': { label: 'Moderation review', path: `/admin?tab=${ADMIN_MODERATION_INCIDENTS_TAB_SLUG}` },
   'moderation-settings': { label: 'Moderation settings', path: '/admin?tab=admin-settings&section=security' },
+  'model-prices': { label: 'Model prices', path: '/admin?tab=models&modelsSection=prices' },
 };
 
 const SIGNUP_ACTION =
   'Check the admin signup activity for the last hour and the WAF block list. If the senders are bots, block their IPs or email domains.';
 const SIGNUP_LINKS: AlarmLinkKey[] = ['signup-activity', 'waf-block-list'];
 const BLOCKER_LOG_ACTION = 'Check the blocker Lambda log and its dead-letter queue.';
+/** One rule for the ledger spend alarms, read against the breakdown the provider-spend detail adds. */
+const LEDGER_SPEND_DECISION =
+  'Read the breakdown above. If accounts under 7 days old carry little of it, the young-account spend alarm is quiet, and the spend sits with established, paying or internal accounts, it is heavy use: acknowledge in this thread and move on. Escalate to the abuse owner, and suspend suspicious accounts from their admin pages, when new accounts carry a third or more of it, the young-account spend alarm is red too, or this stays red for 2 hours or more. One account with many calls on one model is often a runaway agent: check Agent executions.';
 
 export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'signup-code-send-rate': {
@@ -143,6 +151,16 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Check which accounts created the keys and whether they are new accounts. Revoke keys from accounts that look automated.',
     links: ['signup-activity'],
   },
+  'side-app-mint-our-fault': {
+    title: 'Connected apps cannot get tokens',
+    level: 'warn',
+    category: 'infra',
+    unit: 'failed token exchanges',
+    meaning:
+      'Token exchanges for connected apps are failing on our side at a sustained rate. Users of those apps cannot start AI requests until it clears.',
+    action:
+      'Check the Next.js server log for the side-app-mint-our-fault lines and the errors just above them. A database outage shows up in the hourly health alert queue as well.',
+  },
   'turnstile-policy-inactive': {
     title: 'The sign-in bot challenge is switched off',
     level: 'page',
@@ -171,6 +189,16 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     meaning: 'Stripe took a payment and the credits were not added to the account.',
     action:
       'Find the purchase in Stripe and the credit ledger, grant the credits by hand, then check the webhook handler logs.',
+  },
+  'account-deletion-deadline': {
+    title: 'Account deletion needs attention',
+    level: 'page',
+    category: 'jobs',
+    unit: 'overdue requests or missing reports',
+    meaning:
+      'An account deletion request is at least 25 days old and still open, or the sweep has not reported in its two-day window.',
+    action:
+      'Check accountDeletionSweep logs and its dead-letter queue, then distinguish overdue requests from missing OverdueDeletionRequests datapoints. Follow infra/account-deletion-deadline-alarm.md; recovery can take about two days after the count returns to zero.',
   },
   'billing-event-ingest-failures': {
     title: 'Billing events not reaching Overwatch',
@@ -208,33 +236,6 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     meaning: 'An agent hit the hard limit on self-handoffs and was stopped.',
     action: 'Review the session to see why it never finished.',
     links: ['agent-executions'],
-  },
-  'liveops-p0-issues': {
-    title: 'LiveOps found a blocker issue',
-    level: 'page',
-    category: 'infra',
-    unit: 'issues',
-    meaning: 'The automated triage created a P0 issue from production errors.',
-    action: 'Open the newest P0 issue in the tracker and respond.',
-    links: ['live-ops-triage'],
-  },
-  'liveops-p1-issues': {
-    title: 'LiveOps found a critical issue',
-    level: 'warn',
-    category: 'infra',
-    unit: 'issues',
-    meaning: 'The automated triage created a P1 issue from production errors.',
-    action: 'Open the newest P1 issue in the tracker.',
-    links: ['live-ops-triage'],
-  },
-  'liveops-high-error-volume': {
-    title: 'Production error volume is high',
-    level: 'page',
-    category: 'infra',
-    unit: 'errors',
-    meaning: 'Far more errors than usual were logged. Something may be broken for many users.',
-    action: 'Check the latest deploy and the error log for a common cause.',
-    links: ['live-ops-triage'],
   },
   'ecs-task-failed-to-start': {
     title: 'A background service cannot start',
@@ -439,37 +440,83 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     links: ['signup-activity'],
   },
   'llm-spend-rate': {
-    title: 'AI provider spend is spiking',
+    title: 'AI spend at {provider} is spiking',
     level: 'warn',
     category: 'abuse',
     unit: 'USD',
     meaning:
-      'Estimated spend at one provider in five minutes is at or above the ceiling. A runaway agent or a credit farm are the usual causes.',
-    action:
-      'Open the LLM spend dashboard for the provider and model, then check the agent executions and signup activity.',
+      'Estimated spend at {provider} in five minutes is at or above the burst ceiling. A runaway agent, a credit farm or one heavy user are the usual causes.',
+    action: LEDGER_SPEND_DECISION,
     links: ['agent-executions', 'signup-activity'],
+    detail: 'provider-spend',
+  },
+  'llm-spend-hourly-warn': {
+    title: 'AI spend at {provider} is higher than usual',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Estimated spend at {provider} over one hour is at or above the warn line. This is the heads-up tier; the page tier is the llm-spend-hourly alarm at a higher line. Heavy use by an established account crosses this now and then.',
+    action: `${LEDGER_SPEND_DECISION} This tier only pages when spend reaches the higher line.`,
+    links: ['agent-executions', 'signup-activity'],
+    detail: 'provider-spend',
   },
   'llm-spend-hourly': {
-    title: 'AI provider spend is running hot',
+    title: 'AI spend at {provider} is running hot',
     level: 'page',
     category: 'abuse',
     unit: 'USD',
     meaning:
-      'Estimated spend at one provider over the last hour is at or above the ceiling. A sustained drain from a credit farm, a stolen card, or a runaway agent are the usual causes.',
-    action:
-      'Open the LLM spend dashboard for the provider and top models, check the young-account spend post in LiveOps, then review signup activity and the WAF block list.',
+      'Estimated spend at {provider} over one hour is at or above the page line, well past the warn line. A credit farm, a stolen card, a runaway agent or an unusually heavy paying account are the usual causes.',
+    action: LEDGER_SPEND_DECISION,
     links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+    detail: 'provider-spend',
   },
   'provider-reported-spend-hourly': {
-    title: 'A provider reports unusual AI spend',
+    title: 'Unusual AI spend reported by {provider}',
     level: 'page',
     category: 'cost',
     unit: 'USD',
     meaning:
-      "The provider's own usage report for the last hour, priced with our model rates, is at or above the ceiling. This counts every call billed to the organization, including ones that never reached our ledger.",
+      "{provider}'s own usage report for the last hour, priced with our model rates, is at or above the ceiling. This counts every call billed to the organization, including ones that never reached our ledger.",
     action:
-      'Open the LLM spend dashboard and the provider console usage page for the top models, then check the young-account spend post, signup activity and the WAF block list.',
+      'Compare with the ledger alarms for {provider} (AI spend at {provider} is running hot, or higher than usual). If one of them is red too, the spend went through the app: follow that alarm and its breakdown. If only this one is red, the spend did not pass through our ledger: open the provider console usage page, group by API key, and if a key you do not recognise is spending, rotate it. A one-hour blip that clears on the next report is usually a report lag; acknowledge it.',
+    owner:
+      'Owner: the abuse/LiveOps owner triages this in the thread. Devops: no infrastructure action unless the provider console shows an unknown key spending, which is a key rotation.',
     links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+  },
+  'provider-unpriced-tokens-hourly': {
+    title: 'AI spend at {provider} is partly unpriced',
+    level: 'warn',
+    category: 'cost',
+    unit: 'unpriced hours',
+    meaning:
+      "The last hour's {provider} usage report includes output tokens from models our poller has no price for, above both the volume floor and the share floor, so the provider-reported spend alarm reads low.",
+    action:
+      'Open the usage poller Lambda log and find the WARN line "no price for <ids>". Add a price for each id on the admin model prices page (or as a ModelPrice row); it reaches the poller at the next model discovery run, within 6 hours. If the price snapshot is unavailable, the adapter table or USAGE_ONLY_PRICING in b4m-core/services/src/spendReconciliation/providerUsagePricing.ts is the fallback. Meanwhile, check the {provider} console usage for that hour by hand.',
+    links: ['model-prices'],
+  },
+  'model-price-snapshot-age': {
+    title: 'The model price snapshot is out of date',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'stale hours',
+    meaning:
+      'The model price snapshot the usage poller reads has not been refreshed for 48 hours or more. Usage is still priced from the stale and static prices, so reported spend may drift from the provider bill.',
+    action:
+      'Check whether model discovery ran and wrote the price snapshot: look at the model discovery Lambda log for the snapshot write, and at its schedule. Once it writes a fresh snapshot the next hourly poll clears this alarm.',
+    links: ['model-prices'],
+  },
+  'model-price-snapshot-missing': {
+    title: 'The model price snapshot is missing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'missing hours',
+    meaning:
+      'The usage poller could not use the model price snapshot on 48 hourly polls in a row (it was absent, unreadable or invalid). Usage is still priced from the static prices, so reported spend may drift from the provider bill.',
+    action:
+      'Check whether model discovery ran and wrote the price snapshot. Then check the poller can read the snapshot object: the bucket setting on the poller Lambda, its read permission, and the poller log line "model price snapshot unavailable".',
+    links: ['model-prices'],
   },
   'provider-usage-poll-errors': {
     title: 'The provider usage poller is failing',
@@ -479,6 +526,36 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     meaning:
       'The hourly job that reads Anthropic and OpenAI usage reports failed, so the provider-side spend alarms are blind until it recovers.',
     action: 'Check the poller Lambda log for the error. A missing or rotated admin key is the usual cause.',
+  },
+  'spend-reconciliation-drift': {
+    title: 'Provider billing and our credit costs disagree',
+    level: 'page',
+    category: 'cost',
+    unit: 'drifting provider-months',
+    meaning:
+      "The nightly reconciliation found a provider's billed spend for last month differing from our internal cost estimate by more than the error band. Either we under-bill usage the provider charges for, or our model rates are wrong.",
+    action:
+      'Open the reconciliation banner on the credit analytics page for the provider and the size of the gap, then compare the provider console usage by model against our model rates.',
+    links: ['spend-monitor'],
+  },
+  'spend-reconciliation-nothing-reconciled': {
+    title: 'The nightly spend reconciliation checked nothing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'empty runs',
+    meaning:
+      'Every provider was skipped or failed in the nightly reconciliation, so credits were not compared against provider billing and a drift would go unnoticed.',
+    action:
+      'Check the reconciliation Lambda log. A missing or rotated provider admin key shows as skipped; a provider API error shows as failed.',
+  },
+  'spend-reconciliation-errors': {
+    title: 'The nightly spend reconciliation is failing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'failed runs',
+    meaning:
+      'The nightly job that compares provider billing with our credit costs failed before it could report, so the drift and nothing-reconciled alarms are blind until it recovers.',
+    action: 'Check the reconciliation Lambda log for the error. A database or provider API outage is the usual cause.',
   },
   'image-moderation-incident-unalerted': {
     title: 'A moderation incident has no reviewer alert',
@@ -531,6 +608,18 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     action: 'Check the WAF block list. Nothing else is needed unless real users report being refused.',
     links: ['waf-block-list'],
   },
+  'refused-request-burst': {
+    title: 'One IP is collecting refused API requests',
+    level: 'warn',
+    category: 'security',
+    unit: 'refused requests from the top IP',
+    meaning:
+      'A single client IP sent many API requests in 15 minutes that were refused (401 to 405) and that carried no resolved user. Volume only: the API probe detector scores what was probed. Normal clients send a handful; a steady stream usually means a scripted client walking the API. Nothing is blocked automatically.',
+    action:
+      'Look at the top IP, its paths and any accounts listed above. A client polling one or two session paths is a stale tab: acknowledge and move on. Paths shown as /api/:unmatchedApiPath or /api/:type/:id are collapsed 404s, so a few of those can be many different guesses and count as probing. Many distinct paths, admin or internal routes, or a burst that repeats across windows is probing: hand the IP to the WAF owner and suspend any listed account that is clearly abusive.',
+    links: ['waf-block-list'],
+    detail: 'refused-request-burst',
+  },
   'stream-idle-timeouts': {
     title: 'AI replies are being cut off by our idle watchdog',
     level: 'warn',
@@ -582,6 +671,46 @@ export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
 /** Level and category for alarms the catalog does not know. */
 export const DEFAULT_ALARM_LEVEL: AlarmLevel = 'warn';
 export const DEFAULT_ALARM_CATEGORY: AlarmCategory = 'infra';
+
+/**
+ * Who a category's alarms belong to, so whoever the page reaches can tell whether it is theirs.
+ * An entry's own owner (or handoff) replaces it.
+ */
+export const CATEGORY_OWNER: Partial<Record<AlarmCategory, string>> = {
+  abuse:
+    'Owner: the abuse/LiveOps owner triages this in the thread. Devops: no infrastructure action is needed; leave it to them unless they ask, or it stays red for 2 hours or more with nobody on it.',
+};
+
+/** Must stay in sync with LLM_SPEND_PROVIDERS in infra/llmSpend.ts and the provider-reported alarms. */
+export const ALARM_PROVIDERS = ['anthropic', 'openai', 'bedrock', 'google', 'other'] as const;
+export type AlarmProvider = (typeof ALARM_PROVIDERS)[number];
+
+const PROVIDER_LABELS: Record<AlarmProvider, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  bedrock: 'Bedrock',
+  google: 'Google',
+  other: 'other providers',
+};
+const UNKNOWN_PROVIDER_LABEL = 'an AI provider';
+
+const isAlarmProvider = (value: string | undefined): value is AlarmProvider =>
+  (ALARM_PROVIDERS as readonly string[]).includes(value ?? '');
+
+/** The provider a per-provider alarm watches: its Provider dimension, else the name's last segment. */
+export function alarmProvider(alarm: CloudWatchAlarmPayload): AlarmProvider | undefined {
+  const dimension = alarm.Trigger?.Dimensions?.find(d => d.name === 'Provider')?.value;
+  if (isAlarmProvider(dimension)) return dimension;
+  const last = /-([a-z]+)$/.exec(alarm.AlarmName ?? '')?.[1];
+  return isAlarmProvider(last) ? last : undefined;
+}
+
+/** Fills the {provider} placeholder; a sentence that now opens with the fallback is capitalised. */
+function fillProvider(text: string, label: string): string {
+  if (!text.includes('{provider}')) return text;
+  const filled = text.replace(/\{provider\}/g, label);
+  return filled.charAt(0).toUpperCase() + filled.slice(1);
+}
 
 const COLOR = {
   page: '#E01E5A',
@@ -689,6 +818,8 @@ export type ParsedReason =
       /** Epoch ms of the newest and oldest breaching datapoint windows. */
       latestStart: number;
       earliestStart: number;
+      /** Breaching datapoints the reason lists. */
+      datapoints: number;
       period?: number;
     }
   | { kind: 'missing'; minutes?: number }
@@ -720,6 +851,7 @@ export function parseReason(alarm: CloudWatchAlarmPayload): ParsedReason {
       limit: /less than/i.test(reason) ? 'floor' : 'ceiling',
       latestStart: latest.start,
       earliestStart: earliest.start,
+      datapoints: points.length,
       period: trigger?.Period,
     };
   }
@@ -761,6 +893,15 @@ export function describeReason(
   return `${what}${when}${threshold}.`;
 }
 
+/** Periods from an hour up are sums over the whole window, so no crossing time can be read from them. */
+const LONG_PERIOD_SECONDS = 3600;
+
+function describeBreachingWindows(count: number, periodSeconds: number): string {
+  const phrase = periodPhrase(periodSeconds);
+  if (count <= 1) return `just crossed (${phrase === 'hour' ? 'an' : 'a'} ${phrase}-long sum, so no exact start time)`;
+  return `${count} consecutive ${phrase === 'hour' ? 'hours' : phrase === 'day' ? 'days' : `${phrase} windows`}`;
+}
+
 /** Field cells for the numbers-at-a-glance block; empty when the reason carries no numbers. */
 export function describeFields(
   alarm: CloudWatchAlarmPayload,
@@ -791,6 +932,12 @@ export function describeFields(
         ? `*Window*\n${periodPhrase(parsed.period)} ending ${formatClock(new Date(parsed.latestStart + parsed.period * 1000))} UTC`
         : `*At*\n${formatClock(new Date(parsed.latestStart))} UTC`
     );
+    if (parsed.period && parsed.period >= LONG_PERIOD_SECONDS) {
+      // A datapoint this long is a sum over its whole window; its start is not when the line was
+      // crossed, so a start time plus duration would read as an hour-long breach.
+      fields.push(`*Breaching for*\n${describeBreachingWindows(parsed.datapoints, parsed.period)}`);
+      return fields;
+    }
     sinceMs = parsed.earliestStart;
   } else if (parsed.kind === 'missing') {
     if (parsed.minutes !== undefined) {
@@ -810,8 +957,18 @@ export function describeFields(
 
 function resolveEntry(alarm: CloudWatchAlarmPayload, stage: string) {
   const suffix = alarmSuffix(alarm.AlarmName, stage);
-  const entry = lookupCatalog(suffix);
-  if (entry) return { entry, title: entry.title, level: entry.level, category: entry.category };
+  const found = lookupCatalog(suffix);
+  if (found) {
+    const provider = alarmProvider(alarm);
+    const label = provider ? PROVIDER_LABELS[provider] : UNKNOWN_PROVIDER_LABEL;
+    const entry: AlarmCatalogEntry = {
+      ...found,
+      title: fillProvider(found.title, label),
+      meaning: fillProvider(found.meaning, label),
+      action: fillProvider(found.action, label),
+    };
+    return { entry, title: entry.title, level: entry.level, category: entry.category };
+  }
   const words = suffix.replace(/-/g, ' ');
   return {
     entry: undefined,
@@ -991,6 +1148,8 @@ export function formatAlarmSlackMessage(
   const happened = describeReason(alarm, entry?.unit, entry?.measurement);
   const why = entry?.meaning ?? alarm.AlarmDescription;
   const sections = [`*What happened*\n${escapeMrkdwn(happened)}`];
+  const owner = entry?.owner ?? (entry?.handoff ? undefined : CATEGORY_OWNER[category]);
+  if (owner) sections.push(`*Whose it is*\n${escapeMrkdwn(owner)}`);
   if (why) sections.push(`*Why it matters*\n${escapeMrkdwn(why)}`);
   sections.push(...(options.details ?? []));
   if (entry?.coverage) sections.push(`*Scope and freshness*\n${escapeMrkdwn(entry.coverage)}`);
@@ -1073,16 +1232,33 @@ export function appUrlFromEnv(env: NodeJS.ProcessEnv = process.env): string | un
   return domain ? `https://app.${domain}` : undefined;
 }
 
-export async function postAlarmToSlack(webhookUrl: string, message: SlackAlarmMessage): Promise<void> {
+export function postAlarmToSlack(webhookUrl: string, message: SlackAlarmMessage): Promise<void>;
+export function postAlarmToSlack(
+  webhookUrl: string,
+  message: SlackAlarmMessage,
+  options: { atMostOnce: boolean }
+): Promise<{ state: 'delivered' | 'unconfirmed' }>;
+export async function postAlarmToSlack(
+  webhookUrl: string,
+  message: SlackAlarmMessage,
+  options?: { atMostOnce: boolean }
+): Promise<void | { state: 'delivered' | 'unconfirmed' }> {
   const body: Record<string, unknown> = { text: message.text };
   if (message.blocks.length > 0) body.blocks = message.blocks;
   if (message.attachments && message.attachments.length > 0) body.attachments = message.attachments;
-  const resp = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    throw new Error(`Slack webhook failed: ${resp.status} ${resp.statusText}`);
+  try {
+    const resp = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) {
+      throw new Error(`Slack webhook failed: ${resp.status} ${resp.statusText}`);
+    }
+    if (options) return { state: 'delivered' };
+  } catch (error) {
+    if (!options?.atMostOnce) throw error;
+    return { state: 'unconfirmed' };
   }
 }

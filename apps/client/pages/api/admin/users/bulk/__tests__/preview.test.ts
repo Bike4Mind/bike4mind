@@ -14,13 +14,21 @@ const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => (rateLimitOptions.push(options), () => undefined),
 }));
-vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkResolveDeps: {}, usersBulkPreviewDeps: {} }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({
+  usersBulkResolveDeps: {},
+  usersBulkPreviewDeps: {},
+}));
 
 const mockResolve = vi.fn();
 const mockPreview = vi.fn();
-vi.mock('@server/admin/usersBulk/resolve', () => ({
+vi.mock('@bike4mind/server-utils/admin/usersBulk/resolve', () => ({
   resolveAdminUsersBulk: (...a: unknown[]) => mockResolve(...a),
   previewAdminUsersBulk: (...a: unknown[]) => mockPreview(...a),
+}));
+
+const mockAudit = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => mockAudit(...args),
 }));
 
 import handler from '../preview';
@@ -30,8 +38,8 @@ const delegate = (...adminPermissions: AdminPermissionId[]) => ({ ...ADMIN, isAd
 const BODY = { target: { kind: 'filter', filter: { status: 'active' } }, action: { type: 'suspend' } };
 
 async function call(body: unknown, user: Record<string, unknown> = ADMIN) {
-  const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user });
+  const { req, res } = createMocks({ method: 'POST' });
+  Object.assign(req, { user, body });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }
@@ -41,6 +49,40 @@ describe('POST /api/admin/users/bulk/preview', () => {
     vi.clearAllMocks();
     mockResolve.mockResolvedValue({ matched: 0, eligible: [], excluded: { self: 0, admins: 0 }, overCap: false });
     mockPreview.mockResolvedValue({ eligible: 0 });
+    mockAudit.mockResolvedValue({});
+  });
+
+  describe('provider end-user identifier search', () => {
+    const DIGEST = 'cd'.repeat(32);
+    const body = (search: string) => ({ ...BODY, target: { kind: 'filter', filter: { search } } });
+
+    it('does not audit a name search or an id-list target', async () => {
+      await call(body('ada'));
+      await call({ ...BODY, target: { kind: 'ids', userIds: ['a'.repeat(24)] } });
+      expect(mockAudit).not.toHaveBeenCalled();
+    });
+
+    it('audits a 64-hex filter search against the single matched account', async () => {
+      mockResolve.mockResolvedValue({ matched: 1, eligible: [], excluded: { self: 0, admins: 0 }, overCap: false });
+      mockPreview.mockResolvedValue({ eligible: 1, sample: [{ id: 'u1', name: 'Ada', email: 'ada@example.com' }] });
+
+      const res = await call(body(DIGEST));
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.provider_id.resolved',
+          target: { kind: 'user', id: 'u1', displayName: 'ada@example.com' },
+          details: { providerEndUserId: DIGEST, source: 'users_bulk_preview', matched: true, matchedCount: 1 },
+        })
+      );
+    });
+
+    it('fails the request when the audit write fails', async () => {
+      mockAudit.mockRejectedValue(new Error('audit down'));
+      await expect(call(body(DIGEST))).rejects.toThrow('audit down');
+    });
   });
 
   it('requires JWT admin auth and a per-admin rate limit', () => {

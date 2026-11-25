@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 
@@ -45,7 +46,7 @@ describe('emitProcessingFailed', () => {
     ]);
   });
 
-  it.each(['cli-sse', 'cli-ws', 'embed'] as const)(
+  it.each(['cli-sse', 'embed'] as const)(
     'emits only the Stage+Surface series on %s, leaving the /process series untouched',
     async surface => {
       await emitProcessingFailed(surface, new Error('429 Too Many Requests'));
@@ -56,7 +57,7 @@ describe('emitProcessingFailed', () => {
     }
   );
 
-  it.each(['cli-sse', 'cli-ws', 'embed'] as const)('skips a non-fault on the %s surface', async surface => {
+  it.each(['cli-sse', 'embed'] as const)('skips a non-fault on the %s surface', async surface => {
     mockIsOperatorFault.mockReturnValueOnce(false);
     await emitProcessingFailed(surface, new Error('out of credits'));
     expect(mockEmitMetrics).not.toHaveBeenCalled();
@@ -76,7 +77,7 @@ describe('emitProcessingFailed', () => {
   });
 
   it('resolves without throwing when building the datums fails', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleError = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mockResource.App = undefined;
 
     await expect(emitProcessingFailed('cli-sse', new Error('boom'))).resolves.toBeUndefined();

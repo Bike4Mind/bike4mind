@@ -1,6 +1,7 @@
 import z from 'zod';
 import { generatedAudioRequestFields } from './generatedAudio';
 import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
+import { CompletionRunAttributionSchema } from './schemas/cliCompletions';
 
 /**
  * Supported sound-effects generation vendors. Currently only ElevenLabs.
@@ -32,7 +33,22 @@ export const soundEffectsRequestSchema = z.object({
   promptInfluence: z.number().min(0).max(1).optional(),
   format: z.string().optional(),
   organization_id: BillingOrganizationIdSchema,
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget before the " +
+      'provider is called, and the call is refused with 422 `run_budget_exhausted` when it does not fit.'
+  ),
   ...generatedAudioRequestFields,
 });
 
 export type SoundEffectsRequest = z.infer<typeof soundEffectsRequestSchema>;
+
+/** A sound-effect job's request: the generation fields of soundEffectsRequestSchema, without delivery and billing. */
+export const soundEffectJobRequestSchema = soundEffectsRequestSchema.pick({
+  provider: true,
+  text: true,
+  durationSeconds: true,
+  promptInfluence: true,
+  format: true,
+});
+
+export type SoundEffectJobRequest = z.infer<typeof soundEffectJobRequestSchema>;

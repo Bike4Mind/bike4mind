@@ -20,6 +20,13 @@ describe('runTaxonomyInference', () => {
     createMock.mockReset();
   });
 
+  it('opts out of OpenAI-side storage', async () => {
+    createMock.mockResolvedValue(completionWith(null));
+
+    await runTaxonomyInference('key', []);
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ store: false }));
+  });
+
   it('propagates a genuine API-call failure rather than swallowing it', async () => {
     const apiError = new Error('401 Incorrect API key provided');
     createMock.mockRejectedValue(apiError);

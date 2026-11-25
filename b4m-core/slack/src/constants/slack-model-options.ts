@@ -1,8 +1,8 @@
 import { buildApiKeyTable, getAvailableModels, PICKER_LISTING_OPTIONS } from '@bike4mind/llm-adapters';
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService } from '@bike4mind/services-core';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
+import { isUnpricedTextModel } from '@bike4mind/services-core/llm/modelAdmission';
 import { Logger } from '@bike4mind/observability';
 import { getSlackDb } from '../di/registry';
 

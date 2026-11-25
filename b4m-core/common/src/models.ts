@@ -273,6 +273,9 @@ export enum ChatModels {
   JURASSIC2_MID = 'ai21.j2-mid-v1',
 
   // GEMINI
+  // Gemini 4
+  GEMINI_4_NEON = 'gemini-4-neon',
+
   // Gemini 3.5
   GEMINI_3_5_FLASH = 'gemini-3.5-flash',
 
@@ -656,7 +659,7 @@ export type ModelName = z.infer<typeof supportedModels>;
 export type ModelPriceSource = UsagePriceSource;
 
 /** Why a listed model is shown to a caller but not selectable by them. */
-export type ModelAccessLock = { locked: true; reason: 'requires_paid_plan' };
+export type ModelAccessLock = { locked: true; reason: 'requires_paid_plan' | 'org_policy' };
 
 export type ModelInfo = {
   id: ModelName;
@@ -875,6 +878,7 @@ export const sumOneHourCacheWrites = (turns: readonly TurnUsage[] | undefined): 
 // Alarm-only: billing behavior is unchanged.
 const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number => {
   if (cost === 0 && usage > 0 && !model.freeToRun) {
+    // eslint-disable-next-line no-console -- alarm signal in pure pricing code shared with the browser bundle
     console.error(
       `[UNPRICED_MODEL] ${model.id} (${model.backend}) computed $0 for ${usage} tokens; its pricing map is missing or zero`
     );

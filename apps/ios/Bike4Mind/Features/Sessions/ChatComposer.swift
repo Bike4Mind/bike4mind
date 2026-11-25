@@ -1,8 +1,10 @@
 import B4MKit
 import SwiftUI
 
-/// The message bar shared by a session's chat and the new-conversation screen: rounded field, dictation,
-/// optional agent-run toggle and send. Draft and send state stay with the owning view model.
+/// The message bar shared by a session's chat and the new-conversation screen, styled like the web
+/// composer at phone width (SessionBottom): a full-width panel bar with a hairline top edge, the field,
+/// dictation, the optional agent-run toggle and a solid send square. Draft and send state stay with the
+/// owning view model.
 struct ChatComposer: View {
   @Binding var draft: String
   var isFocused: FocusState<Bool>.Binding
@@ -10,10 +12,14 @@ struct ChatComposer: View {
   /// Non-nil only when the account can start agent runs; `nil` hides the toggle and its hint.
   var agentRun: Binding<Bool>?
   let onDictate: () -> Void
+  /// Starts the hands-free voice conversation; `nil` hides the button.
+  var onVoiceConversation: (() -> Void)?
   let onSend: () -> Void
 
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-  @ScaledMetric(relativeTo: .title) private var iconSize: CGFloat = 32
+  @ScaledMetric(relativeTo: .title) private var iconSize: CGFloat = 24
+  @ScaledMetric(relativeTo: .title) private var sendSize: CGFloat = 32
+  @ScaledMetric(relativeTo: .title) private var sendGlyphSize: CGFloat = 14
 
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
@@ -25,9 +31,12 @@ struct ChatComposer: View {
       }
       row
     }
-    .padding(.horizontal, Tokens.Spacing.m)
-    .padding(.vertical, Tokens.Spacing.s)
-    .background(.bar)
+    .padding(Tokens.Spacing.s + Tokens.Spacing.xs)
+    .background {
+      Tokens.Palette.panel
+        .overlay(alignment: .top) { Rectangle().fill(Tokens.Palette.borderSolid).frame(height: 1) }
+        .ignoresSafeArea(edges: .bottom)
+    }
   }
 
   /// At accessibility text sizes the field takes the full width and the buttons move to a row beneath it;
@@ -39,16 +48,18 @@ struct ChatComposer: View {
           messageField
           HStack(spacing: Tokens.Spacing.s) {
             micButton
+            voiceConversationButton
             agentButton
             Spacer(minLength: 0)
             sendButton
           }
         }
       } else {
-        HStack(alignment: .bottom, spacing: Tokens.Spacing.s) {
-          micButton
-          agentButton
+        HStack(alignment: .bottom, spacing: Tokens.Spacing.xs) {
           messageField
+          micButton
+          voiceConversationButton
+          agentButton
           sendButton
         }
       }
@@ -57,11 +68,24 @@ struct ChatComposer: View {
 
   private var micButton: some View {
     Button(action: onDictate) {
-      icon("mic.circle")
+      icon("mic")
     }
     .frame(minWidth: 44, minHeight: 44)
     .accessibilityLabel("Dictate a message")
     .accessibilityIdentifier("chat-composer-mic")
+  }
+
+  @ViewBuilder
+  private var voiceConversationButton: some View {
+    if let onVoiceConversation {
+      Button(action: onVoiceConversation) {
+        icon("waveform")
+      }
+      .frame(minWidth: 44, minHeight: 44)
+      .accessibilityLabel("Start a voice conversation")
+      .accessibilityHint("Talk hands-free and hear the replies")
+      .accessibilityIdentifier("chat-composer-voice-conversation")
+    }
   }
 
   @ViewBuilder
@@ -70,7 +94,7 @@ struct ChatComposer: View {
       Button {
         agentRun.wrappedValue.toggle()
       } label: {
-        icon(agentRun.wrappedValue ? "bolt.circle.fill" : "bolt.circle")
+        icon(agentRun.wrappedValue ? "bolt.fill" : "bolt")
       }
       .frame(minWidth: 44, minHeight: 44)
       .accessibilityLabel("Run as agent")
@@ -81,26 +105,34 @@ struct ChatComposer: View {
   }
 
   private var messageField: some View {
-    TextField("Message", text: $draft, axis: .vertical)
-      .lineLimit(1...6)
-      .focused(isFocused)
-      .padding(.horizontal, Tokens.Spacing.m)
-      .padding(.vertical, Tokens.Spacing.s + 2)
-      .background(Tokens.Palette.groupedBackground)
-      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous)
-          .strokeBorder(Tokens.Palette.divider, lineWidth: 1)
-      }
-      .submitLabel(.send)
-      .onSubmit { if canSend { onSend() } }
-      .accessibilityIdentifier("chat-composer-field")
+    TextField(
+      "Message", text: $draft,
+      prompt: Text("Type your message here...").foregroundStyle(Tokens.Palette.composerPlaceholder.opacity(0.75)),
+      axis: .vertical
+    )
+    .lineLimit(1...6)
+    .font(Tokens.Typography.body)
+    .foregroundStyle(Tokens.Palette.primaryText)
+    .focused(isFocused)
+    .padding(.horizontal, Tokens.Spacing.xs)
+    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+    .submitLabel(.send)
+    .onSubmit { if canSend { onSend() } }
+    .accessibilityIdentifier("chat-composer-field")
   }
 
+  /// Web SessionToolbar: a solid primary 32pt square at radius sm with a small arrow.
   private var sendButton: some View {
     Button(action: onSend) {
-      icon("arrow.up.circle.fill")
+      Image(systemName: "arrow.up")
+        .font(.system(size: sendGlyphSize, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(width: sendSize, height: sendSize)
+        .background(
+          Tokens.Palette.sendButton.opacity(canSend ? 1 : 0.4),
+          in: RoundedRectangle(cornerRadius: Tokens.Radius.sm, style: .continuous))
     }
+    .buttonStyle(.plain)
     .disabled(!canSend)
     .frame(minWidth: 44, minHeight: 44)
     .accessibilityLabel("Send")
@@ -110,6 +142,6 @@ struct ChatComposer: View {
   private func icon(_ name: String) -> some View {
     Image(systemName: name)
       .font(.system(size: iconSize))
-      .symbolRenderingMode(.hierarchical)
+      .foregroundStyle(Tokens.Palette.secondaryText)
   }
 }

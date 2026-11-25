@@ -48,6 +48,22 @@ describe('GenerationJobRepository', () => {
     expect((await generationJobRepository.findById(id))?.ownerId).toBe('u1');
   });
 
+  it('round-trips the run attribution and its budget claim, and leaves both absent without a run', async () => {
+    const run = { runId: 'run-1', role: 'root' as const, purpose: 'tool' as const, taskId: 't1' };
+    const claimed = await generationJobRepository.createJob({
+      ...newJob(),
+      run,
+      runClaim: { runId: 'run-1', credits: 120 },
+    });
+    expect(await generationJobRepository.findById(claimed.id)).toMatchObject({
+      run,
+      runClaim: { runId: 'run-1', credits: 120 },
+    });
+    const plain = await generationJobRepository.findById((await generationJobRepository.createJob(newJob())).id);
+    expect(plain).not.toHaveProperty('run');
+    expect(plain).not.toHaveProperty('runClaim');
+  });
+
   it('rejects a supplied id that is not a lowercase 24-hex ObjectId string', async () => {
     const upper = new mongoose.Types.ObjectId().toHexString().toUpperCase();
     for (const id of ['job1', '', upper]) {
@@ -156,6 +172,35 @@ describe('GenerationJobRepository', () => {
     const job = await generationJobRepository.createJob(newJob({ state: 'succeeded' }));
     expect(await generationJobRepository.claimTerminalHandling(job.id, t0)).toBe(true);
     expect(await generationJobRepository.claimTerminalHandling(job.id, plus(1))).toBe(false);
+  });
+
+  it('claimGroupCompletionNotice succeeds exactly once, including on a doc stored before the field existed', async () => {
+    const job = await generationJobRepository.createJob(newJob({ state: 'succeeded' }));
+    await GenerationJobModel.updateOne({ _id: job.id }, { $unset: { groupCompletionNotifiedAt: 1 } });
+    expect(await generationJobRepository.claimGroupCompletionNotice(job.id, t0)).toBe(true);
+    expect(await generationJobRepository.claimGroupCompletionNotice(job.id, plus(1))).toBe(false);
+  });
+
+  it("findByGroup returns one requester's image jobs in the group, oldest first", async () => {
+    const groupPayload = (groupId: string) => ({ ...newJob().payload, groupId });
+    const first = await generationJobRepository.createJob(
+      newJob({ kind: 'image', payload: groupPayload('g1') } as Partial<IGenerationJob>)
+    );
+    const second = await generationJobRepository.createJob(
+      newJob({ kind: 'image', payload: groupPayload('g1') } as Partial<IGenerationJob>)
+    );
+    await generationJobRepository.createJob(
+      newJob({ kind: 'image', payload: groupPayload('g2') } as Partial<IGenerationJob>)
+    );
+    await generationJobRepository.createJob(
+      newJob({ kind: 'image', requestedBy: 'u2', payload: groupPayload('g1') } as Partial<IGenerationJob>)
+    );
+    await generationJobRepository.createJob(
+      newJob({ kind: 'video', payload: groupPayload('g1') } as Partial<IGenerationJob>)
+    );
+
+    const members = await generationJobRepository.findByGroup('u1', 'g1');
+    expect(members.map(member => member.id)).toEqual([first.id, second.id]);
   });
 
   it('enforces one idempotency key per owner', async () => {
@@ -380,5 +425,58 @@ describe('GenerationJobRepository', () => {
     const found = await generationJobRepository.findByIdempotencyKey(CreditHolderType.User, 'u1', 'k9');
     expect(found?.id).toBe(job.id);
     expect(await generationJobRepository.findByIdempotencyKey(CreditHolderType.User, 'u1', 'nope')).toBeNull();
+  });
+
+  describe('findOutstandingHoldsForUser', () => {
+    const hold = (reservedCredits: number, ownerType = CreditHolderType.User, ownerId = 'u1') => ({
+      ownerId,
+      ownerType,
+      userId: 'u1',
+      organizationId: ownerType === CreditHolderType.Organization ? ownerId : null,
+      reservedCredits,
+      balanceAfterHold: 1000,
+    });
+    const backdate = (id: string, createdAt: Date) =>
+      GenerationJobModel.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { createdAt } });
+
+    it("returns the user's own-credit job holds that have neither settled nor been released", async () => {
+      const queued = await generationJobRepository.createJob(newJob({ creditHold: hold(40) }));
+      await generationJobRepository.createJob(newJob({ state: 'running', creditHold: hold(25) }));
+      const since = new Date(Date.now() - 60_000);
+      const outstanding = await generationJobRepository.findOutstandingHoldsForUser('u1', since);
+      expect(outstanding.map(sample => sample.credits).sort((a, b) => a - b)).toEqual([25, 40]);
+      const createdAt = (await generationJobRepository.findById(queued.id))?.createdAt;
+      expect(outstanding.find(sample => sample.credits === 40)?.at).toEqual(createdAt);
+    });
+
+    it('leaves out a job whose hold was settled to nothing', async () => {
+      const job = await generationJobRepository.createJob(newJob({ state: 'failed', creditHold: hold(6) }));
+      await generationJobRepository.recordSettlement(job.id, 0);
+      const since = new Date(Date.now() - 60_000);
+      expect(await generationJobRepository.findOutstandingHoldsForUser('u1', since)).toEqual([]);
+    });
+
+    it("leaves out settled, released, unheld, org-billed, older and other users' jobs", async () => {
+      const settled = await generationJobRepository.createJob(newJob({ state: 'succeeded', creditHold: hold(1) }));
+      await generationJobRepository.recordSettlement(settled.id, 1);
+      const released = await generationJobRepository.createJob(newJob({ state: 'failed', creditHold: hold(2) }));
+      await generationJobRepository.markTerminalHandled(released.id, new Date());
+      await generationJobRepository.createJob(newJob({ creditHold: null }));
+      await generationJobRepository.createJob(
+        newJob({
+          ownerType: CreditHolderType.Organization,
+          ownerId: 'org1',
+          creditHold: hold(3, CreditHolderType.Organization, 'org1'),
+        })
+      );
+      await generationJobRepository.createJob(
+        newJob({ ownerId: 'u2', requestedBy: 'u2', creditHold: hold(4, CreditHolderType.User, 'u2') })
+      );
+      const old = await generationJobRepository.createJob(newJob({ creditHold: hold(5) }));
+      const since = new Date(Date.now() - 60_000);
+      await backdate(old.id, new Date(since.getTime() - 60_000));
+
+      expect(await generationJobRepository.findOutstandingHoldsForUser('u1', since)).toEqual([]);
+    });
   });
 });

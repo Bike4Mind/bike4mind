@@ -8,16 +8,20 @@ import {
   projectRepository,
   organizationRepository,
   Group,
+  spaceRepository,
 } from '@bike4mind/database';
 import {
   canViewInvite,
   getInviteDetails,
   filterInviteRecipientsToSelf,
   toSharerInviteViews,
+  isDisabledSpaceInviteKey,
 } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sharingService } from '@bike4mind/services';
+import { InviteType, NotFoundError } from '@bike4mind/common';
+import { recordOrganizationAuditEventSafe } from '@bike4mind/server-utils/utils/organizationAudit';
 
 const handler = baseApi()
   /**
@@ -48,6 +52,9 @@ const handler = baseApi()
       if (access === 'expired') {
         return res.status(410).json({ message: 'Invite has expired' });
       }
+      if (access === 'revoked') {
+        return res.status(410).json({ message: 'Invite has been revoked', revoked: true });
+      }
       if (access !== 'allowed') {
         return res.status(404).json({ message: 'Invite Not Found' });
       }
@@ -70,6 +77,8 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invalid delete invite request' });
       }
 
+      if (await isDisabledSpaceInviteKey(id)) throw new NotFoundError('Invite not found');
+
       const updatedInvite = await sharingService.cancelInviteById(
         req.user,
         { id },
@@ -81,11 +90,20 @@ const handler = baseApi()
             projects: projectRepository,
             organizations: organizationRepository,
             groups: Group,
+            spaces: spaceRepository,
           },
         }
       );
 
       const [view] = await toSharerInviteViews([updatedInvite], req.user);
+      if (updatedInvite?.type === InviteType.Organization) {
+        await recordOrganizationAuditEventSafe({
+          organizationId: updatedInvite.documentId,
+          actorUserId: req.user.id,
+          action: 'invite.revoked',
+          targetId: updatedInvite.id,
+        });
+      }
       return res.json(view);
     })
   );

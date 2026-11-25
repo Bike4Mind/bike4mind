@@ -1,4 +1,4 @@
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -6,6 +6,7 @@ import {
   sessionRepository,
   projectRepository,
   fabFileRepository,
+  spendFreezeRepository,
   userRepository,
   questRepository,
 } from '@bike4mind/database';
@@ -18,6 +19,11 @@ import {
   redactSessionForClient,
 } from '@bike4mind/common';
 import { apiKeyService, sessionService } from '@bike4mind/services';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import {
+  billedOrganizationIdForFreeze,
+  spendFreezeSubjectForRequest,
+} from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import {
   buildVoiceInstructions,
   ForbiddenError,
@@ -68,6 +74,12 @@ function voiceUnavailableError(extra?: Record<string, unknown>) {
 
 const handler = baseApi().post(async (req, res) => {
   assertAiAccessAllowed(req.user);
+  // Voice bills the user personally, so only an org-billed key's own org can be the frozen org.
+  const organizationId = billedOrganizationIdForFreeze(req.apiKeyInfo);
+  // Before any gate that reads settings or the provider, and whether or not credits are enforced.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, organizationId), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
   const { sessionId, isReconnect } = CreateSessionBodySchema.parse(req.body);
 
   const settings = await getSettingsMap(
@@ -254,12 +266,9 @@ When you get the tool result back, summarize it conversationally for voice.`;
         });
 
         instructions = buildVoiceInstructions(baseInstructions, historyContext);
-        console.log(
-          `[Voice Session] Added ${chronologicalHistory.length} history items to context (${instructions.length} chars)`
-        );
       }
     } catch (error) {
-      console.error('[Voice Session] Failed to fetch history for context:', error);
+      req.logger.error('Failed to fetch history for context', { error });
       // Continue without history context - don't fail the session
     }
   }
@@ -446,6 +455,9 @@ When you get the tool result back, summarize it conversationally for voice.`;
       sessionId: session.id,
       priorStartedAt: priorHoldStartedAt,
       apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      organizationId,
+      spendFreezes: spendFreezeRepository,
       reservedCredits: enforceCredits ? reservedCredits : null,
       startedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).

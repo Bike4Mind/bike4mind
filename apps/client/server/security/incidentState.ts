@@ -16,7 +16,7 @@ import type {
   IncidentPayments,
   IncidentQueues,
   IncidentState,
-} from '@client/app/components/admin/SecurityDashboard/incidentTypes';
+} from '@bike4mind/server-utils/app/components/admin/SecurityDashboard/incidentTypes';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GRANT_POOLS = ['signup', 'trickle'] as const;

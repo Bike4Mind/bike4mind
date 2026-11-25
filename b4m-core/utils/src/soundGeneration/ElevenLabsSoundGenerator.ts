@@ -1,5 +1,6 @@
 import { DEFAULT_SOUND_MODEL_ID, elevenLabsContentTypeForFormat } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { isQuotaExhaustedResponse, ProviderQuotaExhaustedError } from '../providerQuota';
 import { parseRetryAfterMs, ProviderRateLimitError } from '../providerRateLimitError';
 import { GeneratedSound, SoundGenerationOptions, SoundGenerator } from './types';
 
@@ -67,11 +68,26 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
         ...(options.durationSeconds !== undefined ? { duration_seconds: options.durationSeconds } : {}),
         ...(options.promptInfluence !== undefined ? { prompt_influence: options.promptInfluence } : {}),
       }),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: options.signal
+        ? AbortSignal.any([AbortSignal.timeout(this.timeoutMs), options.signal])
+        : AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
+      if (isQuotaExhaustedResponse(res.status, detail)) {
+        // The account behind the key is out of credits: an operational state that needs a top-up, not a fault.
+        this.logger.warn('ElevenLabs sound generation unavailable: provider quota exhausted', {
+          status: res.status,
+          detail,
+        });
+        throw new ProviderQuotaExhaustedError(
+          'elevenlabs',
+          res.status,
+          detail,
+          `ElevenLabs sound generation quota exhausted: ${res.status} ${detail}`
+        );
+      }
       if (res.status === 429) {
         // The plan's concurrency/rate cap, not a fault: warn only, the caller decides whether to retry.
         this.logger.warn('ElevenLabs sound generation rate-limited', { detail });
@@ -82,7 +98,11 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
         );
       }
       this.logger.error('ElevenLabs sound generation failed', { status: res.status, detail });
-      throw new Error(`ElevenLabs sound generation failed: ${res.status} ${detail}`);
+      // status and detail let a caller classify the failure without parsing the message.
+      throw Object.assign(new Error(`ElevenLabs sound generation failed: ${res.status} ${detail}`), {
+        status: res.status,
+        detail,
+      });
     }
 
     const audio = Buffer.from(await res.arrayBuffer());

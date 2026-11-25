@@ -18,6 +18,12 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 
 const mockSessionsRetrieve = vi.fn();
+const mockFindTeam = vi.fn();
+vi.mock('@bike4mind/database/infra', () => ({
+  organizationRepository: {
+    findByStripeCustomerId: (...args: unknown[]) => mockFindTeam(...args),
+  },
+}));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     checkout: { sessions: { retrieve: (...args: unknown[]) => mockSessionsRetrieve(...args) } },
@@ -108,6 +114,43 @@ describe('GET /api/subscriptions/checkout-session', () => {
     const data = res._getJSONData();
     expect(data).toMatchObject({ transactionId: 'cs_test_1', value: 30 });
     expect(data.credits).toBeUndefined();
+  });
+
+  it("resolves only the purchasing owner's newly provisioned team", async () => {
+    mockSessionsRetrieve.mockResolvedValue(
+      paidSession({
+        customer: 'cus_team',
+        subscription: {
+          metadata: { userId: OWNER_ID, ownerType: 'Organization', newOrganizationName: 'New team' },
+        },
+      })
+    );
+    mockFindTeam.mockResolvedValue({ id: 'org1', userId: OWNER_ID });
+    const first = call('cs_test_1');
+    await first.promise;
+    expect(first.res._getJSONData()).toMatchObject({ teamCheckout: true, organizationId: 'org1' });
+    mockFindTeam.mockResolvedValue({ id: 'org2', userId: 'other' });
+    const second = call('cs_test_1');
+    await second.promise;
+    expect(second.res._getJSONData().organizationId).toBeUndefined();
+  });
+
+  it('preserves purchase facts while a new team is pending or its lookup fails', async () => {
+    mockSessionsRetrieve.mockResolvedValue(
+      paidSession({
+        customer: 'cus_team',
+        subscription: {
+          metadata: { userId: OWNER_ID, ownerType: 'Organization', newOrganizationName: 'New team' },
+        },
+      })
+    );
+    mockFindTeam.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('database unavailable'));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = call('cs_test_1');
+      await result.promise;
+      expect(result.res._getJSONData()).toMatchObject({ transactionId: 'cs_test_1', teamCheckout: true });
+      expect(result.res._getJSONData().organizationId).toBeUndefined();
+    }
   });
 
   it('retrieves the caller-supplied session with the expansions authorization needs', async () => {

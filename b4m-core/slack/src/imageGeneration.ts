@@ -30,7 +30,7 @@ export async function triggerImageGeneration(params: TriggerImageGenerationParam
   const { chatCompletionDefaults, eventBus } = getSlackDeps();
   const { User: SlackUser, Quest } = getSlackDb();
   const { SQSService } = await import('@bike4mind/utils');
-  const { ChatCompletionInvoke } = await import('@bike4mind/services/llm/ChatCompletionInvoke');
+  const { ChatCompletionInvoke } = await import('@bike4mind/services-core/llm/ChatCompletionInvoke');
 
   // getSlackDb() DI models don't preserve Mongoose static method types
   const user = await (SlackUser as Record<string, (...args: unknown[]) => unknown>).findById(userId);
@@ -83,7 +83,6 @@ export async function triggerImageGeneration(params: TriggerImageGenerationParam
             'Call image_generation with the user prompt EXACTLY as-is in a SINGLE tool call. Do NOT rewrite, simplify, or split the prompt into multiple calls.',
         },
       ],
-      enableQuestMaster: false,
       enableMementos: false,
       enableArtifacts: false,
       enableAgents: false,

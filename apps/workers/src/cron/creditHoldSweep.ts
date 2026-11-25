@@ -13,6 +13,7 @@
  */
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
+  completionRunRepository,
   connectDB,
   organizationRepository,
   pendingCreditHoldRepository,
@@ -24,6 +25,9 @@ import { creditService } from '@bike4mind/services';
 import { emitMetrics as putMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 const logger = new Logger({ metadata: { service: 'creditHoldSweep' } });
 
@@ -61,6 +65,8 @@ export async function runCreditHoldSweep({
             users: userRepository,
             organizations: organizationRepository,
           });
+          // A completion's run budget claim goes back with its hold; the run's budget itself is untouched.
+          if (claimed.runClaim) await completionRunRepository.releaseClaim(claimed.runClaim, 0);
         }
         return claimed;
       });

@@ -129,6 +129,31 @@ campaign cookies, they are not readable by JavaScript.
 
 ## Cross-product signup reporting (self-reported)
 
+### Product-event metadata validation
+
+The shared `emitProductEvent` transport emits only fields with a declared Zod
+validator. Its default vocabulary covers the host's signup, funnel, billing and
+account events. Another product supplies `metadataFields` beside its event
+builders, using that event's own categorical enums, bounded identifiers and
+numeric validators. The product owns its vocabulary; the transport enforces it.
+An event's validators should reuse the product's existing schemas and constants,
+so a payload change and its validation can ship together.
+
+`metadataFields` is a map of synchronous **field** validators, not a whole-object
+schema: each present field is parsed independently. Unknown or invalid fields are
+omitted while valid siblings survive. The shared `userType`, `lane`, `internal`
+and `userAction` validators always take precedence over a product's declarations.
+A product schema cannot broaden those marks. Only flat string, number and boolean
+values are supported; personal information, secrets and arbitrary content must
+not be declared as metadata fields. Dropped-field diagnostics contain field names,
+the event name and product id, never the rejected values.
+
+Products need a transport integration test that sends their real builder payloads
+through `emitProductEvent`, asserting both preserved dimensions and rejection of
+invalid or unknown values. Mocking the emitter does not verify this boundary.
+
+### Reported events
+
 Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
 ingest key for. The host product is excluded from `signup`, because it already
@@ -300,6 +325,69 @@ visitor whose app snapshot says `granted` and who then declines on the marketing
 site is still attributed by signup until the app loads again and republishes,
 while checkout, which resolves consent in the browser at request time, would
 already see the denial.
+
+## Share-link referrals
+
+Every user can copy a personal share link, `/r/<code>`, from the Invite a friend
+dialog. The code is 8 random characters, minted the first time the user asks for
+their link, and kept on the account as `User.referralCode`. It identifies the
+sharer to the server only and contains no personal information.
+
+The "Built with" pill on embedded published pages and the bar on open-public
+published pages also link through the author's share link, as
+`/r/<code>?via=embed-badge` or `/r/<code>?via=share-bar`, when the author has a
+verified email or an OAuth sign-in. Such an author's code is minted the first time
+one of their pages is served, if they have none yet. These links redirect to the
+same campaign-tagged marketing page the pill and bar linked to before, instead of
+to signup.
+
+Opening a share link whose code belongs to an account stores that code in the app
+cookie `b4m_ref` (`__Host-b4m_ref` outside local development), then redirects to
+signup. The cookie is HttpOnly, `path=/`, `Secure` outside local development, and
+`SameSite=Lax` for the same OAuth-callback reason as the campaign cookies. It lasts
+30 days, and the signup that reads it clears it. A credited signup records the
+sharer in `User.referredByUserId`, the field an email invite sets, and the time in
+`User.referredViaLinkAt`. Crediting also compares the new account's signup IP with
+the IPs the sharer signed up and signed in from (`signupMeta.ip`,
+`loginRecords[].ip`); nothing new is stored from that comparison.
+
+The cookie is not gated on the consent decision, and denying consent does not
+clear it. It holds only the code of a link the visitor chose to open, is never sent
+to a third party, and is used only to credit the signup it leads to.
+
+| Data             | Storage                                                   | Lifetime                                     | Purpose                                    |
+| ---------------- | --------------------------------------------------------- | -------------------------------------------- | ------------------------------------------ |
+| Share code       | MongoDB `User.referralCode`                               | Account lifetime                             | Name the sharer in their link              |
+| Pending referral | App cookie `b4m_ref`                                      | 30 days, cleared by the signup that reads it | Credit a signup to the link's owner        |
+| Link referral    | MongoDB `User.referredByUserId`, `User.referredViaLinkAt` | Account lifetime                             | Referral rewards and the inviter's summary |
+
+Two product events go to host analytics. `referral_link_visit` is
+sent without a user and carries only `known`, whether the code belongs to an
+account, and `via`, which published-page link was followed (`embed-badge`,
+`share-bar`, or `direct` for any other visit). `referral_link_signup` is sent under the new account's pseudonym and
+carries `outcome` (whether the signup was credited, and if not, which rule
+declined it) and `method` (the signup method). Synthetic accounts send no
+`referral_link_signup`. Neither event carries the code or the sharer's identity.
+
+## Team feature-use events
+
+The browser reports in-app actions to the app's own activity log through `POST
+/api/analytics/log-event`. For a signed-in account that is an admin, carries a
+developer tag, or carries the `rounds` user tag, each action that route records
+is also sent to Overwatch as a `quest_feature_used` event, so the team's use of a
+feature can be checked. Requests made with an API key send nothing, and no other
+account's actions are sent.
+
+The event goes to the host product under the user's pseudonym and the visit id
+from `b4m_vid`, as the daily `active` event does. Its metadata is only:
+
+- `feature`: the recorded action's type in snake case, so `Integrations Page
+  Viewed` becomes `integrations_page_viewed`.
+- `internal: true`, whatever the account's flags, and `lane: "synthetic"` as
+  well for a synthetic account. This is the one event that can carry both marks.
+
+The action's own metadata is never sent. At most one event is sent per account
+and feature every 10 minutes on each server instance.
 
 ## Verified hops
 

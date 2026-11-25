@@ -1,4 +1,16 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -10,31 +22,52 @@ import { useNavigate } from '@tanstack/react-router';
 import {
   isTurnBudgetStop,
   lastBoundaryIndex,
+  RUN_BUDGET_STOP,
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
   type ChatMessage,
-  type ChatUsage,
 } from '@shared/chat';
+import { modelEditSummary } from '@shared/modelEdit';
+import {
+  editWarnings,
+  regenerableReply,
+  turnsChangedThings,
+  typedText,
+  type RewindWarning,
+} from '@shared/threadRewind';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { CopyMessageButton, revealCopyButtonSx } from './CopyMessageButton';
 import { LinkifiedText } from './ExternalLink';
 import { ReasoningRow } from './ReasoningRow';
+import { EditMessageButton, PromptEditor, RegenerateButton } from './RewindControls';
+import { OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
+import { FindBar } from './FindBar';
+import { FIND_CURRENT_HIGHLIGHT, FIND_HIGHLIGHT } from './findHighlight';
+import { ThreadFindContext, useRevealFindTarget } from './ThreadFindContext';
+import { messageScope, roundScope } from './threadFind';
+import { useThreadFind } from './useThreadFind';
 import { SelectionActions } from './SelectionActions';
 import { automaticSummary, displayText, relaySummaryParts } from './relayRows';
 import { MentionedText, SessionLink } from './SessionLink';
+import { ChildReportCard } from './ChildReportCard';
+import { childCardLayout, type ChildCardsLive } from './childCardLayout';
+import { ChildSessionCards } from './ChildSessionCards';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
-import { describeReplyCost, formatCreditsSpent } from './statusLine';
-import { describeTokenRate, formatTokenRate, useShowTokenRate } from './tokenRate';
+import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
+import { describeReplyStats, FOOTER_STATS, footerSeparator, messageStats, statLabel } from './replyStats';
+import { useReplyStatsPrefs } from './replyStatsPrefs';
+import { railGroupId, ReplyStatsRail, turnGridSx, useRailDrawn } from './ReplyStatsRail';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
+import { RunBudgetRaiseRow } from './orchestrator/RunBudgetRaiseRow';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
 const BUDGET_STOP_LABELS: Record<string, string> = {
@@ -50,7 +83,32 @@ const BUDGET_STOP_LABELS: Record<string, string> = {
  * happened and here is what to do about it" - the chip alone read as a dead end, which is
  * exactly what it no longer is.
  */
-function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: () => void }) {
+/**
+ * The reply a run-budget pause stopped, when only app notices (an agent's report, a waiting
+ * notice) landed under it: its raise row is still the way the run resumes, so it stays on offer.
+ */
+export function budgetPausedReplyIndex(messages: readonly ChatMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'assistant') return message.stopReason === RUN_BUDGET_STOP ? index : -1;
+    if (!message.system) return -1;
+  }
+  return -1;
+}
+
+function StopReasonRow({
+  reason,
+  onContinue,
+  sessionId,
+}: {
+  reason?: string;
+  onContinue?: () => void;
+  sessionId?: string | null;
+}) {
+  // Continue alone would be refused again: only a raise resumes the run. Offered on the last turn only.
+  if (reason === RUN_BUDGET_STOP) {
+    return onContinue && sessionId ? <RunBudgetRaiseRow sessionId={sessionId} /> : null;
+  }
   if (reason === 'max_tokens') {
     return (
       <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-truncated-chip">
@@ -117,13 +175,33 @@ function ServerCredentialsRow() {
         size="sm"
         variant="soft"
         color="primary"
-        onClick={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
+        onClick={() => void navigate({ to: '/settings', search: { section: 'models', setting: 'model-servers' } })}
         data-testid="chat-server-credentials-btn"
       >
         Open Model servers
       </Button>
     </Stack>
   );
+}
+
+const messageTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'always' });
+const messageTimeUnits = [
+  ['year', 365 * 24 * 60 * 60],
+  ['month', 30 * 24 * 60 * 60],
+  ['week', 7 * 24 * 60 * 60],
+  ['day', 24 * 60 * 60],
+  ['hour', 60 * 60],
+  ['minute', 60],
+] as const;
+
+function showMessageTime(event: MouseEvent<HTMLElement>, createdAt: string) {
+  const seconds = Math.max(0, (Date.now() - Date.parse(createdAt)) / 1000);
+  const unit = messageTimeUnits.find(([, length]) => seconds >= length);
+  event.currentTarget.title = Number.isNaN(seconds)
+    ? ''
+    : unit
+      ? messageTimeFormatter.format(-Math.floor(seconds / unit[1]), unit[0])
+      : 'just now';
 }
 
 /**
@@ -133,20 +211,61 @@ function ServerCredentialsRow() {
  * Copy takes what the bubble shows: on a skill turn that is the invocation the user typed,
  * not the expanded body folded away under it.
  */
-const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
-  const attachments = message.attachments ?? [];
+const UserTurn = memo(function UserTurn({
+  message,
+  sessionId,
+  editWarning,
+  editDisabled = false,
+  onEdit,
+}: {
+  message: ChatMessage;
+  sessionId: string | null;
+  /** Set on a prompt the user typed and main has stored; absent, there is no Edit. */
+  editWarning?: RewindWarning;
+  /** A turn is running; Edit waits for it. */
+  editDisabled?: boolean;
+  onEdit?: (messageId: string, text: string) => Promise<boolean>;
+}) {
+  // A point-and-edit turn shows its parts as a chip; its close-up went to the model, not the bubble.
+  const modelEdit = modelEditSummary(message.notes);
+  const attachments = (message.attachments ?? []).filter(
+    attachment => !(modelEdit?.closeup && attachment.kind === 'image' && attachment.name === modelEdit.closeup)
+  );
   const skill = message.skill;
   const [expanded, setExpanded] = useState(false);
-  const copyText = skill ? `/${skill.name}${skill.args ? ` ${skill.args}` : ''}` : message.content;
+  const copyText = typedText(message);
+  const [editing, setEditing] = useState(false);
+  const editable = editWarning !== undefined && onEdit !== undefined;
+
+  if (editable && editing) {
+    return (
+      <Stack direction="row" justifyContent="flex-end">
+        <PromptEditor
+          initialText={copyText}
+          warning={editWarning}
+          disabled={editDisabled}
+          onCancel={() => setEditing(false)}
+          onSend={async text => {
+            const sent = await onEdit(message.id, text);
+            // Sent, this turn is replaced and unmounts; refused, the editor stays with the text.
+            if (sent) setEditing(false);
+            return sent;
+          }}
+        />
+      </Stack>
+    );
+  }
 
   return (
     <Stack direction="row" justifyContent="flex-end" alignItems="flex-end" spacing={0.5} sx={revealCopyButtonSx}>
+      {editable && <EditMessageButton disabled={editDisabled} onClick={() => setEditing(true)} />}
       {copyText && <CopyMessageButton text={copyText} testId="chat-message-user-copy-btn" />}
       <Sheet
         variant="soft"
         color="primary"
         sx={{ px: 2, py: 1.25, borderRadius: 'lg', maxWidth: '85%', minWidth: 0 }}
         data-testid="chat-message-user"
+        onMouseEnter={event => showMessageTime(event, message.createdAt)}
       >
         {/* Above the text, matching the composer: what was handed over, then what was asked
             about it. Not removable here - the turn has been sent. */}
@@ -154,6 +273,17 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
           <Box sx={{ mb: message.content ? 1 : 0 }}>
             <AttachmentRow sessionId={sessionId} attachments={attachments} />
           </Box>
+        )}
+        {modelEdit && modelEdit.parts.length > 0 && (
+          <Chip
+            size="sm"
+            variant="outlined"
+            color="primary"
+            sx={{ mb: 0.75, maxWidth: '100%' }}
+            data-testid="chat-message-model-edit-chip"
+          >
+            Editing: {modelEdit.parts.join(', ')}
+          </Chip>
         )}
 
         {/* A skill turn shows the INVOCATION, because that is the sentence the user wrote. The
@@ -198,6 +328,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
               level="body-sm"
               sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
               data-testid="chat-message-user-text"
+              data-find-scope={messageScope(message.id)}
             >
               <MentionedText text={message.content} />
             </Typography>
@@ -225,21 +356,40 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  * thread above - is a render per mouse move across a transcript that can be hundreds of turns
  * long. The parent's `:hover` does the same job for nothing; see AssistantTurn.
  *
- * Credits show only when the server reported them. Absent is not zero - a turn that failed,
- * and every reply stored before credits were captured, would otherwise claim to have been free.
- * A self-hosted reply shows its generation speed in the same place. Nothing at all when neither
- * is there.
+ * Nothing at all when the server reported no credits and the reply has no stat to show. Absent is
+ * not zero - a turn that failed, and every reply stored before this was captured, would otherwise
+ * claim to have been free.
+ *
+ * Where the stats rail is off or does not fit, the reply's stats are here instead: speed, total, a
+ * long model load and thinking time on the line where ticked in Settings, then the credits, and all
+ * of them in the title.
  */
-function ReplyCost({ usage }: { usage?: ChatUsage }) {
+function ReplyCost({ message }: { message: ChatMessage }) {
   const showDollars = useShowDollarCosts();
-  const showRate = useShowTokenRate();
-  const credits = formatCreditsSpent(usage);
-  const rate = showRate ? formatTokenRate(usage?.rate) : null;
-  if (!credits && !rate) return null;
-  const details = [
-    describeReplyCost(usage, showDollars),
-    rate ? describeTokenRate(usage?.rate, usage?.outputTokens) : null,
-  ].filter((line): line is string => line !== null);
+  const { hidden } = useReplyStatsPrefs();
+  const credits = formatCreditsSpent(message.usage);
+  const rows = messageStats(message);
+  const named = FOOTER_STATS.flatMap(([id, name]) => {
+    const row = hidden.has(id) ? undefined : rows.find(candidate => candidate.id === id);
+    if (!row) return [];
+    const label = statLabel(row);
+    return [{ id, label, text: name(row.value, label) }];
+  });
+  if (!credits && named.length === 0) return null;
+  const details = [describeReplyCost(message.usage, showDollars), describeReplyStats(rows)].filter(
+    (line): line is string => line !== null
+  );
+  const parts = [
+    ...named.map(({ id, label, text }, index) => ({
+      join: footerSeparator(named[index - 1]?.id, id, label),
+      node: (
+        <span key={id} data-testid={`chat-message-stat-${id}`}>
+          {text}
+        </span>
+      ),
+    })),
+    ...(credits ? [{ join: ' \xb7 ', node: <span key="credits">{credits}</span> }] : []),
+  ];
 
   return (
     <Typography
@@ -249,12 +399,20 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
       // Native, like the turn status line's own split: a Joy tooltip per reply would mount a
       // popper for every turn in the thread to serve the one the pointer is over.
       title={details.length > 0 ? details.join('\n') : undefined}
-      sx={{ position: 'absolute', top: '100%', right: 0, mt: 0.5, whiteSpace: 'nowrap' }}
+      sx={{
+        position: 'absolute',
+        top: '100%',
+        right: 0,
+        // Clear of Copy, which sits at the other end of the same gap.
+        maxWidth: 'calc(100% - 40px)',
+        mt: 0.5,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}
       data-testid="chat-message-cost"
     >
-      {credits}
-      {credits && rate && ' \xb7 '}
-      {rate && <span data-testid="chat-message-rate">{rate}</span>}
+      {parts.flatMap(({ join, node }, index) => (index === 0 ? [node] : [join, node]))}
     </Typography>
   );
 }
@@ -273,6 +431,9 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
  * under the turn. It copies `content`, the markdown source of every round's prose, and is not
  * offered while the reply is still being written.
  *
+ * With the stats rail on, the reply's stats sit left of it and the cost moves there with them,
+ * leaving Copy alone in the gap. The rail runs on beside what follows a short reply; see railRows.
+ *
  * Memoized, as every turn is: a streaming reply re-renders the thread once a frame, and only the
  * last turn's props change on those frames.
  */
@@ -281,11 +442,21 @@ const AssistantTurn = memo(function AssistantTurn({
   onRespond,
   onMove,
   onContinue,
+  onRegenerate,
+  regenerateWarns = false,
+  sessionId,
   status,
   live = false,
   skipRounds = 0,
+  rail = false,
 }: {
   message: ChatMessage;
+  /** Absent unless this is the last reply and nothing is running; see MessageThread. */
+  onRegenerate?: () => void;
+  /** The reply's tools changed things, so Regenerate asks first. */
+  regenerateWarns?: boolean;
+  /** The open conversation, for the controls a stopped turn offers; absent with none open. */
+  sessionId?: string | null;
   onRespond: RespondToApproval;
   /** Absent with no conversation open; the running-command control is then not drawn. */
   onMove?: MoveCallToBackground;
@@ -297,7 +468,10 @@ const AssistantTurn = memo(function AssistantTurn({
   status?: ReactNode;
   /** Leading stored rounds not drawn yet, when the thread's window ends inside this reply. */
   skipRounds?: number;
+  /** MessageThread draws the stats rail beside the reply, so there is no hover footer. */
+  rail?: boolean;
 }) {
+  const railDrawn = useRailDrawn(message.id) && rail;
   const toolCalls = message.toolCalls ?? [];
   const rounds = roundsOf(message);
   // Hidden from the front of the WHOLE list rather than drawn from a slice of it, so a round
@@ -321,9 +495,13 @@ const AssistantTurn = memo(function AssistantTurn({
         },
       }}
       data-testid="chat-message-assistant"
+      onMouseEnter={event => showMessageTime(event, message.createdAt)}
       // The orchestrator's "Read the report" scrolls to and highlights the one with its summary's id.
       data-assistant-reply
       data-message-id={message.id}
+      data-reply
+      // The rail comes before the reply for the grid's placement; this reads it after the reply.
+      {...(railDrawn ? { 'aria-owns': railGroupId(message.id) } : {})}
     >
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten
@@ -344,7 +522,11 @@ const AssistantTurn = memo(function AssistantTurn({
             {/* Per round rather than over the whole reply, which is also what keeps a code fence
                 from leaking: a block opened in one round cannot swallow the next round's prose,
                 because the next round is a parse of its own. */}
-            {presented.text.length > 0 && <ReplyMarkdown text={presented.text} />}
+            {presented.text.length > 0 && (
+              <Box data-find-scope={roundScope(message.id, index)}>
+                <ReplyMarkdown text={presented.text} />
+              </Box>
+            )}
             {presented.unfinishedArtifact !== null && (
               <Typography level="body-sm" color="warning" sx={{ mt: 1 }} data-testid="chat-unfinished-artifact">
                 {presented.unfinishedArtifact
@@ -368,18 +550,21 @@ const AssistantTurn = memo(function AssistantTurn({
         </Alert>
       )}
 
-      <StopReasonRow reason={message.stopReason} onContinue={onContinue} />
+      <StopReasonRow reason={message.stopReason} onContinue={onContinue} sessionId={sessionId} />
 
       {/* Last, under the reply it describes, which is where the eye already is while a turn
           runs. It lived in the composer before and read as a property of the input box rather
           than of the answer being written. */}
       {status && <Box sx={{ mt: 1 }}>{status}</Box>}
 
-      <ReplyCost {...(message.usage ? { usage: message.usage } : {})} />
+      {!rail && <ReplyCost message={message} />}
 
-      {!live && message.content.trim().length > 0 && (
-        <Box sx={{ position: 'absolute', top: '100%', left: 0 }}>
-          <CopyMessageButton text={message.content} testId="chat-message-assistant-copy-btn" />
+      {!live && (message.content.trim().length > 0 || onRegenerate) && (
+        <Box sx={{ position: 'absolute', top: '100%', left: 0, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          {message.content.trim().length > 0 && (
+            <CopyMessageButton text={message.content} testId="chat-message-assistant-copy-btn" />
+          )}
+          {onRegenerate && <RegenerateButton onRegenerate={onRegenerate} changes={regenerateWarns} />}
         </Box>
       )}
     </Box>
@@ -396,6 +581,7 @@ const AssistantTurn = memo(function AssistantTurn({
  */
 const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage }) {
   if (message.sideChatOf) return <SideChatOpening message={message} from={message.sideChatOf} />;
+  if (message.childReport) return <ChildReportCard message={message} report={message.childReport} />;
   return (
     <Sheet
       variant="soft"
@@ -406,7 +592,11 @@ const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage 
       <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', mb: 0.5 }}>
         From a session you started
       </Typography>
-      <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+      <Typography
+        level="body-sm"
+        sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+        data-find-scope={messageScope(message.id)}
+      >
         <LinkifiedText text={displayText(message)} />
       </Typography>
     </Sheet>
@@ -432,7 +622,9 @@ function SideChatOpening({ message, from }: { message: ChatMessage; from: { sess
           {from.title}
         </SessionLink>
       </Typography>
-      <ReplyMarkdown text={displayText(message)} />
+      <Box data-find-scope={messageScope(message.id)}>
+        <ReplyMarkdown text={displayText(message)} />
+      </Box>
     </Sheet>
   );
 }
@@ -485,6 +677,10 @@ function CollapsedTurn({
   kind: 'relay' | 'automatic';
 }) {
   const [open, setOpen] = useState(false);
+  useRevealFindTarget(
+    target => target.messageId === message.id,
+    () => setOpen(true)
+  );
 
   return (
     <Box sx={{ borderLeft: '2px solid', borderColor: 'divider', pl: 1.25 }}>
@@ -523,6 +719,7 @@ function CollapsedTurn({
           sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', pt: 0.5, pb: 0.5 }}
           textColor="text.secondary"
           data-testid={`chat-message-${kind}-body`}
+          data-find-scope={messageScope(message.id)}
         >
           <LinkifiedText text={kind === 'automatic' ? message.content : displayText(message)} />
         </Typography>
@@ -571,7 +768,7 @@ const BoundaryRow = memo(function BoundaryRow({ message }: { message: ChatMessag
           <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', mb: 0.5 }}>
             Summary of the conversation so far
           </Typography>
-          <Box data-testid="chat-boundary-summary">
+          <Box data-testid="chat-boundary-summary" data-find-scope={messageScope(message.id)}>
             <ReplyMarkdown text={message.content} />
           </Box>
         </Sheet>
@@ -590,6 +787,11 @@ const BoundaryRow = memo(function BoundaryRow({ message }: { message: ChatMessag
  */
 function EarlierMessages({ count, children }: { count: number; children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  // `count` is the boundary's index, so the messages folded here are exactly those before it.
+  useRevealFindTarget(
+    target => target.messageIndex < count,
+    () => setOpen(true)
+  );
 
   return (
     <Box
@@ -620,16 +822,21 @@ function EarlierMessages({ count, children }: { count: number; children: ReactNo
           <ChevronIcon open={open} />
         </Box>
       </Stack>
-      {open && (
-        <Stack spacing={3} sx={{ pt: 2 }}>
-          {children}
-        </Stack>
-      )}
+      {open && <Box sx={{ pt: 2, ...turnGridSx }}>{children}</Box>}
     </Box>
   );
 }
 
 const PIN_THRESHOLD_PX = 48;
+
+/** Find matches in amber, the current one in the primary colour (see findHighlight). */
+const findHighlightSx = {
+  [`& *::highlight(${FIND_HIGHLIGHT})`]: { backgroundColor: 'var(--joy-palette-warning-softActiveBg)' },
+  [`& *::highlight(${FIND_CURRENT_HIGHLIGHT})`]: {
+    backgroundColor: 'var(--joy-palette-primary-solidBg)',
+    color: 'var(--joy-palette-primary-solidColor)',
+  },
+};
 
 /**
  * The prompts the last message is waiting on, as one comparable value; empty when there are none.
@@ -649,7 +856,46 @@ export function awaitingApprovalKey(message: ChatMessage | undefined): string {
  */
 const REVEAL_MARGIN_PX = 1500;
 
-type RenderTurn = (message: ChatMessage, index: number, skipRounds: number) => ReactNode;
+/** `end` is where the list the turn is drawn in ends, for a rail that runs on past its reply. */
+type RenderTurn = (message: ChatMessage, index: number, skipRounds: number, end: number) => ReactNode;
+
+/** The messages MessageThread's turn() draws as an AssistantTurn; must stay in step with it. */
+function isReplyTurn(message: ChatMessage): boolean {
+  return !message.boundary && !message.automatic && !message.relay && !message.system && message.role !== 'user';
+}
+
+/**
+ * How many grid rows the rail of the reply at `index` runs down: its own, and the one group of
+ * turns after it in the same list, if any come before the next reply. See turnGridSx.
+ */
+export function railRows(
+  messages: readonly ChatMessage[],
+  index: number,
+  end: number,
+  drawn: (index: number) => boolean = () => true
+): number {
+  // Skips what turn() draws nothing for (a notice folded into a card drawn elsewhere), so the rail never claims a row no group fills.
+  let next = index + 1;
+  while (next < end && !drawn(next)) next += 1;
+  const after = messages[next];
+  return next < end && after && !isReplyTurn(after) ? 2 : 1;
+}
+
+/** The turns between two replies, one grid item so that their gap is theirs and not the rows'. */
+function TurnGroup({ children }: { children: ReactNode }) {
+  return (
+    <Stack spacing={3} sx={{ minWidth: 0 }} data-testid="chat-turn-group">
+      {children}
+    </Stack>
+  );
+}
+
+/** Keyed by the reply the run follows, so a group keeps its turns' state as the window grows over it or a turn joins it. */
+function groupKey(messages: readonly ChatMessage[], index: number): string {
+  let at = index - 1;
+  while (at >= 0 && !isReplyTurn(messages[at]!)) at--;
+  return `group-${at >= 0 ? messages[at]!.id : 'start'}`;
+}
 
 /**
  * messages[from..to), drawn from the end: the last WINDOW_STEP rounds on mount, and another
@@ -693,6 +939,17 @@ function WindowedTurns({
   const latest = useRef(messages);
   latest.current = messages;
 
+  // A match above the window grows it to that message whole, rather than a step at a time.
+  useRevealFindTarget(
+    target => target.messageIndex >= from && target.messageIndex < to,
+    target =>
+      setHeld(current => {
+        const drawn = clampWindow(current, from, to);
+        const outside = target.messageIndex < drawn.start || (target.messageIndex === drawn.start && drawn.skip > 0);
+        return outside ? { start: target.messageIndex, skip: 0 } : current;
+      })
+  );
+
   // Re-subscribed after every step: a fresh observer reports the sentinel's state at once, so a
   // step that did not fill the margin is followed by the next without waiting for a scroll.
   useEffect(() => {
@@ -722,10 +979,31 @@ function WindowedTurns({
     root.scrollTop = root.scrollHeight - kept;
   });
 
+  const items: ReactNode[] = [];
+  let run: ReactNode[] = [];
+  let runKey = '';
+  const closeRun = () => {
+    if (run.length > 0) items.push(<TurnGroup key={runKey}>{run}</TurnGroup>);
+    run = [];
+  };
+  for (let index = start; index < to; index++) {
+    const message = messages[index]!;
+    const node = turn(message, index, index === start ? skip : 0, to);
+    if (node === null) continue;
+    if (isReplyTurn(message)) {
+      closeRun();
+      items.push(node);
+    } else {
+      if (run.length === 0) runKey = groupKey(messages, index);
+      run.push(node);
+    }
+  }
+  closeRun();
+
   return (
     <>
       {complete ? above : <div ref={sentinel} data-testid="chat-thread-older-sentinel" />}
-      {messages.slice(start, to).map((message, offset) => turn(message, start + offset, offset === 0 ? skip : 0))}
+      {items}
     </>
   );
 }
@@ -743,6 +1021,12 @@ export function MessageThread({
   footer,
   onReplyToSelection,
   onSideChatFromSelection,
+  statsRail = false,
+  liveTurn = null,
+  onEditMessage,
+  onRegenerate,
+  findable = false,
+  childSessions,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -779,6 +1063,18 @@ export function MessageThread({
   onReplyToSelection?: (text: string) => void;
   /** Branch a side chat about text the user highlighted in one message. */
   onSideChatFromSelection?: (text: string) => void;
+  /** Each reply's stats in a rail beside it: on, and wide enough. Off puts them in the hover footer. */
+  statsRail?: boolean;
+  /** The turn in flight, for the live figures on the reply it is writing. */
+  liveTurn?: TurnProgress | null;
+  /** Replace a sent prompt and drop the turns after it; absent, prompts have no Edit. */
+  onEditMessage?: (messageId: string, text: string) => Promise<boolean>;
+  /** Drop the last reply and run its prompt again; absent, there is no Regenerate. */
+  onRegenerate?: () => void;
+  /** Mod+F opens a find bar over this thread. Only one thread on screen should take it. */
+  findable?: boolean;
+  /** Live state of the sessions this one started, for their cards; without it a card goes by its latest notice. */
+  childSessions?: ChildCardsLive;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -791,28 +1087,76 @@ export function MessageThread({
   // Only the LAST boundary divides the thread. Earlier ones fall inside the folded section and
   // draw their own divider there, which is what a conversation compacted twice should look like.
   const boundary = lastBoundaryIndex(messages);
+  // By id: a queued prompt or a relayed message can land after the reply while it is still written.
+  const liveReplyId = streaming ? (liveTurn?.messageId ?? last?.id) : undefined;
+  const warnings = useMemo(() => editWarnings(messages), [messages]);
+  const regenerable = !streaming && onRegenerate ? regenerableReply(messages) : null;
+  const budgetPaused = useMemo(() => budgetPausedReplyIndex(messages), [messages]);
+  const regenerateWarns = useMemo(() => (regenerable ? turnsChangedThings([regenerable]) : false), [regenerable]);
+  const childCards = useMemo(() => childCardLayout(messages, childSessions), [messages, childSessions]);
+  const drawnAt = (index: number) => {
+    const message = messages[index];
+    return !message || !childCards.folded.has(message.id) || index === childCards.anchor;
+  };
+  // Through a ref so UserTurn's memo holds: the callback changes with every thread update.
+  const editRef = useRef(onEditMessage);
+  editRef.current = onEditMessage;
+  const onEdit = useCallback(
+    (messageId: string, text: string) => editRef.current?.(messageId, text) ?? Promise.resolve(false),
+    []
+  );
 
   // One function for both sides of the divider, taking each message's index in the WHOLE thread,
   // so a turn drawn inside the disclosure is the same turn with the same Continue and status
   // rules rather than a second rendering path that can drift from this one.
-  const turn: RenderTurn = (message, index, skipRounds) => {
+  const turn: RenderTurn = (message, index, skipRounds, end) => {
     if (message.boundary) return <BoundaryRow key={message.id} message={message} />;
     if (message.automatic) return <AutomaticTurn key={message.id} message={message} />;
     if (message.relay) return <RelayTurn key={message.id} message={message} />;
+    if (childCards.folded.has(message.id)) {
+      return index === childCards.anchor ? (
+        <ChildSessionCards key="child-session-cards" cards={childCards.cards} />
+      ) : null;
+    }
     if (message.system) return <SystemTurn key={message.id} message={message} />;
-    if (message.role === 'user') return <UserTurn key={message.id} message={message} sessionId={sessionId} />;
+    if (message.role === 'user') {
+      // An optimistic prompt has no stored id yet for main to rewind to.
+      const editWarning = message.id.startsWith(OPTIMISTIC_ID_PREFIX) ? undefined : warnings.get(message.id);
+      return (
+        <UserTurn
+          key={message.id}
+          message={message}
+          sessionId={sessionId}
+          {...(onEditMessage && editWarning ? { editWarning, editDisabled: streaming, onEdit } : {})}
+        />
+      );
+    }
+    // One fragment whether or not the rail is drawn, so the reply keeps its state across the breakpoint.
     return (
-      <AssistantTurn
-        key={message.id}
-        message={message}
-        onRespond={onRespond}
-        {...(onMove ? { onMove } : {})}
-        // Only the last turn, and only while nothing is running: resuming writes back
-        // into its own message, so a Continue on an older one would edit history.
-        {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
-        {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
-        {...(skipRounds > 0 ? { skipRounds } : {})}
-      />
+      <Fragment key={message.id}>
+        {statsRail && (
+          <ReplyStatsRail
+            message={message}
+            {...(message.id === liveReplyId ? { turn: liveTurn } : {})}
+            span={railRows(messages, index, end, drawnAt)}
+          />
+        )}
+        <AssistantTurn
+          message={message}
+          onRespond={onRespond}
+          {...(onMove ? { onMove } : {})}
+          // Only the last turn, and only while nothing is running: resuming writes back
+          // into its own message, so a Continue on an older one would edit history. A budget
+          // pause is the exception: its raise row resumes the run, not this message.
+          {...((index === messages.length - 1 || index === budgetPaused) && !streaming
+            ? { onContinue, sessionId }
+            : {})}
+          {...(regenerable?.id === message.id && onRegenerate ? { onRegenerate, regenerateWarns } : {})}
+          {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
+          {...(skipRounds > 0 ? { skipRounds } : {})}
+          {...(statsRail ? { rail: true } : {})}
+        />
+      </Fragment>
     );
   };
 
@@ -852,6 +1196,15 @@ export function MessageThread({
     return () => observer.disconnect();
   }, [empty]);
 
+  const find = useThreadFind({
+    messages,
+    host,
+    enabled: findable && !empty,
+    onReveal: () => {
+      pinned.current = false;
+    },
+  });
+
   if (empty) {
     return (
       <Box
@@ -872,38 +1225,49 @@ export function MessageThread({
   }
 
   return (
-    // Scrolling on the outer box, the column on the inner one: reversing the two would put the
-    // scrollbar in the middle of the window rather than at the edge of the pane.
-    <Box ref={host} onScroll={onScroll} sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="chat-thread">
-      <Stack ref={column} spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
-        <WindowedTurns
-          messages={messages}
-          from={Math.max(boundary, 0)}
-          to={messages.length}
-          host={host}
-          turn={turn}
-          above={
-            boundary > 0 && (
-              <EarlierMessages count={boundary}>
-                <WindowedTurns messages={messages} from={0} to={boundary} host={host} turn={turn} />
-              </EarlierMessages>
-            )
-          }
-        />
-        {/* The turn line normally rides the reply, but the last message is not always that reply:
+    // The find bar floats over the thread from this wrapper, so it stays put while the thread scrolls.
+    <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <ThreadFindContext.Provider value={find.target}>
+        {/* Scrolling on the outer box, the column on the inner one: reversing the two would put the
+        scrollbar in the middle of the window rather than at the edge of the pane. */}
+        <Box
+          ref={host}
+          onScroll={onScroll}
+          sx={{ flex: 1, minHeight: 0, ...scrollingColumnHostSx, ...findHighlightSx }}
+          data-testid="chat-thread"
+        >
+          <Box ref={column} sx={{ ...contentColumnSx, py: 3, ...turnGridSx }}>
+            <WindowedTurns
+              messages={messages}
+              from={Math.max(boundary, 0)}
+              to={messages.length}
+              host={host}
+              turn={turn}
+              above={
+                boundary > 0 && (
+                  <EarlierMessages count={boundary}>
+                    <WindowedTurns messages={messages} from={0} to={boundary} host={host} turn={turn} />
+                  </EarlierMessages>
+                )
+              }
+            />
+            {/* The turn line normally rides the reply, but the last message is not always that reply:
             a queued prompt or a relayed message can land after it while the turn still runs. */}
-        {streaming && status && last && !(last.role === 'assistant' && !last.relay && !last.system) && (
-          <Box>{status}</Box>
-        )}
-        <OrphanVideoJobs messages={messages} />
-        {footer}
-        {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
+            {streaming && status && last && !(last.role === 'assistant' && !last.relay && !last.system) && (
+              <Box>{status}</Box>
+            )}
+            <OrphanVideoJobs messages={messages} />
+            {footer}
+            {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
             scrolled past rather than brought into view. */}
-        <div ref={bottom} />
-      </Stack>
-      {onReplyToSelection && onSideChatFromSelection && (
-        <SelectionActions container={host} onReply={onReplyToSelection} onSideChat={onSideChatFromSelection} />
-      )}
+            <div ref={bottom} />
+          </Box>
+          {onReplyToSelection && onSideChatFromSelection && (
+            <SelectionActions container={host} onReply={onReplyToSelection} onSideChat={onSideChatFromSelection} />
+          )}
+        </Box>
+      </ThreadFindContext.Provider>
+      {find.open && <FindBar find={find} />}
     </Box>
   );
 }

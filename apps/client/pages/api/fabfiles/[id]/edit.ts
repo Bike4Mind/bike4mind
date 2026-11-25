@@ -1,3 +1,4 @@
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import {
@@ -34,7 +35,6 @@ import {
   appendEditedVersion,
   MAX_OFFICE_EDIT_BYTES,
 } from '@bike4mind/utils';
-import { v4 as uuidv4 } from 'uuid';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService, fabFilesService } from '@bike4mind/services';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
@@ -48,7 +48,7 @@ import {
   resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 const rewriteStorageDb = {
   fabFiles: fabFileRepository,
@@ -241,7 +241,9 @@ const handler = baseApi()
           }
 
           // A platform-picked fallback (no request model) is not a user choice, so it skips the user-facing gates.
-          await (await createModelAdmission(user, models, !model)).assert(modelInfo.id);
+          await (
+            await createModelAdmission(user, models, !model, { organizationId: resolveRequestBillingOrgId(req) })
+          ).assert(modelInfo.id);
 
           const runModelInfo = (await resolveShadowSubstitute(req, modelInfo, models)) ?? modelInfo;
 
@@ -454,7 +456,7 @@ Return only the edited content without any markdown code blocks or explanations.
                 existingVersions: file.versions,
                 newFileSize: newBuffer.length,
                 now,
-                nonce: uuidv4(),
+                nonce: crypto.randomUUID(),
                 maxEditedVersions,
               });
               await fabFilesService.assertRewriteFits(file, newBuffer.length, rewriteStorageDb, user);

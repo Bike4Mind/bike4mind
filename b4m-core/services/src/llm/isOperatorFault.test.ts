@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import { OutputBudgetExhaustedError, ResponsesStreamTruncatedError } from '@bike4mind/llm-adapters';
 import { InsufficientCreditsError, isOperatorFault } from './ChatCompletionProcess';
+import { ContextOverflowError } from './contextOverflowMessage';
 
 describe('isOperatorFault', () => {
   it.each([
@@ -30,7 +31,19 @@ describe('isOperatorFault', () => {
     ['a truncated Responses stream', new ResponsesStreamTruncatedError('gpt-5')],
     ['an exhausted output budget', new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash')],
     ['a tool pairing error', new Error('tool_use ids must have a matching tool_result')],
-    ['a context overflow', new Error('Your request is too large for this model')],
+    [
+      'a context overflow refusal',
+      new ContextOverflowError('Your request is too large for this model', {
+        modelId: 'small-model',
+        inputTokens: 6_000,
+        maxSafeInputTokens: 5_000,
+        contextLimit: 8_000,
+        reservedOutputTokens: 3_000,
+        tokenBreakdown: null,
+        messageCount: 2,
+        mementoCount: 0,
+      }),
+    ],
     ['a caller-input 4xx', new BadRequestError('Failed to create LLM backend for model: nope')],
     ['a 429 TooManyRequestsError', new TooManyRequestsError('slow down')],
     ['an overloaded provider', Object.assign(new Error('upstream busy'), { status: 529 })],

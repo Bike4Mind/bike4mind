@@ -1,0 +1,122 @@
+{
+  "$comment": "Feature parity matrix for the mobile release train. Process, statuses and gating rule: docs/mobile-release-train.md. Validate with `pnpm --filter @bike4mind/scripts mobile-release validate`.",
+  "features": [
+    {
+      "id": "sign-in",
+      "title": "Sign-in (OAuth 2.0 + PKCE web flow)",
+      "train": "26.12",
+      "web": "green",
+      "ios": "green",
+      "android": "green",
+      "notes": "Android release builds need the b4m-android-app OAuth client and assetlinks.json on the server."
+    },
+    {
+      "id": "chat-streaming",
+      "title": "Chat: send, stream and settle a reply over the realtime socket",
+      "train": "26.12",
+      "web": "green",
+      "ios": "green",
+      "android": "green"
+    },
+    {
+      "id": "notebooks-list",
+      "title": "Notebooks list",
+      "train": "26.12",
+      "web": "green",
+      "ios": "green",
+      "android": "green"
+    },
+    {
+      "id": "client-version-handshake",
+      "title": "Client version handshake and update-required screen",
+      "train": "26.12",
+      "web": "na",
+      "ios": "green",
+      "android": "green"
+    },
+    {
+      "id": "push-notifications",
+      "title": "Push notifications (APNs / FCM)",
+      "train": "26.12",
+      "web": "na",
+      "ios": "green",
+      "android": "green"
+    },
+    {
+      "id": "onboarding",
+      "title": "First-launch welcome",
+      "web": "na",
+      "ios": "green",
+      "android": "red"
+    },
+    {
+      "id": "account-deletion",
+      "title": "Account deletion and restore",
+      "web": "green",
+      "ios": "green",
+      "android": "yellow",
+      "notes": "Required by both stores before public release."
+    },
+    {
+      "id": "settings",
+      "title": "Settings and profile",
+      "web": "green",
+      "ios": "green",
+      "android": "green"
+    },
+    {
+      "id": "studio-media-gallery",
+      "title": "Studio media gallery",
+      "web": "green",
+      "ios": "green",
+      "android": "yellow",
+      "notes": "Android: green once the gallery items in apps/android/DEVICE_TESTING.md pass on a device."
+    },
+    {
+      "id": "deep-links",
+      "title": "Deep links and universal / app links",
+      "web": "na",
+      "ios": "green",
+      "android": "yellow",
+      "notes": "Android: green once the link items in apps/android/DEVICE_TESTING.md pass on a device with assetlinks.json live."
+    },
+    {
+      "id": "share-capture",
+      "title": "Share sheet, camera and voice capture",
+      "web": "na",
+      "ios": "green",
+      "android": "yellow"
+    },
+    {
+      "id": "home-screen-widgets",
+      "title": "Home-screen widgets",
+      "web": "na",
+      "ios": "green",
+      "android": "red"
+    },
+    {
+      "id": "assistant-brief",
+      "title": "Assistant brief, opened from the brief_ready push and in-app",
+      "web": "red",
+      "ios": "yellow",
+      "android": "yellow",
+      "notes": "Android: green once the brief items in apps/android/DEVICE_TESTING.md pass on a device."
+    },
+    {
+      "id": "live-agent-progress",
+      "title": "Live agent progress outside the app (Live Activities)",
+      "web": "na",
+      "ios": "green",
+      "android": "yellow",
+      "notes": "Android: green once the agent-run items in apps/android/DEVICE_TESTING.md pass on a device, including an Android 16 Live Update."
+    },
+    {
+      "id": "scan-hand-to-assistant",
+      "title": "Scan a bill and hand it to the assistant: confirm the extracted obligation, see it in a brief before it is due",
+      "web": "na",
+      "ios": "yellow",
+      "android": "yellow",
+      "notes": "Both platforms: green once a scanned invoice is handed off, corrected, confirmed and filed on a physical device (the document scanner is unavailable on simulators and emulators)."
+    }
+  ]
+}

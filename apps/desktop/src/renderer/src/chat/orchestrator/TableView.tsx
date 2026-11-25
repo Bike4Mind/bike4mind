@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { timeAgo } from '../prBarModel';
 import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
+import { AgentPrIndicator } from './AgentPrIndicator';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import { formatAgentCost, type AgentView } from './roster';
 
@@ -56,7 +57,7 @@ function SortHeader({
   );
 }
 
-export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProps) {
+export function TableView({ agents, onSelect, onOpenPr, selectedId }: OrchestratorViewProps) {
   const [sort, setSort] = useState<Sort | null>(null);
 
   const rows = useMemo(() => {
@@ -90,12 +91,13 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
       >
         <thead>
           <tr>
-            <th style={{ width: 96 }}>State</th>
+            {/* Wide enough for the longest chip, "Needs your decision" (AgentStateChip). */}
+            <th style={{ width: 152 }}>State</th>
             <SortHeader sortKey="agent" label="Agent" sort={sort} onSort={toggleSort} />
             <th>Now</th>
             <SortHeader sortKey="updated" label="Updated" sort={sort} onSort={toggleSort} />
             <SortHeader sortKey="cost" label="Cost" sort={sort} onSort={toggleSort} />
-            <th style={{ width: 96 }}>PR</th>
+            <th style={{ width: 116 }}>PR</th>
             <th>Branch</th>
           </tr>
         </thead>
@@ -115,7 +117,11 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
               data-selected={agent.id === selectedId}
             >
               <td>
-                <AgentStateChip state={agent.state} preparing={agent.preparing !== undefined} />
+                <AgentStateChip
+                  state={agent.state}
+                  preparing={agent.preparing !== undefined}
+                  deciding={agent.decision !== undefined}
+                />
               </td>
               <td title={agent.seedPrompt}>
                 <Typography level="body-sm" sx={{ ...clamp, pl: `${(agent.depth - 1) * INDENT_PX}px` }}>
@@ -129,7 +135,13 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
               </td>
               <td>{timeAgo(agent.updatedAt, now) ?? '-'}</td>
               <td>{formatAgentCost(agent.usdCost, agent.credits)}</td>
-              <td>{agent.pr ? `#${agent.pr.number} ${agent.pr.state}` : '-'}</td>
+              <td>
+                {agent.pr ? (
+                  <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} />
+                ) : (
+                  '-'
+                )}
+              </td>
               <td>
                 <Typography level="body-xs" sx={clamp}>
                   {agent.branch ?? '-'}

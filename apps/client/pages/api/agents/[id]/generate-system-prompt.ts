@@ -8,7 +8,7 @@ import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAl
 import { agentRepository } from '@bike4mind/database';
 import { ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { generateAgentSystemPrompt } from '@server/agents/authoring/generateAgentSystemPrompt';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { HTTPError } from '@bike4mind/common';
 import { logSystemPromptGenerationFailure } from '@server/agents/systemPromptRateLimit';
 

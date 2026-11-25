@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
+import { parseProviderCatalog, scanProviderSources, validateProviderCatalog } from './providerCallInventory';
 
 /**
  * Invariant: a route that runs a platform-key text completion bills it.
@@ -92,7 +93,7 @@ describe('a platform-key completion is metered', () => {
   });
 
   it('does not count an import of a meter as metering', () => {
-    const importOnly = `import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+    const importOnly = `import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 const { llm } = await OperationsModelService.getOperationsModel();
 await llm.complete(model, messages);`;
     const called = `${importOnly}\nconst meter = createRequestCompletionMeter(req, 'x');`;
@@ -103,5 +104,41 @@ await llm.complete(model, messages);`;
   it('keeps EXEMPT entries real', () => {
     const files = new Set(routes.map(r => r.file));
     expect([...EXEMPT].filter(e => !files.has(e))).toEqual([]);
+  });
+});
+
+const REPO_ROOT = path.resolve(__dirname, '../../../..');
+const PROVIDER_CATALOG = 'scripts/unmetered-provider-call-allowlist.txt';
+const PROVIDER_ROOTS = [
+  'apps/client/pages/api',
+  'apps/client/server',
+  'apps/workers/src',
+  'b4m-core/services/src',
+  'packages/server-utils/src',
+];
+
+function providerSources(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory())
+      return ['__tests__', '__fixtures__', 'fixtures', 'node_modules'].includes(entry.name)
+        ? []
+        : providerSources(full);
+    return /\.tsx?$/.test(entry.name) && !/\.(?:test|spec)\.tsx?$|\.d\.ts$/.test(entry.name) ? [full] : [];
+  });
+}
+
+describe('provider call inventory across helpers, workers and services', () => {
+  it('classifies every discovered site against the reviewed inventory', () => {
+    const sources = Object.fromEntries(
+      PROVIDER_ROOTS.flatMap(root => providerSources(path.join(REPO_ROOT, root))).map(file => [
+        path.relative(REPO_ROOT, file).split(path.sep).join('/'),
+        readFileSync(file, 'utf8'),
+      ])
+    );
+    const scan = scanProviderSources(sources);
+    const entries = parseProviderCatalog(readFileSync(path.join(REPO_ROOT, PROVIDER_CATALOG), 'utf8'));
+    expect(scan.sites.length).toBeGreaterThan(0);
+    expect(validateProviderCatalog(scan, entries, entries)).toEqual([]);
   });
 });

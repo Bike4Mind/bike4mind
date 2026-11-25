@@ -6,14 +6,10 @@ import {
   CircularProgress,
   DialogContent,
   Divider,
-  Dropdown,
   FormControl,
   FormLabel,
-  IconButton,
   Input,
   ListDivider,
-  Menu,
-  MenuButton,
   MenuItem,
   Option,
   Select,
@@ -25,7 +21,6 @@ import {
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import HistoryIcon from '@mui/icons-material/History';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import SaveIcon from '@mui/icons-material/Save';
 import {
   useSystemPrompts,
@@ -47,8 +42,8 @@ import {
   type AdminListState,
   type DataColumn,
 } from './shared';
-import { adminFocus } from './shared/adminStyles';
 import { Dash, DialogFooter, Field, TruncatedText } from './promptAndToolParts';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 /** Extended type for prompts returned by the API (includes computed fields) */
 interface ISystemPromptWithMeta extends Omit<IAdminSystemPrompt, 'activeVersion'> {
@@ -124,39 +119,23 @@ function PromptRowMenu({
   onDelete: (prompt: ISystemPromptWithMeta) => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${prompt.name}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`system-prompt-row-actions-${prompt.promptId}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        <MenuItem onClick={() => onView(prompt)} data-testid={`system-prompt-row-view-${prompt.promptId}`}>
-          View details
-        </MenuItem>
-        <MenuItem onClick={() => onEdit(prompt)} data-testid={`system-prompt-row-edit-${prompt.promptId}`}>
-          {prompt.hasOverride ? 'Edit override' : 'Create override'}
-        </MenuItem>
-        {/* Only DB-only prompts can be deleted; ones with a code default are reset instead */}
-        {prompt.hasCodeDefault === false && (
-          <>
-            <ListDivider />
-            <MenuItem onClick={() => onDelete(prompt)} data-testid={`system-prompt-delete-btn-${prompt.promptId}`}>
-              Delete prompt
-            </MenuItem>
-          </>
-        )}
-      </Menu>
-    </Dropdown>
+    <RowActionsMenu testId={`system-prompt-row-actions-${prompt.promptId}`} ariaLabel={`Actions for ${prompt.name}`}>
+      <MenuItem onClick={() => onView(prompt)} data-testid={`system-prompt-row-view-${prompt.promptId}`}>
+        View details
+      </MenuItem>
+      <MenuItem onClick={() => onEdit(prompt)} data-testid={`system-prompt-row-edit-${prompt.promptId}`}>
+        {prompt.hasOverride ? 'Edit override' : 'Create override'}
+      </MenuItem>
+      {/* Only DB-only prompts can be deleted; ones with a code default are reset instead */}
+      {prompt.hasCodeDefault === false && (
+        <>
+          <ListDivider />
+          <MenuItem onClick={() => onDelete(prompt)} data-testid={`system-prompt-delete-btn-${prompt.promptId}`}>
+            Delete prompt
+          </MenuItem>
+        </>
+      )}
+    </RowActionsMenu>
   );
 }
 

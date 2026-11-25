@@ -73,7 +73,8 @@ export interface ReplyContainerProps {
   settled?: boolean;
   /** Machine-readable classifier for an error quest, drives targeted error UI (e.g. the Add Credits CTA). */
   errorCode?: IChatHistoryItem['errorCode'];
-  questMasterPlanId?: string;
+  /** The message came from the retired in-chat QuestMaster plan feature; renders the legacy note. */
+  legacyQuestMasterPlan?: boolean;
   promptMeta?: PromptMeta;
   messageId?: string;
   onEdit?: (newReply: string) => void;

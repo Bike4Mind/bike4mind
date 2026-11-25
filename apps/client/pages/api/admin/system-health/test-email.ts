@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { MailService, type TestEmailResult } from '@bike4mind/server-utils/utils/mailer/index';
+import { sendLiveTestEmail } from '@bike4mind/server-utils/utils/mailer/testEmail';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
@@ -32,8 +32,7 @@ const handler = adminApi({
         throw new BadRequestError('No email address provided and user has no email on file.');
       }
 
-      const mailService = new MailService();
-      const result: TestEmailResult = await mailService.sendTestEmail(recipientEmail);
+      const result = await sendLiveTestEmail(recipientEmail);
 
       await recordAdminActionFromRequest(req, {
         action: 'system_health.test_run',
@@ -54,11 +53,15 @@ const handler = adminApi({
           error: 'Invalid email address format',
         });
       }
+      if (error instanceof BadRequestError) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
 
-      console.error('Error sending test email:', error);
+      req.logger.error('Error sending test email', { error });
       return res.status(500).json({
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to send test email',
+        // A rejected Lambda invoke carries raw AWS SDK text, so it stays in the log above.
+        error: 'Failed to send test email',
       });
     }
   });

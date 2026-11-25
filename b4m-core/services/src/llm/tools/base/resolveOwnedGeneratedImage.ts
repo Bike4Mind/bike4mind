@@ -23,9 +23,6 @@ export type GeneratedImageOwnershipLookup = {
  * owns, so this is "owns a session that references it", not "generated it".
  * The lookup chain mirrors userCanAccessGeneratedImage (packages/server-utils/src/utils/generatedImageAccess.ts),
  * which additionally serves share recipients for viewing - keep the two in sync.
- * Caveat: this guards the bare-key route only. While the CDN serves `/generated/<key>` publicly
- * (infra/buckets.ts), anyone holding a key can fetch it directly, so this is not yet a
- * confidentiality boundary.
  *
  * Throws NotFoundError with one message for a malformed key, an unknown key, a key owned by someone
  * else, and a host that did not wire the lookup (fail closed), so the outcome reveals nothing about
@@ -49,7 +46,7 @@ export async function resolveOwnedGeneratedImageUrl(
 
 /**
  * The ownership rule documented on resolveOwnedGeneratedImageUrl, as a boolean for a caller that needs the bytes
- * rather than a URL (the video job's loadInputImage in apps/client/server/generationJobs/wiring.ts). False for
+ * rather than a URL (the video job's loadInputImage in packages/server-utils/src/generationJobs/wiring.ts). False for
  * a malformed, unknown or foreign key and for an unwired lookup alike.
  */
 export async function callerOwnsGeneratedImage(

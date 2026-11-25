@@ -26,7 +26,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import {
   checkStorageLimitForOwner,
   getSettingsMap,
@@ -36,7 +36,6 @@ import {
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
@@ -265,7 +264,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
   const results = await Promise.all(
     resolvedFiles.map(async ({ item: fileItem, mimeType }) => {
       const ext = mime.extension(mimeType);
-      const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+      const fileKey = `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`;
 
       // Merge data lake meta-tag with file-specific tags, then guarantee the file also lands
       // under the lake's content prefix. Reconciling AFTER the injection is load-bearing: the
@@ -308,10 +307,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
       );
 
       // Bound to the declared size the size and storage checks above ran on: S3 refuses any other length.
+      // Create-only: the uploader must send `If-None-Match: *` (uploadFileToUrl, the CLI's uploadFileBytes).
       const command = new PutObjectCommand({
         Bucket: Resource.fabFileBucket.name,
         Key: fileKey,
         ContentLength: fileItem.fileSize,
+        IfNoneMatch: '*',
       });
 
       // Hosted returns the direct S3 presign; self-host returns a same-origin proxy URL

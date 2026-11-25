@@ -21,16 +21,36 @@ import {
   settleAutoIndexBuilds,
 } from '../../database/src/__test__/createMongoServer';
 
+vi.mock('sst', () => ({
+  Resource: new Proxy({} as Record<string, unknown>, {
+    get: (_, key) => ({ value: `test-${String(key)}`, name: `test-${String(key)}` }),
+  }),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 const effects = vi.hoisted(() => ({
+  deleteImportPrefix: vi.fn(),
   storage: vi.fn(),
   cancel: vi.fn(),
   billingEvent: vi.fn(),
   email: vi.fn(),
   artifacts: vi.fn(),
 }));
+vi.mock('@bike4mind/fab-pipeline', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/fab-pipeline')>()),
+  S3Storage: class {
+    constructor(private readonly bucketName: string) {}
+    deletePermanently = effects.storage;
+    deletePrefixPermanently(prefix: string) {
+      return effects.deleteImportPrefix(this.bucketName, prefix);
+    }
+  },
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getGeneratedImageStorage: () => ({ delete: effects.storage, deletePermanently: effects.storage }),
+  getGeneratedImageStorage: () => ({
+    delete: effects.storage,
+    deletePermanently: effects.storage,
+    deletePrefixPermanently: effects.storage,
+  }),
   getPublishedArtifactsStorage: () => ({ deletePrefix: effects.storage, deletePrefixPermanently: effects.storage }),
   getFilesStorage: () => ({
     delete: effects.storage,
@@ -46,7 +66,9 @@ vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', 
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: vi.fn() }));
 vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: effects.billingEvent }));
-vi.mock('@server/users/accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: effects.email }));
+vi.mock('@bike4mind/server-utils/users/accountDeletionEmail', () => ({
+  sendAccountDeletionCompleteEmail: effects.email,
+}));
 vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   cancelAccountSubscriptions: effects.cancel,
   readAccountSubscriptionCustomerIds: vi.fn(async () => []),
@@ -54,7 +76,7 @@ vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   NO_SUBSCRIPTIONS_CANCELED: { canceled: [], failed: [] },
 }));
 
-import { hardDeleteUser } from '@server/services/hardDeleteUser';
+import { hardDeleteUser } from '@bike4mind/server-utils/services/hardDeleteUser';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import {
   backfillErasureRecords,
@@ -151,6 +173,10 @@ describe('reapplyErasures', () => {
 
     const first = await reapplyErasures({ records, dryRun: false });
     expect(first).toMatchObject({ scanned: 2, matched: 1, reapplied: 1, failed: 0, unmatchableKey: 0 });
+    expect(effects.deleteImportPrefix).toHaveBeenCalledExactlyOnceWith(
+      'test-historyImportBucket',
+      `notebooks/${erased.id}/`
+    );
     expect(await counts()).toEqual({ users: 1, orgs: 1, sessions: 1, authEvents: 1 });
     expect(await keep(bystander)).toEqual({ user: 1, org: 1, session: 1, authEvents: 1 });
     expect(effects.cancel).not.toHaveBeenCalled();

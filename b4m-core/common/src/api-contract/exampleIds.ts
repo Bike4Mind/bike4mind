@@ -7,5 +7,8 @@
 export const EXAMPLE_RESOURCE_ID = '664f1c2b9a1e4d0012ab34cd';
 export const EXAMPLE_SESSION_ID = '664f1c2b9a1e4d0012ab34aa';
 export const EXAMPLE_FILE_ID = '664f1c2b9a1e4d0012ab34bb';
+// A second file, for bodies that take two (a Scene's video and audio).
+export const EXAMPLE_SECOND_FILE_ID = '664f1c2b9a1e4d0012ab34ee';
+export const EXAMPLE_GROUP_ID = '664f1c2b9a1e4d0012ab34ff';
 // The canonical MongoDB-docs example ObjectId.
 export const EXAMPLE_USER_ID = '507f1f77bcf86cd799439011';

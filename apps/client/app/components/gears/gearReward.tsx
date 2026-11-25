@@ -284,6 +284,8 @@ export const PendingRewardNote = ({ gear }: { gear: GearStatus }) => (
         ? `Claimable for ${creditText(gear)} once your account is ${minAgeText(gear)} old.`
         : gear.pendingReason === 'unavailable'
           ? "This reward isn't available for your account."
-          : `Once someone else opens your artifact link while signed in, you can claim ${creditText(gear)}.`}
+          : gear.key === 'shareproject'
+            ? `Once a teammate with a verified email joins one of your projects, you can claim ${creditText(gear)}.`
+            : `Once someone else with a verified email opens your artifact link while signed in, you can claim ${creditText(gear)}.`}
   </Typography>
 );

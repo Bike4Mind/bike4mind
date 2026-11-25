@@ -1,5 +1,6 @@
 // apps/client/pages/api/skills/index.ts
 import { Request } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { skillRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
@@ -10,7 +11,7 @@ import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 const ALLOWED_ORDER_BY = new Set(['createdAt', 'updatedAt', 'name']);
 const ALLOWED_ORDER_DIRECTION = new Set(['asc', 'desc']);
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.SKILLS_WRITE], grandfatherLegacyKeys: true })
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
     const { query = '', page = '1', limit = '10', orderBy = 'updatedAt', orderDirection = 'desc' } = req.query;
 

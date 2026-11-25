@@ -75,6 +75,7 @@ describe('auth method normalization', () => {
 
   it('labels a legacy value as stored instead of hiding it', () => {
     expect(authMethodLabel('saml')).toBe('SSO (SAML)');
+    expect(authMethodLabel('persona')).toBe('Persona login code');
     expect(authMethodLabel('magic-link')).toBe('Other (magic-link)');
     expect(authMethodLabel(null)).toBeUndefined();
   });

@@ -18,12 +18,16 @@ import {
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { getCallerModelList } from '@server/utils/callerModelList';
-import { CLIENT_CONFIG_FEATURE_SETTINGS } from '@server/utils/clientConfigFeatures';
+import { CLIENT_CONFIG_FEATURE_SETTINGS, RETIRED_CLIENT_CONFIG_FEATURES } from '@server/utils/clientConfigFeatures';
 import { callablePublicModels, toPublicModelWithReasoning } from '@server/utils/publicModels';
 import { publicAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { configuredSupportEmail } from '@server/auth/blockedSignIn';
 import { resolveRecommendedModelIds } from '@client/app/utils/recommendedModels';
+import { Resource } from 'sst';
+import { resolvePublicClientConfig } from '@server/utils/publicClientConfig';
+import { toClientConfigPickerModel } from '@server/utils/clientConfigCatalog';
 
 /**
  * A stored row that fails its schema (blank, off-list, malformed) already reads as the setting's
@@ -41,7 +45,7 @@ const resolveFeatures = (settings: Record<string, string>): ClientConfigFeatures
     flag,
     readSetting(key, settings) === true,
   ]);
-  return Object.fromEntries(entries) as ClientConfigFeatures;
+  return { ...Object.fromEntries(entries), ...RETIRED_CLIENT_CONFIG_FEATURES } as ClientConfigFeatures;
 };
 
 const isServerStatus = (value: string): value is ClientConfigResponse['server']['status'] =>
@@ -58,10 +62,12 @@ const handler = nextRouteForContract(getClientConfigContract, {
   // Read once at client start-up; it should not spend the daily budget the real work needs.
   exemptReadsFromDailyRateLimit: true,
 }).get(async (req, res) => {
-  const [settings, { models }] = await Promise.all([
+  const [settings, catalog, publicConfig] = await Promise.all([
     getSettingsMap({ adminSettings: adminSettingsRepository }, { logger: req.logger }),
-    getCallerModelList(req.user, req.logger),
+    getCallerModelList(req.user, req.logger, { organizationId: resolveRequestBillingOrgId(req) }),
+    resolvePublicClientConfig(req),
   ]);
+  const { models } = catalog;
 
   const available = callablePublicModels(models)
     .map(toPublicModelWithReasoning)
@@ -88,6 +94,25 @@ const handler = nextRouteForContract(getClientConfigContract, {
       ),
       available,
     },
+    public_config: publicConfig,
+    transport: {
+      websocket_url: Resource.websocket.url,
+      sse_completions_url: process.env.CHAT_COMPLETION_PUBLIC_URL
+        ? `${process.env.CHAT_COMPLETION_PUBLIC_URL.replace(/\/+$/, '')}/api/ai/v1/completions`
+        : '',
+    },
+    catalog: {
+      models: models.map(toClientConfigPickerModel),
+      locked_models: catalog.lockedModels.map(toClientConfigPickerModel),
+      superseded_models: catalog.supersededModels.map(model => ({
+        id: model.id,
+        name: model.name,
+        replacement_id: model.replacementId,
+        replacement_name: model.replacementName,
+      })),
+      model_list_revision: catalog.modelListRevision,
+      catalog_unavailable: catalog.catalogUnavailable,
+    },
   };
 
   // `available` is built from the caller's own provider keys - never cacheable by a shared cache.
@@ -101,4 +126,5 @@ export const config = {
   api: {
     externalResolver: true,
   },
+  bind: ['websocketApi'],
 };

@@ -5,7 +5,7 @@
 // and ElevenLabs appends "/chat/completions" when making the actual request,
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
-import { DATA_LAKE_TOOL_NAMES, isTerminalCreditRefusal, questGenerationJobs } from '@bike4mind/common';
+import { DATA_LAKE_TOOL_NAMES, isTerminalCreditRefusal, NotFoundError, questGenerationJobs } from '@bike4mind/common';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
@@ -31,16 +31,20 @@ import {
   type CapturedToolCall,
   type OpenAIChatRequest,
 } from '@bike4mind/voice';
-import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
+import {
+  getDefaultChatCompletionOptions,
+  getSharedTokenizer,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 // Built-in tools enabled for voice turns. Curated to ones that execute INLINE
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,
@@ -145,6 +149,8 @@ async function runFullPipeline(
 
   const chatCompletionOptions = {
     ...getDefaultChatCompletionOptions(),
+    // As chat.ts: audio_generation runs its job inline in this turn, so it stays in-process.
+    audioToolJobs: buildAudioToolJobs(),
     queue: noopQueue,
     tokenizer: getSharedTokenizer(logger),
     user,
@@ -152,18 +158,6 @@ async function runFullPipeline(
     gpcSignalDetected: false,
     features: new Map<featureNames, ChatCompletionFeature>(),
     logger,
-    createCompletionMeter: ({
-      organizationId,
-      featureLabel,
-    }: {
-      organizationId: string | null;
-      featureLabel: string;
-    }) =>
-      createCompletionMeter(user, logger, featureLabel, {
-        sessionId: sessionCtx.sessionId,
-        organizationId,
-        apiKeyId: sessionCtx.apiKeyId,
-      }),
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,
     // No-op: we run process() inline in this request handler, so we deliberately
@@ -196,7 +190,7 @@ async function runFullPipeline(
     enableArtifacts: false,
     // Enable the inline built-in tools (web search, RAG, etc.) plus any ElevenLabs
     // client tools for this turn. Without the builtins the agent can't search the
-    // web. QuestMaster, Agents (subagent Lambda handoff), and Mementos (async
+    // web. Agents (subagent Lambda handoff) and Mementos (async
     // creation) stay off so the whole voice turn runs in-process - no separate
     // Lambda or SQS dispatch. The one exception is video_generation, which only enqueues a job.
     tools: [
@@ -206,7 +200,6 @@ async function runFullPipeline(
     ],
     // The save-intent gate would otherwise offer the data-lake tools past the list above.
     deniedTools: [...DATA_LAKE_TOOL_NAMES],
-    enableQuestMaster: false,
     enableMementos: false,
     enableAgents: false,
     // Speech streams from the raw reply, so a choices block would be read aloud; there are no buttons.
@@ -222,6 +215,7 @@ async function runFullPipeline(
     userId: sessionCtx.userId,
     authOrigin: sessionCtx.authOrigin,
     apiKeyId: sessionCtx.apiKeyId,
+    apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
@@ -238,10 +232,10 @@ async function runFullPipeline(
       // from this body only.
       authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
+      apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,
-      questMaster: undefined,
       researchMode: undefined,
       imageConfig: undefined,
     },
@@ -453,14 +447,14 @@ const handler = ipGatedApi.post(async (req, res) => {
     }
     // Flat strings next to `err`: the alert sink prints each field with `${value}`, which turned
     // the nested error object into `[object Object]`.
-    // A credit refusal is an expected outcome, not a pipeline fault; the spoken fallback below still runs.
+    // A credit refusal or a missing session is an expected outcome, not a pipeline fault; the spoken fallback below still runs.
     const failureFields = {
       err,
       errorName: err instanceof Error ? err.name : typeof err,
       errorMessage: err instanceof Error ? err.message : String(err),
       errorCause: describeErrorCause(err),
     };
-    if (isTerminalCreditRefusal(err)) {
+    if (isTerminalCreditRefusal(err) || err instanceof NotFoundError) {
       req.logger.warn(failureFields, '[voice-v2/llm-proxy] full pipeline failed');
     } else {
       req.logger.error(failureFields, '[voice-v2/llm-proxy] full pipeline failed');

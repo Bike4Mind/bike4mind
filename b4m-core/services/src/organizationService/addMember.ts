@@ -9,6 +9,7 @@ import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { canAdministerOrganization } from './orgAuthority';
+import { notifyOrgEvent } from './orgEventObserver';
 
 const addMemberSchema = z.object({
   userId: z.string().optional(),
@@ -59,12 +60,15 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
   // Owner-inclusive team size: the owner is not a `users[]` row (see organizationService/create.ts)
   // but still occupies a seat, so full means owner + members >= seats (#1423). This matches the
   // canonical accounting in sharingService/accept.ts and validateSeatChange.
-  if (!force && organizationSeatUsage(organization).full) {
+  const seatUsage = organizationSeatUsage(organization);
+  if (!force && seatUsage.full) {
+    await notifyOrgEvent({ type: 'seat_limit', organizationId, seats: seatUsage.seats });
     throw new UnprocessableEntityError('Organization is at full capacity');
   }
 
   // Add the user to the organization's users array
   const userIndex = organization.users.findIndex(f => f.userId === userToAdd.id);
+  const isNewMember = userIndex < 0;
 
   if (userIndex >= 0) {
     // Already a member - just refresh their permissions
@@ -104,6 +108,10 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
   if (!userToAdd.organizationId) {
     userToAdd.organizationId = organizationId;
     await db.users.update({ id: userToAdd.id, organizationId });
+  }
+
+  if (isNewMember) {
+    await notifyOrgEvent({ type: 'member_joined', organizationId, userId: userToAdd.id, actorUserId: user.id });
   }
 
   return { organization, user: userToAdd };

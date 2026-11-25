@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { UnauthorizedError } from '@bike4mind/utils';
-import { deleteFabFile } from './delete';
+import { deleteFabFile, deleteAuthorizedFabFile } from './delete';
 import { DATA_LAKES, IFabFileDocument, STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
 
 const beforeStampCutoff = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000);
@@ -101,6 +101,28 @@ describe('deleteFabFile', () => {
     mockAdapter.db.users.findById.mockResolvedValue(null);
 
     await expect(deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter)).rejects.toThrow(UnauthorizedError);
+  });
+
+  it('deletes a transaction-authorized file without a live uploader or any User adapter', async () => {
+    mockAdapter.db.users.findById.mockRejectedValue(new Error('Uploader is gone'));
+    const onDeleteComplete = vi.fn();
+    const trusted = {
+      storage: mockAdapter.storage,
+      db: {
+        fabFiles: mockAdapter.db.fabFiles,
+        fabFileChunks: mockAdapter.db.fabFileChunks,
+        sessions: mockAdapter.db.sessions,
+      },
+      onDeleteComplete,
+    };
+    const result = await deleteAuthorizedFabFile(mockFabFile as IFabFileDocument, trusted);
+    expect(result.action).toBe('deleted');
+    expect(result.references?.fileIds).toEqual([mockFileId]);
+    expect(mockAdapter.db.users.findById).not.toHaveBeenCalled();
+    expect(mockAdapter.db.fabFiles.update).toHaveBeenCalledWith({ id: mockFileId, deletedAt: expect.any(Date) });
+    expect(mockAdapter.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledWith(mockFileId);
+    expect(mockAdapter.storage.delete).toHaveBeenCalledWith('uploads/test-file.txt');
+    expect(onDeleteComplete).toHaveBeenCalledWith(mockFabFile, 1024);
   });
 
   describe('owned files', () => {

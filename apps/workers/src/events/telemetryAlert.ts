@@ -108,7 +108,7 @@ async function decrementRateLimitCounter(logger: Logger): Promise<void> {
  * This handler runs in a dedicated Lambda, ensuring alerts complete
  * even after the main request Lambda terminates.
  *
- * Features (aligned with LiveOps Triage):
+ * Features:
  * - Fingerprinting for deterministic deduplication
  * - GitHub issue deduplication (fingerprint matching against open issues)
  * - Regression detection (fingerprint matching against closed issues)

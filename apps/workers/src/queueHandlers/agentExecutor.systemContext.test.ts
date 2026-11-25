@@ -55,9 +55,13 @@ describe('systemContext call site in agentExecutor', () => {
     throw new Error('Unbalanced braces in the agent.runIteration options object');
   };
 
-  it('passes startPayload.systemContext to runIteration as context, only when set', () => {
+  it('passes startPayload.systemContext (plus the director context and the recent-images note) to runIteration as context, only when set', () => {
     const options = runIterationOptions();
-    expect(options).toContain('...(startPayload?.systemContext ? { context: startPayload.systemContext } : {})');
+    const normalized = source.replace(/\s+/g, ' ');
+    expect(normalized).toContain(
+      'const systemContext = withRecentImagesNote( withDirectedSystemContext(startPayload?.systemContext, { ...directedSession, productionToolsReady: productionConfig !== null, briefing: await loadDirectorBriefing(directedSession, productionConfig?.compositions, logger), }), recentImagesNote );'
+    );
+    expect(options).toContain('...(systemContext ? { context: systemContext } : {})');
     // Exactly one `context:` key, so nothing later in the object can overwrite the spread.
     expect(options.match(/\bcontext:/g)).toHaveLength(1);
   });

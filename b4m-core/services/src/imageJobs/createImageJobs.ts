@@ -1,21 +1,26 @@
 import { Types } from 'mongoose';
 import {
   getImageModelCatalogEntry,
+  IMAGE_JOB_INPUT_MIME_TYPES,
   ImageJobRequestSchema,
   imageJobInputs,
   resolveLegacyImageModel,
   usdToCredits,
   validateImageRequest,
+  type ApiKeyBillingOwnerType,
+  type CompletionRunAttribution,
   type ImageJobRequest,
   type ImageModelCatalogEntry,
   type StoredImageRequest,
 } from '@bike4mind/common';
-import { releaseCreditHold, type CreditHold } from '../creditService/creditHold';
+import { releaseCreditHold } from '../creditService/creditHold';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import {
+  checkBatchSpendCap,
   findIdempotentReplay,
   holdJobCredits,
   persistAndEnqueueJob,
+  type HeldJobCredits,
   resolveJobOwner,
   type IdempotencyKeyReused,
   type JobOwner,
@@ -68,13 +73,12 @@ const toStoredRequest = (request: ImageJobRequest): StoredImageRequest => {
 const jobKey = (idempotencyKey: string | undefined, index: number, count: number) =>
   idempotencyKey === undefined ? undefined : `${idempotencyKey}:${index}/${count}`;
 
-// The formats both providers' edit paths accept; the mask is converted to PNG, which takes PNG or JPEG.
-const INPUT_MIME_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
+// The mask is converted to PNG, which takes PNG or JPEG.
 const MASK_MIME_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg']);
 
 const acceptsMimeType = (role: string, mimeType: string): boolean => {
   const normalized = mimeType.split(';')[0].trim().toLowerCase();
-  return (role === 'mask' ? MASK_MIME_TYPES : INPUT_MIME_TYPES).has(normalized);
+  return (role === 'mask' ? MASK_MIME_TYPES : IMAGE_JOB_INPUT_MIME_TYPES).has(normalized);
 };
 
 /**
@@ -95,9 +99,10 @@ export async function createImageJobs(
   const caps = getImageModelCatalogEntry(parsed.data.model);
   const provider = deps.providers.get(caps.provider);
   // A retired id is refused rather than rendered as its successor: the job records the model it renders.
+  // Local checkpoints are discovered at runtime, so the local provider lists no models and serves every local id.
   const served =
     provider !== undefined &&
-    (provider.models as readonly string[]).includes(parsed.data.model) &&
+    (caps.provider === 'local' || (provider.models as readonly string[]).includes(parsed.data.model)) &&
     resolveLegacyImageModel(parsed.data.model) === parsed.data.model;
   if (!served) {
     return refuse(422, 'model_unavailable', `Image model ${parsed.data.model} is not available for generation jobs`);
@@ -122,10 +127,21 @@ export async function createImageJobs(
   if (reused) return reused;
   const replayed = replays.flatMap(replay => (replay?.ok ? [replay.job] : []));
   if (replayed.length === input.count) {
-    return { ok: true, groupId: replayed[0].payload.groupId ?? replayed[0].id, jobs: replayed, created: false };
+    return {
+      ok: true,
+      groupId: replayed[0].payload.groupId ?? replayed[0].id,
+      jobs: replayed,
+      created: false,
+      createdCount: 0,
+    };
   }
 
-  await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
+  await deps.assertModelAdmission(
+    input.user.id,
+    request.model,
+    input.user.adminRoleWithheld,
+    input.user.organizationId
+  );
   if (!isUsableApiKey(await deps.resolveApiKey(caps.provider, input.user.id))) {
     return refuse(422, 'model_unavailable', `Image model ${request.model} has no API key configured`);
   }
@@ -149,7 +165,18 @@ export async function createImageJobs(
 
   const { enforceCredits } = await deps.getSettings();
   const requiredCredits = usdToCredits(estimateImageJobUsd(request));
-  const holds = await holdBatch(missingIndexes.length, { enforceCredits, user: input.user, requiredCredits }, deps);
+  const holds = await holdBatch(
+    missingIndexes.length,
+    {
+      enforceCredits,
+      user: input.user,
+      requiredCredits,
+      apiKeyId: input.apiKeyId,
+      apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
+      ...(input.run && { run: input.run }),
+    },
+    deps
+  );
   if (!holds.ok) return holds;
 
   const groupId = replayed[0]?.payload.groupId ?? new Types.ObjectId().toHexString();
@@ -164,17 +191,43 @@ export async function createImageJobs(
     const job = replay?.ok ? replay.job : fresh.next().value;
     return job ? [job] : [];
   });
-  return { ok: true, groupId: jobs[0]?.payload.groupId ?? groupId, jobs, created: true };
+  return {
+    ok: true,
+    groupId: jobs[0]?.payload.groupId ?? groupId,
+    jobs,
+    created: true,
+    createdCount: created.jobs.length,
+  };
 }
 
-type HoldParams = { enforceCredits: boolean; user: CreateImageJobsInput['user']; requiredCredits: number };
+type HoldParams = {
+  enforceCredits: boolean;
+  user: CreateImageJobsInput['user'];
+  requiredCredits: number;
+  apiKeyId?: string;
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+  run?: CompletionRunAttribution;
+};
 
+type Held = Omit<HeldJobCredits, 'ok'>;
+
+/**
+ * One hold per job, each claimed against the run (if any) in its own transaction. A refusal or a throw part way
+ * through returns the holds and claims already taken, so the batch is all or nothing.
+ */
 async function holdBatch(
   count: number,
   params: HoldParams,
   deps: CreateImageJobsDeps
-): Promise<{ ok: true; holds: (CreditHold | null)[] } | Refusal> {
-  const holds: (CreditHold | null)[] = [];
+): Promise<{ ok: true; holds: Held[] } | Refusal> {
+  if (count > 1) {
+    const capped = await checkBatchSpendCap(
+      { enforceCredits: params.enforceCredits, user: params.user, totalCredits: count * params.requiredCredits },
+      deps
+    );
+    if (capped) return capped;
+  }
+  const holds: Held[] = [];
   for (let index = 0; index < count; index++) {
     let held: Awaited<ReturnType<typeof holdJobCredits>>;
     try {
@@ -187,17 +240,14 @@ async function holdBatch(
       await releaseHolds(holds, deps);
       return held;
     }
-    holds.push(held.hold);
+    holds.push({ hold: held.hold, ...(held.runClaim && { runClaim: held.runClaim }) });
   }
   return { ok: true, holds };
 }
 
-async function releaseHolds(holds: readonly (CreditHold | null)[], deps: CreateImageJobsDeps): Promise<void> {
-  for (const hold of holds) {
-    if (!hold) continue;
-    try {
-      await releaseCreditHold(hold, deps.credits);
-    } catch (error) {
+async function releaseHolds(holds: readonly Held[], deps: CreateImageJobsDeps): Promise<void> {
+  for (const { hold, runClaim } of holds) {
+    const logHoldFailure = (hold: NonNullable<Held['hold']>, error: unknown) =>
       // No sweep refunds a create-time hold, so the log carries what to return by hand; never mask the refusal.
       deps.logger.error('image_job_create_hold_release_failed', {
         ownerId: hold.ownerId,
@@ -205,7 +255,33 @@ async function releaseHolds(holds: readonly (CreditHold | null)[], deps: CreateI
         reservedCredits: hold.reservedCredits,
         error,
       });
+    const runBudget = deps.runBudget;
+    if (runClaim && runBudget) {
+      let releasing: 'hold' | 'claim' = 'hold';
+      try {
+        await runBudget.transact(async () => {
+          if (hold) await releaseCreditHold(hold, deps.credits);
+          releasing = 'claim';
+          await runBudget.release(runClaim, 0);
+        });
+      } catch (error) {
+        if (releasing === 'hold' && hold) logHoldFailure(hold, error);
+        deps.logger.error('image_job_create_run_claim_release_failed', { runClaim, error });
+      }
+      continue;
     }
+    if (hold) {
+      try {
+        await releaseCreditHold(hold, deps.credits);
+      } catch (error) {
+        logHoldFailure(hold, error);
+      }
+    }
+    if (!runClaim) continue;
+    deps.logger.error('image_job_create_run_claim_release_failed', {
+      runClaim,
+      error: new Error('No run budget adapters to release the run claim'),
+    });
   }
 }
 
@@ -215,7 +291,7 @@ type PersistParams = {
   request: StoredImageRequest;
   providerId: ImageJob['payload']['providerId'];
   groupId: string;
-  holds: readonly (CreditHold | null)[];
+  holds: readonly Held[];
   keys: readonly (string | undefined)[];
   missingIndexes: readonly number[];
 };
@@ -236,16 +312,27 @@ async function persistBatch(
           ...owner,
           requestedBy: input.user.id,
           ...(input.apiKeyId !== undefined && { apiKeyId: input.apiKeyId }),
+          ...(input.questId !== undefined && { questId: input.questId }),
           source: input.source,
+          ...(input.delivery && { delivery: input.delivery }),
           state: 'pending',
-          payload: { request, providerId, groupId },
+          payload: {
+            request,
+            providerId,
+            groupId,
+            groupSize: input.count,
+            ...(input.purpose !== undefined && { purpose: input.purpose }),
+            ...(input.discardInputFileIds?.length && { discardInputFileIds: input.discardInputFileIds }),
+          },
           pollCount: 0,
           attempts: 0,
           cancelRequested: false,
           nextPollAt: now,
           deadlineAt: new Date(now.getTime() + IMAGE_JOB_MAX_WALL_CLOCK_MS),
           ...(keys[index] !== undefined && { idempotencyKey: keys[index] }),
-          creditHold: holds[position],
+          creditHold: holds[position].hold,
+          ...(input.run && { run: input.run }),
+          ...(holds[position].runClaim && { runClaim: holds[position].runClaim }),
         },
         deps
       );

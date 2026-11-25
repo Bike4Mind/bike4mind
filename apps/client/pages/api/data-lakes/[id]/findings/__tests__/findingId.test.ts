@@ -39,7 +39,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => unknown) => next(),
 }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({
   DATA_LAKE_READ_SCOPES: [],
   assertDataLakeWriteScope: h.assertDataLakeWriteScope,
 }));

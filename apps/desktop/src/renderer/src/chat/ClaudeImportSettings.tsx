@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
+import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
 import DialogActions from '@mui/joy/DialogActions';
@@ -95,6 +96,26 @@ function Count({ label, value, testId }: { label: string; value: number; testId:
   );
 }
 
+/** The longer account of what a source syncs, kept out of the way until asked for. */
+function HowItWorks({ children }: { children: ReactNode }) {
+  return (
+    <Box component="details">
+      <Typography
+        component="summary"
+        level="body-xs"
+        textColor="text.tertiary"
+        sx={{ display: 'list-item', cursor: 'pointer' }}
+      >
+        How this works
+      </Typography>
+      <Box sx={{ mt: 0.75 }}>{children}</Box>
+    </Box>
+  );
+}
+
+/** How long the deep-linked "Keep in sync" switch stays highlighted (ms). */
+const WEB_SWITCH_HIGHLIGHT_MS = 2500;
+
 const KIND_LABEL: Record<ClaudeImportKind, string> = {
   'claude-code': 'Claude Code',
   'claude-chat': 'Claude chat',
@@ -148,11 +169,19 @@ export function ClaudeImportSettings({
   );
   const sectionRefs = useRef<Partial<Record<ClaudeImportKind, HTMLDivElement | null>>>({});
   const focused = useRef(false);
+  // A deep link to the web section flashes its "Keep in sync" switch so the eye lands on it.
+  const [highlightWebSwitch, setHighlightWebSwitch] = useState(false);
   useEffect(() => {
     if (!loaded || !focus || focused.current) return;
     focused.current = true;
     sectionRefs.current[focus]?.scrollIntoView?.({ block: 'start' });
+    if (focus === 'b4m-web') setHighlightWebSwitch(true);
   }, [loaded, focus]);
+  useEffect(() => {
+    if (!highlightWebSwitch) return undefined;
+    const timer = window.setTimeout(() => setHighlightWebSwitch(false), WEB_SWITCH_HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [highlightWebSwitch]);
 
   // Two quick clicks would each build on the selection drawn before either reply arrived.
   const pendingProjects = useRef<{ selection: Set<string>; inFlight: number } | null>(null);
@@ -164,7 +193,7 @@ export function ClaudeImportSettings({
         variant="soft"
         data-testid="claude-import-load-error"
         endDecorator={
-          <Button size="sm" color="danger" variant="soft" onClick={onRetry} data-testid="claude-import-retry-btn">
+          <Button size="sm" variant="outlined" color="danger" onClick={onRetry} data-testid="claude-import-retry-btn">
             Retry
           </Button>
         }
@@ -228,30 +257,33 @@ export function ClaudeImportSettings({
         }}
         data-testid="claude-import-code-section"
       >
-        <Typography level="title-sm">Claude Code sessions</Typography>
+        <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+          <Typography level="title-sm">Claude Code sessions</Typography>
+          <Switch
+            size="sm"
+            checked={enabled}
+            disabled={!state.signedIn}
+            onChange={event => void run(() => api.setCodeSettings({ enabled: event.target.checked }))}
+            endDecorator="Keep in sync"
+            slotProps={{
+              input: {
+                'aria-label': 'Keep Claude Code sessions in sync',
+                'data-testid': 'claude-import-code-enable-switch',
+              },
+            }}
+          />
+        </Stack>
         <Typography level="body-xs" textColor="text.secondary" data-testid="claude-import-code-explainer">
           Mirrors your Claude Code sessions here, read-only: Claude Code&apos;s files are never changed. Continue one
           here and it stops syncing.
         </Typography>
-        <Switch
-          size="sm"
-          checked={enabled}
-          disabled={!state.signedIn}
-          onChange={event => void run(() => api.setCodeSettings({ enabled: event.target.checked }))}
-          endDecorator="Keep in sync"
-          sx={{ alignSelf: 'flex-start' }}
-          slotProps={{
-            input: {
-              'aria-label': 'Keep Claude Code sessions in sync',
-              'data-testid': 'claude-import-code-enable-switch',
-            },
-          }}
-        />
-        <Typography level="body-xs" textColor="text.tertiary">
-          Sessions Claude Code ran in its own worktrees (a project&apos;s .claude/worktrees folder), filed under that
-          project. Sessions run anywhere else, including other tools&apos; worktrees, are left out. A session you
-          continue here becomes your own copy and stops syncing, so nothing you add is ever overwritten.
-        </Typography>
+        <HowItWorks>
+          <Typography level="body-xs" textColor="text.tertiary">
+            Sessions Claude Code ran in its own worktrees (a project&apos;s .claude/worktrees folder), filed under that
+            project. Sessions run anywhere else, including other tools&apos; worktrees, are left out. A session you
+            continue here becomes your own copy and stops syncing, so nothing you add is ever overwritten.
+          </Typography>
+        </HowItWorks>
 
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
           <Typography
@@ -263,7 +295,8 @@ export function ClaudeImportSettings({
           </Typography>
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
+            color="neutral"
             onClick={() => void run(() => api.pickCodeFolder(false))}
             data-testid="claude-import-code-folder-btn"
           >
@@ -272,7 +305,7 @@ export function ClaudeImportSettings({
           {code.settings.sourceFolder && (
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
               color="neutral"
               onClick={() => void run(() => api.pickCodeFolder(true))}
               data-testid="claude-import-code-folder-reset-btn"
@@ -358,6 +391,7 @@ export function ClaudeImportSettings({
           <Button
             size="sm"
             variant="outlined"
+            color="neutral"
             loading={code.running}
             disabled={!state.signedIn}
             onClick={() => void run(() => api.syncCode())}
@@ -408,6 +442,7 @@ export function ClaudeImportSettings({
           <Button
             size="sm"
             variant="outlined"
+            color="neutral"
             loading={chat.running}
             disabled={!state.signedIn}
             onClick={() =>
@@ -448,7 +483,8 @@ export function ClaudeImportSettings({
           )}
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
+            color="neutral"
             disabled={!state.signedIn}
             onClick={() => void run(() => api.setWatchFolder(false))}
             data-testid="claude-import-chat-watch-btn"
@@ -458,7 +494,7 @@ export function ClaudeImportSettings({
           {chat.watchFolder && (
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
               color="neutral"
               onClick={() => void run(() => api.setWatchFolder(true))}
               data-testid="claude-import-chat-unwatch-btn"
@@ -478,30 +514,46 @@ export function ClaudeImportSettings({
         }}
         data-testid="claude-import-web-section"
       >
-        <Typography level="title-sm">Bike4Mind web conversations</Typography>
+        <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+          <Typography level="title-sm">Bike4Mind web conversations</Typography>
+          <Switch
+            data-testid="claude-import-web-switch"
+            data-highlighted={highlightWebSwitch ? 'true' : undefined}
+            sx={{
+              px: 0.75,
+              py: 0.25,
+              mr: -0.75,
+              borderRadius: 'sm',
+              transition: 'background-color 400ms ease',
+              bgcolor: highlightWebSwitch ? 'primary.softBg' : 'transparent',
+            }}
+            size="sm"
+            checked={web.settings.enabled}
+            disabled={!state.signedIn}
+            onChange={event => {
+              setHighlightWebSwitch(false);
+              void run(() => api.setWebSettings({ enabled: event.target.checked }));
+            }}
+            endDecorator="Keep in sync"
+            slotProps={{
+              input: {
+                'aria-label': 'Keep Bike4Mind web conversations in sync',
+                'data-testid': 'claude-import-web-enable-switch',
+              },
+            }}
+          />
+        </Stack>
         <Typography level="body-xs" textColor="text.secondary" data-testid="claude-import-web-explainer">
           Mirrors your Bike4Mind web notebooks here, read-only: nothing on the web is changed. Continue one here and it
           stops syncing.
         </Typography>
-        <Switch
-          size="sm"
-          checked={web.settings.enabled}
-          disabled={!state.signedIn}
-          onChange={event => void run(() => api.setWebSettings({ enabled: event.target.checked }))}
-          endDecorator="Keep in sync"
-          sx={{ alignSelf: 'flex-start' }}
-          slotProps={{
-            input: {
-              'aria-label': 'Keep Bike4Mind web conversations in sync',
-              'data-testid': 'claude-import-web-enable-switch',
-            },
-          }}
-        />
-        <Typography level="body-xs" textColor="text.tertiary">
-          Your notebooks on Bike4Mind web, for the account you are signed in with, synced when you sign in, when you
-          come back to this app, and when you press Sync now. Prompts and replies come over; agent steps, images and
-          files stay on the web. A conversation you continue here becomes your own copy and stops syncing.
-        </Typography>
+        <HowItWorks>
+          <Typography level="body-xs" textColor="text.tertiary">
+            Your notebooks on Bike4Mind web, for the account you are signed in with, synced when you sign in, when you
+            come back to this app, and when you press Sync now. Prompts and replies come over; agent steps, images and
+            files stay on the web. A conversation you continue here becomes your own copy and stops syncing.
+          </Typography>
+        </HowItWorks>
         <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }} data-testid="claude-import-web-counts">
           <Count label="found" value={web.counts.found} testId="claude-import-web-found-text" />
           <Count label="imported" value={web.counts.imported} testId="claude-import-web-imported-text" />
@@ -513,6 +565,7 @@ export function ClaudeImportSettings({
           <Button
             size="sm"
             variant="outlined"
+            color="neutral"
             loading={web.running}
             disabled={!state.signedIn || !web.settings.enabled}
             onClick={() => void run(() => api.syncWeb())}
@@ -549,7 +602,7 @@ export function ClaudeImportSettings({
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="danger"
             disabled={!state.signedIn}
             onClick={() => setConfirming('claude-code')}
@@ -559,7 +612,7 @@ export function ClaudeImportSettings({
           </Button>
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="danger"
             disabled={!state.signedIn}
             onClick={() => setConfirming('claude-chat')}
@@ -569,7 +622,7 @@ export function ClaudeImportSettings({
           </Button>
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="danger"
             disabled={!state.signedIn}
             onClick={() => setConfirming('b4m-web')}
@@ -600,7 +653,7 @@ export function ClaudeImportSettings({
               Remove
             </Button>
             <Button
-              variant="plain"
+              variant="outlined"
               color="neutral"
               disabled={removing}
               onClick={() => setConfirming(null)}

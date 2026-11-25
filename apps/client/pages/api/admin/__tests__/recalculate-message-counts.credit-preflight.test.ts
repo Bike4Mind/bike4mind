@@ -25,7 +25,7 @@ vi.mock('@bike4mind/database/auth', () => ({
   sessionRepository: { count: mockCount, countTaggableNotebooks: mockCountTaggable },
 }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ SpiderEvents: { Start: { publish: mockPublishStart } } }));
-vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionOperationalCreditPreflight', () => ({
   assertSessionOperationalCredits: mockAssertCredits,
 }));
 
@@ -47,7 +47,12 @@ const ungroomedField = (call: unknown[]) => {
 const run = async (body: Record<string, unknown>) => {
   const res = { json: vi.fn(), status: vi.fn().mockReturnThis() };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-    { user: { id: 'admin-1', isAdmin: true }, query: {}, body, logger: undefined },
+    {
+      user: { id: 'admin-1', isAdmin: true },
+      query: {},
+      body,
+      logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+    },
     res
   );
   return res;
@@ -192,7 +197,12 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
 
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() };
     const thrown = await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { user: { id: 'admin-1', isAdmin: true }, query: {}, body: { operations: ['summarize'] }, logger: undefined },
+      {
+        user: { id: 'admin-1', isAdmin: true },
+        query: {},
+        body: { operations: ['summarize'] },
+        logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+      },
       res
     ).catch((err: unknown) => err);
 

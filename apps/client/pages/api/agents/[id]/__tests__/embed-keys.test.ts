@@ -181,3 +181,16 @@ describe('GET /api/agents/[id]/embed-keys', () => {
     expect((res as any)._getJSONData()).toHaveLength(1);
   });
 });
+
+describe('GET /api/agents/[id]/embed-keys - org service account', () => {
+  it('refuses a service-account caller before any lookup', async () => {
+    vi.clearAllMocks();
+    const { req, res } = makeReq(
+      { id: 'agent-1' },
+      { id: 'sa1', isSystem: true, serviceAccountOrganizationId: 'org-1' }
+    );
+    await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(agentFindById).not.toHaveBeenCalled();
+    expect(listAgentEmbedKeys).not.toHaveBeenCalled();
+  });
+});

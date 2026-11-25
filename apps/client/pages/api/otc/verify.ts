@@ -1,10 +1,10 @@
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { blockedSignInMessage, configuredSupportEmail } from '@server/auth/blockedSignIn';
 import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import {
   ACCOUNT_SUSPENDED_ERROR_CODE,
   AuthEvents,
-  MfaEnrollmentEvents,
   HTTPError,
   buildSuspensionNotice,
   InternalServerError,
@@ -52,11 +52,10 @@ import {
   reserveOtcRegistrationDomainBudget,
 } from '@server/utils/otcLimits';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
-import { recordMfaEnrollmentEvent } from '@server/auth/mfaEnrollmentFunnel';
-import { readEnforceMfa } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
+import { creditShareLinkSignup } from '@server/referrals/shareLink';
 import { assertSignupNetworkWithinLimits } from '@bike4mind/server-utils/auth/signupNetworkLimits';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -69,7 +68,7 @@ import { readVisitId } from '@server/analytics/visitSession';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import * as z from 'zod';
-import { selfUserResponseSchema } from '@bike4mind/common';
+import { selfUserResponseSchema, signupDomainGrantRefusalNotice } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { recordAdminActionForActor, systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -102,7 +101,11 @@ const otcVerifyCredentialsSchema = z.object({
 
 // Existing-user login spreads the self-view user at the top level next to the access token.
 const otcLoginResponseSchema = selfUserResponseSchema.extend({ accessToken: z.string() });
-const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, accessToken: z.string() });
+const otcRegistrationResponseSchema = z.object({
+  user: selfUserResponseSchema,
+  accessToken: z.string(),
+  signupGrantNotice: z.string().optional(),
+});
 
 // Re-read at verify so turning the kill switch off also stops codes issued before the change. A failed
 // read keeps applying, matching what send stored.
@@ -340,6 +343,8 @@ const handler = baseApi({ auth: false })
       }
 
       // --- DIRECT LOGIN ---
+      // Before the session is minted, so a role lookup failure leaves nothing to undo.
+      await resolveRoleAdminPermissions(existingUser);
       const { accessToken, refreshToken } = await issueSessionForRequest(req, existingUser.id, {
         createdVia: 'otc',
         tokenVersion: existingUser.tokenVersion ?? 0,
@@ -668,6 +673,14 @@ const handler = baseApi({ auth: false })
     // stages stay joinable to the door, then report the stages OTC completes in one step - the
     // code proved the email, and registerViaOTC plus the domain grant above seeded the credits.
     const signupFunnel = await recordSignupAcquisition({ req, user: newUser, method: 'otc' });
+    // After recordSignupNetwork: the share-link checks compare the stored signup IP with the referrer's.
+    await creditShareLinkSignup({
+      req,
+      res,
+      userId: newUser.id,
+      method: 'otc',
+      isSynthetic: signupFunnel.isSynthetic,
+    });
     // Credit the signup to the product the visitor came through, if any, and only with consent
     // - see readConsentedAcquisitionTouches. Never throws. Synthetic accounts are detected
     // above so they never reach a signup conversion.
@@ -695,15 +708,21 @@ const handler = baseApi({ auth: false })
     });
     await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' }, visitId });
 
-    // A new account has no factor, so under enforceMFA this session opens on the enforcement
-    // screen (MFAEnforcementWrapper) rather than the app. Best-effort, like the analytics above.
-    if (await readEnforceMfa({ skipCache: false }).catch(() => false)) {
-      await recordMfaEnrollmentEvent(
-        newUser.id,
-        MfaEnrollmentEvents.REQUIRED,
-        { surface: 'session', source: 'otc-registration', strategy: 'otc' },
-        req.logger
-      );
+    // Domain grants may have just joined an MFA-required organization. Resolve only after
+    // those memberships commit, before minting any full session or refresh cookie.
+    const secondFactor = await resolveSecondFactor(req, newUser, {
+      origin: { strategy: 'otc', createdVia: 'otc-registration' },
+    });
+    if (secondFactor.kind === 'challenge') {
+      return res.status(200).json({
+        mfaRequired: true,
+        passkeyAvailable: secondFactor.passkeyAvailable,
+        userId: newUser.id,
+        accessToken: secondFactor.mfaToken,
+      });
+    }
+    if (secondFactor.kind === 'enroll') {
+      return res.status(200).json({ mfaSetupRequired: true, userId: newUser.id, accessToken: secondFactor.mfaToken });
     }
 
     const registrationSession = await issueSessionForRequest(req, newUser.id, {
@@ -713,8 +732,11 @@ const handler = baseApi({ auth: false })
     });
     setRefreshCookie(res, registrationSession.refreshToken);
     return respond(res, otcRegistrationResponseSchema, {
-      user: redactUserSecretsForSelf(newUser),
+      user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(newUser)),
       accessToken: registrationSession.accessToken,
+      ...(domainGrant.packageRefusal && {
+        signupGrantNotice: signupDomainGrantRefusalNotice(domainGrant.packageRefusal),
+      }),
     });
   });
 

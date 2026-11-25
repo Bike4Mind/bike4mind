@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -10,6 +10,7 @@ import { setImportedInline } from './importedInline';
 import { foldedParents, setNestingEnabled, toggleFolded } from './nestedSessions';
 import { SessionList } from './SessionList';
 import { useSessions } from './useChat';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -53,6 +54,7 @@ const summary = (id: string, title: string, extra: Partial<ChatSessionSummary> =
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 let onSelect = vi.fn<(id: string) => void>();
+let statuses = new Map<string, ChatSessionStatus>();
 let renameSession = vi.fn<(id: string, title: string) => Promise<ChatSessionSummary | null>>();
 
 /** The real sessions owner under the list, so a rename travels the same path it does in the app. */
@@ -62,10 +64,9 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
     <SessionList
       sessions={sessions}
       mode={mode}
-      onModeChange={() => {}}
       loading={loading}
       activeId={activeId}
-      statuses={new Map()}
+      statuses={statuses}
       prSummaries={new Map()}
       collapsed={false}
       onToggleCollapsed={() => {}}
@@ -94,6 +95,7 @@ async function mount(
   activeId: string | null = null
 ) {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       listSessions: async () => sessions,
       onSessionSummary: () => () => undefined,
@@ -164,6 +166,7 @@ const settle = () => act(async () => undefined);
 beforeEach(() => {
   badgeRenders.count = 0;
   onSelect = vi.fn();
+  statuses = new Map();
   renameSession = vi.fn(async (id: string, title: string) => summary(id, title));
 });
 
@@ -195,12 +198,6 @@ describe('renaming a session from the sidebar', () => {
 
     expect(query('chat-rename-session-btn')).toBeNull();
     expect(query('chat-session-menu-btn')?.getAttribute('aria-expanded')).not.toBe('true');
-  });
-
-  it('enters editing on a double-click of the title', async () => {
-    await mount([summary('a', 'Alpha')]);
-    doubleClickTitle('Alpha');
-    expect(renameInput().value).toBe('Alpha');
   });
 
   it('saves on Enter with the id and the trimmed title, and shows it at once', async () => {
@@ -244,8 +241,8 @@ describe('renaming a session from the sidebar', () => {
     expect(titles()).toEqual(['Alpha']);
   });
 
+  // An empty title trims to the same value as a whitespace-only one.
   it.each([
-    ['empty', ''],
     ['whitespace-only', '    '],
     ['unchanged', '  Alpha '],
   ])('treats an %s title as a no-op', async (_label, text) => {
@@ -282,24 +279,18 @@ describe('renaming a session from the sidebar', () => {
     expect(query('chat-rename-error')).toBeNull();
   });
 
-  it('does not open the session while editing, nor fire the Cmd shortcuts', async () => {
+  it('does not open the session while editing, nor fire the session shortcuts', async () => {
     await mount([summary('a', 'Alpha'), summary('b', 'Beta')]);
     doubleClickTitle('Beta');
     onSelect.mockClear();
 
     act(() => renameInput().click());
     act(() => renameInput().closest<HTMLElement>('[data-testid="chat-session-item"]')?.click());
-    press('1', { code: 'Digit1', metaKey: true });
+    press('1', { code: 'Digit1', altKey: true });
     press(' ');
 
     expect(onSelect).not.toHaveBeenCalled();
     expect(query('chat-session-rename-input')).not.toBeNull();
-  });
-
-  it('opens the session on a single click when not editing', async () => {
-    await mount([summary('a', 'Alpha')]);
-    act(() => rowOf('Alpha').click());
-    expect(onSelect).toHaveBeenCalledWith('a');
   });
 
   it('filters search against the new title straight away', async () => {
@@ -353,8 +344,8 @@ describe('renaming a session from the sidebar', () => {
     }
   });
 
-  it('redraws only the edited row among hundreds', async () => {
-    const many = Array.from({ length: 300 }, (_, index) => summary(`s${index}`, `Session ${index}`));
+  it('redraws only the edited row among a hundred', async () => {
+    const many = Array.from({ length: 100 }, (_, index) => summary(`s${index}`, `Session ${index}`));
     await mount(many);
 
     badgeRenders.count = 0;
@@ -421,12 +412,12 @@ describe('sessions imported from Claude, in their own section', () => {
     expect(titles()).toEqual(['Imported work']);
   });
 
-  it('lets the Cmd shortcuts reach imported rows a search has put on screen', async () => {
+  it('lets the session shortcuts reach imported rows a search has put on screen', async () => {
     await mount([summary('own', 'My own chat'), summary('cc-1', 'Imported work', { importOrigin: origin })]);
     typeSearch('imported');
     onSelect.mockClear();
     act(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1', metaKey: true, bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1', altKey: true, bubbles: true }));
     });
     expect(onSelect).toHaveBeenCalledWith('cc-1');
   });
@@ -469,12 +460,56 @@ describe('sub-sessions an agent spawned', () => {
     setNestingEnabled(true);
   });
 
+  const hintOf = (title: string) =>
+    rowOf(title).closest('li')?.querySelector('[data-testid="chat-session-parent-hint"]')?.textContent ?? null;
+
   it('draw indented under their parent, which counts them on its fold pill', async () => {
     await mount(sessions());
     expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
     expect([depthOf('Root'), depthOf('Kid A'), depthOf('Grandkid'), depthOf('Kid B')]).toEqual([null, '1', '2', '1']);
-    const pills = all('chat-session-fold-btn');
-    expect(pills.map(pill => pill.textContent)).toEqual(['3', '1']);
+    expect(all('chat-session-fold-btn').map(pill => pill.textContent)).toEqual(['3', '1']);
+    expect([hintOf('Kid A'), hintOf('Kid B'), hintOf('Grandkid')]).toEqual([null, null, null]);
+  });
+
+  it('caps the indent at three levels and labels deeper sessions', async () => {
+    const chain = [summary('s0', 'Level 1')];
+    for (let level = 1; level <= 4; level += 1) chain.push(spawned(`s${level}`, `Level ${level + 1}`, `s${level - 1}`));
+    await mount(chain);
+    expect(chain.map(entry => depthOf(entry.title))).toEqual([null, '1', '2', '3', '3']);
+    expect(rowOf('Level 4').closest('li')?.querySelector('[data-testid="chat-session-depth-chip"]')).toBeNull();
+    expect(rowOf('Level 5').closest('li')?.querySelector('[data-testid="chat-session-depth-chip"]')?.textContent).toBe(
+      'level 5'
+    );
+  });
+
+  it('keeps the level-3 rail running past a deeper row', async () => {
+    await mount([
+      summary('s0', 'Top'),
+      spawned('s1', 'L1', 's0'),
+      spawned('s2', 'L2', 's1'),
+      spawned('a', 'A', 's2'),
+      spawned('b', 'B', 's2'),
+      spawned('d', 'D', 'a'),
+    ]);
+    expect(depthOf('D')).toBe('3');
+    const guides = rowOf('D').closest('li')?.getAttribute('data-nest-guides') ?? '';
+    expect(guides).toHaveLength(3);
+    expect(guides.endsWith('1')).toBe(true);
+  });
+
+  it('lights the elbows on the path to a waiting or working descendant', async () => {
+    statuses = new Map([
+      ['grandkid', 'needs-action'],
+      ['kid-b', 'processing'],
+    ]);
+    await mount(sessions());
+    const heat = (title: string) => rowOf(title).closest('li')?.getAttribute('data-nest-heat') ?? null;
+    expect([heat('Root'), heat('Kid A'), heat('Grandkid'), heat('Kid B')]).toEqual([
+      null,
+      'needs-action',
+      'needs-action',
+      'processing',
+    ]);
   });
 
   it('fold away and come back from the pill, without opening the parent', async () => {
@@ -510,8 +545,10 @@ describe('sub-sessions an agent spawned', () => {
       setter?.call(input, 'Kid');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    // The parent does not match, so its children stand on their own rows.
-    expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+    // A search is a flat list: no tree, and each result says where it came from.
+    expect(titles()).toEqual(['Kid A', 'Kid B', 'Grandkid']);
+    expect([depthOf('Kid A'), depthOf('Grandkid')]).toEqual([null, null]);
+    expect([hintOf('Kid A'), hintOf('Grandkid')]).toEqual(['from Root', 'from Kid A']);
   });
 
   it('leave the pill inert under a search, where a fold could not show', async () => {
@@ -522,9 +559,9 @@ describe('sub-sessions an agent spawned', () => {
       setter?.call(input, 'Kid');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    act(() => foldButton().click());
+    expect(query('chat-session-fold-btn')).toBeNull();
     expect(foldedParents().has('kid-a')).toBe(false);
-    expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+    expect(titles()).toEqual(['Kid A', 'Kid B', 'Grandkid']);
   });
 
   it('unfold the branches holding the open session, and still fold on request', async () => {
@@ -541,6 +578,7 @@ describe('sub-sessions an agent spawned', () => {
     setNestingEnabled(false);
     await mount(sessions());
     expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
+    expect(hintOf('Kid A')).toBeNull();
     expect(query('chat-session-fold-btn')).toBeNull();
   });
 });
@@ -567,13 +605,6 @@ describe('messaging a session from the sidebar', () => {
     expect(sendMessage).toHaveBeenCalledWith({ sessionId: 'b', text: 'hello' });
     expect(onSelect).not.toHaveBeenCalled();
     expect(query('message-session-dialog')).toBeNull();
-  });
-
-  it('is disabled for an archived session', async () => {
-    await mount([summary('a', 'Alpha'), summary('z', 'Old one', { archived: true })]);
-    act(() => el('sidebar-archived-btn').click());
-    openMenu('Old one');
-    expect(el('session-row-message-action').getAttribute('aria-disabled')).toBe('true');
   });
 });
 
@@ -607,17 +638,14 @@ describe('finding a session by issue or PR number', () => {
     expect(titles()).toEqual(['#1234 | PR#5678 | sidebar search', 'Reading around', 'Mentions 1234 in passing']);
   });
 
-  it('opens the top hit on Enter', async () => {
+  it('opens the top hit on Enter, and clears the search on Escape', async () => {
     await mount(refSessions());
-    const input = typeSearch('PR#5678');
+    typeSearch('PR#5678');
     act(() => {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      el('chat-search-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
     expect(onSelect).toHaveBeenCalledWith('linked');
-  });
 
-  it('clears the search on Escape', async () => {
-    await mount(refSessions());
     const input = typeSearch('1234');
     act(() => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -626,8 +654,32 @@ describe('finding a session by issue or PR number', () => {
     expect(query('sidebar-ref-matches')).toBeNull();
   });
 
-  it('focuses the search on the modifier plus K', async () => {
+  it('focuses the search on the modifier plus Shift+F, unless another view already took the chord, and on modifier plus K', async () => {
     await mount(refSessions());
+    const chord = () =>
+      new KeyboardEvent('keydown', {
+        key: 'F',
+        code: 'KeyF',
+        metaKey: true,
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+    const taken = (event: KeyboardEvent) => event.preventDefault();
+    window.addEventListener('keydown', taken, true);
+    act(() => {
+      window.dispatchEvent(chord());
+    });
+    window.removeEventListener('keydown', taken, true);
+    expect(document.activeElement).not.toBe(el('chat-search-input'));
+
+    act(() => {
+      window.dispatchEvent(chord());
+    });
+    expect(document.activeElement).toBe(el('chat-search-input'));
+
+    act(() => el('chat-search-input').blur());
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
     });

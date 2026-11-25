@@ -3,7 +3,7 @@
 /**
  * Migration: Encrypt Existing Tokens at Rest
  *
- * Encrypts all plaintext OAuth tokens, API keys, and webhook secrets
+ * Encrypts plaintext integration tokens, API keys, and webhook secrets
  * stored in MongoDB using AES-256-GCM.
  *
  * Affected collections:
@@ -11,6 +11,9 @@
  *   - mcpservers: envVariables values, webhook secrets
  *   - orgslackworkspaces: slackBotToken
  *   - slackdevworkspaces: slackBotToken
+ *
+ * Not covered: sign-in provider tokens (users.authProviders[], users.oauthCredentials);
+ * they are encrypted when the user next signs in.
  *
  * Safety:
  *   - Uses isEncrypted() guard to skip already-encrypted values

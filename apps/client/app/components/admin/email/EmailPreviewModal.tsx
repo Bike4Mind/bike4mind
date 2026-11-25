@@ -1,5 +1,6 @@
 import React from 'react';
-import { Modal, ModalDialog, ModalClose, Typography, Box, Sheet, Chip, CircularProgress } from '@mui/joy';
+import { Typography, Box, Sheet, Chip, CircularProgress } from '@mui/joy';
+import { AdminDialog } from '@client/app/components/admin/shared/AdminDialog';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { EmailSendStatus } from '@bike4mind/common';
@@ -35,6 +36,7 @@ const getStatusColor = (status: EmailSendStatus) => {
     case EmailSendStatus.PENDING:
       return 'warning';
     case EmailSendStatus.PROCESSING:
+    case EmailSendStatus.QUEUED:
       return 'primary';
     case EmailSendStatus.FAILED:
     case EmailSendStatus.BOUNCED:
@@ -58,122 +60,107 @@ export default function EmailPreviewModal({ open, onClose, attemptId }: EmailPre
   });
 
   return (
-    <Modal open={open} onClose={onClose}>
-      <ModalDialog
-        sx={{
-          width: '90vw',
-          maxWidth: 1000,
-          height: '90vh',
-          maxHeight: '90vh',
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
-        <ModalClose />
-        <Typography level="title-lg">Email Preview</Typography>
+    <AdminDialog open={open} onClose={onClose} title="Email preview" width={1000} data-testid="email-preview-modal">
+      {isLoading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+          <CircularProgress />
+        </Box>
+      ) : attempt ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {/* Email Details */}
+          <Sheet variant="soft" sx={{ p: 2, borderRadius: 'md' }}>
+            <Typography level="title-sm" sx={{ mb: 1 }}>
+              Email Details
+            </Typography>
 
-        {isLoading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-            <CircularProgress />
-          </Box>
-        ) : attempt ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, overflow: 'auto', flex: 1, minHeight: 0 }}>
-            {/* Email Details */}
-            <Sheet variant="soft" sx={{ p: 2, borderRadius: 'md' }}>
-              <Typography level="title-sm" sx={{ mb: 1 }}>
-                Email Details
-              </Typography>
-
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
-                <Typography level="body-sm">Status:</Typography>
-                <Chip color={getStatusColor(attempt.status)} size="sm">
-                  {attempt.status?.toUpperCase() ?? 'UNKNOWN'}
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
+              <Typography level="body-sm">Status:</Typography>
+              <Chip color={getStatusColor(attempt.status)} size="sm">
+                {attempt.status?.toUpperCase() ?? 'UNKNOWN'}
+              </Chip>
+              {attempt.isTestEmail && (
+                <Chip color="warning" size="sm">
+                  TEST
                 </Chip>
-                {attempt.isTestEmail && (
-                  <Chip color="warning" size="sm">
-                    TEST
-                  </Chip>
-                )}
-              </Box>
+              )}
+            </Box>
 
+            <Box sx={{ mb: 1 }}>
+              <Typography level="body-sm">Recipient:</Typography>
+              <Typography level="body-md" fontWeight="md">
+                {attempt.recipientEmail || 'Unknown'}
+              </Typography>
+              {attempt.isTestEmail && attempt.originalRecipient && (
+                <Typography level="body-xs" color="warning">
+                  Original recipient: {attempt.originalRecipient}
+                </Typography>
+              )}
+            </Box>
+
+            {attempt.sentAt && (
               <Box sx={{ mb: 1 }}>
-                <Typography level="body-sm">Recipient:</Typography>
-                <Typography level="body-md" fontWeight="md">
-                  {attempt.recipientEmail || 'Unknown'}
-                </Typography>
-                {attempt.isTestEmail && attempt.originalRecipient && (
-                  <Typography level="body-xs" color="warning">
-                    Original recipient: {attempt.originalRecipient}
-                  </Typography>
-                )}
-              </Box>
-
-              {attempt.sentAt && (
-                <Box sx={{ mb: 1 }}>
-                  <Typography level="body-sm">Time:</Typography>
-                  <Typography level="body-md">{new Date(attempt.sentAt).toLocaleString()}</Typography>
-                </Box>
-              )}
-
-              {attempt.renderedSubject && (
-                <Box>
-                  <Typography level="body-sm">Subject:</Typography>
-                  <Typography level="body-md">{attempt.renderedSubject}</Typography>
-                </Box>
-              )}
-
-              {attempt.errorMessage && (
-                <Box sx={{ mt: 1 }}>
-                  <Typography level="body-sm" color="danger">
-                    Error:
-                  </Typography>
-                  <Typography level="body-md" color="danger">
-                    {attempt.errorMessage}
-                  </Typography>
-                </Box>
-              )}
-            </Sheet>
-
-            {/* Email Content */}
-            {attempt.renderedHtml && (
-              <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-                <Typography level="title-sm" sx={{ mb: 1 }}>
-                  Email Content
-                </Typography>
-                <Box
-                  sx={{
-                    border: '1px solid',
-                    borderColor: 'neutral.outlinedBorder',
-                    borderRadius: 'md',
-                    overflow: 'hidden',
-                    bgcolor: 'white',
-                    flex: 1,
-                    minHeight: 300,
-                  }}
-                >
-                  <iframe
-                    srcDoc={attempt.renderedHtml}
-                    // Opaque-origin, no scripts: email HTML plus recipient-derived substitutions
-                    // must not run with the admin's app-origin session.
-                    sandbox=""
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      border: 'none',
-                    }}
-                    title="Email Preview"
-                  />
-                </Box>
+                <Typography level="body-sm">Time:</Typography>
+                <Typography level="body-md">{new Date(attempt.sentAt).toLocaleString()}</Typography>
               </Box>
             )}
-          </Box>
-        ) : (
-          <Box sx={{ p: 4, textAlign: 'center' }}>
-            <Typography level="body-lg">Failed to load email details</Typography>
-          </Box>
-        )}
-      </ModalDialog>
-    </Modal>
+
+            {attempt.renderedSubject && (
+              <Box>
+                <Typography level="body-sm">Subject:</Typography>
+                <Typography level="body-md">{attempt.renderedSubject}</Typography>
+              </Box>
+            )}
+
+            {attempt.errorMessage && (
+              <Box sx={{ mt: 1 }}>
+                <Typography level="body-sm" color="danger">
+                  Error:
+                </Typography>
+                <Typography level="body-md" color="danger">
+                  {attempt.errorMessage}
+                </Typography>
+              </Box>
+            )}
+          </Sheet>
+
+          {/* Email Content */}
+          {attempt.renderedHtml && (
+            <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+              <Typography level="title-sm" sx={{ mb: 1 }}>
+                Email Content
+              </Typography>
+              <Box
+                sx={{
+                  border: '1px solid',
+                  borderColor: 'neutral.outlinedBorder',
+                  borderRadius: 'md',
+                  overflow: 'hidden',
+                  bgcolor: 'white',
+                  height: '60vh',
+                  minHeight: 300,
+                }}
+              >
+                <iframe
+                  srcDoc={attempt.renderedHtml}
+                  // Opaque-origin, no scripts: email HTML plus recipient-derived substitutions
+                  // must not run with the admin's app-origin session.
+                  sandbox=""
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    border: 'none',
+                  }}
+                  title="Email Preview"
+                />
+              </Box>
+            </Box>
+          )}
+        </Box>
+      ) : (
+        <Box sx={{ p: 4, textAlign: 'center' }}>
+          <Typography level="body-lg">Failed to load email details</Typography>
+        </Box>
+      )}
+    </AdminDialog>
   );
 }

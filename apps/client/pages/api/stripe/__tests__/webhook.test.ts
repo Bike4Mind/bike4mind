@@ -14,7 +14,12 @@ const mocks = vi.hoisted(() => ({
   constructEvent: vi.fn(),
   updateByStripeSubscriptionId: vi.fn(),
   markPastDue: vi.fn(),
+  findByStripeSubscriptionId: vi.fn(),
+  notifyPaymentActionRequired: vi.fn(),
+  notifyUnpaid: vi.fn(),
+  clearUnpaidNotice: vi.fn(),
   notifyPaymentFailed: vi.fn(),
+  notifyOrgEvent: vi.fn(),
   notifyCanceledForNonPayment: vi.fn(),
   sendToClient: vi.fn(),
   postMessageToSlack: vi.fn(),
@@ -42,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   recordBillingEvent: vi.fn(),
   publishSubscriptionUpdated: vi.fn(),
   publishInvoicePayment: vi.fn(),
+  releasePlanStorageLimit: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -93,7 +99,11 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionIdReturningBefore: mocks.updateByStripeSubscriptionId,
     markPastDue: mocks.markPastDue,
+    findByStripeSubscriptionId: mocks.findByStripeSubscriptionId,
   },
+}));
+vi.mock('@bike4mind/server-utils/subscriptions/releasePlanStorageLimit', () => ({
+  releasePlanStorageLimit: mocks.releasePlanStorageLimit,
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STRIPE_WEBHOOK_SECRET: 'whsec_test' },
@@ -150,7 +160,14 @@ const { reverseStanding } = vi.hoisted(() => ({ reverseStanding: vi.fn() }));
 vi.mock('@server/billing/purchaseReversal', () => ({ reversePurchaseStanding: reverseStanding }));
 vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: mocks.notifyPaymentFailed,
+  notifyPaymentActionRequired: mocks.notifyPaymentActionRequired,
+  notifyUnpaid: mocks.notifyUnpaid,
+  clearUnpaidNotice: mocks.clearUnpaidNotice,
   notifyCanceledForNonPayment: mocks.notifyCanceledForNonPayment,
+}));
+vi.mock('@bike4mind/services/organizationService/orgEventObserver', () => ({
+  notifyOrgEvent: mocks.notifyOrgEvent,
+  setOrgEventObserver: vi.fn(),
 }));
 // The store itself (stage check, owner, projection) is covered in server/billing/billingEventStore.test.ts.
 vi.mock('@server/billing/billingEventStore', () => ({ recordBillingEvent: mocks.recordBillingEvent }));
@@ -207,6 +224,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.updateByStripeSubscriptionId.mockResolvedValue(userRow);
   mocks.markPastDue.mockResolvedValue(userRow);
+  mocks.findByStripeSubscriptionId.mockResolvedValue(userRow);
   mocks.voidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
   mocks.findUserById.mockResolvedValue(owner);
   mocks.findUserByStripeCustomerId.mockResolvedValue(null);
@@ -257,7 +275,175 @@ describe('signup unlock forfeits', () => {
   });
 });
 
+describe('customer.subscription.updated', () => {
+  const updated = (overrides: Record<string, unknown> = {}) => ({
+    type: 'customer.subscription.updated',
+    data: { object: { id: 'sub_1', status: 'unpaid', latest_invoice: 'in_1', ...overrides } },
+  });
+
+  it('notifies the owner once the subscription is unpaid', async () => {
+    const res = await deliver(updated());
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.publishSubscriptionUpdated).toHaveBeenCalledTimes(1);
+    expect(mocks.notifyUnpaid).toHaveBeenCalledExactlyOnceWith(userRow, logger);
+  });
+
+  it('hands an org subscription row to the notice, which resolves the owner', async () => {
+    const orgRow = { ...userRow, ownerType: SubscriptionOwnerType.Organization, ownerId: 'org_1' };
+    mocks.findByStripeSubscriptionId.mockResolvedValue(orgRow);
+
+    await deliver(updated());
+
+    expect(mocks.notifyUnpaid).toHaveBeenCalledWith(orgRow, logger);
+  });
+
+  it('sends nothing for another status', async () => {
+    await deliver(updated({ status: 'past_due' }));
+
+    expect(mocks.notifyUnpaid).not.toHaveBeenCalled();
+    expect(mocks.clearUnpaidNotice).not.toHaveBeenCalled();
+  });
+
+  it.each(['active', 'trialing'])('re-arms the unpaid notice when the subscription is %s again', async status => {
+    await deliver(updated({ status }));
+
+    expect(mocks.clearUnpaidNotice).toHaveBeenCalledExactlyOnceWith('sub_1', logger);
+    expect(mocks.notifyUnpaid).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing when this stage has no row, or the row is closed', async () => {
+    mocks.findByStripeSubscriptionId.mockResolvedValueOnce(null);
+    await deliver(updated());
+    mocks.findByStripeSubscriptionId.mockResolvedValueOnce({ ...userRow, status: 'canceled' });
+    await deliver(updated());
+
+    expect(mocks.notifyUnpaid).not.toHaveBeenCalled();
+  });
+});
+
+describe('invoice.payment_action_required', () => {
+  const actionInvoice = (overrides: Record<string, unknown> = {}) => ({
+    type: 'invoice.payment_action_required',
+    data: { object: { id: 'in_1', parent: { subscription_details: { subscription: 'sub_1' } }, ...overrides } },
+  });
+
+  it('hands the subscription row and invoice to the notice', async () => {
+    const res = await deliver(actionInvoice());
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.notifyPaymentActionRequired).toHaveBeenCalledExactlyOnceWith(
+      userRow,
+      expect.objectContaining({ id: 'in_1' }),
+      logger
+    );
+  });
+
+  it('passes an org subscription row through, for the notice to resolve the owner', async () => {
+    const orgRow = { ...userRow, ownerType: SubscriptionOwnerType.Organization, ownerId: 'org_1' };
+    mocks.findByStripeSubscriptionId.mockResolvedValue(orgRow);
+
+    await deliver(actionInvoice());
+
+    expect(mocks.notifyPaymentActionRequired).toHaveBeenCalledWith(orgRow, expect.anything(), logger);
+  });
+
+  it("alerts the org's admins once the confirm-payment notice is sent", async () => {
+    mocks.findByStripeSubscriptionId.mockResolvedValue({
+      ...userRow,
+      ownerType: SubscriptionOwnerType.Organization,
+      ownerId: 'org_1',
+    });
+    mocks.notifyPaymentActionRequired.mockResolvedValue(true);
+
+    await deliver(actionInvoice());
+
+    expect(mocks.notifyOrgEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'payment_failed',
+      organizationId: 'org_1',
+      invoiceId: 'in_1',
+    });
+  });
+
+  it('does not alert org admins when the confirm-payment notice was not sent', async () => {
+    mocks.findByStripeSubscriptionId.mockResolvedValue({
+      ...userRow,
+      ownerType: SubscriptionOwnerType.Organization,
+      ownerId: 'org_1',
+    });
+    mocks.notifyPaymentActionRequired.mockResolvedValue(false);
+
+    await deliver(actionInvoice());
+
+    expect(mocks.notifyOrgEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not alert org admins for a personal subscription', async () => {
+    mocks.notifyPaymentActionRequired.mockResolvedValue(true);
+
+    await deliver(actionInvoice());
+
+    expect(mocks.notifyOrgEvent).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when this stage has no row for the subscription', async () => {
+    mocks.findByStripeSubscriptionId.mockResolvedValue(null);
+
+    const res = await deliver(actionInvoice());
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.notifyPaymentActionRequired).not.toHaveBeenCalled();
+  });
+
+  it('stays silent for a row that is already closed', async () => {
+    mocks.findByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'canceled' });
+
+    await deliver(actionInvoice());
+
+    expect(mocks.notifyPaymentActionRequired).not.toHaveBeenCalled();
+  });
+
+  it('ignores an invoice with no subscription', async () => {
+    await deliver(actionInvoice({ parent: null }));
+
+    expect(mocks.findByStripeSubscriptionId).not.toHaveBeenCalled();
+    expect(mocks.notifyPaymentActionRequired).not.toHaveBeenCalled();
+  });
+});
+
 describe('invoice.payment_failed', () => {
+  const orgRow = { ...userRow, ownerType: SubscriptionOwnerType.Organization, ownerId: 'org_1' };
+
+  it("alerts the org's admins once the owner's notice is claimed", async () => {
+    mocks.markPastDue.mockResolvedValue(orgRow);
+    mocks.notifyPaymentFailed.mockResolvedValue(true);
+
+    await deliver(failedInvoice());
+
+    expect(mocks.notifyOrgEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'payment_failed',
+      organizationId: 'org_1',
+      invoiceId: 'in_1',
+    });
+  });
+
+  it('does not alert org admins on a redelivery whose notice was already claimed', async () => {
+    mocks.markPastDue.mockResolvedValue(orgRow);
+    mocks.notifyPaymentFailed.mockResolvedValue(false);
+
+    await deliver(failedInvoice());
+
+    expect(mocks.notifyOrgEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not raise an org alert for a personal subscription', async () => {
+    mocks.notifyPaymentFailed.mockResolvedValue(true);
+
+    await deliver(failedInvoice());
+
+    expect(mocks.notifyOrgEvent).not.toHaveBeenCalled();
+  });
+
   it('marks the row past_due and emails its owner', async () => {
     const res = await deliver(failedInvoice());
 
@@ -431,6 +617,42 @@ describe('customer.subscription.deleted', () => {
     expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledOnce();
   });
 
+  it("releases the user's plan storage allowance, owner taken from the row", async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'active' });
+
+    const event = deleted('cancellation_requested');
+    event.data.object.metadata = { userId: 'different_metadata_user' };
+    await deliver(event);
+
+    expect(mocks.releasePlanStorageLimit).toHaveBeenCalledOnce();
+    expect(mocks.releasePlanStorageLimit).toHaveBeenCalledWith('user_1', 'sub_1', logger);
+  });
+
+  it('releases the allowance before the invoice cleanup, so a delivery that times out in it has still released', async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'active' });
+    mocks.voidOpenSubscriptionInvoices.mockReturnValueOnce(new Promise(() => {}));
+
+    // Not awaited: the handler waits on the cleanup, which here never settles.
+    void deliver(deleted('cancellation_requested'));
+    await vi.waitFor(() => expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalled());
+
+    expect(mocks.releasePlanStorageLimit).toHaveBeenCalledOnce();
+  });
+
+  it('leaves storage alone for an org-owned subscription and in a stage with no row', async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValueOnce({
+      ...userRow,
+      ownerType: SubscriptionOwnerType.Organization,
+      ownerId: 'org_1',
+    });
+    await deliver(deleted('cancellation_requested'));
+
+    mocks.updateByStripeSubscriptionId.mockResolvedValueOnce(null);
+    await deliver(deleted('cancellation_requested'));
+
+    expect(mocks.releasePlanStorageLimit).not.toHaveBeenCalled();
+  });
+
   it('posts the end once across a redelivery', async () => {
     mocks.updateByStripeSubscriptionId
       .mockResolvedValueOnce({ ...userRow, status: 'active' })
@@ -452,12 +674,14 @@ describe('customer.subscription.deleted', () => {
     expect(mocks.emitBillingEvent).toHaveBeenCalledWith(expect.objectContaining({ event: 'subscription_ended' }));
   });
 
-  it("writes the subscription's final Stripe mirror with the canceled status", async () => {
-    await deliver(deleted(null));
+  it.each([null, 1_761_000_000])("writes the subscription's final Stripe mirror with ended_at=%s", async endedAt => {
+    const event = deleted(null);
+    await deliver({ ...event, data: { object: { ...event.data.object, ended_at: endedAt } } });
 
     expect(mocks.updateByStripeSubscriptionId).toHaveBeenCalledWith('sub_1', {
       status: 'canceled',
       canceledAt: new Date(1_760_000_000 * 1000),
+      endedAt: endedAt === null ? null : new Date(endedAt * 1000),
       unitAmount: 2000,
       currency: 'usd',
       interval: 'month',

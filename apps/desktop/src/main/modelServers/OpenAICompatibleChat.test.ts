@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { FetchLike, OpenAICompatibleProduct } from '@bike4mind/local-models';
-import type { CompletionStreamEvent } from '../chat/streamEvents';
-import type { ModelLoadSettings } from '@shared/modelSettings';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
-import type { LearnedThinker } from './ModelServerStore';
 import {
   isEffortTemplate,
   OpenAICompatibleChat,
@@ -11,7 +7,22 @@ import {
   NO_PROPS_EXPIRY_MS,
   TEMPLATE_RETRY_MS,
   toOpenAIMessages,
+  contextTooSmallHint,
+  longMessageNotice,
 } from './OpenAICompatibleChat';
+import { FAKE_VLLM_MAX_MODEL_LEN, startFakeVllm, type FakeVllm } from '@bike4mind/local-models/testing';
+import { ModelServerRegistry } from './ModelServerRegistry';
+import { ModelServerStore, type LearnedThinker } from './ModelServerStore';
+import { inertLaunchers } from './testLaunchers';
+import type { FetchLike, OpenAICompatibleProduct } from '@bike4mind/local-models';
+import type { CompletionStreamEvent } from '../chat/streamEvents';
+import type { ModelLoadSettings } from '@shared/modelSettings';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
+import type { CompletionRequest } from '../chat/completions';
+
+// Conditions here hold a few promise turns in; vi.waitFor's default 50ms poll would wait each one out.
+const waitFor = <T>(check: () => T | Promise<T>) => vi.waitFor(check, { interval: 1 });
 
 const BASE = 'http://127.0.0.1:18080';
 const MODEL = 'local:srv-abc123:qwen2.5-0.5b';
@@ -45,6 +56,8 @@ async function collect(client: OpenAICompatibleChat, request: Parameters<OpenAIC
   await client.stream(request, event => events.push(event));
   return events;
 }
+
+const started = (event: CompletionStreamEvent) => 'toolStarted' in event;
 
 const delta = (content: object, finish: string | null = null) => ({
   choices: [{ delta: content, finish_reason: finish }],
@@ -86,9 +99,80 @@ describe('OpenAICompatibleChat', () => {
       ]);
     const events = await collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'read a' }] });
     expect(events).toEqual([
+      { type: 'content', toolStarted: { name: 'read_', id: 'call_1' } },
       { type: 'tool_use', tools: [{ name: 'read_file', arguments: '{"path":"a"}', id: 'call_1' }] },
       { type: 'content', stopReason: 'tool_use' },
     ]);
+  });
+
+  it('announces each tool call once, as its name first arrives, ahead of the finished calls', async () => {
+    const one = await collect(
+      chat(async () =>
+        sse([
+          delta({ tool_calls: [{ index: 0, id: 'call_1', function: { name: 'read_file', arguments: '' } }] }),
+          delta({ tool_calls: [{ index: 0, function: { arguments: '{"path":"a"}' } }] }, 'tool_calls'),
+          '[DONE]',
+        ])
+      ),
+      { model: MODEL, messages: [{ role: 'user', content: 'read a' }] }
+    );
+    expect(one.filter(started)).toEqual([{ type: 'content', toolStarted: { name: 'read_file', id: 'call_1' } }]);
+    expect(one.findIndex(started)).toBeLessThan(one.findIndex(event => event.type === 'tool_use'));
+
+    const parallel = await collect(
+      chat(async () =>
+        sse([
+          delta({ tool_calls: [{ index: 0, id: 'call_1', function: { name: 'read_file', arguments: '{"a":1}' } }] }),
+          delta({ tool_calls: [{ index: 1, id: 'call_2', function: { name: 'grep', arguments: '{"b":' } }] }),
+          delta(
+            {
+              tool_calls: [
+                { index: 0, function: { arguments: '' } },
+                { index: 1, function: { arguments: '2}' } },
+              ],
+            },
+            'tool_calls'
+          ),
+          '[DONE]',
+        ])
+      ),
+      { model: MODEL, messages: [{ role: 'user', content: 'go' }] }
+    );
+    expect(parallel.filter(started)).toEqual([
+      { type: 'content', toolStarted: { name: 'read_file', id: 'call_1' } },
+      { type: 'content', toolStarted: { name: 'grep', id: 'call_2' } },
+    ]);
+
+    const afterText = await collect(
+      chat(async () =>
+        sse([
+          delta({ content: 'Let me look.' }),
+          delta(
+            { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'read_file', arguments: '{}' } }] },
+            'tool_calls'
+          ),
+          '[DONE]',
+        ])
+      ),
+      { model: MODEL, messages: [{ role: 'user', content: 'read a' }] }
+    );
+    expect(afterText.slice(0, 2)).toEqual([
+      { type: 'content', text: 'Let me look.' },
+      { type: 'content', toolStarted: { name: 'read_file', id: 'call_1' } },
+    ]);
+  });
+
+  it('announces a call without an id by its name alone', async () => {
+    const events = await collect(
+      chat(async () =>
+        sse([
+          delta({ tool_calls: [{ index: 0, function: { name: 'read_file', arguments: '{}' } }] }, 'tool_calls'),
+          '[DONE]',
+        ])
+      ),
+      { model: MODEL, messages: [{ role: 'user', content: 'read a' }] }
+    );
+    expect(events[0]).toEqual({ type: 'content', toolStarted: { name: 'read_file' } });
   });
 
   it('reports a length stop as max_tokens', async () => {
@@ -113,8 +197,93 @@ describe('OpenAICompatibleChat', () => {
       type: 'content',
       stopReason: 'stop',
       usage: { inputTokens: 12, outputTokens: 3 },
-      rate: { evalTokens: 3, evalMs: 120, promptTokens: 12, promptMs: 30, draftTokens: 4, draftAccepted: 2 },
+      rate: {
+        evalTokens: 3,
+        evalMs: 120,
+        loadReported: false,
+        promptTokens: 12,
+        promptMs: 30,
+        draftTokens: 4,
+        draftAccepted: 2,
+      },
     });
+  });
+
+  it("keeps llama-server's cache count from its timings over the usage details", async () => {
+    const fetch: FetchLike = async () =>
+      sse([
+        delta({ content: 'Hi' }, 'stop'),
+        {
+          choices: [],
+          usage: { prompt_tokens: 2500, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 2000 } },
+          timings: { cache_n: 2400, prompt_n: 100, prompt_ms: 50, predicted_n: 3, predicted_ms: 120 },
+        },
+        '[DONE]',
+      ]);
+    const events = await collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+    expect(events.at(-1)).toEqual({
+      type: 'content',
+      stopReason: 'stop',
+      usage: { inputTokens: 2500, outputTokens: 3 },
+      rate: {
+        evalTokens: 3,
+        evalMs: 120,
+        loadReported: false,
+        promptTokens: 100,
+        promptMs: 50,
+        cachedPromptTokens: 2400,
+      },
+    });
+  });
+
+  it('keeps the cached prompt count from the usage details on a reply too short to rate', async () => {
+    const fetch: FetchLike = async () =>
+      sse([
+        delta({ content: 'Hi' }, 'stop'),
+        {
+          choices: [],
+          usage: { prompt_tokens: 900, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 850 } },
+        },
+        '[DONE]',
+      ]);
+    const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+    expect(events.at(-1)).toEqual({
+      type: 'content',
+      stopReason: 'stop',
+      usage: { inputTokens: 900, outputTokens: 1, cachedPromptTokens: 850 },
+    });
+  });
+
+  it('keeps the cached prompt count when a later usage chunk leaves the details out', async () => {
+    const fetch: FetchLike = async () =>
+      sse([
+        delta({ content: 'Hi' }),
+        {
+          choices: [],
+          usage: { prompt_tokens: 900, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 850 } },
+        },
+        delta({ content: '!' }, 'stop'),
+        { choices: [], usage: { prompt_tokens: 900, completion_tokens: 2 } },
+        '[DONE]',
+      ]);
+    const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+    expect(events.at(-1)).toMatchObject({ usage: { inputTokens: 900, outputTokens: 2, cachedPromptTokens: 850 } });
+  });
+
+  it('keeps the reasoning count an OpenAI-compatible server reports', async () => {
+    const fetch: FetchLike = async () =>
+      sse([
+        delta({ reasoning_content: 'hmm' }),
+        delta({ content: 'Hi' }, 'stop'),
+        {
+          choices: [],
+          usage: { prompt_tokens: 20, completion_tokens: 30, completion_tokens_details: { reasoning_tokens: 25 } },
+          timings: { predicted_n: 30, predicted_ms: 300 },
+        },
+        '[DONE]',
+      ]);
+    const events = await collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+    expect(events.at(-1)).toMatchObject({ usage: { inputTokens: 20, outputTokens: 30, reasoningTokens: 25 } });
   });
 
   describe('without server timings', () => {
@@ -159,7 +328,7 @@ describe('OpenAICompatibleChat', () => {
         type: 'content',
         stopReason: 'stop',
         usage: { inputTokens: 5, outputTokens: 41 },
-        rate: { evalTokens: 40, evalMs: 2000, estimated: true },
+        rate: { evalTokens: 40, evalMs: 2000, estimated: true, untimedTokens: 1 },
       });
     });
 
@@ -173,6 +342,54 @@ describe('OpenAICompatibleChat', () => {
         );
       const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
       expect(events.at(-1)).toMatchObject({ rate: { evalTokens: 2, evalMs: 2000, estimated: true } });
+    });
+
+    it('estimates rather than take a server rate that timed nothing', async () => {
+      const fetch: FetchLike = async () =>
+        reads(
+          { at: 1000, chunks: [delta({ content: 'a' })] },
+          { at: 1500, chunks: [delta({ content: 'b' })] },
+          {
+            at: 3000,
+            chunks: [
+              delta({ content: 'c' }, 'stop'),
+              {
+                choices: [],
+                usage: { prompt_tokens: 5, completion_tokens: 41 },
+                timings: { predicted_n: 41, predicted_ms: 0 },
+              },
+              '[DONE]',
+            ],
+          }
+        );
+      const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+      expect(events.at(-1)).toMatchObject({ rate: { evalTokens: 40, evalMs: 2000, estimated: true } });
+    });
+
+    it('keeps the cached prompt count from the usage details beside the estimate', async () => {
+      const fetch: FetchLike = async () =>
+        reads(
+          { at: 1000, chunks: [delta({ content: 'a' })] },
+          { at: 1500, chunks: [delta({ content: 'b' })] },
+          {
+            at: 3000,
+            chunks: [
+              delta({ content: 'c' }, 'stop'),
+              {
+                choices: [],
+                usage: { prompt_tokens: 800, completion_tokens: 41, prompt_tokens_details: { cached_tokens: 600 } },
+              },
+              '[DONE]',
+            ],
+          }
+        );
+      const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+      expect(events.at(-1)).toEqual({
+        type: 'content',
+        stopReason: 'stop',
+        usage: { inputTokens: 800, outputTokens: 41, cachedPromptTokens: 600 },
+        rate: { evalTokens: 40, evalMs: 2000, estimated: true, untimedTokens: 1 },
+      });
     });
 
     it('estimates nothing from a burst: a big first read and a few tiny ones right after', async () => {
@@ -724,7 +941,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed);
     await client.listModels();
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     const [listed] = await client.listModels();
     expect(listed).toMatchObject({ name: 'house-model', supportsReasoningEffort: true });
     expect(listed?.controls?.effort?.levels).toEqual(['low', 'medium', 'high']);
@@ -750,7 +967,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed);
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
     await collect(client, ask('house-model', { thinking: false, reasoningEffort: 'high' }));
@@ -773,7 +990,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed);
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(await effortOf(client)).toEqual([['org/gpt oss:Q4', false, undefined]]);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -782,7 +999,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
 
     loaded = true;
     await collect(client, ask('org/gpt oss:Q4'));
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     expect(server.propsUrls).toHaveLength(2);
     expect(await effortOf(client)).toEqual([['org/gpt oss:Q4', true, undefined]]);
     await collect(client, ask('org/gpt oss:Q4', { reasoningEffort: 'low' }));
@@ -802,7 +1019,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed);
     expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     await settle();
     clock.set(TEMPLATE_RETRY_MS - 1);
     expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
@@ -810,7 +1027,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     expect(server.propsUrls).toHaveLength(1);
     clock.set(TEMPLATE_RETRY_MS);
     expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(2));
     expect(changed).not.toHaveBeenCalled();
   });
 
@@ -820,12 +1037,12 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const server = llamaServer({ props: () => new Response('boom', { status: 500 }) });
     const client = chat(server.fetch);
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     await settle();
     vi.setSystemTime(new Date('2020-01-01T00:00:00Z'));
     clock.set(TEMPLATE_RETRY_MS);
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(2));
   });
 
   it.each(['vllm', 'lmstudio', 'llama-swap', null] as const)('never asks %s for a template', async product => {
@@ -847,7 +1064,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     await collect(client, ask('house-model'));
     expect(server.propsUrls).toHaveLength(1);
     answer(Response.json({ chat_template: HARMONY }));
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     // A turn sent before the next listing already carries the level.
     await collect(client, ask('house-model', { reasoningEffort: 'medium' }));
     expect(server.bodies[1]).toMatchObject({ reasoning_effort: 'medium' });
@@ -861,7 +1078,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed);
     await client.listModels();
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
 
     size = null;
     expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
@@ -872,7 +1089,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     size = 5_000_000_000;
     text = QWEN;
     expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(2));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
     expect(server.propsUrls).toHaveLength(2);
@@ -884,13 +1101,13 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed);
     await client.listModels();
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     names = ['other'];
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(2));
     names = ['house-model'];
     expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(3));
     expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
   });
 
@@ -909,7 +1126,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       const changed = vi.fn();
       const client = chat(server.fetch, 'llama-server', changed);
       await client.listModels();
-      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+      await waitFor(() => expect(server.propsUrls).toHaveLength(1));
 
       names = [];
       expect(await effortOf(client)).toEqual([]);
@@ -920,7 +1137,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       await settle();
       expect(changed).not.toHaveBeenCalled();
       expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
-      await vi.waitFor(() => expect(answers).toHaveLength(2));
+      await waitFor(() => expect(answers).toHaveLength(2));
       answers[1](Response.json({ chat_template: currentTemplate }));
       await settle();
       expect(await effortOf(client)).toEqual([['house-model', effort, undefined]]);
@@ -933,15 +1150,15 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const server = llamaServer({ names: () => names, props: () => new Response('boom', { status: 500 }) });
     const client = chat(server.fetch, 'llama-server');
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     await new Promise(resolve => setTimeout(resolve, 0));
     names = ['other'];
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(2));
     await new Promise(resolve => setTimeout(resolve, 0));
     names = ['house-model'];
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(3));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(3));
     expect(server.propsUrls.map(url => new URL(url).searchParams.get('model'))).toEqual([
       'house-model',
       'other',
@@ -969,7 +1186,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       });
       const client = chat(server.fetch);
       await client.listModels();
-      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(5));
+      await waitFor(() => expect(server.propsUrls).toHaveLength(5));
       await settle();
       expect(probed(server.propsUrls).sort()).toEqual(['m0', 'm1', 'm3', 'm5', 'm6']);
       expect(most).toBe(PROPS_CONCURRENCY);
@@ -992,7 +1209,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       state = 'loaded';
       size = 5_000_000_000;
       await client.listModels();
-      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      await waitFor(() => expect(changed).toHaveBeenCalledOnce());
       expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
     });
 
@@ -1007,7 +1224,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       const changed = vi.fn();
       const client = chat(server.fetch, 'llama-server', changed);
       await client.listModels();
-      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+      await waitFor(() => expect(server.propsUrls).toHaveLength(1));
       await settle();
       await client.listModels();
       await settle();
@@ -1016,7 +1233,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       size = 5_000_000_000;
       answer = template(HARMONY);
       await client.listModels();
-      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      await waitFor(() => expect(changed).toHaveBeenCalledOnce());
       expect(server.propsUrls).toHaveLength(2);
     });
 
@@ -1030,7 +1247,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       const changed = vi.fn();
       const client = chat(server.fetch, 'llama-server', changed);
       await client.listModels();
-      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+      await waitFor(() => expect(server.propsUrls).toHaveLength(1));
       size = 5_000_000_000;
       await client.listModels();
       answer(Response.json({ chat_template: HARMONY }));
@@ -1050,7 +1267,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       const changed = vi.fn();
       const client = chat(server.fetch, 'llama-server', changed);
       await client.listModels();
-      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      await waitFor(() => expect(changed).toHaveBeenCalledOnce());
 
       state = 'unloaded';
       await client.listModels();
@@ -1060,7 +1277,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       state = 'loaded';
       answer = template(QWEN, '/models/a.gguf');
       await client.listModels();
-      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+      await waitFor(() => expect(server.propsUrls).toHaveLength(2));
       await settle();
       expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
       expect(changed).toHaveBeenCalledOnce();
@@ -1070,7 +1287,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       state = 'loaded';
       answer = template(QWEN, '/models/b.gguf');
       await client.listModels();
-      await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(changed).toHaveBeenCalledTimes(2));
       expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
     });
 
@@ -1084,11 +1301,11 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
       const changed = vi.fn();
       const client = chat(server.fetch, 'llama-server', changed);
       await client.listModels();
-      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+      await waitFor(() => expect(server.propsUrls).toHaveLength(1));
       await settle();
       loaded = true;
       await collect(client, ask('beta'));
-      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      await waitFor(() => expect(changed).toHaveBeenCalledOnce());
       expect(probed(server.propsUrls)).toEqual(['alpha', 'alpha']);
       expect(await effortOf(client)).toEqual([['alpha', true, undefined]]);
     });
@@ -1099,7 +1316,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed);
     await client.listModels();
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     await collect(client, ask('beta', { reasoningEffort: 'high' }));
     expect(server.bodies[0]).toMatchObject({ reasoning_effort: 'high' });
     expect(probed(server.propsUrls)).toEqual(['alpha']);
@@ -1112,7 +1329,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     });
     const client = chat(server.fetch);
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(PROPS_CONCURRENCY));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(PROPS_CONCURRENCY));
     await settle();
     for (const model of ['m0', 'm1', 'm0']) await collect(client, ask(model));
     await client.listModels();
@@ -1129,7 +1346,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     });
     const client = chat(server.fetch, 'llama-server', changed);
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     await settle();
     clock.set(NO_PROPS_EXPIRY_MS - 1);
     await collect(client, ask('house-model'));
@@ -1140,7 +1357,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     status = 200;
     clock.set(NO_PROPS_EXPIRY_MS);
     await client.listModels();
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     expect(server.propsUrls).toHaveLength(2);
   });
 
@@ -1154,7 +1371,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed);
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     await settle();
     await collect(client, ask('house-model'));
     expect(server.propsUrls).toHaveLength(1);
@@ -1164,7 +1381,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     down = false;
     status = 200;
     await client.listModels();
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     expect(server.propsUrls).toHaveLength(2);
   });
 
@@ -1172,7 +1389,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const server = llamaServer({ props: () => new Response('boom', { status: 500 }) });
     const client = chat(server.fetch);
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     await settle();
     for (let turn = 0; turn < 3; turn++) await collect(client, ask('house-model'));
     await settle();
@@ -1183,13 +1400,13 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const server = llamaServer({ props: notLoaded });
     const client = chat(server.fetch);
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     await settle();
     await collect(client, ask('house-model'));
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(2));
     await settle();
     await collect(client, ask('house-model'));
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(3));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(3));
   });
 
   it('never asks about a model whose name or alias already says gpt-oss', async () => {
@@ -1219,7 +1436,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed, { isCurrent: () => current });
     await client.listModels();
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(1));
     current = false;
     answer(Response.json({ chat_template: HARMONY }));
     await settle();
@@ -1235,7 +1452,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     });
     const client = chat(server.fetch, 'llama-server', undefined, { isCurrent: () => current });
     await client.listModels();
-    await vi.waitFor(() => expect(answers).toHaveLength(PROPS_CONCURRENCY));
+    await waitFor(() => expect(answers).toHaveLength(PROPS_CONCURRENCY));
     current = false;
     for (const answer of answers) answer(Response.json({ chat_template: QWEN }));
     await settle();
@@ -1249,7 +1466,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     const changed = vi.fn();
     const client = chat(server.fetch, 'llama-server', changed);
     await client.listModels();
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
 
     expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
     expect(server.propsUrls).toHaveLength(1);
@@ -1260,7 +1477,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     down = false;
     text = QWEN;
     expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
-    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await waitFor(() => expect(server.propsUrls).toHaveLength(2));
     await settle();
     expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
     expect(server.propsUrls).toHaveLength(2);
@@ -1274,7 +1491,7 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     });
     const client = chat(server.fetch, 'llama-server', toolsChanged, { warn });
     await client.listModels();
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+    await waitFor(() => expect(warn).toHaveBeenCalledOnce());
     expect(warn.mock.calls[0]?.[0]).toContain('registry gone');
     expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
   });
@@ -1762,6 +1979,402 @@ describe('toOpenAIMessages', () => {
         { type: 'text', text: 'what is this' },
         { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAAA' } },
       ],
+    });
+  });
+});
+
+describe('vLLM', () => {
+  const MAX_MODEL_LEN = FAKE_VLLM_MAX_MODEL_LEN;
+
+  const fetchLike: FetchLike = (input, init) => fetch(input, init);
+  const texts = (events: readonly CompletionStreamEvent[]) =>
+    events.flatMap(event => (event.type === 'content' && event.text ? [event.text] : []));
+  const RUNTIME = 'srv-vllm01';
+  const id = (name: string) => `local:${RUNTIME}:${name}`;
+  const WEATHER_TOOL = {
+    toolSchema: {
+      name: 'get_weather',
+      description: 'Current weather for a city.',
+      parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+    },
+  };
+
+  let vllm: FakeVllm | undefined;
+  afterEach(async () => {
+    await vllm?.close();
+    vllm = undefined;
+  });
+
+  function client(server: FakeVllm, toolsChanged = vi.fn()) {
+    return new OpenAICompatibleChat({
+      runtimeId: RUNTIME,
+      baseUrl: server.baseUrl,
+      label: 'gpu vllm',
+      product: 'vllm',
+      fetch: fetchLike,
+      hasCredentials: () => false,
+      redact: text => text,
+      toolsChanged,
+    });
+  }
+
+  async function turn(chat: OpenAICompatibleChat, request: CompletionRequest, notices: string[] = []) {
+    const events: CompletionStreamEvent[] = [];
+    await chat.stream(
+      request,
+      event => events.push(event),
+      undefined,
+      undefined,
+      message => notices.push(message)
+    );
+    return events;
+  }
+
+  describe('OpenAICompatibleChat against vLLM', () => {
+    it('lists served-name aliases once and an adapter with its base, sized by max_model_len', async () => {
+      vllm = await startFakeVllm();
+      const chat = client(vllm);
+      const models = await chat.listModels();
+      expect(models.map(({ name, contextWindow, baseModel }) => ({ name, contextWindow, baseModel }))).toEqual([
+        { name: 'qwen-small', contextWindow: MAX_MODEL_LEN, baseModel: undefined },
+        { name: 'sql-lora', contextWindow: MAX_MODEL_LEN, baseModel: 'qwen-small' },
+      ]);
+      expect(models.every(model => model.supportsTools === undefined)).toBe(true);
+      expect(models.map(model => model.aliasIds)).toEqual([[models[0].id.replace(/qwen-small$/, 'qwen')], undefined]);
+    });
+
+    it('takes the context from max_model_len before any listing, for the first name, an alias and an adapter', async () => {
+      vllm = await startFakeVllm();
+      for (const name of ['qwen-small', 'qwen', 'sql-lora'])
+        expect(await client(vllm).contextTokens(id(name))).toBe(4096);
+    });
+
+    it('round-trips a tool call: streamed tool_calls, the tool result sent back, then the answer', async () => {
+      vllm = await startFakeVllm();
+      const chat = client(vllm);
+      const ask: CompletionRequest = {
+        model: id('qwen-small'),
+        messages: [{ role: 'user', content: 'Weather in Paris?' }],
+        tools: [WEATHER_TOOL],
+        sessionId: 's1',
+      };
+      const first = await turn(chat, ask);
+      expect(first).toEqual([
+        { type: 'content', toolStarted: { name: 'get_weather', id: 'chatcmpl-tool-9a2b' } },
+        {
+          type: 'tool_use',
+          tools: [{ name: 'get_weather', arguments: '{"city": "Paris"}', id: 'chatcmpl-tool-9a2b' }],
+        },
+        { type: 'content', stopReason: 'tool_use', usage: { inputTokens: 210, outputTokens: 20 } },
+      ]);
+      const second = await turn(chat, {
+        ...ask,
+        messages: [
+          ...ask.messages,
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'chatcmpl-tool-9a2b', name: 'get_weather', input: { city: 'Paris' } }],
+          },
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'chatcmpl-tool-9a2b', content: '21C, clear' }],
+          },
+        ],
+      });
+      expect(texts(second)).toEqual(['It is 21C ', 'in Paris.']);
+      expect(second.at(-1)).toMatchObject({ stopReason: 'stop' });
+      expect(vllm.requests[1]).toMatchObject({
+        model: 'qwen-small',
+        tools: [{ type: 'function', function: WEATHER_TOOL.toolSchema }],
+        messages: [
+          { role: 'user', content: 'Weather in Paris?' },
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: 'chatcmpl-tool-9a2b',
+                type: 'function',
+                function: { name: 'get_weather', arguments: '{"city":"Paris"}' },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'chatcmpl-tool-9a2b', content: '21C, clear' },
+        ],
+      });
+    });
+
+    it('chats without tools when started without tool flags, says why once per conversation, and lists tools off', async () => {
+      vllm = await startFakeVllm();
+      vllm.toolFlags = false;
+      const toolsChanged = vi.fn();
+      const chat = client(vllm, toolsChanged);
+      const notices: string[] = [];
+      const ask: CompletionRequest = {
+        model: id('qwen-small'),
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [WEATHER_TOOL],
+        sessionId: 's1',
+      };
+      const events = await turn(chat, ask, notices);
+      expect(texts(events)).toEqual(['Hello.']);
+      await turn(chat, ask, notices);
+      await turn(chat, { ...ask, tools: [], sessionId: 's2' }, notices);
+      expect(vllm.requests.map(request => 'tools' in request)).toEqual([true, false, false, false]);
+      expect(notices).toHaveLength(2);
+      expect(notices[0]).toMatch(/gpu vllm was started without tool calling/);
+      expect(notices[0]).toContain('--enable-auto-tool-choice');
+      expect(notices[0]).toContain('--tool-call-parser');
+      expect(toolsChanged).toHaveBeenCalledTimes(1);
+      expect(chat.toolsHint()).toBe(notices[0]);
+      expect((await chat.listModels()).map(model => model.supportsTools)).toEqual([false, false]);
+    });
+
+    it('turns tools back on at the recheck after vLLM restarts with tool flags', async () => {
+      vllm = await startFakeVllm();
+      vllm.toolFlags = false;
+      const toolsChanged = vi.fn();
+      const chat = client(vllm, toolsChanged);
+      const ask: CompletionRequest = {
+        model: id('qwen-small'),
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [WEATHER_TOOL],
+        sessionId: 's1',
+      };
+      await turn(chat, ask);
+      await chat.recheckTools('qwen-small');
+      expect(chat.toolsHint()).not.toBeNull();
+
+      vllm.toolFlags = true;
+      await chat.recheckTools('qwen-small');
+      const probe = vllm.requests.at(-1);
+      expect(probe).toMatchObject({ model: 'qwen-small', max_tokens: 1, tools: [{ type: 'function' }] });
+      expect(probe?.stream).toBeUndefined();
+      expect(chat.toolsHint()).toBeNull();
+      expect(toolsChanged).toHaveBeenCalledTimes(2);
+      expect((await chat.listModels()).every(model => model.supportsTools === undefined)).toBe(true);
+      const events = await turn(chat, ask);
+      expect(events.some(event => event.type === 'tool_use')).toBe(true);
+    });
+
+    it('turns tools off on the next chat after vLLM restarts without tool flags', async () => {
+      vllm = await startFakeVllm();
+      const chat = client(vllm);
+      const ask: CompletionRequest = {
+        model: id('qwen-small'),
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [WEATHER_TOOL],
+        sessionId: 's1',
+      };
+      expect((await turn(chat, ask)).some(event => event.type === 'tool_use')).toBe(true);
+      vllm.toolFlags = false;
+      const notices: string[] = [];
+      const events = await turn(chat, ask, notices);
+      expect(texts(events)).toEqual(['Hello.']);
+      expect(notices).toHaveLength(1);
+    });
+
+    it('asks a vLLM server once whether it takes tools, before any chat', async () => {
+      vllm = await startFakeVllm();
+      const chat = client(vllm);
+      await chat.recheckTools('qwen-small');
+      await chat.recheckTools('qwen-small');
+      expect(vllm.requests).toHaveLength(1);
+      expect(chat.toolsHint()).toBeNull();
+
+      vllm.toolFlags = false;
+      const fresh = client(vllm);
+      await fresh.recheckTools('qwen-small');
+      expect(fresh.toolsHint()).toMatch(/started without tool calling/);
+    });
+  });
+
+  describe('OpenAICompatibleChat when the context is too small for Desktop prompt and tools', () => {
+    const ask = (sessionId: string, toolPromptTokens?: number): CompletionRequest => ({
+      model: `local:${RUNTIME}:qwen-small`,
+      messages: [{ role: 'user', content: 'Say hello.' }],
+      sessionId,
+      ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
+    });
+
+    it('says why once per conversation, hints on the server, and names --max-model-len; a larger one turns them back on', async () => {
+      vllm = await startFakeVllm();
+      const toolsChanged = vi.fn();
+      const chat = client(vllm, toolsChanged);
+      expect(
+        (await chat.listModels()).map(model => [model.contextWindow, model.contextFixed, model.supportsTools])
+      ).toEqual([
+        [MAX_MODEL_LEN, true, undefined],
+        [MAX_MODEL_LEN, true, undefined],
+      ]);
+      expect(chat.toolsHint()).toBeNull();
+
+      const notices: string[] = [];
+      expect(texts(await turn(chat, ask('a', 9_000), notices))).toEqual(['Hello.']);
+      await turn(chat, ask('a'), notices);
+      // A turn is told only when it measured the overflow itself; there is no server-wide fallback to a stale figure.
+      await turn(chat, ask('b', 9_000), notices);
+      expect(notices).toHaveLength(2);
+      expect(notices[0]).toMatch(/qwen-small with a 4096-token context.*about 9000 tokens.*--max-model-len 16384/);
+      expect(notices[0]).not.toMatch(/--enable-auto-tool-choice/);
+      expect(toolsChanged).toHaveBeenCalledTimes(1);
+      // Listing never marks tools off for size: whether a turn carries tools is decided per turn, not by the server.
+      expect((await chat.listModels()).map(model => model.supportsTools)).toEqual([undefined, undefined]);
+      expect(chat.toolsHint()).toMatch(/runs qwen-small, sql-lora with a 4096-token context/);
+
+      vllm.maxModelLen = 16_384;
+      expect((await chat.listModels()).map(model => model.supportsTools)).toEqual([undefined, undefined]);
+      expect(chat.toolsHint()).toBeNull();
+      expect(toolsChanged).toHaveBeenCalledTimes(2);
+      await turn(chat, ask('c'), notices);
+      expect(notices).toHaveLength(2);
+    });
+
+    it('keeps tools on and says nothing when the context holds the prompt', async () => {
+      vllm = await startFakeVllm();
+      vllm.maxModelLen = 16_384;
+      const toolsChanged = vi.fn();
+      const chat = client(vllm, toolsChanged);
+      await chat.listModels();
+      const notices: string[] = [];
+      await turn(chat, { ...ask('a'), tools: [WEATHER_TOOL] }, notices);
+      expect(notices).toEqual([]);
+      expect(vllm.requests.at(-1)?.tools).toHaveLength(1);
+      expect(chat.toolsHint()).toBeNull();
+      expect(toolsChanged).not.toHaveBeenCalled();
+    });
+
+    it('names the larger --max-model-len a bigger prompt needs', () => {
+      expect(contextTooSmallHint('gpu', 'vllm', [{ name: 'm', context: 8192 }], 15_000)).toMatch(
+        /--max-model-len 32768/
+      );
+      expect(contextTooSmallHint('gpu', 'llama-server', [{ name: 'm', context: 4096 }], 9_000)).toMatch(
+        /--ctx-size 16384/
+      );
+    });
+  });
+
+  describe('OpenAICompatibleChat tools versus a fixed context', () => {
+    const chatTurn = (sessionId: string, extra: Partial<CompletionRequest> = {}): CompletionRequest => ({
+      model: id('qwen-small'),
+      messages: [{ role: 'user', content: 'Weather in Paris?' }],
+      sessionId,
+      ...extra,
+    });
+
+    it('keeps sending tools to a conversation that fits after another one overflowed, and clears the hint', async () => {
+      vllm = await startFakeVllm();
+      const chat = client(vllm);
+      await chat.listModels();
+      const notices: string[] = [];
+      await turn(chat, chatTurn('big', { toolPromptTokens: 9_000 }), notices);
+      expect(notices).toHaveLength(1);
+      expect(chat.toolsHint()).toMatch(/--max-model-len/);
+
+      const events = await turn(chat, chatTurn('small', { tools: [WEATHER_TOOL] }), notices);
+      expect(events.some(event => event.type === 'tool_use')).toBe(true);
+      expect(vllm.requests.at(-1)?.tools).toHaveLength(1);
+      expect((await chat.listModels()).some(model => model.supportsTools === false)).toBe(false);
+      expect(chat.toolsHint()).toBeNull();
+    });
+
+    it('tells a turn whose message overflows so every time, without the server hint or the once-per-chat memory', async () => {
+      vllm = await startFakeVllm();
+      const chat = client(vllm);
+      await chat.listModels();
+      const notices: string[] = [];
+      await turn(chat, chatTurn('a', { toolPromptTokens: 1_000 }), notices);
+      await turn(chat, chatTurn('a', { toolPromptTokens: 1_000 }), notices);
+      expect(notices).toEqual([
+        longMessageNotice('qwen-small', MAX_MODEL_LEN),
+        longMessageNotice('qwen-small', MAX_MODEL_LEN),
+      ]);
+      expect(notices[0]).not.toMatch(/--max-model-len/);
+      expect(chat.toolsHint()).toBeNull();
+    });
+  });
+
+  describe('ModelServerRegistry with a vLLM server', () => {
+    const cipher: SecretCipher = {
+      isEncryptionAvailable: () => true,
+      encryptString: plain => Buffer.from(plain, 'utf8'),
+      decryptString: encrypted => encrypted.toString('utf8'),
+    };
+    const memoryFile = (): StoreFile => {
+      let contents: string | null = null;
+      return {
+        read: async () => contents,
+        write: async next => {
+          contents = next;
+        },
+      };
+    };
+
+    it('shows the tools hint on the server row and clears it at the check after a restart with flags', async () => {
+      vllm = await startFakeVllm();
+      vllm.toolFlags = false;
+      const quiet = { debug: () => undefined, warn: () => undefined };
+      const changed = vi.fn();
+      const servers = new ModelServerRegistry({
+        store: new ModelServerStore(cipher, memoryFile(), quiet),
+        logger: quiet,
+        launchers: inertLaunchers(),
+        changed,
+        fetchFor: () => fetchLike,
+        localFetch: async () => new Response('{"version":"0.12.0"}'),
+        resolve: async () => ['127.0.0.1'],
+      });
+      const views = await servers.add({
+        address: vllm.baseUrl,
+        credential: { type: 'none' },
+        name: 'gpu vllm',
+        kind: 'openai-compatible',
+        access: 'chat',
+      });
+      expect(views[1]).toMatchObject({
+        health: { state: 'online', version: '0.32.0' },
+        models: ['qwen-small', 'sql-lora'],
+      });
+      await vi.waitFor(async () =>
+        expect((await servers.views())[1].toolsHint).toMatch(/started without tool calling/)
+      );
+      const listed = await servers.models();
+      expect(listed.map(model => [model.name, model.baseModel, model.supportsTools])).toEqual([
+        ['qwen-small', undefined, false],
+        ['sql-lora', 'qwen-small', false],
+      ]);
+
+      vllm.toolFlags = true;
+      await servers.check(views[1].id);
+      await vi.waitFor(async () => expect((await servers.views())[1].toolsHint).toBeUndefined());
+      expect(changed).toHaveBeenCalled();
+    });
+
+    it('keeps the alias ids on the listed model while the server is down', async () => {
+      vllm = await startFakeVllm();
+      const quiet = { debug: () => undefined, warn: () => undefined };
+      const servers = new ModelServerRegistry({
+        store: new ModelServerStore(cipher, memoryFile(), quiet),
+        logger: quiet,
+        launchers: inertLaunchers(),
+        fetchFor: () => fetchLike,
+        localFetch: async () => new Response('{"version":"0.12.0"}'),
+        resolve: async () => ['127.0.0.1'],
+      });
+      const views = await servers.add({
+        address: vllm.baseUrl,
+        credential: { type: 'none' },
+        name: 'gpu vllm',
+        kind: 'openai-compatible',
+        access: 'chat',
+      });
+      const online = (await servers.models()).find(model => model.name === 'qwen-small');
+      expect(online?.aliasIds).toEqual([online?.id.replace(/qwen-small$/, 'qwen')]);
+
+      await vllm.close();
+      vllm = undefined;
+      await servers.check(views[1].id);
+      const down = (await servers.models()).find(model => model.name === 'qwen-small');
+      expect(down).toMatchObject({ id: online?.id, aliasIds: online?.aliasIds, unavailable: expect.any(String) });
     });
   });
 });

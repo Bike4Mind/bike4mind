@@ -8,6 +8,9 @@ import {
   FleetUsageExportTooLargeError,
   readFleetUsageExport,
 } from '@server/usage/fleetUsageExport';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'fleetUsageExport' } });
 
 const AUDIT_COUNTER_NAME = 'Fleet Usage Export Access';
 const AUDIT_PRINCIPAL = { userId: 'fleet-usage-export', userName: 'Fleet usage export', userLevel: 'service' };
@@ -46,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (authorization.status === 'disabled') {
     if (authorization.misconfigured && !warnedMisconfigured) {
       warnedMisconfigured = true;
-      console.error('Fleet usage export is disabled: token or scope configuration is invalid');
+      logger.error('Fleet usage export is disabled: token or scope configuration is invalid');
     }
     return res.status(404).json({ error: 'Not found', request_id: requestId });
   }
@@ -96,7 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await audit('allow', parsed.data);
     return res.status(200).json(snapshot);
   } catch {
-    console.error('Fleet usage export failed', { requestId });
+    logger.error('Fleet usage export failed', { requestId });
     return res.status(500).json({ error: 'Usage export unavailable', request_id: requestId });
   }
 }

@@ -4,11 +4,17 @@ import { passthroughShape } from './responseShape';
 import { adminApiKeyAccessSchema, adminApiKeyRequestCountsSchema } from './adminUserCredits';
 
 /**
- * Secret fields of an API key, never sent to a client: the legacy bcrypt hash, the SHA-256 digest
- * of the raw key, and the callback signing secret. UserApiKeyModel's toJSON transform also drops
+ * Fields of an API key never sent to a client: the legacy bcrypt hash, the SHA-256 digest of the
+ * raw key, the callback signing secret, and the admin-set moderation exception (its reason and
+ * acting admin are not the key owner's to read). UserApiKeyModel's toJSON transform also drops
  * them; this keeps them out if a read path skips serialization.
  */
-export const USER_API_KEY_WITHHELD_FIELDS = ['keyHash', 'keyDigest', 'callbackSigningSecret'] as const;
+export const USER_API_KEY_WITHHELD_FIELDS = [
+  'keyHash',
+  'keyDigest',
+  'callbackSigningSecret',
+  'moderationException',
+] as const;
 
 // Held to IUserApiKeyDocument: a new field fails the build here until it is classified.
 const USER_API_KEY_RESPONSE_FIELDS = {
@@ -36,6 +42,7 @@ const USER_API_KEY_RESPONSE_FIELDS = {
   allowedOrigins: true,
   identifiedClientIds: true,
   preauthorizedLakeIds: true,
+  orgOwned: true,
   branding: true,
   spendCap: true,
   ownerHasWhitelabel: true,
@@ -62,6 +69,15 @@ export const apiKeyRateLimitUsageSchema = z.object({
 
 export type ApiKeyRateLimitUsage = z.infer<typeof apiKeyRateLimitUsageSchema>;
 
+/** The admin-visible part of a key's moderation exception; the acting admin id stays server-side. */
+export const adminApiKeyModerationExceptionSchema = z.object({
+  categories: z.array(z.string()),
+  reason: z.string(),
+  setAt: z.coerce.date(),
+});
+
+export type AdminApiKeyModerationException = z.infer<typeof adminApiKeyModerationExceptionSchema>;
+
 /** GET /api/admin/users/[userId]/user-api-keys */
 export const adminUserApiKeysResponseSchema = z.object({
   apiKeys: z.array(userApiKeyResponseSchema),
@@ -69,4 +85,6 @@ export const adminUserApiKeysResponseSchema = z.object({
   /** Requests per key from the usage log (90-day TTL), keyed by key id; absent keys made none. */
   requests: z.record(z.string(), adminApiKeyRequestCountsSchema),
   access: adminApiKeyAccessSchema,
+  /** Keys with a moderation exception, keyed by key id; absent keys have none. */
+  moderationExceptions: z.record(z.string(), adminApiKeyModerationExceptionSchema),
 });

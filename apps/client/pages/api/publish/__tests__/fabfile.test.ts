@@ -31,6 +31,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   FabFile: { findById: () => ({ select: () => ({ lean: mocks.fileLean }) }) },
+  fabFileRepository: { findById: () => mocks.fileLean() },
   PublishedArtifact: {
     findOne: (filter: unknown) => {
       mocks.publishedFindOne(filter);

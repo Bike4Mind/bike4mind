@@ -48,21 +48,6 @@ export const OPERATIONS_GUIDE: readonly AdminGuideEntry[] = [
     ],
   },
   {
-    id: 'secrets-rotation',
-    title: 'Secrets rotation',
-    summary:
-      'Tracks which secrets are on a rotation schedule, when each was last renewed and when the next rotation is due, so overdue secrets are easy to spot.',
-    views: ['admin.secrets_rotation'],
-    settings: [],
-    howTo: [
-      'Open Secrets rotation. Each row shows the secret, its description, interval in days, last renewed, last renewed by, next rotation and a status of Active, Overdue or Inactive.',
-      'Open the row menu, choose Mark renewed and confirm. This records you as the person who renewed it and restarts its cycle. It needs update permission on secret rotations. For other secrets, click it after you rotate them in the source system.',
-      'For the signing secret, click Mark renewed BEFORE you deploy the replacement secret: it snapshots the secret the running process uses, and a capture that matches the last one is refused.',
-      'To change a schedule, open the row menu, choose Edit rotation, set the description and the rotation interval (1 to 365 days), then click Save changes.',
-    ],
-    keywords: ['rotate keys', 'credential rotation', 'overdue secret', 'renew secret', 'key expiry'],
-  },
-  {
     id: 'system-secrets',
     title: 'System secrets',
     summary:
@@ -76,30 +61,6 @@ export const OPERATIONS_GUIDE: readonly AdminGuideEntry[] = [
       'To go back to the infrastructure value, open the row menu on a GUI override and choose Delete override, then confirm.',
     ],
     keywords: ['environment variables', 'env vars', 'secret override', 'gui override', 'sst secret', 'api keys config'],
-  },
-  {
-    id: 'liveops-triage',
-    title: 'LiveOps Triage',
-    summary:
-      'Manages triage configurations that read error alerts from a Slack channel, use an AI model to prioritize them and file GitHub or Jira issues. Each configuration can be dry-run, run on demand and reviewed in run history.',
-    views: ['admin.liveops_triage'],
-    settings: [],
-    howTo: [
-      'Open LiveOps Triage. The left list shows each configuration with its tracker, interval and an On or Off chip. Click Add for a new one, or select one to edit it.',
-      'Fill in the name, issue tracker Type (GitHub or Jira), Slack workspace, source and output channel, run interval, model and Max Errors Per Run, then click Create or Save.',
-      'Click Dry Run to see what would be filed without creating issues. Click Run Now to create real issues (the tooltip warns it is not a test). Both open the Lookback Period modal, where you pick the period.',
-      'Use the Active Runs section to follow current and recent runs. The System Health card in a configuration shows whether its dependencies are ready.',
-    ],
-    keywords: [
-      'error alerts',
-      'incident triage',
-      'create github issues',
-      'jira issues',
-      'dry run',
-      'run now',
-      'run history',
-      'prompt template',
-    ],
   },
   {
     id: 'sre-agent',
@@ -270,7 +231,7 @@ export const OPERATIONS_GUIDE: readonly AdminGuideEntry[] = [
     views: ['admin.slack_metrics'],
     settings: [],
     howTo: [
-      'Open Slack Metrics to see the Slack Event Activity, Agent Usage, Intent Breakdown, Export Formats and Export Success Rate charts.',
+      'Open Slack Metrics to see the Slack event activity, agent usage, intent breakdown, export formats and export success rate charts.',
       'If a filter leaves nothing to show, clear it. A No Slack events yet message means the integration has not recorded any activity.',
     ],
     keywords: ['slack usage', 'message analytics', 'slack stats', 'slack activity', 'agent usage'],

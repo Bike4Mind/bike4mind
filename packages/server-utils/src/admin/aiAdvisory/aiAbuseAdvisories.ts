@@ -18,6 +18,7 @@ const MIN_SHARED_ACCOUNTS = 2;
 
 type LatestJudgment = {
   _id: string;
+  assessmentId: mongoose.Types.ObjectId;
   result: string;
   probabilities: { value: string; probability: number }[];
   assessedAt: Date;
@@ -34,6 +35,7 @@ async function latestJudgments(detectionIds: string[]): Promise<Map<string, Late
     {
       $group: {
         _id: '$detectionId',
+        assessmentId: { $first: '$_id' },
         result: { $first: '$result' },
         probabilities: { $first: '$probabilities' },
         assessedAt: { $first: '$assessedAt' },
@@ -52,6 +54,7 @@ async function unsuspendedUserIds(userIds: string[]): Promise<Set<string>> {
   return new Set(users.map(user => String(user._id)));
 }
 
+// The raw stored entry; the eval-set calibration renormalises instead (apps/client verdictEval/calibration.ts renormalisedAbuseProbability).
 const abuseProbabilityOf = (judgment: LatestJudgment): number | null =>
   judgment.probabilities.find(entry => entry.value === 'abuse')?.probability ?? null;
 
@@ -147,6 +150,7 @@ export async function listAiAbuseAdvisories(
       const candidate: AiAbuseAdvisory = {
         userId,
         detectionId: detection.id,
+        assessmentId: String(judgment.assessmentId),
         detector: detection.detector,
         abuseProbability: abuseProbabilityOf(judgment),
         assessedAt: judgment.assessedAt,

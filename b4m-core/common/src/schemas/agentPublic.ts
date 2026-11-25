@@ -149,3 +149,37 @@ export const EnhanceAgentFieldResponseSchema = z.object({
   enhanced_value: z.string().describe('The enhanced text. It is returned, not saved to the agent.'),
 });
 export type EnhanceAgentFieldResponse = z.infer<typeof EnhanceAgentFieldResponseSchema>;
+
+/** Strict, so the SPA route's camelCase spelling is a 422 rather than silently dropped. */
+export const TransferAgentCreditsRequestSchema = z
+  .object({
+    amount: z
+      .number()
+      .int()
+      .positive()
+      .describe('Credits to move from your balance to the agent. A positive whole number.'),
+  })
+  .strict();
+export type TransferAgentCreditsRequest = z.infer<typeof TransferAgentCreditsRequestSchema>;
+
+export const TransferAgentCreditsResponseSchema = z.object({
+  transferred: z.number().int().describe('Credits moved to the agent.'),
+  user_credits: z.number().describe('Your balance after the transfer.'),
+  agent_credits: z.number().describe("The agent's balance after the transfer."),
+});
+export type TransferAgentCreditsResponse = z.infer<typeof TransferAgentCreditsResponseSchema>;
+
+/** Strict, so the SPA route's camelCase `agentName` / `sessionId` are a 422 rather than silently dropped. */
+export const CreateAgentFromContextRequestSchema = z
+  .object({
+    agent_name: z.string().trim().min(1).max(200).describe('Name for the new agent. At most 200 characters.'),
+    session_id: z
+      .string()
+      .min(1)
+      .describe(
+        'The notebook (session) to learn from: its messages and attached files shape the agent. You must own it, ' +
+          'or hold create access to it.'
+      ),
+  })
+  .strict();
+export type CreateAgentFromContextRequest = z.infer<typeof CreateAgentFromContextRequestSchema>;

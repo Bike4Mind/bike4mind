@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { accountCampaignGroupSchema } from './accountCampaign';
 import { completionSynchronyEvidenceSchema } from './completionSynchrony';
 import { completionSequenceEvidenceSchema } from './completionSequence';
+import { assessmentAiDecisionSchema } from './adminAi';
 
 /**
  * Shadow detections: what an abuse detector WOULD have done to an actor, recorded next to its alert
@@ -41,12 +42,15 @@ export const SELF_ASSESSED_SHADOW_DETECTORS: readonly ShadowDetector[] = ['signu
  * The action the detector's policy maps the detection to. contain/suspend/restrict match the admin
  * bulk user actions; blockIp is for actors with no signed-in account, where containing a user is not
  * possible. confirmHold/releaseHold/none are the signup domain hold assessment's outcomes (confirm the
- * hold, release it, or leave it for an admin).
+ * hold, release it, or leave it for an admin). limit/verify are graduated interventions a detector
+ * opts into (apps/workers/src/security/autoContainment/policy.ts maps each action to a tier).
  */
 export const SHADOW_DETECTION_ACTIONS = [
   'contain',
   'suspend',
   'restrict',
+  'limit',
+  'verify',
   'blockIp',
   'confirmHold',
   'releaseHold',
@@ -153,7 +157,7 @@ export type ShadowDetectionPayment = z.infer<typeof shadowDetectionPaymentSchema
 /**
  * Where a verdict came from. `review` is a grade recorded on the Detections page; `suspension` and
  * `reinstatement` are recorded for the admin who suspended or reinstated an account the detection
- * names; `automation` is the stale-detection grader (apps/client/server/security/shadowDetectionAutoGrade.ts),
+ * names; `automation` is the stale-detection grader (apps/workers/src/security/shadowDetectionAutoGrade.ts),
  * which never counts as a human verdict. Absent on entries written before the field existed, which
  * were all reviews.
  */
@@ -289,6 +293,8 @@ export const shadowDetectionVerdictRequestSchema = z.object({
   expectedRevision: z.number().int().min(0),
   verdict: z.enum(SHADOW_DETECTION_VERDICTS),
   reason: z.unknown(),
+  /** Set when the grade was taken from the detection's assessment suggestion (accepted or overridden). */
+  aiDecision: assessmentAiDecisionSchema.optional(),
 });
 export type ShadowDetectionVerdictRequest = z.infer<typeof shadowDetectionVerdictRequestSchema>;
 

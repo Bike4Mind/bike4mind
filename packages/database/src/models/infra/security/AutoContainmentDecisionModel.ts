@@ -1,14 +1,21 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
+import { withTransaction } from '@bike4mind/db-core';
 import {
   AUTO_CONTAINMENT_OUTCOMES,
+  INTERVENTION_RELEASE_CONDITIONS,
+  INTERVENTION_SCOPES,
+  INTERVENTION_TIERS,
   type AutoContainmentDecisionItem,
   type AutoContainmentOutcome,
+  type InterventionReleaseCondition,
+  type InterventionScope,
+  type InterventionTier,
 } from '@bike4mind/common';
 
 /**
  * Automated containment decisions (contract in b4m-core/common/src/schemas/autoContainment.ts). One
- * document per (detection, revision): that unique pair is what keeps a re-assessed or re-swept
- * detection from being acted on twice.
+ * graduated claim and one independent Contain claim per detection revision. The shared graduated
+ * claim keeps concurrent tier choices from stacking.
  */
 export interface IAutoContainmentDecisionDocument extends Document {
   detectionId: string;
@@ -22,6 +29,19 @@ export interface IAutoContainmentDecisionDocument extends Document {
   batchId: string | null;
   error: string | null;
   decidedAt: Date;
+  tier?: InterventionTier;
+  /** Internal write fence shared by hold application and committed containment receipts. */
+  holdWriteVersion?: number;
+  /** Null also covers pre-tier writers that omit this field in the compound unique index. */
+  claimClass?: 'graduated' | null;
+  containedUserIds?: string[];
+  policyVersion?: number | null;
+  scope?: InterventionScope;
+  expiresAt?: Date | null;
+  releaseCondition?: InterventionReleaseCondition | null;
+  releasedAt?: Date | null;
+  releasedBy?: string | null;
+  releaseReason?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -29,6 +49,7 @@ export interface IAutoContainmentDecisionDocument extends Document {
 // Matches the ShadowDetection retention, so a decision never outlives its detection.
 const RETENTION_SECONDS = 365 * 24 * 60 * 60;
 const DUPLICATE_KEY = 11000;
+const claimClassOf = (tier: InterventionTier): 'graduated' | null => (tier === 'contain' ? null : 'graduated');
 
 export const AutoContainmentDecisionSchema: Schema<IAutoContainmentDecisionDocument> =
   new Schema<IAutoContainmentDecisionDocument>(
@@ -44,11 +65,37 @@ export const AutoContainmentDecisionSchema: Schema<IAutoContainmentDecisionDocum
       batchId: { type: String, default: null },
       error: { type: String, default: null },
       decidedAt: { type: Date, required: true },
+      tier: { type: String, enum: INTERVENTION_TIERS, default: 'contain' },
+      claimClass: {
+        type: String,
+        enum: ['graduated', null],
+        default: function (this: IAutoContainmentDecisionDocument) {
+          return claimClassOf(this.tier ?? 'contain');
+        },
+      },
+      holdWriteVersion: { type: Number, default: 0 },
+      containedUserIds: { type: [String], default: [] },
+      policyVersion: { type: Number, default: null },
+      scope: { type: String, enum: INTERVENTION_SCOPES, default: 'account' },
+      expiresAt: { type: Date, default: null },
+      releaseCondition: { type: String, enum: [...INTERVENTION_RELEASE_CONDITIONS, null], default: null },
+      releasedAt: { type: Date, default: null },
+      releasedBy: { type: String, default: null },
+      releaseReason: { type: String, default: null },
     },
     { timestamps: true, versionKey: false, collection: 'AutoContainmentDecision' }
   );
 
-AutoContainmentDecisionSchema.index({ detectionId: 1, revision: 1 }, { unique: true });
+/** Graduated decisions whose holds may be on accounts: a failed one can have applied some before it failed. */
+const HOLDING_FILTER = {
+  tier: { $in: INTERVENTION_TIERS.filter(tier => tier !== 'contain') },
+  outcome: { $in: ['intervened', 'failed'] },
+};
+
+AutoContainmentDecisionSchema.index(
+  { detectionId: 1, revision: 1, claimClass: 1 },
+  { unique: true, name: 'detection_revision_claim_class_unique' }
+);
 AutoContainmentDecisionSchema.index({ decidedAt: 1 }, { expireAfterSeconds: RETENTION_SECONDS });
 AutoContainmentDecisionSchema.index({ outcome: 1, decidedAt: -1 });
 
@@ -56,7 +103,12 @@ export const AutoContainmentDecisionModel: Model<IAutoContainmentDecisionDocumen
   (mongoose.models.AutoContainmentDecision as unknown as Model<IAutoContainmentDecisionDocument>) ??
   model<IAutoContainmentDecisionDocument>('AutoContainmentDecision', AutoContainmentDecisionSchema);
 
-export type RecordAutoContainmentDecisionInput = Omit<AutoContainmentDecisionItem, 'id'>;
+type DecisionTierField =
+  'tier' | 'policyVersion' | 'scope' | 'expiresAt' | 'releaseCondition' | 'releasedAt' | 'releasedBy' | 'releaseReason';
+
+/** The tier fields are optional so the Contain path records exactly what it did before tiers existed. */
+export type RecordAutoContainmentDecisionInput = Omit<AutoContainmentDecisionItem, 'id' | DecisionTierField> &
+  Partial<Pick<AutoContainmentDecisionItem, DecisionTierField>>;
 
 type LeanDecision = Omit<IAutoContainmentDecisionDocument, keyof Document> & { _id: Types.ObjectId };
 
@@ -73,17 +125,45 @@ const toItem = (doc: LeanDecision): AutoContainmentDecisionItem => ({
   batchId: doc.batchId,
   error: doc.error,
   decidedAt: doc.decidedAt,
+  tier: doc.tier ?? 'contain',
+  policyVersion: doc.policyVersion ?? null,
+  scope: doc.scope ?? 'account',
+  expiresAt: doc.expiresAt ?? null,
+  releaseCondition: doc.releaseCondition ?? null,
+  releasedAt: doc.releasedAt ?? null,
+  releasedBy: doc.releasedBy ?? null,
+  releaseReason: doc.releaseReason ?? null,
 });
 
 const isDuplicateKey = (error: unknown) =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === DUPLICATE_KEY;
 
 export class AutoContainmentDecisionRepository {
-  /** Inserts the decision unless the (detection, revision) already has one; null when it does. */
+  /** Inserts the decision unless the revision already has a claim of this class; null when it does. */
   async recordOnce(input: RecordAutoContainmentDecisionInput): Promise<AutoContainmentDecisionItem | null> {
+    if (!Types.ObjectId.isValid(input.detectionId)) return null;
     try {
-      const doc = await AutoContainmentDecisionModel.create(input);
-      return toItem(doc.toObject() as unknown as LeanDecision);
+      return await withTransaction(async session => {
+        // This parent write serializes new claims, including an insert delayed behind Contain cleanup.
+        // update-validators-off: native driver increments only the declared internal counter; preserves domain timestamps/revision
+        const parent = await mongoose.connection
+          .collection('ShadowDetection')
+          .updateOne({ _id: new Types.ObjectId(input.detectionId) }, { $inc: { holdClaimVersion: 1 } }, { session });
+        if (parent.matchedCount !== 1) return null;
+        const tier = input.tier ?? 'contain';
+        const prior = await AutoContainmentDecisionModel.find({ detectionId: input.detectionId })
+          .session(session)
+          .lean<LeanDecision[]>();
+        const covering = tier === 'contain' ? prior.filter(row => (row.tier ?? 'contain') === 'contain') : prior;
+        const covered = new Set(covering.flatMap(row => row.userIds));
+        const userIds = input.userIds.filter(userId => !covered.has(userId));
+        if (userIds.length === 0) return null;
+        const [doc] = await AutoContainmentDecisionModel.create(
+          [{ ...input, userIds, tier, claimClass: claimClassOf(tier) }],
+          { session }
+        );
+        return toItem(doc.toObject() as unknown as LeanDecision);
+      });
     } catch (error) {
       if (isDuplicateKey(error)) return null;
       throw error;
@@ -119,14 +199,78 @@ export class AutoContainmentDecisionRepository {
     return doc ? toItem(doc) : null;
   }
 
-  /** Records how a claimed decision ended. */
-  async finish(id: string, patch: Pick<AutoContainmentDecisionItem, 'outcome' | 'batchId' | 'error'>): Promise<void> {
-    await AutoContainmentDecisionModel.updateOne({ _id: new Types.ObjectId(id) }, { $set: patch });
+  /** Records how this specific claim ended; a released or reclaimed claim cannot be overwritten. */
+  async finish(
+    id: string,
+    patch: Pick<AutoContainmentDecisionItem, 'outcome' | 'batchId' | 'error'>,
+    decidedAt: Date
+  ): Promise<boolean> {
+    const result = await AutoContainmentDecisionModel.updateOne(
+      { _id: new Types.ObjectId(id), outcome: 'pending', decidedAt },
+      { $set: patch },
+      { runValidators: true }
+    );
+    return result.matchedCount === 1;
+  }
+
+  /**
+   * Marks an applied graduated hold released. Only a graduated decision that applied holds (`intervened`,
+   * or `failed` after applying some) and is not yet released moves,
+   * so a repeat or a release racing expiry is a no-op; null when nothing changed.
+   */
+  async release(
+    id: string,
+    { by, reason, condition, now }: { by: string; reason: string; condition: InterventionReleaseCondition; now: Date }
+  ): Promise<AutoContainmentDecisionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await AutoContainmentDecisionModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(id), ...HOLDING_FILTER, releasedAt: null },
+      {
+        $set: {
+          outcome: 'released',
+          releasedAt: now,
+          releasedBy: by,
+          releaseReason: reason,
+          releaseCondition: condition,
+        },
+      },
+      { new: true, runValidators: true }
+    ).lean<LeanDecision>();
+    return doc ? toItem(doc) : null;
+  }
+
+  /** Stamps applied, unreleased graduated decisions as expired; returns how many moved. */
+  async markExpired(ids: string[], now: Date): Promise<number> {
+    const objectIds = ids.filter(id => Types.ObjectId.isValid(id)).map(id => new Types.ObjectId(id));
+    if (objectIds.length === 0) return 0;
+    const result = await AutoContainmentDecisionModel.updateMany(
+      { _id: { $in: objectIds }, ...HOLDING_FILTER, releasedAt: null, expiresAt: { $ne: null, $lte: now } },
+      { $set: { outcome: 'expired', releasedAt: now, releaseCondition: 'expiry' } },
+      { runValidators: true }
+    );
+    return result.modifiedCount;
+  }
+
+  async findById(id: string): Promise<AutoContainmentDecisionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await AutoContainmentDecisionModel.findById(id).lean<LeanDecision>();
+    return doc ? toItem(doc) : null;
+  }
+
+  /** Applied graduated decisions of one tier not yet released, oldest first (bulk rollback). */
+  async listActiveByTier(tier: InterventionTier, limit: number): Promise<AutoContainmentDecisionItem[]> {
+    const docs = await AutoContainmentDecisionModel.find({ ...HOLDING_FILTER, tier, releasedAt: null })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean<LeanDecision[]>();
+    return docs.map(toItem);
   }
 
   /** Every decision on the detection, any revision, oldest first. */
   async listForDetection(detectionId: string): Promise<AutoContainmentDecisionItem[]> {
-    const docs = await AutoContainmentDecisionModel.find({ detectionId }).sort({ revision: 1 }).lean<LeanDecision[]>();
+    const docs = await AutoContainmentDecisionModel.find({ detectionId })
+      .sort({ revision: 1, _id: 1 })
+      .lean<LeanDecision[]>();
     return docs.map(toItem);
   }
 

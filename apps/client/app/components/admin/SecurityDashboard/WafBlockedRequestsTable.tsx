@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Autocomplete, AutocompleteOption, Box, Button, Stack, Typography } from '@mui/joy';
 import type { SecurityDashboardWafBlockedRequestsResult } from '@/app/hooks/data/admin';
-import type { WafRangeInput } from '@/server/security/wafTraffic';
+import type { WafRangeInput } from '@bike4mind/server-utils/security/wafTraffic';
 import { DataTable, EmptyState, ErrorState, StatusChip } from '../shared';
 import { formatRangeLabel } from './wafRangeLabel';
 
@@ -111,6 +111,7 @@ export const WafBlockedRequestsTable = ({
               ...FILTERS.filter(([key]) => key !== 'action').map(([key, label]) => ({
                 id: key,
                 label,
+                wrap: true,
                 render: (row: (typeof rows)[number]) => (
                   <Typography level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
                     {row[key]}
@@ -120,11 +121,13 @@ export const WafBlockedRequestsTable = ({
               {
                 id: 'args',
                 label: 'Args',
+                wrap: true,
                 render: row => <Typography sx={{ overflowWrap: 'anywhere' }}>{row.args}</Typography>,
               },
               {
                 id: 'requestId',
                 label: 'Request ID',
+                wrap: true,
                 render: row => (
                   <Typography sx={{ overflowWrap: 'anywhere', fontFamily: 'monospace' }}>{row.requestId}</Typography>
                 ),

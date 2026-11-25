@@ -10,7 +10,11 @@ interface UseProgrammaticSubmitParams {
   /** The send function to drive - typically `useSendMessage`'s `handleSendClick`. */
   handleSendClick: (
     prompt?: string,
-    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[]; systemContext?: string }
+    options?: {
+      toolsOverride?: B4MLLMTools[];
+      systemContext?: string;
+      forceAgent?: boolean;
+    }
   ) => Promise<IChatHistoryItemDocument | undefined>;
   readyState: ReadyState;
   submitting: boolean;
@@ -106,7 +110,12 @@ export function useProgrammaticSubmit({
     const timer = setTimeout(() => {
       launchTimersRef.current.delete(timer);
       if ((currentSessionRef.current?.id ?? null) !== electedSessionId) return;
-      handleSendClickRef.current(content, { toolsOverride, ...(systemContext ? { systemContext } : {}) });
+      handleSendClickRef.current(content, {
+        toolsOverride,
+        ...(systemContext ? { systemContext } : {}),
+        ...(dispatch.forceAgent ? { forceAgent: true } : {}),
+        ...(dispatch.productionCompositionId ? { productionCompositionId: dispatch.productionCompositionId } : {}),
+      });
     }, 150);
     launchTimersRef.current.add(timer);
   }, []);

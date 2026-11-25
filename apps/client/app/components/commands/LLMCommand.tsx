@@ -24,6 +24,15 @@ import { createOptimisticSessionId } from '@client/app/utils/llm';
 import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import { blankRapidReplies, terminalQuests } from '@client/app/hooks/chatCompletionState';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
+import { MODEL_CONFIGURATIONS_QUERY_KEY } from '@client/app/hooks/data/modelAccessRevision';
+
+// modelAdmission's refusal of a model the caller's access entry does not admit (b4m-core/services/src/llm/modelAdmission.ts).
+const MODEL_ACCESS_REFUSAL = /^Model ".+" is not accessible\b/;
+
+export const isModelAccessRefusal = (body: unknown): boolean => {
+  const message = (body as { error?: unknown } | undefined)?.error;
+  return typeof message === 'string' && MODEL_ACCESS_REFUSAL.test(message);
+};
 
 export type LLMCommandArgs = {
   params: string;
@@ -43,7 +52,6 @@ export type LLMCommandArgs = {
   questId?: string;
   /** Correct-and-retry target: the quest whose answer the user says was wrong. */
   correctsQuestId?: string;
-  enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableArtifacts?: boolean;
   enableAgents?: boolean;
@@ -52,7 +60,6 @@ export type LLMCommandArgs = {
   tools: B4MLLMTools[];
   projectId?: string;
   organizationId?: string | null;
-  questMaster?: LLMApiRequestBody['questMaster'];
   researchMode?: LLMApiRequestBody['researchMode'];
   /** Suppresses the server's own tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
   skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
@@ -78,6 +85,8 @@ export type LLMCommandArgs = {
   mcpServers?: string[];
   /** Custom MCP connector slugs switched off in the Tools menu (LLMContext.disabledMcpConnections). */
   disabledMcpConnections?: string[];
+  /** Platform connector ids switched on in the Tools menu (LLMContext.enabledPlatformMcpConnections). */
+  enabledPlatformMcpConnections?: string[];
   optimisticSessionId?: string;
   /** Agent-mode toggle state forwarded through to the chat completion payload. */
   agentMode?: LLMApiRequestBody['agentMode'];
@@ -138,14 +147,12 @@ export async function handleLLMCommand(
       messageOnlyFileIds,
       questId,
       correctsQuestId,
-      enableQuestMaster,
       queryClient,
       tools,
       projectId,
       organizationId,
       max_tokens = 2048,
       enableAgents,
-      questMaster,
       researchMode,
       skipAutoOffers,
       skipRapidReply,
@@ -155,6 +162,7 @@ export async function handleLLMCommand(
       deepResearchConfig,
       mcpServers,
       disabledMcpConnections,
+      enabledPlatformMcpConnections,
       optimisticSessionId,
       agentMode,
     } = args;
@@ -183,7 +191,17 @@ export async function handleLLMCommand(
             queryClient,
             questId,
             currentSession?.id,
-            { replies: [], reply: undefined, prompt: userPrompt, timestamp: new Date(), status: undefined },
+            {
+              replies: [],
+              reply: undefined,
+              prompt: userPrompt,
+              timestamp: new Date(),
+              status: undefined,
+              // The cache merges the server ack over the cached quest, and the ack omits the plan id
+              // the server cleared, so without these the retry would keep showing the legacy plan note.
+              questMasterPlanId: undefined,
+              questMasterReply: undefined,
+            },
             cb
           )
       : currentSession?.id || tmpSessionId
@@ -202,6 +220,7 @@ export async function handleLLMCommand(
       agentIds: _omitAgentIds,
       mcpServers: _omitMcpServers,
       disabledMcpConnections: _omitDisabledMcpConnections,
+      enabledPlatformMcpConnections: _omitEnabledPlatformMcpConnections,
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
@@ -275,7 +294,6 @@ export async function handleLLMCommand(
         message: userPrompt,
         messageFileIds: promptFileIds,
         ...(messageOnlyFileIds?.length ? { messageOnlyFileIds } : {}),
-        enableQuestMaster,
         enableMementos: args.enableMementos,
         enableArtifacts: args.enableArtifacts,
         enableAgents: args.enableAgents,
@@ -289,13 +307,15 @@ export async function handleLLMCommand(
         tools,
         projectId,
         organizationId,
-        ...(questMaster ? { questMaster } : {}),
         ...(researchMode ? { researchMode } : {}),
         ...(skipAutoOffers ? { skipAutoOffers: true } : {}),
         // Include mcpServers if it's an array (even empty - means user disabled all)
         ...(Array.isArray(mcpServers) ? { mcpServers } : {}),
         ...(Array.isArray(disabledMcpConnections) && disabledMcpConnections.length > 0
           ? { disabledMcpConnections }
+          : {}),
+        ...(Array.isArray(enabledPlatformMcpConnections) && enabledPlatformMcpConnections.length > 0
+          ? { enabledPlatformMcpConnections }
           : {}),
         ...(deepResearchConfig ? { deepResearchConfig } : {}),
         ...(imageConfig ? { imageConfig } : {}),
@@ -396,6 +416,11 @@ export async function handleLLMCommand(
 
       if (status === 404) {
         toast.error(i18n.t('session.errors.notebookDeleted'));
+      } else if (status === 403 && isModelAccessRefusal(error.response?.data)) {
+        // An admin turned the model off after this picker loaded; refetch access so the picker drops it now
+        // rather than when the access revision reaches this tab.
+        void args.queryClient.invalidateQueries({ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY });
+        toast.error(i18n.t('session.errors.modelUnavailable'));
       } else if (status === 401 || status === 403) {
         toast.error(i18n.t('session.errors.noPermission'));
       } else if (status === 400) {

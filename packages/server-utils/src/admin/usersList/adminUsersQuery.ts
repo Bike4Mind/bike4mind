@@ -22,9 +22,11 @@ export function organizationNamesOf(filter: AdminUsersFilter): string[] | null {
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
 // toProviderEndUserId output: what an LLM provider names in a safety notice about one of our users.
-const PROVIDER_END_USER_ID = /^[0-9a-f]{64}$/i;
+export const PROVIDER_END_USER_ID = /^[0-9a-f]{64}$/i;
 
-function searchCondition(search: string, toObjectId: (id: string) => unknown): Condition {
+function searchCondition(search: string, context: AdminUsersQueryContext): Condition {
+  const { toObjectId } = context;
+  const platformOwnerIds = (context.platformEndUserOwnerIds ?? []).filter(id => OBJECT_ID.test(id));
   const pattern = escapeRegex(search);
   return {
     $or: [
@@ -33,6 +35,7 @@ function searchCondition(search: string, toObjectId: (id: string) => unknown): C
       { email: { $regex: pattern, $options: 'i' } },
       ...(OBJECT_ID.test(search) ? [{ _id: toObjectId(search) }] : []),
       ...(PROVIDER_END_USER_ID.test(search) ? [{ providerEndUserId: search.toLowerCase() }] : []),
+      ...(platformOwnerIds.length > 0 ? [{ _id: { $in: platformOwnerIds.map(toObjectId) } }] : []),
     ],
   };
 }
@@ -69,9 +72,14 @@ export type AdminUsersQueryContext = {
   funnelStepUserIds?: string[];
   /** Users the AI advisory flags as abuse; required when the filter sets `aiVerdict`. */
   aiAbuseUserIds?: string[];
+  /** Users in the filter's Analytics acquisition row; required with `acqSource` or `acqUnattributed`. */
+  acquisitionUserIds?: string[];
+  /** The platform account behind a searched provider id that names a platform key's end user. */
+  platformEndUserOwnerIds?: string[];
 };
 
-type ResolvedIdsKey = 'verdictUserIds' | 'activeUserIds' | 'funnelStepUserIds' | 'aiAbuseUserIds';
+type ResolvedIdsKey =
+  'verdictUserIds' | 'activeUserIds' | 'funnelStepUserIds' | 'aiAbuseUserIds' | 'acquisitionUserIds';
 
 function resolvedIdsCondition(context: AdminUsersQueryContext, key: ResolvedIdsKey, filterKey: string): Condition {
   const ids = context[key];
@@ -81,13 +89,13 @@ function resolvedIdsCondition(context: AdminUsersQueryContext, key: ResolvedIdsK
 
 /**
  * The `$match` for a filter. Every condition is on a User field, so it also serves `find()` callers.
- * `hasApiKey`, `verdict`, the active window and `funnelStep` match `_id` against ids resolved up front
- * rather than a per-user `$lookup`: the lookup cost one subquery per filtered user, and the DocumentDB
- * converter dropped its `status` condition.
+ * `hasApiKey`, `verdict`, the active window, `funnelStep` and the acquisition row match `_id` against ids
+ * resolved up front rather than a per-user `$lookup`: the lookup cost one subquery per filtered user,
+ * and the DocumentDB converter dropped its `status` condition.
  */
 export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUsersQueryContext): Condition {
   const conditions: Condition[] = [];
-  if (filter.search) conditions.push(searchCondition(filter.search, context.toObjectId));
+  if (filter.search) conditions.push(searchCondition(filter.search, context));
   const tags = filter.tags && tagsCondition(filter.tags);
   if (tags) conditions.push(tags);
 
@@ -135,6 +143,12 @@ export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUse
   }
   if (filter.funnelStep) conditions.push(resolvedIdsCondition(context, 'funnelStepUserIds', 'funnelStep'));
   if (filter.aiVerdict) conditions.push(resolvedIdsCondition(context, 'aiAbuseUserIds', 'aiVerdict'));
+  if (filter.acqSource || filter.acqUnattributed) {
+    conditions.push(
+      resolvedIdsCondition(context, 'acquisitionUserIds', filter.acqSource ? 'acqSource' : 'acqUnattributed')
+    );
+  }
+  if (filter.adminRole) conditions.push({ adminRoleIds: context.toObjectId(filter.adminRole) });
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 

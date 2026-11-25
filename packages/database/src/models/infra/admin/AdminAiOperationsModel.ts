@@ -17,6 +17,7 @@ const attemptSchema = new Schema<AdminAiAttempt>(
   { collection: 'AdminAiAttempt', versionKey: false }
 );
 attemptSchema.index({ startedAt: -1, feature: 1 });
+attemptSchema.index({ startedAt: 1 }, { expireAfterSeconds: 400 * 24 * 60 * 60, name: 'admin_ai_attempt_retention' });
 attemptSchema.index({ suggestionId: 1 });
 export const AdminAiAttemptModel =
   (mongoose.models.AdminAiAttempt as mongoose.Model<AdminAiAttempt> | undefined) ??

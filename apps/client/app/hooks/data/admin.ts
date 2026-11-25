@@ -10,27 +10,21 @@ import type {
   IncidentRange,
   IncidentSignals,
   IncidentState,
-} from '@client/app/components/admin/SecurityDashboard/incidentTypes';
+} from '@bike4mind/server-utils/app/components/admin/SecurityDashboard/incidentTypes';
 import type { SignupAnomalySnapshot } from '@bike4mind/server-utils/app/utils/signupAnomaly';
+import type { SecopsTriageStatusResponse } from '@client/pages/api/admin/secops-triage/status';
 
-export interface LiveOpsTriageEnv {
+export interface DeploymentInfo {
   stage: string;
   isForkProduction: boolean;
-  isSourceDeployment: boolean;
-  isPreviewEnvironment: boolean;
-  isLocalDevelopment: boolean;
-  showTab: boolean;
 }
 
-/**
- * Deployment descriptor shared by the admin tabs: the stage, plus whether this is a fork's
- * production stage. One query key, so AdminPage and the tab it renders share a single request.
- */
-export function useLiveOpsTriageEnv(enabled = true) {
+/** The stage this deployment runs on, and whether it is a fork's production stage. */
+export function useDeploymentInfo(enabled = true) {
   return useQuery({
-    queryKey: ['liveops-triage', 'env'],
+    queryKey: ['admin', 'deployment-info'],
     queryFn: async () => {
-      const { data } = await api.get<LiveOpsTriageEnv>('/api/admin/liveops-triage-env');
+      const { data } = await api.get<DeploymentInfo>('/api/admin/deployment-info');
       return data;
     },
     enabled,
@@ -404,13 +398,16 @@ export interface SecurityDashboardWafLogsInsightsOverview {
   reason?: 'no-webacl' | 'no-logging-config' | 'no-log-destination' | 'no-data';
 }
 
-export const useSecurityDashboardCloud = () => {
+export const SECURITY_DASHBOARD_CLOUD_QUERY_KEY = ['admin', 'security-dashboard', 'cloud'] as const;
+
+export const useSecurityDashboardCloud = (refetchInterval: number | false = false) => {
   return useQuery<SecurityDashboardCloudSnapshot>({
-    queryKey: ['admin', 'security-dashboard', 'cloud'],
+    queryKey: SECURITY_DASHBOARD_CLOUD_QUERY_KEY,
     queryFn: async () => {
       const res = await api.get<SecurityDashboardCloudSnapshot>('/api/admin/security-dashboard/cloud');
       return res.data;
     },
+    refetchInterval,
     staleTime: 5 * 60 * 1000, // 5 minutes
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
@@ -418,9 +415,11 @@ export const useSecurityDashboardCloud = () => {
   });
 };
 
+export const SECURITY_DASHBOARD_PROWLER_QUERY_KEY = ['admin', 'security-dashboard', 'cloud-prowler'] as const;
+
 export const useSecurityDashboardProwler = () => {
   return useQuery<SecurityDashboardProwlerSnapshot | null>({
-    queryKey: ['admin', 'security-dashboard', 'cloud-prowler'],
+    queryKey: SECURITY_DASHBOARD_PROWLER_QUERY_KEY,
     queryFn: async () => {
       const res = await api.get<SecurityDashboardProwlerSnapshot | null>('/api/admin/security-dashboard/cloud-prowler');
       return res.data ?? null;
@@ -524,16 +523,10 @@ export const useSecurityDashboardWafBlockedRequests = (params: { range: WafRange
 };
 
 export const useRunCloudSecurityScan = () => {
-  const queryClient = useQueryClient();
-
   return useMutation<RunSecurityScanResponse>({
     mutationFn: async () => {
       const res = await api.post<RunSecurityScanResponse>('/api/admin/security-dashboard/cloud');
       return res.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'cloud'] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'security-dashboard', 'overview'] });
     },
   });
 };
@@ -549,6 +542,16 @@ export const useRunProwlerScan = () => {
     // Prowler results arrive asynchronously (~10 min via GitHub Actions).
     // No automatic invalidation - the user refreshes the Prowler Audit tab
     // when they expect the scan to be complete.
+  });
+};
+
+export const SECOPS_TRIAGE_STATUS_QUERY_KEY = ['admin', 'secops-triage', 'status'] as const;
+
+/** Issue filing readiness for the saved settings, plus the recent filing runs. */
+export const useSecopsTriageStatus = () => {
+  return useQuery<SecopsTriageStatusResponse>({
+    queryKey: SECOPS_TRIAGE_STATUS_QUERY_KEY,
+    queryFn: async () => (await api.get<SecopsTriageStatusResponse>('/api/admin/secops-triage/status')).data,
   });
 };
 

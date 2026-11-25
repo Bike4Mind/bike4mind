@@ -1,7 +1,8 @@
-import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import path from 'path';
 
-dotenv.config({ path: path.resolve(__dirname, '../../.env.e2e') });
+const envFile = path.resolve(__dirname, '../../.env.e2e');
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL_SLOW_RESPONSES || '';
 /**

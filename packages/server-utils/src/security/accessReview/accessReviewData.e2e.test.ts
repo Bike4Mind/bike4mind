@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
+import { hasAdminPermission } from '@bike4mind/common';
+import { resolveRoleAdminPermissions } from '../../auth/adminRoles';
 import mongoose from 'mongoose';
 import {
+  AdminAuditLogModel,
+  AdminRoleModel,
   AuthSessionModel,
   CcBridgeDevice,
   OAuthGrantModel,
@@ -11,6 +15,7 @@ import {
   TrustedDeviceModel,
   User,
   UserApiKey,
+  UserAuthAuditLogModel,
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../database/src/__test__/createMongoServer';
 import { collectAccessReview, collectAccessReviewCounts, sendAccessReviewReminder } from './accessReviewData';
@@ -151,6 +156,17 @@ afterAll(async () => {
   await server?.stop();
 });
 
+const noAuditTrail = {
+  directPermissions: [],
+  adminRoleIds: [],
+  roles: [],
+  lastAdminActionAt: null,
+  lastSignInAt: null,
+  mfaEnabled: false,
+  grantedBy: null,
+  grantedAt: null,
+};
+
 describe('collectAccessReview', () => {
   it('enumerates privileged access and counts every grant without reading secrets', async () => {
     const snapshot = await collectAccessReview({ now });
@@ -183,6 +199,8 @@ describe('collectAccessReview', () => {
         username: 'root',
         fullAdmin: true,
         permissions: [],
+        permissionSources: [],
+        ...noAuditTrail,
         status: 'active',
         lastActiveAt: past.toISOString(),
         activeSessions: 1,
@@ -198,6 +216,9 @@ describe('collectAccessReview', () => {
         username: null,
         fullAdmin: false,
         permissions: ['support:read'],
+        permissionSources: [{ permission: 'support:read', direct: true, roles: [] }],
+        ...noAuditTrail,
+        directPermissions: ['support:read'],
         status: 'banned',
         lastActiveAt: null,
         activeSessions: 0,
@@ -209,6 +230,7 @@ describe('collectAccessReview', () => {
       },
       expect.objectContaining({ userId: deletedId, status: 'deleted', fullAdmin: true, permissions: [] }),
     ]);
+    expect(snapshot.roles).toEqual([]);
 
     expect(snapshot.apiKeys).toEqual([
       expect.objectContaining({
@@ -364,6 +386,103 @@ describe('collectAccessReview', () => {
     await expect(collectAccessReviewCounts(now)).resolves.toEqual(snapshot.counts);
   });
 
+  it('reports last admin action, last sign-in, MFA and who granted access from the audit trail', async () => {
+    const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000);
+    const [a, b, c, d] = [id(), id(), id(), id()];
+    const [aId, bId, cId, dId] = [a, b, c, d].map(String);
+    const actor = (userId: string, name: string) => ({
+      kind: 'user',
+      scope: 'platform',
+      userId,
+      name,
+      email: `${name}@example.org`,
+      wasAdmin: true,
+    });
+    const entry = (
+      actorId: string,
+      name: string,
+      action: string,
+      at: Date,
+      targetId = 'settings',
+      details?: Record<string, string[]>
+    ) => ({
+      _id: id(),
+      action,
+      occurredAt: at,
+      actor: actor(actorId, name),
+      target: { kind: targetId === 'settings' ? 'settings' : 'user', id: targetId, displayName: targetId },
+      ...(details && { details }),
+    });
+    const granted = (ids: string[]) => ({ granted: ids, revoked: [], rolesAdded: [], rolesRemoved: [] });
+    const auditIds: mongoose.Types.ObjectId[] = [];
+    const authIds: mongoose.Types.ObjectId[] = [];
+
+    await User.collection.insertMany([
+      {
+        _id: a,
+        username: 'alpha',
+        isAdmin: true,
+        mfa: { totpEnabled: true, totpSecret: 'TOTP_SECRET_NEVER_IN_REPORT', backupCodes: ['BACKUP_NEVER_IN_REPORT'] },
+      },
+      { _id: b, username: 'bravo', isAdmin: true },
+      { _id: c, username: 'charlie', isAdmin: false, adminPermissions: ['users:read'] },
+      { _id: d, username: 'delta', isAdmin: false, adminPermissions: ['support:read'], mfa: { passkeyEnabled: true } },
+    ]);
+    const audit = [
+      entry(bId, 'bravo', 'user.permissions.updated', daysAgo(150), cId, granted(['users:read'])),
+      entry(aId, 'alpha', 'user.permissions.updated', daysAgo(10), cId, granted(['users:read', 'support:read'])),
+      // Newer, but it only removed a permission, so alpha stays the grantor.
+      entry(dId, 'delta', 'user.permissions.updated', daysAgo(4), cId, {
+        granted: [],
+        revoked: ['support:read'],
+        rolesAdded: [],
+        rolesRemoved: [],
+      }),
+      entry(aId, 'alpha', 'settings.updated', daysAgo(3)),
+      entry(aId, 'alpha', 'user.permissions.denied', daysAgo(1)),
+      entry(bId, 'bravo', 'settings.updated', daysAgo(120)),
+    ];
+    auditIds.push(...audit.map(row => row._id));
+    const auth = [
+      { _id: id(), userId: aId, event: 'login_success', createdAt: daysAgo(5) },
+      { _id: id(), userId: aId, event: 'login_success', createdAt: daysAgo(2) },
+      { _id: id(), userId: bId, event: 'login_failed', createdAt: daysAgo(1) },
+    ];
+    authIds.push(...auth.map(row => row._id));
+    await AdminAuditLogModel.collection.insertMany(audit);
+    await UserAuthAuditLogModel.collection.insertMany(auth);
+
+    try {
+      const { admins } = await collectAccessReview({ now });
+      const row = (userId: string) => admins.find(admin => admin.userId === userId);
+
+      expect(row(aId)).toMatchObject({
+        mfaEnabled: true,
+        lastAdminActionAt: daysAgo(3).toISOString(),
+        lastSignInAt: daysAgo(2).toISOString(),
+        grantedBy: null,
+      });
+      expect(row(bId)).toMatchObject({
+        mfaEnabled: false,
+        lastAdminActionAt: daysAgo(120).toISOString(),
+        lastSignInAt: null,
+      });
+      expect(row(cId)).toMatchObject({
+        directPermissions: ['users:read'],
+        grantedBy: { userId: aId, name: 'alpha', email: 'alpha@example.org' },
+        grantedAt: daysAgo(10).toISOString(),
+        lastAdminActionAt: null,
+      });
+      expect(row(dId)).toMatchObject({ mfaEnabled: true, directPermissions: ['support:read'] });
+      const serialized = JSON.stringify(admins);
+      expect(serialized).not.toMatch(/NEVER_IN_REPORT|totpSecret|backupCodes|"mfa"/);
+    } finally {
+      await User.collection.deleteMany({ _id: { $in: [a, b, c, d] } });
+      await AdminAuditLogModel.collection.deleteMany({ _id: { $in: auditIds } });
+      await UserAuthAuditLogModel.collection.deleteMany({ _id: { $in: authIds } });
+    }
+  });
+
   it('defaults to the current time', async () => {
     const snapshot = await collectAccessReview();
     expect(Date.now() - new Date(snapshot.generatedAt).getTime()).toBeLessThan(60_000);
@@ -390,5 +509,139 @@ describe('sendAccessReviewReminder', () => {
     const posted = `${JSON.stringify(log.mock.calls[0])}${post.mock.calls[0][0]}`;
     for (const detail of ['@example.org', 'root', fullId, 'ops key']) expect(posted).not.toContain(detail);
     log.mockRestore();
+  });
+});
+
+describe('collectAccessReview admin roles', () => {
+  it('reports held roles, per-permission provenance and the role catalog with members', async () => {
+    const support = id();
+    const billing = id();
+    const unused = id();
+    const deadRole = id();
+    const roleHolder = id();
+    const rootWithRole = id();
+    const deadOnly = id();
+    await AdminRoleModel.collection.insertMany([
+      {
+        _id: support,
+        name: 'Support agent',
+        description: 'Front line',
+        permissions: ['support:read', 'users:moderate'],
+      },
+      { _id: billing, name: 'Billing', description: '', permissions: ['support:read', 'credits:adjust'] },
+      { _id: unused, name: 'Unused', description: '', permissions: ['models:curate'] },
+    ]);
+    await User.collection.insertMany([
+      {
+        _id: roleHolder,
+        username: 'agent',
+        email: 'agent@example.org',
+        isAdmin: false,
+        adminPermissions: ['support:read'],
+        adminRoleIds: [support, billing, deadRole, 'not-an-id'],
+      },
+      { _id: rootWithRole, username: 'root2', isAdmin: true, adminPermissions: [], adminRoleIds: [billing] },
+      { _id: deadOnly, username: 'dead-only', isAdmin: false, adminPermissions: [], adminRoleIds: [deadRole] },
+    ]);
+    try {
+      const snapshot = await collectAccessReview({ now });
+      const admin = (userId: mongoose.Types.ObjectId) => snapshot.admins.find(row => row.userId === String(userId));
+      const supportRef = { id: String(support), name: 'Support agent' };
+      const billingRef = { id: String(billing), name: 'Billing' };
+
+      expect(admin(roleHolder)).toMatchObject({
+        permissions: ['support:read', 'credits:adjust', 'users:moderate'],
+        directPermissions: ['support:read'],
+        roles: [
+          { ...supportRef, deleted: false },
+          { ...billingRef, deleted: false },
+          { id: String(deadRole), name: null, deleted: true },
+          { id: 'not-an-id', name: null, deleted: true },
+        ],
+        permissionSources: [
+          { permission: 'support:read', direct: true, roles: [billingRef, supportRef] },
+          { permission: 'credits:adjust', direct: false, roles: [billingRef] },
+          { permission: 'users:moderate', direct: false, roles: [supportRef] },
+        ],
+      });
+      expect(admin(rootWithRole)).toMatchObject({ fullAdmin: true, roles: [{ ...billingRef, deleted: false }] });
+      expect(admin(deadOnly)).toMatchObject({
+        permissions: [],
+        permissionSources: [],
+        roles: [{ id: String(deadRole), name: null, deleted: true }],
+      });
+
+      expect(snapshot.roles).toEqual([
+        {
+          ...billingRef,
+          description: '',
+          permissions: ['support:read', 'credits:adjust'],
+          members: [
+            { userId: String(roleHolder), email: 'agent@example.org', username: 'agent', status: 'active' },
+            { userId: String(rootWithRole), email: null, username: 'root2', status: 'active' },
+          ],
+        },
+        {
+          ...supportRef,
+          description: 'Front line',
+          permissions: ['support:read', 'users:moderate'],
+          members: [{ userId: String(roleHolder), email: 'agent@example.org', username: 'agent', status: 'active' }],
+        },
+        { id: String(unused), name: 'Unused', description: '', permissions: ['models:curate'], members: [] },
+      ]);
+    } finally {
+      await User.collection.deleteMany({ _id: { $in: [roleHolder, rootWithRole, deadOnly] } });
+      await AdminRoleModel.collection.deleteMany({});
+    }
+  });
+});
+
+describe('legacy role identity parity', () => {
+  it('matches authorization for a raw uppercase role reference and deduplicates aliases', async () => {
+    const roleId = 'abcdef000000000000000001';
+    const roleObjectId = new mongoose.Types.ObjectId(roleId);
+    const holder = id();
+    await AdminRoleModel.collection.insertOne({
+      _id: roleObjectId,
+      name: 'Legacy billing',
+      description: '',
+      permissions: ['credits:adjust'],
+    });
+    await User.collection.insertOne({
+      _id: holder,
+      username: 'legacy-holder',
+      isAdmin: false,
+      adminPermissions: [],
+      adminRoleIds: [roleId.toUpperCase()],
+    });
+    try {
+      const authorized = await User.findById(holder);
+      if (!authorized) throw new Error('Missing legacy role holder');
+      await resolveRoleAdminPermissions(authorized);
+      expect(hasAdminPermission(authorized, 'credits:adjust')).toBe(true);
+      const snapshot = await collectAccessReview({ now });
+      const row = snapshot.admins.find(admin => admin.userId === String(holder));
+      expect(row).toMatchObject({
+        permissions: ['credits:adjust'],
+        roles: [{ id: roleId, name: 'Legacy billing', deleted: false }],
+        permissionSources: [
+          { permission: 'credits:adjust', direct: false, roles: [{ id: roleId, name: 'Legacy billing' }] },
+        ],
+      });
+      await User.collection.updateOne(
+        { _id: holder },
+        { $set: { adminRoleIds: [roleId.toUpperCase(), roleObjectId] } }
+      );
+      const aliases = await collectAccessReview({ now });
+      expect(aliases.admins.find(admin => admin.userId === String(holder))?.roles).toEqual([
+        { id: roleId, name: 'Legacy billing', deleted: false },
+      ]);
+      expect(aliases.roles.find(role => role.id === roleId)?.members.map(member => member.userId)).toEqual([
+        String(holder),
+      ]);
+    } finally {
+      await User.collection.deleteOne({ _id: holder });
+      await AdminRoleModel.collection.deleteOne({ _id: roleObjectId });
+    }
   });
 });

@@ -36,7 +36,7 @@ vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 
-import { resolveAccessibleLakes, adminBypassLakeIds } from './index';
+import { resolveAccessibleLakes, adminBypassLakeIds } from '@bike4mind/server-utils/dataLakes/index';
 
 const asReq = (user: Record<string, unknown>) => ({ user }) as unknown as EntitlementRequest;
 

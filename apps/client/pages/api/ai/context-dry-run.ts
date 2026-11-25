@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import type { FabFileSignOptions } from '@bike4mind/server-utils/files/browserFileSigner';
 import { Request } from 'express';
 
 /**
@@ -114,8 +115,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_FILES] }).post(
     const deps = {
       db: { fabFiles: fabFileRepository, users: userRepository, adminSettings: adminSettingsRepository },
       storage: {
-        generateSignedUrl: async (path: string, expireInSeconds: number) =>
-          storage.getSignedUrl(path, 'get', { expiresIn: expireInSeconds }),
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) =>
+          storage.getSignedUrl(path, 'get', { expiresIn: expireInSeconds, ...options }),
       },
     };
 

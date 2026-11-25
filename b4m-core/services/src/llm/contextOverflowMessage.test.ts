@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildContextOverflowMessage } from './contextOverflowMessage';
+import { buildContextOverflowMessage, ContextOverflowError, isContextOverflowError } from './contextOverflowMessage';
 
 describe('buildContextOverflowMessage', () => {
   const base = {
@@ -94,5 +94,37 @@ describe('buildContextOverflowMessage', () => {
       tokensBySource: { fabFiles: 243_329 },
     });
     expect(msg).toContain('💡');
+  });
+
+  it('always offers switching to a larger-context model', () => {
+    const msg = buildContextOverflowMessage({
+      modelName: 'Llama 3 Instruct 8B',
+      inputTokens: 5_664,
+      maxSafeInputTokens: 5_144,
+      tokensBySource: { fabFiles: 2_996, systemPrompts: 1_853, toolSchemas: 787, userPrompt: 28 },
+    });
+    expect(msg).toContain('Your request is too large for Llama 3 Instruct 8B (5,664 tokens used, 5,144 max)');
+    expect(msg).toMatch(/Remove or detach some files/);
+    expect(msg).toMatch(/switch to a model with a larger context window/);
+  });
+});
+
+describe('ContextOverflowError', () => {
+  it('keeps the user-facing message and carries structured details', () => {
+    const details = {
+      modelId: 'llama3-8b',
+      inputTokens: 5_664,
+      maxSafeInputTokens: 5_144,
+      contextLimit: 8_192,
+      reservedOutputTokens: 3_048,
+      tokenBreakdown: { fabFiles: 2_996 },
+      messageCount: 3,
+      mementoCount: 0,
+    };
+    const error = new ContextOverflowError('Your request is too large for Llama 3 Instruct 8B', details);
+    expect(isContextOverflowError(error)).toBe(true);
+    expect(error.message).toBe('Your request is too large for Llama 3 Instruct 8B');
+    expect(error.details).toEqual(details);
+    expect(isContextOverflowError(new Error('Your request is too large for Llama 3 Instruct 8B'))).toBe(false);
   });
 });

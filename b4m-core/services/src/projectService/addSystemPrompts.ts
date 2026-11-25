@@ -1,10 +1,17 @@
 import { Logger } from '@bike4mind/observability';
-import { IFabFileRepository, IProjectDocument, IProjectRepository, IUserDocument } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  IProjectDocument,
+  IProjectRepository,
+  IUserDocument,
+  withoutOrgApiKeyReach,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { canonicalId, distinctIdCount } from '../utils/objectIds';
 import uniq from 'lodash/uniq.js';
 import { updateShareableFiles } from './addFiles';
+import { AttachableItem, assertCanAttachToProject } from './attachGate';
 
 const addSystemPromptsSchema = z.object({
   projectId: z.string(),
@@ -44,8 +51,15 @@ export const addSystemPrompts = async (
       : found
   ) as IProjectDocument;
 
-  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
+  const files = await db.fabFiles.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(user), fileIds);
   if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
+  // A file already in the project (as a file or a prompt) is already shared with its members.
+  assertCanAttachToProject(
+    files as unknown as AttachableItem[],
+    user,
+    [...(project.fileIds ?? []), ...project.systemPrompts.map(prompt => prompt.fileId)],
+    'files'
+  );
 
   // Resolved ids, in REQUEST order: a doubled id - or the same id in two hex cases - would push two
   // systemPrompts entries for one file, but `files` comes back in Mongo's order, and this array's

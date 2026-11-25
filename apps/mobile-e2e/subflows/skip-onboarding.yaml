@@ -1,0 +1,24 @@
+appId: com.bike4mind.app
+---
+# A fresh install shows the two-page welcome before sign-in on both platforms (absent after an upgrade or once finished).
+# `when: visible` does not wait, and Android draws a blank frame while the session restores, so first wait for
+# whichever screen comes up (ids are regexes): the welcome, sign-in, or the signed-in landing a fixture launch
+# opens on (iOS home-menu-btn / home-profile-btn, Android sessions-new-conversation-btn; see assert-signed-in.yaml).
+- extendedWaitUntil:
+    visible:
+      id: "onboarding-next-btn|signin-submit-btn|home-menu-btn|home-profile-btn|sessions-new-conversation-btn"
+    timeout: 30000
+- runFlow:
+    when:
+      visible:
+        id: onboarding-next-btn
+    commands:
+      - tapOn:
+          id: onboarding-next-btn
+- runFlow:
+    when:
+      visible:
+        id: onboarding-next-btn
+    commands:
+      - tapOn:
+          id: onboarding-next-btn

@@ -29,6 +29,7 @@ import {
 import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import {
   assertConnectorLakeWrite,
   createLakeIngestRetirer,
@@ -74,7 +75,6 @@ import { finalizeBatchIfComplete } from '@bike4mind/server-utils/dataLakes/dataL
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { z, ZodError } from 'zod';
 import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
@@ -636,6 +636,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
+    await resolveRoleAdminPermissions(user);
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
     // A revoked/expired grant reaches this run at one of two token resolutions - the fetch below or the
@@ -1333,7 +1334,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
 
         const ext = mime.extension(mimeType);
-        const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+        const fileKey = `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`;
         const tags = await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
 
         const fabFile = await ingestLakeFile({

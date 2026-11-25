@@ -16,7 +16,8 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 const hooks = vi.hoisted(() => ({
   detail: vi.fn(),
   mutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  me: undefined as { organizations: Array<{ id: string; name: string }> } | undefined,
+  me: undefined as
+    { organizations: Array<{ id: string; name: string }>; spaces?: Array<{ id: string; name: string }> } | undefined,
 }));
 
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
@@ -176,9 +177,32 @@ describe('ListingDetail "Use in Claude Code"', () => {
     fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     expect(JSON.parse(screen.getByTestId('marketplace-tab-props').textContent ?? '')).toEqual({
-      org: { id: 'org1', name: 'Acme Labs' },
+      owner: { kind: 'organization', id: 'org1', name: 'Acme Labs' },
       pluginName: 'hello-team-abc123',
       skillName: 'Hello Team',
+    });
+  });
+
+  it('passes a Space listing to the team marketplace tab with the Space as owner', () => {
+    hooks.me = { organizations: [], spaces: [{ id: 'sp1', name: 'Platform' }] };
+    const data = makeData();
+    renderListing(
+      makeData({
+        listing: {
+          ...data.listing,
+          name: 'Hello Team',
+          visibility: 'space',
+          spaceId: 'sp1',
+          claudePluginName: 'hello-team-abc123',
+        },
+      })
+    );
+    fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    expect(JSON.parse(screen.getByTestId('marketplace-tab-props').textContent ?? '').owner).toEqual({
+      kind: 'space',
+      id: 'sp1',
+      name: 'Platform',
     });
   });
 });
@@ -202,6 +226,21 @@ describe('ListingDetail review chip', () => {
     renderListing(reviewed(true));
     expect(screen.getByText('Self-approved by the author')).toBeInTheDocument();
     expect(screen.queryByText('Reviewed by a person')).not.toBeInTheDocument();
+  });
+});
+
+describe('ListingDetail scan tier chip', () => {
+  it('labels the tier as a scan result for the author of a person-approved version', () => {
+    const base = makeData();
+    renderListing(
+      makeData({
+        listing: { ...base.listing, autoChecked: false, riskTier: 'review' },
+        version: { ...base.version!, reviewStatus: 'approved' },
+        viewer: { ...base.viewer, isAuthor: true },
+      })
+    );
+    expect(screen.getByText('Reviewed by a person')).toBeInTheDocument();
+    expect(screen.getByTestId('market-tier-review')).toHaveTextContent('Scan: needs a look');
   });
 });
 

@@ -8,6 +8,7 @@ import {
 import type { DlqDescriptor, InspectableDlqDescriptor, DlqResolvers } from '@bike4mind/infra';
 import * as generatedInfraResources from '../premium-generated/infraResources.generated';
 import { Logger } from '@bike4mind/observability';
+import { parseScheduledEvent } from './dlqScheduleRule';
 
 // Mirrored by DlqReplaySafety in apps/client/app/hooks/data/dlqManagement.ts; keep both in sync.
 export const DLQ_REPLAY_SAFETY = ['safe', 'side-effects', 'unsafe'] as const;
@@ -28,7 +29,80 @@ export interface DlqQueueHelp {
   owner: string;
 }
 
-export type CoreDlqDescriptor = InspectableDlqDescriptor & DlqQueueHelp;
+/** The record a dead letter is about, shown in the admin Dead letters table. */
+export type DlqMessageEntity = { type: string; id: string };
+
+/** Reads the entity from a parsed message body; null when the body does not name one. */
+export type DlqDescribe = (body: unknown) => DlqMessageEntity | null;
+
+/**
+ * When a dead letter is safe to discard. superseded-schedule: a scheduled job whose handler ignores the
+ * event time, so any later run covers it. self-healing: normal use retries the work until it succeeds.
+ * Must stay in sync with DlqRecommendationFacts.staleWhen in b4m-core/common dlqPolicy.ts.
+ */
+export const DLQ_STALE_WHEN = ['superseded-schedule', 'self-healing'] as const;
+export type DlqStaleWhen = (typeof DLQ_STALE_WHEN)[number];
+
+/** Limits staleWhen to bodies whose EventBridge detail-type is listed, for a queue shared by several jobs. */
+export type DlqStaleScope = { staleWhen?: DlqStaleWhen; staleDetailTypes?: readonly string[] };
+
+export type CoreDlqDescriptor = InspectableDlqDescriptor & DlqQueueHelp & { describe: DlqDescribe } & DlqStaleScope;
+
+const readPath = (value: unknown, path: string): unknown =>
+  path
+    .split('.')
+    .reduce<unknown>(
+      (current, key) =>
+        typeof current === 'object' && current !== null ? (current as Record<string, unknown>)[key] : undefined,
+      value
+    );
+
+/** Describes a body as `type`, identified by the first of `paths` (dotted, array indexes allowed) holding an id. */
+export function entityAt(type: string, ...paths: string[]): DlqDescribe {
+  return body => {
+    for (const path of paths) {
+      const value = readPath(body, path);
+      if (typeof value === 'string' && value.trim() !== '') return { type, id: value };
+      if (typeof value === 'number' && Number.isFinite(value)) return { type, id: String(value) };
+    }
+    return null;
+  };
+}
+
+/** For a queue that carries several message types: the first describer that recognises the body. */
+export function firstEntity(...describers: DlqDescribe[]): DlqDescribe {
+  return body => {
+    for (const describe of describers) {
+      const entity = describe(body);
+      if (entity) return entity;
+    }
+    return null;
+  };
+}
+
+/** For a queue whose bodies name no record, such as a scheduled event. */
+export const noEntity: DlqDescribe = () => null;
+
+/**
+ * The entity a raw DLQ body is about; null for a body that is not JSON or names none. Any queue's
+ * EventBridge Scheduled Event body the queue's own describe does not name falls back to its run time.
+ */
+export function describeDlqMessage(
+  entry: Pick<RegisteredDlqDescriptor, 'describe'>,
+  rawBody: string | undefined
+): DlqMessageEntity | null {
+  if (!rawBody) return null;
+  let body: unknown;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    return null;
+  }
+  const entity = entry.describe?.(body) ?? null;
+  if (entity) return entity;
+  const scheduled = parseScheduledEvent(rawBody);
+  return scheduled ? { type: 'Scheduled run', id: scheduled.time } : null;
+}
 
 /** Names each DlqQueueHelp field that is missing, blank, or (for replay) outside DLQ_REPLAY_SAFETY. */
 export function missingQueueHelp(entry: Partial<Record<keyof DlqQueueHelp, unknown>>): string[] {
@@ -58,6 +132,17 @@ export function missingQueueHelp(entry: Partial<Record<keyof DlqQueueHelp, unkno
  */
 const DLQ_REGISTRY = [
   {
+    label: 'cloud-security-scan',
+    displayName: 'Cloud Security Scan',
+    application: 'Security',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed cloud security scan invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failure and request a new scan from the security dashboard.',
+    owner: 'Security',
+    describe: noEntity,
+  },
+  {
     label: 'fab-file-vectorize',
     displayName: 'FabFile Vectorize',
     application: 'FabFileProcessing',
@@ -67,6 +152,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'A file that is already fully vectorized is skipped; an unfinished one embeds its remaining chunks, which reserves embedding credits.',
     owner: 'Knowledge files',
+    describe: entityAt('File', 'fabFileId'),
   },
   {
     label: 'fab-file-chunk',
@@ -77,6 +163,7 @@ const DLQ_REGISTRY = [
     replay: 'safe',
     replayNote: 'Chunking is claimed per file, so a duplicate delivery exits instead of chunking the file twice.',
     owner: 'Knowledge files',
+    describe: entityAt('File', 'fabFileId'),
   },
   {
     label: 'image-generation',
@@ -88,6 +175,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'No completion guard: a replay calls the image provider again and holds image credits for the new attempt.',
     owner: 'Image generation',
+    describe: entityAt('Quest', 'questId'),
   },
   {
     label: 'image-edit',
@@ -99,6 +187,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'No completion guard: a replay calls the image provider again and holds image credits for the new attempt.',
     owner: 'Image generation',
+    describe: entityAt('Quest', 'questId'),
   },
   {
     label: 'generation-callback',
@@ -110,6 +199,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'Sends only while the callback is dispatched or failed and its event id still matches, so a replay retries a failed callback once.',
     owner: 'Public API',
+    describe: entityAt('Quest', 'questId'),
   },
   {
     label: 'data-lake-research',
@@ -121,6 +211,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'The run is claimed before it starts, so a run already claimed or settled is skipped; a run still queued runs now and makes its LLM calls.',
     owner: 'Data lake',
+    describe: entityAt('Research run', 'runId'),
   },
   {
     label: 'research-engine',
@@ -131,6 +222,7 @@ const DLQ_REGISTRY = [
     replay: 'side-effects',
     replayNote: 'A replay re-runs the scrape and the LLM calls for the task, spending credits again.',
     owner: 'Research',
+    describe: firstEntity(entityAt('Quest', 'payload.questId'), entityAt('Research task', 'payload.id')),
   },
   {
     label: 'release-notes',
@@ -140,18 +232,10 @@ const DLQ_REGISTRY = [
     description: 'Writes release notes or weekly highlights and announces them in Slack.',
     replay: 'unsafe',
     replayNote:
-      'Nothing records that the Slack announcement went out, so a replay regenerates the note and posts again. Only a human-edited note is left alone.',
+      'Nothing records that the Slack announcement went out, so a replay regenerates the release note or highlights and posts again. Only a human-edited release note is left alone.',
     owner: 'Release notes',
-  },
-  {
-    label: 'whats-new-highlights',
-    displayName: "What's New Highlights",
-    application: 'WhatsNewGeneration',
-    sourceQueue: 'whatsNewHighlightsQueue',
-    description: "Builds the weekly What's New highlights and posts them to Slack.",
-    replay: 'unsafe',
-    replayNote: 'Nothing records an earlier Slack post, so a replay posts the highlights again.',
-    owner: 'Release notes',
+    // One DLQ for both kinds of whatsNewJob message: a release names its tag, a highlights run its correlation id.
+    describe: firstEntity(entityAt('Release', 'releaseTag'), entityAt('Highlights run', 'correlationId')),
   },
   {
     label: 'notebook-curation',
@@ -163,6 +247,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'A curation job that already completed is skipped; a failed or unfinished one runs the LLM again and charges credits.',
     owner: 'Notebooks',
+    describe: entityAt('Notebook', 'sessionId'),
   },
   {
     label: 'agent-proactive-message',
@@ -173,6 +258,7 @@ const DLQ_REGISTRY = [
     replay: 'unsafe',
     replayNote: 'No dedup on the message: a replay writes and sends another message to the user and spends credits.',
     owner: 'Agents',
+    describe: entityAt('Agent config', 'sessionAgentConfigId'),
   },
   {
     label: 'github-webhook',
@@ -184,6 +270,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'Subscribers already recorded for this GitHub delivery id are skipped, but those records expire after 7 days, so a later replay notifies every subscriber again.',
     owner: 'Integrations',
+    describe: entityAt('Webhook delivery', 'deliveryId'),
   },
   {
     label: 'webhook-delivery',
@@ -195,6 +282,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'The 1-hour dedup cache has usually expired by replay time, so the POST is sent again; receivers can drop it by its stable eventId.',
     owner: 'Integrations',
+    describe: entityAt('Webhook subscription', 'subscriptionId'),
   },
   {
     label: 'slack-export',
@@ -206,6 +294,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'A cancelled job is skipped; otherwise the export is rebuilt from Slack and uploaded again, with nothing sent outside.',
     owner: 'Integrations',
+    describe: entityAt('Export job', 'jobId'),
   },
   {
     label: 'quest-export',
@@ -217,16 +306,42 @@ const DLQ_REGISTRY = [
     replayNote:
       'If the ZIP already exists only the completed event is re-sent; otherwise the ZIP is rebuilt, which can call the summary model again.',
     owner: 'Chat',
+    describe: firstEntity(entityAt('Export job', 'exportJobId'), entityAt('Feedback summary job', 'summaryJobId')),
+  },
+  {
+    label: 'callable-function-call',
+    displayName: 'Callable Function Call',
+    application: 'CallableFunctionCall',
+    sourceQueue: 'callableFunctionCallQueue',
+    description: 'Runs one asynchronous call of a saved Python function.',
+    replay: 'safe',
+    replayNote:
+      'A job dead-lettered before its claim runs the call on replay. One already claimed is skipped, and ends the call as an error if its worker was lost.',
+    owner: 'Chat',
+    describe: entityAt('Call', 'callId'),
   },
   {
     label: 'account-data-export',
     displayName: 'Account Data Export',
     application: 'AccountDataExport',
     sourceQueue: 'accountDataExportQueue',
-    description: "Builds a user's account data export and emails them the download link.",
+    description: 'Builds account data or organization metadata exports and emails an authenticated download link.',
     replay: 'unsafe',
     replayNote: 'An export that was already built is not rebuilt, but the ready email is sent again.',
     owner: 'Accounts',
+    describe: entityAt('Export job', 'exportJobId'),
+  },
+  {
+    label: 'account-erasure',
+    displayName: 'Account Erasure',
+    application: 'AccountErasure',
+    sourceQueue: 'accountErasureQueue',
+    description: 'Runs the account purge for a user an admin scheduled for data subject erasure.',
+    replay: 'safe',
+    replayNote:
+      'The purge is leased and idempotent, so a replay finishes an interrupted erasure; a user already deleted is skipped.',
+    owner: 'Accounts',
+    describe: entityAt('User', 'userId'),
   },
   {
     label: 'generation-job',
@@ -238,17 +353,19 @@ const DLQ_REGISTRY = [
     replayNote:
       'Each step reads the stored job state, but a replay can call the model again. Only the step that claims the finished job sends the ready push.',
     owner: 'Generation jobs',
+    describe: entityAt('Job', 'jobId'),
   },
   {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    description: 'Triages recent Slack alerts into issue tracker tickets for a LiveOps config.',
-    replay: 'unsafe',
+    label: 'render-job',
+    displayName: 'Studio Render Job',
+    application: 'GenerationJob',
+    sourceQueue: 'renderJobQueue',
+    description: 'Encodes a Studio composition to video on the render worker.',
+    replay: 'safe',
     replayNote:
-      'A run within 5 minutes of the last one is skipped and duplicate issues are deduplicated, but a later replay runs a fresh triage and posts the Slack summary again.',
-    owner: 'Platform ops',
+      'The worker skips a job that is no longer running and treats an already succeeded render as done, so a replay only re-encodes a job that never finished.',
+    owner: 'Generation jobs',
+    describe: entityAt('Job', 'jobId'),
   },
   {
     label: 'sre-fix',
@@ -260,6 +377,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'Dispatch is claimed on the error record before GitHub is called, so a replay after a dispatch is skipped. If GitHub is unavailable at replay time, the fix is marked failed and a Slack failure notice is posted.',
     owner: 'Platform ops',
+    describe: entityAt('SRE fix', 'trackingId', 'detail.trackingId'),
   },
   {
     label: 'sre-job',
@@ -271,6 +389,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'Analysis is claimed per error fingerprint and GitHub comments check for an existing marker, but a replay can still call the model again.',
     owner: 'Platform ops',
+    describe: firstEntity(entityAt('SRE incident', 'fingerprint'), entityAt('SRE fix', 'trackingId')),
   },
   {
     label: 'email-ingestion',
@@ -282,6 +401,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'Mail with a Message-ID that was already ingested for the user is not stored twice. Mail without one gets a new id, so a replay stores it again and queues another billed analysis.',
     owner: 'Email ingestion',
+    describe: entityAt('Email object', 'Records.0.s3.object.key'),
   },
   {
     label: 'email-analysis',
@@ -292,6 +412,7 @@ const DLQ_REGISTRY = [
     replay: 'side-effects',
     replayNote: 'An email that already has an analysis is skipped; otherwise the LLM runs again and is billed.',
     owner: 'Email ingestion',
+    describe: entityAt('Email', 'emailId'),
   },
   {
     label: 'email-batch',
@@ -303,6 +424,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'Only recipients still marked pending are mailed, so a replay sends the rest of the batch without resending delivered mail.',
     owner: 'Email marketing',
+    describe: entityAt('Email job', 'jobId'),
   },
   {
     label: 'email-job',
@@ -314,6 +436,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'No status guard: a replay creates new send attempts for every recipient and mails the whole campaign again.',
     owner: 'Email marketing',
+    describe: entityAt('Email job', 'jobId'),
   },
   {
     label: 'tavern-heartbeat',
@@ -324,6 +447,7 @@ const DLQ_REGISTRY = [
     replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
+    describe: entityAt('Agent', 'agentId'),
   },
   {
     label: 'deep-agent-wake',
@@ -335,6 +459,7 @@ const DLQ_REGISTRY = [
     replayNote:
       "No dedup on the wake: a replay runs one more cycle, calling the model and spending the mission's credits.",
     owner: 'Agents',
+    describe: entityAt('Agent', 'agentId'),
   },
   {
     label: 'secops-triage',
@@ -346,6 +471,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'Matching open issues are updated rather than duplicated, but a replay runs a fresh triage and can post the Slack summary again.',
     owner: 'Security ops',
+    describe: entityAt('Scan snapshot', 'snapshotId'),
   },
   {
     label: 'overwatch-analytics',
@@ -356,6 +482,7 @@ const DLQ_REGISTRY = [
     replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
+    describe: entityAt('Analytics event', 'eventId'),
   },
   {
     label: 'agent-continuation',
@@ -367,6 +494,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'The execution is claimed atomically from a resumable status, so a replay of a run that moved on exits; otherwise the agent resumes and spends credits.',
     owner: 'Agents',
+    describe: entityAt('Agent execution', 'childExecutionId', 'executionId'),
   },
   {
     label: 'optihashi-run-completion',
@@ -377,6 +505,7 @@ const DLQ_REGISTRY = [
     replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
+    describe: entityAt('Run', 'runId'),
   },
   {
     label: 'bob-run',
@@ -387,6 +516,7 @@ const DLQ_REGISTRY = [
     replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
+    describe: entityAt('Run', 'runId'),
   },
   {
     label: 'libreoncology-audio-render',
@@ -397,6 +527,7 @@ const DLQ_REGISTRY = [
     replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
+    describe: noEntity,
   },
   {
     label: 'data-lake-cleanup',
@@ -407,6 +538,7 @@ const DLQ_REGISTRY = [
     replay: 'safe',
     replayNote: 'The cleanup is guarded and idempotent, so a replay only removes what an earlier run left behind.',
     owner: 'Data lake',
+    describe: entityAt('Data lake', 'dataLakeId'),
   },
   {
     label: 'data-lake-taxonomy',
@@ -418,6 +550,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'The batch is claimed first and a finalized batch is skipped; a batch still queued runs the model again and is billed.',
     owner: 'Data lake',
+    describe: entityAt('Data lake', 'dataLakeId'),
   },
   {
     label: 'lake-memory',
@@ -429,6 +562,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'The ledger de-duplicates beliefs so nothing is stored twice, but a replay re-scans the lake and bills the LLM again.',
     owner: 'Data lake',
+    describe: entityAt('Data lake', 'dataLakeId'),
   },
   {
     label: 'risk-evidence',
@@ -440,6 +574,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'The summary is recomputed from stored activity. A signup replay also runs the linked-account check the failed attempt skipped, which can contain the account; an account the check already recorded is skipped.',
     owner: 'Account security',
+    describe: entityAt('User', 'userId'),
   },
   {
     label: 'lake-inconsistency-model',
@@ -450,6 +585,7 @@ const DLQ_REGISTRY = [
     replay: 'side-effects',
     replayNote: 'Runs under a per-lake lease; a replay makes the LLM calls again and charges the lake owner.',
     owner: 'Data lake',
+    describe: entityAt('Data lake', 'dataLakeId'),
   },
   {
     label: 'drive-lake-ingest',
@@ -461,6 +597,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'The sync claims the connection first and skips files it already ingested, so a replay only picks up new or unfinished work.',
     owner: 'Data lake',
+    describe: entityAt('Drive connection', 'connectionId'),
   },
   {
     label: 'drive-disconnect-purge',
@@ -472,6 +609,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'Each run re-reads what is left and a released connection is skipped, so a replay finishes the purge without double-counting.',
     owner: 'Data lake',
+    describe: entityAt('Data lake', 'dataLakeId'),
   },
   {
     label: 'github-lake-ingest',
@@ -483,6 +621,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'The sync claims the connection first and skips files it already ingested, so a replay only picks up new or unfinished work.',
     owner: 'Data lake',
+    describe: entityAt('GitHub connection', 'connectionId'),
   },
   {
     label: 'github-lake-revoke',
@@ -493,6 +632,7 @@ const DLQ_REGISTRY = [
     replay: 'safe',
     replayNote: 'A retry finishes the purge even after the connection row is gone, so a replay only completes it.',
     owner: 'Data lake',
+    describe: entityAt('GitHub connection', 'connectionId'),
   },
   {
     label: 'publish-thumbnail',
@@ -504,6 +644,19 @@ const DLQ_REGISTRY = [
     replayNote:
       'A job superseded by a newer version is dropped; otherwise the thumbnail is rendered and stored again, with nothing sent outside.',
     owner: 'Published artifacts',
+    describe: entityAt('Published artifact', 'publicId'),
+  },
+  {
+    label: 'dlq-triage-sweep',
+    displayName: 'DLQ Triage Sweep',
+    application: 'LiveOps',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed DLQ triage sweep invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'LiveOps',
+    describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'young-account-spend-alert',
@@ -514,6 +667,7 @@ const DLQ_REGISTRY = [
     description: 'Retains failed young-account spend alert invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Account security',
+    describe: noEntity,
   },
   {
     label: 'api-probe-detector',
@@ -524,6 +678,7 @@ const DLQ_REGISTRY = [
     description: 'Retains failed API probe detector invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Security ops',
+    describe: noEntity,
   },
   {
     label: 'image-moderation-review-sweep',
@@ -534,6 +689,8 @@ const DLQ_REGISTRY = [
     description: 'Retains failed image moderation review sweep invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Moderation',
+    describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'spend-monitor',
@@ -544,6 +701,7 @@ const DLQ_REGISTRY = [
     description: 'Retains failed spend monitor invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Billing',
+    describe: noEntity,
   },
   {
     label: 'signup-grant-held-release',
@@ -554,6 +712,8 @@ const DLQ_REGISTRY = [
     description: 'Retains failed signup grant release invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Accounts',
+    describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'revenue-snapshot',
@@ -564,6 +724,7 @@ const DLQ_REGISTRY = [
     description: 'Retains failed revenue snapshot invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Billing',
+    describe: noEntity,
   },
   {
     label: 'subscription-reconciliation',
@@ -574,6 +735,8 @@ const DLQ_REGISTRY = [
     description: 'Retains failed subscription reconciliation invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Billing',
+    describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'account-deletion-sweep',
@@ -584,6 +747,20 @@ const DLQ_REGISTRY = [
     description: 'Retains failed account deletion sweep invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Accounts',
+    describe: noEntity,
+    staleWhen: 'superseded-schedule',
+  },
+  {
+    label: 'organization-retention',
+    displayName: 'Organization Retention',
+    application: 'Organization',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed organization retention sweep invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Organizations',
+    describe: noEntity,
+    staleWhen: 'superseded-schedule',
   },
   {
     label: 'fab-file-moderation',
@@ -594,6 +771,7 @@ const DLQ_REGISTRY = [
     description: 'Retains failed file upload moderation invocations for inspection.',
     replayNote: 'S3 invokes the consumer directly; there is no SQS replay destination.',
     owner: 'Knowledge files',
+    describe: entityAt('File path', 'Records.0.s3.object.key'),
   },
   {
     label: 'telemetry-alert-rule',
@@ -604,6 +782,18 @@ const DLQ_REGISTRY = [
     description: 'Retains telemetry alert events that could not be delivered or processed.',
     replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
     owner: 'Platform ops',
+    describe: entityAt('Quest', 'detail.requestId'),
+  },
+  {
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains moderation escalation alerts that could not be posted to the abuse alarm channel.',
+    replayNote: 'No SQS replay destination; check the user in the text moderation review list instead.',
+    owner: 'Trust and safety',
+    describe: entityAt('User', 'detail.userId'),
   },
   {
     label: 'session-enrichment',
@@ -614,6 +804,10 @@ const DLQ_REGISTRY = [
     description: 'Retains session enrichment events that could not be delivered or processed.',
     replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
     owner: 'Chat',
+    describe: entityAt('Notebook', 'detail.sessionId'),
+    staleWhen: 'self-healing',
+    // Only summarize re-runs on its own (while summaryAt lags); a session.tag job is user-requested.
+    staleDetailTypes: ['session.summarize'],
   },
   {
     label: 'billing-events',
@@ -624,6 +818,7 @@ const DLQ_REGISTRY = [
     description: 'Retains billing events that could not be delivered or processed.',
     replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
     owner: 'Billing',
+    describe: firstEntity(entityAt('Invoice', 'detail.invoiceId'), entityAt('Subscription', 'detail.subscriptionId')),
   },
   {
     label: 'email-events',
@@ -634,6 +829,7 @@ const DLQ_REGISTRY = [
     description: 'Retains email events that could not be delivered or processed.',
     replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
     owner: 'Email',
+    describe: noEntity,
   },
   {
     label: 'push-events',
@@ -644,6 +840,7 @@ const DLQ_REGISTRY = [
     description: 'Retains push notification events that could not be delivered or processed.',
     replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
     owner: 'Notifications',
+    describe: entityAt('User', 'detail.userId'),
   },
   {
     label: 'notebook-events',
@@ -654,6 +851,7 @@ const DLQ_REGISTRY = [
     description: 'Retains notebook events that could not be delivered or processed.',
     replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
     owner: 'Notebooks',
+    describe: firstEntity(entityAt('Notebook', 'detail.sessionId'), entityAt('Spider job', 'detail.spiderJobId')),
   },
   {
     label: 'completion-events',
@@ -664,6 +862,7 @@ const DLQ_REGISTRY = [
     description: 'Retains completion events that could not be delivered or processed.',
     replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
     owner: 'Chat',
+    describe: entityAt('Quest', 'detail.questId'),
   },
   {
     label: 'business-metric-alerts',
@@ -674,6 +873,18 @@ const DLQ_REGISTRY = [
     description: 'Retains failed business metric alert invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Analytics',
+    describe: noEntity,
+  },
+  {
+    label: 'side-app-health-alerts',
+    displayName: 'Side App Health Alerts',
+    application: 'SideApps',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed connected app health alert invocations for inspection.',
+    replayNote: 'No SQS replay destination; the next hourly run re-evaluates, so inspect the failure instead.',
+    owner: 'Platform ops',
+    describe: noEntity,
   },
   {
     label: 'alarm-handler',
@@ -684,6 +895,7 @@ const DLQ_REGISTRY = [
     description: 'Retains alarm notifications that could not reach the alarm handler.',
     replayNote: 'SNS delivers notifications directly; there is no SQS replay destination.',
     owner: 'Platform ops',
+    describe: entityAt('Alarm', 'AlarmName'),
   },
   {
     label: 'generated-media-purge',
@@ -695,6 +907,7 @@ const DLQ_REGISTRY = [
     replayNote:
       'Each key is rechecked against live references and notebook ownership before it is deleted, and deleting a key that is already gone is a no-op.',
     owner: 'Notebooks',
+    describe: entityAt('Notebook', 'sessionIds.0'),
   },
 ] as const satisfies readonly CoreDlqDescriptor[];
 
@@ -713,7 +926,11 @@ export type SourceQueueName = CoreSourceQueueName | ContributedSourceQueueName;
 
 /** An entry the registry holds; a null source queue has no SQS replay destination. */
 export type RegisteredDlqDescriptor = InspectableDlqDescriptor &
-  Partial<DlqQueueHelp> & { label: DlqLabel; sourceQueue: SourceQueueName | null };
+  Partial<DlqQueueHelp> & {
+    label: DlqLabel;
+    sourceQueue: SourceQueueName | null;
+    describe?: DlqDescribe;
+  } & DlqStaleScope;
 
 type LinkableQueues = {
   dlqUrls: Record<string, string>;
@@ -728,7 +945,7 @@ const resolvers: DlqResolvers = {
 // infra/queues.ts partitions the same specs against the same reservedQueueNames, so the
 // registry lists exactly the pairs that deploy. Registers nothing when codegen could not read
 // the core names, or read names this file's DLQ_REGISTRY contradicts (a stale generated file).
-function contributedDescriptors(): DlqDescriptor[] {
+function contributedDescriptors(): (DlqDescriptor & Partial<DlqQueueHelp>)[] {
   const specs = generatedInfraResources.contributedInfraResources.queues;
   if (specs.length === 0) return [];
   const reserved = reservedQueueNames(generatedInfraResources);
@@ -752,11 +969,16 @@ function contributedDescriptors(): DlqDescriptor[] {
   }
   const result = partitionContributedQueues(specs, reserved);
   for (const line of describeDroppedContributions('contributed queue', result)) Logger.warn(`[dlqRegistry] ${line}`);
-  return result.registered.map(({ label, displayName, application, name }) => ({
+  return result.registered.map(({ label, displayName, application, name, description, replay, replayNote, owner }) => ({
     label,
     displayName,
     application,
     sourceQueue: name,
+    // Only declared help keys, so an entry without help stays exactly as it was.
+    ...(description === undefined ? {} : { description }),
+    ...(replay === undefined ? {} : { replay }),
+    ...(replayNote === undefined ? {} : { replayNote }),
+    ...(owner === undefined ? {} : { owner }),
   }));
 }
 

@@ -68,6 +68,7 @@ import {
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ADMIN_ASSISTANT_TOOL_NAMES,
+  CALLABLE_FUNCTIONS_PROMPT_NOTE,
   ChatModels,
   CreditHolderType,
   DATA_LAKE_TOOL_NAMES,
@@ -102,15 +103,20 @@ import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { AiAccessRefusedError, insufficientCreditsError } from '@bike4mind/common';
 import { FlaggedContentError, BedrockGuardrailsService, OpenaiModerationsService } from '@bike4mind/utils';
 import { applyModerationHit } from '../userService/moderationPolicy';
 
-vi.mock('../userService/moderationPolicy', () => ({
-  applyModerationHit: vi.fn().mockResolvedValue({ hitsInWindow: 1, status: 'active' }),
-  MODERATION_POLICY: {},
-  moderationThrottleKey: vi.fn(),
-}));
+vi.mock('../userService/moderationPolicy', async importOriginal => {
+  const actual = await importOriginal<typeof import('../userService/moderationPolicy')>();
+  return {
+    applyModerationHit: vi.fn().mockResolvedValue({ hitsInWindow: 1, status: 'active', transitionedTo: null }),
+    MODERATION_POLICY: {},
+    moderationThrottleKey: vi.fn(),
+    // Real: the alert decision is pure, and these tests assert which hits raise one.
+    moderationEscalationAlert: actual.moderationEscalationAlert,
+  };
+});
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -337,15 +343,19 @@ describe('ChatCompletionProcess', () => {
         create: vi.fn(),
       },
       mcpServers: { find: vi.fn().mockResolvedValue([]) },
-      users: { update: vi.fn() },
+      users: { update: vi.fn(), findById: vi.fn().mockResolvedValue(mockUser) },
+      newAccountSpendCap: {
+        adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+        personalSpendSince: async () => [],
+      },
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: {},
-      questMasterPlans: {},
       connections: {},
       creditTransactions: {},
       agents: {},
       projects: { findById: vi.fn() },
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
     service = new ChatCompletionProcess(baseOptions as any);
     service.db = mockDb;
@@ -805,6 +815,23 @@ describe('ChatCompletionProcess', () => {
       const final = JSON.parse(JSON.stringify(mockQuest));
       for (const key of ['deletedAt', 'createdAt', 'updatedAt']) delete final[key];
       expect(persisted).toEqual(final);
+    });
+
+    it('never write lakeSaveCount back, so a retried turn cannot reset the count its tools claimed', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.lakeSaveCount = 2;
+      const writes: Record<string, unknown>[] = [];
+      const record = async (patch: Record<string, unknown>) => {
+        writes.push(JSON.parse(JSON.stringify(patch)));
+        return patch;
+      };
+      mockDb.quests.update.mockImplementation(record);
+      mockDb.quests.updateIfUnfinished.mockImplementation(record);
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      expect(writes.length).toBeGreaterThan(0);
+      for (const w of writes) expect(w).not.toHaveProperty('lakeSaveCount');
     });
   });
 
@@ -6290,6 +6317,131 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    describe('spend freeze', () => {
+      const freezeRecord = (scopeType: 'User' | 'Organization' | 'apiKey') => ({
+        scopeType,
+        frozenAt: new Date('2026-11-16T00:00:00.000Z'),
+        reason: 'admin review',
+      });
+
+      it.each([
+        ['user', { userId: 'user1', organizationId: 'org1', apiKeyId: undefined }, 'User' as const],
+        ['organization', { userId: 'user1', organizationId: 'org1', apiKeyId: undefined }, 'Organization' as const],
+        ['api key', { userId: 'user1', organizationId: 'org1', apiKeyId: 'key-1' }, 'apiKey' as const],
+      ])(
+        'settles the quest as spend_frozen for a frozen %s, with no hold and no provider call',
+        async (_label, subject, scopeType) => {
+          const { complete } = reservationOrgSetup();
+          fundedOrg();
+          mockQuest.sessionId = 'session1';
+          mockDb.users.incrementCredits = vi.fn();
+          mockDb.spendFreezes.findActiveForSubject.mockResolvedValue(freezeRecord(scopeType));
+
+          await service.process({
+            body: {
+              ...reservationBody(),
+              ...(subject.apiKeyId ? { authOrigin: 'apiKey', apiKeyId: subject.apiKeyId } : {}),
+            },
+            logger: mockLogger,
+          });
+
+          expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith(
+            expect.objectContaining({ userId: 'user1', organizationId: 'org1', apiKeyId: subject.apiKeyId })
+          );
+          expect(mockQuest.type).toBe('error');
+          expect(mockQuest.errorCode).toBe('spend_frozen');
+          expect(JSON.stringify(mockQuest.replies)).not.toContain('admin review');
+          expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+          expect(mockDb.users.incrementCredits).not.toHaveBeenCalled();
+          expect(complete).not.toHaveBeenCalled();
+        }
+      );
+
+      it('keeps the acting user in the subject of an org-billed key turn', async () => {
+        reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        mockDb.spendFreezes.findActiveForSubject.mockResolvedValue(freezeRecord('apiKey'));
+
+        await service.process({
+          body: {
+            ...reservationBody(),
+            authOrigin: 'apiKey',
+            apiKeyId: 'key-1',
+            apiKeyBillingOwnerType: CreditHolderType.Organization,
+          },
+          logger: mockLogger,
+        });
+
+        expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
+          userId: 'user1',
+          organizationId: 'org1',
+          apiKeyId: 'key-1',
+        });
+      });
+
+      // A JWT voice turn carries the caller's home org as `organizationId` and reserves against it, so the
+      // freeze subject must be that org, never a separately computed one.
+      const frozenOnlyFor = (frozenOrgId: string) =>
+        mockDb.spendFreezes.findActiveForSubject.mockImplementation(
+          async ({ organizationId }: { organizationId: string | null }) =>
+            organizationId === frozenOrgId ? freezeRecord('Organization') : null
+        );
+
+      it('refuses a turn billed to a frozen home org with spend_frozen, before any hold', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('org1');
+
+        await service.process({ body: reservationBody(), logger: mockLogger });
+
+        expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'user1', organizationId: 'org1' })
+        );
+        expect(mockQuest.errorCode).toBe('spend_frozen');
+        expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+      });
+
+      it('lets the turn through when only an unrelated org is frozen', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('other-org');
+
+        await service.process({ body: reservationBody(), logger: mockLogger });
+
+        expect(mockQuest.errorCode).toBeUndefined();
+        expect(mockDb.organizations.incrementCredits).toHaveBeenCalled();
+        expect(complete).toHaveBeenCalled();
+      });
+
+      it('checks the billed org even when a queued body still carries the retired spendFreezeOrganizationId', async () => {
+        reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('org1');
+
+        await service.process({
+          body: { ...reservationBody(), spendFreezeOrganizationId: null } as ReturnType<typeof reservationBody>,
+          logger: mockLogger,
+        });
+
+        expect(mockQuest.errorCode).toBe('spend_frozen');
+      });
+
+      it('propagates a freeze lookup failure instead of treating the subject as unfrozen', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        mockDb.spendFreezes.findActiveForSubject.mockRejectedValue(new Error('mongo down'));
+
+        await expect(service.process({ body: reservationBody(), logger: mockLogger })).rejects.toThrow('mongo down');
+        expect(complete).not.toHaveBeenCalled();
+      });
+    });
+
     it('refunds the whole hold when a tool call is refused for credits before anything was spent', async () => {
       const { complete } = reservationOrgSetup();
       complete.mockImplementation(async () => {
@@ -6303,6 +6455,61 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
       expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold);
       expect(mockDb.creditTransactions.createTransaction).not.toHaveBeenCalled();
+    });
+
+    it('settles a mid-turn account refusal on the quest without rethrowing, and refunds the hold', async () => {
+      const { complete } = reservationOrgSetup();
+      const message = 'Your account has been suspended.';
+      complete.mockImplementation(async () => {
+        throw new AiAccessRefusedError(message);
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await expect(service.process({ body: reservationBody(), logger: mockLogger })).resolves.toBeUndefined();
+
+      expect(mockQuest.type).toBe('error');
+      expect(mockQuest.reply).toBe(message);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold);
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('[Account refusal]'));
+    });
+
+    it('bills delivered tool charges when a later tool call is refused for account standing', async () => {
+      const { complete } = reservationOrgSetup();
+      complete.mockImplementation(
+        async (
+          _model: string,
+          _messages: unknown,
+          _options: unknown,
+          callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+        ) => {
+          await callback(['partial answer'], { inputTokens: 10, outputTokens: 1000 });
+          const billing = service as unknown as {
+            toolCreditsMap: Map<string, number[]>;
+            toolCreditModels: Set<string>;
+          };
+          billing.toolCreditsMap.set('image_generation', [18]);
+          billing.toolCreditModels.add('image-model');
+          throw new AiAccessRefusedError('Your account has been suspended.');
+        }
+      );
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await expect(service.process({ body: reservationBody(), logger: mockLogger })).resolves.toBeUndefined();
+
+      const charged = mockDb.creditTransactions.createTransaction.mock.calls.reduce(
+        (total: number, [, row]: [string, { credits: number }]) => total - row.credits,
+        0
+      );
+      expect(charged).toBeGreaterThan(18);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold - charged);
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+        'tool_usage',
+        expect.objectContaining({ credits: -18, model: 'image-model' })
+      );
+      expect(mockQuest.creditsUsed).toBe(charged);
     });
 
     // A Stop that lands after a cross-model failover bills the model that was answering, not the
@@ -7469,6 +7676,61 @@ describe('ChatCompletionProcess', () => {
         logger: mockLogger,
       });
 
+    it.each([
+      ['org1', '665000000000000000000001'],
+      ['other-org', undefined],
+      [undefined, undefined],
+      ['lookup-fails', undefined],
+    ])(
+      'records only matching explicit org project context through completion settlement: %s',
+      async (binding, expected) => {
+        const { usageEventsRecord } = arrangeUsageEventScenario({
+          enforceCredits: true,
+          primaryComplete: async (_m, _ms, _o, cb) => {
+            await cb(['Hello'], { inputTokens: 100, outputTokens: 50 });
+          },
+        });
+        const projectId = '665000000000000000000001';
+        mockDb.projects = {
+          ...mockDb.projects,
+          shareable: {
+            findAccessibleById: vi.fn().mockResolvedValue({
+              id: projectId,
+              userId: 'user1',
+              organizationId: binding,
+              fileIds: [],
+              systemPrompts: [],
+              sessionIds: [],
+            }),
+          },
+        };
+        mockDb.organizations.findById.mockResolvedValue({
+          id: 'org1',
+          name: 'Team',
+          currentCredits: 100_000,
+          userDetails: [],
+        });
+        mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: 100_000 });
+        if (binding === 'lookup-fails') {
+          mockDb.projects.shareable.findAccessibleById
+            .mockResolvedValueOnce(null)
+            .mockRejectedValueOnce(new Error('offline'));
+        }
+        await service.process({
+          body: { ...startQuestParams, tools: [], projectId, organizationId: 'org1' },
+          logger: mockLogger,
+        });
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({
+            projectId: expected,
+            feature: 'chat',
+            ownerId: 'org1',
+            ownerType: CreditHolderType.Organization,
+          })
+        );
+      }
+    );
+
     it('records no refusal row when the hop failed for a non-refusal reason', async () => {
       const { usageEventsRecord, fallbackModel } = arrangeUsageEventScenario({
         enforceCredits: true,
@@ -7743,6 +8005,72 @@ describe('ChatCompletionProcess', () => {
         await service.process({ body: personalBody(), logger: mockLogger });
 
         expect(state.balance).toBe(BALANCE - used);
+      });
+
+      it.each([
+        ['image_generation', 'absent'],
+        ['image_generation', 'present'],
+        ['image_generation', 'cleared'],
+        ['edit_image', 'absent'],
+        ['edit_image', 'present'],
+        ['edit_image', 'cleared'],
+      ])('settles %s reservations exactly once when tool telemetry is %s', async (toolName, telemetry) => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const toolCharge = 200;
+        const textCharge = 60;
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          const billing = service as unknown as {
+            toolCreditsMap: Map<string, number[]>;
+            toolCreditModels: Set<string>;
+          };
+          billing.toolCreditsMap.set(toolName, [120, 80]);
+          billing.toolCreditModels.add('image-model');
+          await cb(['Images delivered'], {
+            inputTokens: 10,
+            outputTokens: 50,
+            ...(telemetry === 'absent'
+              ? {}
+              : {
+                  toolsUsed: [
+                    { name: toolName, arguments: '{}' },
+                    { name: toolName, arguments: '{}' },
+                  ],
+                }),
+          });
+          if (telemetry === 'cleared') {
+            await cb(['Images delivered.'], { inputTokens: 10, outputTokens: 50 });
+          }
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        mockedUsdToCreditsStochastic.mockReturnValue(textCharge);
+        mockQuest.sessionId = 'session1';
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        const hold = -incrementCredits.mock.calls[0][1];
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - textCharge - toolCharge);
+        expect(state.balance).toBe(BALANCE - textCharge - toolCharge);
+        expect(mockQuest.creditsUsed).toBe(textCharge + toolCharge);
+        const breakdown = (mockQuest.promptMeta?.functionCalls ?? []).reduce(
+          (sum, call) => sum + (call.creditsUsed ?? 0),
+          0
+        );
+        expect(breakdown).toBe(toolCharge);
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledTimes(2);
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+          'tool_usage',
+          expect.objectContaining({
+            credits: -toolCharge,
+            model: 'image-model',
+            questId: mockQuest.id,
+            description: `Tool usage: ${toolName}`,
+          })
+        );
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+          'text_generation_usage',
+          expect.objectContaining({ credits: -textCharge })
+        );
       });
 
       // The thrown-abort settlement (settleReservation) floors text the same way; tools are never floored.
@@ -11094,6 +11422,7 @@ describe('ChatCompletionProcess', () => {
       disableUserIntegrations?: boolean;
       mcpServers?: string[];
       disabledMcpConnections?: string[];
+      enabledPlatformMcpConnections?: string[];
       disabledTools?: string[];
       surface?: string;
       extraModels?: Array<Record<string, unknown>>;
@@ -11152,6 +11481,9 @@ describe('ChatCompletionProcess', () => {
         ...(params.mcpServers !== undefined ? { mcpServers: params.mcpServers } : {}),
         ...(params.disabledMcpConnections !== undefined
           ? { disabledMcpConnections: params.disabledMcpConnections }
+          : {}),
+        ...(params.enabledPlatformMcpConnections !== undefined
+          ? { enabledPlatformMcpConnections: params.enabledPlatformMcpConnections }
           : {}),
         ...(params.enableSlackTools !== undefined ? { enableSlackTools: params.enableSlackTools } : {}),
       };
@@ -11323,6 +11655,28 @@ describe('ChatCompletionProcess', () => {
         await runWithBuildToolsSpy({ message: 'Compare the smartphones', disabledMcpConnections: ['some-slug'] });
         expect(buildMcpToolsSpy).toHaveBeenCalledWith(
           expect.objectContaining({ disabledMcpConnections: ['some-slug'] })
+        );
+      } finally {
+        buildMcpToolsSpy.mockRestore();
+      }
+    });
+
+    it('request enabledPlatformMcpConnections -> buildMcpTools, and none when the request names none', async () => {
+      const buildMcpToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
+      buildMcpToolsSpy.mockClear();
+      try {
+        await runWithBuildToolsSpy({
+          message: 'Compare the smartphones',
+          enabledPlatformMcpConnections: ['b'.repeat(24)],
+        });
+        expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(
+          expect.objectContaining({ enabledPlatformMcpConnections: ['b'.repeat(24)] })
+        );
+        await runWithBuildToolsSpy({ message: 'Compare the smartphones' });
+        expect(buildMcpToolsSpy).toHaveBeenLastCalledWith(
+          expect.objectContaining({ enabledPlatformMcpConnections: undefined })
         );
       } finally {
         buildMcpToolsSpy.mockRestore();
@@ -11518,7 +11872,28 @@ describe('ChatCompletionProcess', () => {
       enabledTools: string[];
       videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
       musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+      callableFunctionsResolver?: () => Promise<boolean>;
+      /** Rebuilds the service with these constructor options layered over baseOptions. */
+      serviceOptions?: Record<string, unknown>;
     }) => {
+      if (opts.serviceOptions) {
+        service = new ChatCompletionProcess({
+          ...baseOptions,
+          ...opts.serviceOptions,
+        } as unknown as ConstructorParameters<typeof ChatCompletionProcess>[0]);
+        service.db = mockDb;
+        const internals = service as unknown as {
+          statusManager: unknown;
+          buildOptimizedFeatures: () => Promise<void>;
+          loadAdminSettingsAsync: () => Promise<Record<string, string>>;
+          fabFilesToMessages: () => Promise<unknown>;
+        };
+        internals.statusManager = { sendStatusUpdate: vi.fn() };
+        vi.spyOn(service, 'sendStatusUpdate').mockResolvedValue(undefined);
+        vi.spyOn(internals, 'buildOptimizedFeatures').mockResolvedValue(undefined);
+        vi.spyOn(internals, 'loadAdminSettingsAsync').mockResolvedValue({});
+        vi.spyOn(internals, 'fabFilesToMessages').mockResolvedValue({ promptMessages: [], convertedFabFiles: [] });
+      }
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
       buildToolsSpy.mockClear();
       const buildToolPromptSpy = vi
@@ -11557,6 +11932,7 @@ describe('ChatCompletionProcess', () => {
           logger: mockLogger,
           videoToolConfigResolver: opts.videoToolConfigResolver,
           musicToolConfigResolver: opts.musicToolConfigResolver,
+          callableFunctionsResolver: opts.callableFunctionsResolver,
         });
         return buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined;
       } finally {
@@ -11593,6 +11969,59 @@ describe('ChatCompletionProcess', () => {
       const passed = await runWithResolvers({ enabledTools: [], videoToolConfigResolver: resolver });
       expect(resolver).not.toHaveBeenCalled();
       expect(passed?.config?.video_generation).toBeUndefined();
+    });
+
+    describe('callable-function note', () => {
+      const systemText = () =>
+        ((mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? []) as IMessage[])
+          .map(m => String(m.content))
+          .join('\n');
+
+      beforeEach(() => mockedBuildAndSortMessages.mockClear());
+
+      it('appends the note to the artifact prompt when the resolver says on', async () => {
+        enableAdminFlags('EnableArtifacts');
+        const resolver = vi.fn().mockResolvedValue(true);
+        await runWithResolvers({ enabledTools: [], callableFunctionsResolver: resolver });
+        expect(resolver).toHaveBeenCalledTimes(1);
+        expect(systemText()).toContain(CALLABLE_FUNCTIONS_PROMPT_NOTE);
+      });
+
+      it.each([
+        ['says off', vi.fn().mockResolvedValue(false)],
+        ['fails', vi.fn().mockRejectedValue(new Error('settings unavailable'))],
+        ['is not given', undefined],
+      ])('leaves the note out when the resolver %s', async (_label, resolver) => {
+        enableAdminFlags('EnableArtifacts');
+        await runWithResolvers({ enabledTools: [], callableFunctionsResolver: resolver });
+        expect(mockedBuildAndSortMessages).toHaveBeenCalled();
+        expect(systemText()).not.toContain('CALLABLE FUNCTIONS:');
+      });
+
+      it('does not ask while artifacts are off', async () => {
+        const resolver = vi.fn().mockResolvedValue(true);
+        await runWithResolvers({ enabledTools: [], callableFunctionsResolver: resolver });
+        expect(resolver).not.toHaveBeenCalled();
+        expect(systemText()).not.toContain('CALLABLE FUNCTIONS:');
+      });
+    });
+
+    // The web_search signing key reaches the tool config only through this call site, so a dropped
+    // line would still typecheck (the option is optional) and leave every card image unsigned.
+    it('signs web_search image URLs with imageUrlSigningSecret when the host provides one', async () => {
+      const passed = await runWithResolvers({
+        enabledTools: ['web_search'],
+        serviceOptions: { telemetryHmacSecret: 'telemetry-key', imageUrlSigningSecret: 'image-url-key' },
+      });
+      expect(passed?.config?.web_search).toEqual({ imageUrlSigningSecret: 'image-url-key' });
+    });
+
+    it('falls back to telemetryHmacSecret for web_search image URLs when no image key is provided', async () => {
+      const passed = await runWithResolvers({
+        enabledTools: ['web_search'],
+        serviceOptions: { telemetryHmacSecret: 'telemetry-key' },
+      });
+      expect(passed?.config?.web_search).toEqual({ imageUrlSigningSecret: 'telemetry-key' });
     });
   });
 
@@ -11666,8 +12095,8 @@ describe('ChatCompletionProcess', () => {
           processError,
           modelCalled: complete.mock.calls.length > 0,
           requestedMcpServers: buildMcpToolsSpy.mock.calls[0]?.[0]?.requestedMcpServers,
-          // buildOptimizedFeatures is stubbed in beforeEach; its eighth argument is the session prompt.
-          sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[7] as string | undefined,
+          // buildOptimizedFeatures is stubbed in beforeEach; its seventh argument is the session prompt.
+          sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[6] as string | undefined,
           temperature: completeOptions?.temperature,
           maxToolCalls: completeOptions?._internal?.maxToolCalls,
           enabledTools: (buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined)?.enabledTools,
@@ -12364,6 +12793,38 @@ describe('ChatCompletionProcess', () => {
 
       expect(updateCall?.type).toBe('error');
       expect(updateCall?.reply).toMatch(/too large for/);
+    });
+
+    it('logs the refusal once at warn with structured, content-free fields and never at error', async () => {
+      const { updateCall } = await runRecoveryScenario({
+        recoveryTokenCounts: [50_000, 40_000, 50_000, 40_000],
+      });
+
+      expect(updateCall?.reply).toMatch(/too large for/);
+      expect(updateCall?.reply).toMatch(/larger context window/);
+
+      const overflowErrors = mockLogger.error.mock.calls.filter((call: unknown[]) =>
+        /context overflow/i.test(String(call[0]))
+      );
+      expect(overflowErrors).toEqual([]);
+
+      const overflowWarns = mockLogger.warn.mock.calls.filter((call: unknown[]) =>
+        String(call[0]).startsWith('[Context Overflow]')
+      );
+      expect(overflowWarns).toHaveLength(1);
+      const [message, fields] = overflowWarns[0];
+      expect(message).not.toContain(startQuestParams.questId);
+      expect(fields).toMatchObject({
+        questId: startQuestParams.questId,
+        modelId: expect.any(String),
+        inputTokens: expect.any(Number),
+        maxSafeInputTokens: expect.any(Number),
+        contextLimit: expect.any(Number),
+        tokenBreakdown: expect.objectContaining({ toolSchemas: expect.any(Number) }),
+      });
+      expect(fields.inputTokens).toBeGreaterThan(fields.maxSafeInputTokens);
+      // No prompt or attachment text rides along in the log.
+      expect(JSON.stringify(fields)).not.toMatch(/Hello|turn one|reply one/);
     });
 
     it('never attempts a rebuild once tool schemas alone already exceed the safe budget', async () => {
@@ -15109,13 +15570,22 @@ describe('prompt moderation', () => {
     sessionId: 'sess1',
   };
 
-  function wireModMocks({ openaiKey, guardrailId }: { openaiKey: string | null; guardrailId: string | null }) {
+  function wireModMocks({
+    openaiKey,
+    guardrailId,
+    sharedOpenaiKey = '',
+  }: {
+    openaiKey: string | null;
+    guardrailId: string | null;
+    sharedOpenaiKey?: string;
+  }) {
+    const completeModel = vi.fn(
+      async (_model: unknown, _messages: unknown, _options: unknown, callback: (tokens: string[]) => Promise<void>) => {
+        await callback(['Hi!']);
+      }
+    );
     mockedGetLlmByModel.mockReturnValue({
-      complete: vi
-        .fn()
-        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (t: string[]) => Promise<void>) => {
-          await cb(['Hi!']);
-        }),
+      complete: completeModel,
       getModelInfo: vi.fn().mockResolvedValue([]),
       currentModel: 'gpt-4',
     } as any);
@@ -15144,8 +15614,10 @@ describe('prompt moderation', () => {
     mockedGetSettingsValue.mockImplementation(((key: string) => {
       if (key === 'BedrockGuardrailId') return guardrailId ?? '';
       if (key === 'BedrockGuardrailVersion') return 'DRAFT';
+      if (key === 'openaiDemoKey') return sharedOpenaiKey;
       return undefined;
     }) as any);
+    return completeModel;
   }
 
   beforeEach(() => {
@@ -15201,11 +15673,11 @@ describe('prompt moderation', () => {
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: {},
-      questMasterPlans: {},
       connections: {},
       creditTransactions: {},
       agents: {},
       projects: { findById: vi.fn() },
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
     mockLogger = {
       log: vi.fn(),
@@ -15323,6 +15795,137 @@ describe('prompt moderation', () => {
     expect(BedrockGuardrailsService).not.toHaveBeenCalled();
   });
 
+  it('moderates with the shared admin key even when the user has their own OpenAI key', async () => {
+    wireModMocks({ openaiKey: 'user-key', guardrailId: null, sharedOpenaiKey: 'shared-key' });
+    enableAdminFlags('ModerationEnabled');
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(OpenaiModerationsService).toHaveBeenCalledTimes(1);
+    expect(OpenaiModerationsService).toHaveBeenCalledWith('shared-key', expect.anything());
+  });
+
+  it('falls through to the guardrail instead of calling OpenAI with an expired user key', async () => {
+    wireModMocks({ openaiKey: 'expired', guardrailId: 'my-guardrail' });
+    enableAdminFlags('ModerationEnabled');
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(OpenaiModerationsService).not.toHaveBeenCalled();
+    expect(BedrockGuardrailsService).toHaveBeenCalledWith('my-guardrail', 'DRAFT', expect.anything());
+  });
+
+  it('never calls OpenAI moderation with the expired sentinel when nothing else is configured', async () => {
+    wireModMocks({ openaiKey: 'expired', guardrailId: null });
+    enableAdminFlags('ModerationEnabled');
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(OpenaiModerationsService).not.toHaveBeenCalled();
+    expect(BedrockGuardrailsService).not.toHaveBeenCalled();
+  });
+
+  describe('an API key moderation exception', () => {
+    const keyTurn = { ...startParams, apiKeyId: 'key-1' };
+    const flagWith = (
+      Service: typeof OpenaiModerationsService | typeof BedrockGuardrailsService,
+      categories: string[]
+    ) =>
+      vi.mocked(Service).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', categories));
+      } as never);
+    const keyWith = (categories: string[], overrides: Record<string, unknown> = {}) => {
+      const findModerationException = vi.fn().mockResolvedValue({
+        userId: 'user1',
+        status: 'active',
+        moderationException: { categories, reason: 'r', setBy: 'admin-1', setAt: new Date() },
+        ...overrides,
+      });
+      service.db.userApiKeys = { findModerationException };
+      return findModerationException;
+    };
+
+    it.each([
+      [
+        'openai',
+        { openaiKey: 'demo-key', guardrailId: null },
+        OpenaiModerationsService,
+        ['violence', 'violence/graphic'],
+      ],
+      ['bedrock', { openaiKey: null, guardrailId: 'my-guardrail' }, BedrockGuardrailsService, ['VIOLENCE']],
+    ] as const)(
+      'continues a %s-flagged turn the key is excepted from and records no hit',
+      async (_s, knobs, Service, categories) => {
+        const completeModel = wireModMocks(knobs);
+        enableAdminFlags('ModerationEnabled');
+        flagWith(Service, [...categories]);
+        const find = keyWith([...categories]);
+
+        await service.process({ body: keyTurn, logger: mockLogger });
+
+        expect(completeModel).toHaveBeenCalledOnce();
+        expect(find).toHaveBeenCalledExactlyOnceWith('key-1');
+        expect(applyModerationHit).not.toHaveBeenCalled();
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          expect.stringContaining('continued under its API key exception'),
+          expect.objectContaining({ apiKeyId: 'key-1', categories: [...categories] })
+        );
+      }
+    );
+
+    it.each([
+      ['one flagged category is outside the exception', ['violence', 'hate'], () => keyWith(['violence'])],
+      [
+        'the key has no exception',
+        ['violence'],
+        () => (service.db.userApiKeys = { findModerationException: vi.fn().mockResolvedValue(null) }),
+      ],
+      ['the key belongs to another user', ['violence'], () => keyWith(['violence'], { userId: 'user2' })],
+      ['the key is disabled', ['violence'], () => keyWith(['violence'], { status: 'disabled' })],
+      ['the key has expired', ['violence'], () => keyWith(['violence'], { expiresAt: new Date(0) })],
+      [
+        'the lookup fails',
+        ['violence'],
+        () => (service.db.userApiKeys = { findModerationException: vi.fn().mockRejectedValue(new Error('db down')) }),
+      ],
+      ['no key repository is wired', ['violence'], () => undefined],
+    ] as const)('keeps the block and records the hit when %s', async (_label, flagged, arrange) => {
+      const completeModel = wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+      enableAdminFlags('ModerationEnabled');
+      flagWith(OpenaiModerationsService, [...flagged]);
+      arrange();
+
+      await service.process({ body: keyTurn, logger: mockLogger });
+
+      expect(completeModel).not.toHaveBeenCalled();
+      expect(await service.db.quests.findById('q1')).toMatchObject({ type: 'error', errorCode: 'content_blocked' });
+
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        expect.stringContaining('continued under its API key exception'),
+        expect.anything()
+      );
+
+      expect(applyModerationHit).toHaveBeenCalledWith(
+        expect.objectContaining({ hit: expect.objectContaining({ source: 'openai', categories: [...flagged] }) })
+      );
+    });
+
+    it('never reads the exception for a turn no API key started', async () => {
+      const completeModel = wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+      enableAdminFlags('ModerationEnabled');
+      flagWith(OpenaiModerationsService, ['violence']);
+      const find = keyWith(['violence']);
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(completeModel).not.toHaveBeenCalled();
+      expect(await service.db.quests.findById('q1')).toMatchObject({ type: 'error', errorCode: 'content_blocked' });
+
+      expect(find).not.toHaveBeenCalled();
+      expect(applyModerationHit).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('records a moderation hit with source bedrock when Bedrock Guardrails blocks a prompt', async () => {
     wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
     enableAdminFlags('ModerationEnabled');
@@ -15330,15 +15933,161 @@ describe('prompt moderation', () => {
       this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', ['violence']));
     } as any);
 
-    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toBeInstanceOf(
-      FlaggedContentError
-    );
+    await service.process({ body: startParams, logger: mockLogger });
 
     expect(applyModerationHit).toHaveBeenCalledWith(
       expect.objectContaining({
         hit: expect.objectContaining({ source: 'bedrock', categories: ['violence'] }),
       })
     );
+  });
+
+  it.each([
+    ['openai', { openaiKey: 'demo-key', guardrailId: null }, OpenaiModerationsService],
+    ['bedrock', { openaiKey: null, guardrailId: 'my-guardrail' }, BedrockGuardrailsService],
+  ] as const)(
+    'settles a turn the %s check refuses as a content_blocked error quest',
+    async (_source, knobs, Service) => {
+      wireModMocks(knobs);
+      enableAdminFlags('ModerationEnabled');
+      vi.mocked(Service).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('refusal text', ['violence']));
+      } as never);
+
+      // Resolves: a rethrow would send the queue path to retry and the wait route to a 500.
+      await service.process({ body: startParams, logger: mockLogger });
+
+      const quest = await service.db.quests.findById('q1');
+      expect(quest).toMatchObject({
+        type: 'error',
+        status: 'done',
+        errorCode: 'content_blocked',
+        reply: 'refusal text',
+        replies: ['refusal text'],
+      });
+      expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+    }
+  );
+
+  it('leaves errorCode unset on a turn that fails for an unclassified reason', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    enableAdminFlags('ModerationEnabled');
+    vi.mocked(OpenaiModerationsService).mockImplementation(function (this: { checkPrompt: unknown }) {
+      this.checkPrompt = vi.fn().mockRejectedValue(new Error('moderation service unreachable'));
+    } as never);
+
+    await expect(service.process({ body: startParams, logger: mockLogger })).rejects.toThrow(
+      'moderation service unreachable'
+    );
+
+    const quest = await service.db.quests.findById('q1');
+    expect(quest?.type).toBe('error');
+    expect(quest?.errorCode).toBeUndefined();
+    expect(applyModerationHit).not.toHaveBeenCalled();
+  });
+
+  describe('escalation alerts', () => {
+    const blockWith = (categories: string[]) => {
+      wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
+      enableAdminFlags('ModerationEnabled');
+      vi.mocked(BedrockGuardrailsService).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', categories));
+      } as unknown as typeof BedrockGuardrailsService);
+    };
+
+    it('sends an alert for a severe-category hit', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockResolvedValue(undefined);
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(
+          expect.objectContaining({ reasons: ['severe_category'], categories: ['sexual/minors'], source: 'bedrock' })
+        )
+      );
+    });
+
+    it('sends an alert when the hit moves the user into suspend_pending', async () => {
+      blockWith(['violence']);
+      vi.mocked(applyModerationHit).mockResolvedValueOnce({
+        hitsInWindow: 5,
+        action: 'suspend_pending',
+        status: 'suspend_pending',
+        transitionedTo: 'suspend_pending',
+      });
+      const notify = vi.fn().mockResolvedValue(undefined);
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(expect.objectContaining({ reasons: ['suspend_pending'], hitsInWindow: 5 }))
+      );
+    });
+
+    it('sends nothing for an ordinary hit', async () => {
+      blockWith(['violence']);
+      const notify = vi.fn().mockResolvedValue(undefined);
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(applyModerationHit).toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('keeps the request outcome when the alert fails, and warns', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockRejectedValue(new Error('event bus down'));
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to send the escalation alert'),
+          expect.any(Error)
+        )
+      );
+    });
+
+    it('keeps the request outcome when the notifier throws synchronously', async () => {
+      blockWith(['sexual/minors']);
+      service.notifyModerationEscalation = () => {
+        throw new Error('not wired');
+      };
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to send the escalation alert'),
+          expect.objectContaining({ message: 'not wired' })
+        )
+      );
+    });
+
+    it('does not wait for a notifier that never settles', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockReturnValue(new Promise(() => undefined));
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs without a notifier and does not warn about one', async () => {
+      blockWith(['sexual/minors']);
+      service.notifyModerationEscalation = undefined;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(applyModerationHit).toHaveBeenCalled();
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('escalation alert'), expect.anything());
+    });
   });
 
   it('records a provider moderation hit (Hook A) when the Anthropic safety classifier throws', async () => {

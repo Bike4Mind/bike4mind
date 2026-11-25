@@ -4,10 +4,13 @@ import Foundation
 public struct GenerationModel: Identifiable, Hashable, Sendable {
   public let id: String
   public let name: String
+  /// What the model accepts; nil when the list did not describe it (the params panel then shows nothing).
+  public let capabilities: ModelCapabilities?
 
-  public init(id: String, name: String) {
+  public init(id: String, name: String, capabilities: ModelCapabilities? = nil) {
     self.id = id
     self.name = name
+    self.capabilities = capabilities
   }
 
   /// The only image models the server accepts `edit_regions` for (`isFlux3ImageModel` in
@@ -28,28 +31,32 @@ public struct GenerationRequest: Equatable, Sendable {
   public let kind: GenerationKind
   public let prompt: String
   public let modelID: String
-  /// Music only: no vocals.
-  public let instrumental: Bool
+  /// Only the values changed from the model defaults; everything else is left to the server.
+  public let params: GenerationParams
+  /// Images attached as video frames, reference or style; only video requests carry them.
+  public let inputs: [GenerationInput]
 
-  public init(kind: GenerationKind, prompt: String, modelID: String, instrumental: Bool = false) {
+  public init(
+    kind: GenerationKind, prompt: String, modelID: String, params: GenerationParams = GenerationParams(),
+    inputs: [GenerationInput] = []
+  ) {
     self.kind = kind
     self.prompt = prompt
     self.modelID = modelID
-    self.instrumental = instrumental
+    self.params = params
+    self.inputs = inputs
   }
 }
 
 /// A region edit of an existing image.
 public struct ImageEditRequest: Equatable, Sendable {
-  /// A presigned URL of the source image; it must still be valid when the render runs.
-  public let imageURL: URL
-  public let sessionID: String
+  /// The Files entry of the image to edit.
+  public let sourceFileID: String
   public let modelID: String
   public let regions: [EditRegion]
 
-  public init(imageURL: URL, sessionID: String, modelID: String, regions: [EditRegion]) {
-    self.imageURL = imageURL
-    self.sessionID = sessionID
+  public init(sourceFileID: String, modelID: String, regions: [EditRegion]) {
+    self.sourceFileID = sourceFileID
     self.modelID = modelID
     self.regions = regions
   }
@@ -65,22 +72,26 @@ public struct GenerationStatus: Equatable, Sendable {
   public let phase: GenerationPhase
   /// Short-lived presigned URLs of the output.
   public let resultURLs: [URL]
+  /// The Files entry of a job's output, once it succeeded; nil for outputs stored outside Files.
+  public let resultFileID: String?
 
-  public init(phase: GenerationPhase, resultURLs: [URL] = []) {
+  public init(phase: GenerationPhase, resultURLs: [URL] = [], resultFileID: String? = nil) {
     self.phase = phase
     self.resultURLs = resultURLs
+    self.resultFileID = resultFileID
   }
 }
 
 /// Studio's generation routes, all public v1 contracts (so the Android client uses the same ones).
 public protocol StudioAPI: Sendable {
   func models(for kind: GenerationKind) async throws -> [GenerationModel]
-  func generate(_ request: GenerationRequest) async throws -> GenerationHandle
+  /// One handle per job: an image request for several images starts several.
+  func generate(_ request: GenerationRequest) async throws -> [GenerationHandle]
   func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle
+  /// Starts a Scene: a video and a music track muxed into one clip. Free, so it never refuses for credits.
+  func composeScene(_ request: SceneRequest) async throws -> GenerationHandle
   func status(of handle: GenerationHandle) async throws -> GenerationStatus
   func cancel(_ handle: GenerationHandle) async throws
-  /// A notebook for edits of images that do not name one (the edit route requires a session).
-  func createSession(name: String) async throws -> String
 }
 
 /// A request the server refused before starting anything, with its `errorCode` when it sent one.

@@ -10,7 +10,7 @@ import {
 import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
 import { queueSessionTags } from '@server/sessions/queueSessionTags';
-import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
+import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
 import type { Request } from 'express';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -194,7 +194,7 @@ const handler = baseApi()
             // Continue with other sessions even if one fails. `deletedCount` already excludes this
             // one (the increment is past the await), so the response under-reports rather than
             // claiming a delete that rolled back.
-            console.error(`Failed to delete session ${sessionId}:`, error);
+            req.logger.error('Failed to delete session', { sessionId, error });
           }
         }
 

@@ -1,3 +1,4 @@
+import { downloadPublishedIndex } from '@bike4mind/server-utils/services/publish/currentIndex';
 import { randomUUID } from 'node:crypto';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { buildThumbnailDocument, type DroppedAssets } from '@workers/services/publish/buildThumbnailDocument';
@@ -41,6 +42,7 @@ interface ThumbnailArtifactLean {
   publicId: string;
   source: { kind: string };
   storageKeyPrefix?: string;
+  indexObjectPath?: string | null;
   sha256Index?: string;
   manifest?: Array<{ path: string; mimeType: string }>;
   moderationStatus?: string;
@@ -67,7 +69,7 @@ export async function processPublishThumbnailJob(
   render: RenderThumbnail = invokeThumbnailRenderer
 ): Promise<PublishThumbnailOutcome> {
   const artifact = await PublishedArtifact.findOne({ publicId: job.publicId, deletedAt: null })
-    .select('publicId source storageKeyPrefix sha256Index manifest moderationStatus')
+    .select('publicId source storageKeyPrefix indexObjectPath sha256Index manifest moderationStatus')
     .lean<ThumbnailArtifactLean | null>();
   if (!artifact) return 'missing';
   if (artifact.source.kind !== 'bundle' || !artifact.storageKeyPrefix || artifact.moderationStatus === 'taken_down') {
@@ -80,7 +82,10 @@ export async function processPublishThumbnailJob(
   const document = await buildThumbnailDocument({
     versionId: job.versionId,
     manifest: artifact.manifest ?? [],
-    load: path => storage.download(`${prefix}${path}`),
+    load: path =>
+      path === 'index.html'
+        ? downloadPublishedIndex({ ...artifact, storageKeyPrefix: prefix }, storage)
+        : storage.download(`${prefix}${path}`),
     appOrigin: process.env.APP_URL || (PUBLISH_HOST ? `https://${PUBLISH_HOST}` : ''),
   });
   if (!document) return 'superseded';

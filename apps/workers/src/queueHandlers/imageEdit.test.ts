@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   publishImageQuestReadyPush: vi.fn(),
 }));
 
-vi.mock('@server/imageGenerations/imageEdit', () => ({
+vi.mock('@bike4mind/server-utils/imageGenerations/imageEdit', () => ({
   getImageEdit: () => ({ process: h.process }),
 }));
 

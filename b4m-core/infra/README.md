@@ -51,38 +51,56 @@ to the environment variable with the same name, supporting self-host deployments
 An unregistered name returns `undefined`. These checks prevent accidental
 collisions; they do not sandbox workspace code.
 
-Rotation reminders must refer to a registered contributed secret. The admin API
-and notifier use `getSecretRotationConfig()` from
-`@bike4mind/server-utils/lib/secretRotation/constants` to include them.
+Rotation records must refer to a registered contributed secret. They are merged into `getSecretRotationConfig()`
+(`@bike4mind/server-utils/lib/secretRotation/constants`), which no longer drives a reminder since the in-app rotation
+tracker was removed; the field is kept so existing package declarations stay valid.
 
 A queue entry takes the `buildQueuePair` options (`name`, `visibilityTimeout`,
-`dlqName`, `retry`, `encryption`, ...) plus a `label`, `displayName` and
-`application`. Queue and DLQ names are lowerCamel and used verbatim as SST logical
-names; the DLQ defaults to `${name}DLQ`. `visibilityTimeout` uses the
-`sst.aws.Queue` form (`'<n> seconds|minutes|hours'`). The label is kebab-case and
+`dlqName`, `dlqVisibilityTimeout`, `retry`, `encryption`, ...) plus a `label`,
+`displayName` and `application`. Queue and DLQ names are lowerCamel and used
+verbatim as SST logical names; the DLQ defaults to `${name}DLQ`.
+`visibilityTimeout` and the optional `dlqVisibilityTimeout` use the
+`sst.aws.Queue` form (`'<n> seconds|minutes|hours'`, at most 12 hours); an unset
+`dlqVisibilityTimeout` leaves the DLQ at the SQS default. The label is kebab-case and
 names the DLQ alarm; `alarm-handler-dlq` is reserved. Unlike `buildQueuePair`, an
 unset `encryption` means `'kms'`, so a queue moving here from `infra/queues.ts`
 must state its current encryption to keep its resources. A pair is dropped whole
 when either name (raw or env form) or its label collides with core, a reserved
 variable, a contributed secret or an earlier declaration.
 
+A queue entry may also carry the operator help a core registry entry shows on the
+admin DLQ screens: `description` (one line on what the consumer does, at most 200
+characters), `replay` (`'safe'`, `'side-effects'` or `'unsafe'`), `replayNote` (the
+guard the replay value rests on, at most 400) and `owner` (an area name, never a
+person, at most 64). Each text is a single trimmed line with no control characters.
+An invalid value fails codegen, and a pair that still carries one is dropped whole.
+Unset fields are left out of the registry entry.
+
 A registered pair gets a DLQ alarm and dashboard widget, and is listed in the admin
 DLQ registry. Only the web app is linked to it, and no consumer is subscribed: the
-package must wire its own consumer. Server code narrows its names with
-`contributedDlqLabel()` and `contributedSourceQueueName()` from
-`@bike4mind/server-utils/utils/dlqRegistry` before passing them to `getDlqUrl` or
-`getSourceQueueUrl`; both throw for a dropped or undeclared name.
+package must wire its own consumer.
 
-Before deactivating stale rotation records, regenerate the glue with every package
-used by the target stage mounted. Preview the cleanup script with `--dry-run`,
-then pass `--confirm-complete-rotation-inventory` for a write, or
-`--no-contributed-rotations` when the stage has no contributed rotations. The flags
-are not the safeguard. Run under `sst shell`, the script also checks the stage: it
-refuses when a stale record names a non-core secret that the stage still deploys,
-because that record belongs to a package missing from the local tree. It also
-refuses when the shell does not link every core secret (as under `sst shell
---target`), and when the glue was generated without `infra/`, since core and
-package names cannot then be told apart.
+`sst.config.ts` can hand a package's `contributeInfra` an infrastructure context:
+
+- `contributedQueues`: the registered pairs, keyed by queue name with
+  `{ spec, queue, dlq }` values.
+- `eventBus`, `websocketApi`, `fabFileBucket`, `generatedImagesBucket`,
+  `appFilesBucket` and `mcpHandler`: shared core resources to link or reference.
+- `alarmTopic`: the DLQ alarm topic, undefined on a stage without monitoring.
+- `mailBody`: `{ environment, permission }`, the environment entry and the IAM
+  permission a function needs to offload large mail bodies to the app files bucket,
+  as core queue subscribers get them.
+- `forwardErrorLogs(logGroupName)`: subscribes a log group the package created to
+  the core ERROR log handler (`infra/logMonitor.ts`). It takes the name as an SST
+  input, such as `fn.nodes.logGroup.apply(lg => lg?.name)`, and does nothing under
+  `sst dev` or for an undefined name.
+
+Adding a key creates no resource. A package must treat each key as optional, since
+a host revision that predates the wiring passes none of the newer ones.
+Server code narrows its names with `contributedDlqLabel()` and
+`contributedSourceQueueName()` from `@bike4mind/server-utils/utils/dlqRegistry` before
+passing them to `getDlqUrl` or `getSourceQueueUrl`; both throw for a dropped or
+undeclared name.
 
 ## DLQ registries
 

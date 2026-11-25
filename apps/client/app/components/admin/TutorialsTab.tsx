@@ -2,10 +2,14 @@ import React from 'react';
 import { Box, Button, Chip, CircularProgress, Link, Stack, Typography } from '@mui/joy';
 import type { TutorialOwner } from '@bike4mind/common';
 import { CORE_TUTORIALS_API_BASE } from '@client/app/components/tutorial/TutorialHostContext';
+import TutorialDraftsCard from '@client/app/components/tutorial/admin/TutorialDraftsCard';
 import TutorialModulesCard from '@client/app/components/tutorial/admin/TutorialModulesCard';
 import TutorialsSwitchCard from '@client/app/components/tutorial/admin/TutorialsSwitchCard';
-import { SectionCard } from './shared';
+import { AdminPageHeader, SectionCard } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { useTutorialOwners, useTutorialOwnerSummary } from '@client/app/hooks/tutorials/useTutorialOwners';
+
+const CORE_OWNER = 'core';
 
 export const TutorialOwnerSection: React.FC<{ owner: TutorialOwner }> = ({ owner }) => {
   const summary = useTutorialOwnerSummary(owner.adminBase);
@@ -73,11 +77,16 @@ export const TutorialsTab: React.FC = () => {
   const owners = useTutorialOwners();
 
   return (
-    <Stack gap={3} data-testid="tutorials-tab">
+    <Stack gap={ADMIN_REGION_GAP} data-testid="tutorials-tab">
+      <AdminPageHeader
+        title="Tutorials"
+        description="Turn tutorials on, edit core modules and drafts, and see what other owners contribute."
+      />
       <Stack gap={1.5} data-testid="tutorials-core-section">
         <Typography level="title-lg">Core</Typography>
         <TutorialsSwitchCard apiBase={CORE_TUTORIALS_API_BASE} />
-        <TutorialModulesCard apiBase={CORE_TUTORIALS_API_BASE} />
+        <TutorialModulesCard apiBase={CORE_TUTORIALS_API_BASE} owner={CORE_OWNER} />
+        <TutorialDraftsCard apiBase={CORE_TUTORIALS_API_BASE} owner={CORE_OWNER} />
       </Stack>
       {owners.isLoading ? (
         <CircularProgress size="sm" />

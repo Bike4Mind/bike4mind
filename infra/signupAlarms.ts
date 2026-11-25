@@ -100,6 +100,26 @@ if (isMonitoredStage) {
     },
   });
 
+  // Distinct client IPs behind dispatched codes, read as the rule's UniqueContributors via
+  // INSIGHT_RULE_METRIC (a metric filter cannot count distinct values). Raw IP, so IPv6 addresses
+  // in one /64 count separately. Counted only, no alarm.
+  new aws.cloudwatch.ContributorInsightRule('signupCodeSendSourcesRule', {
+    ruleName: `${$app.name}-${$app.stage}-signup-code-send-sources`,
+    ruleState: 'ENABLED',
+    ruleDefinition: serverLogGroupName.apply(logGroupName =>
+      JSON.stringify({
+        Schema: { Name: 'CloudWatchLogRule', Version: 1 },
+        LogGroupNames: [logGroupName],
+        LogFormat: 'JSON',
+        Contribution: {
+          Keys: ['$.clientIp'],
+          Filters: [{ Match: '$.message', In: ['otc-code-dispatched'] }],
+        },
+        AggregateOn: 'Count',
+      })
+    ),
+  });
+
   // Sign-in codes issued but not mailed because the address was refused (pages/api/otc/send.ts).
   new aws.cloudwatch.LogMetricFilter('signupCodeSuppressedFilter', {
     name: `${$app.name}-${$app.stage}-signup-code-suppressed`,
@@ -107,6 +127,20 @@ if (isMonitoredStage) {
     pattern: messageFilterPattern('otc-code-suppressed'),
     metricTransformation: {
       name: 'SignupCodeSuppressed',
+      namespace: metricNamespace,
+      value: '1',
+      unit: 'Count',
+    },
+  });
+
+  // Signup network caps skipped because the settings read or the signup count failed
+  // (packages/server-utils/src/auth/signupNetworkLimits.ts). Counted only, no alarm.
+  new aws.cloudwatch.LogMetricFilter('signupLimitFailOpenFilter', {
+    name: `${$app.name}-${$app.stage}-signup-limit-fail-open`,
+    logGroupName: serverLogGroupName,
+    pattern: messageFilterPattern('signup-limit-failed-open'),
+    metricTransformation: {
+      name: 'SignupLimitFailOpen',
       namespace: metricNamespace,
       value: '1',
       unit: 'Count',

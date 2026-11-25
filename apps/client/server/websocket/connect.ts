@@ -1,11 +1,12 @@
 import { Connection, User, wsConnectTicketRepository } from '@bike4mind/database';
-import { ApiKeyScope, ApiKeyScopeValue } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue, LiveHandoffRegistrationSchema } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
-import { verifyApiKey } from '@server/cli/auth';
+import { verifyApiKey } from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { ipBlockRefusal } from '@server/middlewares/checkBlockedIP';
@@ -195,6 +196,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     }
     assertAccountStateUsable(user);
     assertNoPendingDeletion(user);
+    // A web ticket was minted behind the REST enrollment gate, and an API key is not a sign-in.
+    if (!ticketIdentity && !auth.apiKeyId && (await isMfaEnrollmentOwed(user))) {
+      throw new ForbiddenError(MFA_ENROLLMENT_REQUIRED_MESSAGE);
+    }
     await assertRealtimeSessionActive(auth.sid);
     // Completions and agent runs stream over this socket, so an admin's `all` IP block refuses the connection.
     if (!user.isAdmin) {
@@ -208,10 +213,32 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
       if (refusal) throw new ForbiddenError(refusal.message);
     }
 
+    const handoff = LiveHandoffRegistrationSchema.safeParse({
+      platform: event.queryStringParameters?.handoffPlatform,
+      name: event.queryStringParameters?.handoffName,
+      clientId: event.queryStringParameters?.handoffClientId,
+    });
+    if (ticketIdentity && auth.sid && !handoff.success) {
+      const supplied = ['handoffPlatform', 'handoffName', 'handoffClientId'].some(
+        key => event.queryStringParameters?.[key] !== undefined
+      );
+      if (supplied) {
+        logger.warn('[WS_CONNECT] handoff registration ignored', {
+          issuePaths: handoff.error.issues.map(issue => issue.path.join('.')),
+        });
+      }
+    }
     await Connection.create({
       connectionId: event.requestContext.connectionId,
       userId: user.id,
       source,
+      ...(ticketIdentity &&
+        auth.sid &&
+        handoff.success && {
+          handoffPlatform: handoff.data.platform,
+          handoffName: handoff.data.name,
+          handoffClientId: handoff.data.clientId,
+        }),
       ...(scopes !== undefined && { scopes }),
       ...(auth.sid && { sid: auth.sid }),
       ...(tokenVersion !== undefined && { tokenVersion }),

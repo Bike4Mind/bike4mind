@@ -1,5 +1,7 @@
 import { test, expect } from './fixtures';
+import { TIMEOUTS } from './constants';
 import { apiGetOtcCode } from './helpers/api';
+import { watchMfaSetup } from './helpers/mfa';
 import { getTestUsers } from './helpers/test-users';
 
 test.describe('Signup', () => {
@@ -82,8 +84,17 @@ test.describe('Signup', () => {
     const registered = page.waitForResponse(
       r => r.url().includes('/api/otc/verify') && r.request().method() === 'POST' && r.ok()
     );
-    await loginPage.submitInlineRegister();
-    const { user } = (await (await registered).json()) as { user: { id: string } };
+    const mfaSetup = watchMfaSetup(page);
+    await loginPage.submitInlineRegister({ waitForApp: false });
+    const body = (await (await registered).json()) as {
+      user?: { id: string };
+      userId?: string;
+      mfaSetupRequired?: boolean;
+    };
+    // A stage that enforces MFA sends the new account to setup before signing it in.
+    await mfaSetup.enrollIfAsked(body);
+    const userId = body.user?.id ?? body.userId;
+    await page.waitForURL(url => !url.pathname.includes('/login'), { timeout: TIMEOUTS.ACTION });
     await basePage.dismissModals();
 
     // Account created and signed in - we're off /login and into the app.
@@ -93,7 +104,7 @@ test.describe('Signup', () => {
     // account's own session redacts it.
     // Bot checks are skipped under E2E, so this only guards against tiering every new signup.
     const apiUrl = process.env.API_URL || 'http://localhost:3000';
-    const res = await request.get(`${apiUrl}/api/users/${user.id}`, {
+    const res = await request.get(`${apiUrl}/api/users/${userId}`, {
       headers: { Authorization: `Bearer ${getTestUsers().admin.accessToken}` },
     });
     expect(res.ok()).toBe(true);

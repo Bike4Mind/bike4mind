@@ -5,6 +5,7 @@ import {
   resolveEmbeddingWithKeylessFallback,
 } from '@bike4mind/utils/embeddingProviders';
 import {
+  AiAccessRefusedError,
   type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
@@ -77,8 +78,11 @@ import {
   reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
+  readOrgModelPolicy,
+  createMutex,
 } from '@bike4mind/common';
 import { fallbackThinkingVisibility } from '../thinkingVisibility';
+import { resolveUsageProject } from './usageProject';
 import {
   BadRequestError,
   buildAndSortMessages,
@@ -131,7 +135,12 @@ import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attach
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { chatReasoningOptionsFor } from './chatReasoningOptions';
 import { withOllamaThinkingDefault } from './ollamaThinkingDefault';
-import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
+import {
+  buildRecentGeneratedImagesNote,
+  resolveRecentImageJobFiles,
+  type ImageJobFilesResolver,
+  type RecentImageJobFile,
+} from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
@@ -179,6 +188,7 @@ import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { b4mTools, LATTICE_TOOL_NAMES } from './tools';
+import { withAudioToolJobs } from './tools/implementation/audioGeneration';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
 import {
@@ -199,6 +209,7 @@ import {
   loadModelConfigurations,
   type ModelAdmission,
 } from './modelAdmission';
+import { applyOrgToolPolicy } from './orgToolPolicy';
 import {
   TurnCreditLimiter,
   accumulatedRoundsUsd,
@@ -211,6 +222,7 @@ import {
 } from './chatCreditCap';
 import { buildChatRequestMeta } from './chatRequestMeta';
 import { capRoundOutput, gateEveryRound } from '../completionCreditBudget';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import {
   executedModelFields,
   recordShadowTokenUsage,
@@ -233,14 +245,22 @@ import { logLlmUsageSettled } from './llmUsageSettledLog';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
-import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
-import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
+import type { ImageToolConfig } from './tools/implementation/imageGeneration';
+import {
+  applyModerationHit,
+  MODERATION_POLICY,
+  moderationEscalationAlert,
+  moderationThrottleKey,
+  type ModerationEscalationAlert,
+} from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
 import { createStreamingStatusSender } from './streamingStatusSender';
@@ -254,7 +274,6 @@ import {
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
   ProjectFeature,
-  QuestMasterFeature,
   SlackFeature,
   SummarizeNotebookFeature,
   IChatCompletionServiceOptions,
@@ -266,7 +285,8 @@ import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
-import { buildContextOverflowMessage } from './contextOverflowMessage';
+import { buildContextOverflowMessage, ContextOverflowError, isContextOverflowError } from './contextOverflowMessage';
+import { asUserApiKeyRejection, UserApiKeyRejectedError, userApiKeyRejectedReply } from './userApiKeyRejection';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
   buildTaggedContextMessages,
@@ -311,7 +331,10 @@ import {
   getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
   checkNewAccountSpendCap,
+  assertInterventionSpendAllowed,
 } from '../creditService';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import {
   TelemetryBuilder,
   mapBackendToProvider,
@@ -326,7 +349,12 @@ import {
   buildInjectedBlockDetails,
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
-import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
+import {
+  buildArtifactEmissionMessages,
+  resolveArtifactsEnabled,
+  resolveCallableFunctionsSafely,
+  withArtifactDataOrigins,
+} from './artifactGating';
 import {
   resolveStickyAutoAddedTools,
   shouldOfferBlogTools,
@@ -343,6 +371,7 @@ import {
   sanitizeTelemetryError,
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
+  withCallableFunctions,
   HELP_CENTER_PROMPT,
   ABSTENTION_PROMPT,
   ELISION_WARNING,
@@ -583,8 +612,10 @@ export function resolveModelAwareHistoryCount({
  */
 const SESSION_LENGTH_WARNING_THRESHOLD = 100;
 
-const questSaveMutex = new Mutex();
+const questSaveMutex = createMutex();
 // Identity and server-owned keys; `deletedAt` belongs to soft delete, never to a turn's save.
+// `lakeSaveCount` moves only by claimLakeSaveSlot's atomic $inc; writing the in-memory copy back
+// would reset the count to what it was when the turn loaded the quest.
 const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
   'id',
   '_id',
@@ -592,13 +623,13 @@ const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
   'createdAt',
   'updatedAt',
   'deletedAt',
+  'lakeSaveCount',
 ]);
 
 interface ProcessInitContext {
   parsedBody: z.infer<typeof QuestStartBodySchema>;
   quest: IChatHistoryItemDocument;
   historyCount: number;
-  enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableAgents?: boolean;
   message: string;
@@ -608,7 +639,6 @@ interface ProcessInitContext {
   enabledTools: (z.infer<typeof b4mLLMTools> | string)[];
   projectId?: string;
   organizationId?: string | null;
-  questMaster?: z.infer<typeof QuestStartBodySchema>['questMaster'];
   toolPromptId?: string;
   researchMode?: z.infer<typeof QuestStartBodySchema>['researchMode'];
   embeddingModel?: string;
@@ -715,6 +745,7 @@ export function isAbortError(error: unknown): boolean {
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
   if (isOutputBudgetExhaustedError(error)) return false;
+  if (error instanceof UserApiKeyRejectedError) return false;
   if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
   if (!(error instanceof Error)) return true;
   return !(
@@ -725,7 +756,7 @@ export function isOperatorFault(error: unknown): boolean {
     error instanceof ResponsesStreamTruncatedError ||
     isToolPairingError(error) ||
     isOverloadedError(error) ||
-    error.message.startsWith('Your request is too large for')
+    isContextOverflowError(error)
   );
 }
 
@@ -1114,10 +1145,10 @@ export class ChatCompletionProcess {
   public logEvent: IChatCompletionServiceOptions['logEvent'];
   public queue: IChatCompletionServiceOptions['queue'];
   public autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
+  public notifyModerationEscalation: IChatCompletionServiceOptions['notifyModerationEscalation'];
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
-  public createCompletionMeter: IChatCompletionServiceOptions['createCompletionMeter'];
   public features: Map<featureNames, ChatCompletionFeature>;
   public userAbility: MongoAbility | null = null;
   public sessionId: string;
@@ -1290,6 +1321,7 @@ export class ChatCompletionProcess {
   private attachedKnowledgeFilesMemo: IFabFileDocument[] | null | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
+  private audioToolJobs: IChatCompletionServiceOptions['audioToolJobs'];
   private imageProcessorLambdaName?: string;
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
@@ -1299,6 +1331,7 @@ export class ChatCompletionProcess {
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private customMcp: IChatCompletionServiceOptions['customMcp'];
+  private customMcpDeadline: IChatCompletionServiceOptions['customMcpDeadline'];
   private statusManager: StatusManager | null = null;
   private systemFilesCache: Map<string, [string[], string[]]> | null = null;
   private abortControllers: Map<string, AbortController> | null = null;
@@ -1309,6 +1342,7 @@ export class ChatCompletionProcess {
   private shadowSubstitution: { requested: ModelInfo; actual: ModelInfo; substituteIds: Set<string> } | null = null;
   private publishTelemetryAlert?: IChatCompletionServiceOptions['publishTelemetryAlert'];
   private telemetryHmacSecret?: string;
+  private imageUrlSigningSecret?: string;
   private gpcSignalDetected: boolean = false;
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
@@ -1335,6 +1369,7 @@ export class ChatCompletionProcess {
   private turnCreditLimiter: TurnCreditLimiter | null = null;
   // The UserApiKey that authenticated the current turn (parsedBody.apiKeyId), stamped on its ledger rows.
   private turnApiKeyId: string | undefined;
+  private turnProjectId: string | undefined;
   // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
   // streamed against it (settleAbortedReservation) instead of refunding the whole hold.
   private reservationBasis: {
@@ -1366,12 +1401,14 @@ export class ChatCompletionProcess {
     this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
+    this.audioToolJobs = options.audioToolJobs;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.logger = options.logger;
     this.user = options.user;
     this.logEvent = options.logEvent;
     this.queue = options.queue;
     this.autoNameSession = options.autoNameSession;
+    this.notifyModerationEscalation = options.notifyModerationEscalation;
     this.summarizeSession = options.summarizeSession;
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
@@ -1384,14 +1421,15 @@ export class ChatCompletionProcess {
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
+    this.customMcpDeadline = options.customMcpDeadline;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
-    this.createCompletionMeter = options.createCompletionMeter;
     this.sessionId = options.sessionId;
     this.cacheRepository = options.cacheRepository;
     this.publishTelemetryAlert = options.publishTelemetryAlert;
     this.telemetryHmacSecret = options.telemetryHmacSecret;
+    this.imageUrlSigningSecret = options.imageUrlSigningSecret;
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
@@ -1977,7 +2015,6 @@ export class ChatCompletionProcess {
       tools: enabledTools = [],
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       embeddingModel,
@@ -2028,12 +2065,7 @@ export class ChatCompletionProcess {
       }
     }
 
-    const {
-      historyCount: requestedHistoryCount = DEFAULT_HISTORY_COUNT,
-      enableQuestMaster,
-      enableMementos,
-      enableAgents,
-    } = parsedBody;
+    const { historyCount: requestedHistoryCount = DEFAULT_HISTORY_COUNT, enableMementos, enableAgents } = parsedBody;
 
     // The one place the client's slider sentinel becomes the internal marker. Everything
     // downstream works in that vocabulary, so no later step has to know the wire value.
@@ -2045,7 +2077,6 @@ export class ChatCompletionProcess {
       parsedBody,
       quest,
       historyCount,
-      enableQuestMaster,
       enableMementos,
       enableAgents,
       message,
@@ -2055,7 +2086,6 @@ export class ChatCompletionProcess {
       enabledTools: finalEnabledTools,
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       embeddingModel,
@@ -2155,6 +2185,22 @@ export class ChatCompletionProcess {
     }
   }
 
+  /** The recent-images note's job outputs; a lookup failure only drops them from the note. */
+  private async resolveRecentImageJobFiles({
+    recentImageJobs,
+    resolver,
+    wanted,
+    logger,
+  }: {
+    recentImageJobs: { jobId: string; prompt: string }[] | undefined;
+    resolver: ImageJobFilesResolver | undefined;
+    wanted: boolean;
+    logger: Logger;
+  }): Promise<RecentImageJobFile[]> {
+    if (!wanted) return [];
+    return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
+  }
+
   public async process({
     body,
     logger,
@@ -2164,6 +2210,9 @@ export class ChatCompletionProcess {
     externalTools,
     videoToolConfigResolver,
     musicToolConfigResolver,
+    imageJobsResolver,
+    imageJobFilesResolver,
+    callableFunctionsResolver,
     abortSignal,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
@@ -2180,6 +2229,24 @@ export class ChatCompletionProcess {
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
     /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
     musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+    /**
+     * Resolves the image job engine's create step; only invoked when image_generation or edit_image is enabled.
+     * Null (or no resolver) keeps those tools rendering in-process.
+     */
+    imageJobsResolver?: () => Promise<ImageToolConfig['createJobs'] | null>;
+    /**
+     * The output file of each listed image job that the caller requested and that succeeded (any other id is left
+     * out), so the recent-images note can name those files. Without it the note lists generated keys only.
+     */
+    imageJobFilesResolver?: (input: {
+      jobIds: string[];
+      userId: string;
+    }) => Promise<{ jobId: string; fileId: string }[]>;
+    /**
+     * Whether callable functions are on for the requester; when true, the artifact prompt tells the model how to
+     * write one. Only invoked while artifacts are on; no resolver leaves the note out.
+     */
+    callableFunctionsResolver?: () => Promise<boolean>;
     /**
      * Caller-side cancellation (e.g. the wait=true request deadline). Aborts the turn the same
      * way the cancel watcher does: process() releases or reconciles its own credit reservation,
@@ -2203,11 +2270,11 @@ export class ChatCompletionProcess {
     void this.resolveThinkingVisibility();
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
     this.turnApiKeyId = initContext.parsedBody.apiKeyId;
+    this.turnProjectId = undefined;
     const {
       parsedBody,
       quest,
       historyCount: initialHistoryCount,
-      enableQuestMaster: initialEnableQuestMaster,
       enableMementos: initialEnableMementos,
       enableAgents: initialEnableAgents,
       message,
@@ -2217,7 +2284,6 @@ export class ChatCompletionProcess {
       enabledTools,
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       embeddingModel,
@@ -2228,7 +2294,6 @@ export class ChatCompletionProcess {
       userTimezone,
     } = initContext;
     let historyCount = initialHistoryCount;
-    let enableQuestMaster = initialEnableQuestMaster;
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
     const { questId, sessionId, promptMode } = parsedBody;
@@ -2329,7 +2394,7 @@ export class ChatCompletionProcess {
         case 'contextual':
           return [...baseFeatures, 'agentDetection']; // Add agent detection for contextual queries (includes @mentions)
         case 'complex':
-          return [...baseFeatures, 'mementos', 'questMaster', 'agentDetection']; // Full feature set
+          return [...baseFeatures, 'mementos', 'agentDetection']; // Full feature set
         default:
           return [...baseFeatures, 'agentDetection']; // Safe fallback
       }
@@ -2342,20 +2407,9 @@ export class ChatCompletionProcess {
       optimizedFeatureList = optimizedFeatureList.filter(feature => feature !== 'autoNameSession');
     }
 
-    // Honor explicit user enablement BEFORE any complexity-based optimizations.
-    // When a user explicitly enables QuestMaster (toggle or New Quest flow) they want a
-    // quest; user intent takes precedence over automatic optimization.
-    const userExplicitlyEnabledQuestMaster = enableQuestMaster;
+    // Honor explicit user enablement BEFORE any complexity-based optimizations: user intent
+    // takes precedence over automatic optimization.
     const userExplicitlyEnabledAgents = enableAgents;
-
-    // Add QuestMaster to feature list if user explicitly enabled it (regardless of query complexity)
-    if (userExplicitlyEnabledQuestMaster && !optimizedFeatureList.includes('questMaster')) {
-      optimizedFeatureList = [...optimizedFeatureList, 'questMaster'];
-      logger.info(`🎯 [EXPLICIT_ENABLEMENT] QuestMaster explicitly enabled by user - adding to feature list`, {
-        queryComplexity,
-        sessionId,
-      });
-    }
 
     // Reduce features for simple queries, but NEVER override explicit user settings
     if (isSimpleQuery) {
@@ -2363,11 +2417,6 @@ export class ChatCompletionProcess {
       // Note: Session agent attachment is already handled in classifyQueryComplexity
       // which receives session.agentIds and considers them when determining complexity
       const hasAgentMentions = message.includes('@');
-
-      // Only disable QuestMaster if user did NOT explicitly enable it
-      if (!userExplicitlyEnabledQuestMaster) {
-        enableQuestMaster = false;
-      }
 
       // Only disable agents if NOT explicitly enabled AND no @mentions
       // (attached agents are already handled by query complexity classification)
@@ -2377,9 +2426,7 @@ export class ChatCompletionProcess {
 
       // History is deliberately NOT reduced for simple queries: the count sets where the history
       // window starts, and one that changed with each turn's complexity rewrote the prompt cache.
-      logger.info(
-        `[SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`
-      );
+      logger.info(`[SIMPLE_QUERY] Optimizations: Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`);
     }
 
     // Conservative cap before model info is available; the model-aware adjustment happens after
@@ -2784,7 +2831,6 @@ export class ChatCompletionProcess {
       const vettedPreauthorizedLakeIds = this.turnPreauthorizedLakeIds;
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
-        enableQuestMaster || false,
         // Tri-state, deliberately NOT coerced: explicit false is the caller's memory
         // opt-out and must stay distinguishable from absence (#1319, resolveMementoGates).
         enableMementos,
@@ -2840,6 +2886,7 @@ export class ChatCompletionProcess {
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
       const requestedModelInfo = models.find(m => m.id === resolvedModelId);
+      const orgModelPolicy = readOrgModelPolicy(organization?.modelPolicy);
       // Substitute only the executing model; see resolveShadowModelInfo.
       const { settings: shadowSettings, modelInfo: shadowModelInfo } = await resolveShadowRouting({
         user: this.user,
@@ -2847,6 +2894,7 @@ export class ChatCompletionProcess {
         models,
         adminSettings: this.db.adminSettings,
         logger,
+        orgModelPolicy,
       });
       const modelInfo = shadowModelInfo ?? requestedModelInfo;
       // The model id handed to features and tools that call the backend themselves: the
@@ -2890,6 +2938,7 @@ export class ChatCompletionProcess {
         models,
         enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
         freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
+        orgModelPolicy,
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
@@ -3067,20 +3116,36 @@ export class ChatCompletionProcess {
         }
       }
 
+      // Before any credit gate and whether or not credits are enforced: a frozen subject spends nothing new.
+      // The org is the loaded `organization` the reservation below holds against, so the two cannot diverge.
+      await assertSpendNotFrozen(
+        spendFreezeSubjectForHold({
+          userId: this.user.id,
+          organizationId: organization?.id ?? null,
+          apiKeyId: this.turnApiKeyId,
+        }),
+        { db: { spendFreezes: this.db.spendFreezes } }
+      );
+
       if (adminModerationEnabled) {
         const moderationStartTime = Date.now();
-        // Only run OpenAI moderation if we have an OpenAI key available
-        if (apiKeyTable?.openai) {
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable?.openai,
+          getSettingsValue('openaiDemoKey', defaultAdminSettings)
+        );
+        if (moderationOpenaiKey) {
           try {
-            await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(message);
+            await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(message);
           } catch (moderationError) {
+            if (!(moderationError instanceof FlaggedContentError)) throw moderationError;
             // On a flag, record a per-user moderation hit and auto-escalate (throttle to
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
             // must never mask the block, so its own failure is swallowed with a warning.
-            if (moderationError instanceof FlaggedContentError) {
+            // A flag the turn's key is excepted from does neither: the turn continues.
+            if (!(await this.keyModerationExceptionApplies('openai', moderationError.categories, questId, logger))) {
               await this.recordModerationHit('openai', moderationError.categories, questId, logger);
+              throw moderationError;
             }
-            throw moderationError;
           }
           logger.info(
             `⏱️ [${Date.now() - processStartTime}ms] Moderation check completed in ${
@@ -3094,10 +3159,11 @@ export class ChatCompletionProcess {
             try {
               await this.getBedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
             } catch (moderationError) {
-              if (moderationError instanceof FlaggedContentError) {
+              if (!(moderationError instanceof FlaggedContentError)) throw moderationError;
+              if (!(await this.keyModerationExceptionApplies('bedrock', moderationError.categories, questId, logger))) {
                 await this.recordModerationHit('bedrock', moderationError.categories, questId, logger);
+                throw moderationError;
               }
-              throw moderationError;
             }
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] Bedrock Guardrails check completed in ${
@@ -3131,7 +3197,6 @@ export class ChatCompletionProcess {
               historyCount,
               fabFileIds: sessionFabFileIds,
               questId,
-              questMaster,
               organizationId: organization?.id ?? null,
             });
 
@@ -3694,6 +3759,7 @@ export class ChatCompletionProcess {
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
         customMcp: this.customMcp,
+        customMcpDeadline: this.customMcpDeadline,
         toolCreditsMap: this.toolCreditsMap,
         toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
@@ -3708,6 +3774,7 @@ export class ChatCompletionProcess {
         enableMCPServer,
         requestedMcpServers: parsedBody.mcpServers,
         disabledMcpConnections: parsedBody.disabledMcpConnections,
+        enabledPlatformMcpConnections: parsedBody.enabledPlatformMcpConnections,
         defaultAdminSettings,
         userMessage: initContext.message,
         logger,
@@ -3822,6 +3889,13 @@ export class ChatCompletionProcess {
       const musicToolConfig = enabledTools.includes('music_generation')
         ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
+      const createImageJobs =
+        enabledTools.includes('image_generation') || enabledTools.includes('edit_image')
+          ? await resolveToolConfigSafely('image_generation', imageJobsResolver, logger)
+          : null;
+      const imageToolConfig: ImageToolConfig | typeof imageConfig = createImageJobs
+        ? { selection: imageConfig, createJobs: createImageJobs }
+        : imageConfig;
 
       const subagentModels = agentStore
         ? shadowSettings
@@ -3841,6 +3915,7 @@ export class ChatCompletionProcess {
         // builder produces never appear in that list - MCP tools and the delegate tool's captured
         // parentTools.
         sessionDisabledTools: deniedTools,
+        orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -3853,10 +3928,10 @@ export class ChatCompletionProcess {
             apiKeys: shadowSettings ? undefined : apiKeyTable,
           },
           edit_file: shadowSettings ? { model: runModel } : undefined,
-          image_generation: imageConfig,
-          edit_image: imageConfig,
-          audio_generation: audioConfig,
-          web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
+          image_generation: imageToolConfig,
+          edit_image: imageToolConfig,
+          audio_generation: withAudioToolJobs(audioConfig, this.audioToolJobs),
+          web_search: { imageUrlSigningSecret: this.imageUrlSigningSecret ?? this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
           music_generation: musicToolConfig ?? undefined,
         },
@@ -3894,6 +3969,15 @@ export class ChatCompletionProcess {
       if (deniedTools && allTools) {
         const denied = new Set(deniedTools);
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
+      }
+      if (allTools) {
+        const orgFiltered = applyOrgToolPolicy(allTools, readOrgModelPolicy(organization?.modelPolicy));
+        if (orgFiltered.stripped.length > 0) {
+          logger.info('[OrgToolPolicy] stripped tools the organization does not allow', {
+            tools: orgFiltered.stripped,
+          });
+          allTools = orgFiltered.tools;
+        }
       }
 
       // Research Mode runs its configurations in parallel over one tool list, so a shared budget
@@ -4288,14 +4372,25 @@ export class ChatCompletionProcess {
       // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings); falls back
       // to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared, so a blank value can
       // never strip artifact guidance from completions.
-      const artifactEmissionContent = getSettingsValue(
-        'ArtifactEmissionPrompt',
-        defaultAdminSettings,
-        ARTIFACT_EMISSION_PROMPT
+      // Names the admin-listed Python data origins when there are any, and says how to write a callable function
+      // when that is on for the requester; byte-identical otherwise.
+      const artifactEmissionContent = withCallableFunctions(
+        withArtifactDataOrigins(
+          getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
+          getSettingsValue('pythonArtifactDataOrigins', defaultAdminSettings)
+        ),
+        artifactsEnabled && (await resolveCallableFunctionsSafely(callableFunctionsResolver, logger))
       );
       // Admin-editable via the `HelpCenterPrompt` setting; a blank value falls back to the built-in
       // default so the nudge can never be silently stripped.
       const helpCenterContent = getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT);
+
+      const recentImageJobFiles = await this.resolveRecentImageJobFiles({
+        recentImageJobs: cacheInfo.recentImageJobs,
+        resolver: imageJobFilesResolver,
+        wanted: (editImageAvailable || videoGenerationAvailable) && session.userId === this.user.id,
+        logger,
+      });
 
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
@@ -4350,7 +4445,6 @@ export class ChatCompletionProcess {
         toolPrompt: toolPromptMessages.guidance ? [toolPromptMessages.guidance] : [],
         toolContext: toolPromptMessages.context ? [toolPromptMessages.context] : [],
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
-        questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
         sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
         // Skills catalog (model-invocable `skill` tool discovery) + expanded `/skill-name`
@@ -4375,6 +4469,7 @@ export class ChatCompletionProcess {
         // assumption that broke the view registry once navigate_view became auto-added.
         recentImages: buildRecentGeneratedImagesNote({
           images: cacheInfo.recentGeneratedImages,
+          imageJobFiles: recentImageJobFiles,
           editImageAvailable,
           videoGenerationAvailable,
           sessionOwnerId: session.userId,
@@ -4856,20 +4951,6 @@ export class ChatCompletionProcess {
         );
       }
       if (!inputTokensEstimated && inputTokens > maxSafeInputTokens) {
-        logger.error(`🚨 CRITICAL: Context overflow detected!`, {
-          inputTokens,
-          maxTokens: safeMaxTokens,
-          contextLimit,
-          maxSafeInputTokens,
-          userId: this.user.id,
-          sessionId,
-          questId,
-          model,
-          mementoCount: (featureContextMessages['mementos'] ?? []).length,
-          totalMessages: messages.length,
-          tokenBreakdown: tokensBySource,
-        });
-
         // Persist telemetry before throwing - the outer catch block's saveQuest() writes it to MongoDB
         if (telemetryBuilder) {
           telemetryBuilder.setContextWindow({
@@ -4884,15 +4965,26 @@ export class ChatCompletionProcess {
           quest.promptMeta!.contextTelemetry = telemetryBuilder.build();
         }
 
-        throw new Error(
+        const mementoCount = (featureContextMessages['mementos'] ?? []).length;
+        throw new ContextOverflowError(
           buildContextOverflowMessage({
             modelName: requestedModelInfo.name || model,
             inputTokens,
             maxSafeInputTokens,
             tokensBySource,
             messageCount: messages.length,
-            mementoCount: (featureContextMessages['mementos'] ?? []).length,
-          })
+            mementoCount,
+          }),
+          {
+            modelId: model,
+            inputTokens,
+            maxSafeInputTokens,
+            contextLimit,
+            reservedOutputTokens: safeMaxTokens,
+            tokenBreakdown: tokensBySource ?? null,
+            messageCount: messages.length,
+            mementoCount,
+          }
         );
       }
 
@@ -4927,7 +5019,9 @@ export class ChatCompletionProcess {
 
       const resolveResearchRunModel = (requested: ModelInfo): ModelInfo =>
         shadowSettings
-          ? (resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger) ?? requested)
+          ? (resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger, {
+              orgModelPolicy,
+            }) ?? requested)
           : requested;
 
       this.turnCreditLimiter = null;
@@ -5022,6 +5116,12 @@ export class ChatCompletionProcess {
               reason: 'member_cap',
               requiredCredits: capCheckCredits,
             });
+            await notifyOrgEvent({
+              type: 'member_cap_check',
+              organizationId: organization.id,
+              userId: this.user.id,
+              refused: true,
+            });
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
                 used: getMemberUsedCredits(organization, this.user.id),
@@ -5060,6 +5160,16 @@ export class ChatCompletionProcess {
             });
         }
 
+        this.turnProjectId = await resolveUsageProject({
+          projectId,
+          user: this.user,
+          projects: this.db.projects,
+          ownerId: reservationOwnerId,
+          ownerType: reservationOwnerType,
+        }).catch(() => {
+          logger.warn('Project usage attribution unavailable; recording as Unassigned');
+          return undefined;
+        });
         const holderAfterReservation = await reservationMethods.incrementCredits(reservationOwnerId, -requiredCredits);
 
         if (!holderAfterReservation || holderAfterReservation.currentCredits < 0) {
@@ -5079,6 +5189,15 @@ export class ChatCompletionProcess {
             availableCredits: actualBalance,
           });
           throw new InsufficientCreditsError(errorMessage, 'insufficient_credits');
+        }
+        try {
+          await assertInterventionSpendAllowed(
+            { userId: this.user.id, credits: requiredCredits },
+            { users: this.db.users, window: this.db.newAccountSpendCap.interventionSpendWindow }
+          );
+        } catch (refusal) {
+          await reservationMethods.incrementCredits(reservationOwnerId, requiredCredits);
+          throw refusal;
         }
 
         // Update in-memory balance so mid-stream tool validation sees the reduced balance
@@ -5606,6 +5725,7 @@ export class ChatCompletionProcess {
             ownerId: this.reservedCreditsOwnerId || this.user.id,
             ownerType: this.reservedCreditsOwnerType,
             sessionId: quest.sessionId,
+            projectId: this.turnProjectId,
             feature: 'chat',
             source: 'web',
             ...timedOutAttemptUsageFields(attemptModel, error.usage),
@@ -5623,7 +5743,7 @@ export class ChatCompletionProcess {
       // themselves can't say this: every iteration appends into the same indices.
       let toolCallsSeen = 0;
       let visibleCharsAtLastToolCall = 0;
-      // Generating tools deliver through statusUpdate({ images }) or, for a background job (video, music),
+      // Generating tools deliver through statusUpdate({ images }) or, for a background job (video, music, image),
       // statusUpdate({ generationJobs }); applyQuestStatusChanges (tools/ToolBuilder.ts) merges both with
       // dedup, so growth means a new file or a new job card.
       const countDeliverables = () => (quest.images?.length ?? 0) + questGenerationJobs(quest).length;
@@ -6098,8 +6218,13 @@ export class ChatCompletionProcess {
               break;
             }
             lastError = attemptError as Error;
+            // Same message and status, so the fallback classifiers below see the provider error unchanged.
+            lastError = asUserApiKeyRejection(lastError, currentModel, apiKeyTable) ?? lastError;
             // Recoverable interruptions keep their stack at warn; unexpected failures page.
-            if (isExpectedCompletionError(lastError)) {
+            if (lastError instanceof UserApiKeyRejectedError) {
+              // The user's own saved key, not ours: an expected user-side outcome, logged once here.
+              logger.warn('[User API Key] Provider rejected the user-supplied API key', lastError.logFields);
+            } else if (isExpectedCompletionError(lastError)) {
               // Already warned by the backend or the attempt summary below.
             } else if (
               isAbortError(lastError) ||
@@ -6135,6 +6260,7 @@ export class ChatCompletionProcess {
                   ownerId: this.reservedCreditsOwnerId || this.user.id,
                   ownerType: this.reservedCreditsOwnerType,
                   sessionId: quest.sessionId,
+                  projectId: this.turnProjectId,
                   feature: 'chat',
                   source: 'web',
                   ...(refusedUsage
@@ -6161,15 +6287,18 @@ export class ChatCompletionProcess {
               isSafetyRefusalError(lastError) || isLlmTimeoutError(lastError)
                 ? logger.debug.bind(logger)
                 : logger.warn.bind(logger);
-            logAttempt(
-              `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
-                currentModel.id
-              } (attempt ${fallbackAttempt}):`,
-              {
-                error: lastError.message,
-                shouldRetry: isRetryableError,
-              }
-            );
+            // A rejected user key was logged once above; the summary would repeat the provider message.
+            if (!(lastError instanceof UserApiKeyRejectedError)) {
+              logAttempt(
+                `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
+                  currentModel.id
+                } (attempt ${fallbackAttempt}):`,
+                {
+                  error: lastError.message,
+                  shouldRetry: isRetryableError,
+                }
+              );
+            }
 
             // Tool pairing recovery: if this is a tool_use/tool_result pairing error,
             // strip all tool blocks from history and retry with the same model
@@ -6316,7 +6445,9 @@ export class ChatCompletionProcess {
             // the substitution itself (no status, no fallbackInfo, the requested id stays shown).
             // A failing allowlisted requested model starts a substitution here.
             if (shadowSettings) {
-              const next = shadowCandidates(models, shadowSettings.allowlist).find(m => !triedModelIds.has(m.id));
+              const next = shadowCandidates(models, shadowSettings.allowlist, { orgModelPolicy }).find(
+                m => !triedModelIds.has(m.id)
+              );
               const nextLlm =
                 next && getLlmByModel(chatApiKeyTable, { modelInfo: next, logger, endUserId: this.user.id });
               if (!next || !nextLlm) {
@@ -7057,7 +7188,7 @@ export class ChatCompletionProcess {
         // tool called more than once in a turn settles as the sum of every call, not
         // the count times the last call's cost (see settleToolCallCredits).
         quest.promptMeta!.functionCalls = settleToolCallCredits(
-          quest.promptMeta!.functionCalls || [],
+          this.withReservedToolCalls(quest.promptMeta!.functionCalls || []),
           this.toolCreditsMap
         );
 
@@ -7143,10 +7274,8 @@ export class ChatCompletionProcess {
           if (!this.db.creditTransactions) {
             throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
           }
-          const toolCreditsUsed = (quest.promptMeta!.functionCalls || []).reduce(
-            (sum, fc) => sum + (fc.creditsUsed || 0),
-            0
-          );
+          // Adapter telemetry can omit delivered calls or be replaced by a text-only callback.
+          const toolCreditsUsed = this.chargedToolCredits();
           const totalCreditsUsed = textCreditsUsed + toolCreditsUsed;
           quest.creditsUsed = totalCreditsUsed;
 
@@ -7208,6 +7337,7 @@ export class ChatCompletionProcess {
               ownerId: this.reservedCreditsOwnerId || this.user.id,
               ownerType: this.reservedCreditsOwnerType,
               sessionId: quest.sessionId,
+              projectId: this.turnProjectId,
               feature: 'chat',
               provider: settledLedgerModel.backend,
               model: settledLedgerModel.id,
@@ -7292,9 +7422,9 @@ export class ChatCompletionProcess {
 
             // Record audit-trail transactions with skipBalanceUpdate (balance already settled)
             if (toolCreditsUsed > 0) {
-              const toolNames = (quest.promptMeta!.functionCalls || [])
-                .filter(fc => fc.creditsUsed && fc.creditsUsed > 0)
-                .map(fc => fc.name)
+              const toolNames = Array.from(this.toolCreditsMap)
+                .filter(([, charges]) => charges.some(credits => credits > 0))
+                .map(([name]) => name)
                 .join(', ');
               // NOT currentModel.id: the charge belongs to whatever model the tools ran
               // on. One aggregate row can only name it when a single model charged (see
@@ -7668,7 +7798,7 @@ export class ChatCompletionProcess {
           'summarizeNotebook', // Publishes event to EventBridge
           'contextSummarization', // Publishes event to EventBridge
         ];
-        const postSaveFeatures: Array<featureNames> = ['mementos', 'questMaster'];
+        const postSaveFeatures: Array<featureNames> = ['mementos'];
 
         // P5-a: Truly fire-and-forget the EventBridge features - don't await them.
         fireAndForgetFeatures.forEach(feature => {
@@ -7678,7 +7808,6 @@ export class ChatCompletionProcess {
               quest,
               session,
               messages,
-              questMaster,
               model: runModel,
               historyCount,
               oldestIncludedQuestId,
@@ -7694,7 +7823,7 @@ export class ChatCompletionProcess {
         // remains fire-and-forget since losing perf data is harmless.)
         await saveQuest(quest);
 
-        // P4-a: Post-save features (mementos, questMaster) create side-effect documents -
+        // P4-a: Post-save features (mementos) create side-effect documents -
         // they don't affect quest.reply/replies. Fire-and-forget to avoid blocking response.
         const postSavePromises = postSaveFeatures
           .map(feature =>
@@ -7702,7 +7831,6 @@ export class ChatCompletionProcess {
               quest,
               session,
               messages,
-              questMaster,
               model: runModel,
               historyCount,
               oldestIncludedQuestId,
@@ -7778,14 +7906,16 @@ export class ChatCompletionProcess {
         );
       }
 
-      // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
-      // streamed and the tools already delivered; the rollback below then has nothing left to refund.
-      // Any other failure refunds the whole hold. Keyed on the basis, not the hold: a hold the caller
-      // already released (a stuck turn) still bills the full actual.
+      // A Stop or disconnect that threw, or a later tool call refused for credits or account standing,
+      // still bills what streamed and the tools already delivered; the rollback below then has nothing
+      // left to refund. Any other failure refunds the whole hold. Keyed on the basis, not the hold: a
+      // hold the caller already released (a stuck turn) still bills the full actual.
       if (
         this.reservationBasis &&
         this.reservedCreditsOwnerId &&
-        (isAbortError(err) || resolveQuestErrorCode(err) === 'insufficient_credits')
+        (isAbortError(err) ||
+          resolveQuestErrorCode(err) === 'insufficient_credits' ||
+          err instanceof AiAccessRefusedError)
       ) {
         await this.settleAbortedReservation(quest, processStartTime, logger).catch(settleError =>
           logger.error(`Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
@@ -7855,10 +7985,19 @@ export class ChatCompletionProcess {
         quest.replies = combined;
         quest.reply = combined.join('');
       };
+      const moderationRefused = err instanceof FlaggedContentError;
       // Provider text on a restricted-tier turn can name the substitute. Credit errors keep their
-      // message; the categorized branches below overwrite this reply with fixed text anyway.
+      // message, as do an account refusal (fixed text from accountState) and a moderation refusal
+      // (fixed text from promptModeration); the categorized branches below overwrite this reply
+      // with fixed text anyway.
       const masksMessage =
-        this.shadowSubstitution && !(err instanceof InsufficientCreditsError || resolveQuestErrorCode(err));
+        this.shadowSubstitution &&
+        !(
+          err instanceof InsufficientCreditsError ||
+          err instanceof AiAccessRefusedError ||
+          moderationRefused ||
+          resolveQuestErrorCode(err)
+        );
       setErrorReply(masksMessage ? MODEL_UNAVAILABLE_ERROR_REPLY : (err as Error).message);
       quest.type = 'error';
       setTerminalQuestStatus(quest, 'done');
@@ -7870,6 +8009,8 @@ export class ChatCompletionProcess {
       const questErrorCode = resolveQuestErrorCode(err);
       if (questErrorCode) {
         quest.errorCode = questErrorCode;
+      } else if (moderationRefused) {
+        quest.errorCode = 'content_blocked';
       }
 
       const errorSaveStartTime = Date.now();
@@ -7878,10 +8019,20 @@ export class ChatCompletionProcess {
         `⏱️ [${Date.now() - processStartTime}ms] Error quest save completed in ${Date.now() - errorSaveStartTime}ms`
       );
 
-      if (err instanceof InsufficientCreditsError || questErrorCode) {
+      if (moderationRefused) {
+        // Expected user outcome, already logged once at warn by the moderation service. Settled
+        // rather than rethrown: a queue retry would only repeat the refusal, and the /api/chat
+        // wait route answers with the quest body, where `errorCode` names the reason.
+        return;
+      } else if (err instanceof InsufficientCreditsError || questErrorCode) {
         // Terminal: nothing to retry until credits are added, so return without re-throwing
         // (a throw would route the queue handler to DLQ/retry). Quest already saved above.
         logger.log(`Insufficient credits for quest ${questId}`);
+        return;
+      } else if (err instanceof AiAccessRefusedError) {
+        // Terminal like the credit refusal: a media tool found the account blocked mid-turn. The
+        // quest already carries the refusal text; rethrowing would log it as a processing failure.
+        logger.warn(`[Account refusal] Quest ${questId}: ${err.message}`);
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
@@ -7947,9 +8098,21 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
-      } else if (err instanceof Error && err.message.startsWith('Your request is too large for')) {
-        logger.error(`[Context Overflow] Quest ${questId}: ${err.message}`);
-        // quest.reply already set to err.message above (line 2825) - includes token breakdown
+      } else if (err instanceof UserApiKeyRejectedError) {
+        // Expected user-side outcome, already warned once in the attempt loop. Settled rather than
+        // rethrown, so /process logs no processing failure and emits no ProcessingFailed metric.
+        setErrorReply(userApiKeyRejectedReply(err.provider));
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (isContextOverflowError(err)) {
+        // Expected refusal (the request does not fit the chosen model), so warn, not error: it must
+        // not page. The reply set from err.message above already carries the breakdown and remedy.
+        logger.warn('[Context Overflow] Request refused: too large for the selected model', {
+          questId,
+          ...err.details,
+        });
         return;
       }
       throw err;
@@ -8149,6 +8312,7 @@ export class ChatCompletionProcess {
           ownerId,
           ownerType,
           sessionId: quest.sessionId,
+          projectId: this.turnProjectId,
           feature: 'chat',
           provider: usageLedgerModel.backend,
           model: usageLedgerModel.id,
@@ -8223,6 +8387,20 @@ export class ChatCompletionProcess {
     }
   }
 
+  /** Adds a placeholder call per reserved charge beyond the recorded calls, so missing tool telemetry cannot drop charged credits from the per-call breakdown. */
+  private withReservedToolCalls<T extends { name?: string }>(
+    functionCalls: T[]
+  ): Array<T | { name: string; parameters: Record<string, never> }> {
+    const calls: Array<T | { name: string; parameters: Record<string, never> }> = [...functionCalls];
+    for (const [name, charges] of this.toolCreditsMap) {
+      const recordedCalls = functionCalls.filter(call => call.name === name).length;
+      for (let index = recordedCalls; index < charges.length; index++) {
+        calls.push({ name, parameters: {} });
+      }
+    }
+    return calls;
+  }
+
   /**
    * A turn ended by a thrown abort (a Stop, a disconnect) still spent what it streamed: settle the
    * reservation on the answering model, at the larger of the provider-reported counts and the input
@@ -8273,15 +8451,10 @@ export class ChatCompletionProcess {
           }
         : { modelInfo: basis.modelInfo, inputTokens: basis.inputTokens, outputTokens };
     if (quest.promptMeta) {
-      const calls = [...(quest.promptMeta.functionCalls ?? [])];
-      // A thrown tool call may prevent the backend's final toolsUsed callback. Keep delivered charges visible.
-      for (const [name, charges] of this.toolCreditsMap) {
-        const recordedCalls = calls.filter(call => call.name === name).length;
-        for (let index = recordedCalls; index < charges.length; index++) {
-          calls.push({ name, parameters: {} });
-        }
-      }
-      quest.promptMeta.functionCalls = settleToolCallCredits(calls, this.toolCreditsMap);
+      quest.promptMeta.functionCalls = settleToolCallCredits(
+        this.withReservedToolCalls(quest.promptMeta.functionCalls ?? []),
+        this.toolCreditsMap
+      );
     }
     await this.settleReservation(quest, [usage], processStartTime, logger, 'error', toolCredits);
   }
@@ -8417,7 +8590,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   private getDefaultAdminSettings(): Partial<Record<SettingKey, string>> {
     return {
       // Feature toggles - default to enabled for best user experience
-      EnableQuestMaster: 'true',
       EnableMementos: 'true',
       EnableArtifacts: 'true',
       EnableAgents: 'true',
@@ -8508,7 +8680,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
 
   private async buildOptimizedFeatures(
     adminSettings: Record<string, string>,
-    enableQuestMaster: boolean,
     enableMementos: boolean | undefined,
     enableAgents: boolean,
     projectId?: string,
@@ -8527,7 +8698,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     includeLibraryFiles?: boolean
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
-    const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
     const adminSettingsEnableAgents = getSettingsValue('EnableAgents', adminSettings);
     const adminSettingsEnableLakeMemory = getSettingsValue('EnableLakeMemory', adminSettings);
     const adminSettingsAutoNameNotebook = getSettingsValue('AutoNameNotebook', adminSettings);
@@ -8579,11 +8749,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     if (optimizedFeatureList.includes('autoNameSession') && adminSettingsAutoNameNotebook) {
       this.logger.log('  - Enabling AutoNameSession feature');
       this.features.set('autoNameSession', new AutoNameSessionFeature(this, adminSettingsAutoNameNotebook));
-    }
-
-    if (optimizedFeatureList.includes('questMaster') && enableQuestMaster && adminSettingsEnableQuestMaster) {
-      this.logger.log('  - Enabling QuestMaster feature');
-      this.features.set('questMaster', new QuestMasterFeature(this));
     }
 
     // Agent feature initialization
@@ -8931,19 +9096,57 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     logger: Logger
   ): Promise<void> {
     try {
-      const decision = await applyModerationHit({
-        users: this.db.users,
-        userId: this.user.id,
-        hit: { at: new Date(), categories, source, questId },
-      });
+      const hit = { at: new Date(), categories, source, questId };
+      const decision = await applyModerationHit({ users: this.db.users, userId: this.user.id, hit });
       logger.warn(
         `[Moderation] User ${this.user.id} flagged by ${source}` +
           (categories.length ? ` (${categories.join(', ')})` : '') +
           `; ${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
       );
+      this.sendModerationEscalationAlert(moderationEscalationAlert(this.user.id, hit, decision), logger);
     } catch (recordError) {
       logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
+  }
+
+  /**
+   * Whether the key that authenticated this turn is excepted from every category the check
+   * flagged. Only an API-key turn can be, and a failed lookup keeps the block.
+   */
+  private async keyModerationExceptionApplies(
+    source: 'openai' | 'bedrock',
+    categories: string[],
+    questId: string,
+    logger: Logger
+  ): Promise<boolean> {
+    const userApiKeys = this.db.userApiKeys;
+    if (!this.turnApiKeyId || !userApiKeys) return false;
+    try {
+      const keyCategories = await findKeyModerationExceptionCategories(this.turnApiKeyId, this.user.id, {
+        userApiKeys,
+      });
+      if (!moderationExceptionCovers(categories, keyCategories)) return false;
+    } catch (lookupError) {
+      logger.warn(`[Moderation] Key exception lookup failed for quest ${questId}; keeping the block`, lookupError);
+      return false;
+    }
+    logger.info(`[Moderation] Quest ${questId} continued under its API key exception`, {
+      source,
+      categories,
+      apiKeyId: this.turnApiKeyId,
+    });
+    return true;
+  }
+
+  /** Fire-and-forget: alert delivery never delays or fails the chat request. */
+  private sendModerationEscalationAlert(alert: ModerationEscalationAlert | null, logger: Logger): void {
+    const notify = this.notifyModerationEscalation;
+    if (!alert || !notify) return;
+    void Promise.resolve()
+      .then(() => notify(alert))
+      .catch(alertError =>
+        logger.warn(`[Moderation] Failed to send the escalation alert for user ${this.user.id}:`, alertError)
+      );
   }
 
   private getBedrockGuardrailsService(

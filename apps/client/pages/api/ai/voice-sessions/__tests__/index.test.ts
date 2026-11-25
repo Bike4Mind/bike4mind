@@ -1,6 +1,6 @@
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { ForbiddenError } from '@bike4mind/utils';
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: vi.fn(async () => ({
     assert: vi.fn(async (_modelId: string) => {}),
     admits: vi.fn(async (_modelId: string) => true),
@@ -24,6 +24,7 @@ const mockCreateSession = vi.fn();
 const mockGetSession = vi.fn();
 const mockClaimVoiceHold = vi.fn();
 const mockOpenVoiceHold = vi.fn();
+const mockFindActiveFreeze = vi.fn();
 const { mockGetSettingsMap } = vi.hoisted(() => ({ mockGetSettingsMap: vi.fn(async () => ({})) }));
 
 vi.mock('axios', () => ({
@@ -34,9 +35,11 @@ vi.mock('axios', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  warmExchangeAttribution: async () => undefined,
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   creditTransactionRepository: { createTransaction: async (_type: string, row: object) => ({ id: 'tx', ...row }) },
   adminSettingsRepository: {},
+  cacheRepository: {},
   agentRepository: {},
   apiKeyRepository: {},
   sessionRepository: {
@@ -52,6 +55,7 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...a: unknown[]) => mockFindById(...a),
   },
   questRepository: {},
+  spendFreezeRepository: { findActiveForSubject: (...a: unknown[]) => mockFindActiveFreeze(...a) },
   // No samples and no settings rows: the spend cap reads defaults and never refuses here.
   newAccountSpendCapAdapters: {
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
@@ -66,7 +70,16 @@ vi.mock('@bike4mind/services', () => ({
     getSession: (...a: unknown[]) => mockGetSession(...a),
   },
   // reserveVoiceHold's new-account spend cap; these users are never capped.
-  creditService: { assertNewAccountSpendWithinCap: async () => {} },
+  creditService: {
+    assertNewAccountSpendWithinCap: async () => {},
+    assertInterventionSpendAllowed: async () => {},
+    assertSpendNotFrozen: async (
+      subject: unknown,
+      adapters: { db: { spendFreezes: { findActiveForSubject: (s: unknown) => Promise<unknown> } } }
+    ) => {
+      if (await adapters.db.spendFreezes.findActiveForSubject(subject)) throw new Error('frozen');
+    },
+  },
 }));
 
 vi.mock('@bike4mind/utils', async importOriginal => {
@@ -91,7 +104,7 @@ import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
 async function callRoute(body: Record<string, unknown> = {}, currentCredits = 1_000_000) {
   const { req, res } = createMocks({ method: 'POST', body });
   const logger = { warn: vi.fn(), error: vi.fn() };
-  (req as any).user = { id: 'user-1', currentCredits };
+  (req as any).user = { id: 'user-1', currentCredits, organizationId: 'home-org' };
   (req as any).logger = logger;
   try {
     await (voiceSessionsHandler as any)(req, res);
@@ -100,8 +113,6 @@ async function callRoute(body: Record<string, unknown> = {}, currentCredits = 1_
   }
   return { res, logger };
 }
-
-let consoleError: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -115,13 +126,10 @@ beforeEach(() => {
     data: { value: 'ek-test', expires_at: Math.floor(Date.now() / 1000) + request.expires_after.seconds },
   }));
   mockOpenVoiceHold.mockResolvedValue(true);
-  // The web server is a Lambda: console.error lines carry the ERROR prefix the log monitor alerts on,
-  // so the handled-failure paths must stay off it as well as off req.logger.error.
-  consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  mockFindActiveFreeze.mockResolvedValue(null);
 });
 
 afterEach(() => {
-  consoleError.mockRestore();
   vi.useRealTimers();
 });
 
@@ -153,7 +161,6 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
     expect(res._getJSONData()).toMatchObject({ code: VOICE_SESSION_ERROR.unavailable });
     // An error-level log reaches the LiveOps alert filter; a rejected key is not a server fault.
     expect(logger.error).not.toHaveBeenCalled();
-    expect(consoleError).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -212,7 +219,6 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toMatchObject({ code: VOICE_SESSION_ERROR.unavailable });
     expect(logger.error).not.toHaveBeenCalled();
-    expect(consoleError).not.toHaveBeenCalled();
     expect(mockPost).not.toHaveBeenCalled();
     expect(mockIncrementCredits).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
@@ -521,5 +527,28 @@ describe('POST /api/ai/voice-sessions - admin settings read', () => {
       ],
       skipCache: true,
     });
+  });
+});
+
+describe('POST /api/ai/voice-sessions spend freeze', () => {
+  it('refuses a frozen caller with 403 spend_frozen before admission, the provider or any reserve', async () => {
+    mockFindActiveFreeze.mockResolvedValue({ scopeType: 'User', frozenAt: new Date(), reason: 'test freeze' });
+    const { res } = await callRoute();
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getData()).not.toContain('test freeze');
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: null });
+    expect(createModelAdmission).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+    expect(mockIncrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('allows a member whose only frozen scope is their home organization', async () => {
+    mockFindActiveFreeze.mockImplementation(async (subject: { organizationId: string | null }) =>
+      subject.organizationId === 'home-org' ? { scopeType: 'Organization', frozenAt: new Date() } : null
+    );
+    const { res } = await callRoute();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: null });
   });
 });

@@ -44,7 +44,7 @@ vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlemen
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 const admissionAssertMock = vi.fn(async (_model: string) => {});
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({
     admits: async () => true,
     assert: (model: string) => admissionAssertMock(model),
@@ -156,6 +156,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.agentRepository, 'listForUser').mockResolvedValue([] as never);
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
   vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 

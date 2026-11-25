@@ -1,6 +1,13 @@
-import { IFeedbackDocument, FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
-import type { FeedbackView } from './feedbackTabSearch';
+import {
+  IFeedbackDocument,
+  FeedbackStatus,
+  FeedbackSubject,
+  FeedbackType,
+  type FeedbackAiLabels,
+} from '@bike4mind/common';
+import type { FeedbackCommentFilter, FeedbackView } from './feedbackTabSearch';
 import type { FeedbackReceivedWindow } from './feedbackTrends';
+import type { FeedbackResolution, UpdateFeedbackStatusRequest } from '@bike4mind/common';
 
 // Extended feedback document with MongoDB _id field. `contentExpired` is added by the API's
 // hydrateFeedbackText join - true when content was submitted but has since aged out under the
@@ -26,15 +33,24 @@ export function getFeedbackDisplayContent(
 }
 
 export interface FeedbackFilters {
+  area?: FeedbackAiLabels['area'];
+  severity?: FeedbackAiLabels['severity'];
   searchTerm: string;
   statusFilters: Record<FeedbackStatus, boolean>;
   selectedOrganizations: string[];
+  /** One reporter's user id; undefined is every reporter. */
+  userId?: string;
   /** Undefined is every subject: the server reads an absent `subject` as no filter at all. */
   subject?: FeedbackSubject;
+  resolution?: FeedbackResolution;
   /** Empty is every type. */
   types: FeedbackType[];
   /** Undefined is any age. */
   received?: FeedbackReceivedWindow;
+  /** `YYYY-MM-DD` viewer-local days, both inclusive. */
+  createdFrom?: string;
+  createdTo?: string;
+  comment?: FeedbackCommentFilter;
   sortAscending: boolean;
 }
 
@@ -49,16 +65,23 @@ export interface FeedbackFilters {
  * in that group and is now also the triage table's own subject filter.
  */
 export interface FeedbackListFilterParams {
+  area?: FeedbackAiLabels['area'];
+  severity?: FeedbackAiLabels['severity'];
   userId?: string;
   sessionId?: string;
   questId?: string;
   organizationId?: string;
   subject?: FeedbackSubject;
+  resolution?: FeedbackResolution;
   status?: FeedbackStatus[];
   /** `Feedback` also matches reports with no type (help modal, older reports). */
   type?: FeedbackType[];
   organization?: string[];
   received?: FeedbackReceivedWindow;
+  /** ISO instants, both inclusive. */
+  createdFrom?: string;
+  createdTo?: string;
+  hasComment?: boolean;
   search?: string;
   sort: 'asc' | 'desc';
 }
@@ -91,18 +114,26 @@ export interface FeedbackListResponse {
 
 // Hook return types
 export interface UseFeedbackFiltersReturn {
+  setArea: (value: FeedbackAiLabels['area'] | undefined) => void;
+  setSeverity: (value: FeedbackAiLabels['severity'] | undefined) => void;
   filters: FeedbackFilters;
   setSearchTerm: (term: string) => void;
   setStatusFilters: React.Dispatch<React.SetStateAction<Record<FeedbackStatus, boolean>>>;
   setSelectedOrganizations: (orgs: string[]) => void;
+  setUserId: (userId: string | undefined) => void;
   /** Undefined clears the filter back to every subject. */
   setSubject: (subject: FeedbackSubject | undefined) => void;
+  setResolution: (resolution: FeedbackResolution | undefined) => void;
   /** Empty clears the filter back to every type. */
   setTypes: (types: FeedbackType[]) => void;
   /** Undefined clears the filter back to any age. */
   setReceived: (received: FeedbackReceivedWindow | undefined) => void;
+  /** Sets a custom created range (clearing any preset window); both undefined clears it. */
+  setCreatedRange: (range: { createdFrom: string | undefined; createdTo: string | undefined }) => void;
+  /** Undefined clears the filter back to reports with or without a comment. */
+  setComment: (comment: FeedbackCommentFilter | undefined) => void;
   /** Replaces every filter with the defaults plus `view`, and clears the search box. */
-  showOnly: (view: Partial<Pick<FeedbackView, 'statusFilters' | 'types' | 'received'>>) => void;
+  showOnly: (view: Partial<Pick<FeedbackView, 'statusFilters' | 'types' | 'received' | 'userId'>>) => void;
   toggleSortDirection: () => void;
   /** Debounced, server-ready filter query. Feeds both the list and the CSV export. */
   filterParams: FeedbackListFilterParams;
@@ -128,6 +159,11 @@ export interface UseFeedbackOperationsReturn {
   isError: boolean;
   refreshFeedback: () => Promise<void>;
   handleStatusChange: (feedbackItem: IExtendedFeedbackDocument, newValue: FeedbackStatus | null) => Promise<void>;
+  feedbackToClose: IExtendedFeedbackDocument | null;
+  cancelClose: () => void;
+  confirmClose: (
+    body: Pick<UpdateFeedbackStatusRequest, 'resolution' | 'resolutionDuplicateId' | 'reason'>
+  ) => Promise<void>;
   handleDeleteFeedbackClick: (feedback: IExtendedFeedbackDocument) => void;
   confirmDeleteFeedback: (reason: string) => Promise<void>;
   feedbackToDelete: string | null;

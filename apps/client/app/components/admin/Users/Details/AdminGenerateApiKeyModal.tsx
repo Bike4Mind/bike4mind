@@ -10,7 +10,11 @@ import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminU
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-import { ADMIN_ONLY_API_KEY_SCOPES, type ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import {
+  ADMIN_ONLY_API_KEY_SCOPES,
+  EXPLICIT_ONLY_API_KEY_SCOPES,
+  type ApiKeyScopeOption,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import WarningIcon from '@mui/icons-material/Warning';
@@ -44,10 +48,14 @@ interface AdminGenerateApiKeyModalProps {
 
 // overwatch-ingest:write is left out: createUserApiKey requires a productId for it, which
 // this admin path never collects, so offering it would only buy a 400.
-const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE);
 // A confined scope must be a key's only scope (createUserApiKey enforces it), so picking one
 // replaces the selection and picking any other scope drops it.
 const confinedScopeValues = new Set<ApiKeyScopeValue>(CONFINED_API_KEY_SCOPES);
+const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(
+  s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE && confinedScopeValues.has(s.value)
+);
+// Admin-provisioned scopes that ride alongside the generic ones (ai:end-user-id).
+const companionAdminScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => !confinedScopeValues.has(s.value));
 
 const INGEST_FULL_ADMIN_ONLY = 'Only full administrators can create API keys with admin-provisioned scopes';
 
@@ -132,9 +140,12 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     });
   };
 
-  const selectAllScopeOptions = useMemo(() => scopeOptions.filter(s => !s.requiredEntitlement), [scopeOptions]);
+  const selectAllScopeOptions = useMemo(
+    () => scopeOptions.filter(s => !s.requiredEntitlement && !EXPLICIT_ONLY_API_KEY_SCOPES.has(s.value)),
+    [scopeOptions]
+  );
   const allScopesSelected = selectAllScopeOptions.every(s => formData.scopes.includes(s.value));
-  const genericSelectedCount = formData.scopes.filter(s => !confinedScopeValues.has(s)).length;
+  const genericSelectedCount = scopeOptions.filter(scope => formData.scopes.includes(scope.value)).length;
 
   const toggleScope = (value: ApiKeyScopeValue, checked: boolean) => {
     let scopes: ApiKeyScopeValue[];
@@ -274,6 +285,18 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
             )}
             <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
               {ingestScopeOptions.map(scope => renderScope(scope, canMintIngest ? undefined : INGEST_FULL_ADMIN_ONLY))}
+            </Box>
+          </FormControl>
+
+          <FormControl>
+            <FormLabel sx={{ mb: 0.5 }}>Platform key</FormLabel>
+            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+              Admin-only. Combine with the AI scopes above for a key that serves many end users.
+            </Typography>
+            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
+              {companionAdminScopeOptions.map(scope =>
+                renderScope(scope, canMintIngest ? undefined : INGEST_FULL_ADMIN_ONLY)
+              )}
             </Box>
           </FormControl>
 

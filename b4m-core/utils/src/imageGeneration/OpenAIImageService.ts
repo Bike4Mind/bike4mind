@@ -2,6 +2,7 @@ import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageSe
 import OpenAI from 'openai';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { Logger } from '@bike4mind/observability';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
   fallbackImageSize,
   IMAGE_SIZE_CONSTRAINTS,
@@ -267,6 +268,7 @@ export class OpenAIImageService extends AIImageService {
         stream,
         ...openaiOptions
       } = options;
+      openaiOptions.user = toProviderEndUserId(openaiOptions.user);
 
       const parameterWarnings: string[] = [];
       let gptImageOutputOptions: ReturnType<typeof resolveGptImageOutputOptions> = {};
@@ -661,7 +663,7 @@ export class OpenAIImageService extends AIImageService {
               // the SDK's own union for this arm - so the cast narrows rather than widens.
               ...(forwardSize ? { size: size as '256x256' | '512x512' | '1024x1024' } : {}),
               response_format,
-              user,
+              user: toProviderEndUserId(user),
             }
       );
 

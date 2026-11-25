@@ -180,7 +180,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     expect(Buffer.isBuffer(body)).toBe(true);
     expect((body as Buffer).toString()).toBe('hello world');
     expect(key).toBe('uploads/abc.txt');
-    expect(options).toMatchObject({ ContentType: 'text/plain', ContentLength: 11 });
+    expect(options).toMatchObject({ ContentType: 'text/plain', ContentLength: 11, IfNoneMatch: '*' });
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
@@ -247,6 +247,24 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
 
     await expect(handler(makeReq({}), res)).rejects.toThrow('storage down');
 
+    expect(recomputeUploadedMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 and leaves the row pending when the object already exists', async () => {
+    const fabFile = makePendingFile();
+    findByIdMock.mockResolvedValue(fabFile);
+    uploadMock.mockRejectedValue(
+      Object.assign(new Error('At least one of the pre-conditions you specified did not hold'), {
+        name: 'PreconditionFailed',
+        $metadata: { httpStatusCode: 412 },
+      })
+    );
+    const res = makeRes();
+    await handler(makeReq({}), res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(fabFile.status).toBe('pending');
+    expect(fabFile.save).not.toHaveBeenCalled();
     expect(recomputeUploadedMock).not.toHaveBeenCalled();
   });
 

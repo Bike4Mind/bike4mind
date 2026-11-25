@@ -255,6 +255,35 @@ export const getDB = () => {
   return mongoose;
 };
 
+interface TransactionState {
+  afterCommit: Map<string, () => Promise<unknown>>;
+  rollback?: { error: unknown };
+}
+
+const transactionBySession = new WeakMap<mongoose.mongo.ClientSession, TransactionState>();
+
+/** Prevents a managed transaction from committing when its caller catches a partial write's error. */
+export function markTransactionForRollback(session: mongoose.mongo.ClientSession, error: unknown): void {
+  const state = transactionBySession.get(session);
+  if (state) state.rollback ??= { error };
+}
+
+/**
+ * Queues `work` to run once the withTransaction owning `session` commits; withTransaction awaits it
+ * before returning, so a Lambda cannot freeze mid-way. Latest wins per `key`; an aborted run's work
+ * is dropped. Returns false when withTransaction does not own `session`.
+ */
+export function runAfterCommit(
+  session: mongoose.mongo.ClientSession,
+  key: string,
+  work: () => Promise<unknown>
+): boolean {
+  const queue = transactionBySession.get(session)?.afterCommit;
+  if (!queue) return false;
+  queue.set(key, work);
+  return true;
+}
+
 /**
  * Execute a function within a MongoDB transaction with automatic retry on transient errors.
  *
@@ -294,12 +323,30 @@ export const withTransaction = async <T>(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await mongoose.connection.transaction(async session => {
+      let afterCommit = new Map<string, () => Promise<unknown>>();
+      const result = await mongoose.connection.transaction(async session => {
         logger?.debug('Starting transaction...', { attempt: attempt + 1 });
-        const result = await fn(session);
-        logger?.debug('Transaction completed');
-        return result;
+        // Reset per callback run: the driver re-runs it in the same session on a transient commit error.
+        afterCommit = new Map();
+        const state: TransactionState = { afterCommit };
+        transactionBySession.set(session, state);
+        try {
+          const result = await fn(session);
+          if (state.rollback) throw state.rollback.error;
+          logger?.debug('Transaction completed');
+          return result;
+        } finally {
+          transactionBySession.delete(session);
+        }
       }, transactionOptions);
+      for (const work of afterCommit.values()) {
+        try {
+          await work();
+        } catch (error) {
+          logger?.warn('After-commit work failed', { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return result;
     } catch (error) {
       lastError = error;
 
@@ -534,7 +581,7 @@ export const softDeletePlugin = (
     // which throws "path 'userId' is matched twice" when CASL generates $or
     // filters containing both root userId and nested users.userId paths.
     const softDeleteFilter = { ...castFilter, deletedAt: null };
-    console.debug(`Soft deleting one document with filter: ${JSON.stringify(softDeleteFilter)}`);
+    Logger.debug('Soft deleting one document', { filter: softDeleteFilter });
     return this.collection
       .updateOne(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
       .then((result: any) => ({
@@ -551,7 +598,7 @@ export const softDeletePlugin = (
     // Perform a soft delete by updating the `deletedAt` field.
     // Use raw MongoDB driver to bypass Mongoose 8's path inference (see deleteOne above).
     const softDeleteFilter = { ...castFilter, deletedAt: null };
-    console.debug(`Soft deleting many documents with filter: ${JSON.stringify(softDeleteFilter)}`);
+    Logger.debug('Soft deleting many documents', { filter: softDeleteFilter });
     return this.collection
       .updateMany(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
       .then((result: any) => ({
@@ -717,18 +764,18 @@ export function compareMongoIds(a: string | mongoose.Types.ObjectId, b: string |
 export async function safeDropIndex(collection: mongoose.Collection, indexName: string) {
   try {
     await collection.dropIndex(indexName);
-    console.log(`✓ Dropped index: ${indexName}`);
+    Logger.info('Dropped index', { indexName });
   } catch (error) {
     if (error instanceof mongoose.mongo.MongoError && error.code === 27) {
-      console.log(`⚠ Index not found (skipping): ${indexName}`);
+      Logger.info('Index not found (skipping)', { indexName });
     } else if (error instanceof mongoose.mongo.MongoError && error.code === 26) {
       // NamespaceNotFound: the collection itself does not exist yet, so there is no index
       // to drop - as "safe" a no-op as a missing index. Surfaced as a test-order flake:
       // a migration test calling this in beforeEach fails only when no earlier test in the
       // shard happened to create the collection.
-      console.log(`⚠ Collection not found (skipping): ${indexName}`);
+      Logger.info('Collection not found (skipping)', { indexName });
     } else if (error instanceof Error && error.message?.includes('index not found')) {
-      console.log(`⚠ Index not found (skipping): ${indexName}`);
+      Logger.info('Index not found (skipping)', { indexName });
     } else {
       throw error;
     }

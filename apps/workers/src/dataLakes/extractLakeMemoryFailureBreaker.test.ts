@@ -53,7 +53,7 @@ vi.mock('@bike4mind/common', () => ({
     e?.additionalInfo?.errorCode === 'insufficient_credits' ||
     e?.additionalInfo?.errorCode === 'daily_free_limit_reached',
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => vi.fn() }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
   dataLakeService: { lakeMembershipScope: () => 'datalake:test', lakeMembershipSignals: () => ({ inLake: true }) },

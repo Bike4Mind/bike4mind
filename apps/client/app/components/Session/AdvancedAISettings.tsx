@@ -85,11 +85,6 @@ const AISettings: FC<AISettingsProps> = ({
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = modelInfoRepo?.find(m => m.id === model);
 
-  // Reset QuestMaster to disabled when model changes
-  useEffect(() => {
-    setLLM({ isQuestMasterEnabled: false });
-  }, [model, setLLM]);
-
   // Reset quality to default when switching between image models
   useEffect(() => {
     if (isImageModel(model)) {

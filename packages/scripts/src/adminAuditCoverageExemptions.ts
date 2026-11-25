@@ -10,17 +10,19 @@ export const ADMIN_AUDIT_COVERAGE_EXEMPTIONS: Readonly<Record<string, string>> =
   'PATCH /api/admin/saved-views/[id]': "the admin's own saved filter views on the admin pages",
   'DELETE /api/admin/saved-views/[id]': "the admin's own saved filter views on the admin pages",
 
+  // Audited inside the service, which the barrel import hides from this scan
+  'POST /api/admin/spend-freezes': 'spendFreezeService.freezeSpend writes the strict spend.freeze.applied entry',
+  'POST /api/admin/spend-freezes/lift': 'spendFreezeService.unfreezeSpend writes the strict spend.freeze.lifted entry',
+
   // Reads, previews and dry runs sent as POST
   'POST /api/admin/abuse/bulk-preview': 'dry run: counts what a bulk action would touch, writes nothing',
-  'POST /api/admin/users/bulk/preview': 'dry run: counts what a bulk action would touch, writes nothing',
+  'POST /api/admin/users/signup-verdicts': 'read: classifies a page of users; POST only to carry the id list',
   'POST /api/admin/email/jobs/preview-recipients': 'read: resolves the recipient list of a draft job',
   'POST /api/admin/email/jobs/[id]/check-status': 'bookkeeping: refreshes delivery status from the provider',
   'POST /api/admin/whats-new-highlights-preview': 'preview: renders highlights without saving them',
   'POST /api/admin/system-prompts/[promptId]/test': 'preview: runs a prompt against a model, saves nothing',
   'POST /api/admin/github/test': 'probe: checks the GitHub connection, saves nothing',
   'POST /api/admin/pr-report/generate': 'preview: drafts a PR report; sending it is audited by pr-report/send',
-  'POST /api/admin/liveops-triage-configs/[id]/trigger':
-    'queues a run of an existing triage config; the run is logged in the triage config audit log',
 
   // Machine ingests (auth: false, a shared ingest token, no admin actor)
   'POST /api/admin/rate-limits/ingest': 'machine ingest of rate-limit events, token-authenticated',

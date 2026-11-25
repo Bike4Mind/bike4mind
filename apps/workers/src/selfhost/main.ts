@@ -10,6 +10,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { warnIfPlaintextSecretsOptOut } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
 import { dispatch as researchEngineDispatch } from '@workers/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@workers/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@workers/queueHandlers/fabFileVectorize';
@@ -31,6 +32,7 @@ import { SelfHostWorker } from './selfHostWorker';
 import { registerNotebookCurationQueue } from './notebookCurationQueue';
 import { registerQuestExportQueue } from './questExportQueue';
 import { registerAccountDataExportQueue } from './accountDataExportQueue';
+import { registerAccountErasureQueue } from './accountErasureQueue';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 import { registerRiskEvidenceQueue } from './riskEvidenceQueue';
@@ -43,6 +45,7 @@ import { registerCreditLotSweep } from './creditLotSweep';
 import { registerSpendReconciliation } from './spendReconciliation';
 import { registerCreditPurchaseReconciliation } from './creditPurchaseReconciliation';
 import { registerVoiceHoldSweep } from './voiceHoldSweep';
+import { registerBriefScheduleReconcile } from './briefScheduleReconcile';
 import { registerCreditHoldSweep } from './creditHoldSweep';
 import { registerReferralRewardRelease } from './referralRewardRelease';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
@@ -53,6 +56,7 @@ import { registerAdminAuditAlerts } from './adminAuditAlerts';
 import { registerOauthAbuseAutoBlock } from './oauthAbuseAutoBlock';
 import { registerSignupGrantHeldRelease } from './signupGrantHeldRelease';
 import { registerAccountDeletionSweep } from './accountDeletionSweep';
+import { registerOrganizationRetention } from './organizationRetention';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -73,6 +77,9 @@ import {
   GENERATION_JOB_MAX_RECEIVE_COUNT,
   GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
 } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 /**
  * Self-host background worker entrypoint.
@@ -121,6 +128,7 @@ async function main() {
     process.exit(1);
   }
 
+  warnIfPlaintextSecretsOptOut(bootLogger);
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger);
   bootLogger.info('MongoDB connected');
   // Self-host runs no packages/scripts migrations, so the pool seed the hosted migration
@@ -138,6 +146,7 @@ async function main() {
   registerOauthAbuseAutoBlock(worker);
   registerSignupGrantHeldRelease(worker);
   registerAccountDeletionSweep(worker);
+  registerOrganizationRetention(worker);
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);
@@ -154,6 +163,7 @@ async function main() {
   registerSpendReconciliation(worker);
   registerCreditPurchaseReconciliation(worker);
   registerVoiceHoldSweep(worker);
+  registerBriefScheduleReconcile(worker);
   registerCreditHoldSweep(worker);
   registerReferralRewardRelease(worker);
 
@@ -248,6 +258,7 @@ async function main() {
   await registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
   await registerQuestExportQueue(worker, Resource.questExportQueue?.url, bootLogger);
   await registerAccountDataExportQueue(worker, Resource.accountDataExportQueue?.url, bootLogger);
+  await registerAccountErasureQueue(worker, Resource.accountErasureQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses

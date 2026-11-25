@@ -7,6 +7,7 @@ type Actor = Parameters<typeof isFullAdmin>[0] & { id: string; impersonatedBy?: 
 type CreditedOrganization = {
   userId?: string | null;
   adminUserIds?: readonly string[] | null;
+  billingManagerUserIds?: readonly string[] | null;
   users?: readonly { userId?: string | null }[] | null;
 };
 
@@ -27,7 +28,10 @@ export async function assertDelegateCanCreditUsers(actor: Actor, userIds: string
   if (userIds.some(userId => isSelfOrImpersonator(actor, userId))) {
     throw new ForbiddenError(`You cannot ${verb} your own account`);
   }
-  const users = await userRepository.find({ _id: { $in: userIds } }, { isAdmin: 1, adminPermissions: 1 });
+  const users = await userRepository.find(
+    { _id: { $in: userIds } },
+    { isAdmin: 1, adminPermissions: 1, adminRoleIds: 1 }
+  );
   for (const user of users) assertCanActOnAdminTarget(actor, user, verb);
 }
 
@@ -40,6 +44,7 @@ export async function assertDelegateCanCreditOrganization(
   const memberIds = [
     organization.userId,
     ...(organization.adminUserIds ?? []),
+    ...(organization.billingManagerUserIds ?? []),
     ...(organization.users ?? []).map(member => member.userId),
   ].filter((id): id is string => typeof id === 'string' && id.length > 0);
   if (memberIds.some(id => isSelfOrImpersonator(actor, id))) {

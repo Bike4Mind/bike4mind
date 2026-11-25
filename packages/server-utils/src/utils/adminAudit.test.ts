@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 const h = vi.hoisted(() => ({
   append: vi.fn(),
   findById: vi.fn(),
+  organizationAudit: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -10,12 +11,17 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: h.findById } }));
+vi.mock('./organizationAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('./organizationAudit')>()),
+  recordOrganizationAuditEvent: h.organizationAudit,
+}));
 
 import {
   ADMIN_ACTION_REASON_MISSING_MESSAGE,
   denySelfAdminAction,
   parseAdminActionReason,
   recordAdminActionFromRequest,
+  resolveAdminAuditFromRequest,
   systemAuditActor,
   userAuditTarget,
   type RecordAdminActionFromRequestInput,
@@ -121,6 +127,45 @@ describe('recordAdminActionFromRequest', () => {
       wasAdmin: true,
       impersonatedUserId: 'customer-1',
     });
+  });
+
+  it.each([true, false])(
+    'keeps the real admin on an organization event when platform auditing fails (lookup %s)',
+    async found => {
+      h.findById.mockResolvedValue(
+        found ? { id: 'real-admin', username: 'real', name: 'Real Admin', isAdmin: true } : null
+      );
+      h.append.mockRejectedValueOnce(new Error('platform audit unavailable'));
+      const req = buildRequest({
+        user: { id: 'member', username: 'member', name: 'Member', isAdmin: false, impersonatedBy: 'real-admin' },
+      });
+      const entry = await recordAdminActionFromRequest(req, {
+        action: 'org.admins.updated',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: 'org', displayName: 'Team' },
+        summary: 'Updated managers',
+      });
+      expect(entry).toBeNull();
+      expect(h.findById).toHaveBeenCalledExactlyOnceWith('real-admin');
+      expect(h.organizationAudit).toHaveBeenCalledExactlyOnceWith({
+        organizationId: 'org',
+        actorUserId: 'real-admin',
+        action: 'member.role_changed',
+      });
+    }
+  );
+
+  it('mirrors a member role change into the team audit trail as member.role_changed', async () => {
+    await recordAdminActionFromRequest(buildRequest(), {
+      action: 'org.member.role_changed',
+      actorScope: 'organization',
+      organizationId: 'org',
+      target: { kind: 'organization', id: 'org', displayName: 'Team' },
+      summary: 'changed organization role to manager',
+    });
+    expect(h.organizationAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org', action: 'member.role_changed' })
+    );
   });
 
   it('falls back to an unknown admin when the impersonator cannot be found', async () => {
@@ -261,5 +306,26 @@ describe('userAuditTarget', () => {
     expect((await userAuditTarget('u1')).displayName).toBe('a');
     h.findById.mockResolvedValueOnce(null);
     expect((await userAuditTarget('u1')).displayName).toBe('u1');
+  });
+});
+
+describe('resolveAdminAuditFromRequest', () => {
+  it('returns the same actor and context recordAdminActionFromRequest would stamp', async () => {
+    vi.clearAllMocks();
+    h.append.mockImplementation(async (entry: Record<string, unknown>) => ({ id: 'entry-1', ...entry }));
+    const req = buildRequest();
+
+    const resolved = await resolveAdminAuditFromRequest(req);
+    await recordAdminActionFromRequest(req, baseInput);
+
+    expect(resolved.actor).toEqual(appended().actor);
+    expect(resolved.context).toEqual(appended().context);
+    expect(resolved.context.route).toBe('/api/admin/users/u1/credits');
+  });
+
+  it('throws when the request is unauthenticated', async () => {
+    await expect(resolveAdminAuditFromRequest(buildRequest({ user: undefined }))).rejects.toThrow(
+      'requires an authenticated request'
+    );
   });
 });

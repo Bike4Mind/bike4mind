@@ -33,16 +33,17 @@ public struct TrackedGeneration: Identifiable, Equatable, Sendable {
   public let handle: GenerationHandle
   public internal(set) var phase: GenerationPhase
   public internal(set) var resultURLs: [URL]
+  /// The saved output's Files entry, so a finished job can open in the media detail.
+  public internal(set) var resultFileID: String?
 
   public var id: String { handle.id }
 }
 
 /// Follows every generation started from Studio until it settles.
 ///
-/// Video and music jobs report through the realtime `generation_job_updated` frame; images have no job
-/// frame, so they are polled through their quest. Every generation is also polled on a backoff, because
-/// frames sent while the socket was down are never replayed. Polling stops at a terminal phase or after
-/// `pollWindow`, so a job the server lost cannot poll forever.
+/// Generation jobs report through the realtime `generation_job_updated` frame. Every generation is also polled on a
+/// backoff, because frames sent while the socket was down are never replayed. Polling stops at a terminal phase or
+/// after `pollWindow`, so a job the server lost cannot poll forever.
 @MainActor
 @Observable
 public final class GenerationTracker {
@@ -102,14 +103,13 @@ public final class GenerationTracker {
   /// Starts tracking a generation the server just accepted.
   public func track(_ handle: GenerationHandle) {
     guard !generations.contains(where: { $0.id == handle.id }) else { return }
-    generations.insert(TrackedGeneration(handle: handle, phase: .queued, resultURLs: []), at: 0)
+    generations.insert(TrackedGeneration(handle: handle, phase: .queued, resultURLs: [], resultFileID: nil), at: 0)
     persist()
     startPolling(handle)
   }
 
   public func cancel(_ id: String) async throws {
-    guard let tracked = generations.first(where: { $0.id == id }), tracked.handle.isCancellable,
-      !tracked.phase.isTerminal
+    guard let tracked = generations.first(where: { $0.id == id }), !tracked.phase.isTerminal
     else { return }
     try await api.cancel(tracked.handle)
     apply(GenerationStatus(phase: .cancelled), to: id)
@@ -146,6 +146,7 @@ public final class GenerationTracker {
     guard !current.phase.isTerminal else { return }
     generations[index].phase = status.phase
     if !status.resultURLs.isEmpty { generations[index].resultURLs = status.resultURLs }
+    if let fileID = status.resultFileID { generations[index].resultFileID = fileID }
     guard status.phase.isTerminal else { return }
     polls.removeValue(forKey: id)?.cancel()
     persist()

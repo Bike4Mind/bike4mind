@@ -2,6 +2,7 @@ import {
   usdToCredits,
   VIDEO_INPUT_ROLES,
   VIDEO_MODEL_CATALOG,
+  videoModelProfile,
   type VideoModel,
   type VideoModelId,
 } from '@bike4mind/common';
@@ -9,11 +10,14 @@ import {
 /** The server's public shape for a catalog model, as toPublicVideoModel renders it. */
 export function publicVideoModel(id: VideoModelId): VideoModel {
   const caps = VIDEO_MODEL_CATALOG[id];
+  const profile = videoModelProfile(id);
   return {
     id,
     object: 'video_model',
     display_name: caps.displayName,
     provider: caps.provider,
+    provider_label: profile.providerLabel,
+    blurb: profile.blurb,
     modes: [...caps.modes],
     input_roles: VIDEO_INPUT_ROLES.flatMap(role => {
       const accepted = caps.inputs[role];

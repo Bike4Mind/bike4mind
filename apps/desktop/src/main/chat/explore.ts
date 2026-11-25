@@ -1,7 +1,9 @@
 import { ChatModels } from '@bike4mind/common';
 import type { AxiosInstance } from 'axios';
+import type { BillingPayer } from '@shared/account';
 import type { ChatModelOption, ChatUsage } from '@shared/chat';
-import { streamCompletion, supportsPromptCache } from './completions';
+import type { CompletionRunAttribution } from '@bike4mind/common';
+import { payerOption, streamCompletion, supportsPromptCache, withRunFallback } from './completions';
 import type { ExploreContext } from './tools/types';
 
 /**
@@ -56,6 +58,14 @@ export function buildExploreContext(options: {
   models: readonly ChatModelOption[];
   sessionModel: string;
   onUsage(usage: ChatUsage): void;
+  /** The turn's run attribution, read per request so a run the server refused mid-turn is not resent. */
+  run?: () => CompletionRunAttribution | undefined;
+  /** True when the run has a credit budget: a refused run is then never resent without it. */
+  runBudgeted?: boolean;
+  /** Called when the server refuses `run`, before the request is resent without it. */
+  onRunRejected?: () => Promise<void>;
+  /** The payer the turn's run is bound to; absent outside a run, which reads the account selection. */
+  runPayer?: BillingPayer;
 }): ExploreContext {
   const target = (model: string) => {
     const maxTokens = options.models.find(option => option.id === model)?.maxOutputTokens;
@@ -64,7 +74,21 @@ export function buildExploreContext(options: {
   return {
     ...target(pickExploreModel(options.models, options.sessionModel)),
     fallback: target(options.sessionModel),
-    complete: (request, onEvent, signal) => streamCompletion(options.axios, options.endpoint, request, onEvent, signal),
+    complete: (request, onEvent, signal) =>
+      withRunFallback(
+        options.run?.(),
+        run =>
+          streamCompletion(
+            options.axios,
+            options.endpoint,
+            run ? { ...request, run } : request,
+            onEvent,
+            signal,
+            payerOption(options.runPayer)
+          ),
+        async () => options.onRunRejected?.(),
+        { budgeted: options.runBudgeted }
+      ),
     addUsage: options.onUsage,
   };
 }

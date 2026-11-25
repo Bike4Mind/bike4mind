@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Button, Input, Option, Select, Stack, Typography } from '@mui/joy';
+import { Button, Option, Select, Stack, Typography } from '@mui/joy';
 import { API_COMPLETION_OUTCOME_LABELS, API_REQUEST_LOG_COVERAGE, type IUserApiKeyDocument } from '@bike4mind/common';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import { DataTable, RelativeTime, SectionCard, StatusChip } from '../../../../shared';
 
 export const ApiRequestsSection: React.FC<{ userId: string; apiKeys: readonly IUserApiKeyDocument[] }> = ({
@@ -36,19 +38,27 @@ export const ApiRequestsSection: React.FC<{ userId: string; apiKeys: readonly IU
             </Option>
           ))}
         </Select>
-        <Input
-          type="date"
+        <OptionalDateInput
           value={from}
-          onChange={event => setFrom(event.target.value)}
-          slotProps={{ input: { 'aria-label': 'Requests from UTC date', max: to || undefined } }}
-          data-testid="user-api-requests-from"
+          onChange={setFrom}
+          emptyLabel="From any date"
+          setLabel="Set start date"
+          clearLabel="Remove start date"
+          initialDate={() => (to && to < todayUtc() ? to : todayUtc())}
+          max={to || undefined}
+          aria-label="Requests from UTC date"
+          testId="user-api-requests-from"
         />
-        <Input
-          type="date"
+        <OptionalDateInput
           value={to}
-          onChange={event => setTo(event.target.value)}
-          slotProps={{ input: { 'aria-label': 'Requests to UTC date', min: from || undefined } }}
-          data-testid="user-api-requests-to"
+          onChange={setTo}
+          emptyLabel="To any date"
+          setLabel="Set end date"
+          clearLabel="Remove end date"
+          initialDate={() => (from && from > todayUtc() ? from : todayUtc())}
+          min={from || undefined}
+          aria-label="Requests to UTC date"
+          testId="user-api-requests-to"
         />
         <Button
           size="sm"
@@ -103,6 +113,7 @@ export const ApiRequestsSection: React.FC<{ userId: string; apiKeys: readonly IU
           {
             id: 'completion',
             label: 'Completion outcome',
+            wrap: true,
             render: entry => {
               const observation = entry.request.completionObservation;
               if (!observation) return 'Not captured';

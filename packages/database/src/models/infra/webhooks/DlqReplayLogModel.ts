@@ -9,6 +9,7 @@ export interface IDlqReplayLog {
   sourceQueue: string;
   status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
   operation?: 'replay' | 'discard';
+  aiSuggestionId?: string;
   errorMessage?: string;
   reason?: string;
   replayedBy: string;
@@ -29,6 +30,7 @@ const DlqReplayLogSchema = new mongoose.Schema(
       required: true,
     },
     operation: { type: String, enum: ['replay', 'discard'] },
+    aiSuggestionId: { type: String },
     errorMessage: { type: String },
     reason: { type: String },
     replayedBy: { type: String, required: true },
@@ -42,6 +44,8 @@ const DlqReplayLogSchema = new mongoose.Schema(
 
 // For history queries sorted by time
 DlqReplayLogSchema.index({ queueLabel: 1, createdAt: -1 });
+DlqReplayLogSchema.index({ createdAt: -1, _id: -1 });
+DlqReplayLogSchema.index({ queueLabel: 1, createdAt: -1, _id: -1 });
 
 // For counting replay attempts per message
 DlqReplayLogSchema.index({ messageId: 1, status: 1 });
@@ -56,6 +60,7 @@ interface DlqReplayLogFilters {
   endDate?: Date;
   search?: string;
   limit?: number;
+  before?: { createdAt: Date; id: string };
   /** Defaults to true. Pass false to project `messageBody` out of the query. */
   includeBody?: boolean;
 }
@@ -79,12 +84,46 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
     });
   }
 
+  /** countAttempts for many messages in one query; a message with no counted attempt maps to 0. */
+  async countAttemptsByMessage(messageIds: readonly string[]): Promise<Map<string, number>> {
+    const counts = new Map(messageIds.map(messageId => [messageId, 0]));
+    if (!messageIds.length) return counts;
+    const rows = await this.model.aggregate<{ _id: string; attempts: number }>([
+      // Must match countAttempts: the same statuses count and discards never do.
+      {
+        $match: {
+          messageId: { $in: [...messageIds] },
+          status: { $in: ['success', 'failed'] },
+          operation: { $ne: 'discard' },
+        },
+      },
+      { $group: { _id: '$messageId', attempts: { $sum: 1 } } },
+    ]);
+    for (const row of rows) counts.set(row._id, row.attempts);
+    return counts;
+  }
+
   /**
    * Log a replay operation.
    */
   async logReplay(data: Omit<IDlqReplayLog, 'id' | 'createdAt' | 'updatedAt'>): Promise<IDlqReplayLog> {
     const result = await this.model.create(data);
     return result.toObject();
+  }
+
+  async findSuggestionOutcome(aiSuggestionId: string, queueLabel: string, messageId: string) {
+    const row = await this.model
+      .findOne({ messageId, queueLabel, aiSuggestionId })
+      .select({ status: 1, operation: 1, errorMessage: 1, updatedAt: 1 })
+      .sort({ createdAt: -1, _id: -1 })
+      .lean();
+    if (!row) return null;
+    return {
+      status: row.status,
+      operation: row.operation ?? 'replay',
+      hasWarning: Boolean(row.errorMessage),
+      recordedAt: row.updatedAt.toISOString(),
+    };
   }
 
   /** Finalize only the pending discard created before the SQS deletion request. */
@@ -117,15 +156,28 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
     if (filters.search) {
       const escaped = filters.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
+        ...(mongoose.isObjectIdOrHexString(filters.search)
+          ? [{ _id: new mongoose.Types.ObjectId(filters.search) }]
+          : []),
         { messageId: { $regex: escaped, $options: 'i' } },
         { errorMessage: { $regex: escaped, $options: 'i' } },
         { reason: { $regex: escaped, $options: 'i' } },
       ];
     }
+    if (filters.before) {
+      query.$and = [
+        {
+          $or: [
+            { createdAt: { $lt: filters.before.createdAt } },
+            { createdAt: filters.before.createdAt, _id: { $lt: new mongoose.Types.ObjectId(filters.before.id) } },
+          ],
+        },
+      ];
+    }
     const projection = filters.includeBody === false ? { messageBody: 0 } : undefined;
     const results = await this.model
       .find(query, projection)
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(filters.limit ?? 50);
     return results.map(doc => doc.toObject());
   }

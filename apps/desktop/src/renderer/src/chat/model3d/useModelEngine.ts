@@ -9,6 +9,7 @@ import {
   type ModelSummary,
   type ModelViewState,
 } from '@shared/model3d';
+import type { ModelInspection } from './inspection';
 import { latestOnly } from './latestOnly';
 import { checkedOutcome, errorMessage, ModelEngineFrame, reportGoodFileBuild } from './modelEngineFrame';
 import {
@@ -22,6 +23,7 @@ import {
   summarizeParts,
 } from './modelScene';
 import { renderTurntable } from './turntable';
+import { partFacts, type ModelPartFacts } from '@shared/modelEdit';
 import { captureFromFreshBuild } from './useModelBackgroundBuilds';
 
 export type ModelBuildStatus = 'idle' | 'building' | 'ok' | 'error';
@@ -40,6 +42,8 @@ export type ModelEngine = {
   /** The last good object; kept on an error so the pane can show it dimmed. */
   object: THREE.Group | null;
   summary: ModelSummary | null;
+  /** Names, source lines and bounds of the shown build's parts, for point-and-edit. Empty for loaded assets. */
+  parts: ModelPartFacts[];
   params: Record<string, ModelParam>;
   /** Param keys whose last slider value could not be written back to the file. */
   unsaved: string[];
@@ -56,6 +60,16 @@ export type ModelEngine = {
   /** Saves a recorded turntable clip beside this conversation's model; null when cancelled. */
   saveRecording(sessionId: string | null, bytes: Uint8Array): Promise<string | null>;
   openFile(): Promise<void>;
+  /**
+   * Builds a kept version's source on an engine of its own, for the pane's version preview and
+   * compare; nothing is shown, written or reported. Rejects with the build error.
+   */
+  buildSource(source: string): Promise<THREE.Group>;
+  /**
+   * What the pane's measure and section tools show now (null with neither on), so the agent's
+   * screenshots of this conversation's model carry them too.
+   */
+  setInspection(inspection: ModelInspection | null): void;
 };
 
 type Tracked = { sessionId: string | null; state: ModelViewState };
@@ -76,6 +90,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   const [error, setError] = useState<ModelEngine['error']>(null);
   const [object, setObject] = useState<THREE.Group | null>(null);
   const [summary, setSummary] = useState<ModelSummary | null>(null);
+  const [parts, setParts] = useState<ModelPartFacts[]>([]);
   const [params, setParams] = useState<Record<string, ModelParam>>({});
   const [unsaved, setUnsaved] = useState<string[]>([]);
   const [joints, setJoints] = useState<ModelJoint[]>([]);
@@ -89,6 +104,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     setError(null);
     setObject(null);
     setSummary(null);
+    setParts([]);
     setParams({});
     setUnsaved([]);
     setJoints([]);
@@ -98,10 +114,14 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   const posedPath = useRef<string | null>(null);
   const engine = useRef<ModelEngineFrame | null>(null);
   const captureEngine = useRef<ModelEngineFrame | null>(null);
+  const versionEngine = useRef<ModelEngineFrame | null>(null);
   const fileBuild = useRef<Promise<ModelBuildOutcome | null> | null>(null);
   const darkRef = useRef(dark);
   darkRef.current = dark;
   const objectRef = useRef<THREE.Group | null>(null);
+  const jointAnglesRef = useRef(jointAngles);
+  jointAnglesRef.current = jointAngles;
+  const inspectionRef = useRef<ModelInspection | null>(null);
   const stateRef = useRef(state);
   const sessionRef = useRef(sessionId);
   const overrides = useRef<Record<string, number>>({});
@@ -117,6 +137,8 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
       engine.current = null;
       captureEngine.current?.dispose();
       captureEngine.current = null;
+      versionEngine.current?.dispose();
+      versionEngine.current = null;
     };
   }, []);
 
@@ -181,10 +203,15 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
       setClips([]);
       setObject(next);
       setSummary(nextSummary);
+      setParts(partFacts(outcome.parts));
       setParams(outcome.params);
       setStatus('ok');
       setError(null);
-      if (writeGlb) await reportGoodFileBuild(session, generation, next, nextSummary);
+      if (writeGlb)
+        await reportGoodFileBuild(session, generation, next, nextSummary, {
+          dark: darkRef.current,
+          jointAngles: jointAnglesRef.current,
+        });
     },
     []
   );
@@ -204,6 +231,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
       setError(null);
       setObject(null);
       setSummary(null);
+      setParts([]);
       setParams({});
       setJoints([]);
       setClips([]);
@@ -232,6 +260,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
         setClips(loaded.animations.map(clip => clip.name));
         setObject(loaded);
         setSummary(loadedSummary);
+        setParts([]);
         setParams({});
         setStatus('ok');
         setError(null);
@@ -268,7 +297,8 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
                 current,
                 request.views,
                 darkRef.current,
-                request.pose === 'open' ? openPose(current) : {}
+                request.pose === 'open' ? openPose(current) : {},
+                inspectionRef.current
               );
         rendered
           .then(bytes => window.b4m.model.captureResult({ id, bytes }))
@@ -335,7 +365,19 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     if (sessionRef.current !== null) await window.b4m.model.openDialog(sessionRef.current);
   }, []);
 
+  const buildSource = useCallback(async (source: string) => {
+    versionEngine.current ??= new ModelEngineFrame();
+    const built = await versionEngine.current.build(source, {}, false);
+    if (!built) throw new Error('Another version build replaced this one.');
+    const outcome = checkedOutcome(built);
+    if (!outcome.ok) throw new Error(outcome.error);
+    return buildModelObject(outcome.parts, outcome.units);
+  }, []);
+
   const setJointAngles = useCallback((angles: Record<string, number>) => setJointAnglesState(angles), []);
+  const setInspection = useCallback((inspection: ModelInspection | null) => {
+    inspectionRef.current = inspection;
+  }, []);
 
   return {
     sessionId,
@@ -344,6 +386,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     error,
     object,
     summary,
+    parts,
     params,
     unsaved,
     joints,
@@ -355,5 +398,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     exportFile,
     saveRecording,
     openFile,
+    buildSource,
+    setInspection,
   };
 }

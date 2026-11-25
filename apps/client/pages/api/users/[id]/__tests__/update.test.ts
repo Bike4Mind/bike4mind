@@ -115,11 +115,13 @@ vi.mock('@bike4mind/services', async orig => ({
       moderationStatus: z.string().optional(),
       throttleTier: z.enum(['none', 'shadow']).optional(),
       throttleReason: z.string().optional(),
+      preferences: z.object({ contextTelemetryLevel: z.enum(['none', 'basic', 'enhanced']).optional() }).optional(),
     }),
     updateUserSchema: z.object({
       name: z.string().optional(),
       role: z.string().optional(),
       password: z.string().nullable().optional(),
+      preferences: z.object({ contextTelemetryLevel: z.enum(['none', 'basic', 'enhanced']).optional() }).optional(),
     }),
   },
 }));
@@ -137,7 +139,8 @@ vi.mock('@bike4mind/database', () => ({
       const query = {
         // Applies the projection like Mongo would, so a field dropped from a .select() is absent.
         select: (fields: string) => {
-          const keep = fields.split(' ');
+          // A dotted path keeps its top-level field, as a nested projection would.
+          const keep = fields.split(' ').map(field => field.split('.')[0]);
           // The session-end snapshot is the only read that asks for every block field; note
           // whether it happened inside the change callback (the transaction) or before it.
           if (fields === 'email isBanned suspensionReasonCategory isModerated disputePending moderation') {
@@ -189,6 +192,7 @@ vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async impo
 }));
 
 import { adminSettingsRepository } from '@bike4mind/database';
+import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import handler from '../update';
 
 const run = ({
@@ -1491,6 +1495,112 @@ describe('PUT /api/users/:id/update - user.profile.updated audit', () => {
   });
 });
 
+describe('PUT /api/users/:id/update - moderation status decisions', () => {
+  const MODERATOR = { id: 'mod1', isAdmin: false, adminPermissions: ['users:moderate'] };
+  const REASON = 'Appeal accepted';
+  const target = (status?: string) => ({
+    id: 'other-user',
+    name: 'Other',
+    isAdmin: false,
+    adminPermissions: [],
+    ...(status ? { moderation: { status } } : {}),
+  });
+  const decide = (before: string, after: string) => {
+    mockUserFindById.mockReturnValue(target(before));
+    mockAdminUpdateUser.mockResolvedValue({ user: target(after), creditAdjustment: undefined });
+  };
+
+  it.each([
+    ['confirms the suspension', 'suspend_pending', 'suspended'],
+    ['returns the user to active', 'suspend_pending', 'active'],
+    ['keeps the user throttled', 'suspend_pending', 'throttled'],
+  ] as const)('%s through the admin update and records the change', async (_label, before, after) => {
+    decide(before, after);
+    const { res, promise } = run({
+      user: MODERATOR,
+      userId: 'other-user',
+      body: { moderationStatus: after, statusChangeReason: REASON },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdminUpdateUser).toHaveBeenCalledWith(
+      MODERATOR.id,
+      expect.objectContaining({ moderationStatus: after }),
+      expect.anything()
+    );
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.moderation_status.changed',
+        target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
+        reason: REASON,
+        changes: [{ field: 'moderation.status', before, after }],
+      })
+    );
+  });
+
+  it('reads a user with no moderation record as active', async () => {
+    decide('', 'suspended');
+    await run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { moderationStatus: 'suspended', statusChangeReason: REASON },
+    }).promise;
+
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [{ field: 'moderation.status', before: 'active', after: 'suspended' }] })
+    );
+  });
+
+  it('records a decision that keeps the status, with the throttle expiry it re-armed', async () => {
+    const until = new Date('2026-11-19T00:00:00.000Z');
+    mockUserFindById.mockReturnValue({
+      ...target('throttled'),
+      moderation: { status: 'throttled', throttledUntil: new Date('2026-11-18T06:00:00.000Z') },
+    });
+    mockAdminUpdateUser.mockResolvedValue({
+      user: { ...target('throttled'), moderation: { status: 'throttled', throttledUntil: until } },
+      creditAdjustment: undefined,
+    });
+    await run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { moderationStatus: 'throttled', statusChangeReason: REASON },
+    }).promise;
+
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.moderation_status.changed',
+        reason: REASON,
+        changes: [
+          { field: 'moderation.status', before: 'throttled', after: 'throttled' },
+          {
+            field: 'moderation.throttledUntil',
+            before: '2026-11-18T06:00:00.000Z',
+            after: until.toISOString(),
+          },
+        ],
+      })
+    );
+  });
+
+  it('refuses a delegate without users:moderate', async () => {
+    decide('suspend_pending', 'suspended');
+    const { res, promise } = run({
+      user: { id: 'reader', isAdmin: false, adminPermissions: ['support:read'] },
+      userId: 'other-user',
+      body: { moderationStatus: 'suspended', statusChangeReason: REASON },
+    });
+    await promise.catch(() => undefined);
+
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).not.toBe(200);
+  });
+});
+
 describe('PUT /api/users/:id/update - restricted tier', () => {
   const REASON = 'Signed up in bulk';
   const body = (overrides: Record<string, unknown> = {}) => ({
@@ -1698,5 +1808,155 @@ describe('PUT /api/users/:id/update - users:moderate delegate', () => {
 
     expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     expect(mockUpdateUser).toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - telemetry opt-out deletion', () => {
+  const SELF = { id: 'u1', isAdmin: false };
+  const mockDeletion = vi.mocked(triggerTelemetryDeletion);
+  const storedLevel = (level: string) =>
+    mockUserFindById.mockReturnValue({
+      id: 'u1',
+      name: 'Existing Name',
+      preferences: { contextTelemetryLevel: level },
+    });
+  const optOut = (extra: Record<string, unknown> = {}, user: { id: string; isAdmin: boolean } = SELF) =>
+    run({ user, userId: user.id, body: { preferences: { contextTelemetryLevel: 'none' }, ...extra } });
+
+  beforeEach(() => {
+    mockDeletion.mockReset().mockResolvedValue({ verified: true, deletedCount: 4, remainingCount: 0 });
+    storedLevel('basic');
+  });
+
+  it('reports a verified deletion when the level moves to none', async () => {
+    const { res, promise } = optOut();
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeletion).toHaveBeenCalledTimes(1);
+    expect(mockDeletion).toHaveBeenCalledWith('u1', expect.anything());
+    expect(res._getJSONData().telemetryDeletion).toEqual({ verified: true, remainingCount: 0 });
+  });
+
+  it('saves the level as none first, then reports a deletion that left documents behind', async () => {
+    mockDeletion.mockResolvedValue({ verified: false, deletedCount: 1, remainingCount: 2 });
+
+    const { res, promise } = optOut();
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().telemetryDeletion).toEqual({ verified: false, remainingCount: 2 });
+    expect(mockUpdateUser).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ preferences: expect.objectContaining({ contextTelemetryLevel: 'none' }) }),
+      expect.anything()
+    );
+    expect(mockUpdateUser.mock.invocationCallOrder[0]).toBeLessThan(mockDeletion.mock.invocationCallOrder[0]);
+  });
+
+  it('reports a deletion that could not be re-checked, with no remaining count', async () => {
+    mockDeletion.mockResolvedValue({ verified: false, deletedCount: 0 });
+
+    const { res, promise } = optOut();
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().telemetryDeletion).toEqual({ verified: false });
+    expect(mockUpdateUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not run the deletion for an ordinary save while the level is already none', async () => {
+    storedLevel('none');
+
+    const { res, promise } = optOut({ name: 'New Name' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeletion).not.toHaveBeenCalled();
+    expect(res._getJSONData()).not.toHaveProperty('telemetryDeletion');
+  });
+
+  it('re-runs the deletion on request while the level is already none', async () => {
+    storedLevel('none');
+    mockDeletion.mockResolvedValue({ verified: false, deletedCount: 0, remainingCount: 1 });
+
+    const { res, promise } = optOut({ rerunTelemetryDeletion: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeletion).toHaveBeenCalledTimes(1);
+    const json = res._getJSONData();
+    expect(json.telemetryDeletion).toEqual({ verified: false, remainingCount: 1 });
+    // The flag is a request flag: not reported as discarded, not handed to the service.
+    expect(json.ignoredFields).toBeUndefined();
+    expect(mockUpdateUser.mock.calls[0][1]).not.toHaveProperty('rerunTelemetryDeletion');
+  });
+
+  it('ignores the re-run flag unless the submitted level is none', async () => {
+    const { res, promise } = run({
+      user: SELF,
+      userId: SELF.id,
+      body: { preferences: { contextTelemetryLevel: 'enhanced' }, rerunTelemetryDeletion: true },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeletion).not.toHaveBeenCalled();
+    expect(res._getJSONData()).not.toHaveProperty('telemetryDeletion');
+  });
+
+  it('ignores a re-run flag that is not literally true', async () => {
+    storedLevel('none');
+
+    const { promise } = optOut({ rerunTelemetryDeletion: 'true' });
+    await promise;
+
+    expect(mockDeletion).not.toHaveBeenCalled();
+  });
+
+  it('reports the outcome on the admin branch too, for an admin opting out themselves', async () => {
+    mockUserFindById.mockReturnValue({
+      id: ADMIN.id,
+      name: 'Admin',
+      isAdmin: true,
+      preferences: { contextTelemetryLevel: 'none' },
+    });
+    mockDeletion.mockResolvedValue({ verified: false, deletedCount: 0, remainingCount: 3 });
+
+    const { res, promise } = optOut({ rerunTelemetryDeletion: true }, ADMIN);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeletion).toHaveBeenCalledWith(ADMIN.id, expect.anything());
+    const json = res._getJSONData();
+    expect(json.telemetryDeletion).toEqual({ verified: false, remainingCount: 3 });
+    expect(json.ignoredFields).toBeUndefined();
+  });
+
+  it('runs the deletion for the target account, not the admin, when an admin opts another user out', async () => {
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'u1',
+      body: { preferences: { contextTelemetryLevel: 'none' } },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeletion).toHaveBeenCalledTimes(1);
+    expect(mockDeletion).toHaveBeenCalledWith('u1', expect.anything());
+    expect(res._getJSONData().telemetryDeletion).toEqual({ verified: true, remainingCount: 0 });
+  });
+
+  it.each([false, true])('uses the canonical account target for an uppercase alias (admin=%s)', async admin => {
+    const targetId = 'abcdef0123456789abcdef01';
+    mockUserFindById.mockReturnValue({ id: targetId, name: 'Target', preferences: { contextTelemetryLevel: 'basic' } });
+    const { res, promise } = run({
+      user: admin ? ADMIN : { id: targetId, isAdmin: false },
+      userId: targetId.toUpperCase(),
+      body: { preferences: { contextTelemetryLevel: 'none' } },
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeletion).toHaveBeenCalledWith(targetId, expect.anything());
   });
 });

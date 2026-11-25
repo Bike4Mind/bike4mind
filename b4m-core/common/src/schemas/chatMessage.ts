@@ -7,11 +7,23 @@ import { passthroughShape } from './responseShape';
  * data-subscription projection (apps/client/server/websocket/dataSubscribeFieldLimits.ts), so the
  * REST and WS transports withhold the same set:
  * - `callback`: the caller's webhook URL and API key id (already `select: false` on QuestModel).
+ * - `apiKeyId`, `oauthClientId`: which exchange key and connected app created the turn, for usage reporting.
  * - `embedding`: the message's search vector, internal to retrieval and heavy on list reads.
  * - `slackNotification`: the Slack thread the reply is posted back to.
  * - `signupActivity`: retired turn provenance a quest may still hold until its drop migration runs.
+ * - `pendingActionResolution`: how the last pending action ended, read only by brief serialization.
+ * - `lakeSaveCount`: the per-turn data lake save cap's counter, read only by save_content_to_data_lake.
  */
-export const CHAT_MESSAGE_WITHHELD_FIELDS = ['callback', 'embedding', 'slackNotification', 'signupActivity'] as const;
+export const CHAT_MESSAGE_WITHHELD_FIELDS = [
+  'callback',
+  'apiKeyId',
+  'oauthClientId',
+  'embedding',
+  'slackNotification',
+  'signupActivity',
+  'pendingActionResolution',
+  'lakeSaveCount',
+] as const;
 
 type ChatMessageResponseField = Exclude<keyof IChatHistoryItemDocument, (typeof CHAT_MESSAGE_WITHHELD_FIELDS)[number]>;
 
@@ -42,6 +54,9 @@ const CHAT_MESSAGE_RESPONSE_FIELDS = {
   generationJobs: true,
   agentVideoClipsClaimed: true,
   agentMusicTracksClaimed: true,
+  agentImagesClaimed: true,
+  agentSpeechClipsClaimed: true,
+  agentSoundEffectsClaimed: true,
   oob: true,
   promptMeta: true,
   status: true,

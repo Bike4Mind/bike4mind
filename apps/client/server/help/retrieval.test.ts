@@ -1,7 +1,9 @@
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+
+import { encodeHelpEmbeddings } from '@bike4mind/scripts/help/embeddingsCodec';
 
 import { loadHelpContent, searchHelpContext } from './retrieval';
 
@@ -173,5 +175,70 @@ describe('searchHelpContext currentHelpSlug', () => {
     // entry - which is what keeps the access check from being a silent feature removal.
     const result = await viewing('zzz nonmatching interrogative zzz', true);
     expect(result.relevantArticles.map(a => a.slug)).toContain('admin/runbook');
+  });
+});
+
+describe('searchHelpContext embeddings artifacts', () => {
+  afterEach(() => {
+    fs.rmSync(path.join(generatedDir(), 'help-embeddings.json'), { force: true });
+    fs.rmSync(path.join(generatedDir(), 'help-embeddings.bin'), { force: true });
+  });
+
+  const generatedDir = () => path.join(tmpDir, 'app/generated');
+  const writeMetadata = (dimensions: number) =>
+    writeFile(
+      path.join(generatedDir(), 'help-embeddings.json'),
+      JSON.stringify({
+        chunks: [
+          { slug: 'guides/widget', title: 'Widget Guide', sectionPath: 'Intro', tokenCount: 5, accessLevel: 'public' },
+        ],
+        model: 'text-embedding-3-small',
+        dimensions,
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        sourceArticleCount: 1,
+      })
+    );
+
+  it('falls back to keywords, with a warning, when the binary does not match the metadata', async () => {
+    writeMetadata(4);
+    fs.writeFileSync(path.join(generatedDir(), 'help-embeddings.bin'), Buffer.alloc(3));
+    logger.warn.mockClear();
+
+    const result = await searchHelpContext({
+      question: 'how do I configure the widget',
+      isAdmin: false,
+      apiKeys: null,
+      logger,
+    });
+
+    expect(result.context).toContain('PUBLIC_BODY_MARKER');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('embeddings unavailable'), expect.any(Error));
+  });
+
+  // Module-level cache: a successful load sticks for the process, so this stays the last test.
+  it('loads a valid metadata + binary pair and takes the vector path', async () => {
+    const { metadataJson, vectors } = encodeHelpEmbeddings({
+      chunks: [
+        {
+          slug: 'guides/widget',
+          title: 'Widget Guide',
+          sectionPath: 'Intro',
+          vector: [1, 0, 0, 0],
+          tokenCount: 5,
+          accessLevel: 'public',
+        },
+      ],
+      model: 'text-embedding-3-small',
+      dimensions: 4,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      sourceArticleCount: 1,
+    });
+    writeFile(path.join(generatedDir(), 'help-embeddings.json'), metadataJson);
+    fs.writeFileSync(path.join(generatedDir(), 'help-embeddings.bin'), vectors);
+
+    await searchHelpContext({ question: 'how do I configure the widget', isAdmin: false, apiKeys: null, logger });
+
+    expect(logger.info).toHaveBeenCalledWith('[HelpRetrieval] Loaded 1 embedding chunks');
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('embeddings unavailable'), expect.anything());
   });
 });

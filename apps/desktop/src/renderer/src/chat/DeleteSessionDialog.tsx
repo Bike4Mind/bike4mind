@@ -91,7 +91,13 @@ export function DeleteSessionDialog({
           >
             Delete
           </Button>
-          <Button variant="plain" disabled={deleting} onClick={onClose} data-testid="delete-session-cancel-btn">
+          <Button
+            variant="outlined"
+            color="neutral"
+            disabled={deleting}
+            onClick={onClose}
+            data-testid="delete-session-cancel-btn"
+          >
             Cancel
           </Button>
         </DialogActions>

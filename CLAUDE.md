@@ -26,13 +26,15 @@ GitHub only links a commit to your account when the email is verified there, and
 
 | Task | Command (cached) | Uncached fallback |
 |------|------------------|-------------------|
-| Type check all | `pnpm turbo:typecheck` | `pnpm -r typecheck` |
+| **Verify a branch (default)** | `pnpm verify` | see below |
+| Type check all (what CI gates: tsgo, tsc fallback) | `pnpm turbo:typecheck:fast` | `pnpm -w typecheck:fast && pnpm -r typecheck:fast` |
+| Type check all, pure tsc (nightly baseline) | `pnpm turbo:typecheck` | `pnpm -r typecheck` |
 | Test all | `pnpm turbo:test` | `pnpm -r test` |
 | Lint (CI parity) | `pnpm lint:check` | — |
 | Build core packages | `pnpm turbo:core:build` | `pnpm core:build` |
 | Test one package | `pnpm --filter <pkg> test` | e.g. `pnpm --filter @bike4mind/agents test` |
 
-Verify before pushing: `pnpm turbo:typecheck && pnpm turbo:test && pnpm lint:check`.
+Verify before pushing: `pnpm verify`. It runs `typecheck:fast` and `test` only for the packages your branch changed against `origin/main` (`TURBO_SCM_BASE` overrides), their dependents, and any package whose turbo.json inputs read a changed file (e.g. `workers` for an `apps/client` change), then lints only the changed files. Root config and lockfile changes widen it to the full graph; root `package.json`, lockfile and lint config changes also run the full lint. Extra flags go to turbo: `pnpm verify --concurrency=4` on a busy machine; `--no-lint`, `--tasks typecheck:fast` narrow it. CI still runs everything; reach for the full-repo commands above only when a change is cross-cutting.
 
 ## Project structure
 
@@ -49,6 +51,8 @@ Verify before pushing: `pnpm turbo:typecheck && pnpm turbo:test && pnpm lint:che
 
 Turbo gives cached, topologically-ordered builds; the `pnpm` commands still work as fallback.
 
+- **Many worktrees on one machine:** turbo's local cache defaults to `.turbo/cache` inside each worktree, so a fresh worktree misses on everything. Task hashes are content-based, not path-based, so worktrees can share one store: `export TURBO_CACHE_DIR="$HOME/.cache/turbo-b4m"` in your shell profile (the pre-push hook defaults to it). Prune it occasionally, e.g. `find "${TURBO_CACHE_DIR:-$HOME/.cache/turbo-b4m}" -type f -mtime +14 -delete`.
+- **Pre-push concurrency:** the pre-push hook caps turbo at `--concurrency=25%` of cores, since each typecheck task is itself multi-threaded. Override with `TURBO_CONCURRENCY` (this hook's own variable, not one turbo reads), e.g. `TURBO_CONCURRENCY=4 git push`.
 - Repeat runs are near-instant on a cache hit. `turbo:core:build` builds packages in dependency order (common → utils → agents → services → …).
 - **Do not run `turbo build` unfiltered** — it would try to `next build` the SPA outside its deploy context. Use `pnpm turbo:core:build` / `pnpm turbo:build`.
 - If builds seem stale after a big change, add `--force`.
@@ -97,7 +101,7 @@ Code describes *what* it does and comments explain the *why* that the code can't
 
 - Reproduce one leg locally: `pnpm --filter @bike4mind/client test --shard=2/3`.
 - **Never add a pnpm `--` before test-command args in CI.** `pnpm … test -- --shard=2/3` forwards the literal `--` to vitest, which reads the rest as positional path filters: the shard is ignored, the leg silently runs the whole suite, and nothing errors. The legs run through turbo, whose own `--` is required and is not forwarded (`turbo run test … -- --shard=2/3` runs `pnpm run test --shard=2/3`). `packages/scripts/src/checkClientTestShards.test.ts` fails the build if that shape or a leg goes missing.
-- **CI skips a package's tests when its turbo hash matches a cached pass** (`.turbo/cache`, restored per leg; saved only from push to `main` and `merge_group`). A test that reads a file outside its package needs that file in its `<pkg>#test` inputs in `turbo.json`, or the package in `WHOLE_REPO_TEST_PACKAGES` in `scripts/turbo-test-cache.mjs` if it scans the repo; `scripts/__tests__/turbo-test-cache.test.mjs` fails the build when neither holds. A test that scans the whole repo can instead be named `*.repo.test.*`: the package's `test:repo` script runs it uncached on CI's `misc` leg, outside the `test` hash and outside `pnpm turbo:test`, so run it locally with `pnpm --filter @bike4mind/client test:repo`.
+- **CI skips a package's tests when its turbo hash matches a cached pass** (`.turbo/cache`, restored per leg; saved only from push to `main`). A test that reads a file outside its package needs that file in its `<pkg>#test` inputs in `turbo.json`, or the package in `WHOLE_REPO_TEST_PACKAGES` in `scripts/turbo-test-cache.mjs` if it scans the repo; `scripts/__tests__/turbo-test-cache.test.mjs` fails the build when neither holds. A test that scans the whole repo can instead be named `*.repo.test.*`: the package's `test:repo` script runs it uncached on CI's `misc` leg, outside the `test` hash and outside `pnpm turbo:test`, so run it locally with `pnpm --filter @bike4mind/client test:repo`.
 - Balance is by file **count**, not duration, so the legs are not equally long. The per-shard duration in each job's summary is how you spot one drifting.
 
 **Element selection:** always use `data-testid` (naming `component-action-element`, e.g. `modal-confirm-btn`) — never CSS class names (MUI/Emotion generates random class names).
@@ -115,6 +119,10 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 ```
 
 **Mocking deep import chains:** if a component's transitive imports reach a context provider via a `@/`/`@client` alias, mock it explicitly, e.g. `vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: () => ({ /* … */ }) }))`.
+
+## Database migrations
+
+- Create core migrations with `pnpm migrate generate "<name>"`, which stamps the id from the current UTC time. **Never hand-pick or reuse an id**: CI rejects an added id that is not a fresh generated timestamp. Ordering below the current max is unnecessary, since every unapplied id runs.
 
 ## MongoDB index guidelines
 

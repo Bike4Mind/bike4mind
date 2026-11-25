@@ -1,15 +1,22 @@
 import type { Readable } from 'node:stream';
+import { z } from 'zod';
 import axios, { isAxiosError, type AxiosError } from 'axios';
-import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { SessionChangedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
   CreateFileUploadResponseSchema,
+  CreateImageJobResponseSchema,
   FileResponseSchema,
+  ImageJobSchema,
+  ListImageJobsResponseSchema,
+  ListVideoGenerationsResponseSchema,
   MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
   type CreateFileUploadResponse,
+  type CreateImageJobBody,
   type CreateVideoGenerationBody,
   type FileResponse,
+  type PublicImageJob,
   type VideoGeneration,
   type CreateMusicGenerationBody,
   type MusicGeneration,
@@ -17,9 +24,35 @@ import {
   type SoundEffectsRequest,
   type TTSRequest,
   type TtsBase64Response,
+  type CompletionRunAttribution,
 } from '@bike4mind/common';
+import type { BillingPayer } from '@shared/account';
 import type { ChatToolNotice } from '@shared/chat';
+import { currentBillingPayer } from '../../account/billingPayer';
+import {
+  isRunBudgetExhausted,
+  isRunNotFound,
+  RunBudgetExhaustedError,
+  RunNotFoundError,
+  withRunFallback,
+} from '../completions';
 import { parseMusicModels } from './musicModels';
+
+/**
+ * The orchestration run a turn's paid calls are charged to. Read at call time: the turn drops a
+ * run the server refused, and a call made after that must not send it again.
+ */
+export interface MediaRun {
+  current: () => CompletionRunAttribution | undefined;
+  /** A budgeted run is never resent unattributed: that would spend outside the cap. */
+  budgeted: boolean;
+  /** The payer the run was minted for. Every call this client makes for the run bills it, not the selection. */
+  payer?: BillingPayer;
+  /** Runs when the server no longer knows the run, before any resend. See withRunFallback. */
+  onRejected: () => Promise<void>;
+}
+
+type RunField = { run?: CompletionRunAttribution };
 
 /**
  * A generation failure worth saying something specific about.
@@ -29,6 +62,8 @@ import { parseMusicModels } from './musicModels';
  * provider standing in for the one that was asked for. See ChatToolNotice.
  */
 export class MediaToolError extends Error {
+  code?: string;
+  requestNotStarted?: boolean;
   /** The HTTP status behind it, when there was one; the video poller backs off differently per status. */
   status?: number;
   /** How long the server asked this caller to wait, in ms, when a 429 carried a Retry-After. */
@@ -43,31 +78,6 @@ export class MediaToolError extends Error {
   }
 }
 
-/** POST /api/ai/generate-image, narrowed to what this client sends. */
-export interface GenerateImageRequest {
-  prompt: string;
-  model: string;
-  size?: string;
-  /** Notebook to file the generation under; the server creates one when this is absent. */
-  sessionId?: string;
-  sessionName?: string;
-}
-
-/** The subset of the quest poll this client reads. Extra fields on the wire are ignored. */
-export interface QuestPoll {
-  id: string;
-  status?: string;
-  /** 'error' is the only reliable failure signal: a failed quest still polls 200 with status 'done'. */
-  type?: string;
-  errorCode?: string;
-  sessionId?: string;
-  reply?: string;
-  /** Bare generated-file basenames, e.g. `<uuid>.png`. */
-  images?: string[];
-  /** The same files with short-lived presigned URLs (about an hour); empty only on an older server. */
-  files?: { name: string; url: string; isImage: boolean; isAudio: boolean }[];
-}
-
 export interface FetchedBytes {
   bytes: Buffer;
   contentType: string;
@@ -77,14 +87,11 @@ export interface FetchedBytes {
  * Per-request timeouts, because the app's shared client is configured for ordinary API calls
  * and these are not ordinary API calls.
  *
- * Found the hard way: the default 30s killed `POST /api/ai/generate-image` before the job was
- * even queued. That route resolves the prompt against the notebook's history with an LLM call
- * of its own before it enqueues, so the submit alone can outrun a timeout sized for a JSON read.
- * The audio routes are worse - they synthesize inline and return the bytes, so the whole
+ * The audio routes are the slow ones - they synthesize inline and return the bytes, so the whole
  * provider round trip happens inside the request.
  */
 const TIMEOUT_MS = {
-  /** Queue submit: prompt resolution plus notebook creation before it answers. */
+  /** Queue submit: the route validates inputs and reserves credits before it answers. */
   submit: 90_000,
   /** Synthesis happens inline on these, and a long track takes a while to render. */
   audio: 180_000,
@@ -95,14 +102,12 @@ const TIMEOUT_MS = {
 };
 
 /**
- * Quest statuses that mean the job will not change again. Everything else - 'running',
- * 'pending', an absent status on a freshly queued quest - is still in flight.
+ * The payer each Idempotency-Key was first sent with. The server scopes a key to the billed account,
+ * so a retry that re-read a since-switched payer would start a second, differently billed job.
+ * Module-wide because callers build a fresh client per submit; bounded, oldest evicted first.
  */
-const TERMINAL_STATUSES = new Set(['done', 'stopped']);
-
-export function isTerminalQuest(quest: QuestPoll): boolean {
-  return !!quest.status && TERMINAL_STATUSES.has(quest.status);
-}
+const PAYER_BY_IDEMPOTENCY_KEY = new Map<string, BillingPayer>();
+const PAYER_BY_IDEMPOTENCY_KEY_LIMIT = 500;
 
 /**
  * The b4m generation endpoints this client calls, over the app's authenticated session.
@@ -113,37 +118,118 @@ export function isTerminalQuest(quest: QuestPoll): boolean {
  * the CLI's own ApiClient and config store; this one takes the desktop app's AuthenticatedApiClient.
  */
 export class MediaApiClient {
-  constructor(private readonly api: AuthenticatedApiClient) {}
+  /** `getPayer` is read per submit (see `payer()`), so a switch applies to this client's next call. */
+  constructor(
+    private readonly api: AuthenticatedApiClient,
+    private readonly run?: MediaRun,
+    private readonly getPayer: () => BillingPayer | Promise<BillingPayer> = currentBillingPayer
+  ) {}
 
   /**
-   * Queue an image generation. Returns the quest to poll, not an image: the route hands the
-   * request to a worker and answers immediately.
+   * Send a paid request with the turn's run, tagged as a tool call so the run's usage tells it
+   * apart from the turn's completions. The server claims the call's whole cost against the run
+   * before charging, and refuses it with 422 run_budget_exhausted when it does not fit.
    */
-  async generateImage(request: GenerateImageRequest): Promise<{ questId: string; remoteSessionId?: string }> {
+  private withRun<T>(send: (field: RunField) => Promise<T>): Promise<T> {
+    const current = this.run?.current();
+    return withRunFallback(
+      current && { ...current, purpose: 'tool' },
+      async attribution => {
+        try {
+          return await send(attribution ? { run: attribution } : {});
+        } catch (error) {
+          throw toRunRefusal(error) ?? error;
+        }
+      },
+      async () => this.run?.onRejected(),
+      { budgeted: this.run?.budgeted }
+    );
+  }
+
+  /**
+   * Start image jobs: `count` of them sharing a group id, one image each. Returns as soon as they are queued; the
+   * images render server-side. `idempotencyKey` makes a retried submit return the same jobs, not a second bill.
+   */
+  async createImageJobGroup(
+    body: CreateImageJobBody,
+    idempotencyKey: string
+  ): Promise<{ group_id: string; data: PublicImageJob[] }> {
     try {
-      const response = await this.api.post<{ quest?: { id?: string }; session?: { id?: string } }>(
-        '/api/ai/generate-image',
-        request,
-        { timeout: TIMEOUT_MS.submit }
+      const payer = await this.payer('/api/v1/image-jobs', idempotencyKey);
+      const response = await this.withRun(run =>
+        this.api.post<unknown>(
+          '/api/v1/image-jobs',
+          { ...body, ...payer, ...run },
+          { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
+        )
       );
-      const questId = response?.quest?.id;
-      if (!questId) throw new MediaToolError('The server accepted the request but returned no job to follow.');
-      return { questId, remoteSessionId: response?.session?.id };
+      return CreateImageJobResponseSchema.parse(response);
     } catch (error) {
-      throw toMediaError(error, 'Image generation');
+      throw toPaidCallError(error, 'Image generation');
     }
   }
 
-  async getQuest(questId: string): Promise<QuestPoll> {
+  /** createImageJobGroup for a caller that only follows the jobs. */
+  async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
+    return (await this.createImageJobGroup(body, idempotencyKey)).data;
+  }
+
+  async getImageJob(jobId: string, signal?: AbortSignal): Promise<PublicImageJob> {
     try {
-      return await this.api.get<QuestPoll>(`/api/quests/${encodeURIComponent(questId)}`);
+      const response = await this.api.get<unknown>(`/api/v1/image-jobs/${encodeURIComponent(jobId)}`, {
+        timeout: TIMEOUT_MS.download,
+        signal,
+      });
+      return ImageJobSchema.parse(response);
     } catch (error) {
-      throw toMediaError(error, 'Image generation');
+      throw toMediaError(error, 'Reading the image job');
+    }
+  }
+
+  /** One page of the caller's own finished image jobs, newest first (the Library place). */
+  async listImageJobs(query: { limit: number; cursor?: string }): Promise<z.infer<typeof ListImageJobsResponseSchema>> {
+    try {
+      const response = await this.api.get<unknown>('/api/v1/image-jobs', {
+        params: { limit: query.limit, state: 'succeeded', ...(query.cursor ? { cursor: query.cursor } : {}) },
+        timeout: TIMEOUT_MS.download,
+      });
+      return ListImageJobsResponseSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Listing your images');
+    }
+  }
+
+  /** One page of the caller's own finished video generations, newest first (the Library place). */
+  async listVideoGenerations(query: {
+    limit: number;
+    cursor?: string;
+  }): Promise<z.infer<typeof ListVideoGenerationsResponseSchema>> {
+    try {
+      const response = await this.api.get<unknown>('/api/v1/video-generations', {
+        params: { limit: query.limit, state: 'succeeded', ...(query.cursor ? { cursor: query.cursor } : {}) },
+        timeout: TIMEOUT_MS.download,
+      });
+      return ListVideoGenerationsResponseSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Listing your videos');
+    }
+  }
+
+  async cancelImageJob(jobId: string): Promise<PublicImageJob> {
+    try {
+      const response = await this.api.post<unknown>(
+        `/api/v1/image-jobs/${encodeURIComponent(jobId)}/cancel`,
+        {},
+        { timeout: TIMEOUT_MS.download }
+      );
+      return ImageJobSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Cancelling the image');
     }
   }
 
   /**
-   * Fetch a generated file the quest pointed at.
+   * Fetch a generated file an image job pointed at.
    *
    * A relative URL is this deployment's own local file proxy (self-host and personal dev stages
    * set NEXT_PUBLIC_CDN_URL to `/api/app-files/serve`), so it goes through the authenticated
@@ -173,13 +259,17 @@ export class MediaApiClient {
    */
   async createVideoGeneration(body: CreateVideoGenerationBody, idempotencyKey: string): Promise<VideoGeneration> {
     try {
-      const response = await this.api.post<unknown>('/api/v1/video-generations', body, {
-        timeout: TIMEOUT_MS.submit,
-        headers: { 'Idempotency-Key': idempotencyKey },
-      });
+      const payer = await this.payer('/api/v1/video-generations', idempotencyKey);
+      const response = await this.withRun(run =>
+        this.api.post<unknown>(
+          '/api/v1/video-generations',
+          { ...body, ...payer, ...run },
+          { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
+        )
+      );
       return VideoGenerationSchema.parse(response);
     } catch (error) {
-      throw toMediaError(error, 'Video generation');
+      throw toPaidCallError(error, 'Video generation');
     }
   }
 
@@ -228,8 +318,9 @@ export class MediaApiClient {
     }
     try {
       const target = new URL(upload.upload_url, this.api.getAxiosInstance().defaults.baseURL ?? undefined);
+      // Create-only: upload_url names a freshly minted key, so the PUT must never overwrite one.
       await axios.put(target.toString(), bytes, {
-        headers: { 'Content-Type': mimeType },
+        headers: { 'Content-Type': mimeType, 'If-None-Match': '*' },
         timeout: TIMEOUT_MS.download,
         maxBodyLength: Infinity,
       });
@@ -278,19 +369,26 @@ export class MediaApiClient {
    */
   async synthesizeSpeech(request: Omit<TTSRequest, 'encoding'>): Promise<TtsBase64Response> {
     try {
-      const body = await this.api.post<unknown>(
-        '/api/ai/tts',
-        { ...request, encoding: 'base64' },
-        { timeout: TIMEOUT_MS.audio }
+      const payer = await this.payer();
+      const body = await this.withRun(run =>
+        this.api.post<unknown>(
+          '/api/ai/tts',
+          { ...request, ...payer, ...run, encoding: 'base64' },
+          { timeout: TIMEOUT_MS.audio }
+        )
       );
       return ttsBase64ResponseSchema.parse(body);
     } catch (error) {
-      throw toMediaError(error, 'Speech synthesis');
+      throw toPaidCallError(error, 'Speech synthesis');
     }
   }
 
-  generateSoundEffect(request: SoundEffectsRequest): Promise<GeneratedAudio> {
-    return this.postForAudio('/api/ai/sound-effects', request, 'Sound-effect generation');
+  async generateSoundEffect(request: SoundEffectsRequest): Promise<GeneratedAudio> {
+    return this.postForAudio(
+      '/api/ai/sound-effects',
+      { ...request, ...(await this.payer()) },
+      'Sound-effect generation'
+    );
   }
 
   /** Music models this caller can use right now, in the server's order. */
@@ -312,13 +410,17 @@ export class MediaApiClient {
    */
   async createMusicGeneration(body: CreateMusicGenerationBody, idempotencyKey: string): Promise<MusicGeneration> {
     try {
-      const response = await this.api.post<unknown>('/api/v1/music-generations', body, {
-        timeout: TIMEOUT_MS.submit,
-        headers: { 'Idempotency-Key': idempotencyKey },
-      });
+      const payer = await this.payer('/api/v1/music-generations', idempotencyKey);
+      const response = await this.withRun(run =>
+        this.api.post<unknown>(
+          '/api/v1/music-generations',
+          { ...body, ...payer, ...run },
+          { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
+        )
+      );
       return MusicGenerationSchema.parse(response);
     } catch (error) {
-      throw toMediaError(error, 'Music generation');
+      throw toPaidCallError(error, 'Music generation');
     }
   }
 
@@ -348,16 +450,41 @@ export class MediaApiClient {
   }
 
   /**
+   * Null is stated, never omitted: an omitted payer bills the home organization on most media routes.
+   * With an Idempotency-Key, the payer the key was first sent with is reused for its retries.
+   */
+  private async payer(path?: string, idempotencyKey?: string): Promise<BillingPayer> {
+    const keyed = path && idempotencyKey ? `${path}|${idempotencyKey}` : null;
+    const remembered = keyed ? PAYER_BY_IDEMPOTENCY_KEY.get(keyed) : undefined;
+    if (remembered) return remembered;
+    const payer: BillingPayer = { organization_id: (this.run?.payer ?? (await this.getPayer())).organization_id };
+    if (keyed) {
+      PAYER_BY_IDEMPOTENCY_KEY.set(keyed, payer);
+      if (PAYER_BY_IDEMPOTENCY_KEY.size > PAYER_BY_IDEMPOTENCY_KEY_LIMIT) {
+        const oldest = PAYER_BY_IDEMPOTENCY_KEY.keys().next().value;
+        if (oldest !== undefined) PAYER_BY_IDEMPOTENCY_KEY.delete(oldest);
+      }
+    }
+    return payer;
+  }
+
+  /**
    * The raw-bytes half of the Audio tag. Unlike /api/ai/tts, sound-effects and music have no
    * JSON encoding: the body IS the audio, and the saved-copy outcome rides in `X-B4M-Audio-*`
    * headers. On a failure the JSON error body arrives as bytes too, so it is decoded back into
    * place before the shared mapper reads it.
    */
-  private async postForAudio(path: string, body: unknown, action: string): Promise<GeneratedAudio> {
+  private async postForAudio(path: string, body: object, action: string): Promise<GeneratedAudio> {
     try {
-      const response = await this.api
-        .getAxiosInstance()
-        .post<ArrayBuffer>(path, body, { responseType: 'arraybuffer', timeout: TIMEOUT_MS.audio });
+      const response = await this.withRun(async run => {
+        try {
+          return await this.api
+            .getAxiosInstance()
+            .post<ArrayBuffer>(path, { ...body, ...run }, { responseType: 'arraybuffer', timeout: TIMEOUT_MS.audio });
+        } catch (error) {
+          throw decodeArrayBufferErrorBody(error);
+        }
+      });
       const header = (name: string): string | undefined => {
         const value = response.headers[name];
         return typeof value === 'string' && value ? value : undefined;
@@ -369,7 +496,7 @@ export class MediaApiClient {
         ...(saved ? { fabFileId: header('x-b4m-audio-fab-file-id') } : {}),
       };
     } catch (error) {
-      throw toMediaError(decodeArrayBufferErrorBody(error), action);
+      throw toPaidCallError(decodeArrayBufferErrorBody(error), action);
     }
   }
 }
@@ -437,6 +564,25 @@ interface ApiErrorBody {
 }
 
 /**
+ * A refusal of the request's `run`, as the error the turn acts on: a used-up budget pauses the
+ * whole run (ChatService.pauseRunForBudget), and an unknown run is handled by withRunFallback.
+ */
+function toRunRefusal(error: unknown): RunBudgetExhaustedError | RunNotFoundError | undefined {
+  if (!isAxiosError(error)) return undefined;
+  const body = (error.response?.data ?? {}) as ApiErrorBody;
+  const detail = body.error || body.message;
+  if (isRunBudgetExhausted(error, body)) return new RunBudgetExhaustedError(detail);
+  if (isRunNotFound(error, body)) return new RunNotFoundError(detail);
+  return undefined;
+}
+
+/** toMediaError for a paid submit, letting a run refusal through untouched. */
+function toPaidCallError(error: unknown, action: string): Error {
+  if (error instanceof RunBudgetExhaustedError || error instanceof RunNotFoundError) return error;
+  return toMediaError(error, action);
+}
+
+/**
  * Turn a transport failure into something a user and a model can both act on.
  *
  * `insufficient_credits` gets a notice rather than a bare message: it is the one failure the
@@ -450,18 +596,28 @@ export function toMediaError(error: unknown, action: string): MediaToolError {
   if (isAxiosError(error)) {
     const mapped = fromAxiosError(error, action);
     mapped.status = error.response?.status;
+    const body = z
+      .object({
+        code: z.string().max(100).optional().catch(undefined),
+        errorCode: z.string().max(100).optional().catch(undefined),
+        error: z.string().max(100).optional().catch(undefined),
+      })
+      .safeParse(error.response?.data);
+    if (body.success) mapped.code = body.data.code ?? body.data.errorCode ?? body.data.error;
     const retryAfterMs = parseRetryAfterMs(error.response?.headers['retry-after']);
     if (retryAfterMs !== undefined) mapped.retryAfterMs = retryAfterMs;
     return mapped;
   }
 
-  return new MediaToolError(`${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+  const mapped = new MediaToolError(`${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+  if (error instanceof SessionChangedError) mapped.requestNotStarted = error.beforeRequest;
+  return mapped;
 }
 
 function fromAxiosError(error: AxiosError, action: string): MediaToolError {
   const status = error.response?.status;
   const body = (error.response?.data ?? {}) as ApiErrorBody;
-  const detail = body.error || body.message;
+  const detail = body.message || body.error;
 
   if (body.errorCode === 'insufficient_credits') {
     return new MediaToolError(detail || 'There are not enough credits on this account to generate that.', {

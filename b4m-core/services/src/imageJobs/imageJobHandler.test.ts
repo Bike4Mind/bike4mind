@@ -145,6 +145,128 @@ beforeEach(() => {
 });
 
 describe('image job handler through the real engine', () => {
+  it('links a chat-made job output to its quest and bills it to that quest', async () => {
+    const t = setup(vi.fn<Generate>(async () => succeeded));
+    const created = await createImageJobs(
+      { user, request: request(), count: 1, source: 'agent', questId: 'q-1' },
+      t.deps
+    );
+    const job = t.jobOf(created);
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(expect.objectContaining({ questId: 'q-1' }));
+    expect(vi.mocked(settleCreditHold).mock.calls[0][2]).toMatchObject({ sessionId: 'q-1', questId: 'q-1' });
+  });
+
+  it("counts a delivered chat-made image once on its notebook's badge", async () => {
+    const countNotebookImage = vi.fn(async () => undefined);
+    const t = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { countNotebookImage }
+    );
+    const created = await createImageJobs(
+      { user, request: request(), count: 1, source: 'agent', questId: 'q-1' },
+      t.deps
+    );
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(countNotebookImage).toHaveBeenCalledTimes(1);
+    expect(countNotebookImage).toHaveBeenCalledWith('q-1');
+  });
+
+  it('counts nothing for a Studio job or a blocked chat job, and a failed count never fails the job', async () => {
+    const countNotebookImage = vi.fn(async () => undefined);
+    const studio = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { countNotebookImage }
+    );
+    await create(studio);
+    await studio.runToCompletion();
+
+    const blocked = setup(
+      vi.fn<Generate>(async () => succeeded),
+      { countNotebookImage, moderate: vi.fn(async () => ({ blocked: true as const, reason: 'no' })) }
+    );
+    await createImageJobs({ user, request: request(), count: 1, source: 'agent', questId: 'q-1' }, blocked.deps);
+    await blocked.runToCompletion();
+    expect(countNotebookImage).not.toHaveBeenCalled();
+
+    const throwing = setup(
+      vi.fn<Generate>(async () => succeeded),
+      {
+        countNotebookImage: vi.fn(async () => {
+          throw new Error('db down');
+        }),
+      }
+    );
+    const created = await createImageJobs(
+      { user, request: request(), count: 1, source: 'agent', questId: 'q-1' },
+      throwing.deps
+    );
+    await throwing.runToCompletion();
+    expect(throwing.jobOf(created).state).toBe('succeeded');
+  });
+
+  describe('the inputs a batch marks for deletion', () => {
+    const editBatch = (t: ReturnType<typeof setup>, count: number) =>
+      createImageJobs(
+        { user, request: editRequest(), count, source: 'agent', questId: 'q-1', discardInputFileIds: [MASK_FILE_ID] },
+        t.deps
+      );
+
+    it('stores them on each job and deletes them once, after the last job of the batch ends', async () => {
+      const discardInputFiles = vi.fn(async () => undefined);
+      // A batch of two runs the batch spend cap check; with no user found it lets the batch through.
+      const batchCredits = {
+        users: { findById: vi.fn(async () => null) },
+        spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+      } as unknown as CreditHoldAdapters;
+      const t = setup(
+        vi.fn<Generate>(async () => succeeded),
+        { discardInputFiles, credits: batchCredits }
+      );
+      const created = await editBatch(t, 2);
+      if (!created.ok) throw new Error('refused');
+      const [first, second] = created.jobs;
+      expect(first.payload.discardInputFileIds).toEqual([MASK_FILE_ID]);
+
+      expect(await t.engine.step(first.id)).toBe('terminal');
+      expect(discardInputFiles).not.toHaveBeenCalled();
+
+      expect(await t.engine.step(second.id)).toBe('terminal');
+      expect(discardInputFiles).toHaveBeenCalledTimes(1);
+      expect(discardInputFiles).toHaveBeenCalledWith('u1', [MASK_FILE_ID]);
+    });
+
+    it('deletes them after a failed job too, and a failed delete never changes the job outcome', async () => {
+      const discardInputFiles = vi.fn(async () => {
+        throw new Error('storage down');
+      });
+      const t = setup(
+        vi.fn<Generate>(async () => ({ status: 'failed', retryable: false, message: 'bad request', raw: {} })),
+        { discardInputFiles }
+      );
+      const created = await editBatch(t, 1);
+      await t.runToCompletion();
+      expect(t.jobOf(created).state).toBe('failed');
+      expect(discardInputFiles).toHaveBeenCalledWith('u1', [MASK_FILE_ID]);
+    });
+
+    it('stores nothing and deletes nothing when the batch marks no inputs', async () => {
+      const discardInputFiles = vi.fn(async () => undefined);
+      const t = setup(
+        vi.fn<Generate>(async () => succeeded),
+        { discardInputFiles }
+      );
+      const created = await createImageJobs(
+        { user, request: editRequest(), count: 1, source: 'agent', questId: 'q-1' },
+        t.deps
+      );
+      await t.runToCompletion();
+      expect(t.jobOf(created).payload).not.toHaveProperty('discardInputFileIds');
+      expect(discardInputFiles).not.toHaveBeenCalled();
+    });
+  });
+
   it('generates, moderates, saves to Files and settles the hold', async () => {
     const generate = vi.fn<Generate>(async () => succeeded);
     const t = setup(generate);
@@ -241,6 +363,32 @@ describe('image job handler through the real engine', () => {
     expect(job.payload.output?.fileId).toBeUndefined();
     expect(t.deps.saveToGeneratedBucket).toHaveBeenCalledWith(
       expect.objectContaining({ key: `generated-images/u1/${job.id}.png`, contentType: 'image/png' })
+    );
+  });
+
+  it('moderates and stores a WebP render as image/webp', async () => {
+    // A real 32x32 lossy WebP, the container gpt-image returns for outputFormat webp.
+    const webp = Buffer.from(
+      'UklGRkoAAABXRUJQVlA4ID4AAABQAwCdASogACAAPjEYikOiIaEUBAAgAwSygDsAfgAARr/YAAD+9r4H//zBK/IN2of//pcH6XB+lwf+i4AAAA==',
+      'base64'
+    );
+    const t = setup(
+      vi.fn<Generate>(async () => ({
+        status: 'succeeded',
+        output: { kind: 'inline', base64: webp.toString('base64'), contentType: 'image/webp' },
+      })),
+      { saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })) }
+    );
+    t.provider.fetchOutput.mockResolvedValue(webp);
+    const created = await create(t, request({ outputFormat: 'webp' }));
+    await t.runToCompletion();
+
+    const job = t.jobOf(created);
+    expect(job.state).toBe('succeeded');
+    expect(t.deps.moderate).toHaveBeenCalledWith(expect.objectContaining({ bytes: webp, mimeType: 'image/webp' }));
+    expect(job.payload.output).toMatchObject({ contentType: 'image/webp', bytes: webp.byteLength });
+    expect(t.deps.saveToGeneratedBucket).toHaveBeenCalledWith(
+      expect.objectContaining({ key: `generated-images/u1/${job.id}.webp`, bytes: webp, contentType: 'image/webp' })
     );
   });
 

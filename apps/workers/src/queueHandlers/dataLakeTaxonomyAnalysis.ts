@@ -1,6 +1,6 @@
 import { dataLakeBatchRepository } from '@bike4mind/database';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import { analyzeBatchTaxonomy } from '@server/dataLakes/analyzeBatchTaxonomy';
+import { analyzeBatchTaxonomy } from '@bike4mind/server-utils/dataLakes/analyzeBatchTaxonomy';
 import { z, ZodError } from 'zod';
 
 const AnalyzeTaxonomyPayload = z.object({

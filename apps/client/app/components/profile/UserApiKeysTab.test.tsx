@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -41,7 +41,7 @@ const keyWithSigningSecret = {
 };
 
 const h = vi.hoisted(() => ({
-  keys: [] as any[],
+  keys: [] as Record<string, unknown>[],
   deleteMutate: vi.fn(),
   revokeMutate: vi.fn(),
   createResult: { key: 'b4m_live_newkey123' } as Partial<CreateUserApiKeyResponse>,
@@ -54,19 +54,24 @@ const h = vi.hoisted(() => ({
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
   hasOptiAccess: false,
+  scopeBypass: false,
   eligibility: { canCreate: true, message: null, refusedOrgIds: [] } as {
     canCreate: boolean;
     message: string | null;
     refusedOrgIds: string[];
   },
   billingOrgs: [] as { id: string; name: string }[],
+  functionsEnabled: false,
 }));
 
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
+vi.mock('@client/app/hooks/data/callableFunctions', () => ({
+  useCallableFunctionsEnabled: () => h.functionsEnabled,
+}));
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
-  useApiKeyScopeEntitlements: () => ({ bypass: false, entitlements: new Set<string>() }),
+  useApiKeyScopeEntitlements: () => ({ bypass: h.scopeBypass, entitlements: new Set<string>() }),
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
@@ -186,12 +191,115 @@ describe('UserApiKeysTab - revoked keys', () => {
   });
 });
 
+describe('UserApiKeysTab - legacy keys', () => {
+  const endsAt = '2027-04-01T00:00:00.000Z';
+  const legacyKey = { ...activeKey, legacy: true, legacyEndsAt: endsAt };
+  const newerKey = { ...activeKey, id: 'key-3', name: 'Scoped key', legacy: false, legacyEndsAt: null };
+
+  beforeEach(() => {
+    h.keys = [];
+  });
+
+  it('badges a legacy key with its end date and explains how to replace it, but not a newer key', () => {
+    h.keys = [legacyKey, newerKey];
+    renderTab();
+
+    expect(screen.getByTestId('api-key-legacy-badge-key-1')).toHaveTextContent('Legacy until Apr 1, 2027');
+    expect(screen.queryByTestId('api-key-legacy-badge-key-3')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-keys-legacy-alert')).toHaveTextContent(/Create a new key with the scopes/);
+    expect(screen.getByTestId('api-keys-legacy-alert')).toHaveTextContent(/rotating a legacy key keeps it legacy/);
+  });
+
+  it('shows no badge while no end date is set, so every older key is not flagged without a date', () => {
+    h.keys = [{ ...legacyKey, legacyEndsAt: null }];
+    renderTab();
+
+    expect(screen.queryByTestId('api-key-legacy-badge-key-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-keys-legacy-alert')).not.toBeInTheDocument();
+  });
+});
+
 describe('keyTestPath', () => {
   it('prefers /api/v1/me, falls back to a read the key holds, and gives up on write-only keys', () => {
     expect(keyTestPath([ApiKeyScope.ME_READ, ApiKeyScope.READ_FILES])).toBe('/api/v1/me');
     expect(keyTestPath([ApiKeyScope.AI_CHAT])).toBe('/api/v1/credits');
     expect(keyTestPath([ApiKeyScope.READ_PROJECTS])).toBe('/api/v1/projects');
     expect(keyTestPath([ApiKeyScope.WRITE_FILES])).toBeUndefined();
+    expect(keyTestPath([ApiKeyScope.FUNCTIONS_INVOKE])).toBe('/api/v1/functions');
+  });
+});
+
+describe('UserApiKeysTab - Functions access level', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.functionsEnabled = true;
+    h.createMutate.mockClear();
+  });
+  afterEach(() => {
+    h.functionsEnabled = false;
+  });
+
+  const openModal = () => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+  };
+  const functionsChip = () => screen.getByTestId('api-key-preset-functions').querySelector('button')!;
+
+  it('is not offered while callable functions are off', () => {
+    h.functionsEnabled = false;
+    openModal();
+    expect(screen.queryByTestId('api-key-preset-functions')).toBeNull();
+  });
+
+  it('mints a key holding functions:invoke and nothing else, and hides the other permissions', () => {
+    openModal();
+    fireEvent.click(functionsChip());
+    expect(functionsChip()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('api-key-functions-summary')).toBeTruthy();
+    expect(screen.queryByTestId(`api-key-scope-${ApiKeyScope.READ_FILES}`)).toBeNull();
+    expect(screen.queryByText('Custom')).toBeNull();
+
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Functions key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect((h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes).toEqual([
+      ApiKeyScope.FUNCTIONS_INVOKE,
+    ]);
+  });
+
+  it('returns to the scope list when another access level is chosen', () => {
+    openModal();
+    fireEvent.click(functionsChip());
+    fireEvent.click(screen.getByTestId('api-key-preset-read').querySelector('button')!);
+    expect(functionsChip()).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId(`api-key-scope-${ApiKeyScope.READ_FILES}`)).toBeTruthy();
+  });
+
+  it('keeps the Functions selection when the offered scopes change after it was picked', () => {
+    h.hasOptiAccess = false;
+    try {
+      const view = renderTab();
+      fireEvent.click(screen.getByText('Create API Key'));
+      fireEvent.click(functionsChip());
+      h.hasOptiAccess = true;
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <UserApiKeysTab />
+        </CssVarsProvider>
+      );
+      expect(functionsChip()).toHaveAttribute('aria-pressed', 'true');
+
+      fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+        target: { value: 'Functions key' },
+      });
+      fireEvent.click(screen.getByTestId('api-key-create-btn'));
+      expect((h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes).toEqual([
+        ApiKeyScope.FUNCTIONS_INVOKE,
+      ]);
+    } finally {
+      h.hasOptiAccess = false;
+    }
   });
 });
 
@@ -380,12 +488,14 @@ describe('UserApiKeysTab - premium scopes', () => {
     h.createMutate.mockClear();
   });
 
-  it('names the routes open to every key once, apart from any scope', () => {
+  it('lists the notebook list under the notebook scope, not as open to every key', () => {
     openScopeDocs();
-    expect(screen.getByTestId('api-keys-scopes-open-endpoints')).toHaveTextContent('GET /api/sessions');
-    expect(screen.getByTestId(`api-keys-scope-endpoints-${ApiKeyScope.READ_NOTEBOOKS}`)).not.toHaveTextContent(
-      /GET \/api\/sessions(,|$)/
-    );
+    expect(screen.queryByTestId('api-keys-scopes-open-endpoints')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`api-keys-scope-endpoints-${ApiKeyScope.READ_NOTEBOOKS}-toggle-btn`));
+    const routes = within(screen.getByTestId(`api-keys-scope-endpoints-${ApiKeyScope.READ_NOTEBOOKS}-list`))
+      .getAllByRole('listitem')
+      .map(item => item.textContent);
+    expect(routes).toContain('GET /api/sessions');
   });
 
   it('keeps the premium scopes out of the New-Key modal and its Full access preset without Opti access', () => {
@@ -575,6 +685,40 @@ describe('UserApiKeysTab - skills:write', () => {
   });
 });
 
+describe('UserApiKeysTab - artifacts:publish', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.createMutate.mockClear();
+  });
+
+  const mintScopes = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Publish key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+  };
+
+  it('keeps artifacts:publish out of the default Read-only selection', () => {
+    expect(mintScopes()).not.toContain(ApiKeyScope.ARTIFACTS_PUBLISH);
+  });
+
+  it('keeps artifacts:publish out of Read & write', () => {
+    const readwrite = mintScopes('readwrite');
+    // A write scope proves the preset click took effect.
+    expect(readwrite).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(readwrite).not.toContain(ApiKeyScope.ARTIFACTS_PUBLISH);
+  });
+
+  it('offers artifacts:publish with Full access', () => {
+    expect(mintScopes('full')).toContain(ApiKeyScope.ARTIFACTS_PUBLISH);
+  });
+});
+
 describe('UserApiKeysTab - API key trust gate', () => {
   const blocked = {
     canCreate: false,
@@ -722,5 +866,89 @@ describe('UserApiKeysTab - API key trust gate', () => {
       expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
       expect(screen.getByTestId('api-keys-gate-notice')).toHaveTextContent(switchRefusal.message);
     });
+  });
+});
+
+describe('UserApiKeysTab - personas:mint', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.scopeBypass = true;
+    h.eligibility = { canCreate: true, message: null, refusedOrgIds: [] };
+    h.createMutate.mockClear();
+  });
+  afterEach(() => {
+    h.scopeBypass = false;
+  });
+
+  const openModal = (preset?: 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Persona bot' },
+    });
+  };
+  const minted = () => (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+
+  it('leaves personas:mint out of Full access for a user who may hold it', () => {
+    openModal('full');
+    expect(screen.getByTestId('api-key-scope-personas:mint')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).toContain(ApiKeyScope.BOB_RUN);
+    expect(minted()).not.toContain(ApiKeyScope.PERSONAS_MINT);
+  });
+
+  it('grants personas:mint when it is ticked explicitly', () => {
+    openModal();
+    const chip = screen.getByTestId('api-key-scope-personas:mint');
+    fireEvent.click(chip.querySelector('button') ?? chip);
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).toContain(ApiKeyScope.PERSONAS_MINT);
+  });
+});
+
+describe('UserApiKeysTab - api-keys:manage', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.eligibility = { canCreate: true, message: null, refusedOrgIds: [] };
+    h.createMutate.mockClear();
+  });
+
+  const openModal = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Key manager' },
+    });
+  };
+  const minted = () => (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+
+  it.each([
+    ['Read-only (default)', undefined],
+    ['Read & write', 'readwrite'],
+  ] as const)('leaves api-keys:manage out of %s', (_label, preset) => {
+    openModal(preset);
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).not.toContain(ApiKeyScope.API_KEYS_MANAGE);
+  });
+
+  it('leaves api-keys:manage out of Full access', () => {
+    openModal('full');
+    expect(screen.getByTestId('api-key-scope-api-keys:manage')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    // A spend scope proves the Full access click took effect.
+    expect(minted()).toContain(ApiKeyScope.AI_GENERATE);
+    expect(minted()).not.toContain(ApiKeyScope.API_KEYS_MANAGE);
+  });
+
+  it('grants api-keys:manage when it is ticked explicitly', () => {
+    openModal();
+    const chip = screen.getByTestId('api-key-scope-api-keys:manage');
+    fireEvent.click(chip.querySelector('button') ?? chip);
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).toContain(ApiKeyScope.API_KEYS_MANAGE);
   });
 });

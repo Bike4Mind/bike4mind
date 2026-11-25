@@ -26,6 +26,7 @@ import { organizationService, creditService } from '@bike4mind/services';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { CreditHolderType, IOrganizationDocument, dayjs } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { applyPlanStorageLimit } from './applyPlanStorageLimit';
 
 /**
  * Add credits to an organization and record a credit transaction.
@@ -468,6 +469,20 @@ export const handleOrganizationSubscriptionInvoice = async (
   // sendToClient calls Connection.find() which, with transactionAsyncLocalStorage enabled,
   // would pick up the transaction session if called inside withTransaction.
   const org = organization as IOrganizationDocument | null;
+  // Only the persisted owner may receive storage, including after a duplicate checkout was refused.
+  try {
+    const storedSubscription = await subscriptionRepository.findByStripeSubscriptionId(subscription.id);
+    if (storedSubscription?.ownerType === SubscriptionOwnerType.Organization) {
+      await applyPlanStorageLimit(subscription, storedSubscription.ownerId, logger, SubscriptionOwnerType.Organization);
+    }
+  } catch (error) {
+    logger.error(`Failed to resolve storage owner for subscription ${subscription.id}`, { error });
+    try {
+      await emitMetric('Lumina5/Entitlements', 'PlanStorageLimitFailed', 1, { reason: 'owner_lookup_failed' });
+    } catch (metricError) {
+      logger.warn(`Failed to emit storage owner lookup metric for subscription ${subscription.id}`, { metricError });
+    }
+  }
   if (org?.users?.length) {
     promises.push(
       ...org.users.map(user =>
@@ -689,6 +704,12 @@ export const handleUserSubscriptionInvoice = async (
       }
     }
   });
+
+  // The row created above is what customerSubscriptionUpdated checks ownership against, so its
+  // checkout-time update event can arrive first and skip the limit.
+  if (invoice.billing_reason === 'subscription_create') {
+    await applyPlanStorageLimit(subscription, user.id, logger);
+  }
 
   await sendToClient(metadata.userId, Resource.websocket.managementEndpoint, {
     action: 'invalidate_query',

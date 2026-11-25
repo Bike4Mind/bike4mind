@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Box, Button, Chip, Divider, Stack, Table, Typography } from '@mui/joy';
+import { Button, Chip, Divider, Stack, Typography } from '@mui/joy';
 import {
   LineChart,
   Line,
@@ -13,7 +13,14 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { ErrorState, InlineBar, LoadingState, StatusChip } from '@client/app/components/admin/shared';
+import {
+  DataTable,
+  ErrorState,
+  InlineBar,
+  LoadingState,
+  StatusChip,
+  type DataColumn,
+} from '@client/app/components/admin/shared';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
   ACCENT,
@@ -24,7 +31,7 @@ import {
   WARN,
   xAxisProps,
   yAxisProps,
-} from '@client/app/components/admin/Revenue/chartParts';
+} from '@client/app/components/admin/shared/chartParts';
 import { useIntegrationHistory } from '../hooks/useIntegrationHistory';
 import { buildLatencyTimeSeries, buildErrorRateSeries } from '../utils/chartDataProcessor';
 import type { IntegrationDashboardEntry, CircuitBreakerMode, IntegrationName, InMemoryBreakerState } from '../types';
@@ -66,6 +73,37 @@ function Section({ title, children, testId }: { title: string; children: React.R
     </Stack>
   );
 }
+
+type RecentErrorRow = { err: IntegrationDashboardEntry['recentErrors'][number]; key: string };
+
+// DataTable requires a retry handler; this table is never given `error`, so it is never called.
+const noRetry = () => undefined;
+
+const recentErrorColumns: DataColumn<RecentErrorRow>[] = [
+  { id: 'time', label: 'Time', width: '11rem', render: ({ err }) => new Date(err.occurredAt).toLocaleString() },
+  {
+    id: 'source',
+    label: 'Source',
+    width: '6rem',
+    render: ({ err }) => (
+      <Chip size="sm" variant="soft" color="neutral">
+        {err.source === 'health_check' ? 'Probe' : 'Audit'}
+      </Chip>
+    ),
+  },
+  { id: 'message', label: 'Message', width: '18rem', wrap: true, render: ({ err }) => err.message },
+  {
+    id: 'code',
+    label: 'Code',
+    width: '8rem',
+    render: ({ err }) => (
+      <Typography level="body-xs" sx={{ fontFamily: 'monospace', color: 'admin.inkMuted' }}>
+        {err.errorCode || '-'}
+      </Typography>
+    ),
+  },
+  { id: 'action', label: 'Action', width: '8rem', render: ({ err }) => err.action || '-' },
+];
 
 function MutedNote({ children }: { children: React.ReactNode }) {
   return (
@@ -236,46 +274,17 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
 
       <Section title={`Recent errors (${entry.recentErrors.length})`}>
         {entry.recentErrors.length > 0 ? (
-          <Box sx={{ overflowX: 'auto' }}>
-            <Table size="sm" sx={{ minWidth: 560, '& th': { py: 1 }, '& td': { py: 0.5 } }}>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Source</th>
-                  <th>Message</th>
-                  <th>Code</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {entry.recentErrors.map((err, idx) => (
-                  <tr key={idx}>
-                    <td>
-                      <Typography level="body-xs">{new Date(err.occurredAt).toLocaleString()}</Typography>
-                    </td>
-                    <td>
-                      <Chip size="sm" variant="soft" color="neutral">
-                        {err.source === 'health_check' ? 'Probe' : 'Audit'}
-                      </Chip>
-                    </td>
-                    <td>
-                      <Typography level="body-xs" sx={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {err.message}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Typography level="body-xs" sx={{ fontFamily: 'monospace', color: 'admin.inkMuted' }}>
-                        {err.errorCode || '-'}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Typography level="body-xs">{err.action || '-'}</Typography>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Box>
+          <DataTable
+            rows={entry.recentErrors.map((err, i) => ({ err, key: `${err.occurredAt}-${i}` }))}
+            columns={recentErrorColumns}
+            getRowId={row => row.key}
+            label="Recent errors"
+            onRetry={noRetry}
+            testId="integration-recent-errors-table"
+            pagination={false}
+            maxHeight="none"
+            minWidth="51rem"
+          />
         ) : (
           <MutedNote>No recent errors.</MutedNote>
         )}

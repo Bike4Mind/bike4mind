@@ -2,6 +2,10 @@ import { fabFileRepository } from '@bike4mind/database';
 import { IAgent, isImageServeable } from '@bike4mind/common';
 import { fileUrlSigningDate, FILE_URL_TTL_SECONDS } from '@bike4mind/utils';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'refreshAgentAvatarUrls' } });
 
 /**
  * Refresh agents' portrait signed URLs for display. `viewerId` is the REQUESTING user.
@@ -48,6 +52,7 @@ export const refreshAgentAvatarUrls = async (agents: IAgent[], _viewerId: string
           const newSignedUrl = await getFilesStorage().getSignedUrl(fabFile.filePath, 'get', {
             expiresIn: FILE_URL_TTL_SECONDS,
             signingDate: fileUrlSigningDate(),
+            ...storageReadOverrides({ mimeType: fabFile.mimeType, fileName: fabFile.fileName, key: fabFile.filePath }),
           });
 
           if (newSignedUrl) {
@@ -61,7 +66,7 @@ export const refreshAgentAvatarUrls = async (agents: IAgent[], _viewerId: string
           }
         }
       } catch (error) {
-        console.error(`Error refreshing avatar URL for agent ${agent.name}:`, error);
+        logger.error('Error refreshing agent avatar URL', { agentId: agent.id, error });
       }
 
       return agent;

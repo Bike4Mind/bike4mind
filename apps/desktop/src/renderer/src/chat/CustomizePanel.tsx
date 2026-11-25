@@ -17,10 +17,9 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { SkillMarketImport, SkillMarketListingRef } from '@shared/skillMarket';
 import type { SkillSummary } from '@shared/skills';
-import { entryAttentionChip, EntrySection, type ConfigEntry } from './ConfigEntry';
-import { ChevronIcon, CloseIcon, ExternalLinkIcon, SearchIcon, ServerIcon, SlidersIcon, SparkIcon } from './icons';
+import { EntrySection, type ConfigEntry } from './ConfigEntry';
+import { ChevronIcon, CloseIcon, ExternalLinkIcon, SearchIcon, ServerIcon, SparkIcon } from './icons';
 import { McpServersSettings } from './McpServersSettings';
-import { NavItem } from './SessionList';
 import {
   COLLAPSE_ABOVE_GROUPS,
   filterSkillGroups,
@@ -115,7 +114,7 @@ const SkillRow = memo(function SkillRow({
         {onUpload && skill.source !== 'account' && (
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             onClick={() => onUpload(skill)}
             data-testid="skill-row-upload-btn"
@@ -257,7 +256,8 @@ function SkillsSettings({
   sessionId: string | null;
   onOpenSkillMarket?: (listing?: SkillMarketListingRef) => void;
 }) {
-  const { skills, refresh } = useSkills(sessionId);
+  // With no conversation open the user's own skills still exist; only a project's need one.
+  const { skills, refresh } = useSkills(sessionId ? { sessionId } : { draftDirectory: null });
   const upload = useSkillUpload(() => void refresh(), sessionId);
   const startUpload = upload.start;
   const uploadRow = useCallback(
@@ -337,98 +337,141 @@ function SkillsSettings({
   const userSkillCount = shownUserGroups.reduce((total, group) => total + group.skills.length, 0);
 
   return (
-    <Stack spacing={2.5} data-testid="skills-settings">
-      {/* Collapse all sits beside the filter because it covers the Bike4Mind group above Your skills too. */}
-      <Stack direction="row" spacing={1} alignItems="center">
-        <Input
-          size="sm"
-          value={query}
-          onChange={event => {
-            setQuery(event.target.value);
-            setCollapsedWhileFiltering(new Set());
-          }}
-          placeholder="Filter skills"
-          startDecorator={<SearchIcon />}
-          slotProps={{ input: { 'data-testid': 'skills-filter-input', 'aria-label': 'Filter skills' } }}
-          sx={{ flex: 1 }}
-        />
-        {collapsibleKeys.length > 0 && (
-          <Button size="sm" variant="plain" color="neutral" onClick={toggleAll} data-testid="skills-collapse-all-btn">
-            {anyOpen ? 'Collapse all' : 'Expand all'}
-          </Button>
-        )}
-      </Stack>
-      {shownAccountGroup && (
-        <SkillGroup
-          group={shownAccountGroup}
-          open={isOpen(ACCOUNT_GROUP_KEY)}
-          onToggle={toggle}
-          empty="No Bike4Mind account skills loaded."
-          imports={imports}
-          onOpenListing={onOpenSkillMarket}
-        />
-      )}
-      <Box component="section" data-testid="user-skill-scopes">
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-          <Typography level="title-md">Your skills</Typography>
-          <Chip size="sm" variant="soft" color="neutral">
-            {userSkillCount}
-          </Chip>
-        </Stack>
-        {userGroups.length === 0 ? (
-          <Sheet variant="soft" sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}>
-            <Typography level="body-sm" textColor="text.tertiary">
-              No skills found in ~/.claude/skills.
-            </Typography>
-          </Sheet>
-        ) : shownUserGroups.length === 0 ? (
-          <Sheet variant="soft" sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}>
-            <Typography level="body-sm" textColor="text.tertiary" data-testid="skills-filter-empty">
-              No skills match.
-            </Typography>
-          </Sheet>
-        ) : (
-          <Stack spacing={2}>
-            {shownUserGroups.map(group =>
-              singleSkillScopes.has(group.key) ? (
-                <List key={group.key} size="sm" sx={skillListSx} data-testid="skills-single-row">
-                  <SkillRow skill={group.skills[0]} onUpload={uploadRow} />
-                </List>
-              ) : (
-                <SkillGroup
-                  key={group.key}
-                  group={group}
-                  open={isOpen(group.key)}
-                  onToggle={toggle}
-                  onUpload={uploadRow}
-                />
-              )
+    <Tabs defaultValue="mine" data-testid="skills-settings" sx={{ bgcolor: 'transparent' }}>
+      <TabList
+        aria-label="Skills view"
+        variant="plain"
+        size="sm"
+        sx={{
+          gap: 0.5,
+          mb: 2,
+          bgcolor: 'transparent',
+          '& .MuiTab-root': { borderRadius: 'md', minHeight: 32, px: 1.5 },
+          '& .Mui-selected': { bgcolor: 'background.level1', boxShadow: 'sm' },
+        }}
+      >
+        <Tab value="mine" data-testid="skills-your-tab">
+          Installed
+        </Tab>
+        <Tab value="discover" data-testid="skills-discover-tab">
+          Discover
+        </Tab>
+      </TabList>
+      <TabPanel value="mine" keepMounted sx={{ p: 0 }}>
+        <Stack spacing={2.5}>
+          {/* Collapse all sits beside the filter because it covers the Bike4Mind group above Your skills too. */}
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Input
+              size="sm"
+              value={query}
+              onChange={event => {
+                setQuery(event.target.value);
+                setCollapsedWhileFiltering(new Set());
+              }}
+              placeholder="Filter skills"
+              startDecorator={<SearchIcon />}
+              slotProps={{ input: { 'data-testid': 'skills-filter-input', 'aria-label': 'Filter skills' } }}
+              sx={{ flex: 1 }}
+            />
+            {collapsibleKeys.length > 0 && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={toggleAll}
+                data-testid="skills-collapse-all-btn"
+              >
+                {anyOpen ? 'Collapse all' : 'Expand all'}
+              </Button>
             )}
           </Stack>
-        )}
-      </Box>
+          {shownAccountGroup && (
+            <SkillGroup
+              group={shownAccountGroup}
+              open={isOpen(ACCOUNT_GROUP_KEY)}
+              onToggle={toggle}
+              empty="No Bike4Mind account skills loaded."
+              imports={imports}
+              onOpenListing={onOpenSkillMarket}
+            />
+          )}
+          <Box component="section" data-testid="user-skill-scopes">
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+              <Typography level="title-md">Your skills</Typography>
+              <Chip size="sm" variant="soft" color="neutral">
+                {userSkillCount}
+              </Chip>
+            </Stack>
+            {userGroups.length === 0 ? (
+              <Sheet variant="soft" sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}>
+                <Typography level="body-sm" textColor="text.tertiary">
+                  No skills found in ~/.claude/skills.
+                </Typography>
+              </Sheet>
+            ) : shownUserGroups.length === 0 ? (
+              <Sheet variant="soft" sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}>
+                <Typography level="body-sm" textColor="text.tertiary" data-testid="skills-filter-empty">
+                  No skills match.
+                </Typography>
+              </Sheet>
+            ) : (
+              <Stack spacing={2}>
+                {shownUserGroups.map(group =>
+                  singleSkillScopes.has(group.key) ? (
+                    <List key={group.key} size="sm" sx={skillListSx} data-testid="skills-single-row">
+                      <SkillRow skill={group.skills[0]} onUpload={uploadRow} />
+                    </List>
+                  ) : (
+                    <SkillGroup
+                      key={group.key}
+                      group={group}
+                      open={isOpen(group.key)}
+                      onToggle={toggle}
+                      onUpload={uploadRow}
+                    />
+                  )
+                )}
+              </Stack>
+            )}
+          </Box>
+        </Stack>
+      </TabPanel>
+      <TabPanel value="discover" keepMounted sx={{ p: 0 }}>
+        <Stack spacing={1.5} data-testid="skills-discover">
+          {onOpenSkillMarket && (
+            <Sheet variant="outlined" sx={{ borderRadius: 'lg', p: 2, bgcolor: 'background.level1' }}>
+              <Typography level="title-md">Skill Market</Typography>
+              <Typography level="body-sm" textColor="text.tertiary" sx={{ mt: 0.5, mb: 1.5 }}>
+                Browse skills shared by the community and import them into your own.
+              </Typography>
+              <Button variant="solid" onClick={() => onOpenSkillMarket()} data-testid="customize-skill-market-btn">
+                Browse Skill Market
+              </Button>
+            </Sheet>
+          )}
+          <Sheet variant="outlined" sx={{ borderRadius: 'lg', p: 2, bgcolor: 'background.level1' }}>
+            <Typography level="title-md">Share your own</Typography>
+            <Typography level="body-sm" textColor="text.tertiary" sx={{ mt: 0.5, mb: 1.5 }}>
+              Upload a skill from this computer to your Bike4Mind account.
+            </Typography>
+            <Button
+              variant="outlined"
+              color="neutral"
+              onClick={() => void upload.start(() => window.b4m.skillMarket.pickUploadSource())}
+              data-testid="skill-upload-pick-btn"
+            >
+              Upload a skill...
+            </Button>
+          </Sheet>
+        </Stack>
+      </TabPanel>
       {upload.error && (
-        <Alert color="danger" data-testid="skill-upload-pick-error">
+        <Alert color="danger" data-testid="skill-upload-pick-error" sx={{ mt: 2 }}>
           {upload.error}
         </Alert>
       )}
-      <Stack direction="row" spacing={1}>
-        {onOpenSkillMarket && (
-          <Button variant="outlined" onClick={() => onOpenSkillMarket()} data-testid="customize-skill-market-btn">
-            Browse Skill Market
-          </Button>
-        )}
-        <Button
-          variant="outlined"
-          color="neutral"
-          onClick={() => void upload.start(() => window.b4m.skillMarket.pickUploadSource())}
-          data-testid="skill-upload-pick-btn"
-        >
-          Upload a skill...
-        </Button>
-      </Stack>
       {upload.dialog}
-    </Stack>
+    </Tabs>
   );
 }
 
@@ -470,29 +513,12 @@ function useCustomizeEntries(): ConfigEntry[] {
 }
 
 /**
- * The Customize row in the nav, which opens the screen.
- *
- * It carries the attention badge whether or not the screen is showing. On the old collapse the
- * badge was hidden while open, because the entry it named was then one row below it and the
- * chip was saying the same thing twice; a screen replaces the conversation instead, so nothing
- * about which screen is up changes whether the sidebar should report a dead server.
- *
- * That badge is the whole reason MCP lives here: it used to hold a permanent card in the
- * sidebar for a control that is opened rarely, and the failure count was the only part of that
- * card worth the space.
+ * What the Customize screen would flag, for the dot on the rail's avatar and the chip on its
+ * menu row. Read from the same entries the screen draws, so the dot answers the same question
+ * as the section it points at. MCP is the only entry that can raise one today.
  */
-export function CustomizeNavItem({ onOpen }: { onOpen: () => void }) {
-  const entries = useCustomizeEntries();
-
-  return (
-    <NavItem
-      icon={<SlidersIcon />}
-      label="Customize"
-      onClick={onOpen}
-      end={entryAttentionChip(entries, 'customize-attention-chip')}
-      testId="chat-customize-btn"
-    />
-  );
+export function useCustomizeAttention(): string | undefined {
+  return useCustomizeEntries().find(entry => entry.attention)?.attention;
 }
 
 /**
@@ -582,7 +608,7 @@ export function CustomizeScreen({
               gap: 2,
             }}
           >
-            {['DataLake', 'QuestMaster', 'Tavern', 'Studio'].map(name => (
+            {['DataLake', 'QuestMaster'].map(name => (
               <Sheet
                 key={name}
                 component="article"

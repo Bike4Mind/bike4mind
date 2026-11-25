@@ -1,3 +1,8 @@
+import {
+  downloadPublishedIndex,
+  deleteRetiredPublishedIndex,
+  publishedContentSnapshotFilter,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -6,7 +11,7 @@ import * as cheerio from 'cheerio';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact, Annotation } from '@bike4mind/database';
-import type { ArtifactVersionMeta, IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+import type { IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import {
   validateBundle,
   buildPublishUrlPath,
@@ -16,10 +21,12 @@ import {
   consumePublishAction,
   type PublishActionReceipt,
 } from '@server/services/publish';
+// From the module, not the barrel: tests that hand-build a partial barrel mock (limits.test.ts) do not export these.
+import { planPublishVersions, versionsPushUpdate } from '@server/services/publish/planPublishVersions';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 /**
  * POST /api/publish/[publicId]/revise - Phase C of the artifact-collab layer:
@@ -56,6 +63,7 @@ interface ReviseArtifactLean {
   ownerId: string;
   lastPublishedBy?: string;
   storageKeyPrefix: string;
+  indexObjectPath?: string | null;
   sha256Index?: string;
   size: { totalBytes: number; fileCount: number };
   manifest: Array<{ path: string; size: number; mimeType: string; sha256: string }>;
@@ -140,6 +148,7 @@ const handler = baseApi().post(
       {
         publicId,
         deletedAt: null,
+        ...publishedContentSnapshotFilter(artifact),
         $or: [{ revisingAt: null }, { revisingAt: { $lt: new Date(lockNow.getTime() - REVISE_LOCK_TTL_MS) } }],
       },
       { $set: { revisingAt: lockNow } }
@@ -171,7 +180,7 @@ const handler = baseApi().post(
       // The stored bytes are what gets archived (and counted), not a re-encoding of the decoded text.
       let currentBuf: Buffer;
       try {
-        currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
+        currentBuf = await downloadPublishedIndex(artifact, storage);
       } catch {
         return res.status(500).json({ error: 'Artifact index.html missing from storage' });
       }
@@ -256,27 +265,17 @@ const handler = baseApi().post(
       // Record the version, deduped by content sha and backfilling the version being
       // replaced if history doesn't yet contain it (see restore.ts for rationale).
       // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
-      const haveShas = new Set((artifact.versions ?? []).map(v => v.sha256Index));
-      const versionsToPush: ArtifactVersionMeta[] = [];
-      if (!haveShas.has(currentSha)) {
-        versionsToPush.push({
-          publishedAt: artifact.publishedAt,
-          publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
-          size: artifact.size,
-          sha256Index: currentSha,
-          indexBytes: currentBuf.length,
-        });
-        haveShas.add(currentSha);
-      }
-      if (!haveShas.has(newIndexSha)) {
-        versionsToPush.push({
-          publishedAt: now,
+      const { versionsToPush } = planPublishVersions({
+        previous: artifact,
+        priorIndex: currentBuf,
+        incoming: {
+          sha256: newIndexSha,
           publishedBy: String(req.user.id),
+          publishedAt: now,
           size: { totalBytes, fileCount: newManifest.length },
-          sha256Index: newIndexSha,
           indexBytes: revisedBuf.length,
-        });
-      }
+        },
+      });
 
       // Storage quota on the net change (see checkInPlaceRewriteQuota): index.html is rewritten and
       // the current one is archived, so a revision that changes the page grows it even if no larger.
@@ -296,19 +295,23 @@ const handler = baseApi().post(
 
       // Archive the current version's stored bytes before overwriting, so a bad revision can be
       // rolled back (previousVersionMeta only stores metadata).
-      await storage
-        .upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
+      let archivedPrevious = false;
+      try {
+        await storage.upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
           ContentType: 'text/html',
-        })
-        .catch(() =>
-          req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`)
-        );
+        });
+        archivedPrevious = true;
+      } catch (error) {
+        req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`, {
+          error,
+        });
+      }
 
       // Write the new index.html in place, then the version metadata.
       await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
 
-      await PublishedArtifact.updateOne(
-        { publicId, deletedAt: null },
+      const updated = await PublishedArtifact.updateOne(
+        { publicId, deletedAt: null, revisingAt: lockNow, ...publishedContentSnapshotFilter(artifact) },
         {
           $set: {
             manifest: newManifest,
@@ -323,9 +326,20 @@ const handler = baseApi().post(
               sha256Index: currentSha,
             },
           },
-          $push: { versions: { $each: versionsToPush } },
+          $unset: { indexObjectPath: 1 },
+          ...versionsPushUpdate(versionsToPush),
         }
       );
+
+      if (updated.matchedCount === 0) {
+        return res.status(409).json({ error: 'The page changed while this operation was running' });
+      }
+
+      if (archivedPrevious) {
+        await deleteRetiredPublishedIndex(artifact, storage, error =>
+          req.logger.warn('[REVISE] Could not remove a retired page payload', { error })
+        );
+      }
 
       // Mark the consumed feedback resolved by the AI revision (current version only).
       await Annotation.updateMany(

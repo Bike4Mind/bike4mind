@@ -1,12 +1,12 @@
 import { FC } from 'react';
 import { FormControl, FormHelperText, FormLabel, Input, Typography } from '@mui/joy';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from '@client/app/utils/prettyBytes';
 import { DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { useOrgStorageUsage } from '@client/app/hooks/data/useOrgStorageUsage';
 
 export type ParsedStorageLimit = { valid: true; storageLimit: number | null } | { valid: false };
 
-/** Empty clears the override (null, so the default applies); otherwise a decimal MB in [0, MAX_STORAGE_LIMIT_MB]. */
+/** Empty clears the override; otherwise a decimal MB in [0, MAX_STORAGE_LIMIT_MB]. */
 export const parseStorageLimitInput = (input: string): ParsedStorageLimit => {
   const trimmed = input.trim();
   if (trimmed === '') return { valid: true, storageLimit: null };
@@ -52,7 +52,7 @@ const OrganizationStorageLimitField: FC<OrganizationStorageLimitFieldProps> = ({
       <FormHelperText data-testid="admin-org-storage-usage">
         {isInvalid
           ? `Enter a number of MB from 0 to ${MAX_STORAGE_LIMIT_MB.toLocaleString()}`
-          : `${renderUsage()}. Leave empty for the default (${DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.toLocaleString()} MB).`}
+          : `${renderUsage()}. Leave empty for the plan allowance or default (${DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.toLocaleString()} MB).`}
       </FormHelperText>
     </FormControl>
   );

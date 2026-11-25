@@ -6,20 +6,33 @@
  * and stores a SpendReconciliation snapshot per (month, provider).
  *
  * Reconciles the previous month (closed) and the current month (accruing).
- * Providers whose admin key is not configured are silently skipped.
+ * Providers whose admin key is not configured are skipped.
+ *
+ * The provider side is narrowed to the stage's provider spend scope (providerSpendScope.ts), the same
+ * scope the hourly providerUsagePoll applies; the organization-wide total is logged beside it.
+ *
+ * The hosted handler publishes two metrics alarmed in infra/providerSpend.ts:
+ * SpendReconciliationDrift (closed-month rows above SPEND_RECONCILIATION_DRIFT_ALERT_PCT) and
+ * SpendReconciliationNothingReconciled (a run where every provider-month was skipped or failed).
  *
  * Schedule: daily at 6am UTC
  * Enabled: production + dev
  */
 
 import { Context } from 'aws-lambda';
+import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
 import { connectDB, spendReconciliationRepository, usageEventRepository } from '@bike4mind/database';
-import { ISpendReconciliationInput } from '@bike4mind/common';
+import { ISpendReconciliationInput, SPEND_RECONCILIATION_DRIFT_ALERT_PCT } from '@bike4mind/common';
 import { spendReconciliationService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
+import { type AdminKeyProvider, resolveProviderAdminKey } from './providerAdminKey';
+import { describeProviderSpendScope, readProviderSpendScope } from './providerSpendScope';
+
+const PROVIDER_FETCH_BUDGET_MS = spendReconciliationService.DEFAULT_SPEND_DEADLINE_MS;
+const METRICS_HEADROOM_MS = 30_000;
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),
@@ -28,25 +41,43 @@ const contextToLogs = (context: Context) => ({
   stage: Resource.App.stage,
 });
 
+type ScopedSpendFetch = (
+  key: string,
+  month: string,
+  options: spendReconciliationService.ProviderSpendFetchOptions
+) => Promise<spendReconciliationService.ProviderSpendResult | null>;
+
 interface ProviderConfig {
-  provider: string;
+  provider: AdminKeyProvider;
   source: ISpendReconciliationInput['source'];
-  fetch: (key: string, month: string) => Promise<{ providerUsd: number; breakdown: Record<string, number> } | null>;
-  getKey: () => string | undefined;
+  /** Reads the stage's spend scope and binds it to the fetcher; throws when the scope is unreadable or invalid. */
+  bindScope: () => Promise<{ scope: object | undefined; fetchSpend: ScopedSpendFetch }>;
 }
 
 const PROVIDERS: ProviderConfig[] = [
   {
     provider: 'anthropic',
     source: 'anthropic_admin_api',
-    fetch: spendReconciliationService.fetchAnthropicSpend,
-    getKey: () => Config.ANTHROPIC_ADMIN_API_KEY,
+    bindScope: async () => {
+      const scope = await readProviderSpendScope('anthropic');
+      return {
+        scope,
+        fetchSpend: (key, month, options) =>
+          spendReconciliationService.fetchAnthropicSpend(key, month, undefined, options, scope),
+      };
+    },
   },
   {
     provider: 'openai',
     source: 'openai_usage_api',
-    fetch: spendReconciliationService.fetchOpenAISpend,
-    getKey: () => Config.OPENAI_ADMIN_API_KEY,
+    bindScope: async () => {
+      const scope = await readProviderSpendScope('openai');
+      return {
+        scope,
+        fetchSpend: (key, month, options) =>
+          spendReconciliationService.fetchOpenAISpend(key, month, undefined, options, scope),
+      };
+    },
   },
 ];
 
@@ -62,6 +93,8 @@ export interface SpendReconciliationResult {
   reconciled: number;
   skipped: number;
   failed: number;
+  /** Closed-month rows whose deltaPct exceeds SPEND_RECONCILIATION_DRIFT_ALERT_PCT. */
+  drifted: number;
 }
 
 /**
@@ -71,38 +104,76 @@ export interface SpendReconciliationResult {
 export async function runSpendReconciliation({
   logger,
   now = new Date(),
+  deadlineMs = Date.now() + PROVIDER_FETCH_BUDGET_MS,
 }: {
   logger: Logger;
   now?: Date;
+  deadlineMs?: number;
 }): Promise<SpendReconciliationResult> {
   let reconciled = 0;
   let skipped = 0;
   let failed = 0;
+  let drifted = 0;
 
-  const configured: { providerConfig: ProviderConfig; key: string }[] = [];
+  const configured: {
+    providerConfig: ProviderConfig;
+    key: string;
+    scope: object | undefined;
+    fetchSpend: ScopedSpendFetch;
+  }[] = [];
   for (const providerConfig of PROVIDERS) {
-    const key = providerConfig.getKey();
+    let key: string | undefined;
+    try {
+      key = await resolveProviderAdminKey(providerConfig.provider);
+    } catch (err) {
+      failed++;
+      logger.error(`[SpendReconciliation] ${providerConfig.provider} admin key lookup failed`, err);
+      continue;
+    }
     if (!key || key === 'not-configured') {
       logger.log(`[SpendReconciliation] ${providerConfig.provider}: admin key not configured, skipping`);
       skipped++;
       continue;
     }
-    configured.push({ providerConfig, key });
+    try {
+      configured.push({ providerConfig, key, ...(await providerConfig.bindScope()) });
+    } catch (err) {
+      failed++;
+      logger.error(`[SpendReconciliation] ${providerConfig.provider} spend scope read failed`, err);
+    }
   }
 
   if (configured.length === 0) {
-    logger.log(`[SpendReconciliation] Done: no provider admin key configured, ${skipped} skipped`);
-    return { reconciled, skipped, failed };
+    logger.log(
+      `[SpendReconciliation] Done: no provider admin key configured, ${skipped} skipped` +
+        (failed > 0 ? `, ${failed} failed` : '')
+    );
+    return { reconciled, skipped, failed, drifted };
   }
 
   const months = getReconcileMonths(now);
+  // The accruing month is left out of the drift count: a provider report that lags by a day
+  // reads as a large percentage early in the month. The closed month is re-checked every night.
+  const [closedMonth] = months;
   // getReconcileMonths() only ever uses the current and previous month.
   const internalCogs = await usageEventRepository.monthlyCogsByProvider(2);
 
-  for (const { providerConfig, key } of configured) {
+  for (const [providerIndex, { providerConfig, key, scope, fetchSpend }] of configured.entries()) {
+    const providerStartedAtMs = Date.now();
+    const remainingProviderCount = configured.length - providerIndex;
+    // Share the remaining time fairly, retaining unused time for later providers. Both
+    // months, all pages and every retry for this provider use the same absolute deadline.
+    const providerDeadlineMs = Math.min(
+      deadlineMs,
+      providerStartedAtMs + Math.floor(Math.max(0, deadlineMs - providerStartedAtMs) / remainingProviderCount)
+    );
     for (const month of months) {
       try {
-        const result = await providerConfig.fetch(key, month);
+        if (Date.now() >= providerDeadlineMs) throw new Error('Provider request deadline exceeded');
+        const result = await fetchSpend(key, month, {
+          deadlineMs: providerDeadlineMs,
+          onDiagnostic: diagnostic => logger.warn('[SpendReconciliation] Provider request', diagnostic),
+        });
         if (!result) {
           skipped++;
           continue;
@@ -129,8 +200,22 @@ export async function runSpendReconciliation({
         logger.log(
           `[SpendReconciliation] ${providerConfig.provider} ${month}: ` +
             `provider=$${result.providerUsd.toFixed(2)} internal=$${internalUsd.toFixed(2)} ` +
-            `delta=${deltaUsd >= 0 ? '+' : ''}$${deltaUsd.toFixed(2)} (${deltaPct.toFixed(1)}%)`
+            `delta=${deltaUsd >= 0 ? '+' : ''}$${deltaUsd.toFixed(2)} (${deltaPct.toFixed(1)}%) ` +
+            `org=$${result.orgUsd.toFixed(2)} scope=${describeProviderSpendScope(scope)}`
         );
+        if (result.unappliedScope?.length) {
+          logger.warn(
+            `[SpendReconciliation] ${providerConfig.provider} ${month}: the billing report cannot filter by ` +
+              `${result.unappliedScope.join(', ')}, so provider spend covers more than the configured scope`
+          );
+        }
+        if (month === closedMonth && deltaPct > SPEND_RECONCILIATION_DRIFT_ALERT_PCT) {
+          drifted++;
+          logger.warn(
+            `[SpendReconciliation] ${providerConfig.provider} ${month}: drift ${deltaPct.toFixed(1)}% ` +
+              `exceeds ${SPEND_RECONCILIATION_DRIFT_ALERT_PCT}%`
+          );
+        }
       } catch (err) {
         // A transient provider error must not be stored as a $0 snapshot;
         // count it and move on so the previous good snapshot stays current.
@@ -140,16 +225,44 @@ export async function runSpendReconciliation({
     }
   }
 
-  logger.log(`[SpendReconciliation] Done: ${reconciled} reconciled, ${skipped} skipped, ${failed} failed`);
-  return { reconciled, skipped, failed };
+  logger.log(
+    `[SpendReconciliation] Done: ${reconciled} reconciled, ${skipped} skipped, ${failed} failed, ${drifted} drifted`
+  );
+  return { reconciled, skipped, failed, drifted };
+}
+
+/** Both data points go out on every run, so a healthy night reads as 0 rather than missing. */
+async function publishReconciliationMetrics({ reconciled, drifted }: SpendReconciliationResult): Promise<void> {
+  const timestamp = new Date();
+  await new CloudWatchClient({}).send(
+    new PutMetricDataCommand({
+      // Must match LLM_SPEND_NAMESPACE in infra/providerSpend.ts.
+      Namespace: `${Resource.App.name}/${Resource.App.stage}/LLMSpend`,
+      MetricData: [
+        { MetricName: 'SpendReconciliationDrift', Value: drifted, Unit: 'Count', Timestamp: timestamp },
+        {
+          MetricName: 'SpendReconciliationNothingReconciled',
+          Value: reconciled === 0 ? 1 : 0,
+          Unit: 'Count',
+          Timestamp: timestamp,
+        },
+      ],
+    })
+  );
 }
 
 export async function handler(_event: unknown, context: Context) {
   const logger = new Logger().withMetadata(contextToLogs(context));
+  const remainingMs =
+    typeof context.getRemainingTimeInMillis === 'function'
+      ? context.getRemainingTimeInMillis() - METRICS_HEADROOM_MS
+      : PROVIDER_FETCH_BUDGET_MS;
+  const deadlineMs = Date.now() + Math.max(0, Math.min(PROVIDER_FETCH_BUDGET_MS, remainingMs));
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
   logger.log('[SpendReconciliation] Connected to database');
 
-  const result = await runSpendReconciliation({ logger });
+  const result = await runSpendReconciliation({ logger, deadlineMs });
+  await publishReconciliationMetrics(result);
   return { statusCode: 200, body: JSON.stringify(result) };
 }

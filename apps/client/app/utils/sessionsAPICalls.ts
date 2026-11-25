@@ -115,7 +115,6 @@ export const pushChatMessage = async (
   sessionId: string,
   message: IChatHistoryItem,
   experimentalFeatures?: {
-    enableQuestMaster?: boolean;
     enableMementos: boolean;
     enableArtifacts: boolean;
     enableAgents: boolean;
@@ -135,7 +134,6 @@ export const pushChatMessage = async (
 
   const response = await api.post(`/api/sessions/${sessionId}/chat`, {
     ...message,
-    enableQuestMaster: experimentalFeatures?.enableQuestMaster,
     enableMementos: experimentalFeatures?.enableMementos,
     enableArtifacts: experimentalFeatures?.enableArtifacts,
     enableAgents: experimentalFeatures?.enableAgents,
@@ -172,11 +170,12 @@ export const generateNewSession = async (
   knowledgeIds: string[] = [],
   agentIds: string[] = [],
   projectId?: string,
-  lastUsedModel?: string
+  lastUsedModel?: string,
+  organizationId?: string
 ) => {
   const response = await api.post<ISessionDocument>(
     `/api/sessions/create`,
-    { name, knowledgeIds, agentIds, projectId, lastUsedModel },
+    { name, knowledgeIds, agentIds, projectId, lastUsedModel, organizationId },
     { timeout: SEND_REQUEST_TIMEOUT_MS }
   );
   return response.data;

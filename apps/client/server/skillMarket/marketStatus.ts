@@ -4,7 +4,7 @@ import { skillContentHash } from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * Attach `marketStatus` to every imported skill in a page: stale when its listing has a newer
- * approved version, delisted / removed when the listing was taken down / withdrawn, and
+ * approved version, delisted / removed / hidden when the listing was taken down / withdrawn / hidden by reports, and
  * `locallyModified` when the importer edited the copy. One batched listing lookup per page (no N+1).
  */
 export async function attachMarketStatus<T extends ISkill>(
@@ -27,7 +27,8 @@ export async function attachMarketStatus<T extends ISkill>(
     if (!listing || listing.deletedAt || listing.status === 'withdrawn') state = 'removed';
     else if (listing.status === 'delisted') state = 'delisted';
     // A report-hidden listing can't be imported from until a moderator decides, so don't offer the update yet.
-    else if ((listing.currentVersion ?? 0) > from.version && !listing.hiddenByReports) state = 'stale';
+    else if (listing.hiddenByReports) state = 'hidden';
+    else if ((listing.currentVersion ?? 0) > from.version) state = 'stale';
     return {
       ...skill,
       marketStatus: {

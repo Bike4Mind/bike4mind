@@ -13,6 +13,18 @@ import {
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
+  listDataLakeResearchConfigsContract,
+  createDataLakeResearchConfigContract,
+  getDataLakeResearchConfigContract,
+  updateDataLakeResearchConfigContract,
+  deleteDataLakeResearchConfigContract,
+  startDataLakeResearchRunContract,
+  listDataLakeResearchRunsContract,
+  getDataLakeResearchRunContract,
+  listDataLakeProposalsContract,
+  decideDataLakeProposalContract,
+  getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 } from '@bike4mind/common';
 import { methodBlocks } from './scopeCoverageHelpers';
 
@@ -53,7 +65,7 @@ const READ_ONLY_POST_ROUTES = new Set(['semantic-search.ts', 'rlm-answer.ts', 'c
  * - listed by hand (not inferred from `auth: 'jwtOnly'`) so each exemption is a reviewed claim
  * rather than something a route silently opts into by omission.
  */
-const JWT_ONLY_ROUTES = new Set(['[id]/membership-diff.ts']);
+const JWT_ONLY_ROUTES = new Set(['[id]/membership-diff.ts', '[id]/config-history/[eventId]/undo.ts']);
 
 /**
  * Routes whose gate must be pinned to a SPECIFIC constant, not merely "some DATA_LAKE_ constant".
@@ -79,7 +91,7 @@ const files = routeFiles(ROUTES_DIR);
 const v1Files = routeFiles(V1_ROUTES_DIR);
 
 /**
- * The six contracts CONTRACTS carries for this family, keyed to the constant each one's
+ * The contracts CONTRACTS carries for this family, keyed to the constant each one's
  * `scopes` must be pinned to. `search` is pinned to the query-only set specifically at a
  * reviewer's request: it spends an embedding call and must not open to a `datalake:read`-only key.
  */
@@ -90,6 +102,18 @@ const V1_EXPECTED_SCOPES = [
   [addDataLakeFileContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
   [removeDataLakeFileContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
   [searchDataLakeContract, DATA_LAKE_QUERY_API_KEY_SCOPES] as const,
+  [listDataLakeResearchConfigsContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [createDataLakeResearchConfigContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
+  [getDataLakeResearchConfigContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [updateDataLakeResearchConfigContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
+  [deleteDataLakeResearchConfigContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
+  [startDataLakeResearchRunContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
+  [listDataLakeResearchRunsContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [getDataLakeResearchRunContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [listDataLakeProposalsContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [decideDataLakeProposalContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
+  [getDataLakeConfigHistoryContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [undoDataLakeConfigChangeContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
 ];
 
 // Keyed by the identifier a route passes to nextRouteForContract(), so the source scan can tie
@@ -101,6 +125,18 @@ const V1_CONTRACTS_BY_IDENTIFIER = {
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
+  listDataLakeResearchConfigsContract,
+  createDataLakeResearchConfigContract,
+  getDataLakeResearchConfigContract,
+  updateDataLakeResearchConfigContract,
+  deleteDataLakeResearchConfigContract,
+  startDataLakeResearchRunContract,
+  listDataLakeResearchRunsContract,
+  getDataLakeResearchRunContract,
+  listDataLakeProposalsContract,
+  decideDataLakeProposalContract,
+  getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 };
 
 describe('data-lake routes declare an API-key scope gate', () => {
@@ -122,8 +158,12 @@ describe('data-lake routes declare an API-key scope gate', () => {
       return;
     }
 
-    const gate = source.match(/baseApi\(\{ requiredScopes: (DATA_LAKE_[A-Z_]+) \}\)/);
-    expect(gate, 'route must declare requiredScopes from @server/dataLakes/dataLakeScopes').not.toBeNull();
+    // adminApi takes the same requiredScopes; its admin:* check is per user, not a listed scope.
+    const gate = source.match(/\b(?:baseApi|adminApi)\(\{ requiredScopes: (DATA_LAKE_[A-Z_]+)(?: \}\)|,)/);
+    expect(
+      gate,
+      'route must declare requiredScopes from @bike4mind/server-utils/dataLakes/dataLakeScopes'
+    ).not.toBeNull();
 
     // See dataLakeScopes.ts: admin:* is unstageable, and one mention would deny this
     // family its staging grace period.
@@ -178,7 +218,7 @@ describe('public /api/v1/data-lakes routes gate scopes through their contract', 
     expect(Object.values(V1_CONTRACTS_BY_IDENTIFIER)).toEqual(V1_EXPECTED_SCOPES.map(([c]) => c));
   });
 
-  it('lists exactly these six contracts under /api/v1/data-lakes', () => {
+  it('lists exactly these contracts under /api/v1/data-lakes', () => {
     const v1Contracts = CONTRACTS.filter(c => c.path.startsWith('/api/v1/data-lakes'));
     expect(v1Contracts).toEqual(expect.arrayContaining(V1_EXPECTED_SCOPES.map(([c]) => c)));
     expect(v1Contracts).toHaveLength(V1_EXPECTED_SCOPES.length);

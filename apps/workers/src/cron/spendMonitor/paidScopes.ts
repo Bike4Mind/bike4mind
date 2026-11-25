@@ -9,6 +9,7 @@ type PlanHolderOrganization = {
   id: string;
   userId: string;
   adminUserIds?: readonly string[];
+  billingManagerUserIds?: readonly string[];
   users?: readonly { userId: string; permissions?: readonly string[] | null }[];
 };
 
@@ -23,6 +24,7 @@ export type PaidScopeDeps = {
 const planHolderIds = (organization: PlanHolderOrganization): string[] => [
   organization.userId,
   ...(organization.adminUserIds ?? []),
+  ...(organization.billingManagerUserIds ?? []),
   ...(organization.users ?? []).filter(orgAclRowConfersMembership).map(member => member.userId),
 ];
 
@@ -110,7 +112,7 @@ export function defaultPaidScopeDeps(): PaidScopeDeps {
       subscriptionRepository.findActiveSubscriptionsByOwners(ownerType, ownerIds),
     findPlanHolderOrganizations: async userIds => {
       if (userIds.length === 0) return [];
-      // Same owner/member/admin arms as OrganizationRepository.findPlanHolderOrgIds, batched.
+      // Include billing role holders alongside the existing owner/member/manager plan holders.
       const organizations = await Organization.find({
         $or: [
           { userId: { $in: [...userIds] } },
@@ -120,9 +122,10 @@ export function defaultPaidScopeDeps(): PaidScopeDeps {
             },
           },
           { adminUserIds: { $in: [...userIds] } },
+          { billingManagerUserIds: { $in: [...userIds] } },
         ],
       })
-        .select('userId users.userId users.permissions adminUserIds')
+        .select('userId users.userId users.permissions adminUserIds billingManagerUserIds')
         .lean<(Omit<PlanHolderOrganization, 'id'> & { _id: unknown })[]>();
       return organizations.map(organization => ({ ...organization, id: String(organization._id) }));
     },

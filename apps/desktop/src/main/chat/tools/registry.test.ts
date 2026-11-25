@@ -19,8 +19,21 @@ const mcpSchema: ToolSchema = {
  * off must subtract only itself.
  */
 describe('toolsForRequest', () => {
-  it('declares nothing when nothing is available', () => {
-    expect(names({ roots: [], media: false, host: false })).toEqual([]);
+  it('declares only the plan tool when nothing else is available', () => {
+    expect(names({ roots: [], media: false, host: false })).toEqual(['todo_write']);
+  });
+
+  // A projectless Chat session has no roots; the plan lives in the transcript and needs none.
+  it('offers todo_write without a granted folder, and once alongside the local tools', () => {
+    for (const options of [
+      { roots: [], media: false, host: false },
+      { roots: [], media: true, host: true, ask: true, browser: true, web: true, skills: true },
+      { roots: [], media: false, host: false, modelId: 'gpt-5' },
+      { roots: ['/tmp'], media: false, host: false },
+    ]) {
+      expect(names(options).filter(name => name === 'todo_write')).toEqual(['todo_write']);
+    }
+    expect(names({ roots: [], media: false, host: false })).not.toContain('file_read');
   });
 
   // It reads from the server session's media and writes into the project, so it needs both.
@@ -75,10 +88,41 @@ describe('toolsForRequest', () => {
     expect(findTool('generate_video')).toBeDefined();
   });
 
+  it('offers a Studio session the generation tools and nothing else, whatever else is on', () => {
+    const everything = {
+      studio: true,
+      roots: ['/repo'],
+      media: true,
+      video: [publicVideoModel('gemini-omni-1.1-flash')],
+      host: true,
+      explore: true,
+      browser: true,
+      screen: true,
+      simulator: true,
+      model: true,
+      memory: true,
+      skills: true,
+      web: true,
+      ask: true,
+      mcp: [mcpSchema],
+      mcpServers: true,
+      pullRequest: true,
+    };
+    expect(names(everything)).toEqual(
+      offeredMediaToolNames({ media: true, video: [publicVideoModel('gemini-omni-1.1-flash')] })
+    );
+    expect(names({ ...everything, video: [] })).toEqual(offeredMediaToolNames({ media: true }));
+    // Signed out there is nothing to generate with, and nothing else takes its place.
+    expect(names({ ...everything, media: false })).toEqual([]);
+  });
+
   it('keeps MCP tools when every built-in family is off', () => {
     // A signed-out user with no folder and no project still gets the servers they configured:
     // an MCP server is theirs, and none of the other three preconditions is about it.
-    expect(names({ roots: [], media: false, host: false, mcp: [mcpSchema] })).toEqual(['mcp__notion_search']);
+    expect(names({ roots: [], media: false, host: false, mcp: [mcpSchema] })).toEqual([
+      'todo_write',
+      'mcp__notion_search',
+    ]);
   });
 
   it('drops each family independently', () => {
@@ -189,7 +233,7 @@ describe('toolsForRequest', () => {
     });
 
     it('offers no edit tool at all without a granted folder', () => {
-      expect(names({ roots: [], media: false, host: false, modelId: 'gpt-5' })).toEqual([]);
+      expect(names({ roots: [], media: false, host: false, modelId: 'gpt-5' })).toEqual(['todo_write']);
     });
 
     it('finds every edit tool by name, and says which family a model was offered', () => {
@@ -200,6 +244,80 @@ describe('toolsForRequest', () => {
       expect(isOfferedEditTool('file_write', false)).toBe(true);
       expect(isOfferedEditTool('file_read', true)).toBe(true);
     });
+  });
+
+  // The provider caches tools as one prefix: a worker whose list is a prefix of its parent's reuses
+  // the parent's warm cache, and sibling workers starting together share one write.
+  it("declares a worker's tools as a prefix of its parent's, up to the per-session ones", () => {
+    const shared = {
+      roots: ['/tmp'],
+      media: true,
+      video: [publicVideoModel('gemini-omni-1.1-flash')],
+      host: true,
+      explore: true,
+      browser: true,
+      screen: true,
+      memory: true,
+      skills: true,
+      web: true,
+      mcp: [mcpSchema],
+      mcpServers: true,
+      pullRequest: true,
+      spawnModelHint: null,
+    };
+    const parent = toolsForRequest({ ...shared, ask: true, suggestions: false, delegates: true });
+    const worker = toolsForRequest({ ...shared, ask: false, structuredTask: true, managedDelegation: true });
+    const perSession = new Set([
+      'task_assess',
+      'session_spawn',
+      'quest_complete',
+      'task_report',
+      'ask_user',
+      'request_directory',
+      'loop',
+      'set_session_pull_request',
+      'mcp_add_server',
+    ]);
+    const firstPerSession = worker.findIndex(tool => perSession.has(tool.toolSchema.name));
+
+    expect(firstPerSession).toBeGreaterThan(0);
+    expect(JSON.stringify(worker.slice(0, firstPerSession))).toBe(JSON.stringify(parent.slice(0, firstPerSession)));
+    expect(worker.slice(firstPerSession).every(tool => perSession.has(tool.toolSchema.name))).toBe(true);
+    expect(
+      parent
+        .slice(firstPerSession)
+        .every(tool => perSession.has(tool.toolSchema.name) || tool.toolSchema.name.startsWith('mcp_'))
+    ).toBe(true);
+  });
+
+  it('offers isolation on session_spawn only to a session whose spawn reads it', () => {
+    const base = { roots: ['/tmp'], media: false, host: true, explore: false, spawnModelHint: null };
+    const spawnProperties = (tools: ReturnType<typeof toolsForRequest>) =>
+      tools.find(tool => tool.toolSchema.name === 'session_spawn')?.toolSchema.parameters.properties ?? {};
+
+    expect(spawnProperties(toolsForRequest({ ...base, ask: true, delegates: true }))).toHaveProperty('isolation');
+    const managed = spawnProperties(toolsForRequest({ ...base, ask: false, managedDelegation: true }));
+    expect(managed).toHaveProperty('contract');
+    expect(managed).not.toHaveProperty('isolation');
+  });
+
+  it("lets a task_assess revision leave a contract's defaulted fields out", () => {
+    const tools = toolsForRequest({
+      roots: ['/tmp'],
+      media: false,
+      host: true,
+      explore: false,
+      ask: true,
+      delegates: true,
+    });
+    const assess = tools.find(tool => tool.toolSchema.name === 'task_assess');
+    const action = assess?.toolSchema.parameters.properties.action as { oneOf?: unknown[]; anyOf?: unknown[] };
+    const variants = (action.oneOf ?? action.anyOf ?? []) as {
+      properties: { kind: { const: string }; contract?: { required?: string[] } };
+    }[];
+    const revise = variants.find(variant => variant.properties.kind.const === 'revise');
+
+    expect(revise?.properties.contract?.required?.sort()).toEqual(['acceptanceCriteria', 'outcome', 'role']);
   });
 });
 

@@ -19,7 +19,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { fabFilesService, notebookImportService } from '@bike4mind/services';
-import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
+import { createChatHistoryWrites, createSessionWrites } from '@bike4mind/server-utils/s3/notebookImportComplete';
 import {
   chargeStampedKnowledgeStorage,
   chargeUploadedObject,
@@ -32,7 +32,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 /**
  * The import's quota gate reads `currentStorageSize`, and nothing on the import path used to charge
  * it, so every import measured against the same headroom. Drives the REAL service (built dist - run
- * `pnpm --filter @bike4mind/services build` first) against a replica set, since the row stamp joins the
+ * `pnpm --filter @bike4mind/services-core build` first) against a replica set, since the row stamp joins the
  * import's transaction.
  */
 

@@ -4,6 +4,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import {
+  adminSettingsRepository,
   agentRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
@@ -40,6 +41,7 @@ import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScop
 import { CreateSessionRequestBody } from '../../../../types/api';
 import { toPublicSession } from '@server/sessions/toPublicSession';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { resolveRetentionOrganization } from '@bike4mind/server-utils/organizations/retentionOwnership';
 
 /**
  * The only fields a key holding `ai:generate` WITHOUT `notebooks:write` may set. Everything else
@@ -62,6 +64,10 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
   const userId = req.user.id;
   const body = req.validated;
   const { projectId } = body;
+  if (body.organizationId) {
+    const { resolveActiveOrg } = await import('@bike4mind/server-utils/utils/resolveActiveOrg');
+    body.organizationId = await resolveActiveOrg(req, body.organizationId);
+  }
 
   // The route gate admits ai:generate so a generate-only key can open a bare session. Anything
   // beyond that needs notebooks:write; a JWT caller has no apiKeyInfo and is unaffected.
@@ -178,7 +184,9 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
         // Merges a static lake's admin-set groundingMode override in, so resolveLakeSessionDefaults
         // below (which reads `lake.groundingMode` off this return value) actually sees it.
         fallbackLakeSettings: fallbackLakeSettingsRepository,
+        settings: adminSettingsRepository,
       },
+      logger: req.logger,
     });
     const lakeDefaults = sessionService.resolveLakeSessionDefaults(lake);
     createParams = { ...lakeDefaults, ...body } as CreateSessionRequestBody;
@@ -206,8 +214,12 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
         (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       // The attachment door's lake arms, so a supplied lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
-        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user, req.logger)(),
+        (await import('@bike4mind/server-utils/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(
+          req.user,
+          req.logger
+        )(),
       workspaceSessionSettings: premiumWorkspaceSessionSettings,
+      resolveRetentionOrganization,
     },
     { origin: resolveSessionOrigin(req) }
   );

@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ILakeConfigFieldChange, RecordLakeConfigChangeInput } from '@bike4mind/common';
 import {
@@ -81,6 +82,45 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
       });
       expect(stored?.changes).toHaveLength(1);
       expect(stored?.changes[0]).toMatchObject({ field: 'isPublic', kind: 'literal', before: false, after: true });
+    });
+
+    it('round-trips target, leverChanges and admittedFabFileId through the real model', async () => {
+      const event = await repo.record(
+        baseInput({
+          action: 'approve-proposal',
+          target: { kind: 'proposal', id: 'p1' },
+          admittedFabFileId: 'fab-9',
+          leverChanges: [
+            { lever: 'minRelevance', before: 0.6, after: 0.5 },
+            { lever: 'feedUrl', before: null, after: 'https://example.com/feed.xml' },
+            { lever: 'itemRules', before: [], after: [{ condition: 'press release', action: 'block' }] },
+          ],
+        })
+      );
+
+      const stored = await LakeConfigChangeEventModel.findById(event.id).lean();
+      expect(stored?.target).toEqual({ kind: 'proposal', id: 'p1' });
+      expect(stored?.admittedFabFileId).toBe('fab-9');
+      expect(stored?.leverChanges).toHaveLength(3);
+      expect(stored?.leverChanges?.[0]).toMatchObject({ lever: 'minRelevance', before: 0.6, after: 0.5 });
+      expect(stored?.leverChanges?.[1]).toMatchObject({ lever: 'feedUrl', before: null });
+      expect(stored?.leverChanges?.[2].after).toEqual([{ condition: 'press release', action: 'block' }]);
+    });
+
+    it('round-trips undoesEventId and writes a pre-minted event id as the row id', async () => {
+      const eventId = new mongoose.Types.ObjectId().toHexString();
+      const event = await repo.record(baseInput({ undoesEventId: 'e1', eventId }));
+      expect(event.id).toBe(eventId);
+      const stored = await LakeConfigChangeEventModel.findById(eventId).lean();
+      expect(stored?.undoesEventId).toBe('e1');
+    });
+
+    it('stores an old-shaped row without the new fields', async () => {
+      const event = await repo.record(baseInput());
+      const stored = await LakeConfigChangeEventModel.findById(event.id).lean();
+      expect(stored?.target).toBeUndefined();
+      expect(stored?.leverChanges).toBeUndefined();
+      expect(stored?.admittedFabFileId).toBeUndefined();
     });
 
     it('persists the three scalar shapes a bounded value can take', async () => {

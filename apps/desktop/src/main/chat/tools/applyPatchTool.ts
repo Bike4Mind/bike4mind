@@ -20,6 +20,7 @@ import {
   assertNoControlCharacters,
   assertUnchanged,
   editSnippets,
+  fileChangeAllowance,
   fingerprint,
   forget,
   MAX_WRITE_BYTES,
@@ -404,7 +405,11 @@ function toPrompt(plan: PatchPlan, context: ToolContext): ApprovalPrompt {
     ...plan.changes.map(c => `  ${summaryLine(c, context)}`),
   ].join('\n');
   const diffs = plan.changes.map(change => change.diff);
-  return diffs.length === 1 ? { detail, key: plan.key, diff: diffs[0] } : { detail, key: plan.key, diffs };
+  if (diffs.length !== 1) return { detail, key: plan.key, diffs };
+  const [diff] = diffs;
+  // A delete or a move is more than a change to the file, so its allowance stays with this call.
+  const changesInPlace = diff.operation !== 'delete' && diff.movedFrom === undefined;
+  return { detail, key: plan.key, diff, ...(changesInPlace ? fileChangeAllowance(diff.path) : {}) };
 }
 
 async function restore(plan: PatchPlan, targets: readonly string[]): Promise<void> {

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Button, Sheet, Stack, Typography } from '@mui/joy';
-import { adminSurface } from './adminStyles';
+import { adminBulkBarZIndex, adminSurface } from './adminStyles';
 export type AdminSelection = { mode: 'explicit'; ids: readonly string[] } | { mode: 'allMatching' };
 export function BulkActionBar({
   selection,
@@ -8,12 +8,15 @@ export function BulkActionBar({
   onSelectAllMatching,
   selectAllLabel,
   onClear,
+  selectAllMatchingDisabled = false,
   children,
 }: {
   selection: AdminSelection;
   totalMatching: number;
   onSelectAllMatching: () => void;
   selectAllLabel?: string;
+  /** While the count may still be the previous filters' total. */
+  selectAllMatchingDisabled?: boolean;
   onClear: () => void;
   children: ReactNode;
 }) {
@@ -23,12 +26,18 @@ export function BulkActionBar({
     <Sheet
       variant="outlined"
       data-testid="admin-bulk-action-bar"
-      sx={{ ...adminSurface, position: 'sticky', bottom: 2, zIndex: 2, p: 2, boxShadow: 'md' }}
+      sx={{ ...adminSurface, position: 'sticky', bottom: 2, zIndex: adminBulkBarZIndex, p: 2, boxShadow: 'md' }}
     >
       <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
         <Typography sx={{ color: 'admin.ink' }}>{count.toLocaleString()} selected</Typography>
         {selection.mode === 'explicit' && count < totalMatching && (
-          <Button variant="plain" size="sm" onClick={onSelectAllMatching} data-testid="admin-select-all-matching-btn">
+          <Button
+            variant="plain"
+            size="sm"
+            disabled={selectAllMatchingDisabled}
+            onClick={onSelectAllMatching}
+            data-testid="admin-select-all-matching-btn"
+          >
             {selectAllLabel ?? `Select all ${totalMatching.toLocaleString()} matching`}
           </Button>
         )}

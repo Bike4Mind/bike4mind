@@ -6,6 +6,8 @@ import {
 } from '@bike4mind/infra';
 import { contributedInfraResources } from '../../premium-generated/infraResources.generated';
 import { ensureContributedSecretsLoaded, isContributedSecret } from '../../utils/contributedSecrets';
+import { statusTransportKind, unusedMailSecrets } from '../../utils/mailer/configStatus';
+import type { MailTransportKind } from '../../utils/mailer/transport';
 import { Logger } from '@bike4mind/observability';
 
 export interface SecretRotationEntry {
@@ -42,7 +44,14 @@ export const SECRET_ROTATION_CONFIG: { [key: string]: SecretRotationEntry } = {
     rotationIntervalDays: 90,
     isAutomatic: false,
     rotationProcess:
-      'Generate new key: openssl rand -hex 32. Copy current value to SECRET_ENCRYPTION_KEY_PREVIOUS, then set the new value via sst secret set. Existing encrypted values are re-encrypted on next read.',
+      'Generate new key: openssl rand -hex 32. Copy current value to SECRET_ENCRYPTION_KEY_PREVIOUS, set the new value via sst secret set, and deploy. Stored values are not re-encrypted on read: under sst shell run "pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets", then the same command with --verify. Clear SECRET_ENCRYPTION_KEY_PREVIOUS only after --verify exits 0.',
+  },
+  HMAC_SIGNING_SECRET: {
+    description: 'Optional root secret for signed URLs and hashed identifiers; unset, SECRET_ENCRYPTION_KEY signs',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess:
+      'Generate new value: openssl rand -hex 32. Copy the current value to HMAC_SIGNING_SECRET_PREVIOUS (on first use, copy SECRET_ENCRYPTION_KEY there), set the new value via sst secret set, and deploy. Keep the previous value for at least 90 days: earlier signatures and hashed identifiers are checked against it.',
   },
   OAUTH_RSA_PRIVATE_KEY: {
     description: 'RSA private key for signing OIDC ID tokens (RS256)',
@@ -258,6 +267,13 @@ export const SECRET_ROTATION_CONFIG: { [key: string]: SecretRotationEntry } = {
     isAutomatic: false,
     rotationProcess: 'Generate new random token and update SST Secret',
   },
+  CHAT_COMPLETION_INTERNAL_SECRET: {
+    description: 'Bearer shared by the frontend Lambda and ChatCompletion for internal quest dispatch',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess:
+      'Generate a new random value, set it with `sst secret set`, then deploy the frontend and ChatCompletion together',
+  },
   E2E_CLEANUP_SECRET: {
     description: 'Header secret for the E2E test endpoints (/api/test/*)',
     rotationIntervalDays: 180,
@@ -296,10 +312,17 @@ function ensureContributedRotationsLoaded(): void {
   registerContributedSecretRotations(contributedInfraResources.rotations);
 }
 
-/** Core rotation entries plus every registered contributed one. Core entries win a name clash. */
-export function getSecretRotationConfig(): { [key: string]: SecretRotationEntry } {
+/**
+ * Core rotation entries plus every registered contributed one. Core entries win a name clash.
+ * Mail settings the transport never reads are left out, so an SES stage drops the SMTP ones.
+ */
+export function getSecretRotationConfig(transport: MailTransportKind = statusTransportKind()): {
+  [key: string]: SecretRotationEntry;
+} {
   ensureContributedRotationsLoaded();
-  return { ...Object.fromEntries(contributedRotations), ...SECRET_ROTATION_CONFIG };
+  const config = { ...Object.fromEntries(contributedRotations), ...SECRET_ROTATION_CONFIG };
+  for (const name of unusedMailSecrets(transport)) delete config[name];
+  return config;
 }
 
 /**

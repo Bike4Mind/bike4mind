@@ -27,6 +27,10 @@ vi.mock('@server/middlewares/adminApi', () => ({
     },
   }),
 }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  ApiKeyScope: { ADMIN: 'admin' },
+}));
 vi.mock('@bike4mind/database', async () => ({
   dlqReplayLogRepository: (
     await import('../../../../../../../packages/database/src/models/infra/webhooks/DlqReplayLogModel')
@@ -43,7 +47,16 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   deleteFromQueue: h.delete,
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
-vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
+vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestion: vi.fn() }));
+vi.mock('@bike4mind/observability', async importOriginal => {
+  const original = await importOriginal<typeof import('@bike4mind/observability')>();
+  class Logger extends original.Logger {
+    static info = vi.fn();
+    static error = vi.fn();
+    static warn = vi.fn();
+  }
+  return { ...original, Logger };
+});
 
 import '../replay';
 
@@ -77,7 +90,7 @@ async function callReplay(mode: 'direct' | 'batch') {
     method: 'POST',
     body: {
       queueLabel: 'quest',
-      reason: 'Reviewed failure and replay side effects',
+      reason: 'Verify persisted replay budget',
       ...(mode === 'direct'
         ? { messages: [{ messageId: attempt.messageId, receiptHandle: 'receipt-1', body: '{}' }] }
         : { batchSize: 1 }),

@@ -11,6 +11,7 @@ export * as counterService from './countersService';
 export * as importHistoryService from './importHistoryService';
 export * as sessionService from './sessionService';
 export * as organizationService from './organizationService';
+export * as spaceService from './spaceService';
 export * as apiKeyService from './apiKeyService';
 export * as promptService from './promptService';
 export * as voiceService from './voiceService';
@@ -39,6 +40,7 @@ export * as scopedSettingsService from './settings';
 export * as fileEmbeddingService from './fileEmbeddingService';
 export * as briefcaseService from './briefcaseService';
 export * as imageTemplateService from './imageTemplateService';
+export * as studioCompositionService from './studioCompositionService';
 export * as cheerioService from './lib/cheerio';
 export * as turndownService from './lib/turndown';
 export * as speechToTextService from './speech';
@@ -68,7 +70,7 @@ export * from './auth';
 // Import these from their subpaths instead:
 //   '@bike4mind/services/llm', '@bike4mind/services/cliCompletions',
 //   '@bike4mind/services/agentProactiveMessagingService'
-// services/src/index.closure.test.ts fails if any of them comes back.
+// services/src/index.closure.repo.test.ts fails if any of them comes back.
 //
 // The tool CONTRACT types are the exception, and they are free: `export type` is
 // erased by tsc, so @vercel/nft follows no edge and no tool code is traced. Tool
@@ -80,7 +82,7 @@ export type { ToolDefinition, ToolContext } from './llm/tools/base/types';
 // Three LLM VALUES stay on the barrel deliberately. All are leaves that reach
 // neither the tool registry nor any heavy dependency (mathjs, isolated-vm,
 // sharp), so re-exporting them costs a few files in the barrel closure and no
-// tracer edge to the registry - measured, and index.closure.test.ts still
+// tracer edge to the registry - measured, and index.closure.repo.test.ts still
 // asserts the registry is unreachable from here. Out-of-repo consumers import
 // them from the root, and severing them buys nothing, so the compat surface is
 // cheaper than the coordinated churn. Anything that DOES reach the registry
@@ -103,3 +105,4 @@ export * from './prReportService';
 export * as prReportService from './prReportService';
 export * as ncmecService from './ncmecService';
 export * as adminAuditService from './adminAuditService';
+export * as spendFreezeService from './spendFreezeService';

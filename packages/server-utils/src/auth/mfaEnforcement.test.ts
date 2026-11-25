@@ -1,24 +1,35 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 
 const mockGetSettingsMap = vi.fn();
 const mockSettingsValue = vi.fn();
+const mockOrgRequires = vi.fn();
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled },
+  mfaService: {
+    isMfaEnforcementExempt: (user: IUserDocument) => user.isPersona === true,
+    userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled,
+  },
+}));
+vi.mock('./organizationMfa', () => ({
+  requiresOrganizationMfaEnrollment: (...args: unknown[]) => mockOrgRequires(...args),
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: (...args: unknown[]) => mockGetSettingsMap(...args),
   getSettingsValue: (...args: unknown[]) => mockSettingsValue(...args),
 }));
 
-import { isMfaEnrollmentOwed, readEnforceMfa } from './mfaEnforcement';
+import { isMfaEnrollmentOwed, isMfaEnrollmentRequired, readEnforceMfa } from './mfaEnforcement';
 
-const user = (totpEnabled: boolean) => ({ id: 'u1', mfa: { totpEnabled } }) as unknown as IUserDocument;
+// The team-policy lookup is cached per user id, so each test gets ids no other test has used.
+let nextUserId = 0;
+const user = (totpEnabled: boolean, extra: Partial<IUserDocument> = {}) =>
+  ({ id: `u${++nextUserId}`, mfa: { totpEnabled }, ...extra }) as unknown as IUserDocument;
 
 beforeEach(() => {
   mockGetSettingsMap.mockReset().mockResolvedValue({});
   mockSettingsValue.mockReset();
+  mockOrgRequires.mockReset().mockResolvedValue(false);
 });
 
 describe('readEnforceMfa', () => {
@@ -48,6 +59,31 @@ describe('isMfaEnrollmentOwed', () => {
     expect(mockGetSettingsMap).not.toHaveBeenCalled();
   });
 
+  it('is never owed by a test persona, and never reads the setting for one', async () => {
+    mockSettingsValue.mockReturnValue(true);
+    expect(await isMfaEnrollmentOwed(user(false, { isPersona: true }))).toBe(false);
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+  });
+
+  it('is still owed by an ordinary user, whether isPersona is false or absent', async () => {
+    mockSettingsValue.mockReturnValue(true);
+    expect(await isMfaEnrollmentOwed(user(false, { isPersona: false }))).toBe(true);
+    expect(await isMfaEnrollmentOwed(user(false))).toBe(true);
+  });
+
+  it('is owed by a forced account while enforcement is off, without reading the setting', async () => {
+    mockSettingsValue.mockReturnValue(false);
+    expect(await isMfaEnrollmentOwed(user(false, { mfaEnforcement: 'force' }))).toBe(true);
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+  });
+
+  it('still exempts a forced account that is impersonated, a persona or already enrolled', async () => {
+    const forced = { mfaEnforcement: 'force' } as const;
+    expect(await isMfaEnrollmentOwed(user(false, forced), { impersonatedBy: 'admin-1' })).toBe(false);
+    expect(await isMfaEnrollmentOwed(user(false, { ...forced, isPersona: true }))).toBe(false);
+    expect(await isMfaEnrollmentOwed(user(true, forced))).toBe(false);
+  });
+
   it('is not owed while enforcement is off', async () => {
     mockSettingsValue.mockReturnValue(false);
     expect(await isMfaEnrollmentOwed(user(false))).toBe(false);
@@ -62,5 +98,79 @@ describe('isMfaEnrollmentOwed', () => {
     mockSettingsValue.mockReturnValue(true);
     await isMfaEnrollmentOwed(user(false));
     expect(mockGetSettingsMap).toHaveBeenCalledWith(expect.anything(), { skipCache: false, names: ['enforceMFA'] });
+  });
+});
+
+describe('isMfaEnrollmentOwed under a team MFA policy', () => {
+  beforeEach(() => {
+    mockSettingsValue.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('is owed once the grace period has passed', async () => {
+    mockOrgRequires.mockResolvedValue(true);
+    const member = user(false);
+    expect(await isMfaEnrollmentOwed(member)).toBe(true);
+    expect(mockOrgRequires).toHaveBeenCalledWith(member, expect.any(Date));
+  });
+
+  it('is not owed while the grace period is still running, nor by a user in no team', async () => {
+    // requiresOrganizationMfaEnrollment answers false for both; its own suite covers why.
+    expect(await isMfaEnrollmentOwed(user(false))).toBe(false);
+  });
+
+  it('is never owed by an enrolled member, and never looks the policy up', async () => {
+    mockOrgRequires.mockResolvedValue(true);
+    expect(await isMfaEnrollmentOwed(user(true))).toBe(false);
+    expect(mockOrgRequires).not.toHaveBeenCalled();
+  });
+
+  it('is owed by an unenrolled platform admin, as at sign-in', async () => {
+    mockOrgRequires.mockResolvedValue(true);
+    expect(await isMfaEnrollmentOwed(user(false, { isAdmin: true }))).toBe(true);
+  });
+
+  it('exempts an impersonation session and a test persona without a lookup', async () => {
+    mockOrgRequires.mockResolvedValue(true);
+    expect(await isMfaEnrollmentOwed(user(false), { impersonatedBy: 'admin-1' })).toBe(false);
+    expect(await isMfaEnrollmentOwed(user(false, { isPersona: true }))).toBe(false);
+    expect(mockOrgRequires).not.toHaveBeenCalled();
+  });
+
+  it('skips the lookup when enforceMFA already requires enrollment', async () => {
+    mockSettingsValue.mockReturnValue(true);
+    expect(await isMfaEnrollmentOwed(user(false))).toBe(true);
+    expect(mockOrgRequires).not.toHaveBeenCalled();
+  });
+
+  it('looks the policy up at most once a minute per user', async () => {
+    vi.useFakeTimers();
+    const member = user(false);
+    expect(await isMfaEnrollmentOwed(member)).toBe(false);
+    mockOrgRequires.mockResolvedValue(true);
+    expect(await isMfaEnrollmentOwed(member)).toBe(false);
+    expect(mockOrgRequires).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(60_001);
+    expect(await isMfaEnrollmentOwed(member)).toBe(true);
+    expect(mockOrgRequires).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails closed when the lookup fails', async () => {
+    mockOrgRequires.mockRejectedValue(new Error('db down'));
+    await expect(isMfaEnrollmentOwed(user(false))).rejects.toThrow('db down');
+  });
+});
+
+describe('isMfaEnrollmentRequired', () => {
+  it('is true for enforceMFA or a binding team policy, regardless of enrollment', async () => {
+    mockSettingsValue.mockReturnValue(false);
+    mockOrgRequires.mockResolvedValue(true);
+    expect(await isMfaEnrollmentRequired(user(true))).toBe(true);
+    mockOrgRequires.mockResolvedValue(false);
+    expect(await isMfaEnrollmentRequired(user(true))).toBe(false);
   });
 });

@@ -1,12 +1,15 @@
 import {
   BadRequestError,
   CreditHolderType,
+  ForbiddenError,
   insufficientCreditsError,
   type CreditHoldRecord,
   type ICreditHolder,
   type ICreditHolderMethods,
   type IOrganizationDocument,
   type IUserDocument,
+  type ApiKeyBillingOwnerType,
+  type ISpendFreezeRepository,
   type IUserRepository,
 } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
@@ -15,8 +18,13 @@ import {
   type DeductCreditsAdapters,
   type DeductCreditsParams,
 } from './deductCreditsWithOrgSupport';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
 import { assertNewAccountSpendWithinCap, type NewAccountSpendCapAdapters } from './newAccountSpendCap';
+import { assertInterventionSpendAllowed } from './interventionSpendGate';
+import { aiAccessDeniedMessage } from '../userService/accountState';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
@@ -37,6 +45,8 @@ export type CreditHoldAdapters = {
    */
   deductCredits?: typeof deductCreditsWithOrgSupport;
   newAccountSpendCap: NewAccountSpendCapAdapters;
+  /** Required so every construction site wires the freeze check; holdCredits refuses a frozen subject. */
+  spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   /** Told about each refusal for the admin user timeline; best-effort, a throw is logged and ignored. */
   onInsufficientCredits?: (event: {
     userId: string;
@@ -77,6 +87,15 @@ export async function holdCredits(
     requiredCredits: number;
     featureLabel: string;
     logger: ILogger;
+    /** The UserApiKey that authenticated the request, when there is one; its freeze is checked too. */
+    apiKeyId?: string | null;
+    /**
+     * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+     * the acting user for every key.
+     */
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType | null;
+    /** The caller already ran assertSpendNotFrozen for this reservation; skips the second lookup. */
+    spendFreezeChecked?: boolean;
     /** Runs after the user/org are loaded and before any balance moves; throw to refuse. */
     assertBillable?: (user: IUserDocument, organization: IOrganizationDocument | null) => void;
   },
@@ -91,10 +110,27 @@ export async function holdCredits(
 
   const user = await adapters.users.findById(userId);
   if (!user) throw new BadRequestError('User not found');
+  // Every hold reloads the user, so a queued job or continuation placing one after the account was blocked is
+  // refused here, whichever path placed it. Same gate as assertAiAccessAllowed.
+  const accessDenial = aiAccessDeniedMessage(user);
+  if (accessDenial) throw new ForbiddenError(accessDenial);
   let organization: IOrganizationDocument | null = null;
   if (organizationId) {
     organization = await adapters.organizations.findById(organizationId);
     if (!organization) throw new BadRequestError('Billing organization not found');
+  }
+
+  if (!params.spendFreezeChecked) {
+    await assertSpendNotFrozen(
+      spendFreezeSubjectForHold({
+        userId,
+        organizationId,
+        apiKeyId: params.apiKeyId,
+      }),
+      {
+        db: { spendFreezes: adapters.spendFreezes },
+      }
+    );
   }
 
   params.assertBillable?.(user, organization);
@@ -104,6 +140,7 @@ export async function holdCredits(
   // re-check the cap, so this is the only enforcement point for held requests.
   if (organization && isMemberCreditCapExceeded(organization, userId, requiredCredits)) {
     await notifyInsufficientCredits(adapters, { userId, reason: 'member_cap', featureLabel, requiredCredits }, logger);
+    await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization.id, userId, refused: true });
     throw insufficientCreditsError(
       `Your organization member credit limit has been reached for ${featureLabel}. Contact your organization administrator.`
     );
@@ -149,6 +186,23 @@ export async function holdCredits(
     throw insufficientCreditsError(
       holdInsufficientCreditsMessage(featureLabel, availableCredits, requiredCredits, Boolean(organization))
     );
+  }
+
+  try {
+    await assertInterventionSpendAllowed(
+      { userId, credits: requiredCredits },
+      { users: adapters.users, window: adapters.newAccountSpendCap.interventionSpendWindow }
+    );
+  } catch (refusal) {
+    await holderMethods.incrementCredits(ownerId, requiredCredits).catch((err: unknown) =>
+      logger.error(`${featureLabel} intervention rollback failed - owner debited with no charge`, {
+        ownerId,
+        ownerType,
+        requiredCredits,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      })
+    );
+    throw refusal;
   }
 
   return {

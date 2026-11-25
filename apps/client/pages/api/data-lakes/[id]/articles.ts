@@ -1,6 +1,6 @@
 import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   adminSettingsRepository,
@@ -12,14 +12,18 @@ import {
   lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import {
+  fileContentUrl,
+  signFabFileGet,
+  type FabFileSignOptions,
+} from '@bike4mind/server-utils/files/browserFileSigner';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { adminBypassLakeIds } from '@server/dataLakes';
+import { adminBypassLakeIds } from '@bike4mind/server-utils/dataLakes/index';
 import {
   dataLakeArticleListResponseSchema,
   getFileMembershipArm,
+  readableGroupIds,
   type DataLakeMembershipArm,
   type IFabFileDocument,
 } from '@bike4mind/common';
@@ -54,7 +58,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     // Single shared gate (org-aware; not-found-style denial).
     const dataLake = await dataLakeService.assertLakeAccess(id, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        settings: adminSettingsRepository,
+      },
+      logger: req.logger,
     });
 
     const datalakeTag = dataLake.datalakeTag;
@@ -114,13 +123,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           adminSettings: adminSettingsRepository,
         },
         storage: {
-          generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
+          generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) => {
             try {
-              return await getFilesStorage().getSignedUrl(path, 'get', {
-                expiresIn: expireInSeconds,
-                signingDate: options?.signingDate,
-                audience: 'browser',
-              });
+              return await signFabFileGet(path, expireInSeconds, options);
             } catch {
               return null;
             }
@@ -133,7 +138,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         // what keeps buildOwnershipConditions' restrictToDataLake-with-no-lake-arm throw unreachable.
         lakeMemberships: [lakeMembership],
         includeShared: true,
-        userGroups: req.user.groups ?? [],
+        userGroups: readableGroupIds(req.user),
         // Single-lake browser: only this lake's files.
         restrictToDataLake: true,
         ...(uncategorizedOnly ? { lacksContentPrefixTags: [dataLake.fileTagPrefix] } : {}),

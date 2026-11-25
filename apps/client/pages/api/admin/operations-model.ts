@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/server-utils/services/operationsModelService';
 import { DEFAULT_OPERATIONS_IMAGE_MODEL } from '@bike4mind/server-utils/utils/modelResolvers';
 import { z } from 'zod';
-import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';
+import { ApiKeyScope, SETTINGS_PAGE_READ, SpeechToTextModels } from '@bike4mind/common';
 
 const UpdateOperationsModelSchema = z.object({
   modelId: z.string(),
@@ -19,7 +19,7 @@ const UpdateOperationsModelSchema = z.object({
 });
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  adminPermissions: { GET: SETTINGS_PAGE_READ, PUT: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req: Request, res: Response) => {
@@ -37,7 +37,7 @@ const handler = adminApi({
 
       return res.json(config);
     } catch (error) {
-      console.error('Error getting operations model config:', error);
+      req.logger.error('Error getting operations model config', { error });
       return res.status(500).json({
         error: 'Failed to get operations model configuration',
       });
@@ -85,7 +85,7 @@ const handler = adminApi({
         });
       } catch (error) {
         // Even if initialization fails, return the saved config
-        console.warn('Model initialization failed, but config was saved:', error);
+        req.logger.warn('Model initialization failed, but config was saved', { error });
         return res.json({
           success: true,
           config,
@@ -100,7 +100,7 @@ const handler = adminApi({
         });
       }
     } catch (error) {
-      console.error('Error updating operations model:', error);
+      req.logger.error('Error updating operations model', { error });
       return res.status(500).json({
         error: 'Failed to update operations model configuration',
       });

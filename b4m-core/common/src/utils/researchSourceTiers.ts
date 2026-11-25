@@ -1,9 +1,18 @@
 import type {
   LegacyResearchRunLevers,
+  ResearchItemRule,
   ResearchRunLevers,
+  ResearchSource,
   ResearchUnlistedSources,
 } from '../types/entities/DataLakeResearchTypes';
-import { RESEARCH_DOMAIN_LIST_MAX, RESEARCH_UNLISTED_SOURCES } from '../types/entities/DataLakeResearchTypes';
+import {
+  RESEARCH_DOMAIN_LIST_MAX,
+  RESEARCH_ITEM_RULE_ACTIONS,
+  RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
+  RESEARCH_ITEM_RULES_MAX,
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+  RESEARCH_UNLISTED_SOURCES,
+} from '../types/entities/DataLakeResearchTypes';
 
 /**
  * Shared by the research-config repository (read path), the service normalizer and the run
@@ -67,6 +76,57 @@ export const isSameDomainSet = (a: readonly string[], b: readonly string[]): boo
   return setA.size === setB.size && [...setA].every(value => setB.has(value));
 };
 
+// Line breaks become spaces before stripping, because \p{Cc} also contains them.
+const RULE_LINE_BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/g;
+const RULE_STRIPPED_CHARS =
+  /[\p{Cc}\p{Default_Ignorable_Code_Point}\uFFF9-\uFFFB\u2800]|[\u{13430}-\u{1343F}]|\u{16FE4}/gu;
+
+/**
+ * A rule condition as it is stored and counted: line breaks become spaces, control and
+ * default-ignorable characters (zero-width, bidi, soft hyphen, variation selectors, tags, fillers,
+ * interlinear annotation, Egyptian format controls), the braille blank and the Khitan filler are
+ * removed, the text is NFC-normalized so composed and decomposed accents match, whitespace runs
+ * collapse, then trimmed. Strips ZWJ, so emoji ZWJ sequences split into their parts.
+ */
+export const cleanResearchItemRuleCondition = (condition: string): string =>
+  condition
+    .replace(RULE_LINE_BREAKS, ' ')
+    .replace(RULE_STRIPPED_CHARS, '')
+    .normalize('NFC')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** The one identity of a rule: cleaned, case-folded condition plus action. Normalizer, fingerprint and equality all use it. */
+export const researchItemRuleKey = (rule: ResearchItemRule): string =>
+  `${rule.action}\u0000${cleanResearchItemRuleCondition(rule.condition).toLowerCase().normalize('NFC')}`;
+
+const isResearchItemRuleAction = (value: unknown): value is ResearchItemRule['action'] =>
+  typeof value === 'string' && (RESEARCH_ITEM_RULE_ACTIONS as readonly string[]).includes(value);
+
+/** Clean, drop empty conditions and unknown actions, dedupe on the canonical key. No clamping. */
+export const canonicalItemRules = (values: readonly unknown[] | undefined): ResearchItemRule[] => {
+  const seen = new Set<string>();
+  const rules: ResearchItemRule[] = [];
+  for (const value of values ?? []) {
+    if (typeof value !== 'object' || value === null) continue;
+    const { condition, action } = value as { condition?: unknown; action?: unknown };
+    if (typeof condition !== 'string' || !isResearchItemRuleAction(action)) continue;
+    const rule = { condition: cleanResearchItemRuleCondition(condition), action };
+    if (!rule.condition) continue;
+    const key = researchItemRuleKey(rule);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rules.push(rule);
+  }
+  return rules;
+};
+
+/** The stored-data backstop: `canonicalItemRules`, then clamped to the count and length limits. */
+export const normalizeItemRules = (values: readonly unknown[] | undefined): ResearchItemRule[] =>
+  canonicalItemRules(values)
+    .slice(0, RESEARCH_ITEM_RULES_MAX)
+    .map(rule => ({ ...rule, condition: rule.condition.slice(0, RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS) }));
+
 type TierFields = Pick<ResearchRunLevers, 'trustedDomains' | 'reviewDomains' | 'unlistedSources'>;
 
 /**
@@ -76,8 +136,18 @@ type TierFields = Pick<ResearchRunLevers, 'trustedDomains' | 'reviewDomains' | '
 export const deriveLegacyAllowedDomains = (levers: TierFields): string[] =>
   levers.unlistedSources === 'drop' ? Array.from(new Set([...levers.trustedDomains, ...levers.reviewDomains])) : [];
 
-type Upgraded<T extends LegacyResearchRunLevers> = Omit<T, keyof TierFields | 'allowedDomains'> &
-  TierFields & { allowedDomains: string[] };
+type Upgraded<T extends LegacyResearchRunLevers> = Omit<
+  T,
+  keyof TierFields | 'allowedDomains' | 'autoAdmitTrusted' | 'maxAutoAdmits' | 'source' | 'feedUrl' | 'itemRules'
+> &
+  TierFields & {
+    allowedDomains: string[];
+    autoAdmitTrusted: boolean;
+    maxAutoAdmits: number;
+    source: ResearchSource;
+    feedUrl: string | null;
+    itemRules: ResearchItemRule[];
+  };
 
 /**
  * Brings any stored lever shape to the tiered one. A pure field remap: it never normalizes, and it
@@ -85,10 +155,19 @@ type Upgraded<T extends LegacyResearchRunLevers> = Omit<T, keyof TierFields | 'a
  *
  * - Legacy (no valid `unlistedSources`): a non-empty `allowedDomains` becomes the review list with
  *   other sites dropped; an empty one means other sites go to review.
+ * - Auto-admit levers absent (a config or run snapshot saved before they existed) read as off, with
+ *   the default cap.
  * - Mismatch (valid `unlistedSources`, but `allowedDomains` differs from what the tiers derive): code
  *   that predates the tiers wrote it, so its value wins.
  */
 export function upgradeLegacyResearchLevers<T extends LegacyResearchRunLevers>(levers: T): Upgraded<T> {
+  const autoAdmit = {
+    autoAdmitTrusted: levers.autoAdmitTrusted ?? false,
+    maxAutoAdmits: levers.maxAutoAdmits ?? RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+    source: levers.source === 'feed' ? ('feed' as const) : ('search' as const),
+    feedUrl: levers.feedUrl ?? null,
+    itemRules: levers.itemRules ?? [],
+  };
   const trusted = levers.trustedDomains ?? [];
   const allowed = levers.allowedDomains ?? [];
 
@@ -96,6 +175,7 @@ export function upgradeLegacyResearchLevers<T extends LegacyResearchRunLevers>(l
     const drop = allowed.length > 0;
     return {
       ...levers,
+      ...autoAdmit,
       trustedDomains: trusted,
       reviewDomains: drop ? allowed : [],
       unlistedSources: drop ? 'drop' : 'review',
@@ -110,12 +190,12 @@ export function upgradeLegacyResearchLevers<T extends LegacyResearchRunLevers>(l
   };
   const derived = deriveLegacyAllowedDomains(tiers);
   if (levers.allowedDomains === undefined || isSameDomainSet(allowed, derived)) {
-    return { ...levers, ...tiers, allowedDomains: derived };
+    return { ...levers, ...autoAdmit, ...tiers, allowedDomains: derived };
   }
 
   const next: TierFields =
     allowed.length > 0
       ? { ...tiers, reviewDomains: allowed, unlistedSources: 'drop' }
       : { ...tiers, unlistedSources: 'review' };
-  return { ...levers, ...next, allowedDomains: deriveLegacyAllowedDomains(next) };
+  return { ...levers, ...autoAdmit, ...next, allowedDomains: deriveLegacyAllowedDomains(next) };
 }

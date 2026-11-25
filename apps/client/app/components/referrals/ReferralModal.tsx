@@ -15,11 +15,14 @@ import {
   Input,
   FormLabel,
   FormControl,
+  Chip,
 } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
 import { useSubmitUserInvitation, useSubmitReferral } from '@client/app/hooks/data/regInvites';
-import { useGetReferralSummary } from '@client/app/hooks/data/referralSummary';
+import { useGetReferralSummary, type InviterMilestone } from '@client/app/hooks/data/referralSummary';
+import { useGetReferralLink } from '@client/app/hooks/data/referralLink';
+import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import type { IReferralResult } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { create } from 'zustand';
@@ -69,6 +72,10 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
   // Disabled by the server while the reward amounts are 0, so the section stays out of sight until launch.
   const { data: referralSummary } = useGetReferralSummary({ enabled: isOpen && !!userId });
+  const { data: referralLink } = useGetReferralLink({
+    enabled: isOpen && !!userId && inviteType === ReferralInviteType.referral,
+  });
+  const { copied: linkCopied, handleCopyToClipboard } = useCopyToClipboard();
 
   const [friendEmail, setFriendEmail] = useState<string>('');
   const [numReferralsAvailable, setNumReferralsAvailable] = useState<number>(0);
@@ -261,6 +268,10 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
             </Box>
           )}
 
+          {referralSummary?.enabled && referralSummary.milestones.length > 0 && (
+            <ReferralMilestones milestones={referralSummary.milestones} active={referralSummary.active} />
+          )}
+
           {referralSummary?.enabled && (
             <Box
               data-testid="referral-summary"
@@ -286,6 +297,31 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                 </Box>
               ))}
             </Box>
+          )}
+
+          {referralLink && (
+            <FormControl data-testid="referral-link" sx={{ mb: 3 }}>
+              <FormLabel sx={{ mb: 0.5 }}>{t('referral.share_link_label')}</FormLabel>
+              <Stack direction="row" spacing={1}>
+                <Input
+                  readOnly
+                  value={referralLink.url}
+                  onFocus={e => e.target.select()}
+                  slotProps={{ input: { 'data-testid': 'referral-link-input' } }}
+                  sx={{ flex: 1, borderRadius: '4px' }}
+                />
+                <Button
+                  variant="outlined"
+                  data-testid="referral-link-copy-btn"
+                  onClick={() => handleCopyToClipboard(referralLink.url)}
+                >
+                  {linkCopied ? t('referral.share_link_copied') : t('referral.share_link_copy')}
+                </Button>
+              </Stack>
+              <Typography level="body-xs" sx={{ mt: 0.5 }}>
+                {t('referral.share_link_hint')}
+              </Typography>
+            </FormControl>
           )}
 
           <Stack spacing={2.5} sx={{ mb: 3 }}>
@@ -399,6 +435,42 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
         </DialogContent>
       </ModalDialog>
     </Modal>
+  );
+};
+
+const ReferralMilestones: React.FC<{ milestones: InviterMilestone[]; active: number }> = ({ milestones, active }) => {
+  const { t, i18n } = useTranslation();
+  const next = milestones.find(milestone => !milestone.reached);
+  const credits = (amount: number) => amount.toLocaleString(i18n.language);
+  return (
+    <Box data-testid="referral-modal-milestones" sx={{ mb: 2, textAlign: 'center' }}>
+      <Typography level="body-sm" data-testid="referral-modal-milestone-next">
+        {next ? (
+          <Trans
+            i18nKey="referral.milestone_next"
+            count={Math.max(1, next.friends - active)}
+            values={{ credits: credits(next.credits) }}
+            components={{ strong: <strong /> }}
+          />
+        ) : (
+          t('referral.milestone_all_reached')
+        )}
+      </Typography>
+      <Stack direction="row" spacing={1} useFlexGap justifyContent="center" flexWrap="wrap" sx={{ mt: 1 }}>
+        {milestones.map(milestone => (
+          <Chip
+            key={milestone.friends}
+            size="sm"
+            variant={milestone.reached ? 'solid' : 'outlined'}
+            color={milestone.reached ? 'success' : 'neutral'}
+            data-testid={`referral-modal-milestone-${milestone.friends}`}
+            data-reached={milestone.reached}
+          >
+            {t('referral.milestone_chip', { count: milestone.friends, credits: credits(milestone.credits) })}
+          </Chip>
+        ))}
+      </Stack>
+    </Box>
   );
 };
 

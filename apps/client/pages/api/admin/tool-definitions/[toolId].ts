@@ -123,7 +123,7 @@ const handler = adminApi({
 
       throw new NotFoundError('Tool not found');
     } catch (error) {
-      console.error('Error fetching tool definition:', error);
+      req.logger.error('Error fetching tool definition', { error });
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }
@@ -253,7 +253,7 @@ const handler = adminApi({
         updatedAt: newOverride.updatedAt,
       });
     } catch (error) {
-      console.error('Error updating tool definition:', error);
+      req.logger.error('Error updating tool definition', { error });
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }
@@ -314,7 +314,7 @@ const handler = adminApi({
         message: 'Override deleted. Tool reverted to code defaults.',
       });
     } catch (error) {
-      console.error('Error deleting tool definition override:', error);
+      req.logger.error('Error deleting tool definition override', { error });
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }

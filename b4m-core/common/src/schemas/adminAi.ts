@@ -97,3 +97,60 @@ export const adminAiSuggestionItemSchema = z.object({
   updatedAt: z.date(),
 });
 export type AdminAiSuggestionItem = z.infer<typeof adminAiSuggestionItemSchema>;
+
+export const dlqTriageEvidenceSchema = z.object({
+  coverage: z.literal('partial-sqs-sample'),
+  failureSource: z.enum(['recorded', 'unavailable']),
+  failureCategory: z.enum(['refused', 'timeout', 'invalid output', 'bug', 'unknown']),
+  failedAt: z.string().nullable().optional(),
+  sentTimestamp: z.string().nullable().optional(),
+  retentionSeconds: z.number().nullable().optional(),
+  consumerVersion: z.string(),
+  fixVerification: z.literal('unavailable'),
+  entityContext: z.enum(['present-id-withheld', 'unavailable']),
+  owner: z.string().nullable(),
+  expiry: z.object({
+    status: z.enum(['within-24-hours', 'outside-24-hours', 'elapsed', 'unavailable']),
+    estimatedExpiresAt: z.string().nullable(),
+    explanation: z.string(),
+  }),
+  logFallback: z.object({
+    status: z.enum(['not-needed', 'sampled-matches', 'no-sampled-match', 'unavailable']),
+    sampledEvents: z.number().int().min(0).max(20),
+  }),
+  issueDraft: z.object({ title: z.string(), body: z.string() }).nullable(),
+});
+export type DlqTriageEvidence = z.infer<typeof dlqTriageEvidenceSchema>;
+
+export type DlqTriageExecution = {
+  status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
+  operation: 'replay' | 'discard';
+  hasWarning: boolean;
+  recordedAt: string;
+};
+
+/**
+ * The admin queues that offer an abuse assessment as a suggestion. Each records its own suggestion
+ * rows (feature + entityType), so agreement is measured per queue. Server side:
+ * apps/client/server/admin/ai/assessmentSuggestion.ts.
+ */
+export const ASSESSMENT_SUGGESTION_SURFACES = ['shadowDetection', 'signupRiskReview', 'heldSignupGrant'] as const;
+export type AssessmentSuggestionSurface = (typeof ASSESSMENT_SUGGESTION_SURFACES)[number];
+
+/**
+ * Carried by an admin action taken from an assessment suggestion: the assessment the admin saw and,
+ * on an override, why the model was wrong. The server decides accepted vs overridden itself.
+ */
+export const assessmentAiDecisionSchema = z.object({
+  assessmentId: z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid assessment id'),
+  overrideReason: z.string().trim().min(1).max(ADMIN_AI_MAX_OVERRIDE_REASON_CHARS).optional(),
+});
+export type AssessmentAiDecision = z.infer<typeof assessmentAiDecisionSchema>;
+
+/** Accepting an abuse assessment on a user queue: records agreement, changes nothing on the account. */
+export const assessmentSuggestionAcceptSchema = z.object({
+  surface: z.enum(['signupRiskReview', 'heldSignupGrant']),
+  userId: z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid user id'),
+  assessmentId: z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid assessment id'),
+});
+export type AssessmentSuggestionAccept = z.infer<typeof assessmentSuggestionAcceptSchema>;

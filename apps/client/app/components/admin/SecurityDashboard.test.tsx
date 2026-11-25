@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -13,6 +14,8 @@ vi.mock('@client/app/hooks/data/admin', () => {
   const query = mocks.query;
   const mutation = { mutate: vi.fn(), isPending: false };
   return {
+    SECURITY_DASHBOARD_CLOUD_QUERY_KEY: ['admin', 'security-dashboard', 'cloud'],
+    SECURITY_DASHBOARD_PROWLER_QUERY_KEY: ['admin', 'security-dashboard', 'cloud-prowler'],
     useSecurityDashboardWeb: () => query,
     useRunWebSecurityScan: () => mutation,
     useSecurityDashboardCloud: () => query,
@@ -45,6 +48,12 @@ vi.mock('./SecurityDashboard/ScanSummaryTable', () => ({
     </div>
   ),
 }));
+vi.mock('./SecurityDashboard/IssueFilingCard', () => ({
+  IssueFilingCard: () => <div data-testid="issue-filing-card-stub" />,
+}));
+vi.mock('./SecurityDashboard/RecentFilingRunsCard', () => ({
+  RecentFilingRunsCard: () => <div data-testid="recent-filing-runs-stub" />,
+}));
 
 import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
 import SecurityDashboard from './SecurityDashboard';
@@ -52,9 +61,11 @@ import SecurityDashboard from './SecurityDashboard';
 const theme = extendTheme({ ...getThemeConfig() });
 const renderPage = () =>
   render(
-    <CssVarsProvider theme={theme}>
-      <SecurityDashboard />
-    </CssVarsProvider>
+    <QueryClientProvider client={new QueryClient()}>
+      <CssVarsProvider theme={theme}>
+        <SecurityDashboard />
+      </CssVarsProvider>
+    </QueryClientProvider>
   );
 
 describe('SecurityDashboard views', () => {
@@ -83,6 +94,34 @@ describe('SecurityDashboard views', () => {
     fireEvent.click(screen.getByTestId('security-dashboard-views-incident-btn'));
     expect(fakeAdminRouter.search).not.toHaveProperty('securityView');
     expect(screen.queryByTestId('waf-overview-stub')).not.toBeInTheDocument();
+  });
+
+  it('orders the Scans view: issue filing, scans table, recent filing runs, then the panel selector and panel', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans' });
+    renderPage();
+
+    const children = Array.from(screen.getByTestId('security-scans-view').children);
+    const order = [
+      'issue-filing-card-stub',
+      'scan-summary-stub',
+      'recent-filing-runs-stub',
+      'security-scans-panel-tabs',
+      'security-scans-web-panel',
+    ].map(testId => children.indexOf(screen.getByTestId(testId)));
+    expect(order).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('opens Admin settings on the Security section from the header', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans', securityScan: 'prowler' });
+    renderPage();
+
+    const button = screen.getByTestId('security-dashboard-settings-btn');
+    expect(button).toHaveTextContent('Security settings');
+    fireEvent.click(button);
+
+    expect(fakeAdminRouter.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: '/admin' }));
+    expect(fakeAdminRouter.navigate.mock.lastCall?.[0]).not.toHaveProperty('replace');
+    expect(fakeAdminRouter.search).toEqual({ tab: 'admin-settings', section: 'security' });
   });
 
   it('opens the scan panel a link names', () => {

@@ -29,10 +29,12 @@ import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
 import type { PrGithub } from './github';
 import { shouldAutoArchive } from './autoArchive';
-import { MAX_AUTO_FIX_ATTEMPTS, SHELL_TOOLS, autoFixBudget, planAutoFix } from './autoFix';
+import { DEFAULT_AUTO_FIX_ATTEMPTS, parseAutoFixAttempts } from '@shared/autoFixSetting';
+import { SHELL_TOOLS, autoFixBudget, planAutoFix } from './autoFix';
 import { desktopMergeReadiness } from './autoMerge';
 import { MAX_BATCH, mergeMethodFor } from './github';
 import { POLL_MS, alignToTick, pollDelay } from './pollSchedule';
+import { prIconStatus, type PrIconStatus } from '@shared/prAttention';
 
 /** Branches a PR lookup is never made for: a PR "for main" is someone else's fork, not this session's work. */
 const UNOWNED_BRANCHES = new Set(['main', 'master', 'develop', 'HEAD']);
@@ -48,6 +50,9 @@ const AFTER_PUSH_MS = 15_000;
 
 /** A missing or signed-out gh is re-tried on opening a conversation at most this often. */
 const GH_RETRY_MS = 60_000;
+
+/** Leave room for the GitHub response time before the dialog's next 30s tick. */
+const SELECTED_AGENT_STALE_MS = 25_000;
 
 /**
  * How long after enqueueing a PR missing from the queue with no removal recorded is still
@@ -114,6 +119,8 @@ export interface PrMonitorDeps {
   random?: () => number;
   /** How long a read waits for others to share its query, in ms. */
   batchWindowMs?: number;
+  /** The Settings attempt budget, read at start and on each tick of the box; the default without it. */
+  autoFixAttempts?: () => Promise<number>;
 }
 
 /** Reads that land within this long of each other go to GitHub as one query; see readTogether. */
@@ -179,6 +186,8 @@ export class PrMonitor {
   private readonly timers: PrTimers;
   /** What the sidebar was last told, per conversation; built on first use. */
   private sidebar: Map<string, PrSummary> | null = null;
+  /** The Settings budget as last read, so drawing a bar never waits on it. */
+  private autoFixLimit = DEFAULT_AUTO_FIX_ATTEMPTS;
 
   constructor(protected readonly deps: PrMonitorDeps) {
     this.timers = deps.timers ?? realTimers;
@@ -189,6 +198,7 @@ export class PrMonitor {
    * No read happens here: the first one is a full unopened interval away.
    */
   async start(): Promise<void> {
+    await this.readAutoFixLimit();
     const all = await this.deps.store.all();
     for (const [sessionId, binding] of all) {
       if (isFinishedState(binding.lastState) || !this.armed(binding)) continue;
@@ -239,6 +249,15 @@ export class PrMonitor {
     return this.state(sessionId, binding);
   }
 
+  /** Inspect a selected agent without changing the window's conversation watch. */
+  async getState(sessionId: string): Promise<PrBarState | null> {
+    if (this.gh !== 'ok' && this.now() - this.ghFailedAt > GH_RETRY_MS) this.gh = 'ok';
+    const binding = await this.deps.store.get(sessionId);
+    if (!binding || binding.dismissed) return null;
+    if (this.wantsRead(sessionId, binding, SELECTED_AGENT_STALE_MS)) void this.read(sessionId);
+    return this.state(sessionId, binding);
+  }
+
   /** A window closed. */
   unwatch(viewer: number): void {
     const previous = this.onScreen.get(viewer);
@@ -247,11 +266,11 @@ export class PrMonitor {
   }
 
   /** Whether opening this conversation should start a read: nothing in hand, or it went stale. */
-  protected wantsRead(sessionId: string, binding: PrBinding): boolean {
+  protected wantsRead(sessionId: string, binding: PrBinding, staleMs: number = POLL_MS.onScreenActive): boolean {
     if (this.gh !== 'ok' || this.now() < this.pausedUntil) return false;
     const snapshot = this.live.get(sessionId)?.snapshot ?? binding.finalSnapshot;
     if (!snapshot) return true;
-    return snapshot.state === 'OPEN' && this.now() - snapshot.fetchedAt > POLL_MS.onScreenActive;
+    return snapshot.state === 'OPEN' && this.now() - snapshot.fetchedAt > staleMs;
   }
 
   /**
@@ -395,13 +414,14 @@ export class PrMonitor {
     } else if (option === 'autoMerge') {
       result = await this.changeAutoMerge(sessionId, enabled);
     } else {
-      // Checking the box is fresh consent, so the attempt budget refills. What was already
-      // handled stays handled: the same failure or comment is never sent twice.
-      await this.deps.store.set(sessionId, {
-        ...binding,
+      // Checking the box is fresh consent, so the attempt budget refills to the current setting.
+      // What was already handled stays handled: the same failure or comment is never sent twice.
+      const limit = enabled ? await this.readAutoFixLimit() : 0;
+      await this.deps.store.update(sessionId, current => ({
+        ...current,
         autoFix: enabled,
-        ...(enabled ? { autoFixAttempts: 0, autoFixMax: MAX_AUTO_FIX_ATTEMPTS } : {}),
-      });
+        ...(enabled ? { autoFixAttempts: 0, autoFixMax: limit } : {}),
+      }));
       const live = this.entry(sessionId);
       live.autoFix = { status: enabled ? 'watching' : 'off' };
       // Threads are only read while auto-fix is on, so turning it on needs a read that has them.
@@ -410,6 +430,54 @@ export class PrMonitor {
     await this.schedule(sessionId);
     await this.publish(sessionId);
     return result;
+  }
+
+  private async readAutoFixLimit(): Promise<number> {
+    const read = this.deps.autoFixAttempts;
+    if (read) this.autoFixLimit = parseAutoFixAttempts(await read().catch(() => this.autoFixLimit));
+    return this.autoFixLimit;
+  }
+
+  /**
+   * A new Settings budget. Raising it raises every open PR with auto-fix on, so one that gave up
+   * carries on without a re-check. Lowering it leaves those PRs on the budget they were ticked
+   * for, so none is stopped under a count it already started on; each takes the lower value the
+   * next time its box is ticked. One store write however many PRs change.
+   */
+  async setAutoFixAttempts(attempts: number): Promise<void> {
+    const limit = parseAutoFixAttempts(attempts);
+    this.autoFixLimit = limit;
+    const raised = await this.deps.store.updateEach(binding =>
+      binding.autoFix && !binding.dismissed && !isFinishedState(binding.lastState) && autoFixBudget(binding) < limit
+        ? { ...binding, autoFixMax: limit }
+        : null
+    );
+    const changed = new Set(raised);
+    for (const [sessionId, live] of this.live) {
+      if (live.autoFix?.status !== 'exhausted') continue;
+      if (changed.has(sessionId)) {
+        live.autoFix = { status: 'watching' };
+        // Whatever it gave up on is still unhandled, so a read now picks it back up.
+        void this.read(sessionId);
+        continue;
+      }
+      // Its note names what a re-check would grant, which just changed.
+      const binding = await this.deps.store.get(sessionId);
+      if (!binding?.autoFix) continue;
+      live.autoFix = this.exhaustedStatus(autoFixBudget(binding));
+      changed.add(sessionId);
+    }
+    for (const sessionId of this.onScreen.values()) {
+      if (await this.deps.store.get(sessionId)) changed.add(sessionId);
+    }
+    for (const sessionId of changed) await this.publish(sessionId);
+  }
+
+  private exhaustedStatus(budget: number): { status: 'exhausted'; note: string } {
+    return {
+      status: 'exhausted',
+      note: `Auto-fix gave up after ${budget} attempts. Re-check the box to allow ${this.autoFixLimit} more.`,
+    };
   }
 
   /**
@@ -829,13 +897,22 @@ export class PrMonitor {
     const archiving = shouldAutoArchive(current, snapshot.state);
     const finished = isFinishedState(snapshot.state);
     const draftChanged = (current.lastDraft === true) !== snapshot.isDraft;
-    if (current.lastState !== snapshot.state || draftChanged || archiving || finished || current.finalSnapshot) {
-      const { finalSnapshot: _previous, ...rest } = current;
+    const icon = storedIcon(snapshot);
+    if (
+      current.lastState !== snapshot.state ||
+      draftChanged ||
+      !sameStoredIcon(current, icon) ||
+      archiving ||
+      finished ||
+      current.finalSnapshot
+    ) {
+      const { finalSnapshot: _previous, lastAttention: _a, lastBehind: _b, lastAutoMerge: _m, ...rest } = current;
       // Recorded before archiving, so a crash in between errs toward not archiving twice.
       await this.deps.store.set(sessionId, {
         ...rest,
         lastState: snapshot.state,
         lastDraft: snapshot.isDraft,
+        ...icon,
         ...(archiving ? { archivedOnClose: true } : {}),
         // Without checks: a finished bar draws none, and every launch reads this file whole.
         ...(finished ? { finalSnapshot: { ...forTheBar(snapshot), checks: [] } } : {}),
@@ -877,10 +954,7 @@ export class PrMonitor {
       return;
     }
     const budget = autoFixBudget(binding);
-    const exhausted = {
-      status: 'exhausted' as const,
-      note: `Auto-fix gave up after ${budget} attempts. Re-check the box to allow more.`,
-    };
+    const exhausted = this.exhaustedStatus(budget);
     const plan = planAutoFix(binding, snapshot, this.deps.chat.isBusy(sessionId));
     if (plan.kind === 'none') {
       if (live.autoFix?.status === 'started') return;
@@ -968,7 +1042,7 @@ export class PrMonitor {
       autoFix: {
         status: binding?.autoFix ? (live?.autoFix?.status ?? 'watching') : 'off',
         attempts: binding?.autoFixAttempts ?? 0,
-        max: binding?.autoFix ? autoFixBudget(binding) : MAX_AUTO_FIX_ATTEMPTS,
+        max: binding?.autoFix ? autoFixBudget(binding) : this.autoFixLimit,
         ...(binding?.autoFix && live?.autoFix?.note ? { note: live.autoFix.note } : {}),
         ...(binding?.autoFix && live?.autoFix?.status === 'started' && live.autoFix.conflicts
           ? { conflicts: true }
@@ -995,10 +1069,13 @@ export class PrMonitor {
     // stored flag would keep a row the app has not re-read queued long after it left.
     const queued = !!this.live.get(sessionId)?.queued;
     const repo = `${binding.owner}/${binding.repo}`;
-    if (snapshot)
-      return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft, queued), repo };
+    const appAutoMerge = binding.autoMerge === true;
+    if (snapshot) return { number: binding.number, ...prIconStatus(snapshot, { queued, appAutoMerge }), repo };
     if (!binding.lastState) return null;
-    return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft), repo };
+    const state = prDisplayState(binding.lastState, binding.lastDraft);
+    // A finished PR will not change again, so its stored state is not merely last known.
+    if (isFinishedState(binding.lastState)) return { number: binding.number, state, repo };
+    return { number: binding.number, state, ...storedExtras(binding, state === 'open'), stale: true, repo };
   }
 
   private async sidebarSummaries(): Promise<Map<string, PrSummary>> {
@@ -1032,6 +1109,35 @@ export class PrMonitor {
     this.deps.emit(await this.state(sessionId, binding));
     await this.pushSummary(sessionId, binding);
   }
+}
+
+type StoredIcon = Pick<PrBinding, 'lastAttention' | 'lastBehind' | 'lastAutoMerge'>;
+
+/** The icon extras a read found, as the binding file keeps them: absent rather than false. */
+function storedIcon(snapshot: PrSnapshot): StoredIcon {
+  const icon = prIconStatus(snapshot, { queued: false, appAutoMerge: false });
+  return {
+    ...(icon.attention ? { lastAttention: icon.attention } : {}),
+    ...(icon.behind ? { lastBehind: true } : {}),
+    ...(icon.autoMerge ? { lastAutoMerge: true } : {}),
+  };
+}
+
+function storedExtras(binding: PrBinding, open: boolean): Omit<PrIconStatus, 'state' | 'stale'> {
+  if (!open) return {};
+  return {
+    ...(binding.lastAttention ? { attention: binding.lastAttention } : {}),
+    ...(binding.lastBehind ? { behind: true } : {}),
+    ...(binding.lastAutoMerge || binding.autoMerge ? { autoMerge: true } : {}),
+  };
+}
+
+function sameStoredIcon(binding: PrBinding, icon: StoredIcon): boolean {
+  return (
+    binding.lastAttention === icon.lastAttention &&
+    binding.lastBehind === icon.lastBehind &&
+    binding.lastAutoMerge === icon.lastAutoMerge
+  );
 }
 
 function forTheBar(snapshot: PrSnapshot): PrBarSnapshot {

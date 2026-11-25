@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Alert, Button, Stack, Tooltip, Typography } from '@mui/joy';
+import { Alert, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
+import ReplayIcon from '@mui/icons-material/Replay';
 import { SIGNUP_RISK_AUTO_APPROVAL_LIST_DAYS, type SignupRiskAutoApprovalPolicy } from '@bike4mind/common';
 import {
   ADMIN_REASON_PRESETS,
@@ -98,10 +99,13 @@ export const SignupRiskAutoApprovals: React.FC<{
         rowActions={row => (
           <AdminPermissionAction requirement="users:moderate">
             {missing => (
-              <Button
+              <IconButton
                 size="sm"
-                variant="outlined"
+                variant="plain"
+                color="neutral"
                 disabled={missing}
+                aria-label="Reopen review"
+                title="Reopen review"
                 data-testid={`signup-risk-reopen-${row.userId}`}
                 onClick={() => {
                   decision.reset();
@@ -109,8 +113,8 @@ export const SignupRiskAutoApprovals: React.FC<{
                   setReopening(row);
                 }}
               >
-                Reopen review
-              </Button>
+                <ReplayIcon />
+              </IconButton>
             )}
           </AdminPermissionAction>
         )}

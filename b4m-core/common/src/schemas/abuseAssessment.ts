@@ -17,7 +17,7 @@ import { completionSequenceEvidenceSchema } from './completionSequence';
  * text) and stored for admin review next to the detection. The assessment itself writes nothing to
  * an account; automated containment (schemas/autoContainment.ts, autoContainmentConfig) is the one
  * reader that may act on it, and only in enforce mode. Produced by
- * apps/client/server/security/abuseAssessment/abuseAssessment.ts; stored in the AbuseAssessment collection.
+ * packages/server-utils/src/security/abuseAssessment/abuseAssessment.ts; stored in the AbuseAssessment collection.
  */
 
 /** Bump when the question, its choices or the summary's meaning changes; cached results key on it. */

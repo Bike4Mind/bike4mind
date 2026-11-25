@@ -1,10 +1,15 @@
+import {
+  downloadPublishedIndex,
+  deleteRetiredPublishedIndex,
+  publishedContentSnapshotFilter,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash } from 'node:crypto';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact } from '@bike4mind/database';
-import type { ArtifactVersionMeta, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import {
   validateBundle,
   buildPublishUrlPath,
@@ -14,6 +19,8 @@ import {
   consumePublishAction,
   type PublishActionReceipt,
 } from '@server/services/publish';
+// From the module, not the barrel: tests that hand-build a partial barrel mock (limits.test.ts) do not export these.
+import { planPublishVersions, versionsPushUpdate } from '@server/services/publish/planPublishVersions';
 
 /**
  * POST /api/publish/[publicId]/restore[?sha={version}] - roll a published bundle
@@ -42,6 +49,7 @@ interface RestoreArtifactLean {
   ownerId: string;
   lastPublishedBy?: string;
   storageKeyPrefix: string;
+  indexObjectPath?: string | null;
   sha256Index?: string;
   size: { totalBytes: number; fileCount: number };
   manifest: Array<{ path: string; size: number; mimeType: string; sha256: string }>;
@@ -83,6 +91,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     {
       publicId,
       deletedAt: null,
+      ...publishedContentSnapshotFilter(artifact),
       $or: [{ revisingAt: null }, { revisingAt: { $lt: new Date(lockNow.getTime() - RESTORE_LOCK_TTL_MS) } }],
     },
     { $set: { revisingAt: lockNow } }
@@ -127,7 +136,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
 
     // The CURRENT index.html, archived below before overwriting so restore is reversible. Read
     // before the quota check, which counts what it archives. Null if it cannot be read.
-    const currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`).catch(() => null);
+    const currentBuf = await downloadPublishedIndex(artifact, storage).catch(() => null);
     const now = new Date();
 
     // versions[] is keyed by content sha (distinct snapshots). Restoring old bytes
@@ -136,27 +145,17 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     // backfill the version being replaced if history doesn't yet record it
     // (pre-version-history artifacts, or the first revise/restore).
     // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
-    const haveShas = new Set((artifact.versions ?? []).map(v => v.sha256Index));
-    const versionsToPush: ArtifactVersionMeta[] = [];
-    if (!haveShas.has(currentSha)) {
-      versionsToPush.push({
-        publishedAt: artifact.publishedAt,
-        publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
-        size: artifact.size,
-        sha256Index: currentSha,
-        ...(currentBuf ? { indexBytes: currentBuf.length } : {}),
-      });
-      haveShas.add(currentSha);
-    }
-    if (!haveShas.has(newSha)) {
-      versionsToPush.push({
-        publishedAt: now,
+    const { versionsToPush } = planPublishVersions({
+      previous: artifact,
+      priorIndex: currentBuf,
+      incoming: {
+        sha256: newSha,
         publishedBy: String(req.user.id),
+        publishedAt: now,
         size: { totalBytes, fileCount: newManifest.length },
-        sha256Index: newSha,
         indexBytes: restoredBuf.length,
-      });
-    }
+      },
+    });
 
     // Storage quota on the net change (see checkInPlaceRewriteQuota). The current index.html is
     // archived and the restored version becomes current, so its archived copy leaves the count.
@@ -179,20 +178,26 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
 
     const warnNotArchived = () =>
       req.logger.warn(`[RESTORE] ${publicId} could not archive current version ${currentSha.slice(0, 12)}`);
+    let archivedPrevious = false;
     if (!currentBuf) {
       warnNotArchived();
     } else {
-      await storage
-        .upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, { ContentType: 'text/html' })
-        .catch(warnNotArchived);
+      try {
+        await storage.upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
+          ContentType: 'text/html',
+        });
+        archivedPrevious = true;
+      } catch {
+        warnNotArchived();
+      }
     }
 
     // Write the restored version as the new current.
     await storage.upload(restoredBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
     written = true;
 
-    await PublishedArtifact.updateOne(
-      { publicId, deletedAt: null },
+    const updated = await PublishedArtifact.updateOne(
+      { publicId, deletedAt: null, revisingAt: lockNow, ...publishedContentSnapshotFilter(artifact) },
       {
         $set: {
           manifest: newManifest,
@@ -209,9 +214,20 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
           },
         },
         // $each:[] is a harmless no-op when nothing new to record.
-        $push: { versions: { $each: versionsToPush } },
+        $unset: { indexObjectPath: 1 },
+        ...versionsPushUpdate(versionsToPush),
       }
     );
+
+    if (updated.matchedCount === 0) {
+      return res.status(409).json({ error: 'The page changed while this operation was running' });
+    }
+
+    if (archivedPrevious) {
+      await deleteRetiredPublishedIndex(artifact, storage, error =>
+        req.logger.warn('[RESTORE] Could not remove a retired page payload', { error })
+      );
+    }
 
     // Restore overwrote index.html in place - bust the CDN so the rolled-back
     // version is visible immediately, not after the TTL. Only public pages are

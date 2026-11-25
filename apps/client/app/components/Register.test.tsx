@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   navigate: vi.fn(),
   allowOpenRegistration: true,
+  configLoading: false,
   appleSignInEnabled: false,
   trackSignupConversion: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), dismiss: vi.fn() },
@@ -99,19 +100,30 @@ vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useBrandingSettings: () => ({}),
   usePublicConfig: () => ({
-    data: { allowOpenRegistration: mocks.allowOpenRegistration, appleSignInEnabled: mocks.appleSignInEnabled },
-    isLoading: false,
+    data: mocks.configLoading
+      ? undefined
+      : { allowOpenRegistration: mocks.allowOpenRegistration, appleSignInEnabled: mocks.appleSignInEnabled },
+    isLoading: mocks.configLoading,
   }),
 }));
 vi.mock('./common/MFAModal', () => ({ default: () => null }));
 vi.mock('next/image', () => ({ default: () => null }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (k: string) => k }),
+  useTranslation: () => ({ t: (k: string) => inviteCodeCopy(k) }),
   Trans: ({ i18nKey }: { i18nKey?: string }) => i18nKey ?? null,
 }));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
 
 import Register from './Register';
+import en from '@client/app/locales/en.json';
+
+// Invite-code keys resolve through the shipped en.json (so the exact strings asserted below are the
+// real ones); every other key stays an identity, as before.
+function inviteCodeCopy(key: string): string {
+  return /^auth\.(inviteCode|noInviteCode|joinWaitlist)/.test(key)
+    ? ((en.auth as Record<string, unknown>)[key.slice('auth.'.length)] as string)
+    : key;
+}
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderRegister = () =>
@@ -121,10 +133,57 @@ const renderRegister = () =>
     </CssVarsProvider>
   );
 
+// Per-keystroke input is not under test here; pasting fills a field in one change event.
+const fill = async (user: ReturnType<typeof userEvent.setup>, field: HTMLElement, text: string) => {
+  await user.click(field);
+  await user.paste(text);
+};
+
 describe('Register', () => {
   beforeEach(() => {
     mocks.allowOpenRegistration = true;
+    mocks.configLoading = false;
     mocks.appleSignInEnabled = false;
+  });
+
+  describe('invite code field wording', () => {
+    it('labels the field optional with a hint on open registration, and Continue works with it empty', async () => {
+      renderRegister();
+      expect(screen.getByLabelText('Invite code (optional)')).toBeInTheDocument();
+      expect(screen.getByTestId('register-invite-optional-hint')).toHaveTextContent(
+        'Have a code from a friend? Add it here.'
+      );
+      expect(screen.getByLabelText('Invite code (optional)')).not.toBeRequired();
+      expect(screen.getByLabelText('Invite code (optional)')).toHaveAccessibleDescription(
+        'Have a code from a friend? Add it here.'
+      );
+      expect(screen.queryByTestId('register-join-waitlist-link')).not.toBeInTheDocument();
+      const user = userEvent.setup();
+      await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+      await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+      await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+      await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+      expect(screen.getByTestId('register-submit-btn')).toBeEnabled();
+    });
+
+    it('labels the field plainly, required, with the waitlist line when registration is closed', () => {
+      mocks.allowOpenRegistration = false;
+      renderRegister();
+      expect(screen.getByLabelText(/^Invite code/)).toBeRequired();
+      expect(screen.getByText('Invite code', { selector: 'label' })).toBeInTheDocument();
+      expect(screen.queryByText('Invite code (optional)')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('register-invite-optional-hint')).not.toBeInTheDocument();
+      expect(screen.getByText('No invite code?', { exact: false })).toBeInTheDocument();
+      expect(screen.getByTestId('register-join-waitlist-link')).toHaveTextContent('Join the waitlist');
+    });
+
+    it('shows neither wording while the public config is loading', () => {
+      mocks.configLoading = true;
+      renderRegister();
+      expect(screen.getByTestId('register-config-gate')).toBeInTheDocument();
+      expect(screen.queryByText('Invite code', { exact: false })).not.toBeInTheDocument();
+      expect(screen.queryByTestId('register-invite-optional-hint')).not.toBeInTheDocument();
+    });
   });
 
   it.each([
@@ -143,7 +202,7 @@ describe('Register', () => {
     mocks.startOAuthSignIn.mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderRegister();
-    await user.type(within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' REF 1&x ');
+    await fill(user, within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' REF 1&x ');
     await user.click(screen.getByTestId('register-google-btn'));
     expect(mocks.startOAuthSignIn).toHaveBeenCalledWith('/api/auth/google?inviteCode=REF%201%26x');
   });
@@ -198,7 +257,7 @@ describe('Register - field errors and rate limiting', () => {
     renderRegister();
 
     const input = within(screen.getByTestId('register-email-input')).getByRole('textbox');
-    await user.type(input, 'not-an-email');
+    await fill(user, input, 'not-an-email');
     await user.tab();
 
     const alert = screen.getByTestId('register-email-error');
@@ -213,7 +272,7 @@ describe('Register - field errors and rate limiting', () => {
     renderRegister();
 
     const input = within(screen.getByTestId('register-username-input')).getByRole('textbox');
-    await user.type(input, 'bad name!');
+    await fill(user, input, 'bad name!');
     await user.tab();
 
     const alert = screen.getByTestId('register-username-error');
@@ -232,8 +291,8 @@ describe('Register - field errors and rate limiting', () => {
     });
     renderRegister();
 
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     await user.click(screen.getByTestId('register-submit-btn'));
@@ -248,13 +307,13 @@ describe('Register - field errors and rate limiting', () => {
 describe('Register - second-factor handoff', () => {
   const submitCode = async (user: ReturnType<typeof userEvent.setup>) => {
     mocks.sendOTC.mockResolvedValue({ pendingToken: 'ptok-1' });
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     await user.click(screen.getByTestId('register-submit-btn'));
     const otcInput = within(await screen.findByTestId('register-otc-input')).getByRole('textbox');
-    await user.type(otcInput, '12345678');
+    await fill(user, otcInput, '12345678');
     await user.click(screen.getByTestId('register-verify-btn'));
   };
 
@@ -276,7 +335,7 @@ describe('Register - second-factor handoff', () => {
     expect(screen.getByTestId('register-form')).toBeInTheDocument();
     expect(mocks.navigate).not.toHaveBeenCalled();
     expect(screen.getByText('Google')).not.toBeVisible();
-    await user.type(within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' INVITE123 ');
+    await fill(user, within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' INVITE123 ');
     await submitCode(user);
     await waitFor(() => expect(mocks.verifyOTC).toHaveBeenCalledTimes(1));
     expect(mocks.verifyOTC).toHaveBeenLastCalledWith(expect.objectContaining({ inviteCode: 'INVITE123' }));
@@ -296,8 +355,8 @@ describe('Register - second-factor handoff', () => {
         .mockResolvedValueOnce({ pendingToken: 'ptok-1' })
         .mockReturnValueOnce(new Promise(resolve => (finishResend = resolve)));
       renderRegister();
-      await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-      await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+      await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+      await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
       await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
       await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
       await user.click(screen.getByTestId('register-submit-btn'));
@@ -317,8 +376,8 @@ describe('Register - second-factor handoff', () => {
     mocks.allowOpenRegistration = false;
     renderRegister();
     const user = userEvent.setup();
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     expect(screen.getByTestId('register-submit-btn')).toBeDisabled();
@@ -329,7 +388,7 @@ describe('Register - second-factor handoff', () => {
     mocks.allowOpenRegistration = false;
     renderRegister();
     const user = userEvent.setup();
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(screen.getByTestId('register-join-waitlist-link'));
 
     expect(mocks.navigate).toHaveBeenCalledWith(
@@ -337,11 +396,6 @@ describe('Register - second-factor handoff', () => {
     );
     const { state } = mocks.navigate.mock.calls.at(-1)[0];
     expect(state({})).toEqual({ waitlistEmail: 'new@test.com' });
-  });
-
-  it('hides the waitlist link when registration is open', () => {
-    renderRegister();
-    expect(screen.queryByTestId('register-join-waitlist-link')).not.toBeInTheDocument();
   });
 
   it('marks a freshly registered account first session before entering the app', async () => {
@@ -436,8 +490,8 @@ describe('Register - signup bot checks', () => {
   });
 
   const fillAndSubmit = async (user: ReturnType<typeof userEvent.setup>) => {
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     await user.click(screen.getByTestId('register-submit-btn'));
@@ -472,6 +526,15 @@ describe('Register - product hint from redirectTo', () => {
     expect(screen.getByTestId('auth-redirect-product-hint')).toHaveTextContent('auth.signUpToContinueTo');
   });
 
+  // The hint already reads "Create an account to continue to <product>"; the generic line repeats it.
+  it('shows one headline line, the product hint, on the form step', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/register?redirectTo=%2Fproduct');
+    const { container } = renderRegister();
+    expect(screen.queryByText('auth.createAccountDesc')).toBeNull();
+    expect(container.querySelector('.register-subtitle')).toBeNull();
+  });
+
   it('hides the hint once the code step is reached', async () => {
     vi.clearAllMocks();
     mocks.allowOpenRegistration = true;
@@ -481,13 +544,15 @@ describe('Register - product hint from redirectTo', () => {
     const user = userEvent.setup();
     renderRegister();
     expect(screen.getByTestId('auth-redirect-product-hint')).toBeInTheDocument();
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     await user.click(screen.getByTestId('register-submit-btn'));
     await screen.findByTestId('register-otc-input');
     expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+    // The code step keeps its "code sent to" line; only the form step drops the generic headline.
+    expect(screen.getByText('auth.codeSentTo')).toBeInTheDocument();
   });
 
   it('shows nothing without a product redirect', () => {
@@ -495,5 +560,14 @@ describe('Register - product hint from redirectTo', () => {
     window.history.replaceState(null, '', '/register');
     renderRegister();
     expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+    expect(screen.getByText('auth.createAccountDesc')).toBeInTheDocument();
+  });
+
+  it('keeps the generic headline for a redirect that is not a product', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/register?redirectTo=%2Fnew');
+    renderRegister();
+    expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+    expect(screen.getByText('auth.createAccountDesc')).toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { IUser } from '../types/entities/UserTypes';
 import {
+  organizationRosterScope,
   toSafeUser,
   toSafeUsers,
   redactUserSecretsForSelf,
@@ -127,6 +128,16 @@ describe('toSafeUser', () => {
     );
     // a banned member's flag propagates so the chip can render
     expect(toSafeUser({ ...fullUser, isBanned: true }, 'same-org')!.isBanned).toBe(true);
+    expectNoSecretValues(safe);
+  });
+
+  it('org-member scope keeps isBanned but drops email (names-only roster)', () => {
+    const safe = toSafeUser({ ...fullUser, isBanned: true }, 'org-member');
+    expect(Object.keys(safe!).sort()).toEqual(
+      ['id', 'isBanned', 'isOnline', 'lastActiveAt', 'name', 'photoUrl', 'username'].sort()
+    );
+    expect(safe!.isBanned).toBe(true);
+    expect(safe!.name).toBe(fullUser.name);
     expectNoSecretValues(safe);
   });
 
@@ -335,6 +346,16 @@ describe('redactUserSecretsForSelf', () => {
     expect('riskScore' in toSafeUser(scored, 'self')!).toBe(false);
   });
 
+  it('drops a field no list classifies, without relying on the response schema', () => {
+    const self = redactUserSecretsForSelf({ ...fullUser, futureCredential: 'x' } as Partial<IUser>)!;
+    expect(self).not.toHaveProperty('futureCredential');
+  });
+
+  it("keeps toJSON()'s _id and id, drops __v", () => {
+    const self = redactUserSecretsForSelf({ _id: 'oid', id: 'oid', __v: 3 } as Partial<IUser>)!;
+    expect(self).toEqual({ _id: 'oid', id: 'oid' });
+  });
+
   it('drops every non-rebuilt USER_SECRET_FIELDS entry present on the input', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     const rebuilt = new Set<string>(USER_SUBFIELD_REDACTED_FIELDS);
@@ -349,7 +370,7 @@ describe('redactUserSecretsForSelf', () => {
 // output must satisfy the schema, so a schema that's too strict can't silently 500
 // a live endpoint.
 describe('toSafeUser <-> safeUserResponseSchema contract', () => {
-  it.each(['public', 'same-org', 'self'] as const)('%s scope output parses against the schema', scope => {
+  it.each(['public', 'same-org', 'org-member', 'self'] as const)('%s scope output parses against the schema', scope => {
     const safe = toSafeUser(fullUser, scope);
     expect(() => safeUserResponseSchema.parse(safe)).not.toThrow();
   });
@@ -505,13 +526,14 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
       field: 'mfa',
       input: {
         totpEnabled: true,
+        passkeyEnabled: true,
         setupAt: new Date(),
         lastUsedAt: new Date(),
         totpSecret: 'x',
         backupCodes: ['x'],
         futureField: 'x',
       },
-      allowed: ['totpEnabled', 'setupAt', 'lastUsedAt'],
+      allowed: ['totpEnabled', 'passkeyEnabled', 'setupAt', 'lastUsedAt'],
     },
     {
       field: 'googleDrive',
@@ -693,5 +715,32 @@ describe('redactUserSecretsForSelf <-> selfUserResponseSchema contract', () => {
 
   it('strips a field IUser does not declare', () => {
     expect(selfUserResponseSchema.parse({ id: 'u1', notAUserField: 'x' })).toEqual({ id: 'u1' });
+  });
+});
+
+describe('organizationRosterScope', () => {
+  const org = {
+    userId: 'owner1',
+    adminUserIds: ['manager1', 'former-manager'],
+    users: [
+      { userId: 'manager1', permissions: ['read'] },
+      { userId: 'member2', permissions: ['read'] },
+    ],
+  };
+
+  it.each([
+    ['owner', { id: 'owner1' }],
+    ['current manager', { id: 'manager1' }],
+    ['site admin (staff)', { id: 'staff1', isAdmin: true }],
+  ])('gives the %s the full roster with emails', (_role, actor) => {
+    expect(organizationRosterScope(actor, org)).toBe('same-org');
+  });
+
+  it.each([
+    ['plain member', { id: 'member2' }],
+    ['stale manager without a users row', { id: 'former-manager' }],
+    ['non-admin user flagged isAdmin false', { id: 'member2', isAdmin: false }],
+  ])('gives a %s names only', (_role, actor) => {
+    expect(organizationRosterScope(actor, org)).toBe('org-member');
   });
 });

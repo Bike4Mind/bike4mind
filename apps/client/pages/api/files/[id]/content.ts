@@ -6,14 +6,15 @@ import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { baseApi } from '@server/middlewares/baseApi';
-import { fileContentKey } from '@server/files/browserFileSigner';
+import { fileContentKey } from '@bike4mind/server-utils/files/browserFileSigner';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 
 // Seconds. The redirect must go stale before the S3 link it points at does.
 const REDIRECT_SAFETY_MARGIN_SECONDS = 60;
 const MAX_REDIRECT_CACHE_SECONDS = 1800;
 
 /**
- * The stable browser URL fabFileService's generateSignedUrl hands out (apps/client/server/files/browserFileSigner.ts).
+ * The stable browser URL fabFileService's generateSignedUrl hands out (packages/server-utils/src/files/browserFileSigner.ts).
  * The sig is the capability, so there is no session auth; it 302s to an S3 link signed now, and the
  * redirect is cacheable so repeat loads of the same URL never reach this route.
  */
@@ -45,6 +46,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     const signed = await getFilesStorage().getSignedUrl(fabFile.filePath, 'get', {
       expiresIn: Math.max(60, Math.min(FILE_URL_TTL_SECONDS, check.exp - nowSeconds)),
       audience: 'browser',
+      ...storageReadOverrides({ mimeType: fabFile.mimeType, fileName: fabFile.fileName, key: fabFile.filePath }),
     });
     const s3ExpirySeconds = signedUrlExpiresAt(signed, FILE_URL_TTL_SECONDS).getTime() / 1000;
     const maxAge = Math.max(

@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   publishImageQuestReadyPush: vi.fn(),
 }));
 
-vi.mock('@server/imageGenerations/imageGeneration', () => ({
+vi.mock('@bike4mind/server-utils/imageGenerations/imageGeneration', () => ({
   getImageGeneration: () => ({ process: h.process }),
 }));
 

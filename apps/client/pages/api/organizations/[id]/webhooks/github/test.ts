@@ -15,13 +15,12 @@ import crypto from 'crypto';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
-import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { fetchPinned, SsrfError, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { cacheRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, TooManyRequestsError } from '@bike4mind/utils';
-import { v4 as uuidv4 } from 'uuid';
 
 interface TestRequest {
   targetUrl?: string;
@@ -61,7 +60,7 @@ const handler = baseApi().post(
       );
     }
 
-    const org = await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
     if (!webhookConfig) {
@@ -80,7 +79,7 @@ const handler = baseApi().post(
       throw new Error('SECRET_ENCRYPTION_KEY not configured');
     }
 
-    const secret = decryptSecret(webhookConfig.secret, encryptionKey);
+    const secret = decryptStoredSecret(webhookConfig.secret);
 
     const testPayload = {
       action: 'ping',
@@ -102,8 +101,8 @@ const handler = baseApi().post(
     const signedPayload = `${timestamp}.${payloadString}`;
     const signature = crypto.createHmac('sha256', secret).update(signedPayload).digest('hex');
 
-    const eventId = uuidv4();
-    const deliveryId = uuidv4();
+    const eventId = crypto.randomUUID();
+    const deliveryId = crypto.randomUUID();
 
     // If no target URL, return a mock success (test the signature generation)
     if (!targetUrl) {

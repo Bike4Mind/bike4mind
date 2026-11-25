@@ -1,5 +1,43 @@
 # @bike4mind/resource
 
+## 3.6.0
+
+### Minor Changes
+
+- [#8465](https://github.com/Bike4Mind/bike4mind/pull/8465) [`8ba6c23`](https://github.com/Bike4Mind/bike4mind/commit/8ba6c23d597ff8dfdf966418b1b1818dbe3592a3) Thanks [@maconard](https://github.com/maconard)! - asynchronous function calls for runs longer than a request can wait
+
+### Patch Changes
+
+- [#8353](https://github.com/Bike4Mind/bike4mind/pull/8353) [`8611b8e`](https://github.com/Bike4Mind/bike4mind/commit/8611b8e90d2fb3ac5daab00f1c2ffb8761785c4a) Thanks [@poysama](https://github.com/poysama)! - remove LiveOps triage
+
+## 3.5.0
+
+### Minor Changes
+
+- [#7849](https://github.com/Bike4Mind/bike4mind/pull/7849) [`11494a0`](https://github.com/Bike4Mind/bike4mind/commit/11494a0c114a597c536351a746ae08549aa935a3) Thanks [@onoya](https://github.com/onoya)! - export Productions to MP4 with an ffmpeg render worker and multi-size export pack
+
+- [#8024](https://github.com/Bike4Mind/bike4mind/pull/8024) [`84f6027`](https://github.com/Bike4Mind/bike4mind/commit/84f6027d6a31ec86bb60dba82e315dfa8ea3a24d) Thanks [@poysama](https://github.com/poysama)! - sign with a dedicated secret and per-purpose derived keys
+
+## 3.4.0
+
+### Minor Changes
+
+- [#7580](https://github.com/Bike4Mind/bike4mind/pull/7580) [`bd7f820`](https://github.com/Bike4Mind/bike4mind/commit/bd7f82035d788b7cd87c72ff31b6b4fe131ef674) Thanks [@onoya](https://github.com/onoya)! - deliver push notifications to Android devices over FCM
+
+- [#7774](https://github.com/Bike4Mind/bike4mind/pull/7774) [`72d83d1`](https://github.com/Bike4Mind/bike4mind/commit/72d83d1d230b380d9a8131847eddb59449796ddf) Thanks [@vinchi777](https://github.com/vinchi777)! - add opt-in reaction feedback forwarding
+
+## 3.3.0
+
+### Minor Changes
+
+- [#6744](https://github.com/Bike4Mind/bike4mind/pull/6744) [`88ed8d3`](https://github.com/Bike4Mind/bike4mind/commit/88ed8d3beb899bc9c4f3b5118d0f9941b72ce07b) Thanks [@onoya](https://github.com/onoya)! - data subject erasure from the admin user profile
+
+## 3.2.1
+
+### Patch Changes
+
+- [#7159](https://github.com/Bike4Mind/bike4mind/pull/7159) [`4512d72`](https://github.com/Bike4Mind/bike4mind/commit/4512d72946b2ca0920f1bb54b7fc2bf6a2c6493e) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - finish generated-media purges and batch CDN invalidations
+
 ## 3.2.0
 
 ### Minor Changes

@@ -549,7 +549,7 @@ test.describe('Data Lake - research presets', () => {
     const saved = (await apiListResearchConfigs(request, token, lake.id)).find(c => c.name === name);
     expect(saved).toMatchObject({ maxResults: 25, maxProposals: 10, costCeilingMicroUsd: 250_000 });
 
-    await row.getByTestId('datalake-research-edit-btn').click();
+    await row.getByTestId(/^datalake-research-edit-btn-/).click();
     await expect(modal.getByTestId('datalake-research-preset-standard')).toHaveAttribute('aria-pressed', 'true');
     await expect(modal.getByTestId('datalake-research-advanced')).toBeHidden();
   });
@@ -904,7 +904,7 @@ function largeLakeFiles(): Array<{ fileName: string; content: string }> {
  * Wait until every fixture file is chunked and embedded. Asking earlier gets the unindexed files
  * withheld (retrievalUnavailable.ts), which shows the coverage notice for a reason this test is not
  * about. Reads the server's health grading rather than comparing the counters here, which would be
- * another copy of the reachability rule (packages/scripts/src/checkLakeReachabilitySites.test.ts).
+ * another copy of the reachability rule (packages/scripts/src/checkLakeReachabilitySites.repo.test.ts).
  */
 async function waitUntilFixtureEmbedded(request: APIRequestContext, token: string, lakeId: string): Promise<void> {
   await expect

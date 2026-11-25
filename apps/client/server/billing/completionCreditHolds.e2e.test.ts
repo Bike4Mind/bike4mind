@@ -1,7 +1,9 @@
 import { CreditHolderType } from '@bike4mind/common';
 import {
+  CompletionRunModel,
   PendingCreditHoldModel,
   User,
+  completionRunRepository,
   pendingCreditHoldRepository,
   userRepository,
   withTransaction,
@@ -24,7 +26,11 @@ beforeAll(async () => {
   server = await createMongoReplSet();
   await mongoose.connect(server.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
-  await Promise.all([User.createCollection(), PendingCreditHoldModel.createCollection()]);
+  await Promise.all([
+    User.createCollection(),
+    PendingCreditHoldModel.createCollection(),
+    CompletionRunModel.createCollection(),
+  ]);
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -32,7 +38,11 @@ afterAll(async () => {
 });
 afterEach(async () => {
   vi.restoreAllMocks();
-  await Promise.all([User.collection.deleteMany({}), PendingCreditHoldModel.collection.deleteMany({})]);
+  await Promise.all([
+    User.collection.deleteMany({}),
+    PendingCreditHoldModel.collection.deleteMany({}),
+    CompletionRunModel.collection.deleteMany({}),
+  ]);
 });
 
 async function fixture() {
@@ -76,6 +86,7 @@ describe('durable platform completion holds', () => {
     await reserve();
     const settle = async () => {
       await userRepository.incrementCredits(ownerId, 20);
+      return 10;
     };
     expect(await lifecycle.settle(10, settle)).toBe(true);
     expect(await lifecycle.settle(10, settle)).toBe(true);
@@ -140,5 +151,77 @@ describe('durable platform completion holds', () => {
     await expect(reserve()).rejects.toThrow('record acknowledgement failed');
     expect(await balance()).toBe(100);
     expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+  });
+
+  describe('run budget claim', () => {
+    async function budgetedRun(ownerId: string) {
+      const run = await completionRunRepository.create({
+        userId: ownerId,
+        ownerType: CreditHolderType.User,
+        ownerId,
+        budgetCredits: 50,
+      });
+      const committed = async () => (await completionRunRepository.findById(run.runId))?.committedCredits;
+      const reserveWith = (
+        lifecycle: ReturnType<typeof createCompletionCreditHolds>,
+        debit: () => Promise<Awaited<ReturnType<typeof userRepository.incrementCredits>> & object>
+      ) =>
+        lifecycle.reserve(
+          { ownerId, ownerType: CreditHolderType.User, userId: ownerId, organizationId: null, reservedCredits: 30 },
+          debit,
+          { runId: run.runId, wantedCredits: 30, minimumCredits: 10 }
+        );
+      return { committed, reserveWith, runId: run.runId };
+    }
+
+    it('leaves a concurrent worker room to start after a full-output claim', async () => {
+      const { lifecycle, ownerId } = await fixture();
+      const { committed, runId } = await budgetedRun(ownerId);
+      const reserveFullOutput = (holds: ReturnType<typeof createCompletionCreditHolds>) =>
+        holds.reserve(
+          { ownerId, ownerType: CreditHolderType.User, userId: ownerId, organizationId: null, reservedCredits: 10 },
+          async () => {
+            const user = await userRepository.incrementCredits(ownerId, -10);
+            if (!user) throw new Error('User missing');
+            return user;
+          },
+          { runId, wantedCredits: 200, minimumCredits: 10 }
+        );
+
+      // Budget 50: the parent takes 10 + half of 40, and the worker 10 + half of the remaining 10.
+      await expect(reserveFullOutput(lifecycle)).resolves.toBe(30);
+      await expect(
+        reserveFullOutput(createCompletionCreditHolds(new Logger({ metadata: { test: 'worker' } })))
+      ).resolves.toBe(15);
+      expect(await committed()).toBe(45);
+    });
+
+    it('rolls the run claim back when the balance debit fails after the claim', async () => {
+      const { lifecycle, ownerId } = await fixture();
+      const { committed, reserveWith } = await budgetedRun(ownerId);
+      await expect(
+        reserveWith(lifecycle, async () => {
+          throw new Error('debit failed');
+        })
+      ).rejects.toThrow('debit failed');
+      expect(await committed()).toBe(0);
+      expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+    });
+
+    it('rolls the run claim back when recording the hold fails', async () => {
+      const { lifecycle, ownerId, balance } = await fixture();
+      const { committed, reserveWith } = await budgetedRun(ownerId);
+      vi.spyOn(pendingCreditHoldRepository, 'record').mockRejectedValueOnce(new Error('record failed'));
+      await expect(
+        reserveWith(lifecycle, async () => {
+          const user = await userRepository.incrementCredits(ownerId, -30);
+          if (!user) throw new Error('User missing');
+          return user;
+        })
+      ).rejects.toThrow('record failed');
+      expect(await committed()).toBe(0);
+      expect(await balance()).toBe(100);
+      expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+    });
   });
 });

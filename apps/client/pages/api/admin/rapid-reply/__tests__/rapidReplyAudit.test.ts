@@ -57,13 +57,21 @@ vi.mock('@bike4mind/database/ai', () => ({
   rapidReplyMappingRepository: h.mappings,
 }));
 vi.mock('@bike4mind/database/infra', () => ({ adminSettingsRepository: { getSettingsValue: h.settings } }));
-vi.mock('@bike4mind/database', () => ({ sessionRepository: { create: h.sessionCreate, delete: vi.fn() } }));
+vi.mock('@bike4mind/database', () => ({
+  sessionRepository: { create: h.sessionCreate, delete: vi.fn() },
+  rapidReplyResultRepository: { findByQuestId: vi.fn(), findBySessionId: vi.fn(), delete: vi.fn() },
+}));
+vi.mock('@server/rapidReply/generateRapidReply', () => ({
+  generateRapidReply: vi.fn(),
+  saveRapidReplyResult: vi.fn(),
+}));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 vi.mock('@bike4mind/services/llm', () => ({ ChatCompletionProcess: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: {} }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn(), SQSService: vi.fn() }));
 vi.mock('@bike4mind/llm-adapters', () => ({ buildApiKeyTable: vi.fn(), getAvailableModels: vi.fn() }));
-vi.mock('@server/auth/turnAuth', () => ({ requestTurnAuth: vi.fn() }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({ requestTurnAuth: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: vi.fn(),
   getSharedTokenizer: vi.fn(),
 }));
@@ -86,6 +94,7 @@ const call = async (
 ) => {
   const { req, res } = createMocks({ method, body: options.body ?? {}, query: options.id ? { id: options.id } : {} });
   (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: options.isAdmin ?? true, email: 'a@example.com' };
+  (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   await (handler as Handler)(req, res);
   return { req, res };
 };

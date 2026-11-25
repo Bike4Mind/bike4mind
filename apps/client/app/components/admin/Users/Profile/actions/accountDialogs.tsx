@@ -342,6 +342,48 @@ export const InternalAccountDialog: React.FC<ProfileDialogProps> = ({ user, onCl
   );
 };
 
+/**
+ * Marks the account as a partner's, or stops marking it (`accountSegment`): Spend explorer then
+ * counts its cost as partner spend. Internal is a separate mark (`isInternal`) and wins over this.
+ */
+export const PartnerAccountDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
+  const post = useAdminUserPost(user.id, 'The partner mark was not changed.');
+  const showUndo = useUndoToast();
+  const marking = user.accountSegment !== 'partner';
+  const label = (partner: boolean) => (partner ? 'Partner' : 'Customer');
+
+  const handleConfirm = async (reason: string) => {
+    await post('segment', { accountSegment: marking ? 'partner' : 'customer', reason });
+    onClose();
+    showUndo({
+      message: marking ? 'Marked as a partner' : 'No longer marked as a partner',
+      onUndo: async () => {
+        await post('segment', { accountSegment: marking ? 'customer' : 'partner', reason: undoAdminReason(reason) });
+      },
+      onViewAudit: onAudit,
+    });
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title={marking ? 'Mark as a partner account' : 'Stop marking as a partner'}
+      description={
+        marking
+          ? 'Their AI cost is counted as partner spend in Spend explorer. Nothing about their access changes.'
+          : "Their AI cost counts as a customer's again in Spend explorer."
+      }
+      reasonPresets={ADMIN_REASON_PRESETS.partnerAccount}
+      confirmLabel={marking ? 'Mark partner' : 'Stop marking'}
+      onConfirm={handleConfirm}
+      data-testid="partner-account-dialog"
+    >
+      <ChangePreview before={label(!marking)} after={label(marking)} data-testid="partner-account-dialog-preview" />
+    </ActionDialog>
+  );
+};
+
 /** No undo: the user re-enrols their authenticator. */
 export const ResetMfaDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) => {
   const resetMfa = useForceResetMFA();
@@ -397,7 +439,7 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
       open
       onClose={onClose}
       title={`Delete ${displayName(user)}`}
-      description="Permanently deletes this user's account. Their live Stripe subscriptions, including those of organizations they own, are canceled with no refund. There is no undo; suspend them instead if you might need to restore access."
+      description="Locks and signs this user out, then permanently erases the account and its deletable data. There is no undo; suspend them instead if you might need to restore access."
       reasonPresets={ADMIN_REASON_PRESETS.userDeletion}
       typedConfirm={
         user.email ? { expected: user.email, noun: 'email address' } : { expected: user.id, noun: 'user ID' }
@@ -406,7 +448,13 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
       tone="danger"
       onConfirm={handleConfirm}
       data-testid="delete-user-dialog"
-    />
+    >
+      <Typography level="body-sm" data-testid="delete-user-dialog-details">
+        Erasure runs asynchronously, and records covered by retention rules remain. Live Stripe subscriptions, including
+        those of organizations they own, are canceled with no refund, and organizations they own alone are deleted.
+        Owners of shared organizations must transfer them first. Deleting an admin account may need approval.
+      </Typography>
+    </ActionDialog>
   );
 };
 
@@ -518,6 +566,7 @@ export const LoginAsDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) =
   const loginAs = useLoginAsUser();
   const [mfaToken, setMfaToken] = useState('');
   const name = displayName(user);
+  // Login-as verifies an authenticator-app code, so a passkey alone does not qualify.
   const adminHasMfa = !!currentUser?.mfa?.totpEnabled;
 
   const handleConfirm = async (reason: string) => {
@@ -535,7 +584,7 @@ export const LoginAsDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) =
       confirmLabel={`Log in as ${name}`}
       blockedReason={
         !adminHasMfa
-          ? 'Set up two-factor on your own account first.'
+          ? 'Set up an authenticator app on your own account first.'
           : mfaToken.trim()
             ? null
             : 'Enter your 6-digit authenticator code.'

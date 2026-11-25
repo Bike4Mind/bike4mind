@@ -14,8 +14,17 @@ import {
   ToggleButtonGroup,
   Typography,
 } from '@mui/joy';
-import type { IDataLakeProposalDocument } from '@bike4mind/common';
-import { RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
+import type { DataLakeProposalReviewReason, IDataLakeProposalDocument } from '@bike4mind/common';
+import { RESEARCH_RUN_PRODUCER, feedLabel } from '@bike4mind/common';
+
+const reviewReasonLabel = (reason: DataLakeProposalReviewReason): string => {
+  const quoted = (reason.conditions ?? []).map(condition => `"${condition}"`);
+  if (reason.kind === 'rule_match') return `Sent to review: matched ${quoted.join(', ')}`;
+  if (reason.kind === 'rule_undetermined') {
+    return `Sent to review: could not tell whether ${quoted.join(' or ')} applies`;
+  }
+  return 'Sent to review: the rule check failed';
+};
 
 export type ProposalsView = 'pending' | 'declined';
 type ProposalSort = 'relevance' | 'newest';
@@ -112,7 +121,8 @@ const formatRetrieved = (value: Date | string | undefined): string => {
 
 /**
  * The human half of the acquisition queue (#1671): one lake's pending proposals, each approved or
- * declined explicitly. There is no bulk-approve and no auto-approve control, deliberately - the
+ * declined explicitly. There is no bulk-approve control here, deliberately, and nothing is admitted by score. The only
+ * automatic path is a research config's trusted-site list. The
  * decision this panel exists to capture is per-source, and the relevance score is shown (and may
  * order the list) only as context a reviewer may weigh, never as a lever anything acts on. Declined
  * tombstones have their own view, where one can be restored to the queue.
@@ -247,7 +257,8 @@ export function DataLakeProposalsPanel({
           <Typography level="body-sm">Nothing is waiting for review.</Typography>
           <Typography level="body-xs" textColor="text.tertiary">
             Proposals arrive when a research run finds sources for this lake. Set one up and run it from the Research
-            tab; anything it finds lands here first, and nothing reaches the lake until you approve it.
+            tab; anything it finds lands here first, and nothing reaches the lake until you approve it, unless a
+            research configuration adds results from its trusted sites automatically.
           </Typography>
         </Stack>
       )
@@ -332,6 +343,18 @@ export function DataLakeProposalsPanel({
                 {` \u00b7 retrieved ${formatRetrieved(proposal.provenance.retrievedAt)}`}
               </Typography>
 
+              {proposal.provenance.feedUrl && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposal-feed-source">
+                  {`from feed ${feedLabel(proposal.provenance.feedUrl)}`}
+                </Typography>
+              )}
+
+              {proposal.provenance.reviewReason && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposal-review-reason">
+                  {reviewReasonLabel(proposal.provenance.reviewReason)}
+                </Typography>
+              )}
+
               {!declinedView && proposal.proposedTags.length > 0 && (
                 <Stack
                   direction="row"
@@ -394,7 +417,12 @@ export function DataLakeProposalsPanel({
                   </Stack>
                 )
               ) : decliningId === proposal.id ? (
-                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}
+                  data-testid="datalake-proposal-decline-row"
+                >
                   <Input
                     size="sm"
                     value={reason}
@@ -402,7 +430,7 @@ export function DataLakeProposalsPanel({
                     disabled={busy}
                     placeholder="Why are you declining? (optional)"
                     onChange={e => setReason(e.target.value)}
-                    sx={{ flex: 1 }}
+                    sx={{ flex: 1, minWidth: '12rem' }}
                     slotProps={{ input: { 'data-testid': 'datalake-proposal-decline-reason' } }}
                   />
                   <Button

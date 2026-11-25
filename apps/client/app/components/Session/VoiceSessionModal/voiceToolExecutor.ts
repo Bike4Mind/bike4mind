@@ -129,9 +129,10 @@ async function executeWebFetch(url: string): Promise<string> {
  * Execute web search via server API
  */
 async function executeWebSearch(query: string, num_results: number = 3): Promise<string> {
+  const count = Number.isFinite(num_results) ? Math.min(10, Math.max(1, Math.round(num_results))) : 3;
   const { data } = await api.post('/api/tools/web-search', {
     query,
-    num_results,
+    num_results: count,
   });
 
   return data.result || 'No search results found.';
@@ -173,7 +174,7 @@ async function executeCurrentDateTime(): Promise<string> {
 
 /**
  * Route request through the full ChatCompletion agent loop, giving voice
- * users access to the same tools, RAG, QuestMaster, and MCP integrations as text chat.
+ * users access to the same tools, RAG, and MCP integrations as text chat.
  *
  * Uses wait=false to dispatch through the normal async pipeline, then awaits the
  * reply via WebSocket + poll fallback. wait=true is unsafe: process() dispatches via
@@ -201,14 +202,13 @@ async function executeAgentRequest(
   debugLog(`[AGENT_REQ] Posting to /api/chat — sessionId=${sessionId}, message="${message}"`);
 
   try {
-    debugLog('[AGENT_REQ] Dispatching quest (wait=false, enableTools=true, enableQuestMaster=false)...');
+    debugLog('[AGENT_REQ] Dispatching quest (wait=false, enableTools=true)...');
     const response = await api.post('/api/chat', {
       sessionId,
       message,
       wait: false,
       stream: false,
       enableTools: true,
-      enableQuestMaster: false,
     });
 
     const { data } = response;

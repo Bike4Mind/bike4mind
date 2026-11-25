@@ -13,10 +13,12 @@ const mocks = vi.hoisted(() => ({
   txRuns: 0,
   findById: vi.fn(),
   update: vi.fn(),
+  setMemberRole: vi.fn(),
   addMember: vi.fn(),
   revokeAccess: vi.fn(),
   audit: vi.fn(),
   keptShares: vi.fn(),
+  refreshSeatEntitlements: vi.fn(),
   logEvent: vi.fn(),
 }));
 
@@ -51,8 +53,9 @@ vi.mock('@server/middlewares/adminApi', async importOriginal => {
   };
 });
 vi.mock('@bike4mind/database', () => ({
-  organizationRepository: { findById: mocks.findById, update: mocks.update },
+  organizationRepository: { findById: mocks.findById, update: mocks.update, setMemberRole: mocks.setMemberRole },
   userRepository: {},
+  userApiKeyRepository: {},
   groupRepository: {},
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
@@ -68,6 +71,9 @@ vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConf
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mocks.logEvent }));
 vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({
   reportAndNotifyKeptPersonalLakeShares: mocks.keptShares,
+}));
+vi.mock('@server/organizations/refreshSeatEntitlements', () => ({
+  refreshSeatEntitlements: mocks.refreshSeatEntitlements,
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
@@ -99,11 +105,11 @@ const call = async (
   key: string,
   method: string,
   body: unknown,
-  { isAdmin = true, permissions = [] as string[], userId = USER } = {}
+  { isAdmin = true, permissions = [] as string[], userId = USER, impersonatedBy = undefined as string | undefined } = {}
 ) => {
   const { req, res } = createMocks({ method: method as 'POST', body, query: { id: ORG, userId } });
   const request = Object.assign(req, {
-    user: { id: 'admin1', username: 'admin', isAdmin, adminPermissions: permissions },
+    user: { id: 'admin1', username: 'admin', isAdmin, adminPermissions: permissions, impersonatedBy },
     logger: { info: vi.fn(), error: vi.fn() },
   }) as unknown as Request;
   mocks.guards[key](request, res as unknown as Response, () => {});
@@ -115,13 +121,31 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.txRuns = 0;
   mocks.findById.mockResolvedValue(buildOrg());
+  mocks.setMemberRole.mockResolvedValue(true);
   mocks.addMember.mockResolvedValue({ user: { id: USER, email: 'ada@example.com', level: 'PaidUser' } });
-  mocks.revokeAccess.mockImplementation(async () => buildOrg({ users: [] }));
+  mocks.revokeAccess.mockImplementation(async () => ({
+    organization: buildOrg({ users: [] }),
+    revokedOrgBilledApiKeyIds: ['key-1'],
+  }));
   mocks.audit.mockResolvedValue({});
   mocks.keptShares.mockResolvedValue(0);
 });
 
 describe('admin org membership routes', () => {
+  it.each([
+    ['POST', 'POST', { userId: USER, reason: 'Membership update' }],
+    ['DELETE,PATCH', 'DELETE', { reason: 'Membership update' }],
+  ] as const)('attributes %s membership events to the real admin', async (key, method, body) => {
+    if (method === 'POST') mocks.findById.mockResolvedValue(buildOrg({ users: [] }));
+    await call(key, method, body, { impersonatedBy: 'real-admin' });
+    expect(mocks.logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'admin1', metadata: expect.objectContaining({ userId: USER }) }),
+      expect.objectContaining({ organizationAuditActorUserId: 'real-admin' }),
+      expect.anything(),
+      ORG
+    );
+  });
+
   it('declares first-party JWT-only authentication behind users:moderate', () => {
     expect(mocks.options.POST).toMatchObject({ auth: 'jwtOnly' });
     expect(mocks.options['DELETE,PATCH']).toMatchObject({ auth: 'jwtOnly' });
@@ -263,25 +287,35 @@ describe('DELETE /api/admin/organizations/[id]/members/[userId]', () => {
         target: expect.objectContaining({ kind: 'user', id: USER }),
         organizationId: ORG,
         reason: 'Left the team',
-        details: { organizationName: 'Acme', role: 'manager' },
+        details: { organizationName: 'Acme', role: 'manager', revokedOrgBilledKeys: 1 },
       })
     );
     expect(mocks.keptShares).toHaveBeenCalledWith(USER, expect.objectContaining({ id: ORG }), expect.anything());
+    expect(mocks.refreshSeatEntitlements).toHaveBeenCalledWith(USER);
     expect(res._getJSONData()).toEqual({ organizationId: ORG, userId: USER, personalLakeSharesKept: 0 });
+  });
+
+  it('does not refresh seat entitlements when the removal fails', async () => {
+    mocks.findById.mockResolvedValue(buildOrg({ adminUserIds: [USER] }));
+    mocks.revokeAccess.mockRejectedValueOnce(new Error('boom'));
+
+    await expect(call('DELETE,PATCH', 'DELETE', { reason: 'Left the team' })).rejects.toThrow('boom');
+
+    expect(mocks.refreshSeatEntitlements).not.toHaveBeenCalled();
   });
 });
 
 describe('PATCH /api/admin/organizations/[id]/members/[userId]', () => {
   it('requires a reason and writes nothing without one', async () => {
     await expect(call('DELETE,PATCH', 'PATCH', { role: 'manager' })).rejects.toMatchObject({ statusCode: 400 });
-    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.setMemberRole).not.toHaveBeenCalled();
   });
 
   it('makes a member a manager and audits the role change', async () => {
     mocks.findById.mockResolvedValue(buildOrg({ adminUserIds: ['other'] }));
     const res = await call('DELETE,PATCH', 'PATCH', { role: 'manager', reason: 'Team lead changed' });
 
-    expect(mocks.update).toHaveBeenCalledWith({ id: ORG, adminUserIds: ['other', USER] });
+    expect(mocks.setMemberRole).toHaveBeenCalledWith(ORG, USER, 'manager');
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -299,7 +333,22 @@ describe('PATCH /api/admin/organizations/[id]/members/[userId]', () => {
   it('makes a manager a member again', async () => {
     mocks.findById.mockResolvedValue(buildOrg({ adminUserIds: [USER, 'other'] }));
     await call('DELETE,PATCH', 'PATCH', { role: 'member', reason: 'Team lead changed' });
-    expect(mocks.update).toHaveBeenCalledWith({ id: ORG, adminUserIds: ['other'] });
+    expect(mocks.setMemberRole).toHaveBeenCalledWith(ORG, USER, 'member');
+  });
+
+  it('moves a billing manager to member', async () => {
+    mocks.findById.mockResolvedValue(buildOrg({ billingManagerUserIds: [USER, 'other'] }));
+    const res = await call('DELETE,PATCH', 'PATCH', { role: 'member', reason: 'Role change' });
+
+    expect(mocks.setMemberRole).toHaveBeenCalledWith(ORG, USER, 'member');
+    expect(res._getJSONData()).toMatchObject({ role: 'member' });
+  });
+
+  it('makes a billing manager a manager', async () => {
+    mocks.findById.mockResolvedValue(buildOrg({ billingManagerUserIds: [USER] }));
+    await call('DELETE,PATCH', 'PATCH', { role: 'manager', reason: 'Role change' });
+
+    expect(mocks.setMemberRole).toHaveBeenCalledWith(ORG, USER, 'manager');
   });
 
   it.each([
@@ -309,7 +358,7 @@ describe('PATCH /api/admin/organizations/[id]/members/[userId]', () => {
     await expect(
       call('DELETE,PATCH', 'PATCH', { role: 'member', reason: 'Team lead changed' }, { userId })
     ).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining(message) });
-    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.setMemberRole).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
   });
 
@@ -318,6 +367,33 @@ describe('PATCH /api/admin/organizations/[id]/members/[userId]', () => {
     await expect(call('DELETE,PATCH', 'PATCH', { role: 'manager', reason: 'Team lead changed' })).rejects.toMatchObject(
       { statusCode: 400 }
     );
-    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.setMemberRole).not.toHaveBeenCalled();
+  });
+
+  it('makes a manager a billing manager through the disjoint role write', async () => {
+    mocks.findById.mockResolvedValue(buildOrg({ adminUserIds: [USER] }));
+    const res = await call('DELETE,PATCH', 'PATCH', { role: 'billingManager', reason: 'Finance lead' });
+
+    expect(mocks.setMemberRole).toHaveBeenCalledWith(ORG, USER, 'billingManager');
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [{ field: 'role', before: 'manager', after: 'billingManager' }] })
+    );
+    expect(res._getJSONData()).toEqual({ organizationId: ORG, userId: USER, role: 'billingManager' });
+  });
+
+  it('refuses and does not audit when the member row vanished before the write', async () => {
+    mocks.setMemberRole.mockResolvedValueOnce(false);
+    await expect(call('DELETE,PATCH', 'PATCH', { role: 'manager', reason: 'Team lead changed' })).rejects.toMatchObject(
+      { statusCode: 400 }
+    );
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
+  it('refuses owner as a role', async () => {
+    await expect(call('DELETE,PATCH', 'PATCH', { role: 'owner', reason: 'Team lead changed' })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(mocks.setMemberRole).not.toHaveBeenCalled();
   });
 });

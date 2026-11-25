@@ -33,7 +33,10 @@ import {
   shiftDay,
   unionSize,
   WAU_WINDOW_DAYS,
-} from './analyticsRollup';
+} from '@bike4mind/server-utils/analytics/analyticsRollup';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'analyticsOverview' } });
 
 const QUERY_DEADLINE_MS = 30_000;
 // Per query: the live slice runs several stages in sequence, all inside the 60s API Lambda (infra/web.ts).
@@ -498,7 +501,7 @@ export async function getAnalyticsOverview(
     // A failed live slice leaves today as a gap, like a missing rollup day, instead of failing the page.
     window.partialDay
       ? loadLiveDay(window.partialDay, now).catch(error => {
-          console.warn('analytics overview: live slice for today failed', error);
+          logger.warn('analytics overview: live slice for today failed', { error });
           return null;
         })
       : Promise.resolve(null),

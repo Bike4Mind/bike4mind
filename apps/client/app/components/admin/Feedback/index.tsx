@@ -1,26 +1,20 @@
-import React, { useCallback, useEffect, useRef } from 'react';
-import {
-  Button,
-  Chip,
-  Dropdown,
-  IconButton,
-  ListDivider,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Option,
-  Select,
-  Stack,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Button, Chip, ChipDelete, ListDivider, MenuItem, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
 import { toast } from 'sonner';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
-import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS } from '@bike4mind/common';
+import {
+  FEEDBACK_ID_PARAM,
+  FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
+  FEEDBACK_RESOLUTIONS,
+  FEEDBACK_RESOLUTION_LABELS,
+  FeedbackStatus,
+} from '@bike4mind/common';
+import FeedbackCloseDialog from './FeedbackCloseDialog';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
@@ -35,6 +29,7 @@ import {
   FilterChip,
   StatusChip,
   UpdatingBar,
+  ViewTabs,
   type DataColumn,
 } from '../shared';
 import { ADMIN_REGION_GAP, adminFocus, adminFocusScope } from '../shared/adminStyles';
@@ -46,10 +41,11 @@ import { useFeedbackPagination } from './hooks/useFeedbackPagination';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
 import FeedbackDetailDrawer from './FeedbackDetailDrawer';
 import { useFeedbackDetailNavigation } from './hooks/useFeedbackDetailNavigation';
+import { useFeedbackKeyboard } from './hooks/useFeedbackKeyboard';
 import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
 import FeedbackTrendStrip from './FeedbackTrendStrip';
-import { FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
+import { FEEDBACK_OPEN_STATUSES, FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
 import {
   FEEDBACK_STATUS_LABELS,
   FEEDBACK_STATUS_ORDER,
@@ -60,7 +56,17 @@ import {
   feedbackTypeOf,
   toSubjectFilter,
 } from './constants';
-import { checkedStatuses, toStatusFilters } from './feedbackTabSearch';
+import {
+  checkedStatuses,
+  FEEDBACK_COMMENT_FILTERS,
+  hasCreatedRange,
+  toStatusFilters,
+  type FeedbackCommentFilter,
+} from './feedbackTabSearch';
+import { FeedbackCreatedRangeDialog, formatCreatedRange } from './FeedbackCreatedRangeDialog';
+import { useFeedbackSelection } from './hooks/useFeedbackSelection';
+import FeedbackBulkActions, { feedbackRowScrollClearance } from './FeedbackBulkActions';
+import { RowActionsMenu } from '../shared/RowActionsMenu';
 
 type FeedbackRow = IExtendedFeedbackDocument;
 
@@ -80,6 +86,20 @@ const RECEIVED_FILTER_OPTIONS = FEEDBACK_RECEIVED_WINDOWS.map(range => ({
   value: range,
   label: FEEDBACK_RECEIVED_LABELS[range],
 }));
+const CUSTOM_RANGE = 'custom';
+const COMMENT_FILTER_LABELS: Record<FeedbackCommentFilter, string> = { with: 'Has comment', without: 'No comment' };
+const COMMENT_FILTER_OPTIONS = FEEDBACK_COMMENT_FILTERS.map(comment => ({
+  value: comment,
+  label: COMMENT_FILTER_LABELS[comment],
+}));
+
+// Built-in status views above the list. New is the default; a view lights when the status filter
+// matches it exactly, and picking one leaves every other filter alone.
+const STATUS_VIEWS = [
+  { id: 'new', label: 'New', statuses: [FeedbackStatus.New] },
+  { id: 'open', label: 'Open', statuses: [...FEEDBACK_OPEN_STATUSES] },
+  { id: 'all', label: 'All', statuses: [...FEEDBACK_STATUS_ORDER] },
+] as const;
 
 // Tags the producers add that only restate the type chip; the rest (help, slash command,
 // marketing...) still say where a report came from.
@@ -129,6 +149,7 @@ const ReporterName = ({ row }: { row: FeedbackRow }) => {
 
 const ReporterCell = ({ row }: { row: FeedbackRow }) => {
   const organization = row.organization && row.organization !== 'Unknown' ? row.organization : undefined;
+  const reporterId = parseObjectId(row.userId);
   return (
     <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0, maxWidth: '100%' }}>
       <Stack direction="row" alignItems="baseline" gap={0.75} sx={{ minWidth: 0, width: '100%' }}>
@@ -145,7 +166,7 @@ const ReporterCell = ({ row }: { row: FeedbackRow }) => {
             {row.userEmail}
           </Typography>
         )}
-        {row.userId && <UserIdChip userId={row.userId} />}
+        {reporterId && <UserIdChip userId={reporterId} />}
       </Stack>
     </Stack>
   );
@@ -192,7 +213,8 @@ const ContentCell = ({ row }: { row: FeedbackRow }) => (
     )}
     <Typography
       level="body-sm"
-      sx={{ maxWidth: '100%', maxHeight: 80, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+      data-testid={`feedback-row-content-${row._id}`}
+      sx={{ maxWidth: '100%', maxHeight: 120, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
     >
       {getFeedbackDisplayContent(row, '') || (
         <Typography component="span" sx={{ color: 'admin.inkMuted' }}>
@@ -207,50 +229,34 @@ const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: 
   const conversationPath = feedbackConversationPath(row);
   const reporterMailto = feedbackReporterMailto(row);
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for the report from ${reporterName(row)}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`feedback-row-actions-${row._id}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+    <RowActionsMenu
+      testId={`feedback-row-actions-${row._id}`}
+      ariaLabel={`Actions for the report from ${reporterName(row)}`}
+    >
+      <MenuItem onClick={() => void copyFeedbackRecordLink(row._id)} data-testid={`feedback-row-copy-link-${row._id}`}>
+        Copy link to this report
+      </MenuItem>
+      {conversationPath && (
         <MenuItem
-          onClick={() => void copyFeedbackRecordLink(row._id)}
-          data-testid={`feedback-row-copy-link-${row._id}`}
+          component="a"
+          href={conversationPath}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid={`feedback-row-open-conversation-${row._id}`}
         >
-          Copy link to this report
+          {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
         </MenuItem>
-        {conversationPath && (
-          <MenuItem
-            component="a"
-            href={conversationPath}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid={`feedback-row-open-conversation-${row._id}`}
-          >
-            {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
-          </MenuItem>
-        )}
-        {reporterMailto && (
-          <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
-            Email reporter
-          </MenuItem>
-        )}
-        <ListDivider />
-        <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
-          Delete feedback
+      )}
+      {reporterMailto && (
+        <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
+          Email reporter
         </MenuItem>
-      </Menu>
-    </Dropdown>
+      )}
+      <ListDivider />
+      <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
+        Delete feedback
+      </MenuItem>
+    </RowActionsMenu>
   );
 };
 
@@ -262,12 +268,18 @@ const FeedbackTab: React.FC = () => {
 
   const {
     filters,
+    setArea,
+    setSeverity,
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
+    setUserId,
     setSubject,
+    setResolution,
     setTypes,
     setReceived,
+    setCreatedRange,
+    setComment,
     showOnly,
     toggleSortDirection,
     filterParams,
@@ -282,6 +294,9 @@ const FeedbackTab: React.FC = () => {
     isError,
     refreshFeedback,
     handleStatusChange,
+    feedbackToClose,
+    cancelClose,
+    confirmClose,
     handleDeleteFeedbackClick,
     confirmDeleteFeedback,
     feedbackToDelete,
@@ -331,6 +346,26 @@ const FeedbackTab: React.FC = () => {
   // the row that opened the drawer. Ids are compared rather than put in a selector: a deep-linked
   // id is arbitrary text.
   const tableRegionRef = useRef<HTMLDivElement>(null);
+  useFeedbackKeyboard({
+    rootRef: tableRegionRef,
+    enabled: !openFeedbackId && !loading,
+    onAction: (key, rowId) => {
+      const row = currentFeedback.find(row => row._id === rowId);
+      if (!row) return;
+      if (key === 'e') {
+        const mailto = feedbackReporterMailto(row);
+        if (mailto) window.location.assign(mailto);
+      } else {
+        void handleStatusChange(row, key === 'i' ? FeedbackStatus.InProgress : FeedbackStatus.Closed);
+      }
+    },
+  });
+  const selectionScope = JSON.stringify({ filterParams, currentPage, itemsPerPage });
+  const selection = useFeedbackSelection({
+    pageIds: currentFeedback.map(row => row._id),
+    scopeKey: selectionScope,
+    total,
+  });
   const previousOpenId = useRef(openFeedbackId);
   useEffect(() => {
     const closedId = previousOpenId.current;
@@ -367,6 +402,7 @@ const FeedbackTab: React.FC = () => {
       ID: feedbackItem._id,
       CreatedAt: feedbackItem.createdAt,
       Status: feedbackItem.status,
+      Resolution: feedbackItem.resolution ? FEEDBACK_RESOLUTION_LABELS[feedbackItem.resolution] : '',
       Type: FEEDBACK_TYPE_LABELS[feedbackTypeOf(feedbackItem.type)],
       Subject: feedbackItem.subject ? FEEDBACK_SUBJECT_LABELS[feedbackItem.subject] : '',
       UserId: feedbackItem.userId,
@@ -413,13 +449,43 @@ const FeedbackTab: React.FC = () => {
     label: name,
   }));
 
+  const activeStatusView = STATUS_VIEWS.find(
+    view =>
+      view.statuses.length === selectedStatuses.length &&
+      view.statuses.every(status => selectedStatuses.includes(status))
+  )?.id;
+
+  const createdRange = { createdFrom: filters.createdFrom, createdTo: filters.createdTo };
+  const customRangeSet = hasCreatedRange(createdRange);
+  const receivedOptions = [
+    ...RECEIVED_FILTER_OPTIONS,
+    // The menu entry keeps saying what it does (reopen the picker); the chip shows the range itself.
+    {
+      value: CUSTOM_RANGE,
+      label: 'Custom range\u2026',
+      chipLabel: customRangeSet ? formatCreatedRange(createdRange) : undefined,
+    },
+  ];
+  const [rangeDialogOpen, setRangeDialogOpen] = useState(false);
+  const [bulkBarHeight, setBulkBarHeight] = useState(0);
+  const setReceivedFilter = (value: string | undefined) => {
+    if (value === CUSTOM_RANGE) return setRangeDialogOpen(true);
+    setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value));
+  };
+
   const hasFilters =
+    filters.area !== undefined ||
+    filters.severity !== undefined ||
     filters.searchTerm.trim() !== '' ||
     statusNarrowed ||
     filters.subject !== undefined ||
+    filters.resolution !== undefined ||
     filters.types.length > 0 ||
     filters.received !== undefined ||
-    filters.selectedOrganizations.length > 0;
+    customRangeSet ||
+    filters.comment !== undefined ||
+    filters.selectedOrganizations.length > 0 ||
+    filters.userId !== undefined;
   const clearFilters = () => showOnly({ statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
 
   // `loading` also covers a refetch with rows on screen (keepPreviousData): those rows stay, under a bar.
@@ -428,31 +494,46 @@ const FeedbackTab: React.FC = () => {
 
   const columns: DataColumn<FeedbackRow>[] = [
     { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
-    { id: 'reporter', label: 'Reporter', width: '15rem', render: row => <ReporterCell row={row} /> },
-    { id: 'content', label: 'Feedback', render: row => <ContentCell row={row} /> },
+    // cqw, not %: Chrome treats a percentage inside clamp() as auto on a fixed-layout table. The query
+    // container is the table region below: 15rem once it is ~68rem wide, the 7.25rem floor at ~48rem and
+    // narrower (the region is narrower than that at a 768 px viewport), so Feedback stays widest on tablets.
+    {
+      id: 'reporter',
+      label: 'Reporter',
+      width: 'clamp(7.25rem, 40cqw - 12rem, 15rem)',
+      render: row => <ReporterCell row={row} />,
+    },
+    { id: 'content', label: 'Feedback', wrap: true, render: row => <ContentCell row={row} /> },
     {
       id: 'status',
       label: 'Status',
       width: '8.5rem',
       render: row => (
-        <Select
-          size="sm"
-          value={row.status}
-          onChange={(_, value) => void handleStatusChange(row, value)}
-          slotProps={{
-            button: {
-              'aria-label': `Status of the report from ${reporterName(row)}`,
-              'data-testid': `feedback-row-status-select-${row._id}`,
-            },
-          }}
-          sx={{ width: '100%', minWidth: 0 }}
-        >
-          {FEEDBACK_STATUS_ORDER.map(status => (
-            <Option key={status} value={status}>
-              {FEEDBACK_STATUS_LABELS[status]}
-            </Option>
-          ))}
-        </Select>
+        <Stack gap={0.5}>
+          <Select
+            size="sm"
+            value={row.status}
+            onChange={(_, value) => void handleStatusChange(row, value)}
+            slotProps={{
+              button: {
+                'aria-label': `Status of the report from ${reporterName(row)}`,
+                'data-testid': `feedback-row-status-select-${row._id}`,
+              },
+            }}
+            sx={{ width: '100%', minWidth: 0 }}
+          >
+            {FEEDBACK_STATUS_ORDER.map(status => (
+              <Option key={status} value={status}>
+                {FEEDBACK_STATUS_LABELS[status]}
+              </Option>
+            ))}
+          </Select>
+          {row.resolution && (
+            <Typography level="body-xs" data-testid={`feedback-row-resolution-${row._id}`}>
+              {FEEDBACK_RESOLUTION_LABELS[row.resolution]}
+            </Typography>
+          )}
+        </Stack>
       ),
     },
   ];
@@ -494,6 +575,17 @@ const FeedbackTab: React.FC = () => {
 
       <FeedbackTrendStrip showOnly={showOnly} />
 
+      <ViewTabs
+        views={STATUS_VIEWS}
+        activeId={activeStatusView}
+        onSelect={id => {
+          const view = STATUS_VIEWS.find(candidate => candidate.id === id);
+          if (view) setStatusFilters(toStatusFilters(view.statuses));
+        }}
+        aria-label="Status views"
+        data-testid="feedback-status-views"
+      />
+
       <Stack
         direction="row"
         flexWrap="wrap"
@@ -525,11 +617,39 @@ const FeedbackTab: React.FC = () => {
           onChange={picked => setTypes(FEEDBACK_TYPE_ORDER.filter(type => picked.includes(type)))}
         />
         <FilterChip
+          id="feedback-area"
+          label="Area"
+          value={filters.area}
+          options={FEEDBACK_AI_AREAS.map(value => ({ value, label: value }))}
+          onChange={value => setArea(FEEDBACK_AI_AREAS.find(area => area === value))}
+        />
+        <FilterChip
+          id="feedback-severity"
+          label="Severity"
+          value={filters.severity}
+          options={FEEDBACK_AI_SEVERITIES.map(value => ({ value, label: value }))}
+          onChange={value => setSeverity(FEEDBACK_AI_SEVERITIES.find(severity => severity === value))}
+        />
+        <FilterChip
+          id="feedback-resolution"
+          label="Resolution"
+          value={filters.resolution}
+          options={FEEDBACK_RESOLUTIONS.map(value => ({ value, label: FEEDBACK_RESOLUTION_LABELS[value] }))}
+          onChange={value => setResolution(FEEDBACK_RESOLUTIONS.find(resolution => resolution === value))}
+        />
+        <FilterChip
           id="feedback-received"
           label="Received"
-          value={filters.received}
-          options={RECEIVED_FILTER_OPTIONS}
-          onChange={value => setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value))}
+          value={customRangeSet ? CUSTOM_RANGE : filters.received}
+          options={receivedOptions}
+          onChange={setReceivedFilter}
+        />
+        <FilterChip
+          id="feedback-comment"
+          label="Comment"
+          value={filters.comment}
+          options={COMMENT_FILTER_OPTIONS}
+          onChange={value => setComment(FEEDBACK_COMMENT_FILTERS.find(comment => comment === value))}
         />
         {/* Single-select, because GET /api/feedback takes one subject or none. */}
         <FilterChip
@@ -549,6 +669,22 @@ const FeedbackTab: React.FC = () => {
             onChange={setSelectedOrganizations}
           />
         )}
+        {filters.userId && (
+          <Chip
+            variant="soft"
+            color="primary"
+            data-testid="feedback-filter-reporter-chip"
+            endDecorator={
+              <ChipDelete
+                aria-label="Show every reporter"
+                data-testid="feedback-filter-reporter-clear"
+                onDelete={() => setUserId(undefined)}
+              />
+            }
+          >
+            Reporter: {currentFeedback.find(row => row.userId === filters.userId)?.username || filters.userId}
+          </Chip>
+        )}
       </Stack>
 
       <Stack
@@ -556,7 +692,15 @@ const FeedbackTab: React.FC = () => {
         tabIndex={-1}
         data-testid="feedback-table-region"
         gap={1}
-        sx={{ minWidth: 0, outline: 'none' }}
+        style={
+          { '--feedback-row-scroll-clearance': `${feedbackRowScrollClearance(bulkBarHeight)}px` } as React.CSSProperties
+        }
+        sx={{
+          minWidth: 0,
+          containerType: 'inline-size',
+          ...adminFocus,
+          '& tbody tr[data-row-id]': { scrollMarginBottom: 'var(--feedback-row-scroll-clearance)' },
+        }}
       >
         <UpdatingBar active={loading && !firstLoad} testId="feedback-updating-bar" />
         <DataTable
@@ -565,6 +709,8 @@ const FeedbackTab: React.FC = () => {
           rows={currentFeedback}
           columns={columns}
           getRowId={row => row._id}
+          selection={!loading && totalSettled ? selection.selection : undefined}
+          onSelectionChange={selection.setSelection}
           onRowActivate={row => openFeedback(row._id)}
           activeRowId={openFeedbackId}
           rowTestId={row => `feedback-row-${row._id}`}
@@ -612,6 +758,24 @@ const FeedbackTab: React.FC = () => {
         />
       </Stack>
 
+      {rangeDialogOpen && (
+        <FeedbackCreatedRangeDialog
+          initial={createdRange}
+          onApply={setCreatedRange}
+          onClose={() => setRangeDialogOpen(false)}
+        />
+      )}
+      <FeedbackBulkActions
+        key={`${selectionScope}:${JSON.stringify(selection.selection)}`}
+        selection={selection.selection}
+        filters={filterParams}
+        total={total}
+        disabled={loading || !totalSettled}
+        onSelectionChange={selection.setSelection}
+        onApplied={refreshFeedback}
+        onHeightChange={setBulkBarHeight}
+      />
+
       <ActionDialog
         open={openDeleteFeedbackModal}
         onClose={toggleDeleteFeedbackModal}
@@ -640,7 +804,16 @@ const FeedbackTab: React.FC = () => {
         onNext={detailNavigation.onNext}
         onClose={closeFeedback}
         onStatusChange={handleStatusChange}
+        onShowReporterReports={userId => {
+          // Every status, so no report the drawer counted is hidden; the list also holds this report and any later ones.
+          // The server drops unverified reports from a userId filter, as the count does.
+          showOnly({ userId, statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
+          closeFeedback();
+        }}
       />
+      {feedbackToClose && (
+        <FeedbackCloseDialog feedbackId={feedbackToClose.id} onClose={cancelClose} onConfirm={confirmClose} />
+      )}
     </Stack>
   );
 };

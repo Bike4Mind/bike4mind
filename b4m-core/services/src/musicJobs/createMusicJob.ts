@@ -73,7 +73,12 @@ export async function createMusicJob(
     deps
   );
   if (replay) return replay;
-  await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
+  await deps.assertModelAdmission(
+    input.user.id,
+    request.model,
+    input.user.adminRoleWithheld,
+    input.user.organizationId
+  );
   // After the replay lookup so a same-key retry still gets its job once the key is gone.
   if (!isUsableApiKey(await deps.resolveApiKey(caps.provider, input.user.id))) {
     return {
@@ -105,6 +110,9 @@ export async function createMusicJob(
       user: input.user,
       requiredCredits: estimateMusicCostCredits(caps, request),
       featureLabel: 'music generation',
+      apiKeyId: input.apiKeyId,
+      apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
+      ...(input.run && { run: input.run }),
     },
     deps
   );
@@ -132,6 +140,8 @@ export async function createMusicJob(
       deadlineAt: new Date(now.getTime() + MUSIC_JOB_MAX_WALL_CLOCK_MS),
       idempotencyKey: input.idempotencyKey,
       creditHold: held.hold,
+      ...(input.run && { run: input.run }),
+      ...(held.runClaim && { runClaim: held.runClaim }),
       questId: input.questId,
     },
     deps

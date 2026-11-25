@@ -35,6 +35,10 @@ export const fabFileKeys = {
    *  `content(id)` stays its invalidation prefix. */
   contentRead: (id: string | undefined, strict: boolean) => ['fabFiles', id, 'content', strict] as const,
   name: (id: string) => ['fabFiles', 'name', id] as const,
+  /** A generated file's trail (GET /api/studio/files/:id/lineage); `doc(id)` is its invalidation prefix. */
+  lineage: (id: string) => ['fabFiles', id, 'lineage'] as const,
+  /** A generated voice clip's script and word timings (GET /api/studio/files/:id/speech-script). */
+  speechScript: (id: string) => ['fabFiles', id, 'speechScript'] as const,
   /** Invalidation prefix covering ownList and ownBySession. */
   own: ['fabFiles', 'own'] as const,
   ownList: (params: { search: string; filters: FabFileListFilters; sort: string; sortField: string }) =>

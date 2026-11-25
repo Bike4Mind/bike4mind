@@ -11,6 +11,7 @@ import { readdirSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import ts from 'typescript';
+import { accountDistributionsArn, addSourceArnToCloudfrontRead } from '../bucketSecurity';
 
 const INFRA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -70,6 +71,12 @@ const analyze = (src: string) => {
     if (!pab || !ts.isIdentifier(pab) || pab.text !== 'BLOCK_ALL_PUBLIC_ACCESS') {
       return `${b.name} must set transform.publicAccessBlock to BLOCK_ALL_PUBLIC_ACCESS`;
     }
+    if (access && ts.isStringLiteralLike(access) && access.text === 'cloudfront') {
+      const policy = transform && ts.isObjectLiteralExpression(transform) ? prop(transform, 'policy') : undefined;
+      if (!policy || !ts.isIdentifier(policy) || policy.text !== 'scopeCloudfrontRead') {
+        return `${b.name} is access: 'cloudfront' and must set transform.policy to scopeCloudfrontRead`;
+      }
+    }
     if (!encrypted.has(b.name)) return `${b.name} has no encryptBucketAtRest call`;
     return null;
   };
@@ -91,6 +98,7 @@ describe('S3 buckets state encryption and public-access blocking', () => {
         'fabFileBucket',
         'generatedImagesBucket',
         'historyImportBucket',
+        'modelPriceSnapshotBucket',
         'publishedArtifactsBucket',
         'qaArtifactsBucket',
         'slackExportBucket',
@@ -148,5 +156,64 @@ describe('guard parsing', () => {
 
   it('reports a bucket call no variable declaration owns', () => {
     expect(analyze(`buckets.push(new sst.aws.Bucket('x', {}));`).unattributed).toBe(1);
+  });
+
+  it('requires transform.policy: scopeCloudfrontRead on an access: cloudfront bucket', () => {
+    const wrap = (t: string) =>
+      `const b = new sst.aws.Bucket('b', { access: 'cloudfront', transform: { publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS${t} } });\nencryptBucketAtRest('b', b);`;
+    expect(analyze(wrap(', policy: scopeCloudfrontRead')).problems()).toEqual([]);
+    expect(analyze(wrap('')).problems()).toEqual([
+      "b is access: 'cloudfront' and must set transform.policy to scopeCloudfrontRead",
+    ]);
+    expect(analyze(wrap(', policy: somethingElse')).problems()).toHaveLength(1);
+  });
+
+  it('keeps appFilesBucket the only cloudfront bucket; generatedImagesBucket has no CloudFront grant', () => {
+    const cloudfront = all.filter(b => b.args && ts.isObjectLiteralExpression(b.args) && prop(b.args, 'access'));
+    expect(cloudfront.map(b => b.name)).toEqual(['appFilesBucket']);
+  });
+});
+
+describe('accountDistributionsArn', () => {
+  it('builds the account-wide distribution ARN', () => {
+    const expected = (partition: string, account: string) =>
+      ['arn', partition, 'cloudfront', '', account, 'distribution/*'].join(':');
+    expect(accountDistributionsArn('p1', 'a1')).toBe(expected('p1', 'a1'));
+    expect(accountDistributionsArn('p2', 'a2')).toBe(expected('p2', 'a2'));
+  });
+});
+
+describe('addSourceArnToCloudfrontRead', () => {
+  const arn = accountDistributionsArn('p1', 'a1');
+  const read = {
+    Effect: 'Allow',
+    Principal: { Service: 'cloudfront.amazonaws.com' },
+    Action: 's3:GetObject',
+    Resource: 'x',
+  };
+  const https = {
+    Effect: 'Deny',
+    Principal: '*',
+    Action: 's3:*',
+    Resource: 'x',
+    Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+  };
+  const run = (statements: unknown[]) =>
+    JSON.parse(addSourceArnToCloudfrontRead(JSON.stringify({ Version: '2012-10-17', Statement: statements }), arn));
+
+  it('adds the SourceArn condition to the CloudFront read statement only', () => {
+    const out = run([read, https]);
+    expect(out.Statement[0].Condition).toEqual({ StringLike: { 'AWS:SourceArn': arn } });
+    expect(out.Statement[1]).toEqual(https);
+  });
+
+  it('handles list-shaped principals and actions', () => {
+    const out = run([{ ...read, Principal: { Service: ['cloudfront.amazonaws.com'] }, Action: ['s3:GetObject'] }]);
+    expect(out.Statement[0].Condition.StringLike['AWS:SourceArn']).toBe(arn);
+  });
+
+  it('throws when there is no CloudFront read statement to scope', () => {
+    expect(() => run([https])).toThrow('no CloudFront s3:GetObject statement');
+    expect(() => run([{ ...read, Principal: { Service: 'other.amazonaws.com' } }])).toThrow();
   });
 });

@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { apiGetOtcCode } from './helpers/api';
+import { watchMfaSetup } from './helpers/mfa';
 import {
   SHORT_SCREEN_MOBILE,
   expectNoHorizontalOverflow,
@@ -23,7 +24,7 @@ test.describe('A6.1 signup on a short screen and a slow link', { tag: ['@launch-
     test.skip(!openRegEnabled, 'Open registration disabled on this env.');
   });
 
-  test('a new user signs up with an email code, every step reachable at 375x667', async ({
+  test('A6.1 signup completes with an email code, every step reachable at 375x667 on a throttled link', async ({
     basePage,
     signupPage,
     page,
@@ -80,12 +81,22 @@ test.describe('A6.1 signup on a short screen and a slow link', { tag: ['@launch-
     const verified = page.waitForResponse(r => r.url().includes('/api/otc/verify') && r.request().method() === 'POST', {
       timeout: TIMEOUTS.TEST,
     });
+    const mfaSetup = watchMfaSetup(page);
     await signupPage.verify();
     const verifyResponse = await verified;
     expect(verifyResponse.ok(), 'OTC verify succeeds').toBe(true);
-    const { user, accessToken } = (await verifyResponse.json()) as { user: { id: string }; accessToken: string };
-    // The nested shape is a newly created account; a flat one would mean the email already existed.
-    expect(user?.id, 'verify created a new account').toBeTruthy();
+    const body = (await verifyResponse.json()) as {
+      user?: { id: string };
+      userId?: string;
+      accessToken: string;
+      mfaSetupRequired?: boolean;
+    };
+    // A stage that enforces MFA sends the new account to setup first; its session comes from setup.
+    const enrolled = await mfaSetup.enrollIfAsked(body);
+    // The nested shape (or a setup request) is a newly created account; a flat session would mean
+    // the email already existed.
+    expect(body.user?.id ?? (body.mfaSetupRequired && body.userId), 'verify created a new account').toBeTruthy();
+    const accessToken = enrolled?.accessToken ?? body.accessToken;
 
     // Step 3: signed in and inside the app.
     await page.waitForURL(url => !/\/(register|login)/.test(url.pathname), { timeout: TIMEOUTS.TEST });

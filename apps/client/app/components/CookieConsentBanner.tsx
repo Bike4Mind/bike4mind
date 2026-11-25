@@ -162,7 +162,9 @@ export function CookieConsentBanner() {
         bottom: 0,
         left: 0,
         right: 0,
-        zIndex: 9999,
+        // Just under the modal layer: an open dialog covers the bar instead of the bar covering the
+        // dialog's bottom actions (a pay button on a phone). The bar is back once the dialog closes.
+        zIndex: theme => theme.zIndex.modal - 1,
         p: 2,
         bgcolor: 'background.surface',
         borderTop: '1px solid',

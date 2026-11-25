@@ -25,7 +25,7 @@ import {
   resolveSupportedMimeType,
 } from '@bike4mind/utils';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { createFabFile } from '@bike4mind/server-utils/managers/fabFileManager';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { admitPendingUploads } from '@server/files/pendingUploads';
@@ -35,7 +35,6 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileS
 import type { Request } from 'express';
 import mime from 'mime-types';
 import { Resource } from 'sst';
-import { v4 as uuidv4 } from 'uuid';
 
 const s3Client = createS3Client();
 
@@ -158,16 +157,17 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     );
 
   const ext = mime.extension(mimeType);
-  const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+  const fileKey = `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`;
 
   // Bound to the declared size the size and storage checks above ran on: S3 refuses any other length.
+  // Create-only: the PUT fails if the key exists, so the uploader must send `If-None-Match: *`.
   const command = new PutObjectCommand({
     Bucket: Resource.fabFileBucket.name,
     Key: fileKey,
     ContentLength: data.fileSize,
-    // The narrow ai:generate upload also binds its validated type, and is create-only: the PUT fails
-    // if the key exists, so a scanned object cannot be overwritten.
-    ...(provenance && { ContentType: provenance.contentType, IfNoneMatch: '*' }),
+    IfNoneMatch: '*',
+    // The narrow ai:generate upload also binds its validated type.
+    ...(provenance && { ContentType: provenance.contentType }),
   });
 
   // Spent after every admission gate above, so a refused upload costs nothing.

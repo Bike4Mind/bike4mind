@@ -7,7 +7,7 @@ import { recordRecentFile } from './recentFiles';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
 import { listDistroFiles } from './wslFiles';
 import { shareRelativePath, wslLocation } from '../../wsl/wslPath';
-import { IMAGE_FORMAT_NAMES, showImage, sniffImageType } from './toolImages';
+import { IMAGE_FORMAT_NAMES, showAndKeepImage, sniffImageType } from './toolImages';
 import {
   capOutput,
   MAX_FILE_READ_OUTPUT_CHARS,
@@ -274,10 +274,11 @@ export const fileRead: ToolDefinition = {
     const imageType = sniffImageType(buffer);
     if (imageType) {
       const about = `${target} is a ${IMAGE_FORMAT_NAMES[imageType]} image (${formatBytes(info.size)})`;
-      const shown = showImage(context, buffer, imageType);
-      if (!shown.ok) return `${about}. It was not shown: ${shown.reason}.`;
+      const { shown, kept } = await showAndKeepImage(context, buffer, imageType, target);
+      const userSees = kept ? " The user sees it in the chat, on this call's row." : '';
+      if (!shown.ok) return `${about}. It was not shown: ${shown.reason}.${userSees}`;
       const pixels = shown.pixels ? `, ${shown.pixels}` : '';
-      return `${about}${pixels}. You see it below this result in this reply only; read it again to look at it later.`;
+      return `${about}${pixels}. You see it below this result in this reply only; read it again to look at it later.${userSees}`;
     }
     if (isBinary(buffer)) return `${target} is a binary file (${formatBytes(info.size)}), so it is not shown as text.`;
 

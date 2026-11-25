@@ -4,6 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { CreditTransaction, creditTransactionRepository } from './CreditTransactionModel';
 import {
+  COMPLETION_RUN_USAGE_MAX_ATTEMPTS,
   CreditHolderType,
   GenericCreditDeductTransaction,
   GenericDeductReasons,
@@ -368,77 +369,6 @@ describe('CreditTransactionRepository.usageTotalForOwner', () => {
   });
 });
 
-describe('CreditTransactionRepository.queryAdminAdjustmentsPage', () => {
-  const USER = 'user-1';
-  const recent = () => new Date();
-  const seedAdjustments = (rows: Array<Record<string, unknown>>) =>
-    CreditTransaction.collection.insertMany(
-      rows.map(r => ({
-        ownerId: USER,
-        ownerType: CreditHolderType.User,
-        credits: 50,
-        type: 'generic_add',
-        reason: 'admin_adjustment',
-        createdAt: day(1),
-        updatedAt: day(1),
-        ...r,
-      }))
-    );
-
-  it('returns admin adjustments across all users, newest first, paginated', async () => {
-    await seedAdjustments([
-      { ownerId: 'user-a', createdAt: day(1) },
-      { ownerId: 'user-b', type: 'generic_deduct', credits: -20, createdAt: day(3) },
-      { ownerId: 'user-c', createdAt: day(2) },
-    ]);
-
-    const page1 = await creditTransactionRepository.queryAdminAdjustmentsPage({ limit: 2, skip: 0 });
-    expect(page1.total).toBe(3);
-    expect(page1.data.map(d => d.createdAt.getTime())).toEqual([day(3).getTime(), day(2).getTime()]);
-    expect(page1.data.map(d => d.ownerId)).toEqual(['user-b', 'user-c']);
-  });
-
-  it('excludes non-admin generic writes and usage/org rows', async () => {
-    await seedAdjustments([{ createdAt: recent() }]); // admin adjustment (kept)
-    await seed([
-      // OTC-style generic_add against a user, but not an admin adjustment
-      {
-        ownerId: USER,
-        ownerType: CreditHolderType.User,
-        type: 'generic_add',
-        reason: 'OTC registration',
-        credits: 100,
-        createdAt: recent(),
-      },
-      // usage row
-      {
-        ownerId: USER,
-        ownerType: CreditHolderType.User,
-        type: 'text_generation_usage',
-        credits: -5,
-        createdAt: recent(),
-      },
-      // admin_adjustment but on an organization holder
-      { type: 'generic_deduct', reason: 'admin_adjustment', credits: -10, createdAt: recent() },
-    ]);
-
-    const { data, total } = await creditTransactionRepository.queryAdminAdjustmentsPage({ limit: 50, skip: 0 });
-    expect(total).toBe(1);
-    expect(data[0].ownerType).toBe(CreditHolderType.User);
-    expect(data[0].reason).toBe('admin_adjustment');
-  });
-
-  it('honors the trailing-day window', async () => {
-    await seedAdjustments([{ createdAt: recent() }]);
-    let res = await creditTransactionRepository.queryAdminAdjustmentsPage({ days: 30, limit: 50, skip: 0 });
-    expect(res.total).toBe(1);
-
-    await CreditTransaction.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
-    res = await creditTransactionRepository.queryAdminAdjustmentsPage({ days: 30, limit: 50, skip: 0 });
-    expect(res.total).toBe(0);
-  });
-});
-
 describe('CreditTransactionRepository.dailyNetCreditsForOwner', () => {
   it('sums signed credits per UTC day since `from`, oldest first, scoped to the owner', async () => {
     await seed([
@@ -741,5 +671,163 @@ describe('purchase reversal', () => {
 
     const found = await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.User);
     expect(found?.stripePaymentIntentId).toBe('pi_nostatus');
+  });
+});
+
+describe('CreditTransactionRepository.completionRunSpend', () => {
+  const RUN = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
+  const OWNER = { ownerId: ORG, ownerType: CreditHolderType.Organization };
+
+  /** A settled completion row as cliCompletions writes it: negative credits, lineage under metadata.run. */
+  const completionRow = (
+    credits: number,
+    run: Record<string, unknown>,
+    extra: Record<string, unknown> = {}
+  ): Record<string, unknown> => ({
+    type: 'completion_api_usage',
+    credits: -credits,
+    model: 'claude-sonnet-5-5',
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 1000,
+    cacheWriteTokens: 50,
+    metadata: { requestId: `req-${credits}`, run: { runId: RUN, ...run } },
+    ...extra,
+  });
+
+  it('sums each settled row once, with breakdowns by role, purpose, model and attempt', async () => {
+    await seed([
+      completionRow(40, { role: 'root' }),
+      completionRow(30, { role: 'worker', purpose: 'turn', taskId: 'task-a', attemptId: 'a1' }),
+      // A retry of the same task is its own attempt.
+      completionRow(20, { role: 'worker', taskId: 'task-a', attemptId: 'a2' }, { model: 'claude-haiku-5-5' }),
+      completionRow(10, { role: 'worker', purpose: 'explore', taskId: 'task-a', attemptId: 'a2' }),
+      // A settled request the ledger charged nothing for still counts as a request.
+      completionRow(0, { role: 'worker', taskId: 'task-b', attemptId: 'b1' }),
+    ]);
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.settled).toEqual({
+      creditsCharged: 100,
+      requests: 5,
+      inputTokens: 500,
+      outputTokens: 50,
+      cacheReadTokens: 5000,
+      cacheWriteTokens: 250,
+    });
+    expect(spend.byRole.map(r => [r.role, r.creditsCharged, r.requests])).toEqual([
+      ['worker', 60, 4],
+      ['root', 40, 1],
+    ]);
+    // A request sent without a purpose was a turn.
+    expect(spend.byPurpose.map(r => [r.purpose, r.creditsCharged])).toEqual([
+      ['turn', 90],
+      ['explore', 10],
+    ]);
+    expect(spend.byModel.map(r => [r.model, r.creditsCharged])).toEqual([
+      ['claude-sonnet-5-5', 80],
+      ['claude-haiku-5-5', 20],
+    ]);
+    expect(spend.byAttempt.map(r => [r.role, r.taskId, r.attemptId, r.creditsCharged, r.requests])).toEqual([
+      ['root', undefined, undefined, 40, 1],
+      ['worker', 'task-a', 'a1', 30, 1],
+      ['worker', 'task-a', 'a2', 30, 2],
+      ['worker', 'task-b', 'b1', 0, 1],
+    ]);
+    expect(spend.byAttempt[0]).not.toHaveProperty('taskId');
+    expect(spend.byAttemptTruncated).toBe(false);
+  });
+
+  it("counts only this owner's completion rows for this run", async () => {
+    await seed([
+      completionRow(40, { role: 'root' }),
+      // Same run id on another holder's row: never read through this owner's run.
+      completionRow(500, { role: 'root' }, { ownerId: 'org-2' }),
+      completionRow(500, { role: 'root' }, { ownerType: CreditHolderType.User }),
+      // Another run of the same owner.
+      completionRow(500, { role: 'root', runId: '11111111-2222-4333-8444-555555555555' }),
+      // A non-completion row carrying the same metadata shape.
+      completionRow(500, { role: 'root' }, { type: 'tool_usage' }),
+      // An unattributed completion.
+      { type: 'completion_api_usage', credits: -500, model: 'claude-sonnet-5-5' },
+    ]);
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.settled.creditsCharged).toBe(40);
+    expect(spend.settled.requests).toBe(1);
+  });
+
+  it('counts paid tool rows attributed to the run as settled spend, under the tool purpose', async () => {
+    const toolRow = (type: string, credits: number) => ({
+      type,
+      credits: -credits,
+      model: 'tool-model',
+      metadata: { run: { runId: RUN, role: 'worker', purpose: 'tool', taskId: 'task-a' } },
+    });
+    await seed([
+      completionRow(40, { role: 'root' }),
+      toolRow('image_generation_usage', 25),
+      toolRow('image_edit_usage', 6),
+      toolRow('video_generation_usage', 15),
+      toolRow('music_generation_usage', 8),
+      toolRow('text_to_speech_usage', 4),
+      toolRow('sound_effects_usage', 2),
+    ]);
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.settled.creditsCharged).toBe(100);
+    expect(spend.settled.requests).toBe(7);
+    expect(spend.settled.inputTokens).toBe(100);
+    expect(spend.byPurpose.map(r => [r.purpose, r.creditsCharged])).toEqual([
+      ['tool', 60],
+      ['turn', 40],
+    ]);
+  });
+
+  it('reports zero spend and empty breakdowns for a run with nothing settled', async () => {
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend).toEqual({
+      settled: {
+        creditsCharged: 0,
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+      byRole: [],
+      byPurpose: [],
+      byModel: [],
+      byAttempt: [],
+      byAttemptTruncated: false,
+    });
+  });
+
+  it('lists the largest attempts up to the cap and flags the rest, while settled counts them all', async () => {
+    await seed(
+      Array.from({ length: COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 2 }, (_, index) =>
+        completionRow(index + 1, { role: 'worker', taskId: 'task', attemptId: `attempt-${index}` })
+      )
+    );
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.byAttempt).toHaveLength(COMPLETION_RUN_USAGE_MAX_ATTEMPTS);
+    expect(spend.byAttempt[0].attemptId).toBe(`attempt-${COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 1}`);
+    expect(spend.byAttemptTruncated).toBe(true);
+    expect(spend.settled.requests).toBe(COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 2);
+  });
+
+  it('is served by the partial run index', async () => {
+    const indexes = await CreditTransaction.collection.indexes();
+
+    expect(indexes.find(index => index.name === 'credit_tx_completion_run')).toMatchObject({
+      key: { 'metadata.run.runId': 1 },
+      partialFilterExpression: { 'metadata.run.runId': { $exists: true } },
+    });
   });
 });

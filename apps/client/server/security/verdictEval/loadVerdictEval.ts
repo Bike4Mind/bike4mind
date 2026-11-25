@@ -20,7 +20,7 @@ import {
   ACCOUNT_STATUS_ACTIONS_FILTER,
   REINSTATED_ENTRIES,
   SUSPEND_ACTIONS,
-} from '@server/security/accountStatusAuditActions';
+} from '@bike4mind/server-utils/security/accountStatusAuditActions';
 import { signupVerdictOf } from '@bike4mind/server-utils/users/signupClassifier';
 import { getSignupVerdicts } from '@bike4mind/server-utils/users/signupTimeseries';
 import type { CohortSignals } from './cohorts';

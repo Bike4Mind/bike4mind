@@ -25,6 +25,10 @@ vi.mock('@client/app/components/help/ContextHelpButton', () => ({
 vi.mock('sonner', () => ({
   toast: { success: mocks.toastSuccess, error: mocks.toastError, info: mocks.toastInfo },
 }));
+// Covered by its own test; stubbed so this file's request and state assertions see only the tools table.
+vi.mock('./PlatformMcpConnectorsSection', () => ({
+  default: () => <section data-testid="platform-mcp-section" />,
+}));
 
 import ToolDefinitionsTab from './ToolDefinitionsTab';
 
@@ -96,6 +100,17 @@ const renderTab = () => {
 
 const openRowMenu = async (toolId: string) => fireEvent.click(await screen.findByTestId(`tool-row-actions-${toolId}`));
 
+// Runs out the search debounce on fake time; the debounce itself is pinned by its own test below.
+const searchFor = async (value: string) => {
+  vi.useFakeTimers();
+  try {
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+  } finally {
+    vi.useRealTimers();
+  }
+};
+
 describe('ToolDefinitionsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -117,6 +132,15 @@ describe('ToolDefinitionsTab', () => {
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(within(header).getByTestId('context-help')).toHaveAttribute('data-help-id', 'admin/tool-definitions');
     expect(within(header).getByTestId('tools-refresh-btn')).toHaveTextContent('Refresh');
+  });
+
+  it('carries the platform connectors section below the tools table', async () => {
+    renderTab();
+
+    const section = await screen.findByTestId('platform-mcp-section');
+    expect(
+      screen.getByTestId('tools-table').compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it('refetches the list from the header Refresh button', async () => {
@@ -187,7 +211,7 @@ describe('ToolDefinitionsTab', () => {
       'Search name, description or tags'
     );
 
-    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'weather' } });
+    await searchFor('weather');
     await waitFor(() => expect(listCalls()).toContain(`${LIST_URL}enabled=all&search=weather&page=1&limit=50`));
 
     fireEvent.click(screen.getByTestId('admin-filter-tool-status'));
@@ -425,7 +449,7 @@ describe('ToolDefinitionsTab', () => {
 
     fireEvent.click(screen.getByTestId('admin-filter-tool-status'));
     fireEvent.click(await screen.findByTestId('admin-filter-tool-status-true'));
-    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'zzz' } });
+    await searchFor('zzz');
     await waitFor(() => expect(listCalls()).toContain(`${LIST_URL}enabled=true&search=zzz&page=1&limit=50`));
     fireEvent.click(within(await screen.findByTestId('admin-empty-state')).getByTestId('tools-empty-clear-btn'));
 

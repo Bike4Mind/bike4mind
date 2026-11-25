@@ -71,7 +71,9 @@ export function groupSessions(
   mode: ChatSessionMode,
   userSections: SidebarSectionsState = EMPTY_SIDEBAR_SECTIONS,
   importedInline = false,
-  nested = false
+  nested = false,
+  /** Lower first, ahead of activity within every group; omitted, the order is activity alone. */
+  attentionRank?: (session: ChatSessionSummary) => number
 ): SidebarSections {
   const inMode = sessions.filter(session => session.mode === mode);
   // Archiving outranks pinning: a pinned session that is then archived has been put away, and
@@ -80,8 +82,9 @@ export function groupSessions(
   const visible = inMode.filter(session => !session.archived);
   const children = nested ? nestSpawned(visible, userSections) : NO_CHILDREN;
   const attached = new Set([...children.values()].flat().map(session => session.id));
-  const pinned = visible.filter(session => session.pinned);
-  const rest = visible.filter(session => !session.pinned && !attached.has(session.id));
+  const byGroupActivity = withRank(activityOrder(children), attentionRank);
+  const pinned = visible.filter(session => session.pinned).sort(byGroupActivity);
+  const rest = visible.filter(session => !session.pinned && !attached.has(session.id)).sort(byGroupActivity);
 
   const modesBySection = new Map<string, Set<ChatSessionMode>>();
   for (const session of sessions) {
@@ -162,7 +165,60 @@ function nestSpawned(
     if (siblings) siblings.push(session);
     else children.set(parent.id, [session]);
   }
+  // Creation order keeps a group's rows still while its members work; recency decides the group's place.
+  for (const siblings of children.values()) siblings.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return children;
+}
+
+/** The latest updatedAt among a session and everything nested under it, at any depth. */
+function groupActivity(
+  children: ReadonlyMap<string, readonly ChatSessionSummary[]>,
+  session: ChatSessionSummary
+): string {
+  return descendantsOf(children, session.id).reduce(
+    (latest, child) => (child.updatedAt > latest ? child.updatedAt : latest),
+    session.updatedAt
+  );
+}
+
+/**
+ * Newest group first, judged by its most recently active member rather than the parent alone, so a
+ * busy child keeps its group near the top. Stable, and a no-op on a list with nothing nested.
+ */
+function activityOrder(children: ReadonlyMap<string, readonly ChatSessionSummary[]>) {
+  if (children.size === 0) return () => 0;
+  return (a: ChatSessionSummary, b: ChatSessionSummary): number =>
+    groupActivity(children, b).localeCompare(groupActivity(children, a));
+}
+
+type SessionOrder = (a: ChatSessionSummary, b: ChatSessionSummary) => number;
+
+/** `order`, untouched when there is no rank, so the default sidebar sorts exactly as before. */
+function withRank(order: SessionOrder, rank?: (session: ChatSessionSummary) => number): SessionOrder {
+  if (!rank) return order;
+  return (a, b) => rank(a) - rank(b) || order(a, b);
+}
+
+/**
+ * The title of the parent a spawned session is drawn away from, for its small "from X" label: its
+ * parent is archived or in another mode, the user pinned or filed it, or a search flattened the
+ * list. `all` is every session, not just the matching ones, so a hint survives a search that skips
+ * the parent. A deleted parent has no title to show, so its child gets none.
+ */
+export function parentHints(
+  all: readonly ChatSessionSummary[],
+  children: ReadonlyMap<string, readonly ChatSessionSummary[]>
+): ReadonlyMap<string, string> {
+  const byId = new Map(all.map(session => [session.id, session]));
+  const nestedIds = new Set([...children.values()].flat().map(session => session.id));
+
+  const hints = new Map<string, string>();
+  for (const session of all) {
+    const parent = session.origin && byId.get(session.origin.parentSessionId);
+    if (!parent || parent.id === session.id || nestedIds.has(session.id)) continue;
+    hints.set(session.id, parent.title);
+  }
+  return hints;
 }
 
 /** Every session nested under `sessionId`, at any depth, in drawn order. */
@@ -178,6 +234,11 @@ function projectGroupOf(project: ChatProject): { directory: string; name: string
   const repository = claudeWorktreeOf(project.directory)?.repository;
   if (!repository) return { directory: project.directory, name: project.name };
   return { directory: repository, name: repository.split(/[\\/]/).filter(Boolean).pop() ?? repository };
+}
+
+/** The sidebar group directory a project belongs to: its repository when picked inside a Claude Code worktree. */
+export function projectGroupDirectory(project: ChatProject): string {
+  return projectGroupOf(project).directory;
 }
 
 /** The most recent session's project for a sidebar group, including grouped Claude worktrees. */

@@ -1,37 +1,57 @@
 import Foundation
 
-/// What Studio can make. Video and music run as generation jobs; images (and image edits) run as quests.
+/// What Studio can make. Video, music and Scenes run as generation jobs; images run as image jobs.
+/// A Scene is composed from a video and a music track the person already has, so it is not a create-bar kind.
 public enum GenerationKind: String, CaseIterable, Codable, Sendable {
   case image
   case video
   case music
+  case scene
+
+  /// The kinds the create bar offers: the ones made from a prompt.
+  public static let promptable: [GenerationKind] = [.image, .video, .music]
 
   public var title: String {
     switch self {
     case .image: "Image"
     case .video: "Video"
     case .music: "Music"
+    case .scene: "Scene"
+    }
+  }
+
+  /// What the finished file is in the gallery.
+  public var mediaKind: MediaKind {
+    switch self {
+    case .image: .image
+    case .video, .scene: .video
+    case .music: .audio
     }
   }
 }
 
 /// A generation the server accepted: enough to find it again after a relaunch.
-/// `id` is the job id for video and music and the quest id for images.
+/// `id` is the job id.
 public struct GenerationHandle: Hashable, Codable, Sendable, Identifiable {
   public let kind: GenerationKind
   public let id: String
   public let prompt: String
   public let startedAt: Date
+  /// What it was made with, for "Use these settings". Optional so handles persisted before these existed decode.
+  public let modelID: String?
+  public let params: GenerationParams?
 
-  public init(kind: GenerationKind, id: String, prompt: String, startedAt: Date) {
+  public init(
+    kind: GenerationKind, id: String, prompt: String, startedAt: Date, modelID: String? = nil,
+    params: GenerationParams? = nil
+  ) {
     self.kind = kind
     self.id = id
     self.prompt = prompt
     self.startedAt = startedAt
+    self.modelID = modelID
+    self.params = params
   }
-
-  /// Video and music jobs can be cancelled; an image quest runs to the end.
-  public var isCancellable: Bool { kind != .image }
 }
 
 /// Where a generation stands. The terminal phases never change again.

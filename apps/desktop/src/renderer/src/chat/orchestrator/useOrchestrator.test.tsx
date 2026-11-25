@@ -5,6 +5,7 @@ import type { ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentActivity } from './activity';
 import { writeView } from './orchestratorPrefs';
+import { singlePaneLayout } from './orchestratorLayout';
 import { useAgentActivity, useOrchestratorPrefs, useOrchestratorRoster } from './useOrchestrator';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -214,6 +215,50 @@ describe('useOrchestratorRoster', () => {
 });
 
 describe('useOrchestratorPrefs', () => {
+  it("starts a new session on its project's last view, and records picks for the project", () => {
+    writeView('a', 'aquarium', '/p');
+    writeView('x', 'table', '/other');
+    let latest: ReturnType<typeof useOrchestratorPrefs> | undefined;
+    const Probe = ({ id, project }: { id: string; project?: string }) => {
+      latest = useOrchestratorPrefs(id, project);
+      return null;
+    };
+    act(() => root.render(<Probe id="b" project="/p" />));
+    expect(latest?.view).toBe('aquarium');
+    act(() => latest?.setLayout(singlePaneLayout('board')));
+    expect(window.localStorage.getItem('b4m.orchestrator.projectView./p')).toBe('board');
+    act(() => root.render(<Probe id="b" project="/q" />));
+    expect(latest?.view).toBe('board');
+  });
+
+  it('re-reads when only the project changes, and writes to the current project', () => {
+    window.localStorage.setItem('b4m.orchestrator.projectView./q', 'table');
+    let latest: ReturnType<typeof useOrchestratorPrefs> | undefined;
+    const Probe = ({ project }: { project?: string }) => {
+      latest = useOrchestratorPrefs('s', project);
+      return null;
+    };
+    act(() => root.render(<Probe />));
+    expect(latest?.view).toBe('tavern');
+    act(() => root.render(<Probe project="/q" />));
+    expect(latest?.view).toBe('table');
+    act(() => latest?.setLayout(singlePaneLayout('board')));
+    expect(window.localStorage.getItem('b4m.orchestrator.projectView./q')).toBe('board');
+    expect(window.localStorage.getItem('b4m.orchestrator.projectView./p')).toBeNull();
+  });
+
+  it('keeps a session with no id on the tavern and writes nothing', () => {
+    let latest: ReturnType<typeof useOrchestratorPrefs> | undefined;
+    const Probe = () => {
+      latest = useOrchestratorPrefs(null, '/p');
+      return null;
+    };
+    act(() => root.render(<Probe />));
+    act(() => latest?.setLayout(singlePaneLayout('board')));
+    expect(latest?.view).toBe('tavern');
+    expect(window.localStorage.length).toBe(0);
+  });
+
   it('re-reads when the session changes and setters write through immediately', () => {
     writeView('a', 'board');
     let latest: ReturnType<typeof useOrchestratorPrefs> | undefined;
@@ -226,9 +271,9 @@ describe('useOrchestratorPrefs', () => {
     expect(latest?.surface).toBe('chat');
 
     act(() => root.render(<Probe id="b" />));
-    expect(latest?.view).toBe('tavern');
+    expect(latest?.view).toBe('board');
 
-    act(() => latest?.setView('table'));
+    act(() => latest?.setLayout(singlePaneLayout('table')));
     expect(latest?.view).toBe('table');
     expect(window.localStorage.getItem('b4m.orchestrator.view.b')).toBe('table');
 

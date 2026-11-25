@@ -5,7 +5,7 @@
  *
  * @example
  * const { isFeatureEnabled } = useAdminSettingsCache();
- * const enableQuestMaster = isFeatureEnabled('EnableQuestMaster');
+ * const enableMementos = isFeatureEnabled('EnableMementos');
  */
 
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
@@ -87,7 +87,7 @@ export const useAdminSettingsCache = () => {
  * @example
  * const { settingsMap, isReady } = useCachedSettingsMap();
  * if (isReady) {
- *   const enableQuestMaster = settingsMap['EnableQuestMaster'] === 'true';
+ *   const enableMementos = settingsMap['EnableMementos'] === 'true';
  * }
  */
 export const useCachedSettingsMap = () => {
@@ -104,8 +104,8 @@ export const useCachedSettingsMap = () => {
  * Hook for checking multiple feature flags at once
  *
  * @example
- * const features = useFeatureFlags(['EnableQuestMaster', 'EnableMementos', 'EnableAgents']);
- * if (features.EnableQuestMaster && features.EnableAgents) {
+ * const features = useFeatureFlags(['EnableMementos', 'EnableAgents']);
+ * if (features.EnableMementos && features.EnableAgents) {
  *   // Both features are enabled
  * }
  */

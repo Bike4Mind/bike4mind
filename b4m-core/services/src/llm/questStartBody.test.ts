@@ -40,6 +40,30 @@ describe('QuestStartBodySchema.disableUserIntegrations', () => {
   });
 });
 
+// Bodies queued by an older server still carry the retired QuestMaster fields; they must parse and
+// arrive at the worker without them.
+describe('QuestStartBodySchema retired QuestMaster fields', () => {
+  const legacy = {
+    ...body,
+    enableQuestMaster: true,
+    questMasterStartId: 'paid-start',
+    questAdmittedAs: 'unknown-classification',
+    questMaster: { questMasterPlanId: 'p1', questId: 'q1', subQuestId: 's1' },
+  };
+
+  it('parses a body queued with them', () => {
+    expect(() => QuestStartBodySchema.parse(JSON.parse(JSON.stringify(legacy)))).not.toThrow();
+  });
+
+  it('strips them from the parsed body', () => {
+    const parsed = QuestStartBodySchema.parse(legacy);
+    expect(parsed).not.toHaveProperty('enableQuestMaster');
+    expect(parsed).not.toHaveProperty('questMasterStartId');
+    expect(parsed).not.toHaveProperty('questAdmittedAs');
+    expect(parsed).not.toHaveProperty('questMaster');
+  });
+});
+
 // The worker's /process route re-parses the dispatched body: a stripped id would leave first_value
 // naming no visit, on the first attempt and on every redelivery of the same body.
 describe('QuestStartBodySchema.visitId', () => {

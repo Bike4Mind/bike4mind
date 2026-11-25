@@ -18,7 +18,8 @@ const REASONS: Record<ChatRelayHoldReason, string> = {
 const COLLAPSE_CHARS = 200;
 const COLLAPSE_LINES = 3;
 
-function HeldRelayRow({
+/** One held message with its Deliver / Decline; also drawn by the Agent view's DecisionCard. */
+export function HeldRelayRow({
   held,
   onResolve,
   onOpenSession,
@@ -107,7 +108,7 @@ function HeldRelayRow({
         <Stack direction="row" spacing={1} justifyContent="flex-end">
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             disabled={busy}
             onClick={() => void resolve(false)}

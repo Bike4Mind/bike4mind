@@ -2,6 +2,25 @@ import XCTest
 
 @testable import B4MKit
 
+private actor ResumeInvalidationGate {
+  private(set) var entered = false
+  private(set) var sessions: [String] = []
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  func pause() async {
+    entered = true
+    await withCheckedContinuation { continuation = $0 }
+  }
+
+  func record(_ sessionID: String) { sessions.append(sessionID) }
+
+  func release() {
+    let pending = continuation
+    continuation = nil
+    pending?.resume()
+  }
+}
+
 final class CaptureEngineTests: XCTestCase {
   private let temp = TempDirectory()
   private let lake = CaptureDestination.lake(id: "lake-1", name: "Research")
@@ -17,14 +36,16 @@ final class CaptureEngineTests: XCTestCase {
 
   private func rig(
     api: FakeCaptureAPI = FakeCaptureAPI(), store: FileUploadJobStore? = nil,
-    identifier: String = BackgroundSessionIdentifier.app, uploader: FakeUploader? = nil
+    identifier: String = BackgroundSessionIdentifier.app, uploader: FakeUploader? = nil,
+    didSendToSession: (@Sendable (String) async -> Void)? = nil
   ) -> Rig {
     let store = store ?? FileUploadJobStore(directory: temp.url)
     let uploader = uploader ?? FakeUploader(identifier: identifier)
     let clock = clock
     let engine = CaptureEngine(
       store: store, api: api, ownIdentifier: identifier, makeUploader: { _ in uploader }, now: { clock.now },
-      sleep: { _ in }, configuration: Self.fastConfiguration)
+      sleep: { _ in }, configuration: Self.fastConfiguration,
+      didSendToSession: didSendToSession)
     return Rig(engine: engine, api: api, uploader: uploader, store: store)
   }
 
@@ -52,6 +73,38 @@ final class CaptureEngineTests: XCTestCase {
   }
 
   private func photo(_ name: String = "photo.jpg") -> ShareItem { .image(sharedFile(temp, name: name)) }
+
+  func testResumeInvalidatesCompletedSessionBeforeWaitingForUnfinishedWork() async throws {
+    let rig = rig()
+    let completedJobs = try await rig.engine.enqueue([photo("done.jpg")], to: session, note: nil)
+    var done = try only(completedJobs)
+    done.stage = .done
+    done.updatedAt = clock.now
+    try rig.store.save(done)
+    let uploadingJobs = try await rig.engine.enqueue([photo("live.jpg")], to: lake, note: nil)
+    var live = try only(uploadingJobs)
+    live.stage = .uploading
+    live.uploadSession = BackgroundSessionIdentifier.app
+    live.uploadTaskID = 42
+    live.uploadAttempts = 1
+    try rig.store.save(live)
+    rig.uploader.adopt(jobID: live.id, taskID: 42)
+
+    let gate = ResumeInvalidationGate()
+    let uploader = rig.uploader
+    let clock = clock
+    let engine = CaptureEngine(
+      store: rig.store, api: rig.api, ownIdentifier: BackgroundSessionIdentifier.app,
+      makeUploader: { _ in uploader }, now: { clock.now }, sleep: { _ in await gate.pause() },
+      configuration: Self.fastConfiguration, didSendToSession: { await gate.record($0) })
+    let resumed = Task { await engine.resume() }
+    defer { Task { await gate.release() } }
+    try await eventually("reconciliation paused") { await gate.entered }
+    let invalidated = await gate.sessions
+    XCTAssertEqual(invalidated, ["sess-1"])
+    await gate.release()
+    await resumed.value
+  }
 
   // MARK: - Happy paths
 
@@ -103,6 +156,27 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertEqual(calls.last, .sendMessage(session: "sess-1", message: "what is good here?", files: ["file-1"]))
   }
 
+  func testASessionCaptureReportsTheSessionItSentInto() async throws {
+    let sent = SentSessions()
+    let rig = rig(didSendToSession: { await sent.add($0) })
+    let job = try only(await rig.engine.submit([photo("menu.jpg")], to: session, note: "what is good here?"))
+    rig.uploader.finish(job.id)
+    try await eventually { stage(rig, job.id) == .done }
+    let ids = await sent.ids
+    XCTAssertEqual(ids, ["sess-1"])
+  }
+
+  func testResumeReportsSessionsOfCompletedCapturesSentByAnotherProcess() async throws {
+    let store = FileUploadJobStore(directory: temp.url)
+    let extensionRig = rig(store: store, identifier: BackgroundSessionIdentifier.shareExtension)
+    _ = try await extensionRig.engine.submit([.text("worth a look")], to: session, note: nil)
+    let sent = SentSessions()
+    let appRig = rig(store: store, didSendToSession: { await sent.add($0) })
+    await appRig.engine.resume()
+    let ids = await sent.ids
+    XCTAssertEqual(ids, ["sess-1"])
+  }
+
   func testASessionCaptureWithoutANoteNamesTheFile() async throws {
     let rig = rig()
     let job = try only(await rig.engine.submit([photo("menu.jpg")], to: session, note: nil))
@@ -110,6 +184,34 @@ final class CaptureEngineTests: XCTestCase {
     try await eventually { stage(rig, job.id) == .done }
     let calls = await rig.api.calls
     XCTAssertEqual(calls.last, .sendMessage(session: "sess-1", message: "Attached menu.jpg", files: ["file-1"]))
+  }
+
+  func testAScannedPDFQueuesOfflineAndResumesAsOneSessionAttachmentAfterRelaunch() async throws {
+    let api = FakeCaptureAPI()
+    await api.setCreateUploadError(APIError.offline)
+    let first = rig(api: api)
+    let source = temp.url.appending(path: "Scan.pdf")
+    let bytes = Data("%PDF-1.7 scan payload".utf8)
+    try bytes.write(to: source)
+    let item = ShareItem.pdf(
+      SharedFile(fileURL: source, fileName: "Scan.pdf", mimeType: "application/pdf", byteCount: bytes.count))
+    let jobs = try await first.engine.submit([item], to: session, note: "Summarize this scan")
+    XCTAssertEqual(jobs.count, 1)
+    let job = try XCTUnwrap(jobs.first)
+    XCTAssertEqual(job.stage, .queued)
+    try FileManager.default.removeItem(at: source)
+
+    await api.setCreateUploadError(nil)
+    let relaunched = rig(api: api, store: FileUploadJobStore(directory: temp.url))
+    await relaunched.engine.resume()
+    let started = try XCTUnwrap(relaunched.uploader.started.first)
+    XCTAssertEqual(relaunched.uploader.started.count, 1)
+    XCTAssertEqual(started.contentType, "application/pdf")
+    XCTAssertEqual(try Data(contentsOf: started.file), bytes)
+    relaunched.uploader.finish(job.id)
+    try await eventually { stage(relaunched, job.id) == .done }
+    let calls = await api.calls
+    XCTAssertEqual(calls.last, .sendMessage(session: "sess-1", message: "Summarize this scan", files: ["file-1"]))
   }
 
   func testSharedTextToASessionIsAMessageWithNoUpload() async throws {
@@ -559,25 +661,24 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertFalse(requeue(queued))
   }
 
-  func testObserversSeeEveryTransition() async throws {
+  func testObserversSeeInitialQueuedUploadingAndLatestCompletion() async throws {
     let rig = rig()
     let stream = await rig.engine.updates()
-    let collector = Task { () -> [[UploadStage]] in
-      var seen: [[UploadStage]] = []
-      for await jobs in stream {
-        seen.append(jobs.map(\.stage))
-        if jobs.first?.stage == .done { break }
-      }
-      return seen
-    }
-    let job = try only(await rig.engine.submit([photo()], to: lake, note: nil))
+    var iterator = stream.makeAsyncIterator()
+    let initial = await iterator.next()
+    XCTAssertEqual(initial?.map(\.stage), [])
+    let job = try only(await rig.engine.enqueue([photo()], to: lake, note: nil))
+    let queued = await iterator.next()
+    XCTAssertEqual(queued?.map(\.stage), [.queued])
+    await rig.engine.resume()
+    let uploading = await iterator.next()
+    XCTAssertEqual(uploading?.map(\.stage), [.uploading])
     rig.uploader.finish(job.id)
-    let seen = await collector.value
-    XCTAssertEqual(seen.first, [])
-    XCTAssertTrue(seen.contains([.queued]))
-    XCTAssertTrue(seen.contains([.uploading]))
-    XCTAssertTrue(seen.contains([.registering]))
-    XCTAssertEqual(seen.last, [.done])
+    while let jobs = await iterator.next() {
+      if jobs.first?.stage == .done { return }
+      XCTAssertEqual(jobs.map(\.stage), [.registering])
+    }
+    XCTFail("Updates ended before completion")
   }
 }
 
@@ -616,4 +717,9 @@ private final class UnwritableJobStore: UploadJobStore, @unchecked Sendable {
     try base.writePayload(data, jobID: jobID, fileName: fileName)
   }
   func discardPayload(jobID: UUID) { base.discardPayload(jobID: jobID) }
+}
+
+private actor SentSessions {
+  private(set) var ids: [String] = []
+  func add(_ id: String) { ids.append(id) }
 }

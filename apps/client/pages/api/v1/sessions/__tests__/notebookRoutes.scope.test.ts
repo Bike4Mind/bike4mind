@@ -54,6 +54,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     res.status(405).json({ error: 'Method not allowed' }),
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
@@ -66,7 +67,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: vi.fn() }));
 vi.mock('@bike4mind/database/content', () => ({ Quest: {} }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: {},
@@ -79,7 +80,7 @@ vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', 
   unpublishUserArtifactsBySource: vi.fn(),
 }));
 vi.mock('@bike4mind/utils', () => ({ computeCosineSimilarity: () => 0, getSettingsByNames: vi.fn() }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createRequestCompletionMeter: vi.fn(),
   isCreditsEnforced: async () => false,
   reserveCompletionCredits: vi.fn(),

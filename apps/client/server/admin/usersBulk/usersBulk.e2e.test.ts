@@ -11,17 +11,18 @@ import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
 import { AdminAuditLogModel, Cache, CreditTransaction, User, UserApiKey } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
 import {
+  AdminUsersBulkResultSchema,
   ADMIN_USERS_BULK_MAX,
   ADMIN_USERS_BULK_MAX_CREDIT_ADD,
   ADMIN_USERS_BULK_UNDO_WINDOW_MS,
   type AdminUsersBulkAction,
   type AdminUsersBulkExecuteRequest,
 } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
-import { usersBulkExecuteDeps, usersBulkUndoDeps } from './adapters';
-import { executeAdminUsersBulk, type ExecuteDeps } from './execute';
-import { SUBSCRIPTION_CANCEL_GRACE_MS } from './ports';
-import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from './undo';
-import { cohortHashOf, type BulkUser } from './resolve';
+import { usersBulkExecuteDeps, usersBulkUndoDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
+import { executeAdminUsersBulk, type ExecuteDeps } from '@bike4mind/server-utils/admin/usersBulk/execute';
+import { SUBSCRIPTION_CANCEL_GRACE_MS } from '@bike4mind/server-utils/admin/usersBulk/ports';
+import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/undo';
+import { cohortHashOf, type BulkUser } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import { requestUsersBulkApprovalIfNeeded } from './approvalGate';
 import { approveApproval } from '@server/admin/approvals/service';
 
@@ -153,6 +154,7 @@ describe('users bulk actions on a real replica set', () => {
     );
 
     expect(result).toMatchObject({ applied: 2, skipped: 0, failed: [] });
+    expect(result.committedUserIds?.sort()).toEqual([first, second].sort());
     for (const id of [first, second]) {
       expect(await userState(id)).toMatchObject({ isBanned: true, currentCredits: 0 });
     }
@@ -253,6 +255,7 @@ describe('users bulk actions on a real replica set', () => {
     expect(result).toMatchObject({
       applied: 2,
       canceledSubscriptions: 1,
+      committedUserIds: expect.arrayContaining([paying, refused]),
       subscriptionCancelFailures: [{ userId: refused, error: 'stripe down' }],
     });
     expect(cancelAccountSubscriptions).toHaveBeenCalledWith(
@@ -313,7 +316,7 @@ describe('users bulk actions on a real replica set', () => {
     for (const type of ['suspend', 'contain'] as const) {
       cancelAccountSubscriptions.mockClear();
       const result = await run(adminId, request([banned], { type }, [banned]));
-      expect(result).toMatchObject({ applied: 0, skipped: 1, canceledSubscriptions: 1 });
+      expect(result).toMatchObject({ applied: 0, skipped: 1, canceledSubscriptions: 1, committedUserIds: [] });
       expect(cancelAccountSubscriptions).toHaveBeenCalledTimes(1);
     }
   });
@@ -332,6 +335,7 @@ describe('users bulk actions on a real replica set', () => {
     });
 
     expect(result.applied).toBe(1);
+    expect(result.committedUserIds).toEqual([good]);
     expect(result.failed).toEqual([{ userId: bad, error: 'audit down' }]);
     expect(await userState(good)).toMatchObject({ isModerated: true });
     expect(await userState(bad)).toMatchObject({ isModerated: false });
@@ -346,6 +350,7 @@ describe('users bulk actions on a real replica set', () => {
     const replayed = await run(adminId, body);
 
     expect(replayed).toEqual(first);
+    expect(AdminUsersBulkResultSchema.parse(replayed).committedUserIds).toEqual([target]);
     expect(await userState(target)).toMatchObject({ currentCredits: 110 });
     expect(await auditCount('user.bulk.credits_adjusted')).toBe(1);
     expect(await auditCount('user.bulk.executed')).toBe(1);
@@ -532,6 +537,7 @@ describe('users bulk actions on a real replica set', () => {
     const result = await run(adminId, body, { budgetMs: 0 });
 
     expect(result).toMatchObject({ applied: 8, partial: true, remaining: 2, failed: [] });
+    expect(result.committedUserIds?.sort()).toEqual(ids.slice(0, 8).sort());
     expect(await User.countDocuments({ _id: { $in: ids }, isModerated: true })).toBe(8);
     const summary = await AdminAuditLogModel.findOne({ action: 'user.bulk.executed' }).lean();
     expect(summary?.details).toMatchObject({ partial: true, remaining: 2, applied: 8 });

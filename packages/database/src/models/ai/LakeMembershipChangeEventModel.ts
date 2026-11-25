@@ -33,6 +33,8 @@ const LakeMembershipChangeEventSchema = new Schema<ILakeMembershipChangeEventDoc
     fabFileId: { type: String, required: true },
     action: { type: String, enum: LAKE_MEMBERSHIP_CHANGE_ACTIONS, required: true },
     origin: { type: String, enum: LAKE_MEMBERSHIP_CHANGE_ORIGINS, required: true },
+    undoesEventId: { type: String },
+    causedByEventId: { type: String },
     // `immutable` blocks the ordinary updateOne/updateMany/findOneAndUpdate paths, the same
     // backstop LakeConfigChangeEventModel applies to its own `expiresAt` - NOT a guarantee against
     // a caller that deliberately opts out or reaches the collection via the raw driver. The
@@ -74,6 +76,7 @@ class LakeMembershipChangeEventRepository
     // The real wall clock, always - no caller-facing override, matching lakeConfigChangeEventRepository.
     const now = new Date();
     const created = await this.eventModel.create({
+      ...(input.eventId ? { _id: input.eventId } : {}),
       principalKind: input.principalKind,
       principalId: input.principalId,
       onBehalfOfUserId: input.onBehalfOfUserId,
@@ -82,6 +85,8 @@ class LakeMembershipChangeEventRepository
       fabFileId: input.fabFileId,
       action: input.action,
       origin: input.origin,
+      undoesEventId: input.undoesEventId,
+      causedByEventId: input.causedByEventId,
       expiresAt: lakeMembershipChangeExpiresAt(now),
     });
     return created.toJSON() as unknown as ILakeMembershipChangeEventDocument;

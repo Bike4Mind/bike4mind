@@ -74,9 +74,11 @@ export interface GitHubIssue {
   html_url: string;
   labels: Array<{ name: string; color: string }>;
   assignees: Array<{ login: string }>;
+  user: { login: string } | null;
   created_at: string;
   updated_at: string;
   closed_at?: string | null; // Available for closed issues
+  state_reason?: string | null;
 }
 
 /**
@@ -99,6 +101,12 @@ export interface GitHubRepository {
   private: boolean;
   html_url: string;
   description: string | null;
+  archived?: boolean;
+  has_issues?: boolean;
+  default_branch?: string;
+  updated_at?: string | null;
+  pushed_at?: string | null;
+  open_issues_count?: number;
 }
 
 /**
@@ -184,7 +192,8 @@ export interface GitHubCommit {
  * Options for listing merged pull requests
  */
 export interface ListMergedPRsOptions {
-  base: string;
+  /** Target branch; omit to include PRs merged into any branch. */
+  base?: string;
   since: Date;
   perPage?: number;
 }
@@ -193,7 +202,8 @@ export interface ListMergedPRsOptions {
  * Options for listing commits
  */
 export interface ListCommitsOptions {
-  sha: string;
+  /** Branch, tag or commit; omit to use the default branch. */
+  sha?: string;
   since: Date;
   perPage?: number;
 }
@@ -223,10 +233,118 @@ export interface GitHubCodeSearchResult {
  * instead of silently returning empty results.
  */
 export class GitHubRateLimitError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(
+    message: string,
+    readonly retryAfterSeconds?: number,
+    readonly resetAt?: string,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
     this.name = 'GitHubRateLimitError';
   }
+}
+
+/** Thrown by the read methods when a repository is outside the connection's whitelist. */
+export class GitHubRepoNotAllowedError extends Error {
+  constructor(readonly repo: string) {
+    super('Repository is not permitted for this connection');
+    this.name = 'GitHubRepoNotAllowedError';
+  }
+}
+
+/** Thrown by the read methods for a non-2xx GitHub response that is not a rate limit. */
+export class GitHubRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
+    this.name = 'GitHubRequestError';
+  }
+}
+
+export type GitHubOrganizationServiceResult =
+  | { ok: true; service: GitHubService; connectionType: 'github_app' | 'service_account' }
+  | { ok: false; reason: 'missing' | 'disabled' | 'suspended' | 'misconfigured' | 'error' };
+
+export interface GitHubContributor {
+  login: string;
+  contributions: number;
+  avatarUrl: string;
+  htmlUrl: string;
+}
+
+export interface GitHubCommitActivityWeek {
+  total: number;
+  week: number;
+  days: number[];
+}
+
+export type GitHubCommitActivityResult = { status: 'pending' } | { status: 'ok'; weeks: GitHubCommitActivityWeek[] };
+
+export interface GitHubPullRequestDetail extends GitHubPullRequest {
+  draft: boolean;
+  merged: boolean;
+  closed_at: string | null;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+  commits: number;
+  base_ref: string;
+  head_ref: string;
+  requestedReviewers: Array<{ login: string; avatarUrl: string }>;
+}
+
+export interface GitHubUser {
+  login: string;
+  name: string | null;
+  avatarUrl: string;
+  htmlUrl: string;
+}
+
+export interface ListCommitsByAuthorOptions {
+  author: string;
+  since?: Date;
+  until?: Date;
+}
+
+export interface GitHubAuthoredCommit {
+  sha: string;
+  message: string;
+  authorName: string;
+  /** GitHub login of the author, null when the commit email is not linked to an account. */
+  authorLogin: string | null;
+  date: string;
+}
+
+export interface SearchIssuesAndPullsOptions {
+  perPage?: number;
+  page?: number;
+}
+
+export interface GitHubIssueOrPullItem {
+  repo: string;
+  number: number;
+  title: string;
+  body: string | null;
+  state: string;
+  htmlUrl: string;
+  isPullRequest: boolean;
+  user: string | null;
+  labels: string[];
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+  /** Null for issues and for pull requests that are not merged. */
+  mergedAt: string | null;
+  draft: boolean;
+}
+
+export interface SearchIssuesAndPullsResult {
+  items: GitHubIssueOrPullItem[];
+  /** GitHub's own total_count; it can exceed the number of items returned. */
+  totalCount: number;
 }
 
 /**
@@ -246,6 +364,14 @@ export class GitHubAuthInitError extends Error {
   ) {
     super(message);
     this.name = 'GitHubAuthInitError';
+  }
+}
+
+/** A permanent setup fault (missing key, unusable credentials) that retrying cannot fix. */
+class GitHubConfigurationError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'GitHubConfigurationError';
   }
 }
 
@@ -302,6 +428,39 @@ export class GitHubService {
     } catch (error) {
       logger.error('[GitHubService] Error creating service for organization', { orgId, error });
       return null;
+    }
+  }
+
+  /**
+   * Like forOrganization, but reports why no service was produced instead of returning null.
+   */
+  static async forOrganizationResult(orgId: string, logger: Logger): Promise<GitHubOrganizationServiceResult> {
+    try {
+      const connection = await orgGitHubConnectionRepository.findByOrganizationIdWithCredentials(orgId);
+      if (!connection) {
+        logger.warn('[GitHubService] No GitHub connection found for organization', { orgId });
+        return { ok: false, reason: 'missing' };
+      }
+
+      if (!connection.enabled) {
+        logger.warn('[GitHubService] GitHub connection is disabled', { orgId });
+        return { ok: false, reason: 'disabled' };
+      }
+
+      if (connection.suspendedAt) {
+        logger.warn('[GitHubService] GitHub connection is suspended', {
+          orgId,
+          suspendedAt: connection.suspendedAt,
+          suspendedBy: connection.suspendedBy,
+        });
+        return { ok: false, reason: 'suspended' };
+      }
+
+      const service = await GitHubService.createFromConnection(connection, logger);
+      return { ok: true, service, connectionType: connection.connectionType };
+    } catch (error) {
+      logger.error('[GitHubService] Error creating service for organization', { orgId, error });
+      return { ok: false, reason: error instanceof GitHubConfigurationError ? 'misconfigured' : 'error' };
     }
   }
 
@@ -367,7 +526,7 @@ export class GitHubService {
       // Fail hard: without this key, stored credentials cannot be decrypted
       const errorMsg = '[GitHubService] CRITICAL: SECRET_ENCRYPTION_KEY not configured. Cannot decrypt credentials.';
       logger.error(errorMsg);
-      throw new Error('GitHub service configuration error. Please contact administrator.');
+      throw new GitHubConfigurationError('GitHub service configuration error. Please contact administrator.');
     }
 
     let octokit: Octokit;
@@ -384,15 +543,17 @@ export class GitHubService {
       // message is one of a bounded set of sanitized strings (crypto internals are stripped
       // in createOctokitFor{App,PAT} before it is thrown); for any other error we log only
       // the class name, never its message, which could carry decryption internals.
-      // Throw rather than return null: init failures are transient (network) or config
-      // errors that callers should retry/escalate, not silently discard.
+      // Init failures here are configuration faults (the Octokit and auth constructors are lazy
+      // and make no network calls), which is why they map to 'misconfigured'.
       logger.error('[GitHubService] Failed to initialize authentication', {
         connectionId: connection.id,
         connectionType: connection.connectionType,
         reason: error instanceof GitHubAuthInitError ? error.reason : 'unknown',
         detail: error instanceof GitHubAuthInitError ? error.message : error instanceof Error ? error.name : 'unknown',
       });
-      throw new Error('[GitHubService] Failed to initialize GitHub authentication');
+      throw new GitHubConfigurationError('[GitHubService] Failed to initialize GitHub authentication', {
+        cause: error,
+      });
     }
 
     // Filter out empty/whitespace-only entries from whitelist to prevent bypass
@@ -774,6 +935,7 @@ export class GitHubService {
             color: typeof l === 'string' ? '' : l.color || '',
           })),
           assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
+          user: issue.user ? { login: issue.user.login } : null,
           created_at: issue.created_at,
           updated_at: issue.updated_at,
           closed_at: issue.closed_at ?? null,
@@ -831,9 +993,11 @@ export class GitHubService {
             color: typeof l === 'string' ? '' : l.color || '',
           })),
           assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
+          user: issue.user ? { login: issue.user.login } : null,
           created_at: issue.created_at,
           updated_at: issue.updated_at,
           closed_at: issue.closed_at ?? null,
+          state_reason: issue.state_reason ?? null,
         }));
     });
   }
@@ -876,6 +1040,7 @@ export class GitHubService {
           color: typeof l === 'string' ? '' : l.color || '',
         })),
         assignees: result.data.assignees?.map(a => ({ login: a.login })) || [],
+        user: result.data.user ? { login: result.data.user.login } : null,
         created_at: result.data.created_at,
         updated_at: result.data.updated_at,
         closed_at: result.data.closed_at ?? null,
@@ -913,9 +1078,11 @@ export class GitHubService {
             color: typeof l === 'string' ? '' : l.color || '',
           })),
           assignees: result.data.assignees?.map(a => ({ login: a.login })) || [],
+          user: result.data.user ? { login: result.data.user.login } : null,
           created_at: result.data.created_at,
           updated_at: result.data.updated_at,
           closed_at: result.data.closed_at ?? null,
+          state_reason: result.data.state_reason ?? null,
         };
       } catch (error) {
         if ((error as { status?: number }).status === 404) {
@@ -965,9 +1132,11 @@ export class GitHubService {
           color: typeof l === 'string' ? '' : l.color || '',
         })),
         assignees: result.data.assignees?.map(a => ({ login: a.login })) || [],
+        user: result.data.user ? { login: result.data.user.login } : null,
         created_at: result.data.created_at,
         updated_at: result.data.updated_at,
         closed_at: result.data.closed_at ?? null,
+        state_reason: result.data.state_reason ?? null,
       };
     });
   }
@@ -1078,6 +1247,13 @@ export class GitHubService {
    */
   async closeIssue(repo: string, issueNumber: number): Promise<GitHubIssue | null> {
     return this.updateIssue(repo, issueNumber, { state: 'closed' });
+  }
+
+  /**
+   * Reopen a closed issue
+   */
+  async reopenIssue(repo: string, issueNumber: number): Promise<GitHubIssue | null> {
+    return this.updateIssue(repo, issueNumber, { state: 'open' });
   }
 
   // ============================================
@@ -1211,6 +1387,60 @@ export class GitHubService {
   // ============================================
 
   /**
+   * Every issue across all pages, pull requests dropped after collection. Stops at maxPages
+   * and reports `truncated` when the response still links a next page. A denied repo and
+   * rate limits throw typed errors.
+   */
+  async listAllIssues(
+    repo: string,
+    params: { state: 'open' | 'closed' | 'all'; since?: string; maxPages?: number }
+  ): Promise<{ issues: GitHubIssue[]; truncated: boolean }> {
+    const perPage = 100;
+    const requested = Math.floor(params.maxPages ?? NaN);
+    const maxPages = Number.isFinite(requested) ? Math.max(1, requested) : 50;
+
+    return this.executeRead(async () => {
+      const { owner, repo: repoName } = this.assertRepoAllowed(repo);
+      let pages = 0;
+      let truncated = false;
+      const items = await this.octokit.paginate(
+        this.octokit.issues.listForRepo,
+        { owner, repo: repoName, state: params.state, since: params.since, per_page: perPage },
+        (response, done) => {
+          pages++;
+          if (pages >= maxPages) {
+            truncated = /rel="next"/.test(String(response.headers?.link ?? ''));
+            done();
+          }
+          return response.data;
+        }
+      );
+
+      const issues = items
+        .filter(item => !item.pull_request)
+        .map(issue => ({
+          number: issue.number,
+          title: issue.title,
+          body: issue.body ?? null,
+          state: issue.state,
+          html_url: issue.html_url,
+          labels: issue.labels.map(l => ({
+            name: typeof l === 'string' ? l : l.name || '',
+            color: typeof l === 'string' ? '' : l.color || '',
+          })),
+          assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
+          user: issue.user ? { login: issue.user.login } : null,
+          created_at: issue.created_at,
+          updated_at: issue.updated_at,
+          closed_at: issue.closed_at ?? null,
+          state_reason: issue.state_reason ?? null,
+        }));
+
+      return { issues, truncated };
+    });
+  }
+
+  /**
    * Get repository information
    */
   async getRepository(repo: string): Promise<GitHubRepository | null> {
@@ -1235,6 +1465,12 @@ export class GitHubService {
           private: result.data.private,
           html_url: result.data.html_url,
           description: result.data.description,
+          archived: result.data.archived,
+          has_issues: result.data.has_issues,
+          default_branch: result.data.default_branch,
+          updated_at: result.data.updated_at,
+          pushed_at: result.data.pushed_at,
+          open_issues_count: result.data.open_issues_count,
         };
       } catch (error) {
         if ((error as { status?: number }).status === 404) {
@@ -1305,7 +1541,7 @@ export class GitHubService {
         owner,
         repo: repoName,
         state: 'closed',
-        base: options.base,
+        ...(options.base ? { base: options.base } : {}),
         sort: 'updated',
         direction: 'desc',
         per_page: options.perPage || 100,
@@ -1451,22 +1687,38 @@ export class GitHubService {
    * hammering an already-exhausted budget. Anything else is rethrown untouched.
    */
   private asRateLimitedErrorOrRethrow(error: unknown): unknown {
+    const throttle = this.classifyThrottle(error);
+    if (!throttle) return error;
+    return new GitHubRateLimitedError('GitHub rate limit exceeded', throttle.retryAfterSeconds, throttle.resetAt);
+  }
+
+  /**
+   * Single rate-limit decision for a failed GitHub response. A 403 is only a throttle
+   * when the budget is exhausted or a retry-after header is present (or, with
+   * matchMessage, the body says "rate limit"); otherwise it is a permissions error.
+   */
+  private classifyThrottle(
+    error: unknown,
+    options: { matchMessage?: boolean } = {}
+  ): { retryAfterSeconds: number | null; resetAt: string | null } | null {
     const status = (error as { status?: number }).status;
-    if (status !== 403 && status !== 429) return error;
+    if (status !== 403 && status !== 429) return null;
 
-    const headers = (error as { response?: { headers?: Record<string, string> } }).response?.headers ?? {};
-    const info = parseRateLimitHeaders(headers);
+    const response = (error as { response?: { headers?: Record<string, string>; data?: unknown } }).response;
+    const info = parseRateLimitHeaders(response?.headers ?? {});
 
-    // A 403 is only a throttle when the budget is actually exhausted; otherwise it
-    // is a permissions error and must not be reported as "retry later".
-    const isThrottle = status === 429 || info.remaining === 0 || info.retryAfterMs !== null;
-    if (!isThrottle) return error;
+    let isThrottle = status === 429 || info.remaining === 0 || info.retryAfterMs !== null;
+    if (!isThrottle && options.matchMessage) {
+      const body = response?.data as { message?: unknown } | undefined;
+      const text = [error instanceof Error ? error.message : '', typeof body?.message === 'string' ? body.message : ''];
+      isThrottle = text.join(' ').toLowerCase().includes('rate limit');
+    }
+    if (!isThrottle) return null;
 
-    return new GitHubRateLimitedError(
-      'GitHub rate limit exceeded',
-      info.retryAfterMs === null ? null : Math.ceil(info.retryAfterMs / 1000),
-      info.resetAt ? info.resetAt.toISOString() : null
-    );
+    return {
+      retryAfterSeconds: info.retryAfterMs === null ? null : Math.ceil(info.retryAfterMs / 1000),
+      resetAt: info.resetAt ? info.resetAt.toISOString() : null,
+    };
   }
 
   // ============================================
@@ -1487,7 +1739,7 @@ export class GitHubService {
       const allCommits = await this.octokit.paginate(this.octokit.repos.listCommits, {
         owner,
         repo: repoName,
-        sha: options.sha,
+        ...(options.sha ? { sha: options.sha } : {}),
         since: options.since.toISOString(),
         per_page: options.perPage || 100,
       });
@@ -1497,6 +1749,256 @@ export class GitHubService {
         message: c.commit.message,
         author: c.commit.author?.name || 'unknown',
         date: c.commit.author?.date || '',
+      }));
+    });
+  }
+
+  // ============================================
+  // Read Operations (typed errors)
+  // ============================================
+
+  private assertRepoAllowed(repo: string): { owner: string; repo: string } {
+    if (!this.isRepoAllowed(repo)) {
+      throw new GitHubRepoNotAllowedError(repo);
+    }
+    return this.parseRepo(repo);
+  }
+
+  /**
+   * Map a failed GitHub response to GitHubRateLimitError or GitHubRequestError.
+   * A 403 is a rate limit only with an exhausted budget, a retry-after header or a
+   * rate-limit message; a plain 403 is a permission error.
+   */
+  private toReadError(error: unknown): unknown {
+    if (error instanceof GitHubRepoNotAllowedError) return error;
+    const status = (error as { status?: number }).status;
+    if (typeof status !== 'number') return error;
+
+    const throttle = this.classifyThrottle(error, { matchMessage: true });
+    if (throttle) {
+      return new GitHubRateLimitError(
+        'GitHub rate limit exceeded',
+        throttle.retryAfterSeconds ?? undefined,
+        throttle.resetAt ?? undefined,
+        { cause: error }
+      );
+    }
+
+    return new GitHubRequestError(`GitHub API error (${status})`, status, { cause: error });
+  }
+
+  private async executeRead<T>(operation: () => Promise<T>): Promise<T> {
+    return this.executeWithMetrics(async () => {
+      try {
+        return await operation();
+      } catch (error) {
+        throw this.toReadError(error);
+      }
+    });
+  }
+
+  /**
+   * All contributors of a repository, across every page. An empty repository yields [].
+   */
+  async listContributors(repo: string): Promise<GitHubContributor[]> {
+    const { owner, repo: repoName } = this.assertRepoAllowed(repo);
+
+    return this.executeRead(async () => {
+      const perPage = 100;
+      const contributors: GitHubContributor[] = [];
+      for (let page = 1; ; page++) {
+        const response = await this.octokit.request('GET /repos/{owner}/{repo}/contributors', {
+          owner,
+          repo: repoName,
+          per_page: perPage,
+          page,
+        });
+        const data = (response.status as number) === 204 || !Array.isArray(response.data) ? [] : response.data;
+        for (const c of data) {
+          if (!c.login) continue;
+          contributors.push({
+            login: c.login,
+            contributions: c.contributions,
+            avatarUrl: c.avatar_url ?? '',
+            htmlUrl: c.html_url ?? '',
+          });
+        }
+        if (data.length < perPage) break;
+      }
+      return contributors;
+    });
+  }
+
+  /**
+   * Weekly commit counts for the last year. GitHub computes these lazily, so a 202
+   * returns `pending` and the caller should retry later.
+   */
+  async getCommitActivity(repo: string): Promise<GitHubCommitActivityResult> {
+    const { owner, repo: repoName } = this.assertRepoAllowed(repo);
+
+    return this.executeRead(async () => {
+      const response = await this.octokit.request('GET /repos/{owner}/{repo}/stats/commit_activity', {
+        owner,
+        repo: repoName,
+      });
+      if (response.status === 202) return { status: 'pending' as const };
+      const data = (response.status as number) === 204 || !Array.isArray(response.data) ? [] : response.data;
+      return {
+        status: 'ok' as const,
+        weeks: data.map(w => ({ total: w.total, week: w.week, days: [...w.days] })),
+      };
+    });
+  }
+
+  async getPullRequest(repo: string, number: number): Promise<GitHubPullRequestDetail> {
+    const { owner, repo: repoName } = this.assertRepoAllowed(repo);
+
+    return this.executeRead(async () => {
+      const { data: pr } = await this.octokit.pulls.get({ owner, repo: repoName, pull_number: number });
+      return {
+        number: pr.number,
+        title: pr.title,
+        body: pr.body ?? null,
+        state: pr.state,
+        html_url: pr.html_url,
+        merged_at: pr.merged_at ?? null,
+        created_at: pr.created_at,
+        updated_at: pr.updated_at,
+        closed_at: pr.closed_at ?? null,
+        user: pr.user ? { login: pr.user.login } : null,
+        labels: pr.labels.map(l => ({ name: l.name || '' })),
+        draft: pr.draft ?? false,
+        merged: pr.merged,
+        additions: pr.additions,
+        deletions: pr.deletions,
+        changed_files: pr.changed_files,
+        commits: pr.commits,
+        base_ref: pr.base.ref,
+        head_ref: pr.head.ref,
+        requestedReviewers: (pr.requested_reviewers ?? []).map(r => ({
+          login: r.login,
+          avatarUrl: r.avatar_url,
+        })),
+      };
+    });
+  }
+
+  async getUser(login: string): Promise<GitHubUser> {
+    return this.executeRead(async () => {
+      const { data: user } = await this.octokit.users.getByUsername({ username: login });
+      return {
+        login: user.login,
+        name: user.name ?? null,
+        avatarUrl: user.avatar_url,
+        htmlUrl: user.html_url,
+      };
+    });
+  }
+
+  /**
+   * Commits by one author, across every page. Unlike listCommits this keeps the
+   * GitHub login next to the git name. An empty repository yields [].
+   */
+  async listCommitsByAuthor(repo: string, options: ListCommitsByAuthorOptions): Promise<GitHubAuthoredCommit[]> {
+    const { owner, repo: repoName } = this.assertRepoAllowed(repo);
+
+    return this.executeRead(async () => {
+      try {
+        const commits = await this.octokit.paginate(this.octokit.repos.listCommits, {
+          owner,
+          repo: repoName,
+          author: options.author,
+          since: options.since?.toISOString(),
+          until: options.until?.toISOString(),
+          per_page: 100,
+        });
+        return commits.map(c => ({
+          sha: c.sha,
+          message: c.commit.message,
+          authorName: c.commit.author?.name || 'unknown',
+          authorLogin: c.author?.login ?? null,
+          date: c.commit.author?.date || '',
+        }));
+      } catch (error) {
+        // GitHub answers 409 for a repository with no commits.
+        if ((error as { status?: number }).status === 409) return [];
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * One search over several repositories, returning issues and pull requests together.
+   * Every repository must be whitelisted; user qualifiers are sanitized as in searchIssues.
+   */
+  async searchIssuesAndPulls(
+    repos: string[],
+    query: string,
+    options?: SearchIssuesAndPullsOptions
+  ): Promise<SearchIssuesAndPullsResult> {
+    const scopes = repos.map(repo => {
+      const { owner, repo: repoName } = this.assertRepoAllowed(repo);
+      return `repo:${owner}/${repoName}`;
+    });
+    // Without a repo qualifier the search would span all of GitHub.
+    if (scopes.length === 0) return { items: [], totalCount: 0 };
+
+    const sanitizedQuery = this.sanitizeSearchQuery(query);
+
+    return this.executeRead(async () => {
+      const result = await this.octokit.search.issuesAndPullRequests({
+        q: `${scopes.join(' ')} ${sanitizedQuery}`.trim(),
+        per_page: options?.perPage ?? 100,
+        page: options?.page,
+      });
+
+      const requested = new Set(repos.map(repo => this.normalizeRepo(repo)));
+      const items = result.data.items
+        .filter(item => {
+          const itemRepo = item.repository_url.split('/').slice(-2).join('/');
+          return this.isRepoAllowed(itemRepo) && requested.has(this.normalizeRepo(itemRepo));
+        })
+        .map(item => ({
+          repo: item.repository_url.split('/').slice(-2).join('/'),
+          number: item.number,
+          title: item.title,
+          body: item.body ?? null,
+          state: item.state,
+          htmlUrl: item.html_url,
+          isPullRequest: !!item.pull_request,
+          user: item.user?.login ?? null,
+          labels: item.labels.map(l => (typeof l === 'string' ? l : l.name || '')),
+          createdAt: item.created_at,
+          updatedAt: item.updated_at,
+          closedAt: item.closed_at ?? null,
+          mergedAt: item.pull_request?.merged_at ?? null,
+          draft: item.draft ?? false,
+        }));
+
+      return { totalCount: result.data.total_count, items };
+    });
+  }
+
+  /**
+   * Every repository the connection can see (installation repos or the PAT owner's),
+   * across all pages and without the whitelist filter.
+   */
+  async listAllRepositories(): Promise<GitHubRepository[]> {
+    return this.executeRead(async () => {
+      const repos =
+        this.connectionType === 'github_app'
+          ? await this.octokit.paginate(this.octokit.apps.listReposAccessibleToInstallation, { per_page: 100 })
+          : await this.octokit.paginate(this.octokit.repos.listForAuthenticatedUser, { per_page: 100 });
+
+      return repos.map(repo => ({
+        id: repo.id,
+        name: repo.name,
+        full_name: repo.full_name,
+        private: repo.private,
+        html_url: repo.html_url,
+        description: repo.description,
+        archived: repo.archived,
+        has_issues: repo.has_issues,
       }));
     });
   }

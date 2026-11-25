@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
     UNUserNotificationCenter.current().delegate = self
+    // The server selects these with `aps.category` on approval and brief pushes; they must exist before one arrives.
+    UNUserNotificationCenter.current().setNotificationCategories(
+      Set([ApprovalNotificationCategory.makeCategory()] + BriefNotificationCategory.makeCategories()))
     return true
   }
 
@@ -56,10 +59,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping @Sendable () -> Void
   ) {
-    let isDefaultTap = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+    let actionIdentifier = response.actionIdentifier
+    let isDefaultTap = actionIdentifier == UNNotificationDefaultActionIdentifier
     let payload = NotificationPayload(userInfo: response.notification.request.content.userInfo)
+    let replyText = (response as? UNTextInputNotificationResponse)?.userText
     Task { @MainActor in
-      if isDefaultTap { Self.services?.events.didTapNotification(payload) }
+      guard let services = Self.services else { return completionHandler() }
+      if isDefaultTap {
+        services.events.didTapNotification(payload)
+      } else {
+        // Notification buttons: answered here, with the result posted back as a local notification.
+        switch await services.briefNotifications.handle(
+          actionIdentifier: actionIdentifier, replyText: replyText, payload: payload)
+        {
+        case .handled: break
+        case .openBrief: services.events.didTapNotification(payload)
+        case .listen(let briefID): services.navigator.startVoiceConversation(.newConversation, briefID: briefID)
+        case .notHandled:
+          await services.approvalNotifications.handle(actionIdentifier: actionIdentifier, payload: payload)
+        }
+        services.refreshWidgetPendingDecisions()
+      }
       completionHandler()
     }
   }

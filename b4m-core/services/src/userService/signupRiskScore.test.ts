@@ -32,10 +32,35 @@ describe('scoreSignupRisk', () => {
       riskyDomain: null,
       burstCohort: undefined,
       isDatacenter: null,
+      wafAnonIp: null,
+      wafBotSignal: undefined,
       minutesToFirstApiKey: null,
       creditsSpentFirst24h: null,
     };
     expect(scoreSignupRisk(facts, scoring())).toEqual({ score: 0, signals: [], needsReview: false });
+  });
+
+  it('leaves the edge labels out of the score at their default weight of 0', () => {
+    expect(WEIGHTS.wafAnonIp).toBe(0);
+    expect(WEIGHTS.wafBotSignal).toBe(0);
+    expect(scoreSignupRisk({ ...plain, wafAnonIp: true, wafBotSignal: true }, scoring())).toEqual({
+      score: 0,
+      signals: [],
+      needsReview: false,
+    });
+  });
+
+  it.each([
+    ['wafAnonIp', { wafAnonIp: true }],
+    ['wafBotSignal', { wafBotSignal: true }],
+  ] as const)('adds the %s weight with a reason once a weight is set', (signal, facts) => {
+    const config = scoring({ weights: { ...WEIGHTS, wafAnonIp: 12, wafBotSignal: 18 } });
+    const points = config.weights[signal];
+
+    expect(scoreSignupRisk({ ...plain, ...facts }, config).signals).toEqual([
+      { signal, points, reason: expect.any(String) },
+    ]);
+    expect(scoreSignupRisk({ ...plain, [signal]: false }, config).score).toBe(0);
   });
 
   it.each([

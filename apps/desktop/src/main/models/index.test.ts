@@ -8,6 +8,9 @@ import type { CuratedSourceView, HfTokenResult, ModelPull } from '@shared/models
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelHubServiceDeps } from './ModelHubService';
 
+// Conditions here hold a few promise turns in; vi.waitFor's default 50ms poll would wait each one out.
+const waitFor = <T>(check: () => T | Promise<T>) => vi.waitFor(check, { interval: 1 });
+
 type Handler = (event: { sender: { id: number } }, value?: unknown) => unknown;
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, Handler>(),
@@ -57,6 +60,7 @@ vi.mock('@bike4mind/local-models', async importOriginal => ({
   },
 }));
 vi.mock('../windows', () => ({ appWindows: () => [origin, other] }));
+vi.mock('../secrets', () => ({ appSecretCipher: () => electron.safeStorage }));
 vi.mock('./ModelHubService', () => ({
   ModelHubService: class {
     serverChanged = service.serverChanged;
@@ -204,7 +208,7 @@ describe('registerModels', () => {
     expect(ledger.revokeMatching).toHaveBeenCalledTimes(1);
 
     deps.onPullStarted?.(pull);
-    await vi.waitFor(() => expect(ledger.use).toHaveBeenCalled());
+    await waitFor(() => expect(ledger.use).toHaveBeenCalled());
     expect(service.storeLocation).toHaveBeenCalledWith('local');
     expect(ledger.grant).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -273,7 +277,7 @@ describe('Models curated IPC', () => {
     });
     setup();
     const response = electron.handlers.get(IPC_CHANNELS.modelsListCurated)?.({ sender: { id: 1 } });
-    await vi.waitFor(() => expect(service.curated).toHaveBeenCalledOnce());
+    await waitFor(() => expect(service.curated).toHaveBeenCalledOnce());
     sourceView.mockReturnValue({ ...bundledView, origin: 'updated', sequence: 2, check: 'updated' });
     if (!finish) throw new Error('The curated probe never started');
     finish();

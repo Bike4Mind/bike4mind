@@ -45,14 +45,12 @@ import { realpathNearest } from './paths';
 import { resolveWritablePath, withPathLock } from './writeTools';
 
 /**
- * Why every one of these is gated behind the approval the shell tools use.
+ * Why every one of these declares the approval the shell tools use.
  *
- * The local tools are gated for SAFETY - a command runs code on the machine. These are gated
- * for COST: every one of them spends the user's credits at a provider, and unlike a bad file
- * read a bad generation cannot be undone by reading the right file next. The same dialog reads
- * correctly for both because what it actually asks is "do this thing on my behalf", and the
- * alternative - letting a model spend money unattended because the request happened to be
- * harmless to the filesystem - is the worse default.
+ * The local tools ask for SAFETY - a command runs code on the machine. These ask for COST: every
+ * one of them spends the user's credits at a provider, and a bad generation cannot be undone by
+ * reading the right file next. The card shows in "Ask for approval" only; Approve for me and Full
+ * access run these unasked, because the user chose a mode that does not stop for credits.
  *
  * `key` carries the full request, so "always in this chat" covers a retry of the identical
  * generation and nothing else. A different prompt is a different spend and asks again.
@@ -142,7 +140,7 @@ export const generateImageTool: ToolDefinition = {
     parameters: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: 'What to draw. Be specific; the server may refine it.' },
+        prompt: { type: 'string', description: 'What to draw. Be specific; it is sent to the model as written.' },
         model: {
           type: 'string',
           description: 'Image model id. Omit to use this deployment default; a model it does not offer is refused.',
@@ -179,22 +177,16 @@ export const generateImageTool: ToolDefinition = {
           prompt,
           model,
           ...(optionalString(input, 'size') ? { size: optionalString(input, 'size') } : {}),
-          ...(media.getRemoteSessionId() ? { remoteSessionId: media.getRemoteSessionId() } : {}),
-          notebookName: media.notebookName,
         },
         {
           client: media.client,
           store: media.store,
           sessionId: context.sessionId ?? '',
-          cdnUrl: media.cdnUrl,
           signal: context.signal,
           progress: text => context.report?.progress(text),
         }
       );
 
-      if (outcome.remoteSessionId && outcome.remoteSessionId !== media.getRemoteSessionId()) {
-        await media.setRemoteSessionId(outcome.remoteSessionId);
-      }
       for (const item of outcome.media) context.report?.media(item);
 
       const sizes = outcome.media.map(item => formatBytes(item.byteLength)).join(', ');
@@ -666,7 +658,7 @@ export function generateVideoSchema(models: readonly VideoModel[]): ToolSchema {
   return {
     name: 'generate_video',
     description: [
-      'Start generating a short video clip on the Bike4Mind server. Costs the user credits, which they approve first.',
+      'Start generating a short video clip on the Bike4Mind server. Costs the user credits.',
       'Returns as soon as the job is queued: the clip renders in the background and appears in the conversation as a',
       'card the user can play. You do not receive the video and are not told when it finishes - do not wait for it,',
       'poll for it, or promise a result time beyond the estimate. Settings a model does not support are refused, not',

@@ -70,6 +70,7 @@ export async function publishRunPendingAction({
     collapseId: `approval:${questId}`,
     questId,
     sessionId: approvalPush.sessionId,
+    pendingActionTs: action.ts,
   });
 }
 

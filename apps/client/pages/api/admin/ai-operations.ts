@@ -7,7 +7,7 @@ import {
   getAdminAiClassReadiness,
   ADMIN_AI_CLASS_REGISTRY,
   validateAdminAiConfigPromotion,
-} from '@server/admin/ai/readiness';
+} from '@bike4mind/server-utils/admin/ai/readiness';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 
@@ -58,7 +58,9 @@ export default adminApi({
       );
     }
     await withTransaction(async () => {
-      const before = await AdminAiClassModel.findOne(key).lean();
+      const stored = await AdminAiClassModel.findOne(key).lean();
+      const before =
+        stored && Object.fromEntries(Object.keys(update).map(field => [field, stored[field as keyof typeof update]]));
       await AdminAiClassModel.findOneAndUpdate(key, { $set: update }, { upsert: true, runValidators: true });
       await recordAdminSettingChange(req, {
         settingName: 'adminAiConfig',

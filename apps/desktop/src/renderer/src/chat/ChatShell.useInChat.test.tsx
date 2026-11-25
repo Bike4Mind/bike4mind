@@ -9,14 +9,37 @@ import { installedCache } from '../models/installedCache';
 import type { ChatWith } from '../models/modelTarget';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
+vi.mock('./Composer', () => ({
+  Composer: ({ onSend, footer }: { onSend: (text: string) => void; footer: (node: null) => React.ReactNode }) => (
+    <>
+      <button data-testid="test-send" onClick={() => onSend('Hello')}>
+        Send
+      </button>
+      {footer(null)}
+    </>
+  ),
+}));
 
 let offered: ChatWith | undefined;
 let shownError: string | null | undefined;
-let closeModels: (() => void) | undefined;
 vi.mock('../models/ModelsScreen', () => ({
   ModelsScreen: ({
     chatWith,
@@ -29,7 +52,7 @@ vi.mock('../models/ModelsScreen', () => ({
   }) => {
     offered = chatWith;
     shownError = chatError;
-    closeModels = onClose;
+    void onClose;
     return <div data-testid="models-screen" />;
   },
 }));
@@ -110,7 +133,9 @@ const deleteSession = vi.fn(async () => undefined);
 function stubBridge() {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
+        defaultsForNewSession: async () => ({ model: HOSTED, approvalMode: 'auto', reasoningEffort: 'default' }),
         listSessions: async () => [summary('old-1', HOSTED)],
         getSession: async (id: string) => ({ ...summary(id, HOSTED), messages: [] }) as ChatSession,
         getQueuedMessages: async () => [],
@@ -120,6 +145,7 @@ function stubBridge() {
         createSession,
         setSessionModel,
         deleteSession,
+        sendMessage: async () => ({ ok: true, messageId: 'first' }),
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
       getAppInfo: async () => ({ homeDirectory: '/home/test' }),
@@ -149,7 +175,6 @@ beforeEach(() => {
   );
   offered = undefined;
   shownError = undefined;
-  closeModels = undefined;
   createSession.mockClear();
   setSessionModel.mockClear();
   deleteSession.mockClear();
@@ -171,12 +196,23 @@ async function openModels() {
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ChatShell />
+        {/* The avatar menu's Models row lives in the account slot Home supplies; a stand-in reaches the same screen. */}
+        <ChatShell
+          account={context => (
+            <button type="button" onClick={context.onOpenModels} data-testid="chat-models-btn">
+              Models
+            </button>
+          )}
+        />
       </CssVarsProvider>
     );
   });
   await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-models-btn"]')?.click());
   await act(async () => undefined);
+}
+
+async function sendDraft() {
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="test-send"]')?.click());
 }
 
 describe('Use in chat', () => {
@@ -190,22 +226,22 @@ describe('Use in chat', () => {
     await act(async () => use?.());
     await act(async () => undefined);
 
+    expect(createSession).not.toHaveBeenCalled();
+    expect(setSessionModel).not.toHaveBeenCalled();
+    await sendDraft();
     expect(createSession).toHaveBeenCalledTimes(1);
     expect(setSessionModel).toHaveBeenCalledWith('fresh-1', LOCAL_ID);
     expect(document.querySelector('[data-testid="models-screen"]')).toBeNull();
   });
 
-  it('routes a saved server model to that server, and offers nothing for a server that is down', async () => {
+  it('routes a saved server model to that server, offers one still listing, and nothing for a server that is down', async () => {
     await openModels();
     expect(offered?.('gpu', 'qwen3.5:0.8b')).toBeNull();
+    // A server still listing its models is pending, not down: the same lookup offers it.
+    expect(offered?.('slow', 'qwen3.5:0.8b')).toBeTypeOf('function');
     await act(async () => offered?.('lab', 'qwen3.5:0.8b')?.());
+    await sendDraft();
     expect(setSessionModel).toHaveBeenCalledWith('fresh-1', LAB_ID);
-  });
-
-  it('offers a model on a server that is still listing its models', async () => {
-    await openModels();
-    await act(async () => offered?.('slow', 'qwen3.5:0.8b')?.());
-    expect(setSessionModel).toHaveBeenCalledWith('fresh-1', SLOW_ID);
   });
 
   it('starts one conversation for a double click', async () => {
@@ -215,23 +251,22 @@ describe('Use in chat', () => {
       use?.();
       use?.();
     });
+    expect(createSession).not.toHaveBeenCalled();
+    await sendDraft();
     expect(createSession).toHaveBeenCalledTimes(1);
   });
 
-  it('stays on Models with an error, and removes the new conversation, when the model cannot be set', async () => {
+  it('keeps a refused model choice in the draft and removes the unsent session', async () => {
     setSessionModel.mockResolvedValueOnce(null as never);
     await openModels();
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
-    await act(async () => undefined);
-    expect(deleteSession).toHaveBeenCalledWith('fresh-1', false);
-    expect(document.querySelector('[data-testid="models-screen"]')).not.toBeNull();
-    expect(shownError).toContain('could not start a conversation on that model');
-
+    expect(createSession).not.toHaveBeenCalled();
+    await sendDraft();
+    expect(deleteSession).toHaveBeenCalledWith('fresh-1');
+    expect(document.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain('draft settings');
     createSession.mockRejectedValueOnce(new Error('disk full'));
-    await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
-    await act(async () => undefined);
-    expect(shownError).toContain('disk full');
-    expect(document.querySelector('[data-testid="models-screen"]')).not.toBeNull();
+    await sendDraft();
+    expect(document.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain('disk full');
   });
 
   it('says the empty conversation is left behind when removing it fails too', async () => {
@@ -239,31 +274,31 @@ describe('Use in chat', () => {
     deleteSession.mockRejectedValueOnce(new Error('locked'));
     await openModels();
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
-    await act(async () => undefined);
-    expect(deleteSession).toHaveBeenCalledWith('fresh-1', false);
-    expect(shownError).toContain('could not remove the empty one');
+    await sendDraft();
+    expect(deleteSession).toHaveBeenCalledWith('fresh-1');
+    expect(document.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain(
+      'Could not remove the unsent'
+    );
   });
 
-  it('drops the error when Models is closed, so reopening it does not show a stale one', async () => {
+  it('discards a failed draft when Models is reopened', async () => {
     setSessionModel.mockResolvedValueOnce(null as never);
     await openModels();
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
-    await act(async () => undefined);
-    expect(shownError).toContain('could not start a conversation on that model');
-
-    await act(async () => closeModels?.());
+    await sendDraft();
+    expect(document.querySelector('[data-testid="chat-send-error"]')).not.toBeNull();
     await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-models-btn"]')?.click());
     await act(async () => undefined);
     expect(document.querySelector('[data-testid="models-screen"]')).not.toBeNull();
     expect(shownError).toBeNull();
   });
 
-  it('drops the error when Models is left by another route, so reopening it starts clean', async () => {
+  it('discards a failed draft when another screen is opened', async () => {
     setSessionModel.mockResolvedValueOnce(null as never);
     await openModels();
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
-    await act(async () => undefined);
-    expect(shownError).toContain('could not start a conversation on that model');
+    await sendDraft();
+    expect(document.querySelector('[data-testid="chat-send-error"]')).not.toBeNull();
 
     await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-artifacts-btn"]')?.click());
     expect(document.querySelector('[data-testid="models-screen"]')).toBeNull();

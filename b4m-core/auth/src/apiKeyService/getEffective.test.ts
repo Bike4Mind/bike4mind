@@ -1,10 +1,12 @@
 import { vi, describe, it, expect } from 'vitest';
 import {
   getEffectiveApiKey,
+  getEffectiveApiKeyWithSource,
   getEffectiveLLMApiKeys,
   getSearxngUrl,
   getWebSearchProviderSetting,
   sharedAdminKeyProviders,
+  userKeyProviders,
 } from './getEffective';
 import type { IAdminSettingsRepository, IApiKeyRepository, IApiKeyDocument } from '@bike4mind/common';
 import { ApiKeyType } from '@bike4mind/common';
@@ -149,6 +151,34 @@ describe('getEffectiveLLMApiKeys', () => {
     // The sentinel is intentionally surfaced to the caller (e.g. to show an "expired key"
     // warning in the UI) rather than silently swapping in the demo key.
     expect(result.openai).toBe('expired');
+  });
+
+  describe('userKeyProviders', () => {
+    const resolve = (userKeys: Partial<IApiKeyDocument>[], settings: Record<string, string | null>) =>
+      getEffectiveLLMApiKeys('user-123', {
+        db: { apiKeys: makeApiKeyRepo(userKeys), adminSettings: makeAdminSettingsRepo() },
+        getSettingsByNames: makeGetSettingsByNames(settings),
+      });
+
+    it('names only the providers resolved from the user own saved key, expired included', async () => {
+      const result = await resolve(
+        [
+          { type: ApiKeyType.anthropic, apiKey: 'sk-ant-user' },
+          { type: ApiKeyType.gemini, apiKey: 'g-old', expiresAt: new Date('2000-01-01') },
+        ],
+        { openaiDemoKey: 'sk-demo', anthropicDemoKey: 'sk-ant-demo' }
+      );
+      expect([...userKeyProviders(result)].sort()).toEqual(['anthropic', 'gemini']);
+    });
+
+    it('is empty for a table resolved from platform keys only', async () => {
+      const result = await resolve([], { anthropicDemoKey: 'sk-ant-demo' });
+      expect(userKeyProviders(result).size).toBe(0);
+    });
+
+    it('is empty for an object getEffectiveLLMApiKeys did not return', () => {
+      expect(userKeyProviders({ anthropic: 'sk-ant-user' }).size).toBe(0);
+    });
   });
 
   describe('sharedAdminKeyProviders', () => {
@@ -526,5 +556,44 @@ describe('getEffectiveApiKey self-host env fallback', () => {
     await withEnv({ B4M_SELF_HOST: 'true' }, async () => {
       expect(await getEffectiveApiKey('user-1', { type: ApiKeyType.elevenlabs }, adapters())).toBeUndefined();
     });
+  });
+});
+
+describe('getEffectiveApiKeyWithSource', () => {
+  const adapters = (userKey: string | null, settings: Record<string, string | null> = {}) =>
+    ({
+      db: {
+        apiKeys: {
+          ...makeApiKeyRepo(),
+          findByUserIdAndType: vi.fn(async () => (userKey ? { type: ApiKeyType.elevenlabs, apiKey: userKey } : null)),
+        },
+        adminSettings: makeAdminSettingsRepoByName(settings),
+      },
+    }) as unknown as Parameters<typeof getEffectiveApiKeyWithSource>[2];
+
+  it("reports the user's own key as 'user', ahead of the platform key", async () => {
+    expect(
+      await getEffectiveApiKeyWithSource(
+        'user-1',
+        { type: ApiKeyType.elevenlabs },
+        adapters('el-user', { elevenLabsServerApiKey: 'el-platform' })
+      )
+    ).toEqual({ key: 'el-user', source: 'user' });
+  });
+
+  it("reports the admin setting key as 'platform'", async () => {
+    expect(
+      await getEffectiveApiKeyWithSource(
+        'user-1',
+        { type: ApiKeyType.elevenlabs },
+        adapters(null, { elevenLabsServerApiKey: 'el-platform' })
+      )
+    ).toEqual({ key: 'el-platform', source: 'platform' });
+  });
+
+  it('returns undefined when no key resolves', async () => {
+    expect(
+      await getEffectiveApiKeyWithSource('user-1', { type: ApiKeyType.elevenlabs }, adapters(null))
+    ).toBeUndefined();
   });
 });

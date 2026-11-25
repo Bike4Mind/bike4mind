@@ -1,18 +1,25 @@
-import type {
-  GeneratedAssetLineageEntry,
-  GeneratedAssetMetadata,
-  GenerationJobSource,
-  IGenerationJobDocumentOf,
-  IGenerationJobRepository,
-  ImageProviderId,
-  ImageValidationFailure,
-  StorageLimitErrorInfo,
-  UsageEventStatus,
+import {
+  IMAGE_JOB_COUNT_MAX,
+  type ApiKeyBillingOwnerType,
+  type CompletionRunAttribution,
+  type GeneratedAssetLineageEntry,
+  type GeneratedAssetMetadata,
+  type GenerationJobDelivery,
+  type GenerationJobSource,
+  type IGenerationJobDocumentOf,
+  type IGenerationJobRepository,
+  type ImageJobPurpose,
+  type ImageProviderId,
+  type ImageValidationFailure,
+  type StorageLimitErrorInfo,
+  type UsageEventStatus,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { ImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { RunBudgetAdapters } from '../generationJobs/types';
+import type { OutputModerationVerdict } from '../generationJobs/storeOutput';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
 // Stamped on the job as deadlineAt at create; covers the queue wait plus one provider call, or an async provider's
@@ -20,7 +27,7 @@ import type { SaveGeneratedAssetResult } from '../generatedAssets';
 export const IMAGE_JOB_MAX_WALL_CLOCK_MS = 10 * 60_000;
 
 // Most jobs one "make N" request creates.
-export const IMAGE_JOB_BATCH_MAX = 4;
+export const IMAGE_JOB_BATCH_MAX = IMAGE_JOB_COUNT_MAX;
 
 // A generous single-image size (a large PNG), for the create-time storage check.
 export const IMAGE_JOB_OUTPUT_BYTES_ESTIMATE = 16 * 1024 * 1024;
@@ -28,7 +35,7 @@ export const IMAGE_JOB_OUTPUT_BYTES_ESTIMATE = 16 * 1024 * 1024;
 export type ImageJob = IGenerationJobDocumentOf<'image'>;
 
 /** What our own scan decided about a generated image. */
-export type ImageModerationVerdict = { blocked: false } | { blocked: true; reason: string };
+export type ImageModerationVerdict = OutputModerationVerdict;
 
 export type ImageJobDeps = {
   repository: IGenerationJobRepository;
@@ -52,6 +59,8 @@ export type ImageJobDeps = {
     contentType: string;
     generation: GeneratedAssetMetadata & { jobId: string };
     derivedFrom?: GeneratedAssetLineageEntry[];
+    /** A chat-made job's quest; the save links the file to its notebook, which scopes the grants that notebook mints. */
+    questId?: string;
     signal: AbortSignal;
   }): Promise<SaveGeneratedAssetResult>;
   saveToGeneratedBucket(params: {
@@ -69,12 +78,30 @@ export type ImageJobDeps = {
     /** `refusal` for a block that was billed: spend with no image delivered. */
     status: Extract<UsageEventStatus, 'ok' | 'refusal'>;
   }): Promise<void>;
+  /**
+   * Adds one image to the notebook (session) of a chat-made job's quest: the imageCount sidebar badge the in-process
+   * tools bump through recordGeneratedImages. Unset where nothing reads the badge.
+   */
+  countNotebookImage?(questId: string): Promise<void>;
+  /** Claims and releases a job's share of a completion run's budget; required to create a job with a `run`. */
+  runBudget?: RunBudgetAdapters;
+  /**
+   * Deletes the requester's own files among `fileIds` (never unshares one they do not own), with the owner's storage
+   * refunded. Unset where no request sets ImageJobPayload.discardInputFileIds.
+   */
+  discardInputFiles?(userId: string, fileIds: readonly string[]): Promise<void>;
   now(): Date;
   logger: Logger;
 };
 
 export type CreateImageJobsDeps = ImageJobDeps & {
-  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  /** organizationId is the org the job bills (input.user.organizationId), so its model policy applies. */
+  assertModelAdmission(
+    userId: string,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
   /** The refusal detail when the user's Files quota lacks room for `bytes` more; undefined when there is room. */
   checkStorageFor(userId: string, bytes: number): Promise<StorageLimitErrorInfo | undefined>;
@@ -88,8 +115,23 @@ export type CreateImageJobsInput = {
   count: number;
   source: GenerationJobSource;
   apiKeyId?: string;
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+  /** The chat turn that started the batch; every job carries it, so its output is linked to that notebook. */
+  questId?: string;
+  /** Where the finished batch is posted besides the websocket update; every job in the batch carries it. */
+  delivery?: GenerationJobDelivery;
   /** Scopes the whole batch; each job holds `${idempotencyKey}:${index}/${count}`. */
   idempotencyKey?: string;
+  /** Server-chosen only (see createCutoutJob); never read from a client body. */
+  purpose?: ImageJobPurpose;
+  /** The completion run the batch is made for: each job's hold is claimed against its budget (resolvePaidCallRun). */
+  run?: CompletionRunAttribution;
+  /** Server-chosen only: inputs this request made for the batch, deleted when it ends (ImageJobPayload). */
+  discardInputFileIds?: string[];
 };
 
 export type CreateImageJobsErrorCode =
@@ -104,7 +146,14 @@ export type CreateImageJobsErrorCode =
   | 'idempotency_key_reused';
 
 export type CreateImageJobsResult =
-  | { ok: true; groupId: string; jobs: ImageJob[]; created: boolean }
+  | {
+      ok: true;
+      groupId: string;
+      jobs: ImageJob[];
+      created: boolean;
+      /** Jobs this call created; fewer than jobs.length when part of the batch was an idempotent replay. */
+      createdCount?: number;
+    }
   | {
       ok: false;
       status: 400 | 402 | 422;

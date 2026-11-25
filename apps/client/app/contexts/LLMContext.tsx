@@ -75,7 +75,6 @@ export interface LLMContextProps {
   organizationId: string | null;
   resetSettings: () => void;
   updateLLMParams: () => void;
-  isQuestMasterEnabled: boolean;
   /**
    * Tri-state request flag for user memory (#1319). `true` = V1 mementos explicitly on;
    * `undefined` = no V1 intent, defer to the server-side Mementos V2 account opt-in
@@ -116,6 +115,12 @@ export interface LLMContextProps {
    * starts on (see ChatCompletionInvokeParamsSchema.disabledMcpConnections).
    */
   disabledMcpConnections: string[];
+  /**
+   * Platform connector ids switched on in the Tools menu. Opt-in, unlike `disabledMcpConnections`:
+   * a platform connector stays out of every chat until the user switches it on (see
+   * ChatCompletionInvokeParamsSchema.enabledPlatformMcpConnections).
+   */
+  enabledPlatformMcpConnections: string[];
   /**
    * Agent-mode composer toggle state.
    *
@@ -184,7 +189,6 @@ const DEFAULTS = {
     maxDepth: 7, // iterations
   },
   organizationId: null,
-  isQuestMasterEnabled: false,
   // undefined pre-hydration for the same reason as isArtifactsEnabled below: an explicit
   // false would opt a cold-load first prompt out of V2 memory before prefs have loaded.
   isMementosEnabled: undefined,
@@ -205,6 +209,7 @@ const DEFAULTS = {
   lastUsedImageEditModel: null,
   enabledMcpServers: null,
   disabledMcpConnections: [] as string[],
+  enabledPlatformMcpConnections: [] as string[],
   agentMode: { enabled: false, source: 'toggle' as const },
   disableAutoRouteForThisSession: false,
 };
@@ -447,7 +452,6 @@ export const useLLM = create(
           ...sessionModelOverride,
           sessionModelOverride: null,
           hasExplicitSessionModelSelection: false,
-          isQuestMasterEnabled: false,
           disableAutoRouteForThisSession: false,
           agentMode: { enabled: rest.agentMode?.enabled ?? false, source: 'toggle' as const },
         } as LLMContextProps;
@@ -607,7 +611,6 @@ export const LLMProvider: React.FC = () => {
                 model: fallback.id,
                 defaultTextModel: fallback.id,
                 max_tokens: refitMaxTokensForModel(state.max_tokens, liveFallbackInfo, { allowRaise: false }),
-                isQuestMasterEnabled: false,
                 isAgentsEnabled: false,
               };
             }
@@ -652,7 +655,6 @@ export const LLMProvider: React.FC = () => {
             model: modelToUse.id,
             defaultTextModel: modelToUse.id,
             max_tokens: nextMaxTokens,
-            isQuestMasterEnabled: false,
             isAgentsEnabled: false,
           };
         }

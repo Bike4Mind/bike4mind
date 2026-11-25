@@ -1,3 +1,4 @@
+import type { ModelStanding } from '../generation/modelRanking';
 import type { GenerationProviderJobHandle } from '../generation';
 import type { VideoModelId } from './catalog';
 
@@ -31,7 +32,7 @@ export type VideoPricing =
       clips: ReadonlyArray<{ durationSeconds: number; resolution: ResolutionTier; usd: number }>;
     };
 
-export type VideoModelCapabilities = {
+export type VideoModelCapabilities = ModelStanding & {
   provider: VideoProviderId;
   displayName: string;
   modes: readonly VideoMode[];
@@ -44,6 +45,8 @@ export type VideoModelCapabilities = {
   // Rough wall-clock render time, only used to set the agent's expectation. Not part of the public API.
   typicalRenderSeconds: number;
   audio: 'always' | 'optional' | 'none';
+  keyframes?: { max: number };
+  draft?: { usdPerSecond: number; resolutions: readonly ResolutionTier[] };
   pricing: VideoPricing;
   // Admin setting `videoGeneration.enabledModels[id]` overrides this.
   defaultEnabled: boolean;

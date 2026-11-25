@@ -65,6 +65,31 @@ data: [DONE]
 
 ```
 
+### Settled event
+
+When a charge is committed, one `settled` event arrives after the last content event and before `data: [DONE]`:
+
+```
+data: {"type":"settled","requestId":"...","creditsCharged":12,"usdCost":0.0004,"runId":"..."}
+```
+
+- `creditsCharged` is what the ledger recorded. It can be 0, and it can be lower than `credits.used` on the last `content` event.
+- `requestId` echoes the `X-Request-ID` header. Use it to count a settled charge once if you replay a stream. Reusing an `X-Request-ID` does not deduplicate charges.
+- `usdCost` is optional. `runId` appears when the request carried a `run`.
+- It arrives only once the charge is committed, so a stream can end without it. Ignore event types you do not handle.
+
+### Runs
+
+To group requests, mint a run with `POST /api/v1/completion-runs` (body `{ "rootSessionId": "..." }`, optional). It returns `{ runId, rootSessionId?, createdAt }`. Then send `run` in the completion body:
+
+```json
+{ "run": { "runId": "...", "role": "worker", "purpose": "...", "taskId": "...", "attemptId": "...", "parentSessionId": "..." } }
+```
+
+`runId` and `role` (`root` or `worker`) are required; the other fields are optional. A `runId` you did not create returns 404 `run_not_found`; see [Errors](./errors.md#runs).
+
+To read what a run has cost so far, call `GET /api/v1/completion-runs/{runId}/usage` with the same credential. It returns the run's settled spend (`creditsCharged`, `requests` and token counts), counted once per request, with breakdowns by `role`, `purpose`, `model` and task attempt (the largest 500 attempts; `byAttemptTruncated` says when there are more). Its `creditsCharged` is the sum of the `settled` events those requests sent. A request still running, or one sent without `run`, is not included.
+
 ---
 
 ## Implementation Examples

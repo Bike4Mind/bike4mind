@@ -3,6 +3,7 @@ import archiver from 'archiver';
 import { SkillBundle, SkillListing, SkillListingVersion, assignClaudePluginName } from '@bike4mind/database';
 import {
   claudeMarketplaceNameFor,
+  claudeMarketplaceNameForSpace,
   claudeSkillNameFor,
   requireEnv,
   toAbsoluteUrl,
@@ -13,10 +14,13 @@ import {
   type ISkillListingVersion,
 } from '@bike4mind/common';
 import { toSkillMd } from '@bike4mind/common/utils/skillMd';
-import { marketVisibilityFilter } from '@bike4mind/server-utils/skillMarket/market';
+import { marketVisibilityFilter, type MarketAudience } from '@bike4mind/server-utils/skillMarket/market';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'claudeMarketplace' } });
 
 /**
- * Claude Code plugin feed for an org's Skill Market listings and bundles, served by
+ * Claude Code plugin feed for an org's or Space's Skill Market listings and bundles, served by
  * pages/api/v1/skills/market/claude-marketplace.json.ts, [id]/claude-plugin.zip.ts and
  * bundles/[id]/claude-plugin.zip.ts.
  *
@@ -93,16 +97,21 @@ const zipOf = (listing: ISkillListing, version: ISkillListingVersion) =>
 
 /**
  * A bundle's plugin zip: each member's current approved version, or null when no member is servable.
- * A member that is delisted, deleted, moved out of the org or unapproved simply drops out. Each skill
- * sits under its listing's `claudePluginName`, unique in the org, so two same-named skills can't collide.
+ * A member that is delisted, deleted, moved out of the org or Space or unapproved simply drops out. Each skill
+ * sits under its listing's `claudePluginName`, unique in the org or Space, so two same-named skills can't collide.
  * Shared by the feed and the bundle zip route so the feed's sha256 matches what the route serves.
  */
 export async function bundleZipFor(bundle: ISkillBundle): Promise<Buffer | null> {
   const docs = await SkillListing.find({
-    ...marketVisibilityFilter([bundle.organizationId]),
+    ...marketVisibilityFilter(
+      bundle.spaceId
+        ? { orgIds: [], spaceIds: [bundle.spaceId] }
+        : { orgIds: [bundle.organizationId ?? ''], spaceIds: [] }
+    ),
     _id: { $in: bundle.listingIds },
-    visibility: 'organization',
-    organizationId: bundle.organizationId,
+    ...(bundle.spaceId
+      ? { visibility: 'space', spaceId: bundle.spaceId }
+      : { visibility: 'organization', organizationId: bundle.organizationId }),
   });
   const listings = docs.map(d => d.toJSON() as unknown as ISkillListing);
   const versionDocs = await SkillListingVersion.find({
@@ -140,19 +149,24 @@ const servable = (version: ISkillListingVersion | undefined): ISkillListingVersi
 // and the zip depends on no other listing.
 const skillDirName = (version: ISkillListingVersion) => claudeSkillNameFor(version.snapshot.name);
 
+/** The feed's owner: exactly one of an org or a Space. */
+export type MarketplaceOwner =
+  { orgId: string; spaceId?: undefined; name?: string } | { spaceId: string; orgId?: undefined; name?: string };
+
 /**
- * The marketplace.json for one org: its approved Organization listings, oldest first. `baseUrl` is
- * the origin for the zip URLs: pass publicAppUrl(req) so they match the feed URL the tab shows.
+ * The marketplace.json for one org or Space: its approved listings, oldest first. `baseUrl` is the
+ * origin for the zip URLs: pass publicAppUrl(req) so they match the feed URL the tab shows.
  */
 export async function buildClaudeMarketplace(
-  org: { id: string; name?: string },
-  memberOrgIds: string[],
+  owner: MarketplaceOwner,
+  audience: MarketAudience,
   baseUrl: string
 ): Promise<ClaudeMarketplace> {
+  const ownerFilter = owner.spaceId ? { spaceId: owner.spaceId } : { organizationId: owner.orgId };
   const docs = await SkillListing.find({
-    ...marketVisibilityFilter(memberOrgIds),
-    visibility: 'organization',
-    organizationId: org.id,
+    ...marketVisibilityFilter(audience),
+    visibility: owner.spaceId ? 'space' : 'organization',
+    ...ownerFilter,
   }).sort({ _id: 1 });
   const listings = docs.map(d => d.toJSON() as unknown as ISkillListing);
 
@@ -176,7 +190,7 @@ export async function buildClaudeMarketplace(
       listing.claudePluginName = (await SkillListing.findById(listing.id).select('claudePluginName'))?.claudePluginName;
     } catch (err) {
       // Omit just this listing; one unnamable listing must not take down the whole org feed.
-      console.error('[claudeMarketplace] assigning claudePluginName failed', listing.id, err);
+      logger.error('assigning claudePluginName failed', { listingId: listing.id, error: err });
     }
   }
 
@@ -200,7 +214,7 @@ export async function buildClaudeMarketplace(
   );
 
   // After the naming pass above, so a member approved before names were stored is not left out.
-  const bundles = (await SkillBundle.find({ organizationId: org.id }).sort({ _id: 1 })).map(
+  const bundles = (await SkillBundle.find(ownerFilter).sort({ _id: 1 })).map(
     d => d.toJSON() as unknown as ISkillBundle
   );
   // The listing/bundle name checks are check-then-insert across two collections, so a race can still
@@ -224,8 +238,8 @@ export async function buildClaudeMarketplace(
   );
 
   return {
-    name: claudeMarketplaceNameFor(org.id),
-    owner: { name: org.name || 'Bike4Mind' },
+    name: owner.spaceId ? claudeMarketplaceNameForSpace(owner.spaceId) : claudeMarketplaceNameFor(owner.orgId ?? ''),
+    owner: { name: owner.name || 'Bike4Mind' },
     forceRemoveDeletedPlugins: true,
     plugins: [...plugins, ...bundlePlugins].filter(p => p !== null),
   };

@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-// verifyOrgOwner runs for real against a stubbed organizationRepository, so the owner gate itself is under test.
+// verifyOrgPermission runs for real against a stubbed organizationRepository, so the owner gate itself is under test.
 const mockOrgFindById = vi.fn();
 const mockFindWorkspace = vi.fn();
 const mockFindWorkspaceWithToken = vi.fn();
@@ -73,12 +73,21 @@ import '../channels';
 const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
 const STRANGER = '650000000000000000000333';
+const MANAGER = '650000000000000000000444';
 const CHANNEL = 'C0123ABCDEF';
 const TEAM = 'T0123ABCD';
 const KEY_ID = '650000000000000000000999';
 
 const owner = { id: OWNER, isAdmin: false };
 const stranger = { id: STRANGER, isAdmin: false };
+const manager = { id: MANAGER, isAdmin: false };
+const orgWithManager = {
+  id: ORG,
+  name: 'Acme',
+  userId: OWNER,
+  adminUserIds: [MANAGER],
+  users: [{ userId: MANAGER }],
+};
 
 function makeReq(user: { id: string; isAdmin: boolean }, body?: unknown, method: 'GET' | 'PUT' = 'PUT') {
   const { req, res } = createMocks({ method });
@@ -194,6 +203,16 @@ describe('PUT /api/organizations/[id]/integrations/slack/channels', () => {
     expect(mockSetApiPosting).not.toHaveBeenCalled();
   });
 
+  it('refuses a team manager (manageIntegrations is owner-only)', async () => {
+    mockOrgFindById.mockResolvedValue(orgWithManager);
+    const { req, res } = makeReq(manager, { channelId: CHANNEL, apiPostEnabled: true });
+
+    await expect(routeHandlers.PUT(req, res)).rejects.toBeInstanceOf(NotFoundError);
+    expect(mockFindWorkspaceWithToken).not.toHaveBeenCalled();
+    expect(mockSetApiPosting).not.toHaveBeenCalled();
+    expect(mockDisableApiPosting).not.toHaveBeenCalled();
+  });
+
   it('404s a channel Slack cannot find in the workspace', async () => {
     mockConversationsInfo.mockRejectedValue(
       Object.assign(new Error('channel_not_found'), { data: { ok: false, error: 'channel_not_found' } })
@@ -250,5 +269,14 @@ describe('GET /api/organizations/[id]/integrations/slack/channels', () => {
 
     await expect(routeHandlers.GET(req, res)).rejects.toBeInstanceOf(NotFoundError);
     expect(mockFindWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('refuses a team manager (manageIntegrations is owner-only)', async () => {
+    mockOrgFindById.mockResolvedValue(orgWithManager);
+    const { req, res } = makeReq(manager, undefined, 'GET');
+
+    await expect(routeHandlers.GET(req, res)).rejects.toBeInstanceOf(NotFoundError);
+    expect(mockFindWorkspace).not.toHaveBeenCalled();
+    expect(mockFindEnabled).not.toHaveBeenCalled();
   });
 });

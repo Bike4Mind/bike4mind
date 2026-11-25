@@ -55,7 +55,13 @@ import {
 } from '@client/app/hooks/data/useOrgGitHubConnection';
 import { useOrgGitHubRepositories } from '@client/app/hooks/data/useGitHubRepositories';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { getLocalDate } from '@client/app/utils/dateUtils';
 import { sanitizeErrorMessage } from '@client/app/utils/error';
+import OrgFormSaveBar from './OrgFormSaveBar';
+
+const PAT_DEFAULT_EXPIRY_DAYS = 30;
+const PAT_MAX_EXPIRY_DAYS = 365;
 
 interface OrgGitHubConnectionTabProps {
   orgId: string;
@@ -281,6 +287,12 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
     });
   };
 
+  const savedRepos = connection?.allowedRepositories ?? [];
+  const repoChangeCount = editingRepos
+    ? allowedRepos.filter(r => !savedRepos.includes(r)).length +
+      savedRepos.filter(r => !allowedRepos.includes(r)).length
+    : 0;
+
   const handleSaveRepos = () => {
     updateConnection.mutate(
       { orgId, data: { allowedRepositories: allowedRepos } },
@@ -335,8 +347,6 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
       {/* Header */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
         <Stack direction="row" alignItems="center" spacing={1.5}>
-          <GitHubIcon sx={{ fontSize: 28 }} />
-          <Typography level="h3">GitHub API</Typography>
           <ContextHelpButton helpId="organizations/github-connection" tooltipText="GitHub Connection Help" />
           <Chip
             size="sm"
@@ -362,12 +372,6 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
         </Button>
       </Stack>
 
-      {/* Description */}
-      <Typography level="body-sm" sx={{ mb: 3, color: 'text.secondary' }}>
-        Configure your team&apos;s GitHub API connection for features like PR summaries, code context retrieval, and
-        repository integration. Every member of this team will benefit from this connection.
-      </Typography>
-
       {/* Not Connected State */}
       {!connected && (
         <Box
@@ -381,7 +385,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }}
         >
           <GitHubIcon sx={{ fontSize: 48, opacity: 0.5, mb: 2 }} />
-          <Typography level="h4" sx={{ mb: 1 }}>
+          <Typography level="title-md" sx={{ mb: 1 }}>
             No GitHub connection configured
           </Typography>
           <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 3 }}>
@@ -577,7 +581,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
             <Stack spacing={2} sx={{ p: 2 }}>
               <Stack direction="row" justifyContent="space-between" alignItems="center">
                 <Typography level="title-md">Allowed Repositories</Typography>
-                {!editingRepos && (
+                {!editingRepos ? (
                   <Button
                     size="sm"
                     variant="outlined"
@@ -586,6 +590,22 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
                   >
                     Edit
                   </Button>
+                ) : (
+                  // With unsaved picks the save bar's Discard closes the editor instead.
+                  repoChangeCount === 0 && (
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      onClick={() => {
+                        setEditingRepos(false);
+                        setRepoSearchQuery('');
+                      }}
+                      data-testid="org-github-close-repos-btn"
+                    >
+                      Close
+                    </Button>
+                  )
                 )}
               </Stack>
 
@@ -738,28 +758,6 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
                       No repositories found. The GitHub App may not have access to any repositories.
                     </Typography>
                   )}
-
-                  <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 2 }}>
-                    <Button
-                      variant="plain"
-                      color="neutral"
-                      onClick={() => {
-                        setEditingRepos(false);
-                        setAllowedRepos(connection.allowedRepositories || []);
-                        setRepoSearchQuery('');
-                      }}
-                      data-testid="org-github-cancel-repos-btn"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={handleSaveRepos}
-                      loading={updateConnection.isPending}
-                      data-testid="org-github-save-repos-btn"
-                    >
-                      Save
-                    </Button>
-                  </Stack>
                 </Stack>
               ) : allowedRepos.length > 0 ? (
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
@@ -776,6 +774,17 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
               )}
             </Stack>
           </Card>
+
+          <OrgFormSaveBar
+            count={repoChangeCount}
+            pending={updateConnection.isPending}
+            onSave={handleSaveRepos}
+            onDiscard={() => {
+              setEditingRepos(false);
+              setAllowedRepos(connection.allowedRepositories || []);
+              setRepoSearchQuery('');
+            }}
+          />
 
           {/* Health & Test Connection */}
           <Card variant="outlined">
@@ -841,6 +850,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
                   color="neutral"
                   onClick={() => refetchRateLimit()}
                   disabled={loadingRateLimit}
+                  aria-label="Refresh rate limit"
                   data-testid="org-github-rate-limit-refresh-btn"
                 >
                   <Refresh fontSize="small" />
@@ -933,7 +943,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }
         }}
       >
-        <ModalDialog variant="outlined" sx={{ minWidth: 500 }}>
+        <ModalDialog variant="outlined" minWidth={500}>
           <DialogTitle>
             <GitHubIcon sx={{ mr: 1 }} />
             Connect GitHub App
@@ -1045,7 +1055,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }
         }}
       >
-        <ModalDialog variant="outlined" sx={{ minWidth: 450 }}>
+        <ModalDialog variant="outlined" minWidth={450}>
           <DialogTitle>
             <VpnKey sx={{ mr: 1 }} />
             Connect Service Account PAT
@@ -1097,12 +1107,17 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
 
               <FormControl>
                 <FormLabel>Expiration Date (Optional)</FormLabel>
-                <Input
-                  type="date"
+                <OptionalDateInput
                   value={patExpiresAt}
-                  onChange={e => setPatExpiresAt(e.target.value)}
+                  onChange={setPatExpiresAt}
+                  emptyLabel="No expiration date"
+                  setLabel="Set expiration date"
+                  clearLabel="Remove expiration date"
+                  initialDate={() => getLocalDate(PAT_DEFAULT_EXPIRY_DAYS)}
+                  max={getLocalDate(PAT_MAX_EXPIRY_DAYS)}
+                  aria-label="Expiration Date"
                   disabled={createConnection.isPending}
-                  slotProps={{ input: { 'data-testid': 'org-github-pat-expiry-input' } }}
+                  testId="org-github-pat-expiry-input"
                 />
                 <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.secondary' }}>
                   Fine-grained PATs have a maximum expiry of 1 year
@@ -1185,7 +1200,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }
         }}
       >
-        <ModalDialog variant="outlined" sx={{ minWidth: 500 }}>
+        <ModalDialog variant="outlined" minWidth={500}>
           <DialogTitle>
             <VpnKey sx={{ color: 'warning.500', mr: 1 }} />
             Rotate Private Key
@@ -1257,7 +1272,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }
         }}
       >
-        <ModalDialog variant="outlined" sx={{ minWidth: 450 }}>
+        <ModalDialog variant="outlined" minWidth={450}>
           <DialogTitle>
             <VpnKey sx={{ color: 'warning.500', mr: 1 }} />
             Rotate Personal Access Token
@@ -1295,12 +1310,17 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
 
               <FormControl>
                 <FormLabel>New Expiration Date (Optional)</FormLabel>
-                <Input
-                  type="date"
+                <OptionalDateInput
                   value={newPatExpiresAt}
-                  onChange={e => setNewPatExpiresAt(e.target.value)}
+                  onChange={setNewPatExpiresAt}
+                  emptyLabel="No expiration date"
+                  setLabel="Set expiration date"
+                  clearLabel="Remove expiration date"
+                  initialDate={() => getLocalDate(PAT_DEFAULT_EXPIRY_DAYS)}
+                  max={getLocalDate(PAT_MAX_EXPIRY_DAYS)}
+                  aria-label="New Expiration Date"
                   disabled={rotatePAT.isPending}
-                  slotProps={{ input: { 'data-testid': 'org-github-new-pat-expiry-input' } }}
+                  testId="org-github-new-pat-expiry-input"
                 />
               </FormControl>
             </Stack>

@@ -1,3 +1,4 @@
+import type { Theme } from '@mui/joy/styles';
 import { FIELD_FOCUS_PARTS } from '@client/app/utils/themes/customizations/adminSkin';
 
 export { adminScrollGutter, adminScrollbarVisible } from '@client/app/utils/themes/customizations/adminScrollbar';
@@ -25,8 +26,8 @@ export const adminSurface = {
  * (16 on phones), 24 px above the page header and 64 px below the last region. The shell applies it
  * to each tab panel, and detail routes spread it on their root, so a page never pads itself.
  *
- * The bottom padding is what keeps the fixed AI chat pill (FloatingChatPill: 20 px from the
- * bottom-right corner, 40 px tall) off the last row and the table pager. Must stay at least
+ * The bottom padding is what keeps the fixed AI chat pill (FloatingChatPill: by default 20 px from
+ * the bottom-right corner, 40 px tall; it is draggable) off the last row and the table pager. Must stay at least
  * 7 (56 px) on every breakpoint; adminStyles.test.ts pins it.
  */
 export const adminPageFrame = {
@@ -34,6 +35,14 @@ export const adminPageFrame = {
   pt: { xs: 2, md: 3 },
   pb: 8,
 };
+
+/**
+ * Stacking for the sticky bottom bars. A DataTable's sticky header sits at Joy's `zIndex.table`, so the
+ * bars go just above it (and far below Joy's popup layer, so menus and dialogs opened from a bar still
+ * cover it). A wrapper that makes a bar sticky itself must use the same value, or the bar stays under it.
+ */
+export const adminBulkBarZIndex = (theme: Theme) => theme.zIndex.table + 1;
+export const adminSaveBarZIndex = (theme: Theme) => theme.zIndex.table + 2;
 
 /**
  * Rows-per-page sizes the DataTable footer offers. Feedback/constants.ts derives the page sizes its URL
