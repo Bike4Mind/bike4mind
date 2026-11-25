@@ -5,7 +5,7 @@
 // and ElevenLabs appends "/chat/completions" when making the actual request,
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
-import { DATA_LAKE_TOOL_NAMES, isTerminalCreditRefusal, questGenerationJobs } from '@bike4mind/common';
+import { DATA_LAKE_TOOL_NAMES, isTerminalCreditRefusal, NotFoundError, questGenerationJobs } from '@bike4mind/common';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
@@ -15,7 +15,7 @@ import {
   featureNames,
   type ToolDefinition,
 } from '@bike4mind/services/llm';
-import { getSettingsMap, getSettingsValue, NotFoundError, type IQueueService } from '@bike4mind/utils';
+import { getSettingsMap, getSettingsValue, type IQueueService } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { type Logger, describeErrorCause } from '@bike4mind/observability';
 import {
