@@ -107,6 +107,8 @@ describe('TutorialsTab', () => {
     expect(within(screen.getByTestId('tutorials-owner-alpha')).getByTestId('admin-empty-state')).toHaveTextContent(
       'Alpha has no tutorials yet'
     );
+    expect(within(screen.getByTestId('admin-empty-state')).queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tutorials-owner-row-alpha-one')).not.toBeInTheDocument();
   });
 
   it('shows an error with a retry for a failing owner and still renders the rest', () => {
@@ -126,6 +128,12 @@ describe('TutorialsTab', () => {
     expect(screen.getByTestId('tutorials-core-section')).toBeInTheDocument();
     fireEvent.click(alpha.getByTestId('admin-error-retry-btn'));
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the owners retry while refetching', () => {
+    owners.value = { data: undefined, isLoading: false, isError: true, isFetching: true, refetch };
+    renderTab();
+    expect(screen.getByTestId('admin-error-retry-btn')).toBeDisabled();
   });
 
   it('keeps the Core section when the owners list itself fails', () => {

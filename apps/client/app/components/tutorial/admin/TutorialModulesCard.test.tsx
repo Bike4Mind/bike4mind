@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
@@ -77,6 +77,8 @@ describe('TutorialModulesCard', () => {
     current.value = { data: [], isLoading: false, isError: false };
     renderCard();
     expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No tutorials are registered here yet');
+    expect(within(screen.getByTestId('admin-empty-state')).queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tutorial-module-row-alpha')).not.toBeInTheDocument();
   });
 
   it('holds every switch until a reason is given', () => {

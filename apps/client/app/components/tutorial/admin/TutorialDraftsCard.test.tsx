@@ -105,6 +105,7 @@ describe('TutorialDraftsCard', () => {
   beforeEach(() => {
     mockMutate.mockReset();
     download.mockReset();
+    refetch.mockReset();
   });
 
   it('shows a labelled loading state on first load', () => {
@@ -121,10 +122,17 @@ describe('TutorialDraftsCard', () => {
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
+  it('disables the retry while the read is refetching', () => {
+    current.value = { data: undefined, isLoading: false, isError: true, isFetching: true, refetch };
+    renderCard();
+    expect(screen.getByTestId('admin-error-retry-btn')).toBeDisabled();
+  });
+
   it('shows an empty state whose action focuses the session id', () => {
     setDrafts([]);
     renderCard();
     expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No made tutorials yet');
+    expect(screen.queryByTestId('tutorial-drafts-list')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('tutorial-drafts-empty-capture'));
     expect(screen.getByTestId('tutorial-capture-session')).toHaveFocus();
   });
