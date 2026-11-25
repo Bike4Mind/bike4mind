@@ -69,4 +69,28 @@ describe('CurationBreakdownTab', () => {
     fireEvent.click(screen.getByTestId('curation-refresh-btn'));
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
+
+  it('captions each breakdown and lists it per file type as a table', () => {
+    render(
+      <CssVarsProvider>
+        <CurationBreakdownTab
+          chartData={chartData([
+            {
+              fileType: 'pdf',
+              count: 3,
+              curationType: { transcript: 2, executive_summary: 1 },
+              exportFormat: { markdown: 1, txt: 0, html: 0 },
+            },
+            { fileType: 'docx', count: 1, curationType: { transcript: 1, executive_summary: 0 } },
+          ])}
+          filtered={false}
+          emptyAction={null}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('curation-types-caption')).toHaveTextContent('4 curations across 2 file types');
+    expect(screen.getByTestId('export-formats-caption')).toHaveTextContent('1 export across 2 file types');
+    fireEvent.click(screen.getByTestId('curation-types-table-toggle-btn'));
+    expect(screen.getByTestId('curation-types-table')).toHaveTextContent('docx');
+  });
 });

@@ -51,3 +51,50 @@ describe('OverviewTab colors', () => {
     expect(chartFills(container, 'Bar')).toEqual([CHART_ACCENT]);
   });
 });
+
+describe('OverviewTab sections', () => {
+  const chartData = {
+    timeSeriesData: [
+      { date: '2026-11-01', count: 3 },
+      { date: '2026-11-02', count: 0 },
+    ],
+    categoryBreakdown: [
+      { category: 'Session', count: 3, percentage: 75 },
+      { category: 'File', count: 1, percentage: 25 },
+    ],
+    topEvents: [
+      { eventName: 'session.created', count: 3, category: 'Session' },
+      { eventName: 'file.uploaded', count: 1, category: 'File' },
+    ],
+  };
+  const renderTab = (data = chartData) =>
+    render(
+      <CssVarsProvider>
+        <OverviewTab chartData={data} showUsageBySource={false} />
+      </CssVarsProvider>
+    );
+
+  it('sums each chart into its caption', () => {
+    renderTab();
+    expect(screen.getByTestId('overview-events-over-time-caption')).toHaveTextContent('3 events across 2 days');
+    expect(screen.getByTestId('overview-events-by-category-caption')).toHaveTextContent(
+      'Session is the largest category with 3 events'
+    );
+    expect(screen.getByTestId('overview-top-events-caption')).toHaveTextContent('session.created is the most recorded');
+  });
+
+  it('shows the plotted values as a table on request', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('overview-top-events-table-toggle-btn'));
+    const table = screen.getByTestId('overview-top-events-table');
+    expect(table).toHaveTextContent('session.created');
+    expect(table).toHaveTextContent('file.uploaded');
+  });
+
+  it('shows a notice without a table toggle when a series is empty', () => {
+    renderTab({ ...chartData, topEvents: [] });
+    expect(screen.getByTestId('overview-top-events')).toHaveTextContent('No events in this report');
+    expect(screen.queryByTestId('overview-top-events-table-toggle-btn')).toBeNull();
+    expect(screen.getByTestId('overview-events-over-time-table-toggle-btn')).toBeInTheDocument();
+  });
+});
