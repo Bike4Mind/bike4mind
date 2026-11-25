@@ -51,6 +51,7 @@ import { adminPageFrame } from './shared/adminStyles';
 export { AdminTab } from './adminSidebarConfig';
 
 const AdminDashboardTab = dynamic(() => import('./AdminDashboardTab'), { ssr: false });
+const SpacesTab = dynamic(() => import('./Spaces/SpacesTab'), { ssr: false });
 const AiOperationsTab = dynamic(() => import('./AiOperationsTab'), { ssr: false });
 
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
@@ -239,6 +240,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.Organizations}>
             {activeTab === AdminTab.Organizations && <OrganizationsTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.Spaces}>{activeTab === AdminTab.Spaces && <SpacesTab />}</TabPanel>
           <TabPanel value={AdminTab.CreditAnalytics}>
             {activeTab === AdminTab.CreditAnalytics && <CreditAnalyticsTab />}
           </TabPanel>

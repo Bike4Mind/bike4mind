@@ -138,6 +138,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     expectViewIds: ['admin.organizations', 'admin.credit_analytics'],
   },
   {
+    id: 'howto-delete-space',
+    category: 'how-to',
+    question: 'How do I delete a Space or remove a member from it as an admin?',
+    expectViewIds: ['admin.spaces'],
+  },
+  {
     id: 'howto-user-credits',
     category: 'how-to',
     question: 'How do I add credits to a single user?',

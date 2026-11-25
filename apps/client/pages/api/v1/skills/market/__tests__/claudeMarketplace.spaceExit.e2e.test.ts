@@ -253,6 +253,16 @@ describe('skills:read key after its owner exits a Space', () => {
       (owner: { id: string }, _memberId: string, spaceId: string) =>
         spaceService.remove(owner as never, { spaceId }, removeAdapters),
     ],
+    [
+      'is removed by a platform admin who is not in the Space',
+      (_owner: unknown, memberId: string, spaceId: string) =>
+        spaceService.adminRemoveMember({ id: 'platform-admin' } as never, { spaceId, userId: memberId }, exitAdapters),
+    ],
+    [
+      'loses the Space to a platform admin delete',
+      (_owner: unknown, _memberId: string, spaceId: string) =>
+        spaceService.adminRemove({ id: 'platform-admin' } as never, { spaceId }, removeAdapters),
+    ],
   ])("stays active but loses the Space's feed, zips, search and detail when the member %s", async (_l, depart) => {
     const { owner, memberId, a } = await seed();
     await expectServing(memberId, a);
@@ -260,6 +270,19 @@ describe('skills:read key after its owner exits a Space', () => {
     await depart(owner, memberId, a.spaceId);
 
     await expectCutOff(memberId, a);
+  });
+
+  it('blocks a member removed by a platform admin from rejoining by link', async () => {
+    const { memberId, a } = await seed();
+
+    await spaceService.adminRemoveMember(
+      { id: 'platform-admin' } as never,
+      { spaceId: a.spaceId, userId: memberId },
+      exitAdapters
+    );
+
+    const space = await Space.findById(a.spaceId);
+    expect(space?.removedUserIds).toContain(memberId);
   });
 
   it("keeps serving the user's other Space and their org", async () => {

@@ -260,6 +260,20 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
     keywords: ['teams', 'tenants', 'companies', 'create organization', 'org members', 'edit organization', 'seats'],
   },
   {
+    id: 'spaces-list',
+    title: 'Spaces list',
+    summary:
+      'Find any Space across every owner. Each row shows owner, member count, domains and created date. Open one to see members with email and role, and its domains. Full admin access is required.',
+    views: ['admin.spaces'],
+    settings: [],
+    howTo: [
+      'Use "Search by name, owner email or username" to find a Space; sort by name or created date.',
+      'Click a row to open it. The members table has a row menu with "Remove from Space"; the header menu has "Delete Space".',
+      'Both actions need a reason. Deleting also needs the Space name typed, revokes its invites and links, releases its verified domains and tells the owner. The owner cannot be removed.',
+    ],
+    keywords: ['spaces', 'delete space', 'remove space member', 'space owner', 'space domains'],
+  },
+  {
     id: 'organization-credit-top-up',
     title: 'Top up credits for an organization',
     summary:

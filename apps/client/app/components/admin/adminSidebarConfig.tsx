@@ -9,6 +9,7 @@ import {
   Brain,
   BookMarked,
   BookOpen,
+  Boxes,
   Building2,
   ChartColumn,
   ChartLine,
@@ -157,6 +158,7 @@ export enum AdminTab {
   SpendExplorer = 82,
   SpendMonitor = 83,
   TextModerationReview = 84,
+  Spaces = 85,
 }
 
 /**
@@ -248,6 +250,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: Users, tab: AdminTab.Users, label: 'Users', testid: 'admin-users-tab-btn' },
       { Icon: Building2, tab: AdminTab.Organizations, label: 'Organizations', testid: 'admin-organizations-tab-btn' },
+      { Icon: Boxes, tab: AdminTab.Spaces, label: 'Spaces', testid: 'admin-spaces-tab-btn' },
       {
         Icon: Inbox,
         tab: AdminTab.Waitlist,

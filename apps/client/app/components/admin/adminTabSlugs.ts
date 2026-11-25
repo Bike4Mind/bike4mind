@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 import { ADMIN_SPEND_EXPLORER_TAB_SLUG } from './SpendExplorer/spendExplorerSearch';
+import { ADMIN_SPACES_TAB_SLUG } from './Spaces/spacesTabSearch';
 import {
   ADMIN_ANALYTICS_TAB_SLUG,
   ADMIN_EVENTS_TAB_SLUG,
@@ -58,6 +59,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
   [AdminTab.Revenue]: ADMIN_REVENUE_TAB_SLUG,
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
+  [AdminTab.Spaces]: ADMIN_SPACES_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.ModelLogs]: ADMIN_MODEL_LOGS_TAB_SLUG,
   [AdminTab.ModelMetrics]: ADMIN_MODEL_METRICS_TAB_SLUG,

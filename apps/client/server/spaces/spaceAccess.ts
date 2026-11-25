@@ -46,27 +46,32 @@ export interface SpaceInviteLinkView {
 const roleOf = (viewerId: string, space: Pick<ISpaceDocument, 'ownerUserId' | 'members'>) =>
   isSpaceOwner(viewerId, space) ? 'owner' : isSpaceManager(viewerId, space) ? 'admin' : 'member';
 
+type SpaceUser = Pick<IUserDocument, 'id' | 'username' | 'email' | 'photoUrl'>;
+
+const personOf = (
+  byId: Map<string, SpaceUser>,
+  showEmail: boolean,
+  userId: string,
+  role: SpacePersonView['role'],
+  joinedVia: SpaceJoinedVia | null,
+  joinedAt: Date | null
+): SpacePersonView => {
+  const u = byId.get(userId);
+  return {
+    userId,
+    username: u?.username ?? null,
+    avatar: u?.photoUrl ?? null,
+    role,
+    joinedVia,
+    joinedAt,
+    ...(showEmail && u?.email ? { email: u.email } : {}),
+  };
+};
+
 /** Members never see each other's email; owner and admins do. */
 export function toSpaceView(viewer: IUserDocument, { space, users }: spaceService.SpaceWithUsers): SpaceView {
-  const byId = new Map(users.map(u => [u.id, u]));
+  const byId = new Map<string, SpaceUser>(users.map(u => [u.id, u]));
   const showEmail = isSpaceManager(viewer.id, space);
-  const person = (
-    userId: string,
-    role: SpacePersonView['role'],
-    joinedVia: SpaceJoinedVia | null,
-    joinedAt: Date | null
-  ): SpacePersonView => {
-    const u = byId.get(userId);
-    return {
-      userId,
-      username: u?.username ?? null,
-      avatar: u?.photoUrl ?? null,
-      role,
-      joinedVia,
-      joinedAt,
-      ...(showEmail && u?.email ? { email: u.email } : {}),
-    };
-  };
   return {
     id: space.id,
     name: space.name,
@@ -74,8 +79,25 @@ export function toSpaceView(viewer: IUserDocument, { space, users }: spaceServic
     parentOrganizationId: space.parentOrganizationId ?? null,
     viewerRole: roleOf(viewer.id, space),
     memberCount: space.members.length + 1,
-    owner: person(space.ownerUserId, 'owner', null, null),
-    members: space.members.map(m => person(m.userId, m.role, m.joinedVia, m.joinedAt)),
+    owner: personOf(byId, showEmail, space.ownerUserId, 'owner', null, null),
+    members: space.members.map(m => personOf(byId, showEmail, m.userId, m.role, m.joinedVia, m.joinedAt)),
+  };
+}
+
+export type AdminSpaceView = Omit<SpaceView, 'viewerRole'> & { createdAt: Date };
+
+/** The platform admin's view: every email and role, and no viewer role since the admin is not a member. */
+export function toAdminSpaceView(space: ISpaceDocument, users: SpaceUser[]): AdminSpaceView {
+  const byId = new Map(users.map(u => [u.id, u]));
+  return {
+    id: space.id,
+    name: space.name,
+    description: space.description ?? null,
+    parentOrganizationId: space.parentOrganizationId ?? null,
+    memberCount: space.members.length + 1,
+    createdAt: space.createdAt,
+    owner: personOf(byId, true, space.ownerUserId, 'owner', null, null),
+    members: space.members.map(m => personOf(byId, true, m.userId, m.role, m.joinedVia, m.joinedAt)),
   };
 }
 

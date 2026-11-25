@@ -397,6 +397,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.spaces',
+    section: 'admin',
+    label: 'Spaces',
+    description:
+      'Find any Space, see its owner, members with email and role, and domains, remove a member or delete the Space',
+    navigationType: 'tab',
+    target: '85', // AdminTab.Spaces
+    keywords: ['spaces', 'space members', 'shared spaces', 'delete space', 'remove space member'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.analytics',
     section: 'admin',
     label: 'Analytics',
