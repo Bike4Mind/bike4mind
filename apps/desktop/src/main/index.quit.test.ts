@@ -113,6 +113,7 @@ vi.mock('./orchestrateMini', () => ({
     start: async () => undefined,
   }),
 }));
+vi.mock('./host/registerHostConnections', () => ({ registerHostConnections: vi.fn() }));
 vi.mock('./chat', () => ({
   registerChat: () => ({
     service: { sessionStatuses: harness.sessionStatuses },
