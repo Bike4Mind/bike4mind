@@ -41,6 +41,10 @@ export const aiHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
+  CallableFunctionResult: {
+    kind: 'holder',
+    references: [{ path: 'callerUserId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   CodeAgentEvent: {
     kind: 'holder',
     references: [

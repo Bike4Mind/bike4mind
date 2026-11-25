@@ -2,7 +2,6 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sessionRepository } from '@bike4mind/database/auth';
 import { SpiderEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { v4 as uuidv4 } from 'uuid';
 import { assertSessionOperationalCredits } from '@bike4mind/server-utils/utils/sessionOperationalCreditPreflight';
 import { ApiKeyScope, HTTPError } from '@bike4mind/common';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -117,7 +116,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, requir
         });
       }
 
-      const spiderJobId = uuidv4();
+      const spiderJobId = crypto.randomUUID();
 
       // Publish Spider start event - the event handler will process asynchronously
       await SpiderEvents.Start.publish({

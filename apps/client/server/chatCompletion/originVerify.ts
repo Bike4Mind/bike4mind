@@ -1,6 +1,9 @@
 import { timingSafeEqual } from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { redactTokenPath } from '../middlewares/requestLogUrl';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'originVerify' } });
 
 // Must stay in sync with ORIGIN_VERIFY_HEADER in apps/client/proxy.ts and infra/router.ts.
 const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
@@ -16,7 +19,7 @@ export function requireOriginVerify(req: Request, res: Response, next: NextFunct
   const provided = Buffer.from(typeof header === 'string' ? header : '');
   const expected = Buffer.from(secret);
   if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-    console.warn(`[SECURITY] Blocked direct-origin request: ${req.method} ${redactTokenPath(req.path)}`);
+    logger.warn('[SECURITY] Blocked direct-origin request', { method: req.method, path: redactTokenPath(req.path) });
     res.status(403).send('Forbidden');
     return;
   }

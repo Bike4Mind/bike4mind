@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-11-24T11:44:46.862Z",
-  "notice": "Fallback defaults last maintained on 2026-11-24. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-11-25T04:06:09.440Z",
+  "notice": "Fallback defaults last maintained on 2026-11-25. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -1871,7 +1871,8 @@
         },
         "description": "Google's Gemini 4 Neon, a thinking model for agentic and coding work with text, image, audio, video and PDF input.",
         "logoFile": "Google_logo.png",
-        "rank": 3
+        "rank": 3,
+        "releaseDate": "2026-11-18"
       }
     },
     {

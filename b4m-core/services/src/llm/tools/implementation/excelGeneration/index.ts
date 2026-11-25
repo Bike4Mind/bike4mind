@@ -2,7 +2,6 @@ import { ExpectedToolError, isExpectedToolError } from '@bike4mind/common';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import writeXlsxFile from 'write-excel-file/node';
 import type { CellObject, Sheet, SheetData } from 'write-excel-file/node';
-import { v4 as uuidv4 } from 'uuid';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import { z } from 'zod';
 import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
@@ -534,7 +533,7 @@ export const excelGenerationTool: ToolDefinition = {
 
         // Sanitize the user-provided filename and use it for storage
         const sanitizedName = sanitizeFilename(params.filename);
-        const filename = `${sanitizedName}-${uuidv4().slice(0, 8)}.xlsx`;
+        const filename = `${sanitizedName}-${crypto.randomUUID().slice(0, 8)}.xlsx`;
 
         // Upload to generated content storage (same bucket as images)
         await context.imageGenerateStorage.upload(buffer, filename, {

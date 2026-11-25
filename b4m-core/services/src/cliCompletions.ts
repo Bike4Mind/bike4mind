@@ -1229,7 +1229,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       );
     }
     if (firstRound.outputTokens < maxTokens) {
-      logger?.info?.('[CLI_CREDITS] Output budget lowered to what the balance can pay for', {
+      logger?.info?.('[CLI_CREDITS] Output budget lowered to what the balance or run claim can pay for', {
         model,
         maxTokens,
         affordableOutputTokens: firstRound.outputTokens,

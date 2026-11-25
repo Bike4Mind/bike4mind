@@ -34,7 +34,6 @@ const FULL_LINT_GLOBS = [
   'eslint.config.mjs',
   'eslint-suppressions.json',
   'eslint-rules/**',
-  'packages/eslint-config/**',
 ];
 
 const LINTABLE = /\.(?:[cm]?js|jsx|[cm]?ts|tsx)$/;

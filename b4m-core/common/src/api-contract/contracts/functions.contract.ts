@@ -3,10 +3,13 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { REQUEST_TIMEOUT_ERROR_CODE } from '../../apiErrorCodes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
 import {
+  FunctionCallIdParamSchema,
   FunctionIdParamSchema,
+  GetFunctionCallResponseSchema,
   GetFunctionResponseSchema,
   InvokeFunctionFailedErrorSchema,
   InvokeFunctionInputErrorSchema,
+  InvokeFunctionQueuedResponseSchema,
   InvokeFunctionRequestSchema,
   InvokeFunctionResponseSchema,
   InvokeFunctionTimeoutErrorSchema,
@@ -94,8 +97,10 @@ export const invokeFunctionContract = defineEndpoint({
     'Runs one live function on the server with `input` and returns its `output` with a `stamp`: the function, ' +
     'pin, code hash, input hash, runtime, and packages the call ran on, so a result can be traced and repeated. ' +
     'The inputs are checked against `input_schema` before anything runs and the outputs against `output_schema` ' +
-    'after. Calls are synchronous and time-limited; each one is logged with hashes and sizes only, never the ' +
-    'inputs or outputs.',
+    'after. A call is synchronous by default and stops at 45 s. With `mode: "async"` every check is made first, ' +
+    "then the call answers 202 with a `call_id`, runs to the organization's time limit, and keeps its result for " +
+    '24 hours at `GET /api/v1/functions/calls/{call_id}`. Each call is logged with hashes and sizes only, never ' +
+    'the inputs or outputs.',
   tags: ['Functions'],
   auth: 'apiKeyOrJwt',
   scopes: SCOPES,
@@ -105,6 +110,18 @@ export const invokeFunctionContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The call returned.', schema: InvokeFunctionResponseSchema },
+    202: {
+      description:
+        'With `mode: "async"`: every check passed and the call is queued. Nothing ran yet; poll `call_id` for how ' +
+        'it ends.',
+      schema: InvokeFunctionQueuedResponseSchema,
+      pollResult: {
+        schema: GetFunctionCallResponseSchema,
+        description:
+          'Read at `GET /api/v1/functions/calls/{call_id}`. A call that ran and failed still polls as `200` with ' +
+          '`status: "finished"`; check `outcome` before reading `output`.',
+      },
+    },
     403: { description: FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: NOT_FOUND, schema: ApiErrorSchema },
     413: { description: 'The request body or `input` is larger than a call accepts.', schema: ApiErrorSchema },
@@ -123,13 +140,44 @@ export const invokeFunctionContract = defineEndpoint({
     },
     503: {
       description:
-        'No function runtime is available, the runtime was slow to start, or it did not answer. Try again later.',
+        'No function runtime is available, the runtime was slow to start or did not answer, or an asynchronous ' +
+        'call could not be queued. Try again later.',
       schema: ApiErrorSchema,
     },
     504: {
-      description: `The call ran past its time limit and was stopped (\`errorCode: "${REQUEST_TIMEOUT_ERROR_CODE}"\`).`,
+      description:
+        `The call ran past its time limit and was stopped (\`errorCode: "${REQUEST_TIMEOUT_ERROR_CODE}"\`). When ` +
+        "the organization's limit is longer than the 45 s a synchronous call may take, `error` says to send " +
+        '`mode: "async"`.',
       schema: InvokeFunctionTimeoutErrorSchema,
     },
   },
   codeSample: { ...codeSample, body: INVOKE_EXAMPLE },
+});
+
+export const getFunctionCallContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/functions/calls/{call_id}',
+  operationId: 'getFunctionCall',
+  summary: 'Poll an asynchronous function call',
+  description:
+    'Reads an asynchronous call: `queued`, `running`, or `finished` with its `outcome`, `output`, and `stamp`. ' +
+    'Only the person whose key made the call can read it, and a result is kept 24 hours.',
+  tags: ['Functions'],
+  auth: 'apiKeyOrJwt',
+  scopes: SCOPES,
+  pathParams: FunctionCallIdParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The call as it stands.', schema: GetFunctionCallResponseSchema },
+    403: { description: FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: {
+      description:
+        "No call with that id was made by the key owner, or its result is more than 24 hours old. Another person's " +
+        'call answers this same 404.',
+      schema: ApiErrorSchema,
+    },
+    429: { description: RATE_LIMITED, schema: ApiErrorSchema },
+  },
+  codeSample: { ...codeSample, body: {} },
 });

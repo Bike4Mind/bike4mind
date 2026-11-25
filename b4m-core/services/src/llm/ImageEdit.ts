@@ -70,7 +70,6 @@ import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
-import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import type { ImageCreditHolds } from './imageCreditHolds';
@@ -363,7 +362,7 @@ export class ImageEditService {
           sessionId: session.id,
           fabFileIds,
           organizationId,
-          generationId: uuidv4(),
+          generationId: crypto.randomUUID(),
           adminRoleWithheld,
           apiKeyId,
           apiKeyBillingOwnerType,
@@ -952,7 +951,7 @@ export class ImageEditService {
 
       const buffer = await downloadImageAsBuffer(result);
       const fileType = await fileTypeFromBuffer(buffer);
-      const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
+      const filename = `${crypto.randomUUID()}.${fileType?.ext ?? 'png'}`;
 
       await moderateImageOrThrow({
         service: this.imageModerationService,

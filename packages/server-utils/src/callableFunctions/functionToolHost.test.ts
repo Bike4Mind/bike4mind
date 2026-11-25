@@ -4,6 +4,7 @@ import {
   parseFunctionContract,
   projectFunctionSchema,
   reviewHash,
+  type CallableFunctionCallOutcome,
   type CallableFunctionStamp,
   type FunctionContract,
 } from '@bike4mind/common';
@@ -97,7 +98,8 @@ const fn = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const STAMP = { function_id: 'f', slug: CONTRACT.name, trust_label: 'verified' } as unknown as CallableFunctionStamp;
-const dispatched = (overrides: Partial<DispatchFunctionCallResult> = {}): DispatchFunctionCallResult => ({
+type RanResult = DispatchFunctionCallResult<CallableFunctionCallOutcome>;
+const dispatched = (overrides: Partial<RanResult> = {}): RanResult => ({
   outcome: 'ok',
   outputs: { deflection: 0.0042 },
   stamp: STAMP,

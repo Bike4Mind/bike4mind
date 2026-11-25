@@ -1,4 +1,4 @@
-#!/usr/bin/env npx ts-node -r tsconfig-paths/register
+#!/usr/bin/env tsx
 import { signupProtectionRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 

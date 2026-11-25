@@ -3,7 +3,7 @@ import { isMac } from '../platform';
 import { PLACES, type Place } from './places';
 
 /**
- * The rail's keyboard map. The platform's primary modifier plus 1-3 picks a place (Cmd on macOS,
+ * The rail's keyboard map. The platform's primary modifier plus 1-4 picks a place (Cmd on macOS,
  * Ctrl elsewhere). Opening the nth session moved off that chord to Ctrl+1-9 on macOS, and to
  * Alt+1-9 elsewhere, where Ctrl is already the place modifier.
  *

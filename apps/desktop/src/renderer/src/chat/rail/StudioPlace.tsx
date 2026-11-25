@@ -1,5 +1,4 @@
 import Box from '@mui/joy/Box';
-import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
@@ -8,7 +7,10 @@ import { ArrowLeftIcon, PanelLeftIcon } from '../icons';
 import { thinScrollbarSx } from '../layout';
 import { NavItem } from '../SessionList';
 import type { StudioController } from '../studio/controller';
-import { mediaLabel, STUDIO_TILES, StudioContent, tileUnavailableReason } from '../studio/StudioPane';
+import { StudioScope } from '../studio/design/StudioScope';
+import { studioColor, studioFocusSx, studioRadius, studioTransitionSx } from '../studio/design/studioTokens';
+import { mediaLabel, STUDIO_MEDIA } from '../studio/media';
+import { StudioContent, tileUnavailableReason } from '../studio/StudioPane';
 import type { StudioArea } from './places';
 
 const AREAS: readonly { area: StudioArea; label: string }[] = [
@@ -70,7 +72,7 @@ export function StudioSidebar({
         <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1, pt: 0.5, pb: 0.25 }}>
           Create
         </Typography>
-        {STUDIO_TILES.map(tile => {
+        {STUDIO_MEDIA.map(tile => {
           const active = area === 'create' && kind === tile.kind;
           const reason = tileUnavailableReason(controller, tile.kind, unavailableReason);
           return (
@@ -115,29 +117,44 @@ function AreaSwitcher({ area, onChange }: { area: StudioArea; onChange: (area: S
     <Box
       role="tablist"
       aria-label="Studio areas"
-      sx={{ display: 'inline-flex', gap: 0.25, p: 0.25, borderRadius: 'md', bgcolor: 'background.level2' }}
+      sx={{
+        display: 'inline-flex',
+        gap: '2px',
+        p: '3px',
+        borderRadius: studioRadius('md'),
+        bgcolor: studioColor('sunken'),
+        border: `1px solid ${studioColor('hairline')}`,
+      }}
       data-testid="studio-area-nav"
     >
       {AREAS.map(({ area: value, label }) => (
-        <Button
+        <Box
           key={value}
+          component="button"
+          type="button"
           role="tab"
-          size="sm"
           aria-selected={area === value}
-          variant={area === value ? 'outlined' : 'plain'}
-          color="neutral"
           onClick={() => onChange(value)}
           sx={{
-            minHeight: 26,
-            px: 1.25,
-            fontSize: 'xs',
-            bgcolor: area === value ? 'background.surface' : undefined,
-            borderColor: area === value ? 'divider' : 'transparent',
+            ...studioTransitionSx,
+            ...studioFocusSx,
+            border: 0,
+            cursor: 'pointer',
+            font: 'inherit',
+            fontSize: '12.5px',
+            fontWeight: 500,
+            px: 1.5,
+            py: '5px',
+            borderRadius: studioRadius('sm'),
+            color: area === value ? studioColor('text-strong') : studioColor('text-secondary'),
+            bgcolor: area === value ? studioColor('selected') : 'transparent',
+            boxShadow: area === value ? `0 0 0 1px ${studioColor('border')}` : 'none',
+            '&:hover': { color: studioColor('text-strong') },
           }}
           data-testid={`studio-area-${value}`}
         >
           {label}
-        </Button>
+        </Box>
       ))}
     </Box>
   );
@@ -145,9 +162,24 @@ function AreaSwitcher({ area, onChange }: { area: StudioArea; onChange: (area: S
 
 function EmptyState({ title, body, testId }: { title: string; body: string; testId: string }) {
   return (
-    <Stack spacing={0.75} sx={{ maxWidth: 420, mx: 'auto', mt: 12, textAlign: 'center' }} data-testid={testId}>
-      <Typography level="title-md">{title}</Typography>
-      <Typography level="body-sm" textColor="text.tertiary">
+    <Stack
+      spacing={0.75}
+      sx={{
+        maxWidth: 460,
+        mx: 'auto',
+        mt: 10,
+        px: 3,
+        py: 4,
+        textAlign: 'center',
+        border: `1px dashed ${studioColor('border')}`,
+        borderRadius: studioRadius('lg'),
+      }}
+      data-testid={testId}
+    >
+      <Typography level="title-md" sx={{ color: studioColor('text-strong') }}>
+        {title}
+      </Typography>
+      <Typography level="body-sm" sx={{ color: studioColor('text-secondary') }}>
         {body}
       </Typography>
     </Stack>
@@ -180,12 +212,15 @@ export function StudioMain({
   unavailableReason?: string;
 }) {
   return (
-    <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, bgcolor: 'background.surface' }} data-testid="studio-place">
+    <StudioScope
+      sx={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+      testId="studio-place"
+    >
       <Stack
         direction="row"
         alignItems="center"
         spacing={1.5}
-        sx={{ px: 2, py: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}
+        sx={{ px: 2, py: 1.25, borderBottom: `1px solid ${studioColor('hairline')}` }}
         data-testid="studio-header"
       >
         {/* The sidebar already names the place, so the header carries only the switcher. */}
@@ -203,7 +238,7 @@ export function StudioMain({
         ) : !ready ? (
           <EmptyState title="Nothing to create in yet" body={unavailableReason ?? ''} testId="studio-create-empty" />
         ) : (
-          <Stack spacing={2} sx={{ maxWidth: 640, mx: 'auto' }} data-testid="studio-create">
+          <Stack spacing={2} sx={{ maxWidth: 960, mx: 'auto' }} data-testid="studio-create">
             <Stack direction="row" alignItems="center" spacing={1}>
               {kind && (
                 <IconButton
@@ -218,7 +253,9 @@ export function StudioMain({
                   <ArrowLeftIcon />
                 </IconButton>
               )}
-              <Typography level="title-sm">{kind ? `Create ${mediaLabel(kind)}` : 'Create'}</Typography>
+              <Typography level="title-lg" sx={{ color: studioColor('text-strong'), fontWeight: 700 }}>
+                {kind ? `Create ${mediaLabel(kind)}` : 'What are we making?'}
+              </Typography>
             </Stack>
             <StudioContent
               key={`${controller?.sessionId ?? ''}:${controller?.workspaceId ?? ''}`}
@@ -230,6 +267,6 @@ export function StudioMain({
           </Stack>
         )}
       </Box>
-    </Stack>
+    </StudioScope>
   );
 }
