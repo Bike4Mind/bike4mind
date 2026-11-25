@@ -834,6 +834,21 @@ export default defineConfig([
     rules: { 'no-console': 'error' },
   },
 
+  // apps/client/server is covered too. server/scripts and the tutorials apply CLI print for a person at a
+  // terminal by design, and *.integration.ts files are run by hand, so those stay on console.
+  {
+    files: ['apps/client/server/**/*.{ts,tsx}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'apps/client/server/scripts/**',
+      'apps/client/server/tutorials/apply/cli.ts',
+      '**/*.integration.ts',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
   // #9627 — ban filesystem tree-walking in test files anywhere under apps/client/pages/**. Uses
   // no-restricted-syntax (a different rule id than no-restricted-imports), so the apps/client
   // Next.js block's import restrictions still apply to these files unchanged. See

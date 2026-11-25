@@ -2,6 +2,9 @@ import { newSignupGrant, PENDING_FREE_CREDITS_TAG, sanitizeUsername, USERNAME_MA
 import type { ISignupMeta } from '@bike4mind/common';
 import { adminSettingsRepository, User } from '@bike4mind/database';
 import { randomUUID } from 'crypto';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'createOAuthUser' } });
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
 // six total create attempts (base + 5 retries) is already generous for a
@@ -122,9 +125,11 @@ export async function createUniqueOAuthUser(params: {
         // the provider displayName (attacker-controllable) and this is raw console
         // output, so a CRLF/ANSI-laden display name could forge adjacent log lines.
         const safe = (s: string) => s.replace(/[\r\n\t]/g, ' ');
-        console.info(
-          `[oauth create] username "${safe(baseUsername)}" was taken - created "${safe(candidate)}" (retry ${retry})`
-        );
+        logger.info('[oauth create] requested username was taken; created a suffixed one', {
+          requestedUsername: safe(baseUsername),
+          createdUsername: safe(candidate),
+          retry,
+        });
       }
       return user;
     } catch (err) {

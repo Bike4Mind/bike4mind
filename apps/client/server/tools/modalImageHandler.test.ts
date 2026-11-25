@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -81,7 +82,7 @@ describe('ModalImageHandler.processModalImageUrl', () => {
 
   it('stores the object URL without its signature when the copy fails', async () => {
     send.mockRejectedValue(new Error('NoSuchKey'));
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
     expect(await ModalImageHandler.processModalImageUrl(SIGNED)).toBe(
       'https://test-bucket.s3.amazonaws.com/uploads/abc.png'

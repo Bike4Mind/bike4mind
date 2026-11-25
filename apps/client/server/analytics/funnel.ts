@@ -18,6 +18,9 @@ import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymi
 import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { rewardInviterForFirstAnswer } from '@bike4mind/server-utils/referrals/firstAnswerReward';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'funnel' } });
 
 // Server half of the funnel instrumentation. The client half (begin_checkout, upsell_*) is
 // app/utils/funnelEvents.ts. Users flagged isSynthetic are handled differently by each: the client
@@ -77,7 +80,7 @@ export async function recordAccountLane(user: NewAccount): Promise<AccountLane> 
       await userRepository.update({ id: user.id, ...laneFlagsToStore(lane) });
     }
   } catch (err) {
-    console.warn('[b4m-analytics] account lane not persisted', err instanceof Error ? err.message : err);
+    logger.warn('account lane not persisted', { error: err });
   }
   return lane;
 }
@@ -136,7 +139,7 @@ export async function recordSignupAcquisition(opts: {
     }
     return { ...(acquisition && { acquisition }), ...lane };
   } catch (err) {
-    console.warn('[b4m-analytics] signup acquisition not recorded', err instanceof Error ? err.message : err);
+    logger.warn('signup acquisition not recorded', { error: err });
     return lane;
   }
 }
@@ -311,7 +314,7 @@ export async function recordFirstValue(opts: {
     ]);
     return emitted;
   } catch (err) {
-    console.warn('[b4m-analytics] first_value not recorded', err instanceof Error ? err.message : err);
+    logger.warn('first_value not recorded', { error: err });
     return false;
   }
 }

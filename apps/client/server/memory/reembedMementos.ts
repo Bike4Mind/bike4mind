@@ -27,6 +27,9 @@ import {
 } from '@bike4mind/services/llm/embeddingProviders';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'reembedMementos' } });
 
 /** The owner has no credential for the memento embedding provider: definitive, unlike a failed lookup. */
 class MissingEmbeddingCredentialError extends Error {}
@@ -131,7 +134,7 @@ export async function reembedMementosForUser(
       stats.failed += 1;
       const message = `memento ${String(memento._id)}: ${err instanceof Error ? err.message : String(err)}`;
       stats.errors.push(message);
-      console.error(`[reembedMementos] user ${userId} ${message}`);
+      logger.error('Memento re-embed failed', { userId, detail: message });
     }
   }
 

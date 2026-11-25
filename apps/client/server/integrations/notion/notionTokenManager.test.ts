@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock database repositories
@@ -85,7 +86,7 @@ describe('NotionTokenManager', () => {
 
   describe('getValidTokens', () => {
     it('should throw NotionNotConnectedError without logging when user not found', async () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
       mockFindById.mockResolvedValue(null);
 
       await expect(NotionTokenManager.getValidTokens('user-123')).rejects.toThrow(NotionNotConnectedError);
@@ -94,7 +95,7 @@ describe('NotionTokenManager', () => {
     });
 
     it('should throw NotionNotConnectedError without logging when notionConnect is not set', async () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
       mockFindById.mockResolvedValue({ id: 'user-123', notionConnect: null });
 
       await expect(NotionTokenManager.getValidTokens('user-123')).rejects.toThrow(NotionNotConnectedError);
@@ -106,8 +107,8 @@ describe('NotionTokenManager', () => {
       ['missing', ''],
       ['undecryptable', 'undecryptable-token'],
     ])('marks a connection with a %s stored token for reconnection, once at warn', async (_label, accessToken) => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
       mockFindById.mockResolvedValue({
         id: 'user-123',
         notionConnect: { status: 'connected', accessToken, workspaceId: 'ws-123', workspaceName: 'WS' },
@@ -128,7 +129,7 @@ describe('NotionTokenManager', () => {
     });
 
     it('leaves the connection alone when the encryption key is not configured', async () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
       mockFindById.mockResolvedValue({
         id: 'user-123',
         notionConnect: { status: 'connected', accessToken: 'no-key-token', workspaceId: 'ws-123', workspaceName: 'WS' },
@@ -267,6 +268,29 @@ describe('NotionTokenManager', () => {
       });
     });
 
+    it('logs a revoked token with the user id only, never the token', async () => {
+      const info = vi.spyOn(Logger.prototype, 'info').mockImplementation(() => {});
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockFindById.mockResolvedValue({
+        id: 'user-123',
+        notionConnect: {
+          status: 'connected',
+          accessToken: 'revoked-token',
+          workspaceId: 'ws-123',
+          workspaceName: 'WS',
+        },
+      });
+      mockFetch.mockResolvedValue({ ok: false, status: 403 });
+
+      await expect(NotionTokenManager.getValidTokens('user-123')).rejects.toThrow(NotionReconnectRequiredError);
+
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('revoked'), { userId: 'user-123' });
+      expect(JSON.stringify(info.mock.calls)).not.toContain('revoked-token');
+      expect(consoleLog).not.toHaveBeenCalled();
+      info.mockRestore();
+      consoleLog.mockRestore();
+    });
+
     it('should validate token against Notion API', async () => {
       mockFindById.mockResolvedValue({
         id: 'user-123',
@@ -322,12 +346,15 @@ describe('NotionTokenManager', () => {
 
     it('should throw error when tokens cannot be retrieved', async () => {
       mockFindById.mockRejectedValueOnce(new Error('db down'));
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
 
       await expect(NotionTokenManager.ensureValidToken('user-123')).rejects.toThrow(
         'Failed to get valid Notion tokens'
       );
-      expect(errorSpy).toHaveBeenCalledWith('Error in getValidTokens:', expect.any(Error));
+      expect(errorSpy).toHaveBeenCalledWith('Error in getValidTokens', {
+        userId: 'user-123',
+        error: expect.any(Error),
+      });
       errorSpy.mockRestore();
     });
   });

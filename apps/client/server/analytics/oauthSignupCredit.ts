@@ -3,6 +3,9 @@ import type { IUserAcquisition, IUserAcquisitionTouch } from '@bike4mind/common'
 import { User } from '@bike4mind/database';
 import { resolveServerConsent } from '@bike4mind/server-utils/analytics/serverConsent';
 import { emitSignupForSourceProducts } from '@bike4mind/server-utils/analytics/signupEvents';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'oauthSignupCredit' } });
 
 /**
  * Credit for an account created to sign in to an OAuth client: a product that signs its users in
@@ -93,7 +96,7 @@ export async function creditOAuthSignup(opts: {
       account: user,
     });
   } catch (err) {
-    console.warn('[b4m-analytics] oauth signup credit not recorded', err instanceof Error ? err.message : err);
+    logger.warn('oauth signup credit not recorded', { error: err });
     return [];
   }
 }

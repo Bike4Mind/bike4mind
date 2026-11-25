@@ -22,6 +22,9 @@ import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { payOrgInviteBonus } from '@server/credits/orgInviteBonus';
 import type { Request } from 'express';
 import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'inviteResponses' } });
 
 // Accept/refuse side effects shared by POST /api/invites/[id]/{accept,refuse} and POST /api/invites/bulk.
 type InviteResponder = Pick<Request, 'user' | 'ability' | 'apiKeyInfo' | 'logger'>;
@@ -65,7 +68,7 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
       });
     }
   } catch (error) {
-    console.warn(`Failed to transfer tags from file ${fileId} to user ${userId}:`, error);
+    logger.warn('Failed to transfer tags from shared file to user', { fileId, userId, error });
   }
 };
 

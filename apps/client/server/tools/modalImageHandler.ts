@@ -4,6 +4,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { FabFile } from '@bike4mind/database';
 import { BadRequestError, isImageServeable } from '@bike4mind/common';
 import { MODAL_IMAGE_PREFIX, extractModalImageKey } from './modalImageUrls';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'modalImageHandler' } });
 
 const s3Client = new S3Client();
 
@@ -80,7 +83,7 @@ export class ModalImageHandler {
       );
       return permanentKey;
     } catch (error) {
-      console.error('[ModalImageHandler] Failed to copy modal image; storing the unsigned object URL:', error);
+      logger.error('Failed to copy modal image; storing the unsigned object URL', { error });
       return withoutSignature(imageUrl);
     }
   }
