@@ -10,7 +10,6 @@
  * `console.clear()` / `renderBanner()`, the interactive session/rewind selectors,
  * and the rewind input prefill.
  */
-import { v4 as uuidv4 } from 'uuid';
 import { ChatModels } from '@bike4mind/common';
 import { ReActAgent } from '@bike4mind/agents';
 import type { SessionStore, Session, Message } from '../storage';
@@ -101,7 +100,7 @@ export async function createFreshSession(ctx: SessionLifecycleContext): Promise<
   const model = currentSession?.model || ctx.defaultModel || ChatModels.CLAUDE_5_5_SONNET;
   const clearPinnedId = process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID;
   const newSession: Session = {
-    id: clearPinnedId ? (currentSession?.id ?? clearPinnedId) : uuidv4(),
+    id: clearPinnedId ? (currentSession?.id ?? clearPinnedId) : crypto.randomUUID(),
     name: `Session ${new Date().toLocaleString()}`,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

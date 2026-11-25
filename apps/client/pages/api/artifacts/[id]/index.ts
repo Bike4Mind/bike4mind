@@ -2,7 +2,7 @@ import { artifactService } from '@bike4mind/services';
 import { artifactRepository, artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { hideArtifactDenial } from '@bike4mind/server-utils/artifacts/artifactAccess';
 import { z } from 'zod';
 
@@ -63,7 +63,7 @@ const handler = baseApi()
 
       // A denied read is a 404 like a missing artifact: a 401 here would sign the SPA out (the
       // client treats 401 as an expired session) when a user opens someone else's /artifacts/$id.
-      let result = await hideArtifactDenial(
+      const result = await hideArtifactDenial(
         artifactService.get(
           userId,
           {
@@ -81,42 +81,6 @@ const handler = baseApi()
           }
         )
       );
-
-      // If not found by exact ID, try finding by prefix (for legacy artifact IDs without timestamp)
-      // This handles the case where UI uses artifact_react_todo-app but DB has artifact_react_todo-app_1759393649558_0
-      if (!result) {
-        const artifacts = await artifactRepository.find({
-          id: { $regex: `^${artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_\\d+_\\d+$` },
-          userId,
-          deletedAt: null,
-        });
-
-        if (artifacts && artifacts.length > 0) {
-          // Get the most recent one (last in array since they're sorted by creation time)
-          const latestArtifact = artifacts[artifacts.length - 1];
-
-          result = await artifactService.get(
-            userId,
-            {
-              id: latestArtifact.id,
-              includeContent: includeContent !== false,
-              includeVersions,
-              version,
-            },
-            {
-              db: {
-                artifacts: artifactRepository,
-                artifactContents: artifactContentRepository,
-                artifactVersions: artifactVersionRepository,
-              },
-            }
-          );
-        }
-      }
-
-      if (!result) {
-        throw new NotFoundError('Artifact not found');
-      }
 
       return res.json(result);
     })

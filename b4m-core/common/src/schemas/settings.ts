@@ -341,6 +341,9 @@ export const SettingKeySchema = z.enum([
   'EnableArtifactsDefault',
   'pythonArtifactDataOrigins',
   'EnableCallableFunctions',
+  'EnableCallableFunctionsMcp',
+  'CallableFunctionTimeLimitSeconds',
+  'CallableFunctionPendingCallLimit',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -2442,182 +2445,6 @@ export const ContextTelemetryAlertsSchema = z.object({
 
 export type ContextTelemetryAlerts = z.infer<typeof ContextTelemetryAlertsSchema>;
 
-// LiveOps Triage Configuration Validation Limits
-export const LIVEOPS_TRIAGE_VALIDATION_LIMITS = {
-  // Model configuration
-  temperature: { min: 0, max: 2, default: 0.3 },
-  maxTokens: { min: 100, max: 10000, default: 1000 },
-  // Max 180000ms (3 min) to leave 2-minute buffer for post-LLM operations within 5-min Lambda timeout
-  timeoutMs: { min: 30000, max: 180000, default: 60000 },
-
-  // Schedule configuration
-  runIntervalHours: { options: [6, 12, 24] as const, default: 12 },
-
-  // Processing limits
-  maxErrorsPerRun: { min: 1, max: 100, default: 50 },
-  regressionLookbackDays: { min: 7, max: 180, default: 30 },
-  regressionGracePeriodHours: { min: 1, max: 168, default: 48 }, // 1 hour to 1 week, default 48 hours
-
-  // Prompt template
-  promptTemplate: { min: 50, max: 10000 },
-} as const;
-
-// LiveOps Triage Configuration Schema
-const LT = LIVEOPS_TRIAGE_VALIDATION_LIMITS; // Shorthand for readability
-
-export const LiveopsTriageConfigSchema = z.object({
-  // General settings
-  enabled: z.boolean().default(false),
-  slackWorkspaceId: z.string().optional(), // MongoDB ObjectId of the Slack workspace to use
-  slackChannelId: z.string(), // Source channel - where errors are read from
-  slackOutputChannelId: z.string().optional(), // Output channel - where summaries are posted (defaults to slackChannelId if not set)
-  githubOwner: z.string(),
-  githubRepo: z.string(),
-
-  // Schedule configuration
-  runIntervalHours: z
-    .number()
-    .refine(v => LT.runIntervalHours.options.includes(v as 6 | 12 | 24), {
-      message: `Run interval must be one of: ${LT.runIntervalHours.options.join(', ')} hours`,
-    })
-    .default(LT.runIntervalHours.default),
-  postWhenNoErrors: z.boolean().default(true), // Post "all clear" message when no errors found
-
-  // Model configuration
-  modelId: z.string(),
-  temperature: z.number().min(LT.temperature.min).max(LT.temperature.max).default(LT.temperature.default),
-  maxTokens: z.number().min(LT.maxTokens.min).max(LT.maxTokens.max).default(LT.maxTokens.default),
-  timeoutMs: z.number().min(LT.timeoutMs.min).max(LT.timeoutMs.max).default(LT.timeoutMs.default),
-
-  // Processing configuration
-  maxErrorsPerRun: z
-    .number()
-    .min(LT.maxErrorsPerRun.min)
-    .max(LT.maxErrorsPerRun.max)
-    .default(LT.maxErrorsPerRun.default),
-  regressionLookbackDays: z
-    .number()
-    .min(LT.regressionLookbackDays.min)
-    .max(LT.regressionLookbackDays.max)
-    .default(LT.regressionLookbackDays.default),
-  regressionGracePeriodHours: z
-    .number()
-    .min(LT.regressionGracePeriodHours.min)
-    .max(LT.regressionGracePeriodHours.max)
-    .default(LT.regressionGracePeriodHours.default),
-  autoCreateIssues: z.boolean().default(false),
-  approverIds: z.string().default(''),
-
-  // Custom prompt template (optional)
-  promptTemplate: z
-    .string()
-    .min(LT.promptTemplate.min, `Prompt template must be at least ${LT.promptTemplate.min} characters`)
-    .max(LT.promptTemplate.max, `Prompt template cannot exceed ${LT.promptTemplate.max.toLocaleString()} characters`)
-    .trim()
-    .optional(),
-
-  // Run tracking (for idempotency)
-  lastRunAt: z.iso.datetime().optional(),
-  lastRunDate: z.string().optional(), // YYYY-MM-DD for idempotency
-  lastRunResult: z
-    .object({
-      status: z.enum(['success', 'partial', 'failed']),
-      errorsProcessed: z.number(),
-      issuesCreated: z.array(z.number()),
-      issuesDeduplicated: z.number(),
-    })
-    .optional(),
-});
-
-export type LiveopsTriageConfig = z.infer<typeof LiveopsTriageConfigSchema>;
-
-// LiveOps Triage Result Validation Limits (for LLM response validation)
-export const LIVEOPS_TRIAGE_RESULT_VALIDATION_LIMITS = {
-  alertId: { min: 1, max: 100 },
-  category: { min: 1, max: 100 },
-  title: { min: 1, max: 500 },
-  body: { min: 1, max: 10000 },
-  labels: { maxItems: 20, maxItemLength: 50 },
-  occurrenceCount: { min: 1, max: 10000 },
-  matchesExisting: {
-    issueNumber: { min: 1, max: 999999 },
-    title: { min: 1, max: 500 },
-  },
-  recurringPatterns: { maxItems: 50, maxItemLength: 500 },
-  healthAssessment: { maxLength: 2000 },
-} as const;
-
-const TRL = LIVEOPS_TRIAGE_RESULT_VALIDATION_LIMITS; // Shorthand
-
-// TriageResult Schema - validates individual triage results from LLM
-export const TriageResultSchema = z.object({
-  alertId: z.string().min(TRL.alertId.min).max(TRL.alertId.max),
-  priority: z.enum(['P0', 'P1', 'P2', 'P3']),
-  category: z.enum(['database', 'api', 'auth', 'frontend', 'infrastructure', 'llm', 'integration', 'other']),
-  title: z.string().min(TRL.title.min).max(TRL.title.max),
-  body: z.string().min(TRL.body.min).max(TRL.body.max),
-  labels: z.array(z.string().max(TRL.labels.maxItemLength)).max(TRL.labels.maxItems).default([]),
-  matchesExisting: z
-    .object({
-      issueNumber: z.number().int().min(TRL.matchesExisting.issueNumber.min),
-      title: z.string().min(1).max(TRL.matchesExisting.title.max),
-      state: z.enum(['open', 'closed']).optional(),
-    })
-    .nullable()
-    .default(null),
-  isRecurring: z.boolean(),
-  occurrenceCount: z.number().int().min(TRL.occurrenceCount.min).max(TRL.occurrenceCount.max),
-  isRegression: z.boolean().default(false),
-  // Details of the closed issue this error is regressing from (only when isRegression=true)
-  matchedClosedIssue: z
-    .object({
-      issueNumber: z.number().int().min(1),
-      title: z.string().min(1).max(TRL.matchesExisting.title.max),
-      // ISO date string. Accept null/undefined: the LLM is not given the closed
-      // issue's closedAt in the prompt, and any matchedClosedIssue is recomputed
-      // from real GitHub data downstream - so a null here must not fail the run.
-      closedAt: z.string().nullish(),
-    })
-    .nullable()
-    .optional(),
-  // Deterministic fingerprint for cross-batch deduplication (SHA-1 hash, 40 chars)
-  // Added post-LLM processing, not generated by LLM
-  fingerprint: z
-    .string()
-    .length(40)
-    .regex(/^[a-f0-9]+$/)
-    .optional(),
-});
-
-export type TriageResult = z.infer<typeof TriageResultSchema>;
-
-// TriageSummary Schema - validates the summary section of LLM response
-export const TriageSummarySchema = z.object({
-  totalAlerts: z.number().int().min(0),
-  newIssues: z.number().int().min(0),
-  duplicates: z.number().int().min(0),
-  regressions: z.number().int().min(0).default(0),
-  p0Count: z.number().int().min(0),
-  p1Count: z.number().int().min(0),
-  p2Count: z.number().int().min(0),
-  p3Count: z.number().int().min(0),
-  recurringPatterns: z
-    .array(z.string().max(TRL.recurringPatterns.maxItemLength))
-    .max(TRL.recurringPatterns.maxItems)
-    .default([]),
-  healthAssessment: z.string().max(TRL.healthAssessment.maxLength).default(''),
-});
-
-export type TriageSummary = z.infer<typeof TriageSummarySchema>;
-
-// LLMTriageResponse Schema - validates complete LLM response
-export const LLMTriageResponseSchema = z.object({
-  triageResults: z.array(TriageResultSchema),
-  summary: TriageSummarySchema,
-});
-
-export type LLMTriageResponse = z.infer<typeof LLMTriageResponseSchema>;
-
 // API Service Groups
 export const API_SERVICE_GROUPS = {
   OPENAI: {
@@ -2864,6 +2691,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableArtifactsDefault', order: 21 },
       { key: 'pythonArtifactDataOrigins', order: 22 },
       { key: 'EnableCallableFunctions', order: 23 },
+      { key: 'EnableCallableFunctionsMcp', order: 24 },
+      { key: 'CallableFunctionTimeLimitSeconds', order: 24.5 },
+      { key: 'CallableFunctionPendingCallLimit', order: 24.6 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -3879,6 +3709,51 @@ export const settingsMap = {
     order: 23,
     dependsOn: 'EnableArtifacts',
     // Read through resolveCallableFunctionsEnabled in packages/server-utils, never as the raw platform value.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  EnableCallableFunctionsMcp: makeBooleanSetting({
+    key: 'EnableCallableFunctionsMcp',
+    name: 'Enable Callable Functions over MCP',
+    defaultValue: false,
+    description:
+      'Lets an MCP client list and call the live functions of the person whose functions:invoke API key it uses, at /api/mcp/functions. Needs Enable Callable Functions. Off (default): the endpoint refuses every request. Can be overridden per organization.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24,
+    dependsOn: 'EnableCallableFunctions',
+    // Read through resolveCallableFunctionsMcpEnabled in packages/server-utils, never as the raw platform value.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionTimeLimitSeconds: makeNumberSetting({
+    key: 'CallableFunctionTimeLimitSeconds',
+    name: 'Callable Function Time Limit (seconds)',
+    defaultValue: 30,
+    min: 1,
+    max: 795,
+    int: true,
+    description:
+      "How long one call of a saved function may run, in seconds, not counting the runtime's start. Default 30, at most 795. A synchronous API call stops at 45 seconds whatever this is; a call sent with mode async runs to this limit and is polled for its result. Can be overridden per organization; a person in several organizations gets the lowest.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.5,
+    dependsOn: 'EnableCallableFunctions',
+    // Read through resolveCallableFunctionTimeLimitMs in packages/server-utils.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionPendingCallLimit: makeNumberSetting({
+    key: 'CallableFunctionPendingCallLimit',
+    name: 'Callable Function Pending Call Limit',
+    defaultValue: 10,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many asynchronous calls one person may have queued or running at once. A call sent with mode async past this is refused with 429 until one finishes. Can be overridden per organization; a person in several organizations gets the lowest.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.6,
+    dependsOn: 'EnableCallableFunctions',
+    // Read through resolveCallableFunctionPendingCallLimit in packages/server-utils.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   EnableAgents: makeBooleanSetting({

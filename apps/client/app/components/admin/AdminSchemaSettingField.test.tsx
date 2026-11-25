@@ -28,21 +28,20 @@ import { STRUCTURED_SETTINGS } from './schemaSettingForm';
 const appTheme = extendTheme({ ...getThemeConfig() });
 type Key = 'abuseAssessmentConfig' | 'adminAiConfig' | 'autoContainmentConfig' | 'usagePatternSignalsConfig';
 
-const renderField = (key: Key, storedValue: unknown = settingsMap[key].defaultValue, staged = false) => {
-  const field = (
-    <AdminSchemaSettingField
-      setting={settingsMap[key]}
-      structured={STRUCTURED_SETTINGS[key]}
-      storedValue={storedValue}
-      index={0}
-    />
-  );
-  return render(
+const fieldFor = (key: Key, storedValue: unknown) => (
+  <AdminSchemaSettingField
+    setting={settingsMap[key]}
+    structured={STRUCTURED_SETTINGS[key]}
+    storedValue={storedValue}
+    index={0}
+  />
+);
+const renderField = (key: Key, storedValue: unknown = settingsMap[key].defaultValue) =>
+  render(
     <CssVarsProvider theme={appTheme}>
-      {staged ? <SettingsDraftProvider>{field}</SettingsDraftProvider> : field}
+      <SettingsDraftProvider>{fieldFor(key, storedValue)}</SettingsDraftProvider>
     </CssVarsProvider>
   );
-};
 
 const byId = (id: string) => screen.getByTestId(id);
 // A role query walks the whole field tree, which is large for adminAiConfig, so read the options
@@ -70,13 +69,12 @@ describe('AdminSchemaSettingField', () => {
   it('edits and saves per-queue DLQ modes through the existing setting', () => {
     renderField('adminAiConfig');
     pick('admin-setting-dlq-mode-quest', 'off');
-    fireEvent.click(byId('admin-setting-adminAiConfig-save-btn'));
-    expect(mutate).toHaveBeenCalledWith(
+    fireEvent.click(byId('admin-save-confirm-btn'));
+    expect(mutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         key: 'adminAiConfig',
         value: expect.objectContaining({ dlqQueueModes: { quest: 'off' } }),
-      }),
-      expect.any(Object)
+      })
     );
   });
 
@@ -136,8 +134,8 @@ describe('AdminSchemaSettingField', () => {
     expect(within(group).getByText('Signal weights')).toBeInTheDocument();
 
     type('admin-setting-usagePatternSignalsConfig-weights.creditPolling-input', '40');
-    fireEvent.click(byId('admin-setting-usagePatternSignalsConfig-save-btn'));
-    expect(mutate.mock.calls[0][0].value.weights).toEqual({
+    fireEvent.click(byId('admin-save-confirm-btn'));
+    expect(mutateAsync.mock.calls[0][0].value.weights).toEqual({
       apiOnlyUsage: 25,
       regularCadence: 25,
       creditPolling: 40,
@@ -157,13 +155,13 @@ describe('AdminSchemaSettingField', () => {
 
   it('validates with the schema and blocks the save until fixed', () => {
     renderField('usagePatternSignalsConfig');
-    const save = byId('admin-setting-usagePatternSignalsConfig-save-btn');
+    const save = () => byId('admin-save-confirm-btn');
 
     type('admin-setting-usagePatternSignalsConfig-activeWindowHours-input', '9999');
     expect(byId('admin-setting-usagePatternSignalsConfig-activeWindowHours-helper')).toHaveTextContent(
       'Enter a whole number from 1 to 720.'
     );
-    expect(save).toBeDisabled();
+    expect(save()).toBeDisabled();
 
     type('admin-setting-usagePatternSignalsConfig-activeWindowHours-input', '1.5');
     expect(byId('admin-setting-usagePatternSignalsConfig-activeWindowHours-helper')).toHaveTextContent(
@@ -171,16 +169,16 @@ describe('AdminSchemaSettingField', () => {
     );
 
     type('admin-setting-usagePatternSignalsConfig-activeWindowHours-input', '');
-    expect(save).toBeDisabled();
+    expect(save()).toBeDisabled();
 
     type('admin-setting-usagePatternSignalsConfig-activeWindowHours-input', '12');
     expect(byId('admin-setting-usagePatternSignalsConfig-activeWindowHours-helper')).not.toHaveTextContent('Enter a');
-    expect(save).not.toBeDisabled();
-    fireEvent.click(save);
-    expect(mutate).toHaveBeenCalledWith(
-      { key: 'usagePatternSignalsConfig', value: expect.objectContaining({ activeWindowHours: 12 }) },
-      expect.anything()
-    );
+    expect(save()).not.toBeDisabled();
+    fireEvent.click(save());
+    expect(mutateAsync).toHaveBeenCalledWith({
+      key: 'usagePatternSignalsConfig',
+      value: expect.objectContaining({ activeWindowHours: 12 }),
+    });
   });
 
   it('confirms enforce mode before saving', () => {
@@ -188,40 +186,48 @@ describe('AdminSchemaSettingField', () => {
     pick('admin-setting-autoContainmentConfig-mode-input', 'enforce');
     expect(byId('admin-setting-autoContainmentConfig-risk-alert')).toHaveTextContent('contains real accounts');
 
-    fireEvent.click(byId('admin-setting-autoContainmentConfig-save-btn'));
-    expect(mutate).not.toHaveBeenCalled();
-    expect(byId('admin-setting-autoContainmentConfig-confirm-dialog')).toHaveTextContent('suspended');
+    fireEvent.click(byId('admin-save-confirm-btn'));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(byId('admin-settings-warning-dialog')).toHaveTextContent('suspended');
 
-    fireEvent.click(byId('admin-setting-autoContainmentConfig-confirm-cancel-btn'));
-    expect(mutate).not.toHaveBeenCalled();
+    fireEvent.click(byId('admin-settings-warning-cancel-btn'));
+    expect(mutateAsync).not.toHaveBeenCalled();
 
-    fireEvent.click(byId('admin-setting-autoContainmentConfig-save-btn'));
-    fireEvent.click(byId('admin-setting-autoContainmentConfig-confirm-save-btn'));
-    expect(mutate).toHaveBeenCalledWith(
-      { key: 'autoContainmentConfig', value: expect.objectContaining({ mode: 'enforce' }) },
-      expect.anything()
-    );
+    fireEvent.click(byId('admin-save-confirm-btn'));
+    fireEvent.click(byId('admin-settings-warning-save-btn'));
+    expect(mutateAsync).toHaveBeenCalledWith({
+      key: 'autoContainmentConfig',
+      value: expect.objectContaining({ mode: 'enforce' }),
+    });
   });
 
   it('confirms turning on email domain blocking', () => {
     renderField('autoContainmentConfig');
     fireEvent.click(byId('admin-setting-autoContainmentConfig-blockEmailDomains-input'));
     expect(byId('admin-setting-autoContainmentConfig-risk-alert')).toHaveTextContent('blocks the whole domain');
-    fireEvent.click(byId('admin-setting-autoContainmentConfig-save-btn'));
-    expect(byId('admin-setting-autoContainmentConfig-confirm-dialog')).toBeInTheDocument();
-    expect(mutate).not.toHaveBeenCalled();
+    fireEvent.click(byId('admin-save-confirm-btn'));
+    expect(byId('admin-settings-warning-dialog')).toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 
   it('saves other edits without a confirm while enforce is already stored', () => {
     renderField('autoContainmentConfig', { ...settingsMap.autoContainmentConfig.defaultValue, mode: 'enforce' });
     expect(screen.queryByTestId('admin-setting-autoContainmentConfig-risk-alert')).toBeNull();
     type('admin-setting-autoContainmentConfig-maxPerHour-input', '3');
-    fireEvent.click(byId('admin-setting-autoContainmentConfig-save-btn'));
-    expect(mutate).toHaveBeenCalled();
+    fireEvent.click(byId('admin-save-confirm-btn'));
+    expect(mutateAsync).toHaveBeenCalled();
+  });
+
+  it('throws outside a SettingsDraftProvider, since nothing else could save its edits', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(<CssVarsProvider theme={appTheme}>{fieldFor('abuseAssessmentConfig', undefined)}</CssVarsProvider>)
+    ).toThrow('AdminSchemaSettingField must be rendered inside a SettingsDraftProvider.');
+    vi.mocked(console.error).mockRestore();
   });
 
   it('routes the enforce warning through the SaveBar confirm when staged', () => {
-    renderField('autoContainmentConfig', undefined, true);
+    renderField('autoContainmentConfig');
     pick('admin-setting-autoContainmentConfig-mode-input', 'enforce');
     expect(screen.queryByTestId('admin-setting-autoContainmentConfig-save-btn')).toBeNull();
 
@@ -241,18 +247,17 @@ describe('AdminSchemaSettingField', () => {
   });
 
   it('blocks the staged SaveBar while a field is invalid', () => {
-    renderField('abuseAssessmentConfig', undefined, true);
+    renderField('abuseAssessmentConfig');
     type('admin-setting-abuseAssessmentConfig-dailyBudgetUsd-input', '5000');
     expect(byId('admin-save-bar')).toHaveTextContent('Fix the highlighted fields before saving.');
     expect(byId('admin-save-confirm-btn')).toBeDisabled();
   });
 
   it('evaluates staged warnings against the stored value at save time', () => {
-    const { rerender } = renderField(
-      'autoContainmentConfig',
-      { ...settingsMap.autoContainmentConfig.defaultValue, mode: 'enforce' },
-      true
-    );
+    const { rerender } = renderField('autoContainmentConfig', {
+      ...settingsMap.autoContainmentConfig.defaultValue,
+      mode: 'enforce',
+    });
     type('admin-setting-autoContainmentConfig-maxPerHour-input', '3');
 
     rerender(
@@ -350,14 +355,14 @@ describe('AdminSchemaSettingField', () => {
       pick(mode('domainHold'), 'act');
       type('admin-setting-adminAiConfig-monthlyCapUsd-input', '25');
 
-      fireEvent.click(byId('admin-setting-adminAiConfig-save-btn'));
-      expect(mutate).not.toHaveBeenCalled();
-      const dialog = byId('admin-setting-adminAiConfig-confirm-dialog');
+      fireEvent.click(byId('admin-save-confirm-btn'));
+      expect(mutateAsync).not.toHaveBeenCalled();
+      const dialog = byId('admin-settings-warning-dialog');
       expect(dialog).toHaveTextContent('Mode act lets domainHold apply');
       expect(dialog).toHaveTextContent('A monthly cap above $0');
 
-      fireEvent.click(byId('admin-setting-adminAiConfig-confirm-save-btn'));
-      const saved = mutate.mock.calls[0][0].value;
+      fireEvent.click(byId('admin-settings-warning-save-btn'));
+      const saved = mutateAsync.mock.calls[0][0].value;
       expect(saved.monthlyCapUsd).toBe(25);
       expect(saved.features.domainHold.mode).toBe('act');
       expect(saved.features.abuseAssessment.mode).toBe('off');
@@ -371,8 +376,8 @@ describe('AdminSchemaSettingField', () => {
         features: { ...stored.features, domainHold: { ...stored.features.domainHold, mode: 'act' } },
       });
       type('admin-setting-adminAiConfig-monthlyCapUsd-input', '20');
-      fireEvent.click(byId('admin-setting-adminAiConfig-save-btn'));
-      expect(mutate).toHaveBeenCalled();
+      fireEvent.click(byId('admin-save-confirm-btn'));
+      expect(mutateAsync).toHaveBeenCalled();
     });
   });
 });

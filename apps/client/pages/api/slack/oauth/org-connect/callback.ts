@@ -94,7 +94,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     return sendClientRedirect(res, '/organizations?slack_error=invalid_state');
   }
 
-  const { organizationId, userId } = stateResult.payload;
+  const { organizationId, userId, workspaceId } = stateResult.payload;
   auditLogger.setUserId(userId);
   const orgRedirectBase = `/organizations/${organizationId}`;
 
@@ -106,8 +106,8 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       return sendClientRedirect(res, '/organizations?slack_error=org_not_found');
     }
 
-    // Get system app credentials for token exchange
-    const appCredentials = await getSystemSlackAppCredentials();
+    // Credentials of the app the flow started with (signed into the state)
+    const appCredentials = await getSystemSlackAppCredentials(workspaceId);
     if (!appCredentials) {
       auditLogger.failure('no_app_configured');
       return sendClientRedirect(res, `${orgRedirectBase}?tab=integrations&slack_error=no_app_configured`);

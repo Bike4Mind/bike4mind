@@ -1,14 +1,21 @@
+import { z } from 'zod';
 import { ConflictError } from '../../errors';
+import { VisibilitySchema } from '../../schemas/artifacts';
 import type { FunctionContract, FunctionContractChange, FunctionTestTolerance } from '../../schemas/functionContract';
 import { IBaseRepository } from './BaseTypes';
 import type { CallableFunctionCallOutcome, CallableFunctionStamp } from './CallableFunctionCallTypes';
+import type { ICallableFunctionReview, ICallableFunctionReviewView } from './CallableFunctionReviewTypes';
 import { IMongoDocument } from './common';
+import type { McpToolApprovalMode } from './McpConnectionTypes';
 
 /**
  * A Python artifact saved as a callable function: its code copied at one version, with the `FUNCTION` contract the
  * owner's browser read from it. Only the owner can see or call it. API responses go through
  * {@link toCallableFunctionPublic} or {@link toCallableFunctionDetail}.
  */
+
+/** Internal tool namespace: connector slugs must start with a lowercase letter. */
+export const CALLABLE_FUNCTION_TOOL_CONNECTION_ID = '_fn';
 
 export const CALLABLE_FUNCTION_OWNER_TYPES = ['user'] as const;
 export type CallableFunctionOwnerType = (typeof CALLABLE_FUNCTION_OWNER_TYPES)[number];
@@ -97,6 +104,26 @@ export interface CallableFunctionPromotion {
   at: Date;
 }
 
+/** A share has no public rung: every recipient is a named person or a member of the project or organization. */
+export const CallableFunctionGrantVisibilitySchema = VisibilitySchema.exclude(['public']);
+export type CallableFunctionGrantVisibility = z.infer<typeof CallableFunctionGrantVisibilitySchema>;
+
+export const CALLABLE_FUNCTION_GRANT_LIMITS = { maxUserIds: 50 } as const;
+
+/**
+ * Who besides the owner may call the live pin: the people in `userIds`, plus the members of `projectId` when the
+ * visibility is `project` or of `organizationId` when it is `organization`. The artifact is never shared.
+ */
+export interface ICallableFunctionGrants {
+  visibility: CallableFunctionGrantVisibility;
+  projectId?: string;
+  organizationId?: string;
+  userIds: string[];
+}
+
+/** How a caller reaches a function: as its owner or through one arm of its grants. */
+export type CallableFunctionAccess = 'owner' | 'person' | 'project' | 'organization';
+
 /** Computed at read by {@link effectiveCallableFunctionStatus}, so deleting the artifact needs no sweep. */
 export type CallableFunctionStatus = CallableFunctionState | 'disabled' | 'source_deleted';
 
@@ -141,6 +168,8 @@ export interface ICallableFunction {
   description: string;
   state: CallableFunctionState;
   enabled: boolean;
+  /** When chat and agent runs ask before a call, as for a connector tool; unset reads as `default`. */
+  approval?: McpToolApprovalMode;
   pin: ICallableFunctionPin;
   /** Display data only: every call reads `FUNCTION` from the code again. */
   contract: FunctionContract;
@@ -149,6 +178,7 @@ export interface ICallableFunction {
   lastServerRun?: CallableFunctionServerRun;
   promoted?: CallableFunctionPromotion;
   caseResults?: CallableFunctionCaseResults;
+  grants?: ICallableFunctionGrants;
 }
 
 export interface ICallableFunctionDocument extends ICallableFunction, IMongoDocument {}
@@ -157,6 +187,17 @@ export interface ICallableFunctionDocument extends ICallableFunction, IMongoDocu
 export type ICallableFunctionSummary = Omit<
   ICallableFunctionDocument,
   'contract' | 'pin' | 'lastServerRun' | 'promoted' | 'caseResults'
+> & {
+  pin: Omit<ICallableFunctionPin, 'source'>;
+};
+
+/** How many live functions one chat or agent turn offers, oldest first; connectors keep the rest of the tool budget. */
+export const MAX_CALLABLE_FUNCTIONS_PER_TURN = 20;
+
+/** The read chat offers from: the contract without the pinned code, server run, promotion record, or case results. */
+export type ICallableFunctionOfferable = Omit<
+  ICallableFunctionDocument,
+  'pin' | 'lastServerRun' | 'promoted' | 'caseResults'
 > & {
   pin: Omit<ICallableFunctionPin, 'source'>;
 };
@@ -174,6 +215,7 @@ export interface ICallableFunctionPublic {
   status: CallableFunctionStatus;
   state: CallableFunctionState;
   enabled: boolean;
+  approval: McpToolApprovalMode;
   pin: Pick<ICallableFunctionPin, 'artifactId' | 'version' | 'contentHash' | 'pinnedAt' | 'seq'>;
   latestVersion: number | null;
   /** The artifact has a newer version than the pinned one. */
@@ -181,7 +223,46 @@ export interface ICallableFunctionPublic {
   /** Null unless the function is live. */
   trustLabel: CallableFunctionTrustLabel | null;
   examples: CallableFunctionExample[];
+  grants: ICallableFunctionGrants | null;
   createdAt: Date;
+  updatedAt: Date;
+}
+
+/** The list read plus the contract, for a recipient's review: still no pinned code. */
+export type ICallableFunctionSharedSource = ICallableFunctionSummary & Pick<ICallableFunctionDocument, 'contract'>;
+
+/** `pending_review` with no review or one of an earlier interface; `disabled` when the recipient turned it off. */
+export type CallableFunctionSharedStatus = 'pending_review' | 'reviewed' | 'disabled';
+
+export function callableFunctionReviewStatus(
+  review: Pick<ICallableFunctionReview, 'reviewHash' | 'enabled'> | null,
+  reviewHash: string
+): CallableFunctionSharedStatus {
+  if (!review || review.reviewHash !== reviewHash) return 'pending_review';
+  return review.enabled ? 'reviewed' : 'disabled';
+}
+
+/**
+ * What a recipient reads of a function shared with them: the interface they review, never the code, the artifact,
+ * the examples, or the grants.
+ */
+export interface ICallableFunctionShared {
+  id: string;
+  slug: string;
+  description: string;
+  status: CallableFunctionSharedStatus;
+  sharedVia: Exclude<CallableFunctionAccess, 'owner'>;
+  pin: Pick<ICallableFunctionPin, 'version' | 'seq' | 'pinnedAt'>;
+  trustLabel: CallableFunctionTrustLabel | null;
+  ownerName: string;
+  inputs: FunctionContract['inputs'];
+  outputs: FunctionContract['outputs'];
+  /** The live pin's interface hash; a review names it, so an interface changed since is not approved unseen. */
+  reviewHash: string;
+  review: ICallableFunctionReviewView | null;
+  /** Names of the data files and sources the live pin reads; the record carries none yet. */
+  dataPins: string[];
+  sources: string[];
   updatedAt: Date;
 }
 
@@ -214,6 +295,7 @@ export function toCallableFunctionPublic(
     status: effectiveCallableFunctionStatus(doc, head),
     state: doc.state,
     enabled: doc.enabled,
+    approval: doc.approval ?? 'default',
     pin: {
       artifactId: doc.pin.artifactId,
       version: doc.pin.version,
@@ -225,7 +307,55 @@ export function toCallableFunctionPublic(
     updateAvailable: live !== null && live.version > doc.pin.version,
     trustLabel: doc.state === 'live' ? (doc.trustLabel ?? null) : null,
     examples: doc.examples ?? [],
+    grants: doc.grants
+      ? {
+          visibility: doc.grants.visibility,
+          ...(doc.grants.projectId ? { projectId: doc.grants.projectId } : {}),
+          ...(doc.grants.organizationId ? { organizationId: doc.grants.organizationId } : {}),
+          userIds: [...doc.grants.userIds],
+        }
+      : null,
     createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+// Fails typecheck once the record gains `dataPins`: read those and its sources from it instead.
+const NO_DATA_PINS: 'dataPins' extends keyof ICallableFunction ? never : readonly string[] = [];
+
+/** An allowlist, like {@link toCallableFunctionPublic}, for a caller who is not the owner. */
+export function toCallableFunctionShared(
+  doc: ICallableFunctionDocument | ICallableFunctionSharedSource,
+  sharedVia: ICallableFunctionShared['sharedVia'],
+  context: { ownerName: string; reviewHash: string; review: ICallableFunctionReview | null }
+): ICallableFunctionShared {
+  const { review, reviewHash } = context;
+  return {
+    id: doc.id,
+    slug: doc.slug,
+    description: doc.description,
+    status: callableFunctionReviewStatus(review, reviewHash),
+    sharedVia,
+    ownerName: context.ownerName,
+    inputs: doc.contract.inputs,
+    outputs: doc.contract.outputs,
+    reviewHash,
+    review: review
+      ? {
+          approval: review.approval,
+          enabled: review.enabled,
+          reviewedAt: review.reviewedAt,
+          current: review.reviewHash === reviewHash,
+        }
+      : null,
+    dataPins: [...NO_DATA_PINS],
+    sources: [],
+    pin: {
+      version: doc.pin.version,
+      pinnedAt: doc.pin.pinnedAt,
+      ...(doc.pin.seq !== undefined ? { seq: doc.pin.seq } : {}),
+    },
+    trustLabel: doc.state === 'live' ? (doc.trustLabel ?? null) : null,
     updatedAt: doc.updatedAt,
   };
 }
@@ -253,7 +383,7 @@ export function callableFunctionTrustLabel(
  * Top-level fields the generic `update`/`updateGuarded`/`updateMany` refuse. The owner fields never change; the
  * slug, description, pin, and contract move together through `repin`; `pin.seq`, `pin.runtime`, the state, the
  * label, the server run, and the promotion record only through `promote`; the examples only through `setExamples`;
- * the case results only through `recordCaseResults`.
+ * the case results only through `recordCaseResults`; the grants only through `setGrants`.
  */
 export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'ownerType',
@@ -269,6 +399,7 @@ export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'promoted',
   'examples',
   'caseResults',
+  'grants',
 ] as const;
 
 export class CallableFunctionProtectedFieldError extends Error {
@@ -343,7 +474,7 @@ export const CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS = [
 
 export type CallableFunctionCreateInput = Omit<
   ICallableFunctionDocument,
-  'id' | 'createdAt' | 'updatedAt' | 'pin' | (typeof CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS)[number]
+  'id' | 'createdAt' | 'updatedAt' | 'pin' | 'grants' | (typeof CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS)[number]
 > & { pin: CallableFunctionNewPin };
 
 export interface CallableFunctionRepin {
@@ -375,6 +506,16 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
   listForOwner(owner: CallableFunctionOwner, filter?: { artifactId?: string }): Promise<ICallableFunctionSummary[]>;
   countForOwner(owner: CallableFunctionOwner): Promise<number>;
   setEnabled(id: string, owner: CallableFunctionOwner, enabled: boolean): Promise<ICallableFunctionDocument | null>;
+  setApproval(
+    id: string,
+    owner: CallableFunctionOwner,
+    approval: McpToolApprovalMode
+  ): Promise<ICallableFunctionDocument | null>;
+  /** Live and turned on, oldest first, without the pinned code; the artifact may still be gone. */
+  listLiveForOwner(
+    owner: CallableFunctionOwner,
+    options?: { limit?: number; excludeAlwaysAsk?: boolean }
+  ): Promise<ICallableFunctionOfferable[]>;
   /** Compare-and-set on `pin.version === expectedVersion`; null when stale, missing, or not the owner's. */
   repin(
     id: string,
@@ -408,5 +549,20 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
     expected: { updatedAt: Date },
     update: CallableFunctionPromote
   ): Promise<ICallableFunctionDocument | null>;
+  /** Writes the grants of a live function, or removes them when `grants` is null; null when not the owner's. */
+  setGrants(
+    id: string,
+    owner: CallableFunctionOwner,
+    grants: ICallableFunctionGrants | null
+  ): Promise<ICallableFunctionDocument | null>;
+  /**
+   * Live, turned-on functions of other owners whose grants name `userId` or one of the projects or organizations,
+   * with the contract and without the pinned code. The caller still checks each with `canCallFunction`.
+   */
+  listSharedWith(reach: {
+    userId: string;
+    projectIds: string[];
+    organizationIds: string[];
+  }): Promise<ICallableFunctionSharedSource[]>;
   deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean>;
 }

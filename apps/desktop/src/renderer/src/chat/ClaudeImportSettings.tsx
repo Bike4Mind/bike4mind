@@ -113,6 +113,9 @@ function HowItWorks({ children }: { children: ReactNode }) {
   );
 }
 
+/** How long the deep-linked "Keep in sync" switch stays highlighted (ms). */
+const WEB_SWITCH_HIGHLIGHT_MS = 2500;
+
 const KIND_LABEL: Record<ClaudeImportKind, string> = {
   'claude-code': 'Claude Code',
   'claude-chat': 'Claude chat',
@@ -166,11 +169,19 @@ export function ClaudeImportSettings({
   );
   const sectionRefs = useRef<Partial<Record<ClaudeImportKind, HTMLDivElement | null>>>({});
   const focused = useRef(false);
+  // A deep link to the web section flashes its "Keep in sync" switch so the eye lands on it.
+  const [highlightWebSwitch, setHighlightWebSwitch] = useState(false);
   useEffect(() => {
     if (!loaded || !focus || focused.current) return;
     focused.current = true;
     sectionRefs.current[focus]?.scrollIntoView?.({ block: 'start' });
+    if (focus === 'b4m-web') setHighlightWebSwitch(true);
   }, [loaded, focus]);
+  useEffect(() => {
+    if (!highlightWebSwitch) return undefined;
+    const timer = window.setTimeout(() => setHighlightWebSwitch(false), WEB_SWITCH_HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [highlightWebSwitch]);
 
   // Two quick clicks would each build on the selection drawn before either reply arrived.
   const pendingProjects = useRef<{ selection: Set<string>; inFlight: number } | null>(null);
@@ -506,10 +517,23 @@ export function ClaudeImportSettings({
         <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
           <Typography level="title-sm">Bike4Mind web conversations</Typography>
           <Switch
+            data-testid="claude-import-web-switch"
+            data-highlighted={highlightWebSwitch ? 'true' : undefined}
+            sx={{
+              px: 0.75,
+              py: 0.25,
+              mr: -0.75,
+              borderRadius: 'sm',
+              transition: 'background-color 400ms ease',
+              bgcolor: highlightWebSwitch ? 'primary.softBg' : 'transparent',
+            }}
             size="sm"
             checked={web.settings.enabled}
             disabled={!state.signedIn}
-            onChange={event => void run(() => api.setWebSettings({ enabled: event.target.checked }))}
+            onChange={event => {
+              setHighlightWebSwitch(false);
+              void run(() => api.setWebSettings({ enabled: event.target.checked }));
+            }}
             endDecorator="Keep in sync"
             slotProps={{
               input: {

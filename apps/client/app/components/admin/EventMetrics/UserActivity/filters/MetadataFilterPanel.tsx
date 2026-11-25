@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Card,
   Stack,
   Typography,
   Button,
@@ -17,6 +16,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import { METADATA_FIELD, METADATA_OPERATORS } from '@server/analytics/metadataFilterContract';
 import type { MetadataFilter } from '../types';
 import AddIcon from '@mui/icons-material/Add';
+import { SettingsSection } from '../../../shared';
 
 // Shared with the store and the server-side matcher; not redeclared here.
 export type { MetadataFilter } from '../types';
@@ -204,11 +204,11 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
   const activeFilterChips = filterState.filters.filter(filter => isFieldApplicable(filter.field));
 
   return (
-    <Card variant="outlined" sx={{ p: 2, mb: 2 }}>
+    <SettingsSection>
       <Stack spacing={2}>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Typography level="body-sm" fontWeight={800}>
-            Metadata Filters
+          <Typography level="title-md" component="h3" sx={{ color: 'admin.ink' }}>
+            Metadata filters
           </Typography>
           <Button size="sm" startDecorator={<AddIcon />} onClick={addNewFilter}>
             Add Filter
@@ -254,6 +254,6 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
           </Box>
         )}
       </Stack>
-    </Card>
+    </SettingsSection>
   );
 };

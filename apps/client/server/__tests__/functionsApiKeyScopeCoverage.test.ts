@@ -6,6 +6,7 @@ import {
   ApiKeyScope,
   CONFINED_API_KEY_SCOPES,
   CONTRACTS,
+  getFunctionCallContract,
   getFunctionContract,
   invokeFunctionContract,
   listFunctionsContract,
@@ -32,11 +33,16 @@ function routeFiles(dir: string): string[] {
 
 const files = routeFiles(ROUTES_DIR);
 
-const CONTRACTS_BY_IDENTIFIER = { listFunctionsContract, getFunctionContract, invokeFunctionContract };
+const CONTRACTS_BY_IDENTIFIER = {
+  listFunctionsContract,
+  getFunctionContract,
+  invokeFunctionContract,
+  getFunctionCallContract,
+};
 
 describe('public /api/v1/functions routes gate on functions:invoke through their contract', () => {
   it('finds the route files', () => {
-    expect(files).toHaveLength(3);
+    expect(files).toHaveLength(4);
   });
 
   it.each(files.map(f => [path.relative(ROUTES_DIR, f), f]))('%s', (rel, file) => {
@@ -77,11 +83,13 @@ describe('public /api/v1/functions routes gate on functions:invoke through their
     });
   });
 
-  it('opens exactly the three functions routes to a functions:invoke key', () => {
+  it('opens exactly the MCP endpoint and the four functions routes to a functions:invoke key', () => {
     expect(DERIVED_API_KEY_SCOPE_ENDPOINTS[ApiKeyScope.FUNCTIONS_INVOKE]).toEqual([
+      'POST /api/mcp/functions',
       'GET /api/v1/functions',
       'GET /api/v1/functions/:id',
       'POST /api/v1/functions/:id/invoke',
+      'GET /api/v1/functions/calls/:call_id',
     ]);
   });
 });

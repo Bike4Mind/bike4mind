@@ -11,7 +11,6 @@ import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/er
 import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 
 /**
@@ -46,7 +45,7 @@ const handler = baseApi().post(
         await Organization.updateOne({ _id: orgId }, { $unset: { logoFileId: 1 } }).session(session);
       }
 
-      const fileKey = `organizations/${orgId}/${uuidv4()}.${ext}`;
+      const fileKey = `organizations/${orgId}/${crypto.randomUUID()}.${ext}`;
 
       const file = new AppFile({
         userId: req.user.id,

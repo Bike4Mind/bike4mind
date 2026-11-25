@@ -92,18 +92,15 @@ const projectTest = {
   setupFiles: [
     ...(REUSE_WORKERS ? [path.resolve(__dirname, 'vitest.setup.reuse.ts')] : []),
     path.resolve(__dirname, 'vitest.setup.ts'),
+    ...(INTEGRATION_LANE ? [path.resolve(__dirname, 'vitest.setup.integration.ts')] : []),
   ],
   // forks, not threads: a worker thread ignores a test's process.env.TZ change.
   ...(REUSE_WORKERS ? { isolate: false, pool: 'forks' as const } : {}),
-  // Raise the 15s shared floor to 30s. Load-bearing for the integration lane, which holds ~60
-  // real-Mongo suites (createMongoServer/createMongoReplSet): their first write per worker pays an
-  // unavoidable, legitimate cold-start: Mongoose builds every model's indexes on connect (needed
-  // for correctness - the rate-limit suite depends on one, so autoIndex CANNOT be disabled) plus
-  // first-collection creation. Measured at 16-22s under that lane's file parallelism, so 15s (a
-  // unit-test budget) fails 4-ish suites at random - the exact flake. This is not a hang mask: it
-  // is the right budget for integration tests. Attempts to shrink the cold-start instead were
-  // dead ends - autoIndex:false breaks index-dependent suites, and a single shared mongod
-  // serializes every worker's index builds and made it markedly worse.
+  // Raise the 15s shared floor to 30s. Load-bearing for the integration lane, whose real-Mongo
+  // suites (createMongoServer/createMongoReplSet) pay a mongod cold start that a unit-test budget
+  // does not cover under that lane's file parallelism. This is not a hang mask: it is the right
+  // budget for integration tests. vitest.setup.integration.ts keeps that cold start small by
+  // building collections and indexes only for the models a suite asks for.
   testTimeout: 30000,
   // Integration-lane only: these suites exercise real concurrency (compare-and-set races,
   // multi-document transactions) against a real mongod under CI's worker-capped, oversubscribed
@@ -142,9 +139,6 @@ const projectVite = () => ({
   define: {
     global: 'globalThis',
     'process.env': {},
-  },
-  optimizeDeps: {
-    include: ['uuid'],
   },
 });
 

@@ -39,7 +39,6 @@ import {
   stripUnstreamedToolResult,
 } from './toolStreamingHelper';
 import { normalizeOllamaDoneReason } from './stopReason';
-import { v4 as uuidv4 } from 'uuid';
 
 /** A tool call normalized across native (message.tool_calls) and content-embedded forms. */
 interface NormalizedToolCall {
@@ -823,7 +822,7 @@ export class OllamaBackend implements ICompletionBackend {
     return toolCalls.map(tc => ({
       name: tc.function.name,
       arguments: JSON.stringify(tc.function.arguments ?? {}),
-      id: `ollama-tool-${uuidv4()}`,
+      id: `ollama-tool-${crypto.randomUUID()}`,
     }));
   }
 
@@ -862,7 +861,7 @@ export class OllamaBackend implements ICompletionBackend {
       if (seen.has(key)) continue;
       seen.add(key);
       // Real uuid, not a position-derived string - see normalizeToolCalls' doc comment.
-      calls.push({ ...call, id: `ollama-content-tool-${uuidv4()}` });
+      calls.push({ ...call, id: `ollama-content-tool-${crypto.randomUUID()}` });
     }
     return calls;
   }

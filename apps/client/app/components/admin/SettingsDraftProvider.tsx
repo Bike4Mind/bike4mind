@@ -179,3 +179,18 @@ export function useSettingsDraft<T>(
     dirty: draft?.dirty ?? false,
   };
 }
+
+/**
+ * useSettingsDraft for a field with no Save of its own: the page's SaveBar is its only write path,
+ * so it throws outside a SettingsDraftProvider rather than keep an edit nothing can save.
+ */
+export function useRequiredSettingsDraft<T>(
+  component: string,
+  id: string,
+  baseline: T,
+  options: Parameters<typeof useSettingsDraft<T>>[2]
+) {
+  const draft = useSettingsDraft(id, baseline, options);
+  if (!draft.staged) throw new Error(`${component} must be rendered inside a SettingsDraftProvider.`);
+  return draft;
+}

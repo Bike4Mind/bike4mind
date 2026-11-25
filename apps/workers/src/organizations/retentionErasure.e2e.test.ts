@@ -41,7 +41,11 @@ vi.mock('@bike4mind/fab-pipeline', async importActual => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated, deletePermanently: effects.deleteGenerated }),
+  getGeneratedImageStorage: () => ({
+    delete: effects.deleteGenerated,
+    deletePermanently: effects.deleteGenerated,
+    deletePrefixPermanently: effects.deletePrefix,
+  }),
   getPublishedArtifactsStorage: () => ({
     deletePrefix: effects.deletePrefix,
     deletePrefixPermanently: effects.deletePrefix,

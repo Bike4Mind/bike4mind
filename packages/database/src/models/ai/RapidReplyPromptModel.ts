@@ -1,5 +1,6 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { Logger } from '@bike4mind/observability';
 
 export interface IRapidReplyPromptDocument extends Document {
   id: string;
@@ -167,7 +168,7 @@ class RapidReplyPromptRepository
       await this.model.findByIdAndUpdate(id, { isActive: true });
       return true;
     } catch (error) {
-      console.error('Failed to activate version:', error);
+      Logger.error('Failed to activate rapid reply prompt version', { id, error });
       return false;
     }
   }

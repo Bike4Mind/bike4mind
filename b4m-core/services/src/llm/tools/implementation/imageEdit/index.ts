@@ -37,7 +37,6 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
-import { v4 as uuidv4 } from 'uuid';
 import { ExpectedImageGenerationError, NotFoundError, logImageGenerationFailure } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
@@ -247,7 +246,7 @@ export async function processAndStoreImage(
   const buffer = await downloadImageAsBuffer(imageUrl);
   const fileType = await fileTypeFromBuffer(buffer);
   // Same fallback as the image_generation tool: never store a `${uuid}.undefined` key.
-  const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
+  const filename = `${crypto.randomUUID()}.${fileType?.ext ?? 'png'}`;
   const mimeType = fileType?.mime ?? 'image/png';
 
   // Block moderated content BEFORE upload - see moderateToolImage doc comment.
@@ -259,7 +258,14 @@ export async function processAndStoreImage(
   await saveGeneratedAssetFromTool(context, {
     bytes: buffer,
     contentType: mimeType,
-    generation: { generator: 'image', provider, modelId, jobId: uuidv4(), prompt, ...(request && { request }) },
+    generation: {
+      generator: 'image',
+      provider,
+      modelId,
+      jobId: crypto.randomUUID(),
+      prompt,
+      ...(request && { request }),
+    },
     ...(derivedFrom?.length && { derivedFrom }),
     generatedOutputKey: path,
   });

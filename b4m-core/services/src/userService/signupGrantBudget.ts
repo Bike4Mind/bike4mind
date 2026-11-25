@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/common';
 import type mongoose from 'mongoose';
 import { callerTransactionSession } from './callerTransaction';
+import { Logger } from '@bike4mind/observability';
 
 type BudgetAdapters = {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>;
@@ -100,11 +101,11 @@ async function alertCrossing(
       const spent = await readSpent();
       // Reservations run inside callers' payout transactions and Slack can take seconds.
       budgetConfig.notify?.({ pool, day, threshold, spent, budget })?.catch(error => {
-        console.warn('[signup-grant-budget] Budget alert failed', error);
+        Logger.warn('[signup-grant-budget] Budget alert failed', { error });
       });
     }
   } catch (error) {
-    console.warn('[signup-grant-budget] Budget alert failed', error);
+    Logger.warn('[signup-grant-budget] Budget alert failed', { error });
   }
 }
 
@@ -200,7 +201,7 @@ export async function reserveSignupGrantBudget(
         released = true;
         if (scope) scopeDraws.get(scope)?.delete(drawKey);
         await budgetConfig.repository.refund(key, transactionId, amount).catch(error => {
-          console.warn('[signup-grant-budget] Refund failed; the day may under-report remaining budget', error);
+          Logger.warn('[signup-grant-budget] Refund failed; the day may under-report remaining budget', { error });
         });
       };
   if (scope && reservation.fresh) {

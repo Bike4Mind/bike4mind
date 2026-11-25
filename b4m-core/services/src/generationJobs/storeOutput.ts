@@ -50,6 +50,18 @@ export type StoreOutputDeps = {
   logger: Logger;
 };
 
+/**
+ * Folders of the generated bucket that hold fallback outputs, keyed `<folder>/<ownerId>/<jobId>.<ext>`.
+ * Account erasure deletes each folder's owner prefix.
+ */
+export const GENERATION_FALLBACK_FOLDERS = [
+  'generated-images',
+  'generated-audio',
+  'generated-video',
+  'studio-render',
+] as const;
+export type GenerationFallbackFolder = (typeof GENERATION_FALLBACK_FOLDERS)[number];
+
 export type StoreOutputParams = {
   job: Pick<IGenerationJobDocument, 'id' | 'ownerId' | 'requestedBy'>;
   /** Names the output in log lines: `${noun} saved outside Files`. */
@@ -62,7 +74,7 @@ export type StoreOutputParams = {
   sessionId?: string;
   questId?: string;
   /** The fallback key is `${bucketFolder}/${ownerId}/${jobId}.${extension}`. */
-  bucketFolder: string;
+  bucketFolder: GenerationFallbackFolder;
   extension: string;
   /**
    * What a rejecting Files save does. `fallback` keeps the output in the generated bucket (a sync submit cannot
