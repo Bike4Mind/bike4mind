@@ -199,6 +199,28 @@ describe('Studio generation', () => {
     expect(client.fetchGenerated).not.toHaveBeenCalled();
   });
 
+  it('rejects an image request the public API cannot carry before saving or sending anything', async () => {
+    const session = await sessions.create();
+    await expect(
+      service.submit(session.id, { ...image, body: { ...image.body, safetyTolerance: 2 } as never })
+    ).rejects.toThrow('provider safety');
+    expect(client.createImageJobGroup).not.toHaveBeenCalled();
+    expect((await workspaces.listJobs(session.id))?.items).toEqual([]);
+  });
+
+  it('does not read an image child again once its output is stored', async () => {
+    const session = await sessions.create();
+    client.createImageJobGroup.mockResolvedValue({ group_id: 'group', data: [{ id: 'one' }, { id: 'two' }] });
+    client.getImageJob.mockImplementation(async (id: string) =>
+      id === 'one' ? imageChild(id) : imageChild(id, { state: 'running', output: null })
+    );
+    const job = await service.submit(session.id, { ...image, count: 2 });
+    expect(await service.reconcile(session.id, job.id)).toMatchObject({ state: 'running', assetIds: [`${job.id}_0`] });
+    client.getImageJob.mockClear();
+    expect(await service.reconcile(session.id, job.id)).toMatchObject({ state: 'running', assetIds: [`${job.id}_0`] });
+    expect(client.getImageJob.mock.calls).toEqual([['two']]);
+  });
+
   it.each([
     ['blocked by the scan', imageChild('remote-image', { output: { availability: 'unavailable', url: null } })],
     ['gone from the server', null],

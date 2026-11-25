@@ -160,14 +160,12 @@ export class StudioGenerationService {
       if ((await this.requireWorkspace(sessionId, connection)).workspaceId !== workspace.workspaceId) {
         throw new Error('The Studio workspace changed.');
       }
+      const imageBody = request.kind === 'image' ? toCreateImageJobBody(request.body, request.count ?? 1) : undefined;
       await this.saveJob(sessionId, job, connection);
       try {
         this.assertConnection(connection);
-        if (request.kind === 'image') {
-          const result = await connection.client.createImageJobGroup(
-            toCreateImageJobBody(request.body, request.count ?? 1),
-            job.idempotencyKey
-          );
+        if (imageBody) {
+          const result = await connection.client.createImageJobGroup(imageBody, job.idempotencyKey);
           const first = result.data[0];
           if (!first) throw new Error('The server accepted the image request but returned no job to follow.');
           job = {
@@ -313,6 +311,12 @@ export class StudioGenerationService {
     let unsettled = false;
     // At most four children (the count cap), read one by one; StudioJobScheduler paces and backs off the calls.
     for (const [index, id] of ids.entries()) {
+      const assetId = `${job.id}_${index}`;
+      // A stored child is settled; skip the read so a batch does not re-poll finished images.
+      if (await this.findAsset(sessionId, assetId, connection)) {
+        assetIds.push(assetId);
+        continue;
+      }
       const child = await this.readImageChild(id, connection);
       this.assertConnection(connection);
       if (!child) {
@@ -327,23 +331,20 @@ export class StudioGenerationService {
         unsettled = true;
         continue;
       }
-      const assetId = `${job.id}_${index}`;
-      if (!(await this.findAsset(sessionId, assetId, connection))) {
-        if (child.output?.availability !== 'ready' || !child.output.url) {
-          errors.push(`Image ${index + 1} is unavailable.`);
-          continue;
-        }
-        const output = await connection.client.fetchGenerated(child.output.url);
-        await this.storeOutput(
-          sessionId,
-          workspaceId,
-          job,
-          index,
-          output.bytes,
-          output.contentType || child.output.content_type,
-          connection
-        );
+      if (child.output?.availability !== 'ready' || !child.output.url) {
+        errors.push(`Image ${index + 1} is unavailable.`);
+        continue;
       }
+      const output = await connection.client.fetchGenerated(child.output.url);
+      await this.storeOutput(
+        sessionId,
+        workspaceId,
+        job,
+        index,
+        output.bytes,
+        output.contentType || child.output.content_type,
+        connection
+      );
       assetIds.push(assetId);
     }
     const updated: StudioJob = {
