@@ -14,8 +14,12 @@ import { HostServer, pendingHostMethods, type HostServerRuntime } from './HostSe
 
 const summary = (id: string): ChatSessionSummary => ({ id, title: id }) as ChatSessionSummary;
 const status = (sessionId: string): ChatSessionStatusEvent => ({ sessionId, status: 'processing' });
-const token = (sessionId: string, text: string): ChatStreamEvent =>
-  ({ type: 'token', sessionId, messageId: 'm1', text }) as ChatStreamEvent;
+const token = (sessionId: string, text: string): ChatStreamEvent => ({
+  type: 'delta',
+  sessionId,
+  messageId: 'm1',
+  text,
+});
 
 function fakeRuntime(eventLog = new SessionEventLog({ epoch: 'epoch-1' })) {
   const runtime = {

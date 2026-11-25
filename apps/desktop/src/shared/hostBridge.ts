@@ -8,3 +8,12 @@ export type HostBridgeResponse = { ok: true; result: unknown } | { ok: false; er
 
 /** A host notification as it reaches a window, tagged with the host it came from. */
 export type HostNotificationDelivery = { hostId: string; notification: HostNotification };
+
+/**
+ * The renderer's way to the hosts. Not a generic passthrough: main serves only the methods in
+ * hostMethods, and checks each request's params against its method's schema before dispatch.
+ */
+export type HostBridgeApi = {
+  request(hostId: string, method: string, params?: unknown): Promise<HostBridgeResponse>;
+  onNotification(listener: (delivery: HostNotificationDelivery) => void): () => void;
+};
