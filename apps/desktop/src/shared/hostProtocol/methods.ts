@@ -57,6 +57,7 @@ export const hostErrorData = {
   pathUnavailable: z.object({ path: z.string(), reason: z.string() }),
   processNotFound: z.object({ sessionId: z.string(), processId: z.string() }),
 } as const satisfies Record<string, ZodType>;
+export type HostErrorData<K extends keyof typeof hostErrorData> = z.infer<(typeof hostErrorData)[K]>;
 
 /** Mirrors answerTaskDecision's arguments; an approval's `requestId` is the id respondToApproval takes. */
 const requestRespondParams = z.discriminatedUnion('kind', [
@@ -116,9 +117,28 @@ export const hostMethods = {
       confirmationRequired: archiveConfirmationSchema.optional(),
     }),
   },
+  // `allowDiscard` lets worktree cleanup discard uncommitted or unpushed work, keeping the branch;
+  // send it only after showing the user what that loses (since 1.2).
   'session/delete': {
-    params: z.object({ sessionId: z.string(), removeWorktree: z.boolean().optional() }),
+    params: z.object({
+      sessionId: z.string(),
+      removeWorktree: z.boolean().optional(),
+      allowDiscard: z.boolean().optional(),
+    }),
     result: emptyResult,
+  },
+  // Deletes `nestedIds` deepest first, then the session; `removeWorktree` is the session's own
+  // worktree and `nestedWorktreeIds` the nested sessions whose worktrees go too; cleanup may discard
+  // work in each, so send it only after showing what that loses. `error` names the first failure,
+  // after which nothing more is deleted (since 1.2).
+  'session/deleteTree': {
+    params: z.object({
+      sessionId: z.string(),
+      nestedIds: z.array(z.string()),
+      removeWorktree: z.boolean().optional(),
+      nestedWorktreeIds: z.array(z.string()).optional(),
+    }),
+    result: z.object({ deleted: z.array(z.string()), error: z.string().nullable() }),
   },
   // The host replays events after `after`, then streams live; when it cannot it fails with snapshotRequired.
   'session/subscribe': {
@@ -145,7 +165,7 @@ export const hostMethods = {
   // `~` or a relative path is taken from it. A path that is missing, not a directory or not
   // readable fails with pathUnavailable. `truncated` says the entry cap cut the list.
   'fs/browse': {
-    params: z.object({ path: z.string().optional() }),
+    params: z.object({ path: z.string().optional() }).optional(),
     result: z.object({
       path: z.string(),
       parent: z.string().nullable(),
