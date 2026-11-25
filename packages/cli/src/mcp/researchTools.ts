@@ -61,7 +61,8 @@ const ON_USER_REQUEST =
 
 const TRUST_NOTE =
   'Trust-widening changes (auto_admit_trusted, trusted_domains, max_auto_admits, blocked_domains, review_domains, item_rules, ' +
-  "min_relevance, query, source, feed_url, model) apply at once. Each appears in the lake's History and can usually be undone there.";
+  "min_relevance, query, source, feed_url, model) apply at once. Each appears in the lake's History and can usually be undone there. " +
+  ON_USER_REQUEST;
 
 export const RESEARCH_TOOL_META: ToolMeta[] = [
   {
