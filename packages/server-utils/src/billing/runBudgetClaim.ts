@@ -37,7 +37,7 @@ export async function claimRunBudget(claim: {
   minimumCredits: number;
   /** Named in the refusal as the credits the call needs (runBudgetExhaustedMessage). */
   neededCredits?: number;
-  /** Caps the claim at this share of what the run has left (CompletionRunRepository.claimBudget). */
+  /** Caps the claim above `minimumCredits` at this share of the rest (CompletionRunRepository.claimBudget). */
   maxShareOfRemaining?: number;
 }): Promise<number | undefined> {
   const outcome = await completionRunRepository.claimBudget(

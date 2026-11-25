@@ -18,8 +18,8 @@ import { claimRunBudget } from '@bike4mind/server-utils/billing/runBudgetClaim';
 export const COMPLETION_CREDIT_HOLD_TTL_MS = 60 * 60_000;
 const SETTLEMENT_ATTEMPTS = 3;
 /**
- * The most of a run's remaining budget one completion claim may take. A completion's claim is sized to
- * its full output budget but it can be cut short to fit, so capping it leaves the run's concurrent
+ * The most of a run's headroom past its minimum that one completion claim may take. A completion's
+ * claim is sized to its full output budget but it can be cut short to fit, so capping it leaves the run's concurrent
  * workers room to start; the round gate shrinks the round's output to the claim it got.
  */
 export const COMPLETION_CLAIM_SHARE_OF_REMAINING = 0.5;

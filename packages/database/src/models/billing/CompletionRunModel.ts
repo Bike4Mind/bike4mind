@@ -184,7 +184,8 @@ export class CompletionRunRepository {
    * `maxShareOfRemaining` (0-1] caps what one claim takes above its `minimumCredits` at that share of
    * the rest, so a claim that can shrink (a completion) leaves room for the run's concurrent work.
    * The share applies past the minimum, not to the whole remainder: a completion's minimum carries its
-   * input cost, and halving the whole remainder would squeeze a long-context round to a short answer. Must stay in sync with `claimableCredits`, which sizes the same claim on the read side.
+   * input cost, and halving the whole remainder would squeeze a long-context round to a short answer.
+   * Must stay in sync with `claimableCredits`, which sizes the same claim on the read side.
    */
   async claimBudget(
     runId: string,
