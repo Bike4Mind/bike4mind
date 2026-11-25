@@ -1,10 +1,32 @@
 import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
+import { initialUpdateState, reduceUpdate, type UpdateState } from '@shared/update';
 import { REPLY_STATS } from './replyStats';
-import { isSettingsSection, SETTINGS_SECTIONS, SettingsScreen, type SettingsSection } from './SettingsPanel';
+import { SettingsScreen } from './SettingsPanel';
+import { PAGE_ENTRIES, SETTINGS_SECTIONS, type SettingsSection } from './settingsNavigation';
 import { currentThemeMode, nextThemeMode, themeModeSummary } from './themeMode';
+import type { AppUpdateController } from './useAppUpdate';
+
+const update = vi.hoisted(() => ({ state: null as UpdateState | null }));
+
+vi.mock('./useAppUpdate', () => ({
+  useAppUpdate: (): AppUpdateController => ({
+    state: update.state ?? initialUpdateState('', false),
+    blockedBy: null,
+    downloadFailed: false,
+    check: () => {},
+    download: () => {},
+    install: async () => false,
+    dismissBlock: () => {},
+    dismiss: () => {},
+  }),
+}));
+
+beforeEach(() => {
+  update.state = initialUpdateState('1.2.3', true);
+});
 
 /** Rendered to a string, like CustomizePanel's tests and for the same reason: vitest runs on `node`. */
 const markup = (node: React.ReactNode) => renderToStaticMarkup(<CssVarsProvider>{node}</CssVarsProvider>);
@@ -18,111 +40,146 @@ const signedIn: AuthState = {
   user: { id: 'u1' },
 };
 
+const page = (section: SettingsSection, auth: AuthState | null = signedIn) =>
+  markup(<SettingsScreen auth={auth} section={section} onClose={() => {}} />);
+
+/** The page body only: the nav lists every page's name, which would match anything. */
+const pageBody = (html: string) => html.slice(html.indexOf('data-testid="settings-page-'));
+
+const entriesOn = (html: string) => [...pageBody(html).matchAll(/data-entry="([^"]+)"/g)].map(match => match[1]);
+
 describe('the Settings screen', () => {
   const html = markup(<SettingsScreen auth={signedIn} onClose={() => {}} />);
-  const page = (section: SettingsSection) =>
-    markup(<SettingsScreen auth={signedIn} section={section} onClose={() => {}} />);
 
-  it('opens on General, which holds app preferences, connection, and maintenance', () => {
+  it('opens on General', () => {
     expect(html).toContain('data-testid="settings-page-general"');
-    expect(html).toContain('data-entry="appearance"');
-    expect(html).toContain('data-entry="prompt-suggestions"');
-    expect(html).toContain('data-entry="server"');
-    expect(html).toContain('data-entry="updates"');
-    expect(html).toContain('data-entry="worktree-default"');
-    expect(html).toContain('data-entry="local-history"');
-    expect(html).toContain('data-entry="local-data-export"');
-    expect(html).toContain('settings-export-local-btn');
-    expect(html).toContain('data-entry="local-context"');
-    expect(html).toContain('settings-local-context-select');
-    expect(html).toContain('settings-clear-history-btn');
-    expect(html).toContain('data-entry="curated-list"');
-    expect(html).toContain('settings-curated-source-switch');
-    expect(html).not.toContain('data-entry="permissions"');
-    expect(html).not.toContain('data-entry="claude-import"');
+    expect(html).toContain('How the app looks and how the sidebar behaves.');
   });
 
-  it('lists every page in the side nav, whichever one is open', () => {
+  /** The guard for PAGE_ENTRIES: an entry the hook builds but no page lists would show up here. */
+  it.each(SETTINGS_SECTIONS)('shows exactly the %s entries PAGE_ENTRIES places there, in order', section => {
+    const expected: readonly string[] = PAGE_ENTRIES[section];
+    expect(entriesOn(page(section))).toEqual(expected);
+  });
+
+  it('places every entry on exactly one page', () => {
+    const all = SETTINGS_SECTIONS.flatMap(section => entriesOn(page(section)));
+    expect(new Set(all).size).toBe(all.length);
+    expect(all).toHaveLength(SETTINGS_SECTIONS.flatMap(section => PAGE_ENTRIES[section]).length);
+  });
+
+  it('lists every page in the side nav, whichever one is open, with About pinned last', () => {
     for (const section of SETTINGS_SECTIONS) {
       const html = page(section);
       for (const id of SETTINGS_SECTIONS) expect(html).toContain(`data-testid="settings-nav-${id}-btn"`);
+      expect(html.indexOf('settings-nav-about-btn')).toBeGreaterThan(html.indexOf('settings-nav-advanced-btn'));
     }
   });
 
-  it('groups each General setting once under a named section', () => {
-    const groups = html.split(/data-testid="settings-group-[^"]+"/).slice(1);
-    expect(groups).toHaveLength(5);
-    expect(html).not.toContain('data-testid="settings-group-other"');
-    const expected = [
-      ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
-      [
-        'prompt-suggestions',
-        'worktree-default',
-        'spawn-location',
-        'autofix-attempts',
-        'turn-extensions',
-        'orchestration-policy',
-      ],
-      ['local-context', 'reply-stats', 'curated-list'],
-      ['local-history', 'local-data-export'],
-      ['server', 'updates'],
-    ];
-    expected.forEach((entries, index) => {
-      for (const id of entries) {
-        expect(groups[index]).toContain(`data-entry="${id}"`);
-        expect(html.split(`data-entry="${id}"`)).toHaveLength(2);
-        expect(html).toContain(`aria-labelledby="settings-label-${id}"`);
-      }
-    });
+  it('shows the version under About and marks it when an update is waiting', () => {
+    const current = page('general');
+    expect(current).toContain('Version 1.2.3');
+    expect(current).not.toContain('data-testid="settings-nav-about-attention"');
+    update.state = reduceUpdate(initialUpdateState('1.2.3', true), { type: 'available', version: '1.3.0', at: 1 });
+    const offered = page('general');
+    const chip = offered.indexOf('data-testid="settings-nav-about-attention"');
+    expect(chip).toBeGreaterThan(-1);
+    expect(offered.slice(chip, chip + 2000)).toContain('>Update<');
+    expect(offered).not.toContain('data-testid="settings-nav-general-attention"');
   });
 
-  it('offers the notify scope next to the chime, agents only by default', () => {
-    expect(html).toContain('data-testid="settings-notify-scope-group"');
-    expect(html).toContain('data-testid="settings-notify-scope-agents-btn"');
-    expect(html).toContain('data-testid="settings-notify-scope-all-btn"');
-    expect(html).toContain('Agents only');
-    expect(html).toContain('All sessions');
+  it('says when the update server could not be reached, and offers release notes when known', () => {
+    update.state = reduceUpdate(initialUpdateState('1.2.3', true), { type: 'unreachable' });
+    const unreachable = page('about');
+    expect(unreachable).toContain('reach the update server.');
+    expect(unreachable).toMatch(/data-testid="update-check-btn"[^>]*>Try again</);
+    expect(unreachable).not.toContain('update-release-notes-btn');
+    update.state = {
+      ...reduceUpdate(initialUpdateState('1.2.3', true), { type: 'available', version: '1.3.0', at: 1 }),
+      releaseUrl: 'https://example.invalid/releases/1.3.0',
+    };
+    expect(page('about')).toContain('data-testid="update-release-notes-btn"');
   });
 
-  it('keeps advanced worker settings behind an expandable disclosure', () => {
-    expect(html).toContain('<details');
-    expect(html).toContain('data-testid="settings-worker-models-details"');
-    expect(html).toContain('data-testid="orchestration-settings"');
-  });
-
-  it('gives Permissions and Import a page each', () => {
+  it('gives the single-setting pages a heading and the control without a row around it', () => {
     const permissions = page('permissions');
+    expect(permissions).toContain('>Permissions</h2>');
     expect(permissions).toContain('data-entry="permissions"');
-    expect(permissions).not.toContain('data-entry="appearance"');
-    const imports = page('import');
-    expect(imports).toContain('data-entry="claude-import"');
-    expect(imports).not.toContain('data-entry="appearance"');
+    const about = page('about');
+    expect(about).toContain('Your version, updates, and what changed.');
+    expect(about).toContain('data-testid="update-settings"');
+    expect(about).not.toContain('aria-labelledby="settings-label-updates"');
   });
 
-  it('gives model servers their own page, which works signed out too', () => {
-    const servers = markup(<SettingsScreen auth={null} section="servers" onClose={() => {}} />);
-    expect(servers).toContain('data-entry="model-servers"');
-    expect(servers).toContain('data-testid="model-servers"');
-    expect(servers).not.toContain('data-entry="appearance"');
-    expect(isSettingsSection('servers')).toBe(true);
+  it('highlights the row a deep link names', () => {
+    const linked = markup(
+      <SettingsScreen auth={signedIn} section="models" setting="model-servers" onClose={() => {}} />
+    );
+    expect(linked).toMatch(/data-entry="model-servers" data-highlighted="true"/);
+    expect(linked).not.toMatch(/data-entry="reply-stats" data-highlighted/);
+    expect(page('models')).not.toContain('data-highlighted');
   });
 
-  it('only takes known page names from the route', () => {
-    expect(isSettingsSection('worktrees')).toBe(true);
-    expect(isSettingsSection('import')).toBe(true);
-    expect(isSettingsSection('billing')).toBe(false);
-    expect(isSettingsSection(undefined)).toBe(false);
+  it('works signed out, minus the server picker', () => {
+    const models = page('models', null);
+    expect(models).toContain('data-entry="model-servers"');
+    expect(models).toContain('data-testid="model-servers"');
+    expect(entriesOn(page('advanced', null))).not.toContain('server');
   });
 
-  it('offers appearance as a three-way choice', () => {
-    for (const mode of ['system', 'light', 'dark']) {
-      expect(html).toContain(`settings-appearance-${mode}-btn`);
+  it('offers the notify scope, agents only by default', () => {
+    const notifications = page('notifications');
+    expect(notifications).toContain('data-testid="settings-notify-scope-agents-btn"');
+    expect(notifications).toContain('data-testid="settings-notify-scope-all-btn"');
+    expect(notifications).toContain('data-testid="settings-orchestrator-sound-switch"');
+  });
+
+  it('keeps helper agent model settings behind an expandable disclosure', () => {
+    const agents = page('agents');
+    expect(agents).toContain('data-testid="settings-worker-models-details"');
+    expect(agents).toContain('data-testid="orchestration-settings"');
+    expect(agents).toContain('data-testid="settings-worktree-default-switch"');
+    expect(agents).toContain('data-testid="settings-autofix-attempts-select"');
+  });
+
+  it('offers appearance as a three-way choice, and the suggestion switch', () => {
+    for (const mode of ['system', 'light', 'dark']) expect(html).toContain(`settings-appearance-${mode}-btn`);
+    expect(html).toContain('data-testid="settings-suggestions-switch"');
+  });
+
+  it('keeps the reply stats detail in the control, under a one-line description', () => {
+    const models = page('models');
+    expect(models).toContain('Show speed and token counts beside each reply.');
+    expect(models).toContain('data-testid="settings-reply-stats-rail-switch"');
+    for (const id of REPLY_STATS) expect(models).toContain(`data-testid="settings-reply-stat-${id}-checkbox"`);
+    expect(models).toContain('Draft acceptance is reported by llama-server');
+    expect(models).toContain('settings-local-context-select');
+    expect(models).toContain('settings-curated-source-switch');
+  });
+
+  it('keeps local data, export and the Claude import together', () => {
+    const privacy = page('privacy');
+    expect(privacy).toContain('settings-clear-history-btn');
+    expect(privacy).toContain('settings-export-local-btn');
+  });
+
+  it('says how far the server choice reaches', () => {
+    const advanced = page('advanced');
+    expect(advanced).toContain('data-testid="environment-select-btn"');
+    expect(advanced).toContain('Hosted conversations use this server. Local models are not affected.');
+  });
+
+  it('gives every row a description', () => {
+    for (const section of SETTINGS_SECTIONS) {
+      const rows = pageBody(page(section)).split('aria-labelledby="settings-label-').slice(1);
+      for (const row of rows) expect(row).toMatch(/data-testid="config-entry-summary"[^>]*>[^<]+\./);
     }
   });
 
-  it('keeps Billing outside Settings', () => {
-    expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
-    expect(html).not.toContain('billing-loading');
+  it('starts with an empty search box and no results', () => {
+    expect(html).toContain('data-testid="settings-search-input"');
+    expect(html).toContain('placeholder="Search settings"');
+    expect(html).not.toContain('settings-search-results');
   });
 
   it.each([null, { ...signedIn, status: 'signed-out' as const }, { ...signedIn, user: undefined }])(
@@ -130,65 +187,13 @@ describe('the Settings screen', () => {
     auth => {
       const html = markup(<SettingsScreen auth={auth} onClose={() => {}} />);
       expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
-      expect(html).not.toContain('data-testid="settings-page-billing"');
       expect(html).not.toContain('billing-loading');
       expect(html).toContain('data-testid="settings-page-general"');
     }
   );
 
-  it('offers the suggested next prompt preference', () => {
-    expect(html).toContain('data-testid="settings-suggestions-switch"');
-  });
-
-  it('offers the auto-fix attempts setting', () => {
-    expect(html).toContain('data-entry="autofix-attempts"');
-    expect(html).toContain('data-testid="settings-autofix-attempts-select"');
-  });
-
-  it('offers the worktree-by-default preference', () => {
-    expect(html).toContain('data-testid="settings-worktree-default-switch"');
-  });
-
-  it('offers the orchestrator sound preference', () => {
-    expect(html).toContain('data-testid="settings-orchestrator-sound-switch"');
-  });
-
-  it('offers the reply stats rail and a checkbox per stat, in place of the old speed switch', () => {
-    expect(html).toContain('data-testid="settings-reply-stats-rail-switch"');
-    for (const id of REPLY_STATS) expect(html).toContain(`data-testid="settings-reply-stat-${id}-checkbox"`);
-    expect(html).toContain('Share of draft tokens accepted');
-    expect(html).toContain('Draft acceptance is reported by llama-server');
-    expect(html).not.toContain('settings-token-rate-switch');
-  });
-
-  it('mounts the same server picker and updater, not copies of them', () => {
-    expect(html).toContain('data-testid="environment-select-btn"');
-    expect(html).toContain('data-testid="update-settings"');
-  });
-
-  /** The caption came with the picker: it is the one thing the picker cannot say about itself. */
-  it('keeps the line saying how far the server choice reaches', () => {
-    expect(html).toContain('Hosted conversations use this server. Local models run on this device.');
-  });
-
-  it('says what the General page owns', () => {
-    expect(html).toContain('How the app looks, behaves, connects, and keeps itself up to date.');
-  });
-
   it('keeps a way out of the screen', () => {
     expect(html).toContain('data-testid="settings-close-btn"');
-  });
-
-  /**
-   * A renderer that has not talked to main yet knows of no server, and the screen is still the
-   * only place to set one - so the updater has to render without an auth state behind it.
-   */
-  it('still renders before auth has reported', () => {
-    const early = markup(<SettingsScreen auth={null} onClose={() => {}} />);
-    expect(early).toContain('data-entry="appearance"');
-    expect(early).toContain('data-entry="prompt-suggestions"');
-    expect(early).toContain('data-entry="updates"');
-    expect(early).not.toContain('data-entry="server"');
   });
 });
 

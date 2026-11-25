@@ -1,9 +1,11 @@
 import { OrchestrationSettings } from './OrchestrationSettings';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
+import Divider from '@mui/joy/Divider';
 import IconButton from '@mui/joy/IconButton';
+import Input from '@mui/joy/Input';
 import List from '@mui/joy/List';
 import ListItem from '@mui/joy/ListItem';
 import ListItemButton from '@mui/joy/ListItemButton';
@@ -30,14 +32,18 @@ import { AutoFixAttemptsSettings, autoFixAttemptsSummary, useAutoFixAttempts } f
 import { TurnExtensionsSettings, turnExtensionsSummary, useTurnExtensions } from './TurnExtensionsSettings';
 import type { CuratedListSettings as CuratedListSettingsState } from '@shared/models';
 import { CuratedListSettings, curatedListSummary, useCuratedListSettings } from './CuratedListSettings';
-import { SettingsRow, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
+import { SettingsRow, entryAttentionChip, settingHighlightSx, type ConfigEntry } from './ConfigEntry';
 import {
+  AgentsIcon,
   ArrowLeftIcon,
   BranchIcon,
   ContrastIcon,
   DownloadIcon,
   FolderIcon,
+  GearIcon,
+  ModelsIcon,
   PullRequestIcon,
+  SearchIcon,
   ServerIcon,
   ShieldIcon,
   SlidersIcon,
@@ -72,6 +78,17 @@ import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode
 import { UpdateSettings } from './UpdateSettings';
 import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 import { useWorktreeByDefault, worktreeDefaultSummary } from './worktreeDefault';
+import {
+  PAGE_ENTRIES,
+  SECTION_INTRO,
+  SECTION_LABEL,
+  SETTINGS_SECTIONS,
+  isSettingId,
+  matchSettings,
+  sectionOfSetting,
+  type SettingId,
+  type SettingsSection,
+} from './settingsNavigation';
 
 const settingsColumnSx = {
   ...contentColumnSx,
@@ -79,9 +96,6 @@ const settingsColumnSx = {
   boxSizing: 'border-box',
   px: { xs: 3, md: 5 },
 } as const;
-
-/** What the General page is for, said on the page so it does not have to be inferred from a name. */
-const SETTINGS_INTRO = 'How the app looks, behaves, connects, and keeps itself up to date.';
 
 const THEME_MODE_LABEL: Record<ThemeMode, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 
@@ -129,9 +143,9 @@ function suggestionsEntry(enabled: boolean, toggle: () => void, model: string | 
   return {
     id: 'prompt-suggestions',
     icon: <SparkIcon />,
-    label: 'Suggested next prompt',
+    label: 'Suggest a next prompt',
     summary: promptSuggestionsSummary(enabled, model),
-    description: 'Suggest a next prompt after a reply. Uses a little extra model usage.',
+    description: 'Offer a next prompt after each reply, for a little extra model usage.',
     control: (
       <Stack spacing={1.25} sx={{ alignItems: { xs: 'flex-start', md: 'flex-end' } }}>
         <Switch
@@ -140,7 +154,7 @@ function suggestionsEntry(enabled: boolean, toggle: () => void, model: string | 
           onChange={toggle}
           sx={{ alignSelf: { xs: 'flex-start', md: 'flex-end' } }}
           slotProps={{
-            input: { 'aria-label': 'Suggested next prompt', 'data-testid': 'settings-suggestions-switch' },
+            input: { 'aria-label': 'Suggest a next prompt', 'data-testid': 'settings-suggestions-switch' },
           }}
         />
         {enabled && (
@@ -168,8 +182,7 @@ function worktreeEntry(enabled: boolean, toggle: () => void): ConfigEntry {
     icon: <BranchIcon />,
     label: 'Worktree by default',
     summary: worktreeDefaultSummary(enabled),
-    description:
-      'Start Code sessions in a separate git worktree by default. You can change this before the first message.',
+    description: 'Start Code sessions in their own git worktree; you can still change it before the first message.',
     control: (
       <Switch
         size="sm"
@@ -194,7 +207,7 @@ function autoFixAttemptsEntry(
     label: 'Auto-fix attempts',
     summary: autoFixAttemptsSummary(attempts),
     description:
-      'How many times auto-fix tries a pull request before it stops. Takes effect when you next turn auto-fix on. Raising it also applies where auto-fix is already on.',
+      'How many times auto-fix tries a pull request before it stops, from the next time you turn it on (a raise also reaches pull requests where it is already on).',
     control: <AutoFixAttemptsSettings attempts={attempts} onChange={onChange} error={error} />,
   };
 }
@@ -207,10 +220,10 @@ function turnExtensionsEntry(
   return {
     id: 'turn-extensions',
     icon: <SlidersIcon />,
-    label: 'Long-running agents',
+    label: 'Extra turns for long tasks',
     summary: turnExtensionsSummary(extensions),
     description:
-      'When an agent reaches its turn budget while still making progress, it carries on by itself up to this many times per message. Each extension spends more credits. An agent repeating the same step always stops.',
+      'An agent that hits its turn budget while still making progress carries on up to this many times per message, spending more credits each time, but one repeating the same step always stops.',
     control: <TurnExtensionsSettings extensions={extensions} onChange={onChange} error={error} />,
   };
 }
@@ -219,17 +232,19 @@ function nestedSessionsEntry(enabled: boolean, toggle: () => void): ConfigEntry 
   return {
     id: 'nested-sessions',
     icon: <SubSessionsIcon />,
-    label: 'Nest sub-sessions',
+    label: 'Group sub-sessions under their parent',
     summary: nestedSessionsSummary(enabled),
-    description:
-      'Group agent-created sessions under the conversation that started them. Turn off to list each session separately.',
+    description: 'In the sidebar, sessions an agent started sit inside the session that started them.',
     control: (
       <Switch
         size="sm"
         checked={enabled}
         onChange={toggle}
         slotProps={{
-          input: { 'aria-label': 'Nest sub-sessions', 'data-testid': 'settings-nested-sessions-switch' },
+          input: {
+            'aria-label': 'Group sub-sessions under their parent',
+            'data-testid': 'settings-nested-sessions-switch',
+          },
         }}
       />
     ),
@@ -240,17 +255,19 @@ function prAttentionSortEntry(enabled: boolean, setEnabled: (enabled: boolean) =
   return {
     id: 'pr-attention-sort',
     icon: <PullRequestIcon />,
-    label: 'Sort by pull request attention',
+    label: 'Sort the sidebar by pull request status',
     summary: prAttentionSortSummary(enabled),
-    description:
-      'Within each sidebar group, list sessions whose pull request has conflicts, failing CI or requested changes first.',
+    description: 'Sessions whose pull request needs you move to the top.',
     control: (
       <Switch
         size="sm"
         checked={enabled}
         onChange={event => setEnabled(event.target.checked)}
         slotProps={{
-          input: { 'aria-label': 'Sort by pull request attention', 'data-testid': 'settings-pr-attention-sort-switch' },
+          input: {
+            'aria-label': 'Sort the sidebar by pull request status',
+            'data-testid': 'settings-pr-attention-sort-switch',
+          },
         }}
       />
     ),
@@ -261,17 +278,16 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
   return {
     id: 'orchestrator-sound',
     icon: <SoundIcon />,
-    label: 'Orchestrator sounds',
+    label: 'Play sounds',
     summary: enabled ? 'Sounds are on.' : 'Muted.',
-    description:
-      'Play a chime when an agent needs your attention, and the sounds picked below. Turn off to mute everything.',
+    description: 'A chime when an agent needs you, plus the events you pick below.',
     control: (
       <Switch
         size="sm"
         checked={enabled}
         onChange={toggle}
         slotProps={{
-          input: { 'aria-label': 'Orchestrator sounds', 'data-testid': 'settings-orchestrator-sound-switch' },
+          input: { 'aria-label': 'Play sounds', 'data-testid': 'settings-orchestrator-sound-switch' },
         }}
       />
     ),
@@ -282,10 +298,10 @@ function orchestratorSoundMixEntry(): ConfigEntry {
   return {
     id: 'orchestrator-sound-mix',
     icon: <SoundIcon />,
-    label: 'Sound volume and events',
+    label: 'Volume and events',
     summary: 'Volume and which moments make a sound.',
     description:
-      'The needs-you chime always plays while sounds are on. A sound pack (picked from the view menu) replaces the other sounds.',
+      'The needs-you chime always plays while sounds are on, and a sound pack from the view menu replaces the rest.',
     control: <SoundMixControl />,
   };
 }
@@ -334,7 +350,7 @@ function spawnLocationEntry(location: SpawnLocation, setLocation: (location: Spa
     label: 'New agent sessions',
     summary: spawnLocationSummary(location),
     description:
-      'Where a session another session hands work to starts. With Approve for me or Full access it starts at once; in Ask mode a card confirms it with one click.',
+      'Where a session started by another session opens; with Approve for me or Full access it starts at once, and in Ask mode a card confirms it.',
     control: (
       <ToggleButtonGroup
         size="sm"
@@ -368,8 +384,7 @@ function menuBarEntry(shown: boolean, toggle: () => void): ConfigEntry {
     icon: null,
     label: 'Show in menu bar',
     summary: shown ? 'Agent status and quick approvals in the menu bar.' : 'Off.',
-    description:
-      'Show how your orchestrations are doing in the menu bar, with quick approvals and the mini Tavern. It appears once you start an orchestration.',
+    description: 'Running agents at a glance in the menu bar, with quick approvals.',
     control: (
       <Switch
         size="sm"
@@ -387,6 +402,7 @@ function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => vo
     icon: <ContrastIcon />,
     label: 'Show dollar costs',
     summary: 'Development only. Show dollars while streaming and in usage details.',
+    description: 'Show dollar amounts while a reply streams and in usage details (development builds only).',
     control: (
       <Switch
         size="sm"
@@ -404,8 +420,7 @@ function replyStatsEntry(prefs: ReplyStatsPrefs): ConfigEntry {
     icon: <StatsIcon />,
     label: 'Reply stats',
     summary: replyStatsSummary(prefs),
-    description:
-      'Timing, tokens and speed for each reply, beside it when the window is wide enough and you are in the chat view. Otherwise, in a narrow window or while orchestrating, the speed, total, model load and thinking time show under the reply on hover, and the rest in its tooltip. Each shows only where the model or server reports it; a figure starting with ~ is an estimate. Draft acceptance is reported by llama-server running a draft model.',
+    description: 'Show speed and token counts beside each reply.',
     control: (
       <Stack spacing={1.25} sx={{ alignItems: { xs: 'flex-start', md: 'flex-end' } }}>
         <Switch
@@ -433,6 +448,12 @@ function replyStatsEntry(prefs: ReplyStatsPrefs): ConfigEntry {
             />
           ))}
         </Stack>
+        <Typography level="body-xs" textColor="text.tertiary" sx={{ maxWidth: 300 }}>
+          Beside the reply when the window is wide enough and you are in the chat view. Otherwise, in a narrow window or
+          while orchestrating, the speed, total, model load and thinking time show under the reply on hover, and the
+          rest in its tooltip. Each shows only where the model or server reports it; a figure starting with ~ is an
+          estimate. Draft acceptance is reported by llama-server running a draft model.
+        </Typography>
       </Stack>
     ),
   };
@@ -447,8 +468,9 @@ function localContextEntry(
   return {
     id: 'local-context',
     icon: <SlidersIcon />,
-    label: 'Local model context',
+    label: 'Memory for local models',
     summary: localContextSummary(setting),
+    description: 'How much of the conversation a local model can see. More uses more memory.',
     control: <LocalContextSettings setting={setting} onChange={onChange} error={error} fit={fit} />,
   };
 }
@@ -463,13 +485,13 @@ function curatedListEntry(
   return {
     id: 'curated-list',
     icon: <DownloadIcon />,
-    label: 'Curated models list',
+    label: 'Keep the model list up to date',
     summary: !settings && error ? error : curatedListSummary(settings),
     description:
       !settings && error
         ? error
         : settings?.available
-          ? 'Check for an updated list when you open Models, at most every 6 hours. Models are never downloaded automatically.'
+          ? 'Check for an updated list when you open Models, at most every 6 hours, without ever downloading a model.'
           : curatedListSummary(settings),
     control: (
       <CuratedListSettings settings={settings} onEnabled={onEnabled} error={error} onRetry={onRetry} saving={saving} />
@@ -481,8 +503,9 @@ function localHistoryEntry(): ConfigEntry {
   return {
     id: 'local-history',
     icon: <FolderIcon />,
-    label: 'Local history',
+    label: 'Keep history on this device',
     summary: 'Opted-in conversations and pages stay on this device and remain searchable offline.',
+    description: 'Conversations you opt in stay on this device and are never uploaded.',
     control: <LocalHistorySettings />,
   };
 }
@@ -553,7 +576,7 @@ function localDataExportEntry(): ConfigEntry {
     label: 'Export local data',
     summary: 'Save your local conversations and project memories in a portable bundle.',
     description:
-      'Save conversations, attachments, generated media, and project memories to a folder. Credentials and server settings are not included.',
+      'Save conversations, attachments, generated media and project memories to a folder, without credentials or server settings.',
     control: <LocalDataExport />,
   };
 }
@@ -564,6 +587,7 @@ function worktreesEntry(): ConfigEntry {
     icon: <BranchIcon />,
     label: 'Worktrees',
     summary: 'Worktrees the app made for your projects, and the ones no conversation uses any more.',
+    description: 'Worktrees the app made for your projects, and the ones no conversation uses any more.',
     control: <WorktreesSettings />,
   };
 }
@@ -579,6 +603,7 @@ function permissionsEntry(
     icon: <ShieldIcon />,
     label: 'Permissions',
     summary: permissionsSummary(state),
+    description: 'Allow, ask and deny rules for what agents may do.',
     control: <PermissionsSettings state={state} onState={setState} loadError={loadError} onRetry={onRetry} />,
   };
 }
@@ -595,6 +620,7 @@ function claudeImportEntry(
     icon: <FolderIcon />,
     label: 'Import from Claude',
     summary: loadError ? 'Could not load import settings' : claudeImportSummary(state),
+    description: 'Bring your Claude Code sessions and Claude chats into the app, and keep them in sync.',
     control: (
       <ClaudeImportSettings state={state} onState={setState} loadError={loadError} onRetry={onRetry} focus={focus} />
     ),
@@ -612,20 +638,12 @@ function serverEntry(state: AuthState): ConfigEntry {
   return {
     id: 'server',
     icon: <ServerIcon />,
-    label: 'Server',
+    label: 'Bike4Mind server',
     summary: state.environment.url ? state.environment.label : 'No server is set yet',
-    control: (
-      <Stack spacing={1.5}>
-        {/* The scope is said out loud because it is the one thing the picker's own caption
-            cannot tell you: how far the choice reaches. It is a choice of backend, never of
-            where the agent runs; this app's agent is the Electron main process and has
-            nowhere else to go. */}
-        <Typography level="body-xs" textColor="text.tertiary">
-          Hosted conversations use this server. Local models run on this device.
-        </Typography>
-        <EnvironmentPicker state={state} />
-      </Stack>
-    ),
+    // How far the choice reaches is the one thing the picker cannot say about itself. It picks a
+    // backend, never where the agent runs: this app's agent is the Electron main process.
+    description: 'Hosted conversations use this server. Local models are not affected.',
+    control: <EnvironmentPicker state={state} />,
   };
 }
 
@@ -637,6 +655,7 @@ function updatesEntry(controller: AppUpdateController): ConfigEntry {
     icon: <DownloadIcon />,
     label: 'Updates',
     summary: updateSummary(controller.state),
+    description: 'Check for, download and install new versions of the app.',
     ...(attention ? { attention, attentionColor: 'primary' as const } : {}),
     control: <UpdateSettings controller={controller} />,
   };
@@ -654,43 +673,47 @@ function modelServersEntry(
     icon: <ServerIcon />,
     label: 'Model servers',
     summary: modelServersSummary(servers),
+    description: 'This computer, plus Ollama or OpenAI-compatible servers on other machines.',
     ...(attention ? { attention } : {}),
     control: <ModelServersSettings servers={servers} onServers={setServers} loadError={loadError} />,
   };
 }
 
-/** The pages of Settings, in the order the side nav lists them. */
-export const SETTINGS_SECTIONS = ['general', 'servers', 'permissions', 'import', 'worktrees'] as const;
-export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
-
-export function isSettingsSection(value: unknown): value is SettingsSection {
-  return SETTINGS_SECTIONS.includes(value as SettingsSection);
-}
-
 /** px, border included; the header indents its column by this much. */
-const SETTINGS_NAV_WIDTH = 200;
+const SETTINGS_NAV_WIDTH = 256;
 
-const SECTION_LABEL: Record<SettingsSection, string> = {
-  general: 'General',
-  servers: 'Model servers',
-  permissions: 'Permissions',
-  import: 'Import',
-  worktrees: 'Worktrees',
-};
+/** ms a deep-linked row stays highlighted. */
+const HIGHLIGHT_MS = 3000;
+
+/** Every page but About, which sits pinned at the foot of the nav. */
+const LISTED_SECTIONS = SETTINGS_SECTIONS.filter(section => section !== 'about');
 
 const SECTION_ICON: Record<SettingsSection, ReactNode> = {
-  general: <SlidersIcon />,
-  servers: <ServerIcon />,
+  general: <GearIcon />,
+  notifications: <SoundIcon />,
+  agents: <AgentsIcon />,
+  models: <ModelsIcon />,
   permissions: <ShieldIcon />,
-  import: <FolderIcon />,
-  worktrees: <BranchIcon />,
+  privacy: <FolderIcon />,
+  advanced: <SlidersIcon />,
+  about: <DownloadIcon />,
 };
 
+/** Settings whose control needs the full row width rather than a column beside the label. */
+const EXPANDED_SETTINGS = new Set([
+  'orchestrator-sound-mix',
+  'orchestration-policy',
+  'local-context',
+  'model-servers',
+  'permissions',
+  'claude-import',
+  'server',
+  'worktrees',
+  'updates',
+]);
+
 /**
- * Every Settings entry, grouped by the page that shows it.
- *
- * What the app talks to comes before how it maintains itself: the server is the setting a user
- * arrives here to change, and an update is the one that arrives on its own.
+ * Every Settings entry. PAGE_ENTRIES (settingsNavigation.ts) decides which page shows each.
  *
  * Nothing stays mounted while the page is shut. What an unopened Settings still has to report
  * is one string, which the account strip reads for itself - see `useSettingsAttention`.
@@ -698,7 +721,7 @@ const SECTION_ICON: Record<SettingsSection, ReactNode> = {
 function useSettingsEntries(
   auth: AuthState | null,
   importFocus?: ClaudeImportKind
-): Record<SettingsSection, ConfigEntry[]> {
+): { entries: ConfigEntry[]; appVersion: string } {
   const showDollarCosts = useCostDisplayPreference(state => state.showDollarCosts);
   const setShowDollarCosts = useCostDisplayPreference(state => state.setShowDollarCosts);
   const replyStatsPrefs = useReplyStatsPrefs();
@@ -723,154 +746,206 @@ function useSettingsEntries(
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
 
-  return {
-    general: [
-      appearanceEntry(mode, setMode, theme.palette.mode),
-      suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
-      worktreeEntry(worktreeDefault, toggleWorktreeDefault),
-      spawnLocationEntry(spawnLocation, setSpawnLocation),
-      autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
-      turnExtensionsEntry(turnExtensions, next => void setTurnExtensions(next), turnExtensionsError),
-      nestedSessionsEntry(nestedSessions, toggleNestedSessions),
-      prAttentionSortEntry(sortByAttention, setSortByAttention),
-      orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
-      orchestratorSoundMixEntry(),
-      notifyScopeEntry(notifyScope, setNotifyScope),
-      menuBarEntry(menuBar, toggleMenuBar),
-      {
-        id: 'orchestration-policy',
-        icon: null,
-        label: 'Orchestration worker models',
-        summary: 'Explicit worker defaults and targeted model upgrades',
-        control: (
-          <Box component="details">
-            <Typography
-              component="summary"
-              level="body-sm"
-              sx={{ display: 'list-item', cursor: 'pointer', color: 'text.secondary' }}
-              data-testid="settings-worker-models-details"
-            >
-              Configure worker models
-            </Typography>
-            <Box sx={{ mt: 2 }}>
-              <OrchestrationSettings key={`${auth?.environment?.url ?? 'device'}:${auth?.user?.id ?? 'local'}`} />
-            </Box>
+  const entries: ConfigEntry[] = [
+    appearanceEntry(mode, setMode, theme.palette.mode),
+    menuBarEntry(menuBar, toggleMenuBar),
+    suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
+    nestedSessionsEntry(nestedSessions, toggleNestedSessions),
+    prAttentionSortEntry(sortByAttention, setSortByAttention),
+    notifyScopeEntry(notifyScope, setNotifyScope),
+    orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
+    orchestratorSoundMixEntry(),
+    spawnLocationEntry(spawnLocation, setSpawnLocation),
+    worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+    autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
+    turnExtensionsEntry(turnExtensions, next => void setTurnExtensions(next), turnExtensionsError),
+    {
+      id: 'orchestration-policy',
+      icon: null,
+      label: 'Models for helper agents',
+      summary: 'Explicit worker defaults and targeted model upgrades',
+      description: 'Which models Orchestrate may pick for the agents it starts.',
+      control: (
+        <Box component="details">
+          <Typography
+            component="summary"
+            level="body-sm"
+            sx={{ display: 'list-item', cursor: 'pointer', color: 'text.secondary' }}
+            data-testid="settings-worker-models-details"
+          >
+            Configure worker models
+          </Typography>
+          <Box sx={{ mt: 2 }}>
+            <OrchestrationSettings key={`${auth?.environment?.url ?? 'device'}:${auth?.user?.id ?? 'local'}`} />
           </Box>
-        ),
-      },
-      localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
-      replyStatsEntry(replyStatsPrefs),
-      curatedListEntry(
-        curatedList.settings,
-        enabled => void curatedList.setEnabled(enabled),
-        curatedList.error,
-        () => void curatedList.reload(),
-        curatedList.saving
+        </Box>
       ),
-      localHistoryEntry(),
-      localDataExportEntry(),
-      ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
-      ...(auth ? [serverEntry(auth)] : []),
-      updatesEntry(update),
-    ],
-    servers: [modelServersEntry(modelServers, setModelServers, modelServersError)],
-    permissions: [permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions)],
-    import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport, importFocus)],
-    worktrees: [worktreesEntry()],
-  };
+    },
+    replyStatsEntry(replyStatsPrefs),
+    localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
+    curatedListEntry(
+      curatedList.settings,
+      enabled => void curatedList.setEnabled(enabled),
+      curatedList.error,
+      () => void curatedList.reload(),
+      curatedList.saving
+    ),
+    modelServersEntry(modelServers, setModelServers, modelServersError),
+    permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions),
+    localHistoryEntry(),
+    localDataExportEntry(),
+    claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport, importFocus),
+    ...(auth ? [serverEntry(auth)] : []),
+    worktreesEntry(),
+    ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
+    updatesEntry(update),
+  ];
+  return { entries, appVersion: update.state.currentVersion };
 }
 
-/** A page that is one setting needs no box around it: the page heading is its label. */
-function SingleEntryPage({ entry }: { entry: ConfigEntry }) {
+/** The page an entry shows on. One PAGE_ENTRIES forgot lands on Advanced rather than nowhere. */
+function pageOf(id: string): SettingsSection {
+  return sectionOfSetting(id) ?? 'advanced';
+}
+
+/** A page's entries in PAGE_ENTRIES order, then (Advanced only) any that no page lists. */
+function pageEntries(section: SettingsSection, entries: readonly ConfigEntry[]): ConfigEntry[] {
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const ids: readonly string[] = PAGE_ENTRIES[section];
+  const placed = ids.flatMap(id => byId.get(id) ?? []);
+  if (section !== 'advanced') return placed;
+  return [...placed, ...entries.filter(entry => !isSettingId(entry.id))];
+}
+
+function PageHeading({ title, intro }: { title: string; intro: string }) {
   return (
-    <Stack spacing={2} data-testid="config-section" data-entry={entry.id}>
-      <Stack>
-        <Typography level="title-lg">{entry.label}</Typography>
-        <Typography level="body-sm" textColor="text.tertiary" data-testid="config-entry-summary">
-          {entry.summary}
-        </Typography>
-      </Stack>
-      {entry.control}
+    <Stack spacing={1}>
+      <Typography component="h2" level="h3" sx={{ fontSize: 26 }}>
+        {title}
+      </Typography>
+      <Typography level="body-sm" textColor="text.tertiary" data-testid="settings-page-intro">
+        {intro}
+      </Typography>
     </Stack>
   );
 }
 
-const GENERAL_GROUPS = [
-  {
-    id: 'appearance',
-    label: 'Appearance & feedback',
-    entries: [
-      'appearance',
-      'orchestrator-sound',
-      'orchestrator-sound-mix',
-      'notify-scope',
-      'menu-bar',
-      'nested-sessions',
-      'pr-attention-sort',
-    ],
-  },
-  {
-    id: 'conversations',
-    label: 'Conversations & code',
-    entries: [
-      'prompt-suggestions',
-      'worktree-default',
-      'spawn-location',
-      'autofix-attempts',
-      'turn-extensions',
-      'orchestration-policy',
-    ],
-  },
-  { id: 'models', label: 'Models', entries: ['local-context', 'reply-stats', 'curated-list'] },
-  { id: 'data', label: 'Data & privacy', entries: ['local-history', 'local-data-export'] },
-  { id: 'connection', label: 'Connection & updates', entries: ['server', 'updates', 'dollar-costs'] },
-];
-
-const EXPANDED_SETTINGS = new Set([
-  'orchestrator-sound-mix',
-  'orchestration-policy',
-  'local-context',
-  'server',
-  'updates',
-]);
-
-/** Entries missing from GENERAL_GROUPS land in a trailing "Other" group instead of vanishing. */
-function groupEntries(entries: ConfigEntry[]) {
-  const grouped = new Set(GENERAL_GROUPS.flatMap(group => group.entries));
-  const groups = [
-    ...GENERAL_GROUPS.map(group => ({
-      group,
-      rows: group.entries.flatMap(id => entries.filter(entry => entry.id === id)),
-    })),
-    { group: { id: 'other', label: 'Other' }, rows: entries.filter(entry => !grouped.has(entry.id)) },
-  ];
-  return groups.filter(({ rows }) => rows.length > 0);
+/** A page that is one setting needs no row around it: the page heading is its label. */
+function SingleEntryPage({ entry, highlighted }: { entry: ConfigEntry; highlighted: boolean }) {
+  return (
+    <Box
+      data-testid="config-section"
+      data-entry={entry.id}
+      data-highlighted={highlighted ? 'true' : undefined}
+      sx={{ ...settingHighlightSx(highlighted), py: 1 }}
+    >
+      {entry.control}
+    </Box>
+  );
 }
 
-function SectionPage({ section, entries }: { section: SettingsSection; entries: ConfigEntry[] }) {
-  if (entries.length === 1) return <SingleEntryPage entry={entries[0]} />;
+function SectionPage({
+  section,
+  entries,
+  highlighted,
+}: {
+  section: SettingsSection;
+  entries: readonly ConfigEntry[];
+  highlighted: string | undefined;
+}) {
+  const rows = pageEntries(section, entries);
+  const single = rows.length === 1 ? rows[0] : undefined;
+  const intro = section === 'permissions' ? (rows[0]?.summary ?? '') : SECTION_INTRO[section];
   return (
-    <Stack spacing={4}>
+    <Stack spacing={single ? 2 : 3}>
+      <PageHeading title={SECTION_LABEL[section]} intro={intro} />
+      {/* About's row summary is the version line, which the intro does not repeat. */}
+      {single && single.summary !== intro && (
+        <Typography level="body-sm" textColor="text.secondary" data-testid="config-entry-summary">
+          {single.summary}
+        </Typography>
+      )}
+      {single ? (
+        <SingleEntryPage entry={single} highlighted={highlighted === single.id} />
+      ) : (
+        <Box>
+          {rows.map(entry => (
+            <SettingsRow
+              key={entry.id}
+              entry={entry}
+              expanded={EXPANDED_SETTINGS.has(entry.id)}
+              highlighted={highlighted === entry.id}
+            />
+          ))}
+        </Box>
+      )}
+    </Stack>
+  );
+}
+
+function SearchResults({
+  query,
+  entries,
+  onOpen,
+}: {
+  query: string;
+  entries: readonly ConfigEntry[];
+  onOpen: (id: string) => void;
+}) {
+  const results = matchSettings(query, entries);
+  const groups = SETTINGS_SECTIONS.map(section => ({
+    section,
+    rows: results.filter(entry => pageOf(entry.id) === section),
+  })).filter(group => group.rows.length > 0);
+
+  return (
+    <Stack spacing={3} data-testid="settings-search-results">
       <Stack spacing={1}>
         <Typography component="h2" level="h3" sx={{ fontSize: 26 }}>
-          {SECTION_LABEL[section]}
+          {`Results for "${query.trim()}"`}
         </Typography>
-        <Typography level="body-sm" textColor="text.tertiary">
-          {SETTINGS_INTRO}
+        <Typography level="body-sm" textColor="text.tertiary" data-testid="settings-search-count">
+          {results.length === 1 ? '1 setting' : `${results.length} settings`}
         </Typography>
       </Stack>
-      {groupEntries(entries).map(({ group, rows }) => (
+      {groups.length === 0 && (
+        <Typography level="body-md" textColor="text.secondary" data-testid="settings-search-empty">
+          {'No settings match. Try "sound", "theme" or "version".'}
+        </Typography>
+      )}
+      {groups.map(({ section, rows }) => (
         <Box
           component="section"
-          key={group.id}
-          aria-labelledby={`settings-group-${group.id}`}
-          data-testid={`settings-group-${group.id}`}
+          key={section}
+          aria-labelledby={`settings-results-${section}`}
+          data-testid={`settings-results-${section}`}
         >
-          <Typography id={`settings-group-${group.id}`} component="h3" level="title-md" sx={{ mb: 0.5 }}>
-            {group.label}
+          <Typography
+            id={`settings-results-${section}`}
+            component="h3"
+            level="title-sm"
+            textColor="text.tertiary"
+            sx={{ mb: 0.5 }}
+          >
+            {SECTION_LABEL[section]}
           </Typography>
           {rows.map(entry => (
-            <SettingsRow key={entry.id} entry={entry} expanded={EXPANDED_SETTINGS.has(entry.id)} />
+            <SettingsRow
+              key={entry.id}
+              entry={entry}
+              expanded={EXPANDED_SETTINGS.has(entry.id)}
+              action={
+                <Button
+                  size="sm"
+                  variant="plain"
+                  onClick={() => onOpen(entry.id)}
+                  sx={{ ml: 'auto', flexShrink: 0 }}
+                  data-testid={`settings-result-open-${entry.id}-btn`}
+                >
+                  Open in {SECTION_LABEL[section]}
+                </Button>
+              }
+            />
           ))}
         </Box>
       ))}
@@ -878,29 +953,135 @@ function SectionPage({ section, entries }: { section: SettingsSection; entries: 
   );
 }
 
+function prefersReducedMotion(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/**
+ * The deep-linked row, highlighted for HIGHLIGHT_MS once its page is up, after scrolling it into view.
+ * Seeded from `setting` so the first paint already carries the highlight. `request` replays it for
+ * the same row. `scroll` is off when Claude import will scroll to its own focused source instead.
+ */
+function useRowHighlight(
+  page: RefObject<HTMLElement | null>,
+  section: SettingsSection,
+  setting: string | undefined,
+  request: number,
+  scroll: boolean
+): string | undefined {
+  const [highlighted, setHighlighted] = useState(setting);
+  useEffect(() => {
+    setHighlighted(setting);
+    if (!setting) return;
+    if (scroll) {
+      page.current
+        ?.querySelector(`[data-entry="${setting}"]`)
+        ?.scrollIntoView?.({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    }
+    const timer = window.setTimeout(() => setHighlighted(undefined), HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [page, section, setting, request, scroll]);
+  return highlighted;
+}
+
+/** Mod+F focuses the search box. Nothing else on this route claims the chord. */
+function useFindShortcut(input: RefObject<HTMLInputElement | null>) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.code !== 'KeyF' || event.defaultPrevented) return;
+      event.preventDefault();
+      input.current?.focus();
+      input.current?.select();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [input]);
+}
+
 /**
  * "Settings": app preferences, permissions, connections and maintenance, as a page of its own
  * beside Profile rather than a screen in the conversation pane.
  *
- * Customize owns tool connections. Settings owns app-wide preferences, what the agent may do,
- * the deployment a reply comes from, imports, and updates. The side nav splits those into pages
- * so no one page carries all of them.
+ * Customize owns tool connections. Settings owns everything else app-wide, split into category
+ * pages by PAGE_ENTRIES, with a search across all of them. A query replaces the page with results.
  */
 export function SettingsScreen({
   auth,
   section = 'general',
+  setting,
   importFocus,
   onSection,
+  onOpenSetting,
   onClose,
 }: {
   auth: AuthState | null;
   section?: SettingsSection;
-  /** Import page only: the source to scroll to, as the sidebar's sync hints ask. */
+  /** A row on `section`'s page to scroll to and highlight. */
+  setting?: SettingId;
+  /** Data and privacy page only: the Claude import source to scroll to, as the sidebar's sync hints ask. */
   importFocus?: ClaudeImportKind;
+  /** Opens a page; the route drops `setting` with it. */
   onSection?: (section: SettingsSection) => void;
+  onOpenSetting?: (link: { section: SettingsSection; setting: SettingId }) => void;
   onClose: () => void;
 }) {
-  const entries = useSettingsEntries(auth, section === 'import' ? importFocus : undefined);
+  const focus = section === 'privacy' ? importFocus : undefined;
+  const { entries, appVersion } = useSettingsEntries(auth, focus);
+  const [query, setQuery] = useState('');
+  const [highlightRequest, setHighlightRequest] = useState(0);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const page = useRef<HTMLDivElement>(null);
+  const searching = query.trim().length > 0;
+  const highlighted = useRowHighlight(
+    page,
+    section,
+    setting,
+    highlightRequest,
+    !(focus && setting === 'claude-import')
+  );
+  useFindShortcut(searchInput);
+
+  const openSection = (next: SettingsSection) => {
+    setQuery('');
+    onSection?.(next);
+  };
+
+  const openResult = (id: string) => {
+    setQuery('');
+    if (!isSettingId(id)) return;
+    setHighlightRequest(request => request + 1);
+    onOpenSetting?.({ section: pageOf(id), setting: id });
+  };
+
+  const navItem = (id: SettingsSection) => (
+    <ListItem key={id}>
+      <ListItemButton
+        selected={!searching && id === section}
+        onClick={() => openSection(id)}
+        data-testid={`settings-nav-${id}-btn`}
+      >
+        <ListItemDecorator>{SECTION_ICON[id]}</ListItemDecorator>
+        <ListItemContent sx={{ minWidth: 0 }}>
+          <Typography level="inherit" noWrap>
+            {SECTION_LABEL[id]}
+          </Typography>
+          {id === 'about' && appVersion && (
+            <Typography
+              level="body-xs"
+              textColor="text.tertiary"
+              noWrap
+              title={appVersion}
+              data-testid="settings-nav-about-version"
+            >
+              Version {appVersion}
+            </Typography>
+          )}
+        </ListItemContent>
+        {entryAttentionChip(pageEntries(id, entries), `settings-nav-${id}-attention`)}
+      </ListItemButton>
+    </ListItem>
+  );
 
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">
@@ -926,39 +1107,66 @@ export function SettingsScreen({
       </Box>
 
       <Stack direction="row" sx={{ flex: 1, minHeight: 0 }}>
-        <List
-          size="sm"
-          aria-label="Settings sections"
+        <Stack
+          component="nav"
+          aria-label="Settings"
+          spacing={1}
           sx={{
             flex: 'none',
             boxSizing: 'border-box',
             width: SETTINGS_NAV_WIDTH,
             p: 1,
-            gap: 0.25,
             borderRight: '1px solid',
             borderColor: 'divider',
-            '--ListItem-radius': 'var(--joy-radius-sm)',
           }}
           data-testid="settings-nav"
         >
-          {SETTINGS_SECTIONS.map(id => (
-            <ListItem key={id}>
-              <ListItemButton
-                selected={id === section}
-                onClick={() => onSection?.(id)}
-                data-testid={`settings-nav-${id}-btn`}
-              >
-                <ListItemDecorator>{SECTION_ICON[id]}</ListItemDecorator>
-                <ListItemContent>{SECTION_LABEL[id]}</ListItemContent>
-                {entryAttentionChip(entries[id], `settings-nav-${id}-attention`)}
-              </ListItemButton>
-            </ListItem>
-          ))}
-        </List>
+          <Input
+            size="sm"
+            startDecorator={<SearchIcon />}
+            placeholder="Search settings"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            onKeyDown={event => {
+              if (event.key !== 'Escape' || !query) return;
+              event.preventDefault();
+              setQuery('');
+            }}
+            slotProps={{
+              input: { ref: searchInput, 'aria-label': 'Search settings', 'data-testid': 'settings-search-input' },
+            }}
+          />
+          <List
+            size="sm"
+            aria-label="Settings sections"
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: 'auto',
+              p: 0,
+              gap: 0.25,
+              '--ListItem-radius': 'var(--joy-radius-sm)',
+            }}
+          >
+            {LISTED_SECTIONS.map(navItem)}
+          </List>
+          <Divider />
+          <List size="sm" aria-label="About" sx={{ flex: 'none', p: 0, '--ListItem-radius': 'var(--joy-radius-sm)' }}>
+            {navItem('about')}
+          </List>
+        </Stack>
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable', ...thinScrollbarSx }}>
-          <Box sx={{ ...settingsColumnSx, py: 4 }} data-testid={`settings-page-${section}`}>
-            <SectionPage section={section} entries={entries[section]} />
+          <Box
+            ref={page}
+            sx={{ ...settingsColumnSx, py: 4 }}
+            data-testid={searching ? 'settings-page-search' : `settings-page-${section}`}
+          >
+            {searching ? (
+              <SearchResults query={query} entries={entries} onOpen={openResult} />
+            ) : (
+              <SectionPage section={section} entries={entries} highlighted={highlighted} />
+            )}
           </Box>
         </Box>
       </Stack>

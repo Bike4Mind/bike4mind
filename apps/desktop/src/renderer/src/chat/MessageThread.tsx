@@ -160,7 +160,7 @@ function ServerCredentialsRow() {
         size="sm"
         variant="soft"
         color="primary"
-        onClick={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
+        onClick={() => void navigate({ to: '/settings', search: { section: 'models', setting: 'model-servers' } })}
         data-testid="chat-server-credentials-btn"
       >
         Open Model servers
