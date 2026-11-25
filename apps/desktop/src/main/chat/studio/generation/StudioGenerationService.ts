@@ -164,7 +164,8 @@ export class StudioGenerationService {
       await this.saveJob(sessionId, job, connection);
       try {
         this.assertConnection(connection);
-        if (imageBody) {
+        if (request.kind === 'image') {
+          if (!imageBody) throw new Error('The image request body was not prepared.');
           const result = await connection.client.createImageJobGroup(imageBody, job.idempotencyKey);
           const first = result.data[0];
           if (!first) throw new Error('The server accepted the image request but returned no job to follow.');
