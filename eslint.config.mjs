@@ -22,14 +22,15 @@ import requireUpdateValidators from './eslint-rules/require-update-validators.mj
  * - b4m-core packages (with import restrictions)
  * - packages/*
  */
-// B4Mv3 Track 1 — deprecated facade import restrictions.
-// Extracted as consts so they can be spread into blocks that also carry other rules.
-// flat-config last-rule-wins means only the last matching no-restricted-imports rule
-// takes effect per file — each block covering a given file scope must carry ALL restrictions.
 // Core server packages under the no-console rule (see the block that uses these). Append as packages convert.
-const CORE_NO_CONSOLE_SRC = ['b4m-core/db-core', 'b4m-core/agents', 'b4m-core/utils', 'b4m-core/llm-adapters', 'packages/database'].map(
-  pkg => `${pkg}/src/**/*.{ts,tsx,mts,cts}`
-);
+const CORE_NO_CONSOLE_SRC = [
+  'b4m-core/db-core',
+  'b4m-core/agents',
+  'b4m-core/utils',
+  'b4m-core/llm-adapters',
+  'packages/database',
+  'b4m-core/services',
+].map(pkg => `${pkg}/src/**/*.{ts,tsx,mts,cts}`);
 const CORE_NO_CONSOLE_EXEMPT_SCRIPTS = [
   'b4m-core/llm-adapters/src/syncModelDescriptions.ts',
   'packages/database/src/seeds/regenerateModelPriceSeed.ts',
@@ -37,6 +38,10 @@ const CORE_NO_CONSOLE_EXEMPT_SCRIPTS = [
   'packages/database/src/utils/testModelStats.ts',
 ];
 
+// B4Mv3 Track 1 — deprecated facade import restrictions.
+// Extracted as consts so they can be spread into blocks that also carry other rules.
+// flat-config last-rule-wins means only the last matching no-restricted-imports rule
+// takes effect per file — each block covering a given file scope must carry ALL restrictions.
 const b4mv3RestrictedPaths = [
   // @bike4mind/utils deprecated symbols
   {
