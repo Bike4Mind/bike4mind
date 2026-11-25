@@ -272,3 +272,112 @@ describe('assistantBriefRepository lifecycle', () => {
     expect(await assistantBriefRepository.removeEmailSourcedItems('user-me', [])).toBe(0);
   });
 });
+
+describe('assistant brief follow-ups', () => {
+  const REMIND_AT = new Date('2026-11-18T09:00:00.000Z');
+  const followUpContent: AssistantBriefContent = {
+    headline: 'Follow-ups',
+    happened: [],
+    handled: [],
+    decisions: [
+      { id: 'fu-action-1', text: 'Book the room', followUp: { kind: 'actionItem', state: 'pending', remindAt: null } },
+      {
+        id: 'fu-email',
+        text: 'Send follow-up to Sam: Notes',
+        draftReply: { to: 'Sam', subject: 'Notes', body: 'Attached.' },
+        followUp: { kind: 'followUpEmail', state: 'pending', remindAt: null },
+      },
+      {
+        id: 'fu-reminder-1',
+        text: 'Remind me: call back',
+        followUp: { kind: 'reminder', state: 'pending', remindAt: REMIND_AT },
+      },
+    ],
+  };
+  const createFollowUpBrief = async (userId = 'owner') => {
+    const brief = await assistantBriefRepository.createComposing({
+      userId,
+      periodStart: NOW,
+      periodEnd: NOW,
+      origin: 'followUp',
+      followUpInput: { transcript: 'Book the room, email Sam, remind me', timeZone: 'UTC' },
+    });
+    await assistantBriefRepository.markReady(String(brief._id), followUpContent, NOW);
+    return String(brief._id);
+  };
+
+  it('clears the memo on settle and never dedupes with or shifts the activity window', async () => {
+    const composing = await assistantBriefRepository.createComposing({
+      userId: 'owner',
+      periodStart: NOW,
+      periodEnd: NOW,
+      origin: 'followUp',
+      followUpInput: { transcript: 'memo' },
+    });
+    expect(await assistantBriefRepository.findActiveComposing('owner', NOW)).toBeNull();
+    await assistantBriefRepository.markFailed(String(composing._id), 'composition_failed');
+    expect((await assistantBriefRepository.findById(String(composing._id)))?.followUpInput).toBeUndefined();
+
+    const id = await createFollowUpBrief();
+    expect((await assistantBriefRepository.findById(id))?.followUpInput).toBeUndefined();
+    expect(await assistantBriefRepository.findLatestReady('owner')).toBeNull();
+  });
+
+  it('resolves a pending follow-up once and refuses an edit after it', async () => {
+    const id = await createFollowUpBrief();
+    const resolve = () => assistantBriefRepository.resolveFollowUpDecision(id, 'owner', 'fu-email', 'approved', NOW);
+
+    expect(await assistantBriefRepository.resolveFollowUpDecision(id, 'intruder', 'fu-email', 'approved')).toBe(false);
+    await expect(resolve()).resolves.toBe(true);
+    await expect(resolve()).resolves.toBe(false);
+    await expect(
+      assistantBriefRepository.editFollowUpDecision(id, 'owner', 'fu-email', { draftReply: { to: 'sam@example.com' } })
+    ).resolves.toBe(false);
+    const stored = await assistantBriefRepository.findById(id);
+    expect(stored?.decisions[1]).toMatchObject({
+      draftReply: { to: 'Sam' },
+      followUp: { state: 'approved', decidedAt: NOW },
+    });
+  });
+
+  it('edits only the given fields of a pending follow-up', async () => {
+    const id = await createFollowUpBrief();
+    const later = new Date('2026-11-19T09:00:00.000Z');
+
+    await expect(
+      assistantBriefRepository.editFollowUpDecision(id, 'owner', 'fu-email', { draftReply: { to: 'sam@example.com' } })
+    ).resolves.toBe(true);
+    await expect(
+      assistantBriefRepository.editFollowUpDecision(id, 'owner', 'fu-reminder-1', {
+        text: 'Remind me: call Sam',
+        remindAt: later,
+      })
+    ).resolves.toBe(true);
+    await expect(assistantBriefRepository.editFollowUpDecision(id, 'owner', 'missing', { text: 'x' })).resolves.toBe(
+      false
+    );
+    const stored = await assistantBriefRepository.findById(id);
+    expect(stored?.decisions[1].draftReply).toEqual({ to: 'sam@example.com', subject: 'Notes', body: 'Attached.' });
+    expect(stored?.decisions[2]).toMatchObject({ text: 'Remind me: call Sam', followUp: { remindAt: later } });
+  });
+
+  it('finds approved due reminders once, until they are marked surfaced', async () => {
+    const id = await createFollowUpBrief();
+    await createFollowUpBrief('another-owner');
+    const after = new Date(REMIND_AT.getTime() + 1);
+
+    expect(await assistantBriefRepository.findDueReminders('owner', after, 12)).toEqual([]);
+    expect(await assistantBriefRepository.findEarliestPendingReminderAt('owner')).toBeNull();
+    await assistantBriefRepository.resolveFollowUpDecision(id, 'owner', 'fu-reminder-1', 'approved', NOW);
+    expect(await assistantBriefRepository.findEarliestPendingReminderAt('owner')).toEqual(REMIND_AT);
+    expect(await assistantBriefRepository.findDueReminders('owner', new Date(REMIND_AT.getTime() - 1), 12)).toEqual([]);
+
+    const due = await assistantBriefRepository.findDueReminders('owner', after, 12);
+    expect(due).toEqual([
+      { briefId: id, decisionId: 'fu-reminder-1', text: 'Remind me: call back', remindAt: REMIND_AT },
+    ]);
+    await assistantBriefRepository.markRemindersSurfaced('owner', due, after);
+    expect(await assistantBriefRepository.findDueReminders('owner', after, 12)).toEqual([]);
+    expect(await assistantBriefRepository.findEarliestPendingReminderAt('owner')).toBeNull();
+  });
+});

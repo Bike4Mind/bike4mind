@@ -1,5 +1,12 @@
 import mongoose, { Schema } from 'mongoose';
-import type { BriefItem, BriefSourceRef, BriefStatus, StoredBriefDecision } from '@bike4mind/common';
+import {
+  BRIEF_FOLLOW_UP_KINDS,
+  BRIEF_FOLLOW_UP_STATES,
+  type BriefItem,
+  type BriefSourceRef,
+  type BriefStatus,
+  type StoredBriefDecision,
+} from '@bike4mind/common';
 
 /**
  * An assistant brief: what happened, what was handled and what needs a decision, composed for one user
@@ -17,6 +24,10 @@ export type IAssistantBrief = {
   decisions: StoredBriefDecision[];
   composedAt: Date | null;
   failureReason: string | null;
+  /** `followUp` for a brief composed from a dictated memo; absent for an activity brief. */
+  origin?: 'followUp';
+  /** The memo a follow-up brief is composed from; cleared once the brief settles. */
+  followUpInput?: { transcript: string; timeZone?: string };
   createdAt: Date;
   updatedAt: Date;
 };
@@ -85,6 +96,19 @@ const decisionSchema = new Schema(
       required: false,
     },
     repliedAt: { type: Date, required: false },
+    followUp: {
+      type: new Schema(
+        {
+          kind: { type: String, enum: BRIEF_FOLLOW_UP_KINDS, required: true },
+          state: { type: String, enum: BRIEF_FOLLOW_UP_STATES, required: true, default: 'pending' },
+          remindAt: { type: Date, default: null },
+          decidedAt: { type: Date, required: false },
+          surfacedAt: { type: Date, required: false },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
   },
   { _id: false }
 );
@@ -101,6 +125,17 @@ const schema = new Schema<IAssistantBrief>(
     decisions: { type: [decisionSchema], default: [] },
     composedAt: { type: Date, default: null },
     failureReason: { type: String, default: null },
+    origin: { type: String, enum: ['followUp'], required: false },
+    followUpInput: {
+      type: new Schema(
+        {
+          transcript: { type: String, required: true },
+          timeZone: { type: String, required: false },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
   },
   { timestamps: true, versionKey: false, collection: 'AssistantBrief' }
 );
@@ -114,8 +149,25 @@ export const AssistantBriefModel =
 /** A brief still composing after this long is treated as abandoned, so a lost event cannot block composing for good. */
 export const BRIEF_COMPOSING_STALE_MS = 5 * 60 * 1000;
 
+/** Activity briefs only: a follow-up brief neither blocks nor shifts the activity window. */
+const ACTIVITY_BRIEF = { origin: { $ne: 'followUp' } } as const;
+
+export type FollowUpDecisionEdit = {
+  text?: string;
+  draftReply?: Partial<{ to: string; subject: string; body: string }>;
+  remindAt?: Date;
+};
+
+export type DueReminder = { briefId: string; decisionId: string; text: string; remindAt: Date };
+
 export const assistantBriefRepository = {
-  async createComposing(input: { userId: string; periodStart: Date; periodEnd: Date }): Promise<IAssistantBrief> {
+  async createComposing(input: {
+    userId: string;
+    periodStart: Date;
+    periodEnd: Date;
+    origin?: 'followUp';
+    followUpInput?: { transcript: string; timeZone?: string };
+  }): Promise<IAssistantBrief> {
     const created = await AssistantBriefModel.create({ ...input, status: 'composing' });
     return created.toObject();
   },
@@ -125,6 +177,7 @@ export const assistantBriefRepository = {
     return AssistantBriefModel.findOne({
       userId,
       status: 'composing',
+      ...ACTIVITY_BRIEF,
       createdAt: { $gt: new Date(now.getTime() - BRIEF_COMPOSING_STALE_MS) },
     })
       .sort({ createdAt: -1 })
@@ -143,17 +196,19 @@ export const assistantBriefRepository = {
 
   /** The end of the previous brief's window, which the next brief starts from. */
   async findLatestReady(userId: string): Promise<IAssistantBrief | null> {
-    return AssistantBriefModel.findOne({ userId, status: 'ready' }).sort({ createdAt: -1 }).lean();
+    return AssistantBriefModel.findOne({ userId, status: 'ready', ...ACTIVITY_BRIEF })
+      .sort({ createdAt: -1 })
+      .lean();
   },
 
   /** The latest ready brief's id and each decision's approval ref and reply stamp: what the pending-decisions count reads. */
   async findLatestReadyDecisionRefs(userId: string): Promise<{
     _id: mongoose.Types.ObjectId;
-    decisions: Array<Pick<StoredBriefDecision, 'approval' | 'repliedAt'>>;
+    decisions: Array<Pick<StoredBriefDecision, 'approval' | 'repliedAt' | 'followUp'>>;
   } | null> {
     return AssistantBriefModel.findOne({ userId, status: 'ready' })
       .sort({ createdAt: -1 })
-      .select('_id decisions.approval decisions.repliedAt')
+      .select('_id decisions.approval decisions.repliedAt decisions.followUp.state')
       .lean();
   },
 
@@ -161,7 +216,7 @@ export const assistantBriefRepository = {
   async markReady(id: string, content: AssistantBriefContent, composedAt: Date): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(
       { _id: id, status: 'composing' },
-      { $set: { ...content, status: 'ready', composedAt } },
+      { $set: { ...content, status: 'ready', composedAt }, $unset: { followUpInput: 1 } },
       { runValidators: true }
     );
     return result.modifiedCount === 1;
@@ -170,7 +225,7 @@ export const assistantBriefRepository = {
   async markFailed(id: string, failureReason: string): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(
       { _id: id, status: 'composing' },
-      { $set: { status: 'failed', failureReason } },
+      { $set: { status: 'failed', failureReason }, $unset: { followUpInput: 1 } },
       { runValidators: true }
     );
     return result.modifiedCount === 1;
@@ -203,6 +258,112 @@ export const assistantBriefRepository = {
       { $unset: { 'decisions.$.repliedAt': 1 } },
       { runValidators: true }
     );
+  },
+
+  /**
+   * Applies an edit to a follow-up decision while it is still pending; `false` when the brief, the decision
+   * or a pending follow-up on it is missing (the route tells those apart with `findByIdForUser`).
+   */
+  async editFollowUpDecision(
+    id: string,
+    userId: string,
+    decisionId: string,
+    edit: FollowUpDecisionEdit
+  ): Promise<boolean> {
+    if (!mongoose.isValidObjectId(id)) return false;
+    const set: Record<string, unknown> = {};
+    if (edit.text !== undefined) set['decisions.$.text'] = edit.text;
+    if (edit.remindAt !== undefined) set['decisions.$.followUp.remindAt'] = edit.remindAt;
+    for (const [field, value] of Object.entries(edit.draftReply ?? {})) {
+      if (value !== undefined) set[`decisions.$.draftReply.${field}`] = value;
+    }
+    if (Object.keys(set).length === 0) return false;
+    const result = await AssistantBriefModel.updateOne(
+      { _id: id, userId, decisions: { $elemMatch: { id: decisionId, 'followUp.state': 'pending' } } },
+      { $set: set },
+      { runValidators: true }
+    );
+    return result.matchedCount === 1;
+  },
+
+  /** Approves or dismisses a pending follow-up decision, once: only the first caller gets `true`. */
+  async resolveFollowUpDecision(
+    id: string,
+    userId: string,
+    decisionId: string,
+    state: 'approved' | 'dismissed',
+    at: Date = new Date()
+  ): Promise<boolean> {
+    if (!mongoose.isValidObjectId(id)) return false;
+    const result = await AssistantBriefModel.updateOne(
+      { _id: id, userId, decisions: { $elemMatch: { id: decisionId, 'followUp.state': 'pending' } } },
+      { $set: { 'decisions.$.followUp.state': state, 'decisions.$.followUp.decidedAt': at } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  },
+
+  /** Approved reminders due at or before `now` that no brief has listed yet, earliest first. */
+  async findDueReminders(userId: string, now: Date, limit: number): Promise<DueReminder[]> {
+    const due = {
+      'decisions.followUp.kind': 'reminder',
+      'decisions.followUp.state': 'approved',
+      'decisions.followUp.remindAt': { $lte: now },
+      'decisions.followUp.surfacedAt': null,
+    };
+    const rows = await AssistantBriefModel.aggregate<{ _id: mongoose.Types.ObjectId; decision: StoredBriefDecision }>([
+      { $match: { userId, ...due } },
+      { $unwind: '$decisions' },
+      { $match: due },
+      { $sort: { 'decisions.followUp.remindAt': 1 } },
+      { $limit: limit },
+      { $project: { decision: '$decisions' } },
+    ]);
+    return rows.map(row => ({
+      briefId: String(row._id),
+      decisionId: row.decision.id,
+      text: row.decision.text,
+      remindAt: row.decision.followUp?.remindAt as Date,
+    }));
+  },
+
+  /** Stamps reminders as listed in a brief so the next brief does not repeat them. */
+  async markRemindersSurfaced(
+    userId: string,
+    refs: Array<Pick<DueReminder, 'briefId' | 'decisionId'>>,
+    at: Date
+  ): Promise<void> {
+    for (const ref of refs) {
+      if (!mongoose.isValidObjectId(ref.briefId)) continue;
+      await AssistantBriefModel.updateOne(
+        { _id: ref.briefId, userId },
+        { $set: { 'decisions.$[d].followUp.surfacedAt': at } },
+        {
+          arrayFilters: [{ 'd.id': ref.decisionId, 'd.followUp.state': 'approved', 'd.followUp.surfacedAt': null }],
+          runValidators: true,
+        }
+      );
+    }
+  },
+
+  /** The earliest approved reminder not yet listed in a brief, so a schedule save keeps a pulled-forward slot. */
+  async findEarliestPendingReminderAt(userId: string): Promise<Date | null> {
+    const [row] = await AssistantBriefModel.aggregate<{ remindAt: Date }>([
+      { $match: { userId, 'decisions.followUp.kind': 'reminder' } },
+      { $unwind: '$decisions' },
+      {
+        $match: {
+          'decisions.followUp.kind': 'reminder',
+          'decisions.followUp.state': 'approved',
+          'decisions.followUp.remindAt': { $ne: null },
+          'decisions.followUp.surfacedAt': null,
+        },
+      },
+      { $sort: { 'decisions.followUp.remindAt': 1 } },
+      { $limit: 1 },
+      { $project: { _id: 0, remindAt: '$decisions.followUp.remindAt' } },
+    ]);
+    return row?.remindAt ?? null;
   },
 
   /** Removes the items sourced from these ingested emails from every brief of the owner, so a deleted email leaves no copy behind. */
