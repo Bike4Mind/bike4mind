@@ -52,7 +52,7 @@ describe('the first-steps tutorial', () => {
   it('ends on a finale that says where to go next', () => {
     const finale = FIRST_STEPS_STEPS.at(-1)!;
     expect(finale.type).toBe('bridge');
-    expect(finale.body).toMatch(/New chat/);
+    expect(finale.body).toMatch(/New Chat/);
     expect(finale.body).toMatch(/Tutorials/);
   });
 });

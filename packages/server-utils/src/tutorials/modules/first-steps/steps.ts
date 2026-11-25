@@ -52,16 +52,16 @@ export const FIRST_STEPS_STEPS: TutorialStep[] = [
   {
     id: 'first-steps-notebooks',
     type: 'point',
-    anchor: 'sidenav-container',
+    anchor: 'notebook-list-item',
     placement: 'right',
     title: 'Your conversations are saved',
-    body: 'Each conversation is kept as a notebook in the side menu, so you can come back to it later and carry on.',
+    body: 'This conversation is saved as a notebook in the side menu. Open it any time to pick up where you left off.',
   },
   {
     id: 'first-steps-done',
     type: 'bridge',
     title: 'Where to go next',
-    body: 'Press New chat to start your own. Your account menu has Tutorials, with short tours of what is different here, and Get the desktop app.',
+    body: 'Press New Chat to start your own. In your account menu, Tutorials has short tours of what is different here, and you can get the desktop app.',
     action: 'Done',
   },
 ];
