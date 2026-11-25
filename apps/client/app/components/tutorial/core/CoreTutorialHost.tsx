@@ -85,9 +85,10 @@ function CoreTutorialHostInner() {
   const pickedUpFor = useRef<string | null>(null);
   useEffect(() => {
     if (!currentSessionId || pickedUpFor.current === currentSessionId) return;
-    // A walk already running here counts as picked up, so leaving it does not restart it.
+    // A walk already running here counts as picked up, so leaving it does not restart it. One running on another
+    // notebook is left alone, and this notebook is looked at again once it ends.
     if (active) {
-      pickedUpFor.current = currentSessionId;
+      if (active.sessionId === currentSessionId) pickedUpFor.current = currentSessionId;
       return;
     }
     if (!modulesQuery.isSuccess || !progressQuery.data) return;
