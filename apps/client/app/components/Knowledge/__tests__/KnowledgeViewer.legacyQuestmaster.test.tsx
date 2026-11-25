@@ -99,7 +99,16 @@ describe('KnowledgeViewer legacy QuestMaster plan tab', () => {
       'This reply had a QuestMaster plan. QuestMaster plans are no longer shown in chat. ' +
         'Saved plans were copied as markdown files to the "Questmaster archive" folder in your files.'
     );
-    expect(screen.getByTestId('knowledgeviewer-download-btn')).toBeDisabled();
+    // The tab selector shows the legacy item under its fixed label.
+    expect(screen.getByRole('combobox').textContent).toBe('Quest Plan');
+
+    // Joy's Tooltip exposes a string title as the child's aria-label, so the label is the tooltip text.
+    // The copy button has no test id; its tooltip wrapper is the only stable handle on it.
+    const copyWrapper = screen.getByLabelText('Nothing to copy');
+    expect(copyWrapper.querySelector('button')).toBeDisabled();
+    const downloadBtn = screen.getByTestId('knowledgeviewer-download-btn');
+    expect(downloadBtn).toBeDisabled();
+    expect(downloadBtn.getAttribute('aria-label')).toBe('Nothing to download');
     expect(screen.queryByTestId('artifact-viewer-share')).toBeNull();
     expect(h.get).not.toHaveBeenCalled();
     expect(h.post).not.toHaveBeenCalled();

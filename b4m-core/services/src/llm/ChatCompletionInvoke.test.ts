@@ -278,7 +278,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
   it('resets the data lake save count when the retried prompt was edited', async () => {
     const [updated, options] = await retryQuestWithLakeSaves(`${body.message} (before edit)`);
     expect(updated).not.toHaveProperty('lakeSaveCount');
-    expect(options.unset).toContain('lakeSaveCount');
+    expect(options).toEqual({ unset: ['errorCode', 'turnTiming', 'questMasterPlanId', 'lakeSaveCount'] });
   });
 
   it('clears a legacy plan id when a turn written by the retired plan feature is retried', async () => {
@@ -295,12 +295,14 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     });
     mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
 
-    await makeInvoke({ id: OWNER_ID }).invoke({
+    const quest = await makeInvoke({ id: OWNER_ID }).invoke({
       body: { ...body, questId: 'quest-1' },
       userId: OWNER_ID,
       authOrigin: 'session',
     });
 
+    // The returned quest is the ack the client caches, so it must not carry the old plan id either.
+    expect(quest?.questMasterPlanId).toBeUndefined();
     const [updated, options] = mockDb.quests.update.mock.calls[0];
     expect(updated).toHaveProperty('questMasterReply', null);
     expect(options.unset).toEqual(['errorCode', 'turnTiming', 'questMasterPlanId']);

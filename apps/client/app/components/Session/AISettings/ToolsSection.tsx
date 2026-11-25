@@ -134,7 +134,7 @@ interface ToolContainerProps extends PropsWithChildren {
    * When set, this row represents a Smart Tool that can be gated by a missing API
    * key or by the current mode. When it is, the row is dimmed + made
    * non-interactive and wrapped in a tooltip explaining why. Omit for non-tool
-   * rows (Thinking, Quest Master, MCP servers, etc.) which are never gated.
+   * rows (Thinking, Lattice, Research Mode, MCP servers, etc.) which are never gated.
    * A tool the session denies renders nothing at all.
    */
   toolId?: B4MLLMTools;
