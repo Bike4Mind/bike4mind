@@ -275,8 +275,9 @@ export interface IUserPreferences {
   /** Opt-in for a brief after each synced busy block; set through `PUT /api/v1/briefs/busy-blocks`. */
   busyBlockBrief?: { enabled: boolean };
   /**
-   * Which block-end pushes to hold (see isBlockEndPushHeld). Set through `PUT /api/v1/assistant/interruptions`;
-   * a general preferences write can still revert or clear it.
+   * Which block-end brief pushes to hold (see isBlockEndPushHeld). The run summary sent when no block brief
+   * lands still goes out. Set through `PUT /api/v1/assistant/interruptions`; a general preferences write can
+   * still revert or clear it.
    */
   interruptionFeedback?: InterruptionFeedback;
 }

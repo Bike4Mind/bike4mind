@@ -192,7 +192,8 @@ export async function deliverPush(
     logger.info('[Push] category disabled by user preference', { category: event.category });
     return { status: 'skipped', reason: 'category_disabled' };
   }
-  // The brief is already ready and listed; only the push announcing it is held.
+  // The brief is already ready and listed; only the push announcing it is held. The notifyHeldBlockRuns
+  // summary is never held: it sends only when no block brief landed, so it is the one place those runs show up.
   if (
     event.category === 'brief_ready' &&
     event.blockEndCategories &&
