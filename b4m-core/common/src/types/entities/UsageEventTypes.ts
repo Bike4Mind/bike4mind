@@ -125,6 +125,7 @@ export const USAGE_EVENT_OPERATIONS = [
   'memento',
   'assistant_brief',
   'delegated_item',
+  'document_obligation',
 ] as const;
 
 export type UsageEventOperation = (typeof USAGE_EVENT_OPERATIONS)[number];
