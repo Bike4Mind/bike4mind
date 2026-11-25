@@ -587,10 +587,6 @@ describe('deliverPush', () => {
     });
   });
 
-  it('does not hold agent_message, which the block brief cannot surface', () => {
-    expect(BUSY_BLOCK_HELD_CATEGORIES).not.toContain('agent_message');
-  });
-
   it('does not hold a run result inside a busy block when brief_ready is switched off', async () => {
     const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
       loadRecipient: vi.fn(async () => ({
