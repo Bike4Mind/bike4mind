@@ -52,6 +52,13 @@ describe('uptime display', () => {
     expect(uptimeFraction(10, 0)).toBeNull();
   });
 
+  it('has no fraction for non-finite or negative input', () => {
+    expect(uptimeFraction(Number.NaN, 86_400)).toBeNull();
+    expect(uptimeFraction(1, Number.POSITIVE_INFINITY)).toBeNull();
+    expect(uptimeFraction(Number.POSITIVE_INFINITY, 86_400)).toBeNull();
+    expect(uptimeFraction(-1, 86_400)).toBeNull();
+  });
+
   it('maps bar codes to states and back', () => {
     expect(barCodeForState('operational')).toBe('o');
     expect(barCodeForState('major_outage')).toBe('m');

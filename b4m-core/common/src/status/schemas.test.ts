@@ -116,6 +116,16 @@ describe('break-glass journal nonce', () => {
   });
 });
 
+describe('calendar-invalid timestamps', () => {
+  it('rejects a timestamp that matches the shape but is not a real time', () => {
+    for (const bad of ['2026-13-01T00:00:00Z', '2026-11-45T00:00:00Z', '2026-11-23T25:00:00Z']) {
+      expect(parseSummaryStrict({ ...makeSummary(), probesAsOf: bad }).ok).toBe(false);
+      expect(parseSummaryLenient({ ...makeSummary(), probesAsOf: bad }).ok).toBe(false);
+    }
+    expect(parseSummaryStrict(makeSummary()).ok).toBe(true);
+  });
+});
+
 describe('probesTrigger', () => {
   it.each(['scheduled', 'manual', null])('accepts %s', value => {
     expect(parseSummaryStrict({ ...makeSummary(), probesTrigger: value }).ok).toBe(true);

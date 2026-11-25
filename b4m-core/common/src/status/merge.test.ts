@@ -299,6 +299,25 @@ describe('incidents', () => {
   });
 });
 
+describe('outage start from unparseable timestamps', () => {
+  it('ignores an unparseable external since when clamping an unreconciled entry', () => {
+    const external = makeExternal({ state: 'down', since: '2026-13-01T00:00:00Z', checkedAt: secondsAgo(10) });
+    const merged = mergeStatusSources(
+      summaryAged(30),
+      makeBreakglass([entry({ updatedAt: secondsAgo(30) })]),
+      external,
+      NOW
+    );
+    expect(merged.incidents.map(i => i.id)).toEqual(['bg00000001']);
+  });
+
+  it('ignores an unparseable summary probesAsOf when the summary is stale', () => {
+    const summary = { ...summaryAged(10_000), probesAsOf: '2026-13-01T00:00:00Z' };
+    const merged = mergeStatusSources(summary, makeBreakglass([entry({ updatedAt: secondsAgo(30) })]), null, NOW);
+    expect(merged.incidents.map(i => i.id)).toEqual(['bg00000001']);
+  });
+});
+
 describe('break-glass sequence and retraction', () => {
   const summary = (applied: number) => summaryAged(10, { breakglassAppliedSeq: applied });
 

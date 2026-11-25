@@ -25,7 +25,10 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
   const obj = <S extends z.ZodRawShape>(shape: S): z.ZodObject<S, z.core.$strict> =>
     (mode === 'strict' ? z.strictObject(shape) : z.object(shape)) as unknown as z.ZodObject<S, z.core.$strict>;
 
-  const timestamp = z.string().regex(ISO_TIMESTAMP);
+  const timestamp = z
+    .string()
+    .regex(ISO_TIMESTAMP)
+    .refine(value => Number.isFinite(Date.parse(value)), 'must be a real calendar time');
   const nullableTimestamp = timestamp.nullable();
   const httpsUrl = z.string().max(2048).refine(isHttpsUrl, 'must be an https URL');
   const incidentId = z.string().regex(PUBLIC_INCIDENT_ID_PATTERN);

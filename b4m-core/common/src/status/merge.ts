@@ -243,7 +243,8 @@ export function mergeStatusSources(
   const outageCandidates: number[] = [];
   if (S && !fresh) outageCandidates.push(ms(S.probesAsOf));
   if (E && E.state === 'down') outageCandidates.push(ms(E.since));
-  const outageStartMs = outageCandidates.length > 0 ? Math.min(...outageCandidates) : null;
+  const parseable = outageCandidates.filter(Number.isFinite);
+  const outageStartMs = parseable.length > 0 ? Math.min(...parseable) : null;
 
   const candidates: Candidate[] = [];
   for (const head of [...(S?.activeIncidents ?? []), ...(S?.upcomingMaintenance ?? [])]) {

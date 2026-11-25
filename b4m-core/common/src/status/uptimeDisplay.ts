@@ -37,6 +37,7 @@ const FRACTION_SCALE = 100_000;
  * never show a perfect score for a day with downtime.
  */
 export function uptimeFraction(downtimeSeconds: number, observedSeconds: number): number | null {
+  if (!Number.isFinite(observedSeconds) || !Number.isFinite(downtimeSeconds)) return null;
   if (!(observedSeconds > 0) || downtimeSeconds < 0) return null;
   if (downtimeSeconds === 0) return 1;
   const scaled = Math.floor(((observedSeconds - downtimeSeconds) / observedSeconds) * FRACTION_SCALE);
