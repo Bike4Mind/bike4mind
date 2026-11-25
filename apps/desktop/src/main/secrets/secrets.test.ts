@@ -10,7 +10,7 @@ import { fakeKeychain } from './fakeKeychain.testHelper';
 import { resealed } from './reseal';
 import { SecretKeyCipher, isSecretKeyBlob } from './secretKeyCipher';
 import { loadSecretKey, secretKeyItem } from './keychainKey';
-import type { SecretCipher } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import type { RunResult, ProcessRunner } from './runProcess';
 
 describe('appSecretCipher', () => {
