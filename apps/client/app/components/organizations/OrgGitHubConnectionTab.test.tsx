@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import OrgGitHubConnectionTab from './OrgGitHubConnectionTab';
 
-const { updateMutate, idleMutation, connectionData, reposData } = vi.hoisted(() => ({
+const { updateMutate, createMutate, rotatePatMutate, idleMutation, connectionData, reposData } = vi.hoisted(() => ({
   reposData: {
     hasMore: false,
     repositories: [
@@ -26,6 +26,8 @@ const { updateMutate, idleMutation, connectionData, reposData } = vi.hoisted(() 
     },
   },
   updateMutate: vi.fn(),
+  createMutate: vi.fn(),
+  rotatePatMutate: vi.fn(),
   idleMutation: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
 }));
 
@@ -34,12 +36,12 @@ vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () =>
 vi.mock('@client/app/hooks/data/useOrgGitHubConnection', () => ({
   useGetOrgGitHubConnection: () => ({ data: connectionData, isLoading: false, refetch: vi.fn() }),
   useGetOrgGitHubRateLimit: () => ({ data: undefined, isLoading: false, refetch: vi.fn() }),
-  useCreateOrgGitHubConnection: idleMutation,
+  useCreateOrgGitHubConnection: () => ({ mutate: createMutate, isPending: false }),
   useUpdateOrgGitHubConnection: () => ({ mutate: updateMutate, isPending: false }),
   useDeleteOrgGitHubConnection: idleMutation,
   useTestOrgGitHubConnection: idleMutation,
   useRotateOrgGitHubKey: idleMutation,
-  useRotateOrgGitHubPAT: idleMutation,
+  useRotateOrgGitHubPAT: () => ({ mutate: rotatePatMutate, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/useGitHubRepositories', () => ({
   useOrgGitHubRepositories: () => ({ data: reposData, isLoading: false, error: null }),
@@ -118,5 +120,63 @@ describe('OrgGitHubConnectionTab allowed repositories', () => {
       { orgId: 'org-1', data: { allowedRepositories: ['acme/one', 'acme/two'] } },
       expect.any(Object)
     );
+  });
+});
+
+describe('OrgGitHubConnectionTab PAT expiry', () => {
+  const appConnection = connectionData.connection;
+
+  beforeEach(() => {
+    createMutate.mockReset();
+    rotatePatMutate.mockReset();
+  });
+
+  afterEach(() => {
+    connectionData.connected = true;
+    connectionData.connection = appConnection;
+  });
+
+  it('connects a PAT without an expiry while the date is unset', () => {
+    connectionData.connected = false;
+    renderTab();
+    fireEvent.click(screen.getByTestId('org-github-connect-pat-btn'));
+
+    expect(screen.getByTestId('org-github-pat-expiry-input-empty')).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('org-github-pat-input'), { target: { value: 'github_pat_abc' } });
+    fireEvent.click(screen.getByTestId('org-github-connect-pat-confirm-btn'));
+
+    expect(createMutate).toHaveBeenCalledTimes(1);
+    expect(createMutate.mock.calls[0][0].data.patExpiresAt).toBeUndefined();
+  });
+
+  it('connects a PAT with the chosen expiry as an ISO instant', () => {
+    connectionData.connected = false;
+    renderTab();
+    fireEvent.click(screen.getByTestId('org-github-connect-pat-btn'));
+    fireEvent.change(screen.getByTestId('org-github-pat-input'), { target: { value: 'github_pat_abc' } });
+    fireEvent.click(screen.getByTestId('org-github-pat-expiry-input-set-btn'));
+    fireEvent.change(screen.getByTestId('org-github-pat-expiry-input'), { target: { value: '2027-01-31' } });
+    fireEvent.click(screen.getByTestId('org-github-connect-pat-confirm-btn'));
+
+    expect(createMutate.mock.calls[0][0].data.patExpiresAt).toBe(new Date('2027-01-31').toISOString());
+  });
+
+  it('rotates a PAT without an expiry while the date is unset', () => {
+    connectionData.connection = {
+      id: 'conn-2',
+      connectionType: 'service_account',
+      connectedAt: '2026-01-01T00:00:00.000Z',
+      allowedRepositories: [],
+      health: {},
+    } as unknown as typeof appConnection;
+    renderTab();
+    fireEvent.click(screen.getByTestId('org-github-rotate-pat-btn'));
+
+    expect(screen.getByTestId('org-github-new-pat-expiry-input-empty')).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('org-github-new-pat-input'), { target: { value: 'github_pat_new' } });
+    fireEvent.click(screen.getByTestId('org-github-rotate-pat-confirm-btn'));
+
+    expect(rotatePatMutate).toHaveBeenCalledTimes(1);
+    expect(rotatePatMutate.mock.calls[0][0].data.patExpiresAt).toBeUndefined();
   });
 });

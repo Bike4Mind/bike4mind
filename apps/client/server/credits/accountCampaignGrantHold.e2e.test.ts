@@ -249,3 +249,71 @@ describe('account campaign hold on the staged signup grant', () => {
     expect(await creditsOf(user.id)).toBe(10000);
   });
 });
+
+describe('holdGrant intervention on the staged signup grant', () => {
+  const hold = (expiresAt: Date) => ({
+    decisionId: 'decision-1',
+    detectionId: 'detection-1',
+    tier: 'holdGrant',
+    policyVersion: 1,
+    reason: 'Automated holdGrant (policy v1)',
+    appliedAt: new Date(),
+    expiresAt,
+    releasedAt: null,
+    releasedBy: null,
+  });
+  const placeHold = (userId: string, expiresAt = new Date(Date.now() + HOUR_MS)) =>
+    User.updateOne({ _id: userId }, { $push: { interventionHolds: hold(expiresAt) } });
+
+  it('permits the pending-email tranche while an intervention is active', async () => {
+    const user = await User.create({
+      username: 'synthetic-first',
+      name: 'Synthetic First',
+      email: 'first@example.test',
+      emailVerified: true,
+      signupGrant: await newSignupGrant(adminSettings),
+    });
+    await placeHold(user.id);
+    await userService.releaseSignupTranche(user.id, adapters);
+    expect(await creditsOf(user.id)).toBe(1000);
+    expect(await CreditTransaction.countDocuments({ ownerId: user.id })).toBe(1);
+  });
+
+  it('withholds unlocks and drips while the hold is active, without moving the grant', async () => {
+    const user = await createSignupStageUser();
+    const before = await grantOf(user.id);
+    await placeHold(user.id);
+    expect(await unlockPhone(user.id)).toMatchObject({ creditsGranted: 0, withheld: true });
+    expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 0, withheld: true });
+    expect(await creditsOf(user.id)).toBe(1000);
+    expect(await grantOf(user.id)).toEqual(before);
+  });
+
+  it('pays once the hold is released', async () => {
+    const released = await createSignupStageUser();
+    await placeHold(released.id);
+    await User.updateOne(
+      { _id: released.id },
+      { $set: { 'interventionHolds.0.releasedAt': new Date(), 'interventionHolds.0.releasedBy': 'admin1' } }
+    );
+    expect((await unlockPhone(released.id)).creditsGranted).toBeGreaterThan(0);
+  });
+
+  // Its own test: a second signup in one test reads as an account campaign and is held for that instead.
+  it('ignores an expired hold', async () => {
+    const expired = await createSignupStageUser();
+    await placeHold(expired.id, new Date(Date.now() - 1000));
+    expect((await unlockPhone(expired.id)).creditsGranted).toBeGreaterThan(0);
+  });
+
+  it('pays an admin unlock despite the hold', async () => {
+    const user = await createSignupStageUser();
+    await placeHold(user.id);
+    const result = await userService.unlockSignupGrant(user.id, 'admin', {
+      ...adapters,
+      validators: { admin: async () => true },
+      audit: vi.fn(async () => {}),
+    });
+    expect(result.creditsGranted).toBeGreaterThan(0);
+  });
+});

@@ -20,9 +20,8 @@ export const PREVIEW_SKIPPED_QUEUE_CONSUMERS = [
   'githubLakeRevokeQueue',
   // Needs a connected Slack workspace.
   'slackExportQueue',
-  // Ops pipelines: triage dispatch and SRE crons only run where runsScheduledJobs is true, and the
-  // security scans, SRE Slack approvals and Overwatch ingest are not wired to previews.
-  'liveOpsTriageQueue',
+  // Ops pipelines: SRE crons only run where runsScheduledJobs is true, and the security scans,
+  // SRE Slack approvals and Overwatch ingest are not wired to previews.
   'secopsTriageQueue',
   'sreFixQueue',
   'sreJobQueue',

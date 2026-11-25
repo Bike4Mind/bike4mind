@@ -76,6 +76,7 @@ class LakeMembershipChangeEventRepository
     // The real wall clock, always - no caller-facing override, matching lakeConfigChangeEventRepository.
     const now = new Date();
     const created = await this.eventModel.create({
+      ...(input.eventId ? { _id: input.eventId } : {}),
       principalKind: input.principalKind,
       principalId: input.principalId,
       onBehalfOfUserId: input.onBehalfOfUserId,

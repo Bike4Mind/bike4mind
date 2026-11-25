@@ -210,6 +210,18 @@ export function ArtifactIcon() {
   );
 }
 
+/** Mission Control: every orchestration at a glance, as a dashboard of uneven tiles (lucide layout-dashboard). */
+export function MissionControlIcon() {
+  return (
+    <Glyph>
+      <rect x="2.25" y="2.25" width="5" height="6" rx="1" />
+      <rect x="8.75" y="2.25" width="5" height="3.5" rx="1" />
+      <rect x="8.75" y="7.25" width="5" height="6.5" rx="1" />
+      <rect x="2.25" y="10" width="5" height="3.75" rx="1" />
+    </Glyph>
+  );
+}
+
 /** The three approval modes, in the order the popover offers them, and the selected marker. */
 export function HandIcon() {
   return (
@@ -723,6 +735,17 @@ export function ExternalLinkIcon() {
   );
 }
 
+/** Opens in a window of its own inside this app: a window frame with an arrow leaving it. */
+export function NewWindowIcon() {
+  return (
+    <Glyph>
+      <path d="M7 3.5H3.5a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V9" />
+      <path d="M2.5 6.5H5" />
+      <path d="M9.5 2.5h4v4M13.5 2.5 8.5 7.5" />
+    </Glyph>
+  );
+}
+
 /** Blank-chat suggestion: a framed picture, a sun over a hill. */
 export function ImageIcon() {
   return (
@@ -895,6 +918,46 @@ export function RecordIcon() {
   return (
     <Glyph>
       <circle cx="8" cy="8" r="4" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** The place rail's glyphs: 17px, one size up from the sidebar's, per the rail spec. */
+const RAIL_GLYPH = 17;
+
+export function RailChatIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M13.5 7.5c0 2.5-2.5 4.5-5.5 4.5a6.5 6.5 0 0 1-2-.3L3 13l.8-2.5a4.2 4.2 0 0 1-1.3-3C2.5 5 5 3 8 3s5.5 2 5.5 4.5z" />
+    </Glyph>
+  );
+}
+
+export function RailCodeIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />
+    </Glyph>
+  );
+}
+
+/** A tray with an item landing in it: what is waiting on the user, across every place. */
+export function RailAgentsIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M2.5 9.5h3l1 1.75h3l1-1.75h3" />
+      <path d="M2.5 9.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3L12 4.5a1 1 0 0 0-.95-.7h-6.1a1 1 0 0 0-.95.7z" />
+      <path d="M6.25 6.75h3.5" />
+    </Glyph>
+  );
+}
+
+/** A four-point spark: making something, rather than any one medium. */
+export function RailStudioIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M8 2.5c.4 2.6 1.9 4.1 4.5 4.5-2.6.4-4.1 1.9-4.5 4.5-.4-2.6-1.9-4.1-4.5-4.5 2.6-.4 4.1-1.9 4.5-4.5z" />
+      <path d="M12.5 11v2.5M11.25 12.25h2.5" />
     </Glyph>
   );
 }

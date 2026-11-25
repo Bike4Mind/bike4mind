@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   myListings: undefined as Array<Record<string, unknown>> | undefined,
   rescan: vi.fn(),
   navigate: vi.fn(),
+  spaces: [{ id: 'space-1', name: 'Platform' }] as Array<{ id: string; name: string }>,
   suggest: vi.fn((_skillId: string, _enabled?: boolean) => ({
     data: undefined as string[] | undefined,
     isFetching: false,
@@ -27,7 +28,9 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
-  useMarketMe: () => ({ data: { organizations: [{ id: 'org-1', name: 'Acme' }], isReviewer: false, isAdmin: false } }),
+  useMarketMe: () => ({
+    data: { organizations: [{ id: 'org-1', name: 'Acme' }], spaces: h.spaces, isReviewer: false, isAdmin: false },
+  }),
   usePublishSkill: () => ({ mutateAsync: h.publish, isPending: false }),
   useSubmitNewVersion: () => ({ mutateAsync: h.submitVersion, isPending: false }),
   useMyListings: () => ({ data: h.myListings }),
@@ -72,7 +75,39 @@ describe('PublishDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.myListings = undefined;
+    h.spaces = [{ id: 'space-1', name: 'Platform' }];
     h.suggest.mockImplementation(() => ({ data: undefined, isFetching: false }));
+  });
+
+  it('publishes to a Space with its spaceId', async () => {
+    h.publish.mockResolvedValue({
+      listing: { id: 'l1', visibility: 'space', status: 'approved' },
+      version: version({}),
+    });
+    renderDialog();
+    fireEvent.click(screen.getByTestId('market-publish-visibility-space'));
+    expect(screen.getByTestId('market-publish-submit-btn')).toBeDisabled();
+
+    await userEvent.click(screen.getByTestId('market-publish-space-select'));
+    await userEvent.click(await screen.findByRole('option', { name: 'Platform' }));
+    expect(screen.getByTestId('market-publish-submit-btn')).toBeEnabled();
+
+    fireEvent.click(screen.getByTestId('market-publish-submit-btn'));
+    await waitFor(() =>
+      expect(h.publish).toHaveBeenCalledWith({
+        skillId: 'skill-1',
+        visibility: 'space',
+        spaceId: 'space-1',
+        tags: [],
+      })
+    );
+  });
+
+  it('hides the Space option when the user is in no Space', () => {
+    h.spaces = [];
+    renderDialog();
+    expect(screen.getByTestId('market-publish-visibility-organization')).toBeInTheDocument();
+    expect(screen.queryByTestId('market-publish-visibility-space')).not.toBeInTheDocument();
   });
 
   it('submits a new version, not a new listing, when the skill is already listed', async () => {

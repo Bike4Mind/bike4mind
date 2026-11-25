@@ -10,8 +10,10 @@ import {
   type PromptCacheTtl,
   type ReasoningEffort,
 } from '@bike4mind/common';
+import type { BillingPayer } from '@shared/account';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
 import type { GenerationSettings } from '@shared/generation';
+import { currentBillingPayer, PERSONAL_PAYER } from '../account/billingPayer';
 import { devLog } from '../devlog/DevLogSink';
 import { ERRORS_TAG } from '../devlog/tags';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -209,9 +211,20 @@ export async function streamCompletion(
   }
 }
 
+/** Stream options that bill a run's own payer; none outside a run, so the selection is read. */
+export function payerOption(payer: BillingPayer | undefined): StreamOptions {
+  return payer ? { billingPayer: () => payer } : {};
+}
+
 export interface StreamOptions {
   /** How long the open stream may go without a byte before it is treated as dropped. In ms. */
   idleTimeoutMs?: number;
+  /**
+   * Read once per HTTP request. Defaults to the payer the user picked in the account menu. A call
+   * attached to a run passes the run's payer instead: the server refuses a completion billed to
+   * anyone but its run's payer (404 run_not_found), so a mid-run switch must not reach it.
+   */
+  billingPayer?: () => BillingPayer | Promise<BillingPayer>;
 }
 
 /**
@@ -265,12 +278,18 @@ async function streamOnce(
   try {
     const evaluationWire = evaluation?.wire(requestId);
     evaluation?.measure(requestId, request);
+    // An evaluation run is minted without a payer, so it is Personal and its completions must be too.
+    const { organization_id: organizationId } = evaluationWire
+      ? PERSONAL_PAYER
+      : await (options.billingPayer ?? currentBillingPayer)();
     let response: AxiosResponse;
     try {
       response = await axiosInstance.post(
         endpoint,
         {
           model: request.model,
+          // Omitted for Personal: the route already bills the caller there, and an older server ignores it.
+          ...(organizationId ? { organization_id: organizationId } : {}),
           messages: wireMessages(request.messages),
           ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
           ...(request.sessionId ? { sessionId: request.sessionId } : {}),

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  CallableFunctionGrantVisibilitySchema,
+  callableFunctionTrustLabel,
   effectiveCallableFunctionStatus,
   toCallableFunctionDetail,
   toCallableFunctionPublic,
+  toCallableFunctionShared,
   type ICallableFunctionDocument,
 } from './CallableFunctionTypes';
 import type { FunctionContract } from '../../schemas/functionContract';
@@ -77,21 +81,38 @@ describe('toCallableFunctionPublic', () => {
     const view = toCallableFunctionPublic(doc(), { version: 2 });
     expect(Object.keys(view).sort()).toEqual(
       [
+        'approval',
         'createdAt',
         'description',
         'enabled',
+        'examples',
+        'grants',
         'id',
         'latestVersion',
         'pin',
         'slug',
         'state',
         'status',
+        'trustLabel',
         'updateAvailable',
         'updatedAt',
       ].sort()
     );
     expect(Object.keys(view.pin).sort()).toEqual(['artifactId', 'contentHash', 'pinnedAt', 'version']);
     expect(JSON.stringify(view)).not.toContain('def run');
+  });
+
+  it('shows the label and the promotion sequence only while live, and never the server run or runtime', () => {
+    const promoted = {
+      trustLabel: 'verified' as const,
+      lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+      pin: { ...doc().pin, seq: 2, runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] } },
+    };
+    const live = toCallableFunctionPublic(doc({ ...promoted, state: 'live' }), { version: 2 });
+    expect(live).toMatchObject({ trustLabel: 'verified', pin: { seq: 2 } });
+    expect(live).not.toHaveProperty('lastServerRun');
+    expect(live.pin).not.toHaveProperty('runtime');
+    expect(toCallableFunctionPublic(doc({ ...promoted, state: 'draft' }), { version: 2 }).trustLabel).toBeNull();
   });
 
   it('reports a newer artifact version as an available update', () => {
@@ -117,6 +138,80 @@ describe('toCallableFunctionPublic', () => {
   });
 });
 
+describe('sharing', () => {
+  const grants = {
+    visibility: 'project' as const,
+    projectId: 'project-1',
+    userIds: ['user-2'],
+  };
+
+  it('shows the owner the grants', () => {
+    expect(toCallableFunctionPublic(doc(), { version: 2 }).grants).toBeNull();
+    expect(toCallableFunctionPublic(doc({ grants }), { version: 2 }).grants).toEqual(grants);
+  });
+
+  const hash = 'a'.repeat(64);
+  const review = {
+    functionId: 'fn-1',
+    userId: 'user-2',
+    reviewHash: hash,
+    approval: 'always_ask' as const,
+    enabled: true,
+    reviewedAt: new Date(),
+  };
+  const shared = (reviewed: typeof review | null) =>
+    toCallableFunctionShared(
+      doc({
+        state: 'live',
+        trustLabel: 'verified',
+        grants,
+        pin: { ...doc().pin, seq: 2 },
+        contract: { ...contract, tests: [{ name: 'secret case', input: {}, expected: {} }] },
+      }),
+      'project',
+      { ownerName: 'Owner Name', reviewHash: hash, review: reviewed }
+    );
+
+  it('shows a recipient the interface but no code, tests, artifact, examples, grants, or owner ids', () => {
+    const view = shared(null);
+    expect(Object.keys(view).sort()).toEqual(
+      [
+        'dataPins',
+        'description',
+        'id',
+        'inputs',
+        'outputs',
+        'ownerName',
+        'pin',
+        'review',
+        'reviewHash',
+        'sharedVia',
+        'slug',
+        'sources',
+        'status',
+        'trustLabel',
+        'updatedAt',
+      ].sort()
+    );
+    expect(Object.keys(view.pin).sort()).toEqual(['pinnedAt', 'seq', 'version']);
+    expect(view).toMatchObject({ status: 'pending_review', sharedVia: 'project', trustLabel: 'verified' });
+    expect(view.inputs).toEqual(contract.inputs);
+    expect(JSON.stringify(view)).not.toMatch(/def run|artifact-1|user-2|secret case/);
+  });
+
+  it('reads reviewed only while the review names the current hash and is on', () => {
+    expect(shared(review)).toMatchObject({ status: 'reviewed', review: { approval: 'always_ask', current: true } });
+    expect(shared({ ...review, enabled: false }).status).toBe('disabled');
+    const stale = shared({ ...review, reviewHash: 'b'.repeat(64), enabled: false });
+    expect(stale).toMatchObject({ status: 'pending_review', review: { current: false } });
+  });
+
+  it('has no public rung and protects the grants', () => {
+    expect(CallableFunctionGrantVisibilitySchema.options).toEqual(['private', 'project', 'organization']);
+    expect(CALLABLE_FUNCTION_PROTECTED_FIELDS).toContain('grants');
+  });
+});
+
 describe('toCallableFunctionDetail', () => {
   it('adds the contract and the pinned code, still without owner fields', () => {
     const detail = toCallableFunctionDetail(doc(), { version: 2 });
@@ -125,5 +220,23 @@ describe('toCallableFunctionDetail', () => {
     expect(detail).not.toHaveProperty('ownerKey');
     expect(detail).not.toHaveProperty('userId');
     expect(detail.pin).not.toHaveProperty('source');
+  });
+});
+
+describe('callableFunctionTrustLabel', () => {
+  it('is verified only when a worked example passed', () => {
+    expect(callableFunctionTrustLabel([{ kind: 'example', passed: true }])).toBe('verified');
+    expect(
+      callableFunctionTrustLabel([
+        { kind: 'test', passed: true },
+        { kind: 'example', passed: true },
+      ])
+    ).toBe('verified');
+  });
+
+  it('is unverified with declared tests only, with no cases, or with no passing example', () => {
+    expect(callableFunctionTrustLabel([{ kind: 'test', passed: true }])).toBe('unverified');
+    expect(callableFunctionTrustLabel([])).toBe('unverified');
+    expect(callableFunctionTrustLabel([{ kind: 'example', passed: false }])).toBe('unverified');
   });
 });

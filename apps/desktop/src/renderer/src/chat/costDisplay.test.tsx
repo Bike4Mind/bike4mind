@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsScreen } from './SettingsPanel';
 import { TurnStatus } from './TurnStatus';
 import { MessageThread } from './MessageThread';
@@ -44,43 +44,48 @@ vi.mock('./useAppUpdate', async () => {
 
 const usage = { creditsUsed: 54, usdCost: 0.027, inputTokens: 1200 };
 
-function CostSurfaces() {
+/** The settings switch and the readers of the preference; the composer only for its own tooltip test. */
+function CostSurfaces({ composer = false }: { composer?: boolean }) {
+  if (!composer) {
+    return (
+      <>
+        <SettingsScreen auth={null} section="advanced" onClose={() => undefined} />
+        <TurnStatus
+          turn={{ startedAt: Date.now(), tokens: 1200, usage }}
+          activity={{ kind: 'thinking', label: 'Thinking...' }}
+        />
+        <MessageThread
+          sessionId="s1"
+          messages={[{ id: 'm1', role: 'assistant', content: 'done', createdAt: '2026-01-01', usage }]}
+          streaming={false}
+          onRespond={() => undefined}
+          onContinue={() => undefined}
+        />
+      </>
+    );
+  }
   return (
-    <>
-      <SettingsScreen auth={null} onClose={() => undefined} />
-      <TurnStatus
-        turn={{ startedAt: Date.now(), tokens: 1200, usage }}
-        activity={{ kind: 'thinking', label: 'Thinking...' }}
-      />
-      <Composer
-        sessionId="s1"
-        disabled={false}
-        streaming={false}
-        // A low allowance, so the composer's credits ring (and its tooltip) is drawn at all.
-        usage={{ contextTokens: 1200, contextLimit: 200000, credits: 1000, monthlyAllowance: 10_000, lastTurn: usage }}
-        attachments={{
-          attachments: [],
-          busy: false,
-          rejected: [],
-          dismissRejected: () => undefined,
-          add: async () => undefined,
-          attachImage: async () => undefined,
-          attachFilePath: async () => undefined,
-          pick: async () => undefined,
-          remove: () => undefined,
-          clear: () => undefined,
-        }}
-        onSend={() => undefined}
-        onStop={() => undefined}
-      />
-      <MessageThread
-        sessionId="s1"
-        messages={[{ id: 'm1', role: 'assistant', content: 'done', createdAt: '2026-01-01', usage }]}
-        streaming={false}
-        onRespond={() => undefined}
-        onContinue={() => undefined}
-      />
-    </>
+    <Composer
+      sessionId="s1"
+      disabled={false}
+      streaming={false}
+      // A low allowance, so the composer's credits ring (and its tooltip) is drawn at all.
+      usage={{ contextTokens: 1200, contextLimit: 200000, credits: 1000, monthlyAllowance: 10_000, lastTurn: usage }}
+      attachments={{
+        attachments: [],
+        busy: false,
+        rejected: [],
+        dismissRejected: () => undefined,
+        add: async () => undefined,
+        attachImage: async () => undefined,
+        attachFilePath: async () => undefined,
+        pick: async () => undefined,
+        remove: () => undefined,
+        clear: () => undefined,
+      }}
+      onSend={() => undefined}
+      onStop={() => undefined}
+    />
   );
 }
 
@@ -88,7 +93,7 @@ describe('developer dollar cost preference', () => {
   let container: HTMLDivElement;
   let root: Root;
 
-  beforeEach(() => {
+  const stubBridge = () => {
     vi.stubEnv('DEV', true);
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: false,
@@ -96,7 +101,7 @@ describe('developer dollar cost preference', () => {
       addListener: () => undefined,
       removeListener: () => undefined,
     }));
-    // SettingsScreen's menu-bar switch and notify scope read their preferences from main.
+    // The Advanced page (dollar costs, worktrees) and the rest of the screen read their state from main.
     vi.stubGlobal('b4m', {
       watch: {
         getPreferences: async () => DEFAULT_WATCH_PREFERENCES,
@@ -112,11 +117,37 @@ describe('developer dollar cost preference', () => {
         getSpawnLocation: async () => 'worktree',
         setSpawnLocation: async () => 'worktree',
         onSpawnLocation: () => () => undefined,
+        getTurnExtensions: async () => 3,
+        setTurnExtensions: async (extensions: number) => extensions,
+        listRecentFolders: async () => [],
       },
     });
+  };
+
+  // The first mount of these trees costs several times any later one (well past the per-test
+  // budget on CI), and every test here needs one of them; pay it once here.
+  beforeAll(() => {
+    stubBridge();
+    Element.prototype.scrollIntoView = () => undefined;
+    const warm = createRoot(document.createElement('div'));
+    for (const composer of [false, true]) {
+      act(() =>
+        warm.render(
+          <CssVarsProvider>
+            <CostSurfaces composer={composer} />
+          </CssVarsProvider>
+        )
+      );
+    }
+    act(() => warm.unmount());
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  beforeEach(() => {
+    stubBridge();
     window.localStorage.clear();
     useCostDisplayPreference.setState({ showDollarCosts: false });
-    Element.prototype.scrollIntoView = () => undefined;
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -132,11 +163,11 @@ describe('developer dollar cost preference', () => {
     vi.useRealTimers();
   });
 
-  const render = () =>
+  const render = (composer = false) =>
     act(() =>
       root.render(
         <CssVarsProvider>
-          <CostSurfaces />
+          <CostSurfaces composer={composer} />
         </CssVarsProvider>
       )
     );
@@ -174,7 +205,7 @@ describe('developer dollar cost preference', () => {
 
   it('updates the composer usage tooltip when the developer preference changes', async () => {
     vi.useFakeTimers();
-    render();
+    render(true);
     const ring = container.querySelector('[data-testid="composer-status-ring"]');
     act(() => ring?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
     await act(async () => {

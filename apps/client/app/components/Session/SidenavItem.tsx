@@ -62,7 +62,6 @@ import SessionMetadataModal from '@client/app/components/common/SessionMetadataM
 import ShareDocumentModal from '@client/app/components/common/ShareModal';
 import SessionRenameInput from '@client/app/components/Session/RenameInput';
 import { userCanDeleteDoc, userCanShareDoc, userCanUpdateDoc } from '@client/app/utils/userPermission';
-import clsx from 'clsx';
 import { useNavigate } from '@tanstack/react-router';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
@@ -864,7 +863,7 @@ const SessionSidenavItem: FC<{
                 aria-label="Chat options"
                 size={'sm'}
                 slots={{ root: IconButton }}
-                className={clsx('item-actions', { isProcessing })}
+                className={isProcessing ? 'item-actions isProcessing' : 'item-actions'}
                 sx={{
                   visibility: isProcessing ? 'visible' : 'hidden',
                   opacity: isProcessing ? 1 : 0,

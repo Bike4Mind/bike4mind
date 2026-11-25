@@ -9,7 +9,7 @@ import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.css';
 import 'filepond/dist/filepond.min.css';
 import { FilePond, registerPlugin } from 'react-filepond';
 import { toast } from 'sonner';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from '@client/app/utils/prettyBytes';
 import { useCallback, useMemo, useState } from 'react';
 import { createAppFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { useGetReports } from '@client/app/hooks/data/appFile';

@@ -8,9 +8,11 @@ import {
   ListProposalsResponseSchema,
   ResearchConfigResponseSchema,
   ResearchRunResponseSchema,
+  UndoConfigChangeResponseSchema,
   type IDataLakeProposalDocument,
   type IDataLakeResearchConfigDocument,
   type IDataLakeResearchRunDocument,
+  type LakeConfigHistoryEntry,
   type LakeConfigHistoryView,
 } from '@bike4mind/common';
 import { dataLakeResearchService } from '@bike4mind/services';
@@ -20,6 +22,7 @@ import {
   toPublicConfig,
   toPublicConfigHistory,
   toPublicProposal,
+  toPublicUndoResult,
   toPublicRun,
 } from './toPublicResearch';
 
@@ -329,6 +332,9 @@ describe('toPublicConfigHistory', () => {
       changed_at: '2026-03-01T00:00:00.000Z',
       principal_kind: 'user',
       principal_name: 'Casey',
+      undoable: false,
+      undone_by_event_id: null,
+      file_name: null,
       action: 'file-added',
       origin: 'person',
     };
@@ -395,13 +401,79 @@ describe('toPublicConfigHistory', () => {
       changed_at: '2026-03-02T00:00:00.000Z',
       principal_kind: 'user',
       principal_name: 'Casey',
+      undoable: false,
+      undone_by_event_id: null,
       target: { kind: 'file', id: 'fab7' },
+      file_name: null,
       action: 'file-removed',
       origin: 'person',
       undoes_event_id: 'ev0',
     });
     expect(JSON.stringify(mapped)).not.toContain(USER_ID);
     expect(ConfigHistoryResponseSchema.safeParse(mapped).success).toBe(true);
+  });
+
+  it('exposes undoable, undone_by_event_id and file_name, and nothing else from the undo facts', () => {
+    const mapped = toPublicConfigHistory(
+      withEntries([
+        {
+          kind: 'file',
+          eventId: 'ev5',
+          changedAt: new Date('2026-03-02T00:00:00.000Z'),
+          principalKind: 'user',
+          principalId: USER_ID,
+          action: 'file-added',
+          target: { kind: 'file', id: 'fab7' },
+          fileName: 'handbook.pdf',
+          origin: 'person',
+          undoable: true,
+          undone: false,
+          undoNote: 'internal note',
+        },
+        {
+          kind: 'config',
+          eventId: 'ev6',
+          changedAt: new Date('2026-03-02T00:00:00.000Z'),
+          principalKind: 'user',
+          principalId: USER_ID,
+          manageRung: 'creator',
+          action: 'update-research-config',
+          changes: [],
+          undoable: false,
+          undone: true,
+          undoneByEventId: 'ev7',
+        },
+      ])
+    );
+    expect(mapped.data.entries[0]).toMatchObject({
+      undoable: true,
+      undone_by_event_id: null,
+      file_name: 'handbook.pdf',
+    });
+    expect(mapped.data.entries[1]).toMatchObject({ undoable: false, undone_by_event_id: 'ev7' });
+    expect(JSON.stringify(mapped)).not.toMatch(/undoNote|internal note|"undone"|fileName|undoneBy/);
+    expect(JSON.stringify(mapped)).not.toContain(USER_ID);
+    expect(ConfigHistoryResponseSchema.safeParse(mapped).success).toBe(true);
+  });
+
+  it('maps an undo result, and a null entry when the History write did not persist', () => {
+    const row = {
+      kind: 'config',
+      eventId: 'ev8',
+      changedAt: new Date('2026-03-02T00:00:00.000Z'),
+      principalKind: 'user',
+      principalId: USER_ID,
+      manageRung: 'creator',
+      action: 'update-research-config',
+      changes: [],
+      undoable: true,
+      undoesEventId: 'ev1',
+    } as unknown as LakeConfigHistoryEntry;
+    const mapped = toPublicUndoResult({ entry: row, notes: ['on hold'] });
+    expect(mapped).toMatchObject({ data: { event_id: 'ev8', undoable: true }, notes: ['on hold'] });
+    expect(JSON.stringify(mapped)).not.toContain(USER_ID);
+    expect(UndoConfigChangeResponseSchema.safeParse(mapped).success).toBe(true);
+    expect(toPublicUndoResult({ entry: null, notes: [] })).toEqual({ data: null, notes: [] });
   });
 
   it('puts no feed query string on the wire when the stored lever change is redacted', () => {

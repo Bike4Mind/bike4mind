@@ -1,11 +1,6 @@
-import {
-  buildUsagePriceStamp,
-  getTextModelCost,
-  getTurnsCost,
-  type IUsageEventInput,
-  type ModelInfo,
-} from '@bike4mind/common';
+import type { IUsageEventInput, ModelInfo, UsagePriceStamp } from '@bike4mind/common';
 import type { LlmTimeoutUsage } from '@bike4mind/llm-adapters';
+import { priceCompletionUsage, timedOutCompletionUsageFields } from '../billing/priceCompletionUsage';
 
 type TimedOutAttemptFields = Pick<
   IUsageEventInput,
@@ -22,7 +17,7 @@ type TimedOutAttemptFields = Pick<
   | 'creditsCharged'
   | 'status'
 > &
-  ReturnType<typeof buildUsagePriceStamp>;
+  UsagePriceStamp;
 
 /** Matches by name like isLlmTimeoutError (llm-adapters), so a second bundled copy of the class still counts. */
 export function timedOutUsageOf(error: unknown): LlmTimeoutUsage | undefined {
@@ -41,32 +36,15 @@ export function refusedUsageOf(error: unknown): LlmTimeoutUsage | undefined {
  * charged. inputTokens/outputTokens stay 0 because they are the local estimate that feeds token quotas.
  */
 export function timedOutAttemptUsageFields(model: ModelInfo, usage: LlmTimeoutUsage): TimedOutAttemptFields {
-  const { inputTokens, cacheReadInputTokens, cacheCreationInputTokens } = usage;
-  const outputTokens = usage.outputTokens ?? 0;
-  const promptTokens = inputTokens + cacheReadInputTokens + cacheCreationInputTokens;
-  const turns = usage.turnUsage;
+  const { costUsd, priceStamp } = priceCompletionUsage(model, usage);
   return {
     provider: model.backend,
     model: model.id,
-    inputTokens: 0,
-    outputTokens: 0,
-    providerInputTokens: inputTokens,
-    ...(outputTokens > 0 ? { providerOutputTokens: outputTokens } : {}),
-    cachedInputTokens: cacheReadInputTokens,
-    cacheWriteTokens: cacheCreationInputTokens,
-    settledBasis: 'provider',
-    costUsd: turns?.length
-      ? getTurnsCost(model, turns)
-      : getTextModelCost(
-          model,
-          inputTokens,
-          outputTokens,
-          cacheReadInputTokens,
-          cacheCreationInputTokens,
-          promptTokens
-        ),
+    ...timedOutCompletionUsageFields(usage),
+    cachedInputTokens: usage.cacheReadInputTokens,
+    cacheWriteTokens: usage.cacheCreationInputTokens,
+    costUsd,
     creditsCharged: 0,
-    ...buildUsagePriceStamp(model, { turns, tierBasisTokens: promptTokens }),
-    status: 'timeout',
+    ...priceStamp,
   };
 }

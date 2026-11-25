@@ -161,11 +161,24 @@ describe('ActivityTab', () => {
     renderTab({ types: 'admin', to: '2026-10-07' });
     await screen.findByText('No activity matches these filters');
 
-    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-10-01' } });
-    expect(navigatedSearch().search).toMatchObject({ types: 'admin', from: '2026-10-01', to: '2026-10-07' });
+    expect(screen.getByTestId('user-timeline-filter-from-empty')).toHaveTextContent('From any date');
+    expect(screen.queryByTestId('user-timeline-filter-from')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('user-timeline-filter-from-set-btn'));
+    expect(navigatedSearch().search).toMatchObject({ types: 'admin', from: '2026-10-07', to: '2026-10-07' });
 
     fireEvent.click(screen.getByTestId('user-timeline-clear-btn'));
     expect(navigatedSearch().search).toEqual({ tab: 'activity', types: undefined, from: undefined, to: undefined });
+  });
+
+  it('writes an edited start date into the URL and drops it when removed', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null } });
+    renderTab({ types: 'admin', from: '2026-10-02', to: '2026-10-07' });
+    await screen.findByText('No activity matches these filters');
+
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-10-01' } });
+    expect(navigatedSearch().search).toMatchObject({ types: 'admin', from: '2026-10-01', to: '2026-10-07' });
+    fireEvent.click(screen.getByTestId('user-timeline-filter-from-clear-btn'));
+    expect(navigatedSearch().search).toMatchObject({ types: 'admin', from: undefined, to: '2026-10-07' });
   });
 
   it('loads the next page from the returned cursor', async () => {

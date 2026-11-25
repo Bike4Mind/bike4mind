@@ -401,6 +401,13 @@ const ConfigHistoryEntryBaseShape = {
   changed_at: z.string(),
   principal_kind: z.enum(LAKE_ACCESS_PRINCIPAL_KINDS),
   principal_name: z.string().nullable(),
+  undoable: z
+    .boolean()
+    .describe('True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported.'),
+  undone_by_event_id: z
+    .string()
+    .nullable()
+    .describe('The row that undid this one. Null when this row was not undone, or the undoing row is outside the window.'),
 };
 
 const ConfigHistoryConfigEntrySchema = z.object({
@@ -418,6 +425,7 @@ const ConfigHistoryFileEntrySchema = z.object({
   kind: z.literal('file'),
   ...ConfigHistoryEntryBaseShape,
   target: ConfigHistoryTargetSchema.describe('The file the row is about.'),
+  file_name: z.string().nullable().describe('The name of the file. Null when the file no longer exists.'),
   action: z.enum(LAKE_CONFIG_HISTORY_FILE_ACTIONS),
   origin: z.enum(LAKE_MEMBERSHIP_CHANGE_ORIGINS),
   undoes_event_id: z.string().optional(),
@@ -456,6 +464,16 @@ export const ConfigHistoryResponseSchema = z.object({
   }),
 });
 export type ConfigHistoryResponse = z.infer<typeof ConfigHistoryResponseSchema>;
+
+export const ConfigHistoryEventParamSchema = z.object({ id: z.string().min(1), event_id: z.string().min(1) });
+
+export const UndoConfigChangeResponseSchema = z.object({
+  data: ConfigHistoryEntrySchema.nullable().describe(
+    'The History row the undo wrote. Null when that best-effort write did not persist; the undo still happened.'
+  ),
+  notes: z.array(z.string()).describe('Consequences of the undo in words, for example a schedule put on hold.'),
+});
+export type UndoConfigChangeResponse = z.infer<typeof UndoConfigChangeResponseSchema>;
 
 // -- Path params -------------------------------------------------------------------------------
 

@@ -129,11 +129,13 @@ describe('PlansSection - Team tab', () => {
     settingValues = { enableTeamPlan: true };
   });
 
-  it('opens the Business tab, so Team is on offer here as well as from Teams > Create Team', async () => {
+  it('leaves the Business tab enabled and unexplained, and opens it, so Team is on offer here as well as from Teams > Create Team', async () => {
     renderSection();
 
     const tab = screen.getByRole('tab', { name: 'subscription_modal.business' });
     expect(tab).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('subscription-modal-business-tab')).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText('Team plans are not available right now.')).not.toBeInTheDocument();
 
     await userEvent.setup({ delay: null }).click(tab);
 
@@ -202,22 +204,11 @@ describe('PlansSection - Team tab', () => {
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
   });
 
-  it('leaves the Business tab enabled and unexplained when enableTeamPlan is on', () => {
-    renderSection();
-
-    expect(screen.getByRole('tab', { name: 'subscription_modal.business' })).not.toHaveAttribute(
-      'aria-disabled',
-      'true'
-    );
-    expect(screen.getByTestId('subscription-modal-business-tab')).not.toHaveAttribute('aria-describedby');
-    expect(screen.queryByText('Team plans are not available right now.')).not.toBeInTheDocument();
-  });
-
   it('says why Team cannot be bought when its Stripe price is not live, instead of hiding the tab', async () => {
     teamPriceActive = false;
     renderSection();
 
-    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
 
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeDisabled();
     expect(screen.getByTestId('subscription-modal-team-unavailable')).toBeInTheDocument();
@@ -229,7 +220,7 @@ describe('PlansSection - Team tab', () => {
     settingValues = { enableTeamPlan: true, teamPlanMinSeats: 5, teamPlanCreditsPerSeat: 1000 };
     try {
       renderSection();
-      await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+      await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
       expect(screen.getByText('$70')).toBeInTheDocument();
     } finally {
       teamUnitAmount = 3000;
@@ -240,7 +231,7 @@ describe('PlansSection - Team tab', () => {
     settingValues = { enableTeamPlan: true, teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
     renderSection();
 
-    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
 
     expect(screen.getByText('$60')).toBeInTheDocument();
     expect(
@@ -355,7 +346,7 @@ describe('PlansSection', () => {
     expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeInTheDocument();
     expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();
 
-    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
 
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeInTheDocument();
     expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();

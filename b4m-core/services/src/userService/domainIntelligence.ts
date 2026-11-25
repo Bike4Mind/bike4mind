@@ -9,6 +9,7 @@ import {
 import type { DisposableListSource, DomainIntel, SignupProtectionRepository } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { isDisposableEmail, REJECT_TIER_SOURCES } from './disposableEmail';
+import { Logger } from '@bike4mind/observability';
 
 const FAILED = Symbol('failed');
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -196,11 +197,11 @@ export async function getDomainIntel(
   if (cached) return cached;
   // ponytail: no in-flight dedupe, so concurrent first signups on one domain each look it up.
   const intel = await lookupDomainIntel(domain, opts);
-  if (intel.failed.length) console.warn('Domain intelligence lookup failed', { domain, failed: intel.failed });
+  if (intel.failed.length) Logger.warn('Domain intelligence lookup failed', { domain, failed: intel.failed });
   try {
     await repository.saveDomainIntel(intel);
   } catch (error) {
-    console.warn('Domain intelligence cache write failed', { domain, error: String(error) });
+    Logger.warn('Domain intelligence cache write failed', { domain, error });
   }
   return intel;
 }
@@ -270,7 +271,7 @@ export async function domainHoldReason(
     }
     return null;
   } catch (error) {
-    console.warn('Domain intelligence check failed; not holding', { domain, error: String(error) });
+    Logger.warn('Domain intelligence check failed; not holding', { domain, error });
     return null;
   }
 }

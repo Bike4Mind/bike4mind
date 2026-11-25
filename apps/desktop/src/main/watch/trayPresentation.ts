@@ -27,8 +27,10 @@ export const QUICK_AGENT_LABEL_MAX = 24;
 const STATE_GLYPH: Record<AgentState, string> = {
   'needs-you': '\u25CF',
   working: '\u25D0',
+  waiting: '\u25D4',
   done: '\u2713',
   failed: '\u2715',
+  paused: '\u25CB',
   stopped: '\u25CB',
   idle: '\u25CB',
 };

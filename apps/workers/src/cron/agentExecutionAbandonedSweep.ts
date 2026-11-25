@@ -90,7 +90,7 @@ export async function runAbandonedExecutionSweep({ emitMetrics = true } = {}) {
     });
   } else {
     // Error level so the ERROR subscription on this function's log group forwards the
-    // sweep to the Slack channel LiveOps triage reads; the message text stays constant
+    // sweep to the LiveOps Slack channel; the message text stays constant
     // so repeated sweeps dedup into one notification.
     logger.error('[AgentExecutionAbandonedSweep] Marked abandoned', {
       candidates: staleIds.length,

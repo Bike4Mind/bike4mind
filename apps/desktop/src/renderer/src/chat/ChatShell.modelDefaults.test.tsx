@@ -11,7 +11,20 @@ import { ChatShell } from './ChatShell';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 
 let closeModels: (() => void) | undefined;
 vi.mock('../models/ModelsScreen', () => ({
@@ -31,6 +44,14 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's autosizing textarea measures itself on every render, and jsdom resolves that against every
+// emotion sheet in the document and every ancestor, with no layout to measure in the end.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) =>
+  element instanceof HTMLTextAreaElement
+    ? element.style
+    : realGetComputedStyle(element, pseudo)) as typeof getComputedStyle;
 
 window.ResizeObserver ??= class {
   observe() {}
@@ -139,7 +160,14 @@ async function openShell() {
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ChatShell />
+        {/* The avatar menu's Models row lives in the account slot Home supplies; a stand-in reaches the same screen. */}
+        <ChatShell
+          account={context => (
+            <button type="button" onClick={context.onOpenModels} data-testid="chat-models-btn">
+              Models
+            </button>
+          )}
+        />
       </CssVarsProvider>
     );
   });
@@ -259,7 +287,7 @@ describe('a failed read of the model defaults', () => {
     expect(readError()).toContain('store unreadable');
   });
 
-  it('keeps the last good defaults and says they may be stale when a later read fails', async () => {
+  it('keeps the last good defaults and says they may be stale when a later read fails, then clears once one succeeds', async () => {
     getModelSettings.mockResolvedValue({ effort: 'low' });
     await openShell();
     await openSession('Qwen chat');
@@ -270,13 +298,6 @@ describe('a failed read of the model defaults', () => {
     expect(getModelSettings).toHaveBeenCalledTimes(2);
     expect(readError()).toContain('last ones it read');
     expect(await defaultLabel()).toBe('Default (Low)');
-  });
-
-  it('clears the notice once a later read succeeds', async () => {
-    getModelSettings.mockRejectedValue(new Error('store unreadable'));
-    await openShell();
-    await openSession('Qwen chat');
-    expect(readError()).toContain('built-in ones');
 
     getModelSettings.mockResolvedValue({ effort: 'high' });
     await roundTripModels();

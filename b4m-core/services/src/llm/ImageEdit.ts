@@ -34,7 +34,8 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  rejectsTransparentBackground,
+  supportsTransparentBackgroundByCatalog,
+  transparentBackgroundUnsupportedMessage,
   isFlux2ImageModel,
   isFlux3ImageModel,
   getMaxEditReferenceImages,
@@ -42,7 +43,6 @@ import {
   supportsImageEditEndpoint,
   EDIT_SUPPORTED_IMAGE_MODELS,
   IMAGES_PER_EDIT_REQUEST,
-  ImageModels,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -70,7 +70,6 @@ import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
-import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import type { ImageCreditHolds } from './imageCreditHolds';
@@ -265,33 +264,29 @@ export class ImageEditService {
     const {
       sessionId,
       prompt,
-      model: requestedModel,
+      model,
       questId,
       fabFileIds,
       organizationId,
       run: _bodyRun,
       ...rest
     } = EditImageRequestBodySchema.parse(body);
-    if (rest.edit_regions?.length && !isFlux3ImageModel(requestedModel))
+    if (rest.edit_regions?.length && !isFlux3ImageModel(model))
       throw new BadRequestError('edit_regions are only supported on FLUX 3 models');
     // Native FLUX edits take the source image and optional references, without a mask.
-    if (isFlux2ImageModel(requestedModel) || isFlux3ImageModel(requestedModel)) {
+    if (isFlux2ImageModel(model) || isFlux3ImageModel(model)) {
       if (fabFileIds.length > 0)
         throw new BadRequestError(
-          `${isFlux3ImageModel(requestedModel) ? 'FLUX 3' : 'FLUX.2'} edits take no mask; omit fabFileIds`
+          `${isFlux3ImageModel(model) ? 'FLUX 3' : 'FLUX.2'} edits take no mask; omit fabFileIds`
         );
     } else if (fabFileIds.length === 0) {
       throw new BadRequestError('No fabFileIds provided');
     }
 
-    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
-    // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
-    // promptMeta is built, so the persisted model matches what actually renders and bills.
-    const model =
-      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
-        ? ImageModels.GPT_IMAGE_1_5
-        : requestedModel;
-
+    // Fail rather than quietly render opaque or on a different model than the caller picked.
+    if (rest.background === 'transparent' && !supportsTransparentBackgroundByCatalog(model)) {
+      throw new BadRequestError(transparentBackgroundUnsupportedMessage(model));
+    }
     await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
@@ -367,7 +362,7 @@ export class ImageEditService {
           sessionId: session.id,
           fabFileIds,
           organizationId,
-          generationId: uuidv4(),
+          generationId: crypto.randomUUID(),
           adminRoleWithheld,
           apiKeyId,
           apiKeyBillingOwnerType,
@@ -539,7 +534,7 @@ export class ImageEditService {
       apiKeyId,
       apiKeyBillingOwnerType,
       prompt,
-      model: requestedModel,
+      model,
       safety_tolerance,
       prompt_upsampling,
       seed,
@@ -556,15 +551,6 @@ export class ImageEditService {
       edit_regions,
       run,
     } = ImageEditBodySchema.parse(body);
-    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
-    // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
-    // silently turn a valid request into an opaque image. Resolved before billing so
-    // credits key off the model actually used.
-    const model =
-      background === 'transparent' && rejectsTransparentBackground(requestedModel)
-        ? ImageModels.GPT_IMAGE_1_5
-        : requestedModel;
-
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
     const quest = await this.db.quests.findById(questId);
@@ -965,7 +951,7 @@ export class ImageEditService {
 
       const buffer = await downloadImageAsBuffer(result);
       const fileType = await fileTypeFromBuffer(buffer);
-      const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
+      const filename = `${crypto.randomUUID()}.${fileType?.ext ?? 'png'}`;
 
       await moderateImageOrThrow({
         service: this.imageModerationService,

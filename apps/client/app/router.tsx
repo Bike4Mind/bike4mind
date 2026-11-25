@@ -91,6 +91,8 @@ const SharePage = lazy(() => import('./routes/share/$id'));
 const ReportPublicPage = lazy(() => import('./routes/report/$id'));
 const OrganizationsPage = lazy(() => import('./routes/organizations'));
 const OrganizationDetailPage = lazy(() => import('./routes/organizations/$id'));
+const SpacesPage = lazy(() => import('./routes/spaces'));
+const SpaceDetailPage = lazy(() => import('./routes/spaces/$id'));
 const AuthCallbackPage = lazy(() => import('./routes/auth/$strategy/callback'));
 const AuthSuccessPage = lazy(() => import('./routes/auth/success'));
 const LoginPage = lazy(() => import('./routes/login'));
@@ -872,6 +874,29 @@ const organizationDetailRoute = createRoute({
   },
 });
 
+const spacesRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/spaces',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <SpacesPage />
+    </Suspense>
+  ),
+});
+
+const spaceDetailRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/spaces/$id',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <SpaceDetailPage />
+    </Suspense>
+  ),
+  validateSearch: (search: Record<string, unknown>): { tab?: string } => ({
+    tab: optionalStringParam(search, 'tab'),
+  }),
+});
+
 // Auth callback route (replaces /auth/[strategy]/callback.tsx) - no layout needed
 const authCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1554,6 +1579,8 @@ const routeTree = rootRoute.addChildren([
     reportPublicRoute,
     organizationsRoute,
     organizationDetailRoute,
+    spacesRoute,
+    spaceDetailRoute,
     artifactsRoute,
     artifactRoute,
     artifactsDemoRoute,

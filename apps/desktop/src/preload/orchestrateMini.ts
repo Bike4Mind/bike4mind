@@ -4,7 +4,7 @@ import type { OrchestrateMiniApi } from '@shared/ipc';
 /**
  * A third rollup entry beside index.ts and mini.ts, and a sandboxed preload cannot load a shared
  * chunk. So it imports nothing at runtime but electron, and spells its channels out;
- * orchestrateMini.test.ts holds them equal to IPC_CHANNELS.
+ * bridges.test.ts holds them equal to IPC_CHANNELS.
  */
 export const ORCHESTRATE_MINI_CHANNELS = {
   orchestrateMiniGetSnapshot: 'orchestrate:mini-get-snapshot',

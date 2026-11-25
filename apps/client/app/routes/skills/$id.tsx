@@ -230,7 +230,9 @@ const SkillDetailPage: FC = () => {
           version={skill.importedFrom?.version}
           thirdParty={!!skill.importedFrom}
           marketplace={
-            wantsMarketplace ? findMarketplaceListing(myListings, skill.id, marketMe?.organizations) : undefined
+            wantsMarketplace
+              ? findMarketplaceListing(myListings, skill.id, marketMe?.organizations, marketMe?.spaces)
+              : undefined
           }
         />
       ) : null}

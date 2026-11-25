@@ -26,6 +26,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const listOwnPendingInvites = vi.hoisted(() => vi.fn());
+const flags = vi.hoisted(() => ({ spaces: true }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
+  isFeatureEnabled: vi.fn(async (name: string) => (name === 'EnableSpaces' ? flags.spaces : false)),
+}));
 vi.mock('@bike4mind/services', () => ({
   sharingService: { listOwnPendingInvites },
   // Cache is a pass-through in tests: run the factory directly.
@@ -69,6 +73,43 @@ describe('GET /api/users/[id]/userInvites - inbox recipient filtering', () => {
     expect(body.pagination.total).toBe(1);
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(JSON.stringify(body)).not.toContain('other@x.com');
+  });
+});
+
+describe('GET /api/users/[id]/userInvites - Space invites behind EnableSpaces', () => {
+  beforeEach(() => listOwnPendingInvites.mockClear());
+
+  it('hides Space invites with EnableSpaces off and keeps the others', async () => {
+    flags.spaces = false;
+    listOwnPendingInvites.mockResolvedValue({
+      data: [
+        { id: 's1', type: 'Space', recipients: { pending: ['me@x.com'], accepted: [], refused: [] } },
+        { id: 'p1', type: 'Project', recipients: { pending: ['me@x.com'], accepted: [], refused: [] } },
+      ],
+      total: 2,
+    });
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'me' } });
+    Object.assign(req, { user: { id: 'me', email: 'me@x.com', isAdmin: false } });
+    await mockRefs.getHandler!(req, res);
+
+    const body = res._getJSONData();
+    const rows = Array.isArray(body) ? body : body.data;
+    expect(rows.map((row: { id: string }) => row.id)).toEqual(['p1']);
+  });
+
+  it('returns Space invites unchanged with EnableSpaces on', async () => {
+    flags.spaces = true;
+    listOwnPendingInvites.mockResolvedValue({
+      data: [{ id: 's1', type: 'Space', recipients: { pending: ['me@x.com'], accepted: [], refused: [] } }],
+      total: 1,
+    });
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'me' } });
+    Object.assign(req, { user: { id: 'me', email: 'me@x.com', isAdmin: false } });
+    await mockRefs.getHandler!(req, res);
+
+    const body = res._getJSONData();
+    const rows = Array.isArray(body) ? body : body.data;
+    expect(rows.map((row: { id: string }) => row.id)).toEqual(['s1']);
   });
 });
 

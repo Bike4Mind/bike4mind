@@ -119,3 +119,36 @@ describe('AuditFilterBar account filters', () => {
     expect(screen.getByTestId('audit-filter-target-id')).toBeInTheDocument();
   });
 });
+
+describe('AuditFilterBar date range', () => {
+  const onChange = vi.fn();
+
+  beforeEach(() => {
+    onChange.mockReset();
+  });
+
+  it('shows empty labels and no native date inputs while the range is unset', () => {
+    render(<AuditFilterBar filters={{}} onChange={onChange} onClear={vi.fn()} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-filter-from-empty')).toHaveTextContent('From any date');
+    expect(screen.getByTestId('audit-filter-to-empty')).toHaveTextContent('To any date');
+    expect(screen.queryByTestId('audit-filter-from')).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('emits a start-of-day ISO when a start date is set and undefined when it is cleared', () => {
+    const from = dateInputToIso('2026-10-01', 'start');
+    const { rerender } = render(<AuditFilterBar filters={{}} onChange={onChange} onClear={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    fireEvent.click(screen.getByTestId('audit-filter-from-set-btn'));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0].from).toBe(dateInputToIso(isoToDateInput(new Date().toISOString()), 'start'));
+
+    onChange.mockReset();
+    rerender(<AuditFilterBar filters={{ from }} onChange={onChange} onClear={vi.fn()} />);
+    fireEvent.change(screen.getByTestId('audit-filter-from'), { target: { value: '2026-10-02' } });
+    expect(onChange).toHaveBeenCalledWith({ from: dateInputToIso('2026-10-02', 'start') });
+    fireEvent.click(screen.getByTestId('audit-filter-from-clear-btn'));
+    expect(onChange).toHaveBeenLastCalledWith({ from: undefined });
+  });
+});

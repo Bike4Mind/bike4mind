@@ -121,6 +121,11 @@ export const CONTAINMENT_PREDICTIONS: Record<AutoContainmentOutcome, Prediction>
   withdrawn: 'negative',
   pending: 'abstain',
   failed: 'abstain',
+  // A graduated tier predicted abuse when it decided, whatever later released or expired the hold.
+  would_intervene: 'positive',
+  intervened: 'positive',
+  released: 'positive',
+  expired: 'positive',
 };
 
 export const SIGNUP_PREDICTIONS: Record<SignupChartVerdict, Prediction> = {

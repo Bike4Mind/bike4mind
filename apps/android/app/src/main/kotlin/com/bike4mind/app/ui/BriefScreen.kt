@@ -13,7 +13,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,7 +26,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -73,14 +71,14 @@ fun BriefScreen(graph: AppGraph, briefId: String?, onBack: () -> Unit, onOpenSes
             val brief = state.brief
             when {
                 state.loading && brief == null -> Centered(tag = "brief-loading") { CircularProgressIndicator() }
-                brief == null && state.error != null -> Message(
+                brief == null && state.error != null -> Notice(
                     title = stringResource(R.string.brief_load_failed),
                     body = state.error,
                     action = stringResource(R.string.action_try_again) to controller::load,
                     tag = "brief-error",
                     actionTag = "brief-retry-btn",
                 )
-                brief == null -> Message(
+                brief == null -> Notice(
                     title = stringResource(R.string.brief_empty_title),
                     body = stringResource(R.string.brief_empty_body),
                     action = stringResource(R.string.brief_compose) to controller::compose,
@@ -97,7 +95,7 @@ fun BriefScreen(graph: AppGraph, briefId: String?, onBack: () -> Unit, onOpenSes
 private fun BriefContent(brief: Brief, state: BriefState, onCompose: () -> Unit, onLoad: () -> Unit, onOpenSession: (String) -> Unit) {
     when (brief.status) {
         BriefStatus.COMPOSING -> if (state.error != null) {
-            Message(
+            Notice(
                 title = stringResource(R.string.brief_load_failed),
                 body = state.error,
                 action = stringResource(R.string.action_try_again) to onLoad,
@@ -105,7 +103,7 @@ private fun BriefContent(brief: Brief, state: BriefState, onCompose: () -> Unit,
                 actionTag = "brief-retry-btn",
             )
         } else if (state.composeTimedOut) {
-            Message(
+            Notice(
                 title = stringResource(R.string.brief_timed_out_title),
                 body = stringResource(R.string.brief_timed_out_body),
                 tag = "brief-composing",
@@ -118,20 +116,20 @@ private fun BriefContent(brief: Brief, state: BriefState, onCompose: () -> Unit,
                 }
             }
         }
-        BriefStatus.FAILED -> Message(
+        BriefStatus.FAILED -> Notice(
             title = stringResource(R.string.brief_failed_title),
             body = stringResource(R.string.brief_failed_body),
             action = stringResource(R.string.action_try_again) to onCompose,
             tag = "brief-failed",
             actionTag = "brief-failed-retry-btn",
         )
-        BriefStatus.UNKNOWN -> Message(
+        BriefStatus.UNKNOWN -> Notice(
             title = stringResource(R.string.brief_unsupported_title),
             body = stringResource(R.string.brief_unsupported_body),
             tag = "brief-unsupported",
         )
         BriefStatus.READY -> if (brief.isEmpty) {
-            Message(
+            Notice(
                 title = stringResource(R.string.brief_quiet_title),
                 body = stringResource(R.string.brief_quiet_body),
                 action = stringResource(R.string.brief_compose) to onCompose,
@@ -209,36 +207,6 @@ private fun Section(title: String, tag: String, content: @Composable () -> Unit)
     Column(modifier = Modifier.fillMaxWidth().testTag(tag), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
         Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
         content()
-    }
-}
-
-@Composable
-private fun Centered(tag: String, content: @Composable () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize().testTag(tag), contentAlignment = Alignment.Center) { content() }
-}
-
-@Composable
-private fun Message(
-    title: String,
-    body: String?,
-    tag: String,
-    action: Pair<String, () -> Unit>? = null,
-    actionTag: String? = null,
-) {
-    Centered(tag = tag) {
-        Column(
-            modifier = Modifier.padding(Spacing.l),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.m),
-        ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-            body?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-            }
-            action?.let { (label, onClick) ->
-                OutlinedButton(onClick = onClick, modifier = actionTag?.let { Modifier.testTag(it) } ?: Modifier) { Text(label) }
-            }
-        }
     }
 }
 

@@ -53,7 +53,7 @@ async function executeReview(params: {
         pull_number,
       });
     } catch (error) {
-      log.error('pr lookup failed', { toolName: toolName, ...errorLogFields(error) });
+      log.error('pr lookup failed', { toolName, ...errorLogFields(error) });
       if (hasStatus(error, 404)) {
         return createErrorResponse(error, {
           suggestion: `Pull request #${pull_number} was not found in ${fullRepoName}. Verify the PR number is correct.`,
@@ -124,10 +124,10 @@ async function executeReview(params: {
 
     // Audit logging for APPROVE and REQUEST_CHANGES events (both affect merge status)
     if (event === 'APPROVE' || event === 'REQUEST_CHANGES') {
-      log.info('audit: review affecting merge status created', { toolName: toolName, event, number: pull_number });
+      log.info('audit: review affecting merge status created', { toolName, event, number: pull_number });
     }
 
-    log.info('succeeded', { toolName: toolName, number: pull_number });
+    log.info('succeeded', { toolName, number: pull_number });
 
     return createSuccessResponse({
       review: {
@@ -145,7 +145,7 @@ async function executeReview(params: {
       },
     });
   } catch (error) {
-    log.error('failed', { toolName: toolName, ...errorLogFields(error) });
+    log.error('failed', { toolName, ...errorLogFields(error) });
 
     // Handle rate limiting
     if (isRateLimitError(error)) {

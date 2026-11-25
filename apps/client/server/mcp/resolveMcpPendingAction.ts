@@ -1,19 +1,93 @@
 import { Quest, Session } from '@bike4mind/database';
-import { MCP_ACTION_REPLACED_ERROR_CODE, PENDING_ACTION_TTL_MS } from '@bike4mind/common';
+import {
+  MCP_ACTION_REPLACED_ERROR_CODE,
+  PENDING_ACTION_TTL_MS,
+  type CustomConnectorPendingRef,
+} from '@bike4mind/common';
+import {
+  CUSTOM_MCP_AWAITING_APPROVAL_PREFIX,
+  CUSTOM_MCP_OUTPUT_TOO_LARGE_BODY,
+  customMcpResultBody,
+  customMcpResultText,
+  customMcpToolId,
+  type CustomMcpToolCallResult,
+} from '@bike4mind/services/llm';
 import type { Logger } from '@bike4mind/observability';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
+import { WAIT_TURN_BUDGET_MS } from '@server/utils/waitTurnDeadline';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { customMcpToolHost, isCustomToolStillOffered } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
+import { assertCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
+import {
+  FUNCTION_CONNECTION_ID,
+  createFunctionToolHost,
+  isFunctionToolStillOffered,
+} from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import { describeCustomCallFailure } from '@bike4mind/server-utils/mcpConnections/describeRemoteMcpError';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
 type ActingUser = Parameters<typeof resolvePendingActionTarget>[1];
+
+/**
+ * A confirmed function returns its output on the card, capped and refused whole as the model would read it, and
+ * the same text replaces the call's held reply on the quest so the next turn replays the output.
+ */
+async function confirmedFunctionOutcome(
+  questId: string,
+  customConnector: CustomConnectorPendingRef,
+  tool: string,
+  result: CustomMcpToolCallResult,
+  heldCalls: ReadonlyArray<{ name?: string; returnValue?: unknown }>,
+  logger: Logger
+): Promise<PendingActionOutcome> {
+  const output = customMcpResultBody(result);
+  const tooLarge = output === CUSTOM_MCP_OUTPUT_TOO_LARGE_BODY;
+  // A turn can hold the same function twice; the pending action is the last one held, so write into that slot.
+  const name = customMcpToolId(customConnector.slug, tool);
+  const index = heldCalls.findLastIndex(
+    call =>
+      call.name === name &&
+      typeof call.returnValue === 'string' &&
+      call.returnValue.startsWith(CUSTOM_MCP_AWAITING_APPROVAL_PREFIX)
+  );
+  try {
+    if (index >= 0) {
+      const slot = `promptMeta.functionCalls.${index}`;
+      await Quest.updateOne(
+        { _id: questId, [`${slot}.returnValue`]: { $regex: `^${CUSTOM_MCP_AWAITING_APPROVAL_PREFIX}` } },
+        {
+          $set: {
+            [`${slot}.returnValue`]: customMcpResultText(customConnector, result),
+            [`${slot}.success`]: !result.isError && !tooLarge,
+          },
+        },
+        { runValidators: true }
+      );
+    }
+  } catch (error) {
+    logger.warn('[MCP Pending Action] Could not record the confirmed function output', {
+      questId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const failed = result.isError || tooLarge;
+  return {
+    status: 200,
+    body: {
+      success: !failed,
+      message: failed
+        ? `${customConnector.displayName}: ${tool} did not return an output`
+        : `${customConnector.displayName}: ${tool} completed`,
+      output,
+    },
+  };
+}
 
 /**
  * `reason` names the lifecycle outcomes the public API reports as stable error codes; `not_found`
@@ -47,6 +121,8 @@ export async function resolveMcpPendingAction({
   pendingActionTs: number;
   logger: Logger;
 }): Promise<PendingActionOutcome> {
+  // Both routes run in the web function, so a confirmed call gets the same budget as an inline turn.
+  const deadline = Date.now() + WAIT_TURN_BUDGET_MS;
   const session = isValidObjectId(sessionId) ? await Session.findById(sessionId) : null;
   if (!session) {
     logger.error('[MCP Pending Action] Session not found', { sessionId });
@@ -117,11 +193,17 @@ export async function resolveMcpPendingAction({
   // and passes `approved: true` because this click is the approval.
   if (pendingAction.customConnector) {
     const { connectionId, displayName } = pendingAction.customConnector;
+    // A function card answers to the callable functions setting and host, never to custom MCP's.
+    const isFunction = connectionId === FUNCTION_CONNECTION_ID;
+    const host = isFunction ? createFunctionToolHost('chat') : customMcpToolHost;
     // Before the claim, so a disabled feature leaves the action in place.
-    await assertCustomMcpEnabled(user);
+    await (isFunction ? assertCallableFunctionsEnabled(user) : assertCustomMcpEnabled(user));
     // Also before the claim: a connection or tool that is no longer usable would fail after the
     // action was consumed, and the user could not retry.
-    if (!(await isCustomToolStillOffered(user.id, connectionId, pendingAction.tool))) {
+    const stillOffered = isFunction
+      ? await isFunctionToolStillOffered(user.id, pendingAction.tool)
+      : await isCustomToolStillOffered(user.id, connectionId, pendingAction.tool);
+    if (!stillOffered) {
       logger.warn('[MCP Pending Action] Custom connector tool is no longer available', { questId });
       return { status: 409, body: { error: `${displayName} no longer offers this action.` } };
     }
@@ -130,14 +212,25 @@ export async function resolveMcpPendingAction({
       return { status: 409, body: { error: 'This action has already been processed.' }, reason: 'already_resolved' };
     }
     try {
-      const { result } = await customMcpToolHost.callTool({
+      const { result } = await host.callTool({
         connectionId,
         userId: user.id,
         toolName: pendingAction.tool,
         args: pendingAction.params,
         approved: true,
         platformConnectionIds: [connectionId],
+        deadline,
       });
+      if (isFunction) {
+        return await confirmedFunctionOutcome(
+          questId,
+          pendingAction.customConnector,
+          pendingAction.tool,
+          result,
+          quest.promptMeta?.functionCalls ?? [],
+          logger
+        );
+      }
       return {
         status: 200,
         body: result.isError

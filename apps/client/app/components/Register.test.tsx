@@ -121,7 +121,7 @@ import en from '@client/app/locales/en.json';
 // real ones); every other key stays an identity, as before.
 function inviteCodeCopy(key: string): string {
   return /^auth\.(inviteCode|noInviteCode|joinWaitlist)/.test(key)
-    ? (en.auth as Record<string, string>)[key.slice('auth.'.length)]
+    ? ((en.auth as Record<string, unknown>)[key.slice('auth.'.length)] as string)
     : key;
 }
 
@@ -132,6 +132,12 @@ const renderRegister = () =>
       <Register />
     </CssVarsProvider>
   );
+
+// Per-keystroke input is not under test here; pasting fills a field in one change event.
+const fill = async (user: ReturnType<typeof userEvent.setup>, field: HTMLElement, text: string) => {
+  await user.click(field);
+  await user.paste(text);
+};
 
 describe('Register', () => {
   beforeEach(() => {
@@ -153,8 +159,8 @@ describe('Register', () => {
       );
       expect(screen.queryByTestId('register-join-waitlist-link')).not.toBeInTheDocument();
       const user = userEvent.setup();
-      await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-      await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+      await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+      await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
       await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
       await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
       expect(screen.getByTestId('register-submit-btn')).toBeEnabled();
@@ -196,7 +202,7 @@ describe('Register', () => {
     mocks.startOAuthSignIn.mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderRegister();
-    await user.type(within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' REF 1&x ');
+    await fill(user, within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' REF 1&x ');
     await user.click(screen.getByTestId('register-google-btn'));
     expect(mocks.startOAuthSignIn).toHaveBeenCalledWith('/api/auth/google?inviteCode=REF%201%26x');
   });
@@ -251,7 +257,7 @@ describe('Register - field errors and rate limiting', () => {
     renderRegister();
 
     const input = within(screen.getByTestId('register-email-input')).getByRole('textbox');
-    await user.type(input, 'not-an-email');
+    await fill(user, input, 'not-an-email');
     await user.tab();
 
     const alert = screen.getByTestId('register-email-error');
@@ -266,7 +272,7 @@ describe('Register - field errors and rate limiting', () => {
     renderRegister();
 
     const input = within(screen.getByTestId('register-username-input')).getByRole('textbox');
-    await user.type(input, 'bad name!');
+    await fill(user, input, 'bad name!');
     await user.tab();
 
     const alert = screen.getByTestId('register-username-error');
@@ -285,8 +291,8 @@ describe('Register - field errors and rate limiting', () => {
     });
     renderRegister();
 
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     await user.click(screen.getByTestId('register-submit-btn'));
@@ -301,13 +307,13 @@ describe('Register - field errors and rate limiting', () => {
 describe('Register - second-factor handoff', () => {
   const submitCode = async (user: ReturnType<typeof userEvent.setup>) => {
     mocks.sendOTC.mockResolvedValue({ pendingToken: 'ptok-1' });
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     await user.click(screen.getByTestId('register-submit-btn'));
     const otcInput = within(await screen.findByTestId('register-otc-input')).getByRole('textbox');
-    await user.type(otcInput, '12345678');
+    await fill(user, otcInput, '12345678');
     await user.click(screen.getByTestId('register-verify-btn'));
   };
 
@@ -329,7 +335,7 @@ describe('Register - second-factor handoff', () => {
     expect(screen.getByTestId('register-form')).toBeInTheDocument();
     expect(mocks.navigate).not.toHaveBeenCalled();
     expect(screen.getByText('Google')).not.toBeVisible();
-    await user.type(within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' INVITE123 ');
+    await fill(user, within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' INVITE123 ');
     await submitCode(user);
     await waitFor(() => expect(mocks.verifyOTC).toHaveBeenCalledTimes(1));
     expect(mocks.verifyOTC).toHaveBeenLastCalledWith(expect.objectContaining({ inviteCode: 'INVITE123' }));
@@ -349,8 +355,8 @@ describe('Register - second-factor handoff', () => {
         .mockResolvedValueOnce({ pendingToken: 'ptok-1' })
         .mockReturnValueOnce(new Promise(resolve => (finishResend = resolve)));
       renderRegister();
-      await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-      await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+      await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+      await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
       await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
       await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
       await user.click(screen.getByTestId('register-submit-btn'));
@@ -370,8 +376,8 @@ describe('Register - second-factor handoff', () => {
     mocks.allowOpenRegistration = false;
     renderRegister();
     const user = userEvent.setup();
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     expect(screen.getByTestId('register-submit-btn')).toBeDisabled();
@@ -382,7 +388,7 @@ describe('Register - second-factor handoff', () => {
     mocks.allowOpenRegistration = false;
     renderRegister();
     const user = userEvent.setup();
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(screen.getByTestId('register-join-waitlist-link'));
 
     expect(mocks.navigate).toHaveBeenCalledWith(
@@ -390,11 +396,6 @@ describe('Register - second-factor handoff', () => {
     );
     const { state } = mocks.navigate.mock.calls.at(-1)[0];
     expect(state({})).toEqual({ waitlistEmail: 'new@test.com' });
-  });
-
-  it('hides the waitlist link when registration is open', () => {
-    renderRegister();
-    expect(screen.queryByTestId('register-join-waitlist-link')).not.toBeInTheDocument();
   });
 
   it('marks a freshly registered account first session before entering the app', async () => {
@@ -489,8 +490,8 @@ describe('Register - signup bot checks', () => {
   });
 
   const fillAndSubmit = async (user: ReturnType<typeof userEvent.setup>) => {
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     await user.click(screen.getByTestId('register-submit-btn'));
@@ -543,8 +544,8 @@ describe('Register - product hint from redirectTo', () => {
     const user = userEvent.setup();
     renderRegister();
     expect(screen.getByTestId('auth-redirect-product-hint')).toBeInTheDocument();
-    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
-    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await fill(user, within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await fill(user, within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
     await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
     await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
     await user.click(screen.getByTestId('register-submit-btn'));

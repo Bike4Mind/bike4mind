@@ -10,6 +10,7 @@ import type {
 } from '@bike4mind/common';
 import { resolveLakeManageRung, type LakeGrant, type ManageActor } from './manageRule';
 import { resolveLakeConfigAuditRetention, type LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * The audit half of a config-write service's adapters. BOTH repositories are optional, and a
@@ -53,6 +54,10 @@ export interface RecordLakeConfigChangeParams {
   leverChanges?: ILakeConfigLeverChange[];
   /** The file an approve or auto-approve admitted. */
   admittedFabFileId?: string;
+  /** This row reverses that event; set by Undo only. */
+  undoesEventId?: string;
+  /** A pre-minted id, for a caller that must name the row before it is written. */
+  eventId?: string;
   /**
    * The rung that authorized THIS call, when the caller knows it better than `resolveLakeManageRung`
    * can infer it. Two legitimate uses: a write no principal drove (the `auto-activate` action, which
@@ -93,6 +98,8 @@ export async function recordLakeConfigChange(
     target,
     leverChanges,
     admittedFabFileId,
+    undoesEventId,
+    eventId,
     manageRung,
   }: RecordLakeConfigChangeParams,
   { db, logger }: LakeConfigAuditAdapters
@@ -110,7 +117,7 @@ export async function recordLakeConfigChange(
   const logAuditLoss = (msg: string, meta: Record<string, unknown>) => {
     if (logger?.error) return logger.error(msg, meta);
     if (logger?.warn) return logger.warn(msg, meta);
-    return console.error(msg, meta);
+    return Logger.error(msg, meta);
   };
 
   try {
@@ -148,6 +155,8 @@ export async function recordLakeConfigChange(
       target,
       leverChanges,
       admittedFabFileId,
+      undoesEventId,
+      eventId,
       retentionDays,
     });
     return written.id ?? null;

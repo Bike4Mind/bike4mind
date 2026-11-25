@@ -135,7 +135,13 @@ export function TableView({ agents, onSelect, onOpenPr, selectedId }: Orchestrat
               </td>
               <td>{timeAgo(agent.updatedAt, now) ?? '-'}</td>
               <td>{formatAgentCost(agent.usdCost, agent.credits)}</td>
-              <td>{agent.pr ? <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} /> : '-'}</td>
+              <td>
+                {agent.pr ? (
+                  <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} />
+                ) : (
+                  '-'
+                )}
+              </td>
               <td>
                 <Typography level="body-xs" sx={clamp}>
                   {agent.branch ?? '-'}

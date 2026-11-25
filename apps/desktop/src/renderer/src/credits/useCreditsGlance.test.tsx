@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { AccountProfile } from '@shared/account';
+import type { AccountProfile, BillingAccount } from '@shared/account';
 import type { AccountUsageResult } from '@shared/usage';
 import { PROFILE_MIN_GAP_MS, USAGE_MIN_GAP_MS, profileReadDue, usageReadDue } from './refreshGate';
 import { useCreditsGlance, type CreditsGlance } from './useCreditsGlance';
@@ -37,13 +37,13 @@ let host: HTMLDivElement;
 let root: Root;
 let latest: CreditsGlance | null = null;
 
-function Probe({ spentAt, open }: { spentAt: number; open: boolean }) {
-  latest = useCreditsGlance(spentAt, open, now);
+function Probe({ spentAt, open, payer }: { spentAt: number; open: boolean; payer: BillingAccount | null }) {
+  latest = useCreditsGlance(spentAt, open, payer, now);
   return null;
 }
 
-async function render(spentAt: number, open = false) {
-  await act(async () => root.render(<Probe spentAt={spentAt} open={open} />));
+async function render(spentAt: number, open = false, payer: BillingAccount | null = null) {
+  await act(async () => root.render(<Probe spentAt={spentAt} open={open} payer={payer} />));
 }
 
 async function focus() {
@@ -130,4 +130,24 @@ it('gates every reason by its own minimum gap', () => {
   expect(profileReadDue('open', 0, PROFILE_MIN_GAP_MS.open)).toBe(true);
   expect(usageReadDue(null, 0)).toBe(true);
   expect(usageReadDue(0, USAGE_MIN_GAP_MS - 1)).toBe(false);
+});
+
+it('describes an organization pool by its balance alone, not the personal burn', async () => {
+  const acme: BillingAccount = { id: 'org-1', name: 'Acme', personal: false, credits: 7000 };
+  await render(0, false, acme);
+  expect(latest?.organization).toEqual(acme);
+  expect(latest?.burnPerDay).toBeNull();
+  expect(latest?.outlook).toEqual({ kind: 'idle', tone: 'ok', ringFill: 0, refillAt: null });
+
+  await render(0, false, { ...acme, credits: 0 });
+  expect(latest?.outlook).toMatchObject({ kind: 'empty', tone: 'critical' });
+
+  await render(0, false, { ...acme, credits: null });
+  expect(latest?.outlook).toEqual({ kind: 'unknown' });
+});
+
+it('keeps the personal outlook when Personal pays', async () => {
+  await render(0, false, { id: 'u1', name: 'Personal', personal: true, credits: 4000 });
+  expect(latest?.organization).toBeNull();
+  expect(latest?.outlook).toMatchObject({ kind: 'covered' });
 });

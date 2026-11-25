@@ -1,4 +1,16 @@
-import type { ChatSessionStatus, ChatSessionStatusEvent, SessionSetupStep } from '@shared/chat';
+import type { ChatSessionStatus, ChatSessionStatusEvent, SessionBackgroundJobs, SessionSetupStep } from '@shared/chat';
+
+/** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue in ChatService. */
+export type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
+
+/**
+ * Whether a turn that just ended leaves an unread reply: a finished answer with text, or a turn that
+ * failed. Either stays on the Agents board and the dock badge until opened; a stop the user asked for,
+ * or an empty answer, does not.
+ */
+export function endsUnread(outcome: TurnOutcome, replyText: string): boolean {
+  return outcome === 'failed' || (outcome === 'completed' && replyText.trim().length > 0);
+}
 
 /**
  * The authoritative answer to "what is each session doing", for every session at once.
@@ -33,7 +45,17 @@ export class SessionActivity {
 
   private readonly unread = new Set<string>();
 
-  constructor(private readonly onChange: (event: ChatSessionStatusEvent) => void) {}
+  /**
+   * Wake-on-exit background commands still running, per session. Orthogonal to the status: a
+   * session whose turn ended is 'done' and may still be waiting on these (see BackgroundProcessRegistry).
+   */
+  private readonly background = new Map<string, SessionBackgroundJobs>();
+
+  /**
+   * `statusChanged` is false for an event that only moved the setup step or the background jobs,
+   * so a listener that acts on a turn settling (PrMonitor) does not run twice for one turn.
+   */
+  constructor(private readonly onChange: (event: ChatSessionStatusEvent, statusChanged: boolean) => void) {}
 
   statusOf(sessionId: string): ChatSessionStatus {
     const runtime = this.runtimeStatusOf(sessionId);
@@ -55,7 +77,7 @@ export class SessionActivity {
   }
 
   /**
-   * Every session not currently idle.
+   * Every session not currently idle, plus every idle one still waiting on background jobs.
    *
    * 'done' is represented by absence throughout, so a renderer seeded with this holds one entry
    * per busy conversation rather than one per conversation that has ever existed.
@@ -68,11 +90,12 @@ export class SessionActivity {
       ...this.held,
       ...this.deciding,
       ...this.unread,
+      ...this.background.keys(),
     ]);
     const events: ChatSessionStatusEvent[] = [];
     for (const sessionId of ids) {
       const status = this.statusOf(sessionId);
-      if (status !== 'done') events.push(this.eventFor(sessionId, status));
+      if (status !== 'done' || this.background.has(sessionId)) events.push(this.eventFor(sessionId, status));
     }
     return events;
   }
@@ -133,6 +156,13 @@ export class SessionActivity {
     this.transition(sessionId, () => (pending ? this.deciding.add(sessionId) : this.deciding.delete(sessionId)));
   }
 
+  /** The session's running wake-on-exit background jobs, or undefined when none are left. */
+  backgroundChanged(sessionId: string, jobs: SessionBackgroundJobs | undefined): void {
+    this.transition(sessionId, () =>
+      jobs && jobs.running > 0 ? this.background.set(sessionId, { ...jobs }) : this.background.delete(sessionId)
+    );
+  }
+
   /**
    * Drop a deleted conversation. Silent on purpose: the row whose status it would announce is
    * already gone from the sidebar by the time this runs.
@@ -144,6 +174,7 @@ export class SessionActivity {
     this.held.delete(sessionId);
     this.deciding.delete(sessionId);
     this.unread.delete(sessionId);
+    this.background.delete(sessionId);
   }
 
   /** The setup step of a session still being prepared, with no reply streaming yet; else undefined. */
@@ -154,26 +185,40 @@ export class SessionActivity {
 
   private eventFor(sessionId: string, status: ChatSessionStatus): ChatSessionStatusEvent {
     const step = this.setupStep(sessionId, status);
-    if (status === 'needs-action' && this.runtimeStatusOf(sessionId) === 'done')
-      return { sessionId, status, unreadReply: true };
-    return step ? { sessionId, status, preparing: step } : { sessionId, status };
+    const unreadReply = status === 'needs-action' && this.runtimeStatusOf(sessionId) === 'done';
+    const jobs = this.background.get(sessionId);
+    return {
+      sessionId,
+      status,
+      ...(unreadReply ? { unreadReply: true } : {}),
+      ...(step ? { preparing: step } : {}),
+      ...(jobs ? { background: { ...jobs } } : {}),
+    };
+  }
+
+  private backgroundKey(sessionId: string): string {
+    const jobs = this.background.get(sessionId);
+    return jobs ? `${jobs.running}:${jobs.label}` : '';
   }
 
   private transition(sessionId: string, mutate: () => void): void {
     const before = this.statusOf(sessionId);
     const unreadBefore = this.eventFor(sessionId, before).unreadReply;
     const stepBefore = this.setupStep(sessionId, before);
+    const backgroundBefore = this.backgroundKey(sessionId);
     mutate();
     const after = this.statusOf(sessionId);
     // Only a real change goes out: a turn running four tools would otherwise push four
     // identical 'needs-action' events, and every open window would re-render on each one.
-    // The setup step counts as a change: preparing -> replying keeps 'processing'.
+    // The unread flag, the setup step and the background jobs count as changes too.
+    const statusChanged = after !== before;
     if (
-      after !== before ||
+      statusChanged ||
       this.eventFor(sessionId, after).unreadReply !== unreadBefore ||
-      this.setupStep(sessionId, after) !== stepBefore
+      this.setupStep(sessionId, after) !== stepBefore ||
+      this.backgroundKey(sessionId) !== backgroundBefore
     ) {
-      this.onChange(this.eventFor(sessionId, after));
+      this.onChange(this.eventFor(sessionId, after), statusChanged);
     }
   }
 }

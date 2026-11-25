@@ -69,7 +69,8 @@
       "title": "Studio media gallery",
       "web": "green",
       "ios": "green",
-      "android": "red"
+      "android": "yellow",
+      "notes": "Android: green once the gallery items in apps/android/DEVICE_TESTING.md pass on a device."
     },
     {
       "id": "deep-links",

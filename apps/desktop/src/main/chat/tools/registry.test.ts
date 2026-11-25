@@ -88,6 +88,34 @@ describe('toolsForRequest', () => {
     expect(findTool('generate_video')).toBeDefined();
   });
 
+  it('offers a Studio session the generation tools and nothing else, whatever else is on', () => {
+    const everything = {
+      studio: true,
+      roots: ['/repo'],
+      media: true,
+      video: [publicVideoModel('gemini-omni-1.1-flash')],
+      host: true,
+      explore: true,
+      browser: true,
+      screen: true,
+      simulator: true,
+      model: true,
+      memory: true,
+      skills: true,
+      web: true,
+      ask: true,
+      mcp: [mcpSchema],
+      mcpServers: true,
+      pullRequest: true,
+    };
+    expect(names(everything)).toEqual(
+      offeredMediaToolNames({ media: true, video: [publicVideoModel('gemini-omni-1.1-flash')] })
+    );
+    expect(names({ ...everything, video: [] })).toEqual(offeredMediaToolNames({ media: true }));
+    // Signed out there is nothing to generate with, and nothing else takes its place.
+    expect(names({ ...everything, media: false })).toEqual([]);
+  });
+
   it('keeps MCP tools when every built-in family is off', () => {
     // A signed-out user with no folder and no project still gets the servers they configured:
     // an MCP server is theirs, and none of the other three preconditions is about it.

@@ -122,18 +122,31 @@ describe('GET /api/callable-functions/status', () => {
     await call();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ enabled: false });
+    expect(res._getJSONData()).toMatchObject({ enabled: false });
     expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ id: 'jwt-user' }));
     expect(perUserBuckets).toEqual(['GET /api/callable-functions/status']);
   });
 
-  it('answers { enabled: true } when the resolver says so', async () => {
+  it('answers { enabled: true } when the resolver says so, and no server runtime on a stage without one', async () => {
+    vi.stubEnv('CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME', '');
+    vi.stubEnv('CALLABLE_FUNCTION_CHILD_PATH', '');
     mockResolve.mockResolvedValue(true);
     const { res, call } = fire('live-jwt');
     await call();
+    vi.unstubAllEnvs();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ enabled: true });
+    expect(res._getJSONData()).toEqual({ enabled: true, serverRuntime: false });
+  });
+
+  it('reports the server runtime when the stage names one', async () => {
+    vi.stubEnv('CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME', 'runtime-fn');
+    mockResolve.mockResolvedValue(true);
+    const { res, call } = fire('live-jwt');
+    await call();
+    vi.unstubAllEnvs();
+
+    expect(res._getJSONData()).toEqual({ enabled: true, serverRuntime: true });
   });
 
   it('runs the per-user limiter before reading the setting', async () => {

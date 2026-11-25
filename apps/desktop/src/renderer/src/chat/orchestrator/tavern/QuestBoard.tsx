@@ -137,7 +137,7 @@ function Note({
       <Box component="span" sx={{ ...ellipsis, display: 'block', textDecoration: done ? 'line-through' : 'none' }}>
         {title}
       </Box>
-      <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
+      <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
     </Box>
   );
 }
@@ -210,7 +210,12 @@ function MoreNotes({
             <Box sx={{ ...ellipsis, maxWidth: 280, textDecoration: note.done ? 'line-through' : 'none' }}>
               {`${name(note.agent)}: ${questTitle(note.agent)}`}
             </Box>
-            <AgentPrIndicator pr={note.agent.pr} onOpen={() => onOpenPr?.(note.agent.id)} compact />
+            <AgentPrIndicator
+              agentId={note.agent.id}
+              pr={note.agent.pr}
+              onOpen={() => onOpenPr?.(note.agent.id)}
+              compact
+            />
           </MenuItem>
         ))}
       </Menu>

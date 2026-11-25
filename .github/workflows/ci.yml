@@ -199,6 +199,9 @@ jobs:
       - name: Check v1 endpoints use the contract abstraction, non-v1 handlers are jwtOnly, and Function URL handlers are contract-routed
         run: bash scripts/check-contract-gate.sh
 
+      - name: Check provider exception inventory does not grow
+        run: node scripts/check-provider-call-inventory.mjs
+
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
 

@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AccountProfile } from '@shared/account';
+import type { AccountProfile, BillingAccount } from '@shared/account';
 import type { UsageBar } from '@shared/usage';
 import { creditOutlook, dailyBurn, nextRefillAt, type CreditOutlook } from './creditOutlook';
 import { profileReadDue, usageReadDue, type RefreshReason } from './refreshGate';
 
 export interface CreditsGlance {
   profile: AccountProfile | null;
+  /**
+   * The organization paying instead of the personal ledger, or null for Personal. With one set,
+   * `outlook` describes that pool: its balance only, since the personal burn and refill say
+   * nothing about it.
+   */
+  organization: BillingAccount | null;
   outlook: CreditOutlook;
   /** Null until the first usage read lands; the outlook treats that as no known burn. */
   burnPerDay: number | null;
@@ -19,7 +25,12 @@ export interface CreditsGlance {
  * the account menu opens - each gated by refreshGate so a burst of any of them is one read.
  * Never on a timer: see useAccountCredits for why a standing poll is not worth it.
  */
-export function useCreditsGlance(spentAt: number, menuOpen: boolean, now: () => number = Date.now): CreditsGlance {
+export function useCreditsGlance(
+  spentAt: number,
+  menuOpen: boolean,
+  payer: BillingAccount | null = null,
+  now: () => number = Date.now
+): CreditsGlance {
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [bars, setBars] = useState<UsageBar[] | null>(null);
   const [readAt, setReadAt] = useState<number | null>(null);
@@ -69,8 +80,19 @@ export function useCreditsGlance(spentAt: number, menuOpen: boolean, now: () => 
     if (menuOpen) request('open');
   }, [menuOpen, request]);
 
+  const organization = payer && !payer.personal ? payer : null;
   return useMemo(() => {
     const at = readAt ?? now();
+    if (organization) {
+      const outlook = creditOutlook({
+        balance: organization.credits,
+        burnPerDay: 0,
+        refillAt: null,
+        expiring: undefined,
+        now: at,
+      });
+      return { profile, organization, outlook, burnPerDay: null, readAt };
+    }
     const burnPerDay = bars ? dailyBurn(bars, at) : null;
     const outlook = profile
       ? creditOutlook({
@@ -81,6 +103,6 @@ export function useCreditsGlance(spentAt: number, menuOpen: boolean, now: () => 
           now: at,
         })
       : ({ kind: 'unknown' } as const);
-    return { profile, outlook, burnPerDay, readAt };
-  }, [profile, bars, readAt, now]);
+    return { profile, organization: null, outlook, burnPerDay, readAt };
+  }, [profile, organization, bars, readAt, now]);
 }

@@ -9,11 +9,13 @@ import {
   type LakeConfigHistoryEntry,
   type LakeConfigHistoryFieldChange,
   type LakeConfigHistoryView,
+  type LakeConfigUndoResult,
   type ProposalResource,
   type ResearchConfigResource,
   type ResearchLeversResource,
   type ResearchRunResource,
   type ResearchRunTotalsResource,
+  type UndoConfigChangeResponse,
 } from '@bike4mind/common';
 
 /*
@@ -303,12 +305,15 @@ function toPublicEntry(entry: LakeConfigHistoryEntry, userNames: Record<string, 
     changed_at: iso(entry.changedAt) ?? '',
     principal_kind: entry.principalKind,
     principal_name: entry.principalName ?? null,
+    undoable: entry.undoable === true,
+    undone_by_event_id: entry.undoneByEventId ?? null,
   };
   if (entry.kind === 'file') {
     return {
       kind: 'file',
       ...base,
       target: { kind: entry.target.kind, id: entry.target.id },
+      file_name: entry.fileName ?? null,
       action: entry.action,
       origin: entry.origin,
       ...(entry.undoesEventId ? { undoes_event_id: entry.undoesEventId } : {}),
@@ -327,6 +332,10 @@ function toPublicEntry(entry: LakeConfigHistoryEntry, userNames: Record<string, 
       : {}),
     ...(entry.admittedFabFileId ? { admitted_fab_file_id: entry.admittedFabFileId } : {}),
   };
+}
+
+export function toPublicUndoResult(result: LakeConfigUndoResult): UndoConfigChangeResponse {
+  return { data: result.entry ? toPublicEntry(result.entry, {}) : null, notes: result.notes };
 }
 
 export function toPublicConfigHistory(view: LakeConfigHistoryView): ConfigHistoryResponse {

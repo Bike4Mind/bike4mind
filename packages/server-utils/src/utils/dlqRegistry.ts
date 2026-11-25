@@ -356,18 +356,6 @@ const DLQ_REGISTRY = [
     describe: entityAt('Job', 'jobId'),
   },
   {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    description: 'Triages recent Slack alerts into issue tracker tickets for a LiveOps config.',
-    replay: 'unsafe',
-    replayNote:
-      'A run within 5 minutes of the last one is skipped and duplicate issues are deduplicated, but a later replay runs a fresh triage and posts the Slack summary again.',
-    owner: 'Platform ops',
-    describe: entityAt('Triage config', 'configId'),
-  },
-  {
     label: 'sre-fix',
     displayName: 'SRE Fix',
     application: 'SreAgent',

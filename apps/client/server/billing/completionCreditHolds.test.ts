@@ -28,6 +28,7 @@ const {
   transaction: vi.fn(async <T>(callback: () => Promise<T>): Promise<T> => callback()),
 }));
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {},
   pendingCreditHoldRepository: { record, claim, markSettledAndRead, findSettlement, addRunClaimCredits },
   completionRunRepository: { claimBudget, releaseClaim },
   withTransaction: transaction,
@@ -35,7 +36,12 @@ vi.mock('@bike4mind/database', () => ({
   newAccountSpendCapAdapters: { name: 'spend-cap-adapters' },
   warmExchangeAttribution: warm,
 }));
-vi.mock('@bike4mind/services', () => ({ creditService: { assertNewAccountSpendWithinCap: assertSpendCap } }));
+vi.mock('@bike4mind/services', () => ({
+  creditService: {
+    assertNewAccountSpendWithinCap: assertSpendCap,
+    assertInterventionSpendAllowed: async () => undefined,
+  },
+}));
 import { createCompletionCreditHolds } from './completionCreditHolds';
 import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 

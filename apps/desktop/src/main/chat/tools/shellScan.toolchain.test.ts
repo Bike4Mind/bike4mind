@@ -1,6 +1,6 @@
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { userInfo } from 'node:os';
+import { mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { mkdtempOutsideTemp } from '../../../../vitest.tempRoot';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { scanShell } from './shellScan';
 
@@ -15,7 +15,7 @@ describe('toolchain probes when the home folder is reached through a link', () =
 
   beforeEach(async () => {
     // Not under the temp folders, which a scan always allows.
-    base = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-toolchain-')));
+    base = await realpath(await mkdtempOutsideTemp('b4m-toolchain-'));
     await mkdir(join(base, 'real', 'proj'), { recursive: true });
     await symlink(join(base, 'real'), join(base, 'home'));
     home = join(base, 'home');
@@ -47,7 +47,7 @@ describe('toolchain probes when a folder above the home folder is named like a s
   let base: string;
 
   beforeEach(async () => {
-    base = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-token-')));
+    base = await realpath(await mkdtempOutsideTemp('b4m-token-'));
     await mkdir(join(base, 'home', 'proj'), { recursive: true });
     home = join(base, 'home');
   });

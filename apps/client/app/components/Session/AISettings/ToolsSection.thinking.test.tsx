@@ -98,6 +98,10 @@ vi.mock('@client/app/hooks/useComposerMcpConnections', () => ({
 vi.mock('@client/app/hooks/data/settings', () => ({
   useConfig: () => ({ data: { toolAvailability: mocks.toolAvailability.value } }),
 }));
+vi.mock('@client/app/hooks/data/callableFunctions', () => ({
+  useCallableFunctionsEnabled: () => false,
+  useCallableFunctionList: () => ({ data: undefined }),
+}));
 vi.mock('./DeepResearchConfigModal', () => ({ default: () => null }));
 vi.mock('./ImageGenerationModelSelectionModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));

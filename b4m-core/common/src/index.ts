@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './concurrency';
 export * from './dlqPolicy';
 export * from './adminUserNotes';
 export * from './signupGrant';
@@ -161,6 +162,7 @@ export * from './utils/emailDomain';
 export * from './utils/pythonArtifactDataOrigins';
 export * from './utils/callableFunctionsPromptNote';
 export * from './utils/canonicalEmail';
+export * from './utils/canonicalJson';
 export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';
 export * from './utils/internalStaffDomains';

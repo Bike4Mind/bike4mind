@@ -1,5 +1,6 @@
 import { mongoose } from '@bike4mind/database';
 import { retainDeletedSignupTraces } from '../auth/signupNetworkLimits';
+import { deleteReviewsOfOwnedCallableFunctions } from '../callableFunctions/reviews';
 import { purgeUserPublishedArtifacts } from '../services/publish/purgeUserPublishedArtifacts';
 import type { ErasureRegistry, ErasureStage } from '../users/completeAccountDeletion';
 import { DATA_HOLDER_REGISTRY, assertContributedRegistryValid, findUnclassifiedModels } from './registry/index';
@@ -15,6 +16,7 @@ import { assertEveryModelClassified } from './subjectMatcher';
 export const BEFORE_ERASURE_HOOKS: Readonly<Record<string, (userId: string) => Promise<unknown>>> = {
   purgeUserPublishedArtifacts: userId => purgeUserPublishedArtifacts(userId, { deletedBy: userId }),
   retainDeletedSignupTraces,
+  deleteReviewsOfOwnedCallableFunctions,
 };
 
 function beforeErasureHooks(): string[] {

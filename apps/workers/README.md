@@ -5,7 +5,7 @@ Background work that used to live under `apps/client/server`, moved here one cat
 | Path | What | Runs as |
 |---|---|---|
 | `src/events/` | EventBridge event handlers (session naming, summarization, tagging, spider, Slack alarm forwarders, Stripe events) | Lambdas declared in `infra/*.ts` by handler path |
-| `src/cron/` | Scheduled handlers (sweeps, reconcilers, reports) and the LiveOps/SecOps triage SQS workers | Lambdas declared in `infra/cron.ts` and `infra/queues.ts`; some sweeps also run as self-host scheduled tasks |
+| `src/cron/` | Scheduled handlers (sweeps, reconcilers, reports) and the SecOps triage SQS worker | Lambdas declared in `infra/cron.ts` and `infra/queues.ts`; some sweeps also run as self-host scheduled tasks |
 | `src/jobs/` | DataSyncer: seeds a preview stage with staging config on its first deploy | Lambda declared in `infra/dataSyncer.ts` |
 | `src/emailIngestion/` | Inbound email parser and analyzer SQS consumers | Lambdas declared in `infra/emailIngestion.ts` |
 | `src/queueHandlers/` | SQS queue handlers: comms/ops, data-lake pipeline, What's New, image generation, quest export, lake ingest, the agent executor, and the Slack quest processor | Lambdas declared in `infra/*.ts` by handler path; the agent executor also runs self-host through `src/agentExecutor/` |

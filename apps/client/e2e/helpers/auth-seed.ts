@@ -77,6 +77,7 @@ export interface SpecAuth {
  * Caveat: the access token has a 30m TTL (server/auth/tokenGenerator.ts) and is minted at spec
  * setup, so a tail/retry test on a ~30-minute run can outlive it and bounce to /login. A purely
  * test-side seed cannot mint a fresh token for the seeded user without OTC or a dedicated endpoint.
+ * The admin project, which starts last, gets a new token from an OTC sign-in in admin.setup.ts.
  */
 export function buildAuthSuccessUrl(target: string, auth: SpecAuth): string {
   // Token and userId ride the FRAGMENT, matching what every production callback emits: parseAuthParams

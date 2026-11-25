@@ -12,11 +12,6 @@ import { balanced, soleMatch, stripComments } from './helpers/infraSource';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
-const dropLineComments = (source: string) =>
-  source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*\/\/.*$/gm, '')
-    .replace(/([^:'"`])\/\/.*$/gm, '$1');
 
 // Importing any of these runs registerOrgAlertObserver at module load.
 const REGISTERING_MODULES = [
@@ -167,7 +162,7 @@ function scanSites(): Site[] {
   const infraFiles = readdirSync(path.join(REPO_ROOT, 'infra')).filter(name => name.endsWith('.ts'));
   for (const name of infraFiles) {
     const file = `infra/${name}`;
-    const source = dropLineComments(read(file));
+    const source = stripComments(read(file));
     for (const match of source.matchAll(HANDLER)) {
       const module = match[1];
       const sourceFile = [`${module}.ts`, `${module}.tsx`, `${module}/index.ts`].find(candidate =>

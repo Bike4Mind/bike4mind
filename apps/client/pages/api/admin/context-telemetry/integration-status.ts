@@ -23,7 +23,7 @@ const handler = adminApi({
     const alertSettings = ContextTelemetryAlertsSchema.safeParse(alertSettingsRaw);
     const config = alertSettings.success ? alertSettings.data : null;
 
-    // Check GitHub integration via system default connection (like LiveOps Triage)
+    // Check GitHub integration via system default connection
     let githubConfigured = false;
     let githubRepoConfigured = false;
 
@@ -70,7 +70,7 @@ const handler = adminApi({
       });
     }
 
-    // Check Slack integration via workspace (OAuth-based like LiveOps Triage)
+    // Check Slack integration via workspace (OAuth-based)
     let slackConfigured = false;
 
     if (config?.slackWorkspaceId) {

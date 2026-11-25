@@ -15,11 +15,12 @@ import {
   getInviteDetails,
   filterInviteRecipientsToSelf,
   toSharerInviteViews,
+  isDisabledSpaceInviteKey,
 } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sharingService } from '@bike4mind/services';
-import { InviteType } from '@bike4mind/common';
+import { InviteType, NotFoundError } from '@bike4mind/common';
 import { recordOrganizationAuditEventSafe } from '@bike4mind/server-utils/utils/organizationAudit';
 
 const handler = baseApi()
@@ -75,6 +76,8 @@ const handler = baseApi()
       if (!id) {
         return res.status(400).json({ message: 'Invalid delete invite request' });
       }
+
+      if (await isDisabledSpaceInviteKey(id)) throw new NotFoundError('Invite not found');
 
       const updatedInvite = await sharingService.cancelInviteById(
         req.user,

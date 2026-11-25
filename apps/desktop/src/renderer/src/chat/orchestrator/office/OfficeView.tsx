@@ -43,11 +43,13 @@ function placeAgents(rooms: ReadonlyMap<OfficeRoom, readonly AgentView[]>): Plac
 
 const STATE_COLOR = {
   working: '#e7bc55',
+  waiting: '#6fa8dc',
   'needs-you': '#ffe778',
   done: '#96c780',
   failed: '#ee8c75',
   idle: '#c4c5b1',
   stopped: '#c4c5b1',
+  paused: '#c9b27a',
 };
 
 export function OfficeView({
@@ -268,7 +270,7 @@ export function OfficeView({
               {cast.get(agent.id)?.split(' ')[0]}
               {agent.state === 'needs-you' ? ' !' : agent.state === 'done' ? ' *' : ''}
             </span>
-            <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
+            <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
           </Button>
         ))}
         <Typography

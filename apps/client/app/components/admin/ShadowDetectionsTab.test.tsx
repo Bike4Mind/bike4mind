@@ -142,6 +142,9 @@ const queryResult = (data: ShadowDetectionListResponse) => ({
   refetch: vi.fn(),
 });
 
+// Covered by InterventionHolds.test.tsx; its own queries would shift this file's api mocks.
+vi.mock('./InterventionHolds', () => ({ InterventionDecisionsPanel: () => null, InterventionHoldsCard: () => null }));
+
 describe('ShadowDetectionsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();

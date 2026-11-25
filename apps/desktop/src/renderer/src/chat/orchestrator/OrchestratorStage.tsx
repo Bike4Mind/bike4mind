@@ -18,8 +18,11 @@ import { NeedsYouStrip } from './NeedsYouStrip';
 import { toMiniPayload, useOrchestrateMiniWindow, usePublishOrchestrateMini } from './orchestrateMini';
 import { numberAgents, redactForPresenter, restorePresentedAction, type PresentedStage } from './presenter';
 import type { OrchestratorViewId } from './orchestratorPrefs';
-import type { OrchestratorLayout } from './orchestratorLayout';
+import type { OrchestratorLayout, OrchestratorPane } from './orchestratorLayout';
 import { StageLayout } from './StageLayout';
+import { StageDropZones } from './StageDropZones';
+import { pinLabel, resolvePaneSession } from './panePins';
+import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
@@ -64,6 +67,13 @@ export interface OrchestratorViewProps {
    * roster (Presenter mode's placeholder option labels); absent when the props are not redacted.
    */
   restoreAction?(action: ViewAction): ViewAction;
+  /**
+   * The view answers every request in its own scene (the Tavern's dialogue box), so the stage leaves out its
+   * Needs-you strip. Set only for a single unredacted view.
+   */
+  inSceneDecisions?: boolean;
+  /** Bumped when the "N need you" pill asks the in-scene requests to come forward. */
+  needsYouFocusRequest?: number;
 }
 
 /** The parent conversation's front door in the scene: one thread, reached from the bar as well as the composer. */
@@ -138,13 +148,18 @@ export interface OrchestratorStageProps {
   /** Showing the parent conversation takes precedence over an agent peek. */
   conversationRequest?: number;
   presenter?: StagePresenter;
+  /**
+   * The shell's sessions, so a pane in a split can be pinned to another session (panePins.ts) and draw its
+   * roster. Without it every pane shows this stage's roster.
+   */
+  paneSessions?: PaneSessionSource;
 }
 
 const NO_PARENT: ParentView = {};
 const NO_NUMBERS: ReadonlyMap<string, number> = new Map();
 
 /** Presenter mode's agent numbers: given in roster order as agents first show, kept until the mode is turned off. */
-function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
+export function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
   const numbers = useRef(NO_NUMBERS);
   // Written during render on purpose: numberAgents is deterministic and idempotent, so a double render is
   // harmless, and moving it to an effect would flash the real titles for a frame.
@@ -181,8 +196,10 @@ export function OrchestratorStage({
   focus,
   conversationRequest,
   presenter,
+  paneSessions,
 }: OrchestratorStageProps) {
   const [prAgentId, setPrAgentId] = useState<string | null>(null);
+  const [needsYouFocusRequest, setNeedsYouFocusRequest] = useState(0);
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
   const selectedId = selection ? selection.id : localSelectedId;
   const onSelectionChange = selection?.onChange;
@@ -323,6 +340,11 @@ export function OrchestratorStage({
     />
   );
 
+  // The Tavern asks its requests in a dialogue box of its own (tavern/TavernDialogue.tsx). Presenter mode keeps
+  // the strip off and the bubbles' Open-only answers, since the box would show the real requests.
+  const inSceneDecisions =
+    !split && view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused && !presenting;
+
   const detailsInScene =
     (parentScene || (!split && view === 'aquarium')) && renderView !== undefined && agents.length > 0 && !focused;
   const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
@@ -359,6 +381,7 @@ export function OrchestratorStage({
         actions={actions}
         skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
         visible={!settled}
+        onOpenPr={openPr}
       />
     </Box>
   );
@@ -379,7 +402,33 @@ export function OrchestratorStage({
     desk,
     settled: ambient?.settled === true,
     restoreAction,
+    inSceneDecisions,
+    needsYouFocusRequest,
   };
+
+  // A pane pinned to another session draws that session's roster; the stage's selection, drawer, finale and
+  // desk stay the active session's, so a click there opens the agent's session instead.
+  const renderPane = (pane: OrchestratorPane) => {
+    if (!renderView) return null;
+    const pinned =
+      paneSessions && resolvePaneSession(pane, { activeId: rootId, sessions: paneSessions.sessions, split });
+    if (!paneSessions || !pinned) return renderView(pane.view, viewProps);
+    return (
+      <PinnedPane
+        key={pinned.id}
+        rootId={pinned.id}
+        view={pane.view}
+        label={pinLabel(pinned, rootId, paneSessions.sessions, { presenting })}
+        source={paneSessions}
+        renderView={renderView}
+        onOpenSession={actions.open}
+        presenting={presenting}
+        settled={settled}
+      />
+    );
+  };
+
+  const isListedSession = (id: string) => paneSessions?.sessions.some(session => session.id === id) === true;
 
   const snapshot = useMemo(
     () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
@@ -410,7 +459,8 @@ export function OrchestratorStage({
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
-  const askingAgent = parentNeedsYou ? undefined : firstNeedsYou;
+  // An agent's request is the Tavern dialogue box's to show; the card keeps the parent's.
+  const askingAgent = parentNeedsYou || inSceneDecisions ? undefined : firstNeedsYou;
   const needsYouCard = settled && (parentNeedsYou || askingAgent) && (
     <NeedsYouCard
       key={askingAgent?.id ?? 'parent'}
@@ -464,7 +514,7 @@ export function OrchestratorStage({
           </Typography>
         </Box>
       ) : (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1, minWidth: 0 }}>
           <ViewSwitcher
             layout={layout}
             onLayoutChange={onLayoutChange}
@@ -472,6 +522,7 @@ export function OrchestratorStage({
             focus={focus}
             presenter={presenter}
             miniWindow={miniWindow}
+            paneSessions={paneSessions && { activeId: rootId, sessions: paneSessions.sessions, presenting }}
           />
           {presenting && <PresentingBadge />}
           <Typography
@@ -501,7 +552,11 @@ export function OrchestratorStage({
               color="warning"
               variant="solid"
               data-testid="orchestrator-needs-you-pill"
-              onClick={() => (firstNeedsYou ? setSelectedId(firstNeedsYou.id) : onParentFocus?.())}
+              onClick={() => {
+                if (inSceneDecisions && firstNeedsYou) setNeedsYouFocusRequest(value => value + 1);
+                else if (firstNeedsYou) setSelectedId(firstNeedsYou.id);
+                else onParentFocus?.();
+              }}
               sx={{
                 flexShrink: 0,
                 animation: `${pulse} 1.6s ease-in-out infinite`,
@@ -515,7 +570,7 @@ export function OrchestratorStage({
           {dockControl}
         </Box>
       )}
-      {!settled && !presenting && (
+      {!settled && !presenting && !inSceneDecisions && (
         // Off in Presenter mode: its cards would show the real requests the redacted stage hides.
         <NeedsYouStrip agents={rosterAgents} personas={personas} rootTitle={rootTitle} onOpenDetails={setSelectedId} />
       )}
@@ -542,12 +597,17 @@ export function OrchestratorStage({
             />
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
-          ) : renderView ? (
-            <StageLayout
+          ) : renderView && paneSessions ? (
+            <StageDropZones
               layout={layout}
               onLayoutChange={onLayoutChange}
-              renderPane={paneView => renderView(paneView, viewProps)}
-            />
+              activeId={rootId}
+              isListed={isListedSession}
+            >
+              <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
+            </StageDropZones>
+          ) : renderView ? (
+            <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
           ) : (
             <TableView {...viewProps} />
           )}

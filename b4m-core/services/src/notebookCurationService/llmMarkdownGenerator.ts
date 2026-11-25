@@ -181,6 +181,10 @@ async function generateAIConsolidatedNarrative(
   messages: CurationMessage[],
   generateText: GenerateTextFn
 ): Promise<{ summary: string; insights: string; decisions: string; inputTokens: number; outputTokens: number }> {
+  if (messages.length === 0) {
+    return { summary: 'This notebook has no messages.', insights: '', decisions: '', inputTokens: 0, outputTokens: 0 };
+  }
+
   const conversationSample = sampleConversation(messages, 5000); // ~5000 chars max
 
   const prompt = `You are curating a notebook conversation into an executive summary for knowledge sharing.
@@ -486,14 +490,14 @@ function sampleConversation(messages: CurationMessage[], maxChars: number): stri
 
   // Take first message, last message, and sample from middle
   const indicesToSample = [
-    0, // First
-    ...sampleIndices(messages.length, Math.floor(messages.length / 3)), // Middle samples
-    messages.length - 1, // Last
-  ];
+    ...new Set([
+      0, // First
+      ...sampleIndices(messages.length, Math.floor(messages.length / 3)), // Middle samples
+      messages.length - 1, // Last
+    ]),
+  ].filter(idx => idx >= 0 && idx < messages.length);
 
   for (const idx of indicesToSample) {
-    if (idx >= messages.length) continue;
-
     const message = messages[idx];
     const userPrompt = message.prompt || '';
     const assistantReply = stripToolOutputMarker(
