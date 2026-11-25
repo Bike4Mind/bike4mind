@@ -6,6 +6,7 @@ import {
   type BriefDraftReply,
   type BriefItem,
   type DelegationStatus,
+  type PushNotificationCategory,
   type StoredBriefDecision,
 } from '@bike4mind/common';
 
@@ -420,4 +421,25 @@ export function briefPushContent(
     if (asked) return { body: `Your agent asks: ${asked}`, briefAction: action };
   }
   return { body: briefPushBody(brief) };
+}
+
+/**
+ * The push categories a busy-block brief reports, which sendPush checks against the user's interruption
+ * feedback. Decisions count as approval_needed and every non-run section as brief_ready, so neither can be held.
+ */
+export function blockBriefPushCategories(brief: ComposedBrief, activity: BriefActivity): PushNotificationCategory[] {
+  const categories = new Set<PushNotificationCategory>();
+  for (const run of activity.runs) categories.add(run.status === 'failed' ? 'agent_failed' : 'agent_completed');
+  if (brief.decisions.length > 0 || activity.approvals.length > 0 || activity.questions.length > 0) {
+    categories.add('approval_needed');
+  }
+  if (
+    activity.emails.length > 0 ||
+    activity.delegations.length > 0 ||
+    activity.reminders.length > 0 ||
+    activity.obligations.length > 0
+  ) {
+    categories.add('brief_ready');
+  }
+  return [...categories];
 }
