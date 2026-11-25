@@ -416,6 +416,25 @@ describe('dispatchFunctionCall outcomes', () => {
       expect(fetcher).toHaveBeenCalledTimes(2);
     });
 
+    it('counts the source fetch against the wait, so the run gets only what is left', async () => {
+      withSources();
+      vi.useFakeTimers();
+      const slow = vi.fn(async () => {
+        await new Promise(resolve => setTimeout(resolve, 8_000));
+        return fetcher();
+      });
+      const runner = vi.fn((_payload: CallableFunctionRunPayload) => new Promise<never>(() => {}));
+      const pending = dispatchFunctionCall(call(), {
+        runner,
+        waitMs: 20_000,
+        timeoutMs: 600_000,
+        sources: { ...deps(), fetcher: slow },
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(pending).resolves.toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
+      expect(runner.mock.calls[0][0]).toMatchObject({ limits: { timeoutMs: 12_000 } });
+    });
+
     it('answers source_unavailable without running when a source is refused', async () => {
       withSources();
       const runner = runnerOf(ok());

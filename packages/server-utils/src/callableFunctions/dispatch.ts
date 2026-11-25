@@ -517,11 +517,11 @@ export async function dispatchFunctionCall(
       options.callId === undefined
         ? caps.waitMs
         : requestedMs + CALLABLE_FUNCTION_START_BUDGET_MS + CALLABLE_FUNCTION_PARENT_MARGIN_MS;
-    const waitMs = waitFor(capMs, options.deadline === undefined ? options.waitMs : options.deadline - Date.now());
-    if (options.minWaitMs !== undefined && waitMs < options.minWaitMs) {
+    const budgetStarted = Date.now();
+    const budgetMs = waitFor(capMs, options.deadline === undefined ? options.waitMs : options.deadline - budgetStarted);
+    if (options.minWaitMs !== undefined && budgetMs < options.minWaitMs) {
       return finish({ outcome: 'refused', reason: 'budget_exhausted' });
     }
-    const timeoutMs = limitWithin(requestedMs, waitMs);
     const outputBytesCap = Math.min(caps.outputBytes, CALLABLE_FUNCTION_LIMITS.outputBytes);
     const pins = fn.pin.dataPins ?? [];
     row.dataHashes = pins.map(pin => pin.sha256);
@@ -542,6 +542,12 @@ export async function dispatchFunctionCall(
       }
       row.dataHashes = [...row.dataHashes, ...sources.map(entry => entry.sha256)];
     }
+    // The source fetch spends the same wait as the run.
+    const waitMs = Math.max(0, budgetMs - (Date.now() - budgetStarted));
+    if (options.minWaitMs !== undefined && waitMs < options.minWaitMs) {
+      return finish({ outcome: 'refused', reason: 'budget_exhausted' });
+    }
+    const timeoutMs = limitWithin(requestedMs, waitMs);
     let data: CallableFunctionRunData[] | undefined;
     if (pins.length > 0 || sources.length > 0) {
       // Links for exactly this function's files, valid for minutes; the runtime gets links, never the bytes.
