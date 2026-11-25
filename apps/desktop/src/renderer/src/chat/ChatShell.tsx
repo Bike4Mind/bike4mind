@@ -299,6 +299,17 @@ export function ChatShell({
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
   studio?: StudioController;
 }) {
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [placeMemory] = useState(readPlaceMemory);
+  const [launch] = useState(() =>
+    resolveLaunch({ preference: launchPlace(), memory: placeMemory, lastSession: readLastSession() })
+  );
+  const remembered = launch.session;
+  // The session to restore and the open one are fetched even when no loaded page holds them.
+  const keepIds = useMemo(
+    () => [remembered?.id, isSessionDraft(activeId) ? null : activeId].filter((id): id is string => !!id),
+    [remembered, activeId]
+  );
   const {
     sessions,
     loading,
@@ -317,7 +328,16 @@ export function ChatShell({
     exportError,
     clearExportError,
     apply,
-  } = useSessions();
+    hasMore,
+    loadingMore,
+    loadMore,
+    total: sessionTotal,
+    searchSessions,
+  } = useSessions(keepIds);
+  const sessionPaging = useMemo(
+    () => ({ hasMore, loadingMore, onLoadMore: loadMore, total: sessionTotal }),
+    [hasMore, loadingMore, loadMore, sessionTotal]
+  );
   const {
     sections: userSections,
     actions: sectionActions,
@@ -326,12 +346,6 @@ export function ChatShell({
     error: sectionError,
     dismissError: dismissSectionError,
   } = useSidebarSections();
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [placeMemory] = useState(readPlaceMemory);
-  const [launch] = useState(() =>
-    resolveLaunch({ preference: launchPlace(), memory: placeMemory, lastSession: readLastSession() })
-  );
-  const remembered = launch.session;
   const [place, setPlace] = useState<Place>(launch.place);
   // The session mode the list filters by and New starts. A session place sets it; Studio leaves
   // it alone, so the conversation open underneath stays open for the return trip.
@@ -1908,6 +1922,8 @@ export function ChatShell({
             sessions={sessions}
             mode={mode}
             loading={loading}
+            paging={sessionPaging}
+            searchSessions={searchSessions}
             activeId={selectedRosterId ?? activeId}
             statuses={statuses}
             prSummaries={prSummaries}
