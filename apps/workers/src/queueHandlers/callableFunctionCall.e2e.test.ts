@@ -9,6 +9,7 @@ import {
   CALLABLE_FUNCTION_RESULT_MAX_BYTES,
   calculateContentHash,
   parseFunctionContract,
+  reviewHash,
   type FunctionContract,
 } from '@bike4mind/common';
 import {
@@ -17,6 +18,7 @@ import {
   CallableFunction,
   CallableFunctionCall,
   CallableFunctionResult,
+  CallableFunctionReview,
   callableFunctionCallRepository,
   callableFunctionResultRepository,
 } from '@bike4mind/database';
@@ -150,7 +152,11 @@ async function seedFunction(overrides: Record<string, unknown> = {}): Promise<st
 
 const queue = async (
   args: Record<string, unknown> = ARGS,
-  options: { id?: string; caller?: { id: string }; runner?: CallableFunctionRunner | null } = {}
+  options: {
+    id?: string;
+    caller?: { id: string; organizationId?: string };
+    runner?: CallableFunctionRunner | null;
+  } = {}
 ) => {
   const sent: { callId: string }[] = [];
   const call = await queueFunctionCall(
@@ -183,6 +189,7 @@ beforeEach(async () => {
   await Promise.all([
     CallableFunctionCall.deleteMany({}),
     CallableFunctionResult.deleteMany({}),
+    CallableFunctionReview.deleteMany({}),
     CallableFunction.deleteMany({}),
     Artifact.deleteMany({}),
     ArtifactContent.deleteMany({}),
@@ -235,7 +242,60 @@ describe('refusals before anything is queued', () => {
   });
 });
 
+describe('sharing checks before anything is queued', () => {
+  const RECIPIENT = { id: 'recipient-1' };
+  const shareWithRecipient = () =>
+    CallableFunction.updateOne(
+      { _id: functionId },
+      { $set: { grants: { visibility: 'private', userIds: [RECIPIENT.id] } } }
+    );
+
+  const expectNothingQueued = async (sent: { callId: string }[], rowReason: string) => {
+    expect(sent).toEqual([]);
+    expect(await CallableFunctionResult.countDocuments({})).toBe(0);
+    const log = await rows();
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({ outcome: 'refused', reason: rowReason });
+  };
+
+  it('queues nothing for a caller the access check refuses', async () => {
+    await shareWithRecipient();
+    const { call, sent } = await queue(ARGS, { caller: STRANGER });
+    expect(call).toMatchObject({ outcome: 'refused', reason: 'not_found' });
+    await expectNothingQueued(sent, 'not_caller');
+  });
+
+  it('queues nothing for a recipient without a current review, and queues once the review is saved', async () => {
+    await shareWithRecipient();
+    const { call, sent } = await queue(ARGS, { caller: RECIPIENT });
+    expect(call).toMatchObject({ outcome: 'refused', reason: 'review_required' });
+    await expectNothingQueued(sent, 'review_required');
+
+    await CallableFunctionReview.create({
+      functionId,
+      userId: RECIPIENT.id,
+      reviewHash: await reviewHash(CONTRACT),
+      reviewedAt: new Date(),
+    });
+    const reviewed = await queue(ARGS, { caller: RECIPIENT });
+    expect(reviewed.call.outcome).toBe('queued');
+    expect(reviewed.sent).toEqual([{ callId: reviewed.call.callId }]);
+  });
+});
+
 describe('a queued call', () => {
+  it("keeps the caller's organization on the queued call for the worker's run", async () => {
+    const orgCaller = { id: OWNER.id, organizationId: '6b00000000000000000000aa' };
+    const { call } = await queue(ARGS, { caller: orgCaller });
+    expect(await CallableFunctionResult.findOne({ callId: call.callId }).lean()).toMatchObject({
+      organizationId: orgCaller.organizationId,
+    });
+    await runQueuedFunctionCall({ callId: call.callId }, { runner: okRunner() });
+    expect(await rows()).toEqual([
+      expect.objectContaining({ outcome: 'ok', organizationId: orgCaller.organizationId }),
+    ]);
+  });
+
   it('keeps one call-log row from queued through running to finished, and runs once', async () => {
     const { call, sent } = await queue();
     expect(call.outcome).toBe('queued');
