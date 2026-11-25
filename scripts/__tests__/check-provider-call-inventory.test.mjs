@@ -98,7 +98,8 @@ describe('mandatory full-history CI gate', () => {
     expect(job).toContain("if: needs.changes.outputs.deployable == 'true'");
     expect(job).toContain('fetch-depth: 0');
     expect(job).toContain('run: bash scripts/check-contract-gate.sh');
-    expect(gate).toMatch(/^node "\$SCRIPT_DIR\/check-provider-call-inventory\.mjs"$/m);
+    expect(job).toMatch(/^ {8}run: node scripts\/check-provider-call-inventory\.mjs$/m);
+    expect(gate).not.toContain('check-provider-call-inventory.mjs');
     expect(gate).toContain('set -euo pipefail');
   });
 
