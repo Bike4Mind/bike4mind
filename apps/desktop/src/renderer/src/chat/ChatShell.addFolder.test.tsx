@@ -6,6 +6,7 @@ import type { ChatSessionSummary } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
@@ -99,6 +100,7 @@ async function mount(sessions: ChatSessionSummary[] = [], strict = false) {
   Object.assign(window, {
     b4m: new Proxy(
       {
+        host: chatBackedHostBridge(),
         chat: bridge({
           listSessions: async () => sessions,
           getSession: async (id: string) => ({ ...summary(id), messages: [] }),

@@ -9,6 +9,7 @@ import { installedCache } from '../models/installedCache';
 import type { ChatWith } from '../models/modelTarget';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -132,6 +133,7 @@ const deleteSession = vi.fn(async () => undefined);
 function stubBridge() {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
         defaultsForNewSession: async () => ({ model: HOSTED, approvalMode: 'auto', reasoningEffort: 'default' }),
         listSessions: async () => [summary('old-1', HOSTED)],
