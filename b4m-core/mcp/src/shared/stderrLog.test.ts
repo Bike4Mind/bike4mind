@@ -50,13 +50,18 @@ describe('stderrLog', () => {
     log.debug('d');
     log.info('i');
     log.warn('w');
-    log.error('e', { tool: 'create_issue', status: 500 });
+    log.error('e', { toolName: 'create_issue', status: 500 });
 
     const lines = write.mock.calls.map(([chunk]) => JSON.parse(chunk as string));
     expect(lines.map(l => l.severity)).toEqual(['debug', 'info', 'warn', 'error']);
-    expect(lines[3]).toMatchObject({ scope: 'github', msg: 'e', tool: 'create_issue', status: 500 });
+    expect(lines[3]).toMatchObject({ scope: 'github', msg: 'e', toolName: 'create_issue', status: 500 });
     expect(stdout).not.toHaveBeenCalled();
     expect(consoleLog).not.toHaveBeenCalled();
+  });
+
+  it('registers a stderr error listener so a closed pipe does not throw', () => {
+    expect(process.stderr.listenerCount('error')).toBeGreaterThan(0);
+    expect(() => process.stderr.emit('error', new Error('EPIPE'))).not.toThrow();
   });
 
   it('createStderrLogger redacts secret-named keys and serialises errors', () => {

@@ -1,5 +1,12 @@
 import { redactLogValue } from '@bike4mind/observability';
 
+// Same as console: a closed host pipe (EPIPE) must not surface as an unhandled 'error' event.
+let stderrErrorHandled = false;
+if (!stderrErrorHandled) {
+  stderrErrorHandled = true;
+  process.stderr.on('error', () => {});
+}
+
 export type StderrLogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 /**
@@ -34,7 +41,7 @@ export interface StderrLogger {
   error(message: string, fields?: Record<string, unknown>): void;
 }
 
-/** Binds `stderrLog` to a scope so call sites read `log.error('create_issue failed', { tool, status })`. */
+/** Binds `stderrLog` to a scope so call sites read `log.error('create_issue failed', { toolName, status })`. */
 export function createStderrLogger(scope: string): StderrLogger {
   return {
     debug: (message, fields) => stderrLog('debug', scope, message, fields),

@@ -1,10 +1,10 @@
-import { redactLogValue } from '@bike4mind/observability';
+import { redactLogText, redactLogValue } from '@bike4mind/observability';
 import type { StderrLogger } from './stderrLog.js';
 
 function emit(level: 'warn' | 'error', scope: string, message: string, fields?: Record<string, unknown>): void {
   const redacted = fields ? redactLogValue(fields) : undefined;
   // eslint-disable-next-line no-console -- host-side logger: the CLI's Ink patches console.*, and a raw stderr write would tear its frame
-  console[level](`[${scope}] ${message}`, ...(redacted ? [redacted] : []));
+  console[level](`[${scope}] ${redactLogText(message)}`, ...(redacted ? [redacted] : []));
 }
 
 /**
