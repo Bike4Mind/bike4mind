@@ -320,6 +320,9 @@ export function toCallableFunctionPublic(
   };
 }
 
+// Fails typecheck once the record gains `dataPins`: read those and its sources from it instead.
+const NO_DATA_PINS: 'dataPins' extends keyof ICallableFunction ? never : readonly string[] = [];
+
 /** An allowlist, like {@link toCallableFunctionPublic}, for a caller who is not the owner. */
 export function toCallableFunctionShared(
   doc: ICallableFunctionDocument | ICallableFunctionSharedSource,
@@ -345,7 +348,7 @@ export function toCallableFunctionShared(
           current: review.reviewHash === reviewHash,
         }
       : null,
-    dataPins: [],
+    dataPins: [...NO_DATA_PINS],
     sources: [],
     pin: {
       version: doc.pin.version,
