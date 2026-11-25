@@ -22,9 +22,16 @@ import {
   CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_START_BUDGET_MS,
+  runTimeoutAfterDownload,
   type CallableFunctionLimits,
 } from './runtimeLimits';
-import { prepareRunData, validRunData, type CallableFunctionRunData, type DataFetch } from './runtimeData';
+import {
+  CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS,
+  prepareRunData,
+  validRunData,
+  type CallableFunctionRunData,
+  type DataFetch,
+} from './runtimeData';
 
 /**
  * The parent half of the server runtime for Python functions: one fresh child process per run,
@@ -557,7 +564,8 @@ export async function runCallableFunctionInChild(
   const refused = (reason: CallableFunctionReason) => finish({ outcome: 'refused', reason });
 
   if (!validPayload(payload)) return refused('payload_invalid');
-  const limits = callLimits(payload.limits, { ...CALLABLE_FUNCTION_LIMITS, ...options.limits });
+  const ceilings = { ...CALLABLE_FUNCTION_LIMITS, ...options.limits };
+  const limits = callLimits(payload.limits, ceilings);
   if (typeof limits === 'string') return refused(limits);
   // Counted as it travels in the request, escapes included.
   if (functionJsonBytes(JSON.stringify(payload.code)) > limits.sourceBytes) return refused('source_too_large');
@@ -576,14 +584,21 @@ export async function runCallableFunctionInChild(
     if (problems.length > 0) return finish({ outcome: 'input_invalid', problems });
   }
 
+  const downloadStarted = Date.now();
   const data = await prepareRunData(payload.op === 'call' ? payload.data : undefined, {
     cacheDir: options.dataCacheDir,
     fetchData: options.fetchData,
+    budgetMs: Math.min(CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS, ceilings.timeoutMs),
   });
   if (!data.ok) {
     return data.reason === 'data_hash_mismatch'
       ? finish({ outcome: 'data_mismatch', reason: data.reason })
       : finish({ outcome: 'error', reason: data.reason });
+  }
+  const timeoutMs = runTimeoutAfterDownload(limits.timeoutMs, ceilings.timeoutMs, Date.now() - downloadStarted);
+  if (timeoutMs === 0) {
+    await data.release();
+    return finish({ outcome: 'timeout' });
   }
   let run: ChildRun;
   try {
@@ -597,7 +612,7 @@ export async function runCallableFunctionInChild(
         dataDir: data.dir,
       },
       options,
-      limits
+      { ...limits, timeoutMs }
     );
   } finally {
     await data.release();

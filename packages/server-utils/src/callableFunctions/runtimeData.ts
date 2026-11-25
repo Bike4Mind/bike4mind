@@ -51,7 +51,7 @@ export function validRunData(raw: unknown): raw is CallableFunctionRunData[] {
 /** Where downloaded files are kept between warm calls; under /tmp, which is the runtime Lambda's ephemeral storage. */
 export const defaultCallableFunctionDataDir = () => path.join(tmpdir(), 'callable-function-data');
 
-/** Download time, outside the call's own limit. */
+/** Download time at most; the parent counts what it takes against the call's ceiling (`runTimeoutAfterDownload`). */
 export const CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS = 120_000;
 
 /** The cache's share of the ephemeral storage; the rest is the runtime's own. */
