@@ -5,6 +5,7 @@ import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import com.bike4mind.app.calendar.BusyBlockPermissionStore
+import com.bike4mind.app.calendar.BusyBlockSyncWorker
 import com.bike4mind.app.calendar.CalendarBusyBlockReader
 import com.bike4mind.app.capture.MediaAudioRecorder
 import com.bike4mind.app.media.MediaImageLoader
@@ -178,7 +179,8 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     /** [briefId] null shows the latest brief. */
     fun brief(briefId: String?, scope: CoroutineScope) = BriefController(briefs, briefId, scope)
 
-    fun busyBlockBrief(scope: CoroutineScope) = BusyBlockBriefController(busyBlocks, busyBlockSyncer, scope)
+    fun busyBlockBrief(scope: CoroutineScope) =
+        BusyBlockBriefController(busyBlocks, busyBlockSyncer, scope) { enabled -> BusyBlockSyncWorker.follow(appContext, enabled) }
 
     fun mediaGallery(scope: CoroutineScope) = MediaGalleryController(media, mediaFirstPages, scope)
 
@@ -186,9 +188,10 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
 
     /**
      * The session ended: queued shares belong to the account that made them, and the next account must never see
-     * this one's gallery, from memory or disk.
+     * this one's gallery, from memory or disk, and its calendar trigger must never write to the next account.
      */
     suspend fun onSessionEnded() {
+        BusyBlockSyncWorker.cancel(appContext)
         capture.discardAll()
         mediaFirstPages.invalidate()
         mediaImages.clear()
