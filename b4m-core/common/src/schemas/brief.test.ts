@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { BRIEF_LIMITS, BriefDecisionSchema, BriefItemSchema } from './brief';
+import {
+  BRIEF_LIMITS,
+  BUSY_BLOCK_LIMITS,
+  BriefDecisionSchema,
+  BriefItemSchema,
+  PutBusyBlocksSchema,
+  isInBusyBlock,
+} from './brief';
 
 const draft = { to: 'sender@example.com', subject: 'Re: Renewal', body: 'Confirming the date.' };
 
@@ -64,5 +71,63 @@ describe('BriefItemSchema source', () => {
     expect(
       BriefItemSchema.safeParse({ id: 'x1', text: 't', source: { kind: 'obligation', delegationId: 'g1' } }).success
     ).toBe(false);
+  });
+});
+
+describe('PutBusyBlocksSchema', () => {
+  const at = (minutes: number) => new Date(Date.UTC(2026, 10, 20, 15, 0) + minutes * 60_000).toISOString();
+  const block = (startMin: number, endMin: number) => ({ start: at(startMin), end: at(endMin) });
+
+  it.each([
+    ['an empty list', { enabled: true, blocks: [] }],
+    ['a 12-hour block', { enabled: true, blocks: [block(0, 720)] }],
+    ['48 blocks', { enabled: true, blocks: Array.from({ length: 48 }, (_, i) => block(i * 60, i * 60 + 30)) }],
+    ['an offset timestamp', { enabled: false, blocks: [{ start: '2026-11-20T10:00:00-05:00', end: at(30) }] }],
+  ])('accepts %s', (_label, body) => {
+    expect(PutBusyBlocksSchema.safeParse(body).success).toBe(true);
+  });
+
+  it.each([
+    ['end equal to start', { enabled: true, blocks: [block(0, 0)] }],
+    ['end before start', { enabled: true, blocks: [block(30, 0)] }],
+    ['a 12h01m block', { enabled: true, blocks: [block(0, 721)] }],
+    ['49 blocks', { enabled: true, blocks: Array.from({ length: 49 }, (_, i) => block(i * 60, i * 60 + 30)) }],
+    ['a non-array', { enabled: true, blocks: block(0, 30) }],
+    ['a missing enabled flag', { blocks: [] }],
+    ['a date without time', { enabled: true, blocks: [{ start: '2026-11-20', end: at(30) }] }],
+  ])('rejects %s', (_label, body) => {
+    expect(PutBusyBlocksSchema.safeParse(body).success).toBe(false);
+  });
+
+  it('strips event details so only start and end are kept', () => {
+    const parsed = PutBusyBlocksSchema.parse({
+      enabled: true,
+      blocks: [{ ...block(0, 30), title: 'Board meeting', attendees: ['a@example.com'] }],
+    });
+    expect(parsed.blocks[0]).toEqual(block(0, 30));
+  });
+});
+
+describe('isInBusyBlock', () => {
+  const now = new Date('2026-11-20T15:00:00.000Z');
+  const at = (minutes: number) => new Date(now.getTime() + minutes * 60_000);
+  const user = (blocks: { start: Date; end: Date }[], syncedAt: Date | null = at(-5), enabled = true) => ({
+    preferences: { busyBlockBrief: { enabled } },
+    busyBlocks: blocks,
+    busyBlocksSyncedAt: syncedAt,
+  });
+
+  it('is true from a block start up to, not including, its end', () => {
+    expect(isInBusyBlock(user([{ start: now, end: at(30) }]), now)).toBe(true);
+    expect(isInBusyBlock(user([{ start: at(-30), end: now }]), now)).toBe(false);
+  });
+
+  it('is false with no blocks, opted out, never synced, or a stale sync', () => {
+    expect(isInBusyBlock(user([]), now)).toBe(false);
+    expect(isInBusyBlock(user([{ start: at(-5), end: at(5) }], at(-5), false), now)).toBe(false);
+    expect(isInBusyBlock(user([{ start: at(-5), end: at(5) }], null), now)).toBe(false);
+    const stale = new Date(now.getTime() - BUSY_BLOCK_LIMITS.syncFreshMs - 1);
+    expect(isInBusyBlock(user([{ start: at(-5), end: at(5) }], stale), now)).toBe(false);
+    expect(isInBusyBlock({ preferences: null }, now)).toBe(false);
   });
 });

@@ -8,6 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { desktopTheme } from '../theme';
 import { Home } from './Home';
 import { writeSessionPanelOpen } from '../chat/sessionPanelState';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -80,6 +81,7 @@ function stubWindow() {
   );
   install = vi.fn(async (force: boolean) => (force ? { ok: true } : { ok: false, reason: 'busy', busy: BUSY }));
   const namespaces: Record<string, unknown> = {
+    host: chatBackedHostBridge(),
     auth: quietBridge({ getState: async () => signedIn }),
     account: quietBridge({
       getProfile: async () => ({ credits: { balance: null, monthlyAllowance: null }, plan: null, tier: null }),

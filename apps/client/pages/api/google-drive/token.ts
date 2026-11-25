@@ -37,13 +37,11 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
 
     // If the access token is still valid, return it
     if (!isAccessTokenExpired) {
-      console.log('using existing access token...');
       return res.json({ accessToken });
     }
 
     // If the access token is expired, refresh it
     try {
-      console.log('refreshing access token...');
       if (!refreshToken) throw new BadRequestError('Refresh token not found');
       const credentials = await refreshAccessToken(refreshToken);
       await User.updateOne(

@@ -1,11 +1,18 @@
-import React from 'react';
-import { describe, it, expect } from 'vitest';
+import React, { cloneElement, type ReactElement } from 'react';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SpendTab, SpendTabView } from './SpendTab';
 import type { SpendData } from '@bike4mind/common';
 import { spendMockData } from '../utils/spendMockData';
+
+// ResponsiveContainer measures 0x0 in jsdom and renders no children; give the chart a fixed size.
+vi.mock('recharts', async importOriginal => ({
+  ...(await importOriginal<typeof import('recharts')>()),
+  ResponsiveContainer: ({ children }: { children: ReactElement<{ width?: number; height?: number }> }) =>
+    cloneElement(children, { width: 600, height: 300 }),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -185,6 +192,30 @@ describe('SpendTabView', () => {
     expect(screen.getByText('Custom period vs Custom prior')).toBeInTheDocument();
     expect(within(screen.getByTestId('spend-by-account-table')).getByText('Zzyzx Corp')).toBeInTheDocument();
     expect(within(screen.getByTestId('spend-by-model-bars')).getByText('Custom Model One')).toBeInTheDocument();
+  });
+
+  it('plots daily cost by MM-DD with dollar ticks', () => {
+    const data: SpendData = {
+      ...spendMockData,
+      dailyCost: [
+        { date: '2026-01-01', cost: 12 },
+        { date: '2026-01-02', cost: 30 },
+        { date: '2026-01-03', cost: 18 },
+      ],
+    };
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
+
+    const chart = screen.getByTestId('spend-daily-cost-trend');
+    const ticks = (axis: 'x' | 'y') =>
+      [...chart.querySelectorAll(`.recharts-${axis}Axis-tick-labels .recharts-cartesian-axis-tick-value`)].map(
+        tick => tick.textContent
+      );
+    expect(ticks('x')).toEqual(['01-01', '01-02', '01-03']);
+    expect(ticks('y')).toEqual(['$10', '$15', '$20', '$25', '$30']);
+    expect(within(chart).getByText('Date')).toBeInTheDocument();
+    expect(within(chart).getByText('Cost (USD)')).toBeInTheDocument();
+    expect(chart.querySelectorAll('.recharts-area-dot')).toHaveLength(3);
+    expect(chart.querySelector('.recharts-area-dot')).toHaveAttribute('r', '3');
   });
 });
 

@@ -1,8 +1,10 @@
+import type { HostBridgeApi } from './hostBridge';
 import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
+import type { LibraryApi } from './library';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
-import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { AppWorktree, SessionTreeDeletion, SessionWorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
@@ -148,6 +150,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LaunchSignals } from './launchSignals';
 import type {
   ModelBuildReport,
   ModelCaptureRequestEvent,
@@ -174,6 +177,8 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  hostRequest: 'host:request',
+  hostNotification: 'host:notification',
   studioGet: 'studio:get',
   studioPage: 'studio:page',
   studioJobAction: 'studio:job-action',
@@ -183,6 +188,9 @@ export const IPC_CHANNELS = {
   studioUploadReference: 'studio:upload-reference',
   studioAssetAction: 'studio:asset-action',
   studioChanged: 'studio:changed',
+  libraryPage: 'library:page',
+  libraryMedia: 'library:media',
+  libraryLocate: 'library:locate',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -266,6 +274,7 @@ export const IPC_CHANNELS = {
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
   chatListRecentFolders: 'chat:list-recent-folders',
+  chatLaunchSignals: 'chat:launch-signals',
   chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
   chatWorkspaceChanges: 'chat:workspace-changes',
@@ -274,6 +283,7 @@ export const IPC_CHANNELS = {
   chatGetSession: 'chat:get-session',
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
+  chatDeleteSessionTree: 'chat:delete-session-tree',
   chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
   chatListWorktrees: 'chat:list-worktrees',
   chatRemoveWorktrees: 'chat:remove-worktrees',
@@ -844,6 +854,8 @@ export interface OrchestrateMiniApi {
 
 export interface DesktopApi {
   studio: StudioApi;
+  host: HostBridgeApi;
+  library: LibraryApi;
   getAppInfo(): Promise<AppInfo>;
   /** App-menu items (Cmd+N, Cmd+,) that act on the renderer's views. */
   appMenu: {
@@ -1079,6 +1091,8 @@ export interface DesktopApi {
     pickProjectDirectory(): Promise<string | null>;
     /** Recently used project folders that still exist, most recent first. */
     listRecentFolders(): Promise<RecentFolder[]>;
+    /** Local hints for which place a first launch opens on; see shared/launchSignals.ts. */
+    launchSignals(): Promise<LaunchSignals>;
     /** Forget one; the folder itself is untouched. Resolves to the list that is left. */
     removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
@@ -1098,7 +1112,18 @@ export interface DesktopApi {
     getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
-    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /**
+     * Deletes the listed nested sessions, deepest first, then the session itself. `removeWorktree`
+     * is the parent's worktree; `nestedWorktreeIds` are the nested sessions whose worktrees go too.
+     */
+    deleteSessionTree(
+      sessionId: string,
+      nestedIds: string[],
+      removeWorktree?: boolean,
+      nestedWorktreeIds?: string[]
+    ): Promise<SessionTreeDeletion>;
+    /** `alsoDeleting` are nested sessions deleted with it, which then do not hold its worktree. */
+    inspectWorktreeRemoval(sessionId: string, alsoDeleting?: string[]): Promise<SessionWorktreeRemoval | null>;
     /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
     listWorktrees(directory: string): Promise<AppWorktree[]>;
     /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */

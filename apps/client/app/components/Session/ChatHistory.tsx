@@ -188,8 +188,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = memo(
       [reversedHistory, virtuosoRef]
     );
 
-    // Scroll-to-message service for other components (e.g. the QuestMaster
-    // plan board).
+    // Scroll-to-message service for components rendered outside the chat tree.
     useEffect(() => {
       return registerScrollToMessageHandler(messageId => scrollToMessage(messageId, 'smooth'));
     }, [scrollToMessage]);

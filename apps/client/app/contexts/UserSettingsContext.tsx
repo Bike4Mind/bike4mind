@@ -29,7 +29,6 @@ import { handleModelListRevisionSetting, watchModelListArrivals } from '../hooks
 import { handleModelAccessRevisionSetting, watchModelAccessArrivals } from '../hooks/data/modelAccessRevision';
 
 export type ExperimentalFeature =
-  | 'enableQuestMaster'
   | 'enableMementos'
   | 'enableMementosV2'
   | 'enableArtifacts'
@@ -112,7 +111,6 @@ const defaultSettings: UserSettings = {
   enableAutoScroll: true,
   scrollbarWidth: 10,
   experimentalFeatures: {
-    enableQuestMaster: false,
     enableMementos: false,
     enableMementosV2: false,
     enableArtifacts: false,

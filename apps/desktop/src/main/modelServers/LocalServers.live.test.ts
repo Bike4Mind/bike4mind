@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { findOllamaBinary } from '@bike4mind/local-models';
 import { describe, expect, it } from 'vitest';
-import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import { hostLaunchers } from './LocalServerSupervisor';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';

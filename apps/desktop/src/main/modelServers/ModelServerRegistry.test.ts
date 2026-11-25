@@ -47,7 +47,8 @@ import { openedAs, sealedAs, versionedCipher } from '../secrets/versionedCipher.
 import { machineView } from '../models/fit';
 import { LOCAL_NETWORK_HINT, localNetworkHint, withLocalNetworkHint } from './localNetworkHint';
 import type { FetchLike, OllamaEnvironment, OpenAICompatibleProduct } from '@bike4mind/local-models';
-import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import * as chat from '@shared/chat';
 import type { ChatModelOption } from '@shared/chat';
 import type { ProcessProbe } from './adoptedServers';

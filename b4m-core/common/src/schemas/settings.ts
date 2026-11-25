@@ -330,9 +330,9 @@ export const SettingKeySchema = z.enum([
   'UseFormatPrompt',
   'EnableDeferredToolLoading',
   'DeferredToolStartSetMaxTokens',
-  'EnableQuestMaster',
+  'evaluationUserIds',
+  'evaluationModelIds',
   'QuestMasterLegacyShutdownDate',
-  'EnableQuestMasterDefault',
   'EnableHearth',
   'EnableHearthDefault',
   'EnableMementos',
@@ -2722,8 +2722,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'HardwareComputeMaxConcurrentRunsPerUser', order: 90 },
       { key: 'HardwareComputeMaxUsdPerUserPerDay', order: 91 },
       { key: 'SimulatorComputeCreditsPerRound', order: 91.5 },
-      { key: 'EnableQuestMaster', order: 92 },
-      { key: 'EnableQuestMasterDefault', order: 93 },
       { key: 'QuestMasterLegacyShutdownDate', order: 93.5 },
       { key: 'EnableHearth', order: 94 },
       { key: 'EnableHearthDefault', order: 95 },
@@ -3577,25 +3575,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
   }),
-  EnableQuestMaster: makeBooleanSetting({
-    key: 'EnableQuestMaster',
-    name: 'Enable Quest Master',
-    defaultValue: true,
-    description: 'Whether to enable the Quest Master feature.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 90,
-  }),
-  EnableQuestMasterDefault: makeBooleanSetting({
-    key: 'EnableQuestMasterDefault',
-    name: 'Quest Master: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, Quest Master is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 91,
-    dependsOn: 'EnableQuestMaster',
-  }),
   QuestMasterLegacyShutdownDate: {
     ...makeStringSetting({
       key: 'QuestMasterLegacyShutdownDate',
@@ -4169,6 +4148,24 @@ export const settingsMap = {
     order: 15,
     dependsOn: 'EnableDeferredToolLoading',
     userReadable: true,
+  }),
+  evaluationUserIds: makeStringSetting({
+    key: 'evaluationUserIds',
+    name: 'Controlled Evaluation: Allowed User IDs',
+    defaultValue: '',
+    description:
+      'Comma-separated user IDs allowed to create evaluation completion runs and send evaluation requests (the Desktop controlled cost evaluation). Evaluation mode disables provider retries and fallback, bounds output and returns per-request provider usage receipts. Empty (default) refuses every evaluation request. Changes apply to the next request.',
+    category: 'AI',
+    order: 16,
+  }),
+  evaluationModelIds: makeStringSetting({
+    key: 'evaluationModelIds',
+    name: 'Controlled Evaluation: Allowed Model IDs',
+    defaultValue: '',
+    description:
+      'Comma-separated exact catalog model IDs an evaluation request may dispatch to. Aliases are not matched, so confirm each ID resolves to the intended provider model before adding it. Empty (default) refuses every evaluation dispatch. Changes apply to the next request.',
+    category: 'AI',
+    order: 17,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',
@@ -8613,9 +8610,8 @@ export const settingsMap = {
       'only affects later submissions. Set to 0 to make simulator rounds free.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd and
-    // EnableQuestMaster, which would render this row after them instead of beside the Hardware
-    // Compute settings.
+    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd, which
+    // would render this row after it instead of beside the Hardware Compute settings.
     order: 89.5,
     dependsOn: 'EnableComputeSubmission',
   }),

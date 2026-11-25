@@ -64,6 +64,7 @@ const invoke = async (
 ) => {
   const { req, res } = createMocks({ method, body, query: { toolId: TOOL_ID } });
   (req as unknown as { user: object }).user = { id: 'admin-1', isAdmin, name: 'Admin', adminPermissions };
+  (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
   return { req, res };
 };

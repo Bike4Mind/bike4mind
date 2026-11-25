@@ -341,7 +341,6 @@ export class WorkflowStepHandler {
             dashboardDataSources: [],
           },
           questId, // Use existing quest instead of creating a new one
-          enableQuestMaster: false,
           enableMementos: false,
           enableArtifacts: false,
           enableAgents: false,

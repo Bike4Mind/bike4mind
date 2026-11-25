@@ -1,8 +1,11 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockEnsureValidToken } = vi.hoisted(() => ({ mockEnsureValidToken: vi.fn() }));
+const { mockEnsureValidToken, mockLogger } = vi.hoisted(() => ({
+  mockEnsureValidToken: vi.fn(),
+  mockLogger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -33,22 +36,16 @@ import { NotionNotConnectedError, NotionReconnectRequiredError } from '@server/i
 
 const call = async (query: Record<string, string> = {}) => {
   const { req, res } = createMocks({ method: 'GET', query });
-  Object.assign(req, { user: { id: 'user-1' } });
+  Object.assign(req, { user: { id: 'user-1' }, logger: mockLogger });
   await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
   return res;
 };
 
-let errorSpy: ReturnType<typeof vi.spyOn>;
-let warnSpy: ReturnType<typeof vi.spyOn>;
+const errorSpy = mockLogger.error;
+const warnSpy = mockLogger.warn;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-  warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
 });
 
 describe('GET /api/mcp-servers/notion/pages - connection states', () => {
@@ -81,7 +78,10 @@ describe('GET /api/mcp-servers/notion/pages - connection states', () => {
 
     expect(res._getStatusCode()).toBe(500);
     expect(res._getJSONData()).toMatchObject({ code: 'NOTION_DECRYPT_FAILED' });
-    expect(errorSpy).toHaveBeenCalledWith('[Notion Pages] Error browsing pages:', expect.any(Error));
+    expect(errorSpy).toHaveBeenCalledWith('Notion page browse failed', {
+      userId: 'user-1',
+      error: expect.any(Error),
+    });
     expect(warnSpy).not.toHaveBeenCalled();
   });
 

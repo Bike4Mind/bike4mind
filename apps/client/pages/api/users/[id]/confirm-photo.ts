@@ -94,7 +94,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       try {
         await storage.delete(retiredPath);
       } catch (error) {
-        console.warn('Failed to delete retired profile photo', error);
+        req.logger.warn('Failed to delete retired profile photo', { error });
       }
       const retiredCdnPath = appFileCdnPath(retiredPath);
       if (retiredCdnPath) await invalidateRouterPaths([retiredCdnPath], { label: 'profile-photo', logger: req.logger });

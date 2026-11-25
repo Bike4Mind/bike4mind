@@ -184,6 +184,12 @@ export interface ISubscription {
   /** When the owner was emailed that dunning cancelled the subscription; the once-only claim. */
   nonPaymentCancelNotifiedAt?: Date;
   /**
+   * Once-only claims for the confirm-payment and unpaid notices, newest last and capped.
+   * Confirm-payment is `payment_action_required:<invoiceId>`, so a later invoice still sends;
+   * unpaid is `unpaid:<subscriptionId>`, released when the subscription recovers.
+   */
+  billingNoticeKeys?: string[];
+  /**
    * Mirror of the Stripe subscription, written through `stripeMirrorFields` (./stripeMirror.ts)
    * by every path that syncs from a Stripe subscription object. Absent on admin grants and on
    * rows not yet synced or backfilled. `currency` is the billed currency and `unitAmount` is per
@@ -329,4 +335,9 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
   claimNonPaymentCancelNotice(subscriptionId: string): Promise<boolean>;
 
   releaseNonPaymentCancelNotice(subscriptionId: string): Promise<void>;
+
+  /** Same contract as claimPaymentFailureNotice, for a notice identified by `key` (see `billingNoticeKeys`). */
+  claimBillingNotice(subscriptionId: string, key: string): Promise<boolean>;
+
+  releaseBillingNotice(subscriptionId: string, key: string): Promise<void>;
 }

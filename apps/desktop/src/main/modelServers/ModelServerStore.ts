@@ -20,7 +20,8 @@ import type {
   ModelServerSpecs,
 } from '@shared/modelServers';
 import { LOCAL_SERVER_NAME, readLaunchShape, specsBlank, specsProblem } from '@shared/modelServers';
-import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
+import type { StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import { resealed } from '../secrets/reseal';
 import { loopbackLaunchPort } from './loopbackPort';
 

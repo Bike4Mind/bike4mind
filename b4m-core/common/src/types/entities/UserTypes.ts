@@ -272,6 +272,8 @@ export interface IUserPreferences {
    * the GET route treat a missing or disabled schedule as off.
    */
   briefSchedule?: BriefSchedule;
+  /** Opt-in for a brief after each synced busy block; set through `PUT /api/v1/briefs/busy-blocks`. */
+  busyBlockBrief?: { enabled: boolean };
 }
 
 /**
@@ -475,7 +477,7 @@ export interface IClientUsageEntry {
 
 export interface IUser extends ICreditHolder {
   id: string;
-  /** Durable admission id; deleting a QuestMaster plan never restores the allowance. */
+  /** Stored data only: written by the retired in-chat QuestMaster free start, read by nothing. */
   freeQuestStartId?: string;
   username: string;
   name: string;
@@ -568,6 +570,13 @@ export interface IUser extends ICreditHolder {
   nextBriefAt?: Date;
   /** When the last scheduled or event-triggered brief started; the debounce both paths claim. */
   lastBriefStartedAt?: Date;
+  /** Busy intervals synced from the device calendar, merged and sorted; see `preferences.busyBlockBrief`. */
+  busyBlocks?: { start: Date; end: Date }[];
+  busyBlocksSyncedAt?: Date;
+  /** End of the earliest stored block not yet briefed; unset when none is pending or the opt-in is off. */
+  nextBlockBriefAt?: Date;
+  /** End of the last block a brief was claimed for, so a re-sync cannot re-arm it. */
+  lastBlockBriefEnd?: Date;
   /** Private erasure retry state, including restored accounts with no deletion schedule. */
   accountFilePurge?: {
     startedAt?: Date;

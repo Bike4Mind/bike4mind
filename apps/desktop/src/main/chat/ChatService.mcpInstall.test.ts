@@ -8,7 +8,8 @@ import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/ch
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { ChatService } from './ChatService';
 import { McpManager } from './mcp/McpManager';
-import { McpServerStore, type SecretCipher, type StoreFile } from './mcp/McpServerStore';
+import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';

@@ -33,7 +33,6 @@ export * from './adminUsageReceipt';
 export * from './adminSignupGrantPending';
 export * from './adminUserRisk';
 export * from './emailVerificationResponse';
-export * from './questMasterPlan';
 export * from './dataLakeResponse';
 export * from './shareResponse';
 export * from './projectResponse';

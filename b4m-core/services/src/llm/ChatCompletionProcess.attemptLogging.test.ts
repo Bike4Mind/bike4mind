@@ -184,7 +184,6 @@ describe('ChatCompletionProcess failed attempt logging', () => {
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: { findOne: vi.fn().mockResolvedValue(null) },
-      questMasterPlans: {},
       connections: {},
       creditTransactions: {},
       agents: {},

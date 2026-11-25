@@ -334,7 +334,6 @@ describe('sessionCreateIpc', () => {
       createSession: vi.fn(() => Promise.resolve(created)),
       createCodeSession: vi.fn((): Promise<CreateCodeSessionResult> => Promise.resolve({ ok: true, session: created })),
       place: vi.fn(() => Promise.resolve({ sections: placed, failed: false })),
-      rememberFolder: vi.fn(),
       ...overrides,
     };
     const handlers = new Map<string, (...args: unknown[]) => unknown>();

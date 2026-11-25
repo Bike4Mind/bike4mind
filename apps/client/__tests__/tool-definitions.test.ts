@@ -112,6 +112,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: false,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       // Get the handler from the chain
       const handlers = (listHandler as any)._handlers;
@@ -130,6 +131,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (listHandler as any)._handlers;
       await handlers.get(req as any, res as any);
@@ -154,6 +156,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (listHandler as any)._handlers;
       await handlers.get(req as any, res as any);
@@ -192,6 +195,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (listHandler as any)._handlers;
       await handlers.get(req as any, res as any);
@@ -215,6 +219,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (listHandler as any)._handlers;
       await handlers.get(req as any, res as any);
@@ -236,6 +241,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (listHandler as any)._handlers;
       await handlers.get(req as any, res as any);
@@ -255,6 +261,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: false,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await expect(handlers.get(req as any, res as any)).rejects.toThrow(/missing permission/i);
@@ -272,6 +279,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await handlers.get(req as any, res as any);
@@ -308,6 +316,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await handlers.get(req as any, res as any);
@@ -329,6 +338,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await handlers.get(req as any, res as any);
@@ -351,6 +361,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: false,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await expect(handlers.put(req as any, res as any)).rejects.toThrow(/missing permission/i);
@@ -370,6 +381,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await handlers.put(req as any, res as any);
@@ -412,6 +424,7 @@ describe('/api/admin/tool-definitions', () => {
           name: 'Admin User',
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await handlers.put(req as any, res as any);
@@ -464,6 +477,7 @@ describe('/api/admin/tool-definitions', () => {
           name: 'Admin User',
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await handlers.put(req as any, res as any);
@@ -483,6 +497,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: false,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await expect(handlers.delete(req as any, res as any)).rejects.toThrow(/missing permission/i);
@@ -500,6 +515,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await handlers.delete(req as any, res as any);
@@ -530,6 +546,7 @@ describe('/api/admin/tool-definitions', () => {
           isAdmin: true,
         },
       });
+      (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
       const handlers = (toolIdHandler as any)._handlers;
       await handlers.delete(req as any, res as any);
