@@ -39,7 +39,7 @@
     "eventsource-parser": "^3.1.0",
     "node-pty": "1.2.0-beta.15",
     "unpdf": "^1.6.2",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@bike4mind/agents": "workspace:*",
@@ -51,10 +51,10 @@
     "@ladle/react": "5.1.1",
     "@mui/joy": "^5.0.0-beta.52",
     "@mui/system": "^5.15.15",
-    "@tanstack/react-router": "^1.170.17",
+    "@tanstack/react-router": "^1.170.44",
     "@types/node": "^24.0.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@types/three": "^0.187.0",
     "@vitejs/plugin-react": "^6.1.2",
@@ -67,8 +67,8 @@
     "jsdom": "^29.1.1",
     "manifold-3d": "3.5.4",
     "mermaid": "^11.16.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
     "rehype-sanitize": "^6.0.0",
