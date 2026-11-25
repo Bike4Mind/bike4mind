@@ -71,7 +71,6 @@ vi.mock('@bike4mind/database', () => ({
   Organization: { collection: { collectionName: 'organizations' }, findById: vi.fn() },
   Project: { collection: { collectionName: 'projects' } },
   Quest: { collection: { collectionName: 'quests' } },
-  QuestMasterPlan: { collection: { collectionName: 'questMasterPlans' } },
   realtimeConnectionRepository: {
     upsertSubscriber: (...args: unknown[]) => mockUpsertSubscriber(...args),
     removeConnectionSubscribers: (...args: unknown[]) => mockRemoveConnectionSubscribers(...args),
@@ -97,7 +96,6 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
 
 vi.mock('@server/websocket/subscriptionScopes', () => ({
   adminSettingsSubscriptionScope: vi.fn(),
-  questMasterPlanSubscriptionScope: vi.fn(),
   inviteSubscriptionScope: vi.fn(),
 }));
 
@@ -824,6 +822,29 @@ describe('dataSubscribeRequest WS handler - admin settings scope', () => {
       expect.objectContaining({ collectionName: 'adminsettings', query: scoped }),
       expect.anything()
     );
+  });
+
+  it('refuses a subscription to the retired questmasterplans collection', async () => {
+    await expect(
+      func(
+        {
+          requestContext: { connectionId: 'conn-1' },
+          body: JSON.stringify({
+            action: 'subscribe_query',
+            accessToken: 'token-123',
+            subscriptionId: 'sub-1',
+            collectionName: 'questmasterplans',
+            query: {},
+            fields: {},
+            fetchInitialData: false,
+          }),
+        } as never,
+        {} as never,
+        noopLogger as never
+      )
+    ).rejects.toThrow('Invalid collectionName: questmasterplans');
+    expect(mockFindModelByCollectionName).not.toHaveBeenCalled();
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
   });
 });
 

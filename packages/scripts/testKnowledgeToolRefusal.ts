@@ -290,17 +290,12 @@ async function askInSameRequest(
   }>(baseUrl, '/api/chat', {
     method: 'POST',
     token,
-    // QuestMaster (enabled by default on this route) turns a plain factual question into a
-    // multi-step plan document instead of answering it directly - unrelated to the knowledge
-    // tool this script tests, and it swallows the reply entirely (quest completes with
-    // response: null). Disable it so the request exercises a normal chat turn.
     body: JSON.stringify({
       sessionId,
       model,
       message,
       wait: true,
       enableTools: true,
-      enableQuestMaster: false,
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });

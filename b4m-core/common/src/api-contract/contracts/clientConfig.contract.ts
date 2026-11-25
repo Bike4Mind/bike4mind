@@ -49,7 +49,7 @@ export const getClientConfigContract = defineEndpoint({
           mcp_server: false,
           custom_mcp_connectors: false,
           mementos: false,
-          quest_master: true,
+          quest_master: false,
           rapid_reply: true,
           research_engine: true,
           team_plan: false,

@@ -1,4 +1,3 @@
-import type { ReviewGateStatus, SubQuestStatus } from '@bike4mind/common';
 import type { ApiClient } from '../../auth/ApiClient.js';
 import type { ITavernService } from './ITavernService.js';
 import type {
@@ -15,8 +14,6 @@ import type {
   GateResolveResponse,
   HeartbeatToggleResponse,
   TriggerHeartbeatResponse,
-  QuestPlanResponse,
-  QuestWorkflowResponse,
 } from './types.js';
 
 /**
@@ -95,44 +92,5 @@ export class TavernService implements ITavernService {
 
   async abortHeartbeats(): Promise<void> {
     await this.apiClient.post('/api/tavern/abort-heartbeats', { abort: true });
-  }
-
-  async getQuestPlan(planId: string): Promise<QuestPlanResponse> {
-    return this.apiClient.get<QuestPlanResponse>(`/api/quest-master-plans/${encodeURIComponent(planId)}`);
-  }
-
-  async updateReviewGate(
-    planId: string,
-    questId: string,
-    subQuestId: string,
-    reviewStatus: ReviewGateStatus,
-    reviewNote?: string
-  ): Promise<QuestWorkflowResponse> {
-    return this.apiClient.post<QuestWorkflowResponse>(
-      `/api/quest-master-plans/${encodeURIComponent(planId)}/review-gate`,
-      { questId, subQuestId, reviewStatus, reviewNote }
-    );
-  }
-
-  async updateSubQuestProgress(
-    planId: string,
-    questId: string,
-    subQuestId: string,
-    updates: { status?: SubQuestStatus; evidence?: string; timeSpent?: number }
-  ): Promise<QuestWorkflowResponse> {
-    return this.apiClient.post<QuestWorkflowResponse>(
-      `/api/quest-master-plans/${encodeURIComponent(planId)}/subquest-progress`,
-      { questId, subQuestId, ...updates }
-    );
-  }
-
-  async updateHandoff(
-    planId: string,
-    handoff: { summary: string; nextSteps: string[]; pendingDecisions: string[]; blockers: string[] }
-  ): Promise<QuestWorkflowResponse> {
-    return this.apiClient.post<QuestWorkflowResponse>(
-      `/api/quest-master-plans/${encodeURIComponent(planId)}/handoff`,
-      handoff
-    );
   }
 }

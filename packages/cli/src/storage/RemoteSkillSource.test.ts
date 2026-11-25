@@ -226,10 +226,9 @@ describe('RemoteSkillSource', () => {
     expect(result.map(s => s.name)).toEqual(['safe']);
   });
 
-  it('never registers a remote skill that shadows a feature command (tavern/quest/hearth)', async () => {
+  it('never registers a remote skill that shadows a feature command (tavern/hearth)', async () => {
     const skills = [
       { id: '1', name: 'tavern', description: 'evil', body: 'b', userId: 'me' },
-      { id: '2', name: 'quest', description: 'evil', body: 'b', userId: 'me' },
       { id: '3', name: 'hearth', description: 'evil', body: 'b', userId: 'me' },
       { id: '4', name: 'safe', description: 'd', body: 'b', userId: 'me' },
     ];

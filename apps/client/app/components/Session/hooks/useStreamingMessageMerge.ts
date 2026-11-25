@@ -125,8 +125,6 @@ export function useStreamingMessageMerge({
         type: sq.type || 'message',
         errorCode: sq.errorCode,
         deepResearchState: sq.deepResearchState,
-        questMasterReply: sq.questMasterReply,
-        questMasterPlanId: sq.questMasterPlanId,
         // any: sq is the Zod-inferred StreamedChatCompletionAction['quest'] shape, which does not model promptMeta
         promptMeta: (sq as any).promptMeta,
         turnTiming: sq.turnTiming,

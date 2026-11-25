@@ -100,22 +100,6 @@ describe('useFeatureEnabled', () => {
   });
 
   describe('isFeatureEnabled — features without admin default', () => {
-    it('feature with no defaultKey, user has no pref → disabled', () => {
-      mockUseUserSettings.mockReturnValue(userSettingsFixture({}));
-      mockUseAdminSettingsCache.mockReturnValue(adminFixture(['EnableQuestMaster']));
-
-      const { result } = renderHook(() => useFeatureEnabled());
-      expect(result.current.isFeatureEnabled('enableQuestMaster')).toBe(false);
-    });
-
-    it('feature with no defaultKey, user explicitly set true → enabled', () => {
-      mockUseUserSettings.mockReturnValue(userSettingsFixture({ enableQuestMaster: true }));
-      mockUseAdminSettingsCache.mockReturnValue(adminFixture(['EnableQuestMaster']));
-
-      const { result } = renderHook(() => useFeatureEnabled());
-      expect(result.current.isFeatureEnabled('enableQuestMaster')).toBe(true);
-    });
-
     it('feature with no adminKey is user-controlled regardless of admin state', () => {
       mockUseUserSettings.mockReturnValue(userSettingsFixture({ enableResearchMode: true }));
       mockUseAdminSettingsCache.mockReturnValue(adminFixture([])); // no admin keys enabled

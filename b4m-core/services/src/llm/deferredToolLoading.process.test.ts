@@ -211,7 +211,6 @@ const runTurn = async (input: TurnInput): Promise<{ primary?: Call; hop?: Call }
     fabfiles: {},
     fabfilechunks: {},
     adminSettings: { findOne: vi.fn().mockResolvedValue(null) },
-    questMasterPlans: {},
     connections: {},
     creditTransactions: {},
     agents: {},

@@ -174,7 +174,6 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     prompt_upsampling,
     seed,
     output_format,
-    isQuestMasterEnabled,
     isMementosEnabled,
     isArtifactsEnabled,
     tools,
@@ -198,7 +197,6 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       s.prompt_upsampling,
       s.seed,
       s.output_format,
-      s.isQuestMasterEnabled,
       s.isMementosEnabled,
       s.isArtifactsEnabled,
       s.tools,
@@ -349,7 +347,6 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           workBenchFiles,
           sendJsonMessage,
           promptFileIds,
-          enableQuestMaster: isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
           // A correction is a new turn, never a re-run of the flagged quest: passing its id as

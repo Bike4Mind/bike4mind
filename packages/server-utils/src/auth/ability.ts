@@ -79,7 +79,7 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
     // adminsettings subscription is scoped by this rule.
     allow('read', AdminSettings, {
       settingName: {
-        $in: ['EnableQuestMaster', 'EnableMementos', 'EnableArtifacts', 'modelListRevision', 'modelAccessRevision'],
+        $in: ['EnableMementos', 'EnableArtifacts', 'modelListRevision', 'modelAccessRevision'],
       },
     });
     if (user.isAdmin) {
