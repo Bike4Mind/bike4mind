@@ -31,7 +31,7 @@ SYSTEM_DBS = {'admin', 'config', 'local'}
 MONGO_URI = 'mongodb://localhost:27017/?replicaSet=rs0'
 ARTIFACTS = ('mongo.archive.gz', 'objects.tar')
 REMINDER = ('REMINDER: back up the runtime Secret (SECRET_ENCRYPTION_KEY, SECRET_ENCRYPTION_KEY_PREVIOUS, '
-            'MEMORY_KEY_SECRET) separately; without it restored data cannot be decrypted.')
+            'MEMORY_KEY_SECRET, MEMORY_KEY_SECRET_PREVIOUS if set) separately; without it restored data cannot be decrypted.')
 # Written by the init Job into APP_FILES_BUCKET; not user data.
 MARKER = '.initialized-'
 

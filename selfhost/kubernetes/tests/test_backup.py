@@ -242,7 +242,8 @@ class CommandTests(unittest.TestCase):
 
     def test_backup_prints_secret_reminder(self):
         out = self.run_backup(FakeKube())
-        for name in ('SECRET_ENCRYPTION_KEY', 'SECRET_ENCRYPTION_KEY_PREVIOUS', 'MEMORY_KEY_SECRET'):
+        for name in ('SECRET_ENCRYPTION_KEY', 'SECRET_ENCRYPTION_KEY_PREVIOUS', 'MEMORY_KEY_SECRET',
+                     'MEMORY_KEY_SECRET_PREVIOUS'):
             self.assertIn(name, out)
 
     def test_backup_drains_before_dump_and_resumes_after_copy(self):

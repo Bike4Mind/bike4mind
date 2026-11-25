@@ -91,5 +91,8 @@ MAIL_FROM=bike4mind@chat.example.com
 # =====================================================================
 
 # Persistent master key for memory DEK envelope encryption. Generate once: openssl rand -hex 32
-# Back this up with the other encryption keys; do not replace it during redeploys.
+# Back this up with the other encryption keys; change it only by the rotation procedure in
+# docs/security/credential-storage.md.
 MEMORY_KEY_SECRET=
+# The outgoing MEMORY_KEY_SECRET; set only while rotating, otherwise leave empty.
+MEMORY_KEY_SECRET_PREVIOUS=

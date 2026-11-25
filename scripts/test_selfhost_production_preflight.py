@@ -199,6 +199,11 @@ class PreflightTests(unittest.TestCase):
         model['services']['chatcompletion']['environment']['MEMORY_KEY_SECRET'] = 'a-different-memory-key'
         self.assertIn('internal.shared-secrets', check_config(model))
 
+    def test_previous_memory_key_must_match_every_worker(self):
+        model = configured_stack()
+        model['services']['chatcompletion']['environment']['MEMORY_KEY_SECRET_PREVIOUS'] = 'an-outgoing-memory-key'
+        self.assertIn('internal.shared-secrets', check_config(model))
+
     def test_placeholder_table(self):
         cases = [
             ('', True), (None, True),

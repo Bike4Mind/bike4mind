@@ -37,14 +37,43 @@ applied. To re-apply it, delete its record (id `20260904000000`) from the `migra
 Before deployment, provision a persistent `MEMORY_KEY_SECRET` alongside `SECRET_ENCRYPTION_KEY`.
 Generate independent random values; for example, `openssl rand -hex 32`. Cloud deployments validate the
 secret before creating resources. Self-host installations provide it through their runtime environment.
-Back it up securely and keep it stable across redeployments: replacing it makes wrapped memory keys
-unreadable. Deployed memory providers refuse to operate without it. Provisioning the secret alone does
+Back it up securely. Never replace it in place: wrapped memory keys become unreadable. Rotate it only by
+the procedure below. Deployed memory providers refuse to operate without it. Provisioning the secret alone does
 not protect existing raw data keys; run the backfill too.
+
+### Rotating MEMORY_KEY_SECRET
+
+Readers open a memory key wrapped under either `MEMORY_KEY_SECRET` or `MEMORY_KEY_SECRET_PREVIOUS`; new
+keys are always wrapped under the current one. Each step is a full deploy of every service (cloud) or a
+restart of the stack (self-host, with the environment variables of the same names). Do not skip or
+reorder: during a rolling deploy old and new instances run together, so a plain swap would leave
+instances that cannot open each other's keys.
+
+1. Deploy code that reads `MEMORY_KEY_SECRET_PREVIOUS`, with it still unset (`not-configured`).
+2. Set `MEMORY_KEY_SECRET_PREVIOUS` to the new value and deploy. Every instance can now open keys
+   wrapped under either the old or the new value.
+3. Set `MEMORY_KEY_SECRET` to the new value and `MEMORY_KEY_SECRET_PREVIOUS` to the old value, and deploy.
+4. Run `migrate:rewrap-memory-keys --dry-run`, then `migrate:rewrap-memory-keys`, then
+   `migrate:rewrap-memory-keys --verify` (`pnpm --filter @bike4mind/scripts`, under `sst shell` for cloud).
+   The command prints counts only and is safe to repeat; a second run rewraps 0. It stops with exit 2 if
+   any key is stored unwrapped (run `migrate:protect-credentials` first). `--verify` also decrypts one
+   stored fact per principal under the rewrapped key.
+5. Once `--verify` exits 0, clear `MEMORY_KEY_SECRET_PREVIOUS` (`not-configured`) and deploy, then run
+   `--verify` again.
+
+Rollback: before step 5, put the old value back in `MEMORY_KEY_SECRET` and the new one in
+`MEMORY_KEY_SECRET_PREVIOUS`; both are still readable. After step 5 the old value is no longer needed
+by the live data, but a database backup taken before the rewrap still holds keys wrapped under it:
+keep the old value until those backups age out of retention.
+
+Preview and personal stages that read the account-wide fallback do not run the rewrap: set the new value
+as the fallback together with the old one as `MEMORY_KEY_SECRET_PREVIOUS --fallback`, and clear the
+previous fallback once no preview deployed before the swap remains.
 
 The cloud deploy check applies to every stage, including PR previews and personal stages. Before this
 change reaches `main`, set an account-wide default in each AWS account those stages deploy to
 (`sst secret set MEMORY_KEY_SECRET <hex> --fallback`), or every preview and personal-stage deploy is
-refused. The same stability rule applies: the fallback must not be replaced once stages have used it.
+refused. Do not replace the fallback once stages have used it, except as described above.
 
 The token/API-key maintenance commands understand both ciphertext versions. Their rotation operations
 must receive the owning context; copying a bound blob to another record or variable is rejected.

@@ -7,7 +7,10 @@ import {
   decryptVector,
   encryptFact,
   encryptVector,
+  openWrappedDek,
+  resolvePreviousMasterKey,
   subjectHmac,
+  wrapDekUnder,
   type Keyring,
 } from './factCipher';
 
@@ -218,4 +221,58 @@ it('wraps existing raw DEKs without changing the key or making reruns destructiv
   store.set('user:u1', wrapped);
   const provider = createKeyProvider(keyring, master);
   expect((await provider.getDek({ kind: 'user', id: 'u1' }))?.equals(raw)).toBe(true);
+});
+
+describe('master key rotation (previous slot)', () => {
+  const sha = (secret: string) => createHash('sha256').update(secret).digest();
+  const oldKey = sha('old-secret');
+  const newKey = sha('new-secret');
+  const dek = randomBytes(32);
+  const seed = async (wrapped: string) => {
+    const { keyring, store } = makeKeyring();
+    store.set('user:u1', wrapped);
+    return { keyring, store };
+  };
+
+  it('opens a DEK wrapped under the current key', async () => {
+    const { keyring } = await seed(wrapDekUnder(newKey, dek));
+    expect(await createKeyProvider(keyring, newKey, undefined).getDek(user)).toEqual(dek);
+  });
+
+  it('opens a DEK wrapped under the previous key', async () => {
+    const { keyring } = await seed(wrapDekUnder(oldKey, dek));
+    expect(await createKeyProvider(keyring, newKey, oldKey).getDek(user)).toEqual(dek);
+  });
+
+  it('mints under the current key only', async () => {
+    const { keyring, store } = makeKeyring();
+    await createKeyProvider(keyring, newKey, oldKey).getOrCreateDek(user, 'u1', WORK_STARTED);
+    const stored = store.get('user:u1')!;
+    expect(openWrappedDek(stored, [newKey])).not.toBeNull();
+    expect(openWrappedDek(stored, [oldKey])).toBeNull();
+  });
+
+  it('fails closed when no configured key opens it, never reading it as raw', async () => {
+    const { keyring } = await seed(wrapDekUnder(sha('third'), dek));
+    await expect(createKeyProvider(keyring, newKey, oldKey).getDek(user)).rejects.toThrow(/no configured master key/);
+  });
+
+  it('still opens when previous equals current', async () => {
+    const { keyring } = await seed(wrapDekUnder(newKey, dek));
+    expect(await createKeyProvider(keyring, newKey, newKey).getDek(user)).toEqual(dek);
+  });
+
+  it('reports which key opened the value', () => {
+    expect(openWrappedDek(wrapDekUnder(oldKey, dek), [newKey, oldKey])?.keyIndex).toBe(1);
+    expect(openWrappedDek('raw:abc', [newKey])).toBeNull();
+  });
+
+  it('resolvePreviousMasterKey: unset or not-configured is undefined, a value is its SHA-256', () => {
+    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'not-configured');
+    expect(resolvePreviousMasterKey()).toBeUndefined();
+    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'old-secret');
+    expect(resolvePreviousMasterKey()).toEqual(oldKey);
+    expect(resolvePreviousMasterKey('')).toBeUndefined();
+    vi.unstubAllEnvs();
+  });
 });

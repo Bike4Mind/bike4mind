@@ -204,7 +204,7 @@ def check_config(model):
     for name in ('worker', 'chatcompletion', 'agentexecutor'):
         if name in services:
             worker_env = services[name].get('environment') or {}
-            if any(worker_env.get(key) != env.get(key) for key in ('JWT_SECRET', 'SESSION_SECRET', 'SECRET_ENCRYPTION_KEY', 'MEMORY_KEY_SECRET')):
+            if any(worker_env.get(key) != env.get(key) for key in ('JWT_SECRET', 'SESSION_SECRET', 'SECRET_ENCRYPTION_KEY', 'MEMORY_KEY_SECRET', 'MEMORY_KEY_SECRET_PREVIOUS')):
                 failures.add('internal.shared-secrets')
     minio_env = (services.get('minio', {}).get('environment') or {})
     if minio_env.get('MINIO_NOTIFY_WEBHOOK_ENABLE_primary') == 'on':
