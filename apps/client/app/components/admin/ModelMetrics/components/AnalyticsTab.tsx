@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Box, Stack, Typography } from '@mui/joy';
+import { Box, Stack, Typography, useTheme } from '@mui/joy';
 import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useAnalyticsMetrics } from '@client/app/hooks/useAnalyticsMetrics';
 import { processChartData } from '../utils/chartDataProcessor';
@@ -10,6 +10,9 @@ import { ChartTooltipCard } from '@client/app/components/Charts/chartStyle';
 import { INK, SURFACE } from '../../shared/chartParts';
 import { adminChartSeries, adminChartStyle, adminChartTextOn } from '../../EventMetrics/utils/chartTheme';
 import type { ChartData } from '../types';
+
+// Past this many slices the opacity steps of the accent blur; switch to the chartSeries slots.
+const ACCENT_STEP_MAX = 6;
 
 /** Bars narrower or shorter than this, in px, carry no value label. */
 const BAR_LABEL_SKIP = 12;
@@ -112,7 +115,16 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
   const { data: modelInfos = [] } = useModelInfo();
 
   const chartData = useMemo(() => processChartData(analyticsMetrics, modelInfos, true), [analyticsMetrics, modelInfos]);
-  const donutColors = useMemo(() => adminChartSeries(chartData.modelUsageData.length), [chartData]);
+  const seriesPalette = useTheme().palette.admin.chartSeries;
+  const sliceCount = chartData.modelUsageData.length;
+  const fitsAccentSteps = sliceCount <= ACCENT_STEP_MAX;
+  const donutColors = useMemo(
+    () =>
+      fitsAccentSteps
+        ? adminChartSeries(sliceCount)
+        : Array.from({ length: sliceCount }, (_, index) => seriesPalette[index % seriesPalette.length]),
+    [fitsAccentSteps, sliceCount, seriesPalette]
+  );
   const timeLegend = chartData.granularity === 'hourly' ? 'Time' : 'Date';
 
   if (isLoading) {
@@ -137,7 +149,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
               data={chartData.modelUsageData}
               margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
               colors={donutColors}
-              valueColor={index => adminChartTextOn(index, donutColors.length)}
+              valueColor={fitsAccentSteps ? index => adminChartTextOn(index, donutColors.length) : undefined}
               labelColor={INK}
               sliceStroke={SURFACE}
             />

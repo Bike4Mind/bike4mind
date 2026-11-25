@@ -129,6 +129,27 @@ describe('AnalyticsTab', () => {
       expect(within(donut).getByText('1')).toBeTruthy();
     });
 
+    const sliceFills = () =>
+      Array.from(
+        screen.getByTestId('analytics-event-distribution-chart').querySelectorAll('.recharts-pie-sector path')
+      ).map(path => path.getAttribute('fill'));
+
+    it('steps the accent down for a few event types', () => {
+      renderTab(metrics);
+
+      const fills = sliceFills();
+      expect(fills).toHaveLength(2);
+      expect(fills.every(fill => fill?.includes('--joy-palette-admin-accent'))).toBe(true);
+    });
+
+    it('takes the chartSeries slots past six event types, where accent steps blur', () => {
+      const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+      renderTab(names.map((name, index) => timed(`2025-09-14T10:0${index}:00`, name, 100)));
+
+      const palette = appTheme.colorSchemes.light.palette.admin.chartSeries;
+      expect(sliceFills()).toEqual(palette.slice(0, names.length));
+    });
+
     it('draws one bar per event type at its average response time, labelled with the value', () => {
       renderTab(metrics);
 

@@ -7,8 +7,7 @@ import type {
   SecurityDashboardWafBlockedRequestsResult,
 } from '@/app/hooks/data/admin';
 import { ChartTooltipCard } from '@client/app/components/Charts/chartStyle';
-import { adminChartSeries } from '../EventMetrics/utils/chartTheme';
-import { useWafChartTheme } from './useWafChartTheme';
+import { adminChartSeries, adminChartStyle } from '../EventMetrics/utils/chartTheme';
 import { WafBlockedRequestsTable } from './WafBlockedRequestsTable';
 import { formatRangeLabel } from './wafRangeLabel';
 
@@ -31,7 +30,6 @@ const TopItemsBarChart = ({
   /** Room for the name ticks and legend, in px. */
   nameWidth: number;
 }) => {
-  const style = useWafChartTheme();
   const rows = items.map(x => ({ name: x.name, count: Math.round(x.count) }));
 
   return (
@@ -43,24 +41,28 @@ const TopItemsBarChart = ({
         margin={{ top: 10, right: 12, bottom: 0, left: 0 }}
         barCategoryGap="17.5%"
       >
-        <CartesianGrid vertical={false} stroke={style.gridStroke} strokeDasharray={style.gridDash} />
+        <CartesianGrid
+          horizontal={false}
+          stroke={adminChartStyle.gridStroke}
+          strokeDasharray={adminChartStyle.gridDash}
+        />
         <XAxis
           type="number"
           domain={[0, 'auto']}
           height={40}
-          tick={style.tick}
-          tickLine={style.tickLine}
+          tick={adminChartStyle.tick}
+          tickLine={adminChartStyle.tickLine}
           tickSize={5}
           axisLine={false}
-          label={{ value: valueLegend, position: 'insideBottom', offset: 0, style: style.axisLabel }}
+          label={{ value: valueLegend, position: 'insideBottom', offset: 0, style: adminChartStyle.axisLabel }}
         />
         <YAxis
           type="category"
           dataKey="name"
           interval={0}
           width={nameWidth}
-          tick={style.tick}
-          tickLine={style.tickLine}
+          tick={adminChartStyle.tick}
+          tickLine={adminChartStyle.tickLine}
           tickSize={5}
           axisLine={false}
           label={{
@@ -68,7 +70,7 @@ const TopItemsBarChart = ({
             angle: -90,
             position: 'insideLeft',
             offset: 10,
-            style: { ...style.axisLabel, textAnchor: 'middle' },
+            style: { ...adminChartStyle.axisLabel, textAnchor: 'middle' },
           }}
         />
         <Tooltip
