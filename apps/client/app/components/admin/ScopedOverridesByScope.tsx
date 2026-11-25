@@ -20,6 +20,10 @@ import { SettingsSection } from './shared/SettingsSection';
 
 const ALL_LEVELS: OverrideLevel[] = [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake];
 
+/** Object settings (and their Mixed platform rows) are objects at runtime; String() would print [object Object]. */
+const platformValueText = (value: unknown): string =>
+  typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value);
+
 /** See INERT_RUNG_NOTE for why a stored value at an unsettable rung is not reported as applying. */
 function describeOverride(
   setting: AdminSetting,
@@ -140,14 +144,14 @@ export function ScopedOverridesByScope() {
                   data-testid={`scoped-overrides-by-scope-row-${setting.key}`}
                   sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
                 >
-                  <Typography level="body-sm" sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography level="body-sm" sx={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
                     <strong>{setting.name}</strong>
                     {' - '}
                     {describeOverride(
                       setting,
                       override?.settingValue,
                       isSettableHere,
-                      platformValue === undefined ? undefined : String(platformValue)
+                      platformValue === undefined ? undefined : platformValueText(platformValue)
                     )}
                   </Typography>
                   {override && (

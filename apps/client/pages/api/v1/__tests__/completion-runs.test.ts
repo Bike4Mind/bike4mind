@@ -8,12 +8,15 @@ import {
   ForbiddenError,
 } from '@bike4mind/common';
 
-const { contracts, completionRunRepository, userRepository, resolveActiveOrg } = vi.hoisted(() => ({
-  contracts: [] as { operationId: string; auth: string; scopes?: readonly string[] }[],
-  completionRunRepository: { create: vi.fn() },
-  userRepository: { findById: vi.fn() },
-  resolveActiveOrg: vi.fn(),
-}));
+const { contracts, completionRunRepository, userRepository, resolveActiveOrg, adminSettingsRepository } = vi.hoisted(
+  () => ({
+    contracts: [] as { operationId: string; auth: string; scopes?: readonly string[] }[],
+    completionRunRepository: { create: vi.fn() },
+    adminSettingsRepository: { getSettingsValue: vi.fn() },
+    userRepository: { findById: vi.fn() },
+    resolveActiveOrg: vi.fn(),
+  })
+);
 
 vi.mock('@server/middlewares/defineNextRoute', () => ({
   nextRouteForContract: (contract: (typeof contracts)[number]) => {
@@ -26,7 +29,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   },
 }));
 vi.mock('@server/middlewares/perUserRateLimit', () => ({ perUserRateLimit: () => vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ completionRunRepository, userRepository }));
+vi.mock('@bike4mind/database', () => ({ completionRunRepository, userRepository, adminSettingsRepository }));
 vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg }));
 
 import handler from '../completion-runs';
@@ -158,6 +161,31 @@ describe('POST /api/v1/completion-runs', () => {
 
       expect(completionRunRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({ ownerType: CreditHolderType.Organization, ownerId: 'org-1' })
+      );
+    });
+  });
+
+  describe('evaluation', () => {
+    const evaluation = { version: 1, maxProviderUsd: 1, maxTokens: 5000, maxRequests: 3, modelIds: ['model-1'] };
+
+    it('refuses an evaluation run for a user missing from the evaluationUserIds setting', async () => {
+      adminSettingsRepository.getSettingsValue.mockResolvedValue('user-2, user-3');
+
+      await expect(call({ validated: { evaluation } })).rejects.toMatchObject({
+        additionalInfo: { errorCode: 'evaluation_not_enabled' },
+      });
+      expect(adminSettingsRepository.getSettingsValue).toHaveBeenCalledWith('evaluationUserIds');
+      expect(completionRunRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('mints an evaluation run once the setting lists the user, without a redeploy', async () => {
+      adminSettingsRepository.getSettingsValue.mockResolvedValue('user-2, user-1');
+
+      const res = await call({ validated: { evaluation } });
+
+      expect(res._getStatusCode()).toBe(201);
+      expect(completionRunRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ evaluation: expect.objectContaining({ limits: evaluation }) })
       );
     });
   });

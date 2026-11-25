@@ -2137,6 +2137,17 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     return doc?.createdAt ?? null;
   }
 
+  /** Top-level runs that finished in `[start, end)`: the ones whose completion push a busy block held. */
+  async countRunsFinishedBetween(userId: string, start: Date, end: Date): Promise<number> {
+    return this.model
+      .countDocuments({
+        userId,
+        $or: [{ parentExecutionId: { $exists: false } }, { isBackgroundExecution: true }],
+        completedAt: { $gte: start, $lt: end },
+      })
+      .exec();
+  }
+
   // --- DAG decomposition (coordinate_task) ---
 
   /**

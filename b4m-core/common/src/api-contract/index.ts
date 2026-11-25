@@ -29,6 +29,8 @@ export {
   getBriefContract,
   getBriefScheduleContract,
   putBriefScheduleContract,
+  getBusyBlocksContract,
+  putBusyBlocksContract,
   replyToBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './contracts/briefs.contract';

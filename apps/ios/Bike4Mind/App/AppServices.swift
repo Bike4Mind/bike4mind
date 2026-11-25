@@ -50,6 +50,10 @@ final class AppServices {
   let approvalNotifications: ApprovalNotificationHandler
   /// Reads and saves when the server composes the user's brief.
   let briefSchedule: any BriefScheduleAPI
+  /// The busy-block brief opt-in and the device calendar it syncs from.
+  let busyBlocks: any BusyBlocksAPI
+  let busyBlockReader: any BusyBlockReader
+  let busyBlockSyncer: BusyBlockSyncer
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
   /// How many decisions wait on the user, for the lock-screen widget.
@@ -149,6 +153,15 @@ final class AppServices {
       #endif
       return BriefScheduleClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
+    let busyBlocksAPI = ForwardingBusyBlocksAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.busyBlocks }
+      #endif
+      return BusyBlocksClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
+    busyBlocks = busyBlocksAPI
+    busyBlockReader = EventKitBusyBlockReader()
+    busyBlockSyncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG
@@ -495,6 +508,18 @@ struct ForwardingBriefScheduleAPI: BriefScheduleAPI {
 
   func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
     try await provider().save(schedule)
+  }
+}
+
+struct ForwardingBusyBlocksAPI: BusyBlocksAPI {
+  let provider: @MainActor @Sendable () -> any BusyBlocksAPI
+
+  func state() async throws -> BusyBlocksState {
+    try await provider().state()
+  }
+
+  func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
+    try await provider().save(enabled: enabled, blocks: blocks)
   }
 }
 

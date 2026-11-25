@@ -177,6 +177,40 @@ describe('assistantBriefRepository.findLatestReadyDecisionRefs', () => {
     expect(refs?.decisions).toEqual([{}, { approval }]);
   });
 
+  const settleBlock = async (userId: string, decisions: AssistantBriefContent['decisions']) => {
+    const brief = await assistantBriefRepository.createComposing({
+      userId,
+      periodStart: NOW,
+      periodEnd: NOW,
+      trigger: 'busy_block',
+      busyBlock: { start: NOW, end: NOW },
+    });
+    await assistantBriefRepository.markReady(String(brief._id), { ...content, decisions }, NOW);
+    return String(brief._id);
+  };
+
+  it('keeps counting the regular brief after newer busy-block briefs, and counts theirs too', async () => {
+    await settleBlock('owner', [{ id: 'old-block', text: 'Briefed before the regular one' }]);
+    await settle('owner', [{ id: 'd1', text: 'Approve the deploy', approval }]);
+    await settleBlock('owner', [{ id: 'b1', text: 'Reply to the email from the meeting' }]);
+    const newest = await settleBlock('owner', []);
+
+    const refs = await assistantBriefRepository.findLatestReadyDecisionRefs('owner');
+
+    expect(String(refs?._id)).toBe(newest);
+    expect(refs?.decisions).toHaveLength(2);
+    expect(refs?.decisions).toEqual(expect.arrayContaining([{ approval }, {}]));
+  });
+
+  it('counts busy-block briefs when there is no regular ready brief', async () => {
+    const only = await settleBlock('owner', [{ id: 'b1', text: 'Reply to the email' }]);
+
+    const refs = await assistantBriefRepository.findLatestReadyDecisionRefs('owner');
+
+    expect(String(refs?._id)).toBe(only);
+    expect(refs?.decisions).toEqual([{}]);
+  });
+
   it('is null when the owner has no ready brief', async () => {
     await createBrief();
 
