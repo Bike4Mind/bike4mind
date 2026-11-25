@@ -13,6 +13,8 @@ export async function readStudioCatalog(api: AuthenticatedApiClient, models: Mod
     new MediaApiClient(api).listMusicModels(),
     api.get<unknown>('/api/ai/audio-providers'),
     api.get<unknown>('/api/ai/elevenlabs-voices').catch(() => ({ voices: [] })),
+    // Only the Studio image rollout gate (flag, audience, plan): generation itself goes to /api/v1/image-jobs,
+    // which has no gate, so this read keeps desktop Studio's image tab on the web Studio's rollout.
     api.get<unknown>('/api/studio/image-jobs?limit=1').then(
       () => true,
       (error: unknown) => {
