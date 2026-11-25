@@ -1,6 +1,9 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Dropdown from '@mui/joy/Dropdown';
+import List from '@mui/joy/List';
+import ListItem from '@mui/joy/ListItem';
+import ListSubheader from '@mui/joy/ListSubheader';
 import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
@@ -218,9 +221,113 @@ function DoneMenu({ done, onOpen }: { done: readonly ChildChip[]; onOpen: (sessi
 }
 
 /**
+ * Most buttons the strip draws before it folds into the Party pill. The content column is 712px
+ * wide inside its padding and a chip with a title and a branch runs ~170px, so four (the done menu
+ * counts as one) still sit on one row; a fifth wraps.
+ */
+export const PARTY_THRESHOLD = 4;
+
+export function foldsIntoParty(active: readonly ChildChip[], done: readonly ChildChip[]): boolean {
+  return active.length + (done.length > 0 ? 1 : 0) > PARTY_THRESHOLD;
+}
+
+export type PartyGroupKey = 'needs-you' | 'working' | 'done';
+
+export interface PartyGroup {
+  key: PartyGroupKey;
+  label: string;
+  chips: ChildChip[];
+}
+
+const GROUP_OF: Record<ChildChipState, PartyGroupKey> = {
+  'needs-action': 'needs-you',
+  processing: 'working',
+  failed: 'done',
+  finished: 'done',
+};
+
+const GROUP_LABEL: Record<PartyGroupKey, string> = { 'needs-you': 'Needs you', working: 'Working', done: 'Done' };
+
+/** The roster's non-empty groups, in the order the user acts on them; chips keep childChips' order within each. */
+export function partyGroups(chips: readonly ChildChip[]): PartyGroup[] {
+  return (['needs-you', 'working', 'done'] as const)
+    .map(key => ({ key, label: GROUP_LABEL[key], chips: chips.filter(chip => GROUP_OF[chip.state] === key) }))
+    .filter(group => group.chips.length > 0);
+}
+
+/** The pill's text: the party size, then the most pressing count. */
+export function partySummary(chips: readonly ChildChip[]): string {
+  const needs = chips.filter(chip => chip.state === 'needs-action').length;
+  const working = chips.filter(chip => chip.state === 'processing').length;
+  const detail =
+    needs > 0 ? `${needs} ${needs === 1 ? 'needs' : 'need'} you` : working > 0 ? `${working} working` : 'all done';
+  return `Party: ${chips.length} - ${detail}`;
+}
+
+function PartyPill({ chips, onOpen }: { chips: readonly ChildChip[]; onOpen: (sessionId: string) => void }) {
+  const needsYou = chips.some(chip => chip.state === 'needs-action');
+  return (
+    <Dropdown>
+      <MenuButton
+        size="sm"
+        variant="outlined"
+        color={needsYou ? 'warning' : 'neutral'}
+        startDecorator={
+          needsYou ? (
+            <SessionBadge status="needs-action" />
+          ) : chips.some(chip => chip.state === 'processing') ? (
+            <SessionBadge status="processing" />
+          ) : (
+            <ChipIcon state="finished" />
+          )
+        }
+        aria-label={`${partySummary(chips)}. Show every session this conversation started`}
+        data-testid="children-strip-party-btn"
+        sx={{ minHeight: 28, px: 1.25, gap: 0.75, fontWeight: 'md', borderRadius: 'xl' }}
+      >
+        <Typography level="body-xs" textColor="text.primary" data-testid="children-strip-party-summary">
+          {partySummary(chips)}
+        </Typography>
+      </MenuButton>
+      <Menu
+        size="sm"
+        placement="top-start"
+        sx={{ width: 360, maxWidth: 'calc(100vw - 32px)', maxHeight: 420, overflowY: 'auto', zIndex: 'popup' }}
+        data-testid="children-strip-party-menu"
+      >
+        {partyGroups(chips).map(group => (
+          <ListItem nested key={group.key} data-testid="children-strip-party-group" data-group={group.key}>
+            <ListSubheader sticky>
+              {group.label} ({group.chips.length})
+            </ListSubheader>
+            <List size="sm">
+              {group.chips.map(chip => (
+                <MenuItem
+                  key={chip.id}
+                  onClick={() => onOpen(chip.id)}
+                  title={chipHint(chip)}
+                  aria-label={`${chip.title} - ${STATE_LABEL[chip.state]}`}
+                  data-testid="children-strip-party-item"
+                  data-state={chip.state}
+                  sx={{ gap: 0.75, minWidth: 0 }}
+                >
+                  <ChipIcon state={chip.state} />
+                  <ChipLabel chip={chip} />
+                </MenuItem>
+              ))}
+            </List>
+          </ListItem>
+        ))}
+      </Menu>
+    </Dropdown>
+  );
+}
+
+/**
  * One row above the composer showing the sessions the open conversation spawned: which are still
- * working, which wait on the user, which failed, and how many are done, each a click away. Not
- * drawn when there are none, or once all have settled and reported into the thread.
+ * working, which wait on the user, which failed, and how many are done, each a click away. Past
+ * PARTY_THRESHOLD buttons it is one Party pill whose roster lists them grouped instead. Not drawn
+ * when there are none, or once all have settled and reported into the thread.
  */
 export function ChildrenStrip({
   sessions,
@@ -236,8 +343,17 @@ export function ChildrenStrip({
   reportedIds: ReadonlySet<string>;
   onOpenSession: (sessionId: string) => void;
 }) {
-  const { active, done, hidden } = stripLayout(childChips(sessions, statuses, parentId), reportedIds);
+  const chips = childChips(sessions, statuses, parentId);
+  const { active, done, hidden } = stripLayout(chips, reportedIds);
   if (hidden) return null;
+
+  if (foldsIntoParty(active, done)) {
+    return (
+      <Box sx={{ ...contentColumnSx, pt: 1 }} data-testid="children-strip">
+        <PartyPill chips={chips} onOpen={onOpenSession} />
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ ...contentColumnSx, pt: 1 }} data-testid="children-strip">
