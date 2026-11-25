@@ -222,6 +222,19 @@ describe('runBriefScheduleReconcile', () => {
     );
   });
 
+  it('retries an in-flight slot after the gap when a reminder is already due', async () => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    await insertApprovedReminder(userId, minutesAgo(1));
+    await assistantBriefRepository.createComposing({ userId, periodStart: now, periodEnd: now });
+
+    const result = await run();
+    expect(result.in_flight).toBe(1);
+    const regular = computeNextBriefAt(schedule, now)!.getTime();
+    expect(await nextBriefAtOf(userId)).toEqual(
+      new Date(Math.min(regular, now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS))
+    );
+  });
+
   it('leaves a user whose slot is still ahead untouched', async () => {
     const future = new Date(now.getTime() + 60 * 60_000);
     const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: future });

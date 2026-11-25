@@ -9,8 +9,8 @@
  * pushes off, windows with no agent runs and no pending triaged email, and starts within
  * SCHEDULED_BRIEF_MIN_GAP_MS of another brief start (`debounced`: a racing event brief covers the slot,
  * which stays advanced). The next slot is the earlier of the schedule's next slot and the next approved
- * reminder, and a debounced slot with a reminder already due is retried once the gap has passed, so a
- * reminder never waits for the following regular slot.
+ * reminder, and a debounced or in-flight slot with a reminder already due is retried once the gap has passed,
+ * so a reminder the racing brief did not list never waits for the following regular slot.
  *
  * Schedule: rate(5 minutes). Self-host twin: apps/workers/src/selfhost/briefScheduleReconcile.ts.
  */
@@ -65,19 +65,14 @@ async function withNextReminder(
   }
 }
 
-async function retryDebouncedReminders(
-  deps: BriefScheduleReconcileDeps,
-  userId: string,
-  now: Date,
-  next: Date
-): Promise<void> {
+async function retryRacedSlot(deps: BriefScheduleReconcileDeps, userId: string, now: Date, next: Date): Promise<void> {
   const retryAt = new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS);
   if (retryAt >= next) return;
   try {
     if ((await deps.reminders.findDueReminders(userId, now, 1)).length === 0) return;
     await deps.users.advanceNextBriefAt(userId, next, retryAt);
   } catch (err) {
-    logger.warn('[briefScheduleReconcile] failed to re-arm a debounced slot for a due reminder', { userId, err });
+    logger.warn('[briefScheduleReconcile] failed to re-arm a raced slot for a due reminder', { userId, err });
   }
 }
 
@@ -142,7 +137,9 @@ export async function runBriefScheduleReconcile(
     try {
       const outcome = await deps.startScheduledBrief(user.id);
       result[outcome]++;
-      if (outcome === 'debounced' && next) await retryDebouncedReminders(deps, user.id, now, next);
+      if ((outcome === 'debounced' || outcome === 'in_flight') && next) {
+        await retryRacedSlot(deps, user.id, now, next);
+      }
     } catch (err) {
       result.failed++;
       // Only release submission failures when non-delivery and cleanup are established.

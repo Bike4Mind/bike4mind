@@ -88,7 +88,9 @@ export const listBriefsContract = defineEndpoint({
   path: '/api/v1/briefs',
   operationId: 'listBriefs',
   summary: 'List briefs',
-  description: 'Lists your most recent briefs (up to 20), newest first. ' + JWT_ONLY_NOTE,
+  description:
+    'Lists your most recent briefs (up to 20), newest first. A brief composed from a dictated memo is not listed; read it by id. ' +
+    JWT_ONLY_NOTE,
   tags: ['AI'],
   auth: 'jwtOnly',
   responses: {
