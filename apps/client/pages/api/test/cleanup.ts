@@ -299,7 +299,7 @@ const handler = baseApi({ auth: false }).delete(
       childDeleted === 0
         ? 'Swept users but deleted no child rows - check cleanup filters against the schema field types'
         : undefined;
-    if (warning) console.warn(`[e2e cleanup] ${warning}`);
+    if (warning) req.logger.warn(warning);
 
     return res.json({
       success: true,

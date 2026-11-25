@@ -89,10 +89,6 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, requir
         $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
       });
 
-      console.log(
-        `[Admin] Starting Spider job for user ${userId} with ${totalNotebooks} notebooks${dryRun ? ' (DRY RUN)' : ''}`
-      );
-
       // Admin-gated is not credit-gated (#1852): the spider fans summarize/tag out across every
       // notebook this user owns, so an ungated run is the largest operational spend on the
       // platform. Skipped on a dry run, which returns the plan and never reaches the publishes
@@ -150,7 +146,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, requir
       // render its 422 and `insufficient_credits` tag rather than flattening both into the
       // generic 500 below, which would read to the caller as a bug.
       if (error instanceof HTTPError) throw error;
-      console.error('[Admin] Error starting Spider job:', error);
+      req.logger.error('Error starting Spider job', { error });
       return res.status(500).json({
         error: 'Failed to start Spider job',
         details: error instanceof Error ? error.message : 'Unknown error',

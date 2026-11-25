@@ -190,7 +190,7 @@ const handler = baseApi()
           updatedAt: new Date(),
         });
       } catch (error) {
-        console.error('Apply edit error:', error);
+        req.logger.error('Apply edit error', { error });
         // The storage gate and a missing owner already carry their own status code; rethrow them
         // instead of flattening every error to a 400.
         if (isStorageLimitError(error) || error instanceof HTTPError) throw error;

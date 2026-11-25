@@ -834,6 +834,13 @@ export default defineConfig([
     rules: { 'no-console': 'error' },
   },
 
+  // API routes log through req.logger (or a module Logger), same rationale as the server-utils block above.
+  {
+    files: ['apps/client/pages/api/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
   // #9627 — ban filesystem tree-walking in test files anywhere under apps/client/pages/**. Uses
   // no-restricted-syntax (a different rule id than no-restricted-imports), so the apps/client
   // Next.js block's import restrictions still apply to these files unchanged. See
