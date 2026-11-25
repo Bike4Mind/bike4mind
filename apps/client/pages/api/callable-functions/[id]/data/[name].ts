@@ -14,12 +14,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .get(perUserRateLimit('GET /api/callable-functions/[id]/data/[name]'), async (req, res) => {
     if (!req.user) throw new UnauthorizedError('Sign in to use callable functions.');
     await assertCallableFunctionsEnabled(req.user);
-    const { pin, bytes } = await readCallableFunctionData(req.user, param(req.query.id), param(req.query.name));
+    const { bytes } = await readCallableFunctionData(req.user, param(req.query.id), param(req.query.name));
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', 'attachment');
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Data-Sha256', pin.sha256);
     res.status(200).send(bytes);
   })
   .delete(perUserRateLimit('DELETE /api/callable-functions/[id]/data/[name]'), async (req, res) => {

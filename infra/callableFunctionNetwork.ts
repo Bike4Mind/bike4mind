@@ -328,6 +328,7 @@ export function callableFunctionDataBucketPolicy({
   endpointId?: string;
 }) {
   const erasers = eraserRoleArns.filter(Boolean);
+  // Erasers stay outside the read deny because a prefix delete lists the keys first (s3:ListBucket).
   const notDispatcher = {
     ArnNotEquals: { 'aws:PrincipalArn': erasers.length ? [dispatcherRoleArn, ...erasers] : dispatcherRoleArn },
   };

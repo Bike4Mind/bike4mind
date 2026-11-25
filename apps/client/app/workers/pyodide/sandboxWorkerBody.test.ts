@@ -126,22 +126,30 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     const posted: PyodideWorkerResponse[] = [];
     const install = vi.fn().mockResolvedValue(undefined);
     // A writable bit check on the parent directory stands in for Emscripten's permission check.
-    const fsFiles = new Map<string, { mode: number; data?: Uint8Array }>();
+    const fsFiles = new Map<string, { mode: number; data?: Uint8Array; dir?: boolean }>();
     const writable = (path: string) => ((fsFiles.get(path.slice(0, path.lastIndexOf('/')))?.mode ?? 0) & 0o200) !== 0;
     const FS = {
       analyzePath: (path: string) => ({ exists: fsFiles.has(path) }),
-      mkdir: (path: string) => void fsFiles.set(path, { mode: 0o755 }),
+      mkdir: (path: string) => void fsFiles.set(path, { mode: 0o755, dir: true }),
       readdir: (path: string) => [
         '.',
         '..',
-        ...[...fsFiles.keys()].filter(key => key.startsWith(`${path}/`)).map(key => key.slice(path.length + 1)),
+        ...[...fsFiles.keys()]
+          .filter(key => key.startsWith(`${path}/`))
+          .map(key => key.slice(path.length + 1))
+          .filter(name => !name.includes('/')),
       ],
+      stat: (path: string) => ({ mode: fsFiles.get(path)?.dir ? 0o040000 : 0o100000 }),
+      isDir: (mode: number) => (mode & 0o170000) === 0o040000,
       writeFile: (path: string, data: Uint8Array) => {
         if (!writable(path)) throw new Error('EACCES');
         fsFiles.set(path, { mode: 0o644, data });
       },
       chmod: (path: string, mode: number) => void (fsFiles.get(path)!.mode = mode),
-      unlink: (path: string) => void fsFiles.delete(path),
+      unlink: (path: string) => {
+        if (fsFiles.get(path)?.dir) throw new Error('EISDIR');
+        fsFiles.delete(path);
+      },
     };
     const pyodide = {
       FS,
@@ -372,6 +380,20 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     expect(() => pyodide.FS.writeFile('/data/new.csv', new Uint8Array(1))).toThrow('EACCES');
     await send({ ...call, nonce: 'd2' });
     expect([...fsFiles.keys()]).toEqual(['/data']);
+  });
+
+  it('skips a directory a guest made under /data and still runs the next call', async () => {
+    const { posted, send, fsFiles } = startWorker();
+    await send({ type: 'initialize' });
+    const call = { type: 'call' as const, code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 };
+    const bytes = new TextEncoder().encode('x,y\n1,2\n').buffer as ArrayBuffer;
+    await send({ ...call, nonce: 'd1', files: [{ name: 'points.csv', bytes }] });
+    fsFiles.set('/data/made', { mode: 0o755, dir: true });
+
+    await send({ ...call, nonce: 'd2', files: [{ name: 'points.csv', bytes }] });
+
+    expect(posted.at(-1)).toMatchObject({ type: 'call-result', result: { success: true } });
+    expect(fsFiles.get('/data/points.csv')?.mode).toBe(0o444);
   });
 
   it('reports a runtime failure during a call as a failed call-result', async () => {

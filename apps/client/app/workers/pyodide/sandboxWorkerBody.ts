@@ -46,6 +46,8 @@ export function pyodideSandboxWorkerBody(): void {
       analyzePath: (path: string) => { exists: boolean };
       mkdir: (path: string) => void;
       readdir: (path: string) => string[];
+      stat: (path: string) => { mode: number };
+      isDir: (mode: number) => boolean;
       writeFile: (path: string, data: Uint8Array) => void;
       chmod: (path: string, mode: number) => void;
       unlink: (path: string) => void;
@@ -340,6 +342,7 @@ _result
         fs.chmod('/data', 0o755);
         for (const entry of fs.readdir('/data')) {
           if (entry === '.' || entry === '..') continue;
+          if (fs.isDir(fs.stat(`/data/${entry}`).mode)) continue;
           fs.chmod(`/data/${entry}`, 0o644);
           fs.unlink(`/data/${entry}`);
         }
