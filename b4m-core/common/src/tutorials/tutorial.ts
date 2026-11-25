@@ -34,7 +34,7 @@ export interface TutorialStep {
   id: string;
   type: string;
   body: string;
-  /** The body once the step's action is done and it waits for the user's Next. */
+  /** The body once the step's action is done and it waits for the user's Next, or a shorter one a step swaps in. */
   doneBody?: string;
   title?: string;
   /** The `data-testid` the coach card points at; absent means the card floats unanchored. */
