@@ -23,7 +23,8 @@ export interface ErrorInfo {
  * try {
  *   await octokit.issues.create(...);
  * } catch (error) {
- *   const { message } = getErrorInfo(error);
+ *   const { message, status } = getErrorInfo(error);
+ *   if (status === 404) return createCustomErrorResponse(`Not found: ${message}`);
  *   log.error('failed', { toolName: TOOL_NAME, ...errorLogFields(error) });
  *   return createErrorResponse(error);
  * }
@@ -66,7 +67,9 @@ export function getErrorInfo(error: unknown): ErrorInfo {
  * Convenience function when only the message is needed.
  *
  * @example
+ * const message = getErrorMessage(error);
  * log.error('failed', { toolName: TOOL_NAME, ...errorLogFields(error) });
+ * return createCustomErrorResponse(`Failed: ${message}`);
  */
 export function getErrorMessage(error: unknown): string {
   return getErrorInfo(error).message;
