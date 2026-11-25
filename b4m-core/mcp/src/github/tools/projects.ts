@@ -463,7 +463,7 @@ export function registerProjectTools(server: McpServer) {
             log.error('field update failed', {
               toolName: TOOL_UPDATE_PROJECT_ITEM_FIELDS,
               fieldId: update.field_id,
-              detail: errorMsg,
+              ...errorLogFields(fieldError),
             });
             results.push({ field_id: update.field_id, success: false, error: errorMsg });
           }

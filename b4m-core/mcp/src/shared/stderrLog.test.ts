@@ -71,17 +71,22 @@ describe('stderrLog', () => {
 
   it('does not throw on unserializable fields and still writes one parseable line', () => {
     const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    const circular: Record<string, unknown> = {};
-    circular.self = circular;
+    const throwing = {
+      get boom(): string {
+        throw new Error('x');
+      },
+    };
 
     expect(() => stderrLog('error', 'x', 'bigint', { n: 1n })).not.toThrow();
-    expect(() => stderrLog('error', 'x', 'circular', { c: circular })).not.toThrow();
+    expect(() => stderrLog('error', 'x', 'throwing', throwing)).not.toThrow();
 
     expect(write).toHaveBeenCalledTimes(2);
-    for (const [chunk] of write.mock.calls) {
+    const lines = write.mock.calls.map(([chunk]) => {
       const text = chunk as string;
       expect(text.trimEnd().includes('\n')).toBe(false);
-      expect(JSON.parse(text)).toMatchObject({ scope: 'x' });
-    }
+      return JSON.parse(text);
+    });
+    expect(lines[0]).toMatchObject({ scope: 'x', n: '1' });
+    expect(lines[1]).toMatchObject({ scope: 'x', logError: 'unserializable fields' });
   });
 });

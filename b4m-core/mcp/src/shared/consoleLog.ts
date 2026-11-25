@@ -9,8 +9,8 @@ function emit(level: 'warn' | 'error', scope: string, message: string, fields?: 
 
 /**
  * Redacting logger for code that runs inside a host process (the CLI's Ink TUI, desktop main, servers),
- * as opposed to a stdio server. Goes through `console` so the host's patching and redaction apply.
- * debug/info are not used by host-side callers and map to warn-free no-ops.
+ * as opposed to a stdio server. Redaction happens here in `emit`; writing through `console` lets the
+ * host's console patching apply. debug/info are no-ops: host-side callers do not use them.
  */
 export function createConsoleLogger(scope: string): StderrLogger {
   return {

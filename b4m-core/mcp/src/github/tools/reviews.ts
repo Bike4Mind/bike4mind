@@ -239,7 +239,7 @@ export function registerReviewTools(server: McpServer) {
           currentHeadSha = pr.data.head.sha;
         } catch (error) {
           prFetchError = getErrorMessage(error);
-          log.warn('could not fetch PR for preview', { toolName: TOOL_CREATE_REVIEW, detail: prFetchError });
+          log.warn('could not fetch PR for preview', { toolName: TOOL_CREATE_REVIEW, ...errorLogFields(error) });
         }
 
         const previewData: Record<string, unknown> = {
