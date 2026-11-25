@@ -950,3 +950,14 @@ export function RailStudioIcon() {
     </Glyph>
   );
 }
+
+/** Stacked frames: everything made, kept. */
+export function RailLibraryIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <rect x="2.5" y="5" width="9" height="8.5" rx="1.5" />
+      <path d="M5 2.5h7a1.5 1.5 0 0 1 1.5 1.5v7" />
+      <path d="m2.5 11.5 2.5-2.5 2 2 1.5-1.5 3 3" />
+    </Glyph>
+  );
+}

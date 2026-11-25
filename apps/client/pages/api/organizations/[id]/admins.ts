@@ -18,7 +18,7 @@ const handler = baseApi().put(
     const organizationId = req.query.id;
     if (!organizationId) throw new BadRequestError('Organization id is required');
 
-    // ZodError propagates to the central errorHandler (422 via fromZodError). No hand-rolled 400.
+    // ZodError propagates to the central errorHandler (422 via formatZodError). No hand-rolled 400.
     const parsed = bodySchema.parse(req.body);
     const adminUserIds = [...new Set(parsed.adminUserIds)];
 

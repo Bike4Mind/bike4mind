@@ -149,7 +149,7 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
         limit,
       });
     } catch (error) {
-      console.error('Error fetching model logs:', error);
+      req.logger.error('Error fetching model logs', { error });
       throw error; // Let the error handler middleware handle it
     }
   })

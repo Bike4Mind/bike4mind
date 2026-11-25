@@ -217,7 +217,6 @@ describe('DELETE /api/sessions/bulk', () => {
     mockDeleteSession
       .mockRejectedValueOnce(new Error('ConcurrencyConflictError'))
       .mockResolvedValueOnce({ id: 'other-session' });
-    vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const { req, res } = fire(['s1', 's2']);
     await handler(req, res);
@@ -238,7 +237,6 @@ describe('DELETE /api/sessions/bulk', () => {
       .mockResolvedValueOnce({ id: 'other-session' })
       .mockRejectedValueOnce(new Error('ConcurrencyConflictError'))
       .mockResolvedValueOnce({ id: 'other-session' });
-    vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const { req, res } = fire(['s1', 's2', 's3']);
     await handler(req, res);

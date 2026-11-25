@@ -1,19 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { McpServerInput, McpServerProvenance, McpTransport } from '@shared/mcp';
+import type { SecretCipher } from '../../../host/ports';
 import { resealed } from '../../secrets/reseal';
-
-/**
- * The slice of Electron's `safeStorage` this module needs, narrowed to a port for the same
- * reasons as auth/tokenVault.ts: testable without an Electron app, and the "only after the
- * app ready event" rule stays the caller's problem rather than an import-time landmine.
- */
-export interface SecretCipher {
-  isEncryptionAvailable(): boolean;
-  encryptString(plainText: string): Buffer;
-  decryptString(encrypted: Buffer): string;
-  /** True for a blob in an older format that the store should re-save (see secrets/appSecretCipher.ts). */
-  needsReencrypt?(encrypted: Buffer): boolean;
-}
 
 export interface StoreFile {
   read(): Promise<string | null>;

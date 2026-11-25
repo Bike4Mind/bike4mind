@@ -233,7 +233,7 @@ const handler = adminApi({
       },
     });
   } catch (error) {
-    console.error('Error fetching tool definitions:', error);
+    req.logger.error('Error fetching tool definitions', { error });
     return res.status(500).json({ error: 'Failed to fetch tool definitions' });
   }
 });

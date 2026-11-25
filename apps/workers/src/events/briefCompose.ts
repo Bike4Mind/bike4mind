@@ -1,6 +1,7 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { loadPendingBriefEmails } from './loadPendingBriefEmails';
 import { loadPendingBriefDelegations } from './loadPendingBriefDelegations';
+import { loadDueBriefObligations, toBriefObligation } from './loadDueBriefObligations';
 import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   agentExecutionRepository,
@@ -41,7 +42,8 @@ import { assembleFollowUpBrief, buildFollowUpPrompt } from './briefCompose.follo
  * row and publishes the event, as does the schedule reconciler), stores it and pushes `brief_ready`.
  *
  * Composition is one pass of the platform's operations model over the user's recent agent runs, the
- * approvals and questions still waiting on them and counts of their triaged email and delegated items; there is no tool loop. Failures settle the row as `failed` so a
+ * approvals and questions still waiting on them, counts of their triaged email and delegated items and
+ * of their confirmed bills coming due; there is no tool loop. Failures settle the row as `failed` so a
  * polling client stops waiting, and are never rethrown: a retry cannot fix a refused balance or a
  * malformed reply, and the user can simply compose again.
  */
@@ -300,6 +302,7 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
   const delegations = await loadPendingBriefDelegations(brief.userId, brief.periodEnd, now);
   // Capped at the section size so every loaded reminder fits ahead of the other happened items.
   const reminders = await assistantBriefRepository.findDueReminders(brief.userId, now, BRIEF_LIMITS.itemsPerSection);
+  const obligations = await loadDueBriefObligations(brief.userId, now);
 
   return {
     periodStart: brief.periodStart,
@@ -334,6 +337,7 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
       result: item.result,
     })),
     reminders: reminders.map(({ briefId, decisionId, text }) => ({ briefId, decisionId, text })),
+    obligations: obligations.map(item => toBriefObligation(item, now)),
   };
 }
 

@@ -107,6 +107,8 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     // Document scanning UI, run by Google Play services, so the app ships no camera or edge-detection code.
     implementation(libs.mlkit.document.scanner)
+    // Unbundled: the model comes from Play services, so the APK does not carry it.
+    implementation(libs.mlkit.text.recognition)
 
     // Firebase pulls an old fragment; the activity-result permission launcher needs 1.3.0 or later (lint-enforced).
     implementation(libs.androidx.fragment)

@@ -43,9 +43,10 @@ function requiredFor(kind: BriefSourceRef['kind']) {
 // Every field of the wire item must be declared here: strict mode drops undeclared keys on write.
 const sourceSchema = new Schema(
   {
-    kind: { type: String, enum: ['email', 'delegation'], required: true },
+    kind: { type: String, enum: ['email', 'delegation', 'obligation'], required: true },
     emailId: { type: String, required: requiredFor('email') },
     delegationId: { type: String, required: requiredFor('delegation') },
+    obligationId: { type: String, required: requiredFor('obligation') },
   },
   { _id: false }
 );

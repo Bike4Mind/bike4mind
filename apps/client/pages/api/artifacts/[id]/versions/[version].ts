@@ -43,7 +43,7 @@ const handler = baseApi()
 
       if (!versionDoc) {
         // TEMPORARY FALLBACK: If version field is missing, try to find by index
-        console.warn(`Version ${versionNumber} not found by version field, trying by index`);
+        req.logger.warn('Version not found by version field, trying by index', { versionNumber });
 
         // Get all versions for this artifact and sort by creation date
         const allVersions = await artifactVersionRepository.findByArtifactId(artifactId as string);

@@ -69,7 +69,11 @@ const handler = baseApi()
             server.toolSchemas = tools;
             server.toolSchemasFetchedAt = fetchedAt;
           } catch (error) {
-            console.warn(`[MCP] Failed to populate toolSchemas for ${server.name}:`, error);
+            req.logger.warn('MCP tool schema population failed', {
+              serverId: server.id,
+              serverName: server.name,
+              error,
+            });
           }
         })
       );

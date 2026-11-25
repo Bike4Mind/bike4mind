@@ -91,6 +91,11 @@ const ALLOWED_CONTRACTS = new Set([
   // Listed because they declare ai:generate; their handlers refuse an exchange key (REFUSING_ROUTES).
   'createDelegation',
   'getDelegation',
+  // Same: declared with ai:generate, refused in the handlers (REFUSING_ROUTES).
+  'handOffObligation',
+  'listObligations',
+  'getObligation',
+  'updateObligation',
 ]);
 
 // Every endpoint the generated registry lists under ai:generate or me:read. The REFUSING_ROUTES are
@@ -118,6 +123,8 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/v1/image-models',
   'GET /api/v1/me',
   'GET /api/v1/models',
+  'GET|PATCH /api/v1/obligations/:id',
+  'GET|POST /api/v1/obligations',
   'GET /api/v1/music-generations/:id',
   'GET /api/v1/music-models',
   'GET /api/v1/quests/:id',
@@ -186,6 +193,8 @@ const REFUSING_ROUTES = [
   'users/[id]/index.ts',
   'v1/delegations/index.ts',
   'v1/delegations/[id].ts',
+  'v1/obligations/index.ts',
+  'v1/obligations/[id].ts',
   'v1/completion-runs/[runId]/evaluation.ts',
 ];
 

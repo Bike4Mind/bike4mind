@@ -20,6 +20,8 @@ export const HOST_ERROR_CODES = {
   sessionNotFound: -32004,
   capabilityUnavailable: -32005,
   accountMismatch: -32006,
+  pathUnavailable: -32007,
+  processNotFound: -32008,
 } as const;
 
 export const hostErrorSchema = z.object({

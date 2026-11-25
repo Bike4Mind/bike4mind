@@ -48,7 +48,7 @@ const handler = baseApi().get(
       durationMs,
       metadata: { recordCount: telemetryData.length, source: 'user_self_service' },
     }).catch(err => {
-      console.warn('[TelemetryAudit] Failed to log DSAR export:', err instanceof Error ? err.message : 'Unknown error');
+      req.logger.warn('Failed to log DSAR export', { error: err });
     });
 
     res.json({

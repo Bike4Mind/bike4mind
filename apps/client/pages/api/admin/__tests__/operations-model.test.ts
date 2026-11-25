@@ -50,6 +50,7 @@ const body = { modelId: 'gpt-4o', imageModelId: 'flux-pro', speechModelId: 'whis
 const put = async () => {
   const { req, res } = createMocks({ method: 'PUT', body });
   (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+  (req as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return { req, res };
 };

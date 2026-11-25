@@ -960,7 +960,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     const skipped = [...collected.oversized, ...collected.failed];
     if (skipped.length) {
       // No silent truncation - the download is missing bytes, so say which.
-      console.warn(`[publish] export ${artifact.publicId} dropped ${skipped.length} asset(s):`, skipped);
+      req.logger.warn('Publish export dropped assets', { publicId: artifact.publicId, skippedCount: skipped.length });
       res.setHeader('X-Publish-Dropped-Assets', String(skipped.length));
       res.setHeader('X-Publish-Dropped-Asset-Names', truncateHeaderList(skipped, 1024));
     }
@@ -1059,10 +1059,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   if (droppedAssets.length) {
     // No silent truncation - surface skipped assets to operators and reviewers, both the
     // count and the names (truncated to keep the header well under typical 8KB limits).
-    console.warn(
-      `[publish] bundle ${artifact.publicId} dropped ${droppedAssets.length} oversized/failed asset(s):`,
-      droppedAssets
-    );
+    req.logger.warn('Publish bundle dropped assets', {
+      publicId: artifact.publicId,
+      droppedCount: droppedAssets.length,
+    });
     res.setHeader('X-Publish-Dropped-Assets', String(droppedAssets.length));
     res.setHeader('X-Publish-Dropped-Asset-Names', truncateHeaderList(droppedAssets, 1024));
   }

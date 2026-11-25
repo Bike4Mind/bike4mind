@@ -1,14 +1,13 @@
 // BedrockNews credits a solved Headword rung to a Bike4Mind user. Key-only; amounts, caps and
 // idempotency live in server/partners/bedrocknewsPuzzleReward.ts.
 
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, formatZodError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { buildErrorBody } from '@server/middlewares/errorHandler';
 import { isCalendarDate, isWithinPuzzleWindow, PUZZLE_DATE_PATTERN } from '@server/partners/bedrocknewsPuzzleDate';
 import { grantPuzzleReward } from '@server/partners/bedrocknewsPuzzleReward';
-import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 
 const bodySchema = z.object({
@@ -41,7 +40,7 @@ const handler = baseApi({
 
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json(failureBody(fromZodError(parsed.error).message, 'INVALID', req.requestId));
+    return res.status(400).json(failureBody(formatZodError(parsed.error), 'INVALID', req.requestId));
   }
   const { userId, puzzleDate, tier, hard } = parsed.data;
   if (!isWithinPuzzleWindow(puzzleDate)) {

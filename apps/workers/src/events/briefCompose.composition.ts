@@ -63,6 +63,22 @@ export type BriefReminder = {
   text: string;
 };
 
+/**
+ * Obligations repeat in every brief until due, so they get at most half of `happened` and cannot crowd
+ * triaged emails and delegations out of it for the whole lead window.
+ */
+export const BRIEF_OBLIGATION_LIMIT = Math.floor(BRIEF_LIMITS.itemsPerSection / 2);
+
+export type BriefObligation = {
+  obligationId: string;
+  payee: string | null;
+  amount: number | null;
+  currency: string | null;
+  /** `YYYY-MM-DD`. */
+  dueDate: string;
+  summary: string;
+};
+
 export type BriefActivity = {
   periodStart: Date;
   periodEnd: Date;
@@ -72,6 +88,7 @@ export type BriefActivity = {
   emails: BriefEmail[];
   delegations: BriefDelegation[];
   reminders: BriefReminder[];
+  obligations: BriefObligation[];
 };
 
 export type ComposedBrief = {
@@ -104,7 +121,8 @@ export const hasModelActivity = (activity: BriefActivity): boolean =>
   activity.approvals.length > 0 ||
   activity.questions.length > 0 ||
   activity.emails.length > 0 ||
-  activity.delegations.length > 0;
+  activity.delegations.length > 0 ||
+  activity.obligations.length > 0;
 
 /** What the brief says when nothing happened; no model call is made for it. */
 export const emptyBrief = (): ComposedBrief => ({
@@ -193,8 +211,9 @@ export function buildBriefPrompt(activity: BriefActivity, instructions: readonly
     `Questions your agents asked the user and are waiting on: ${JSON.stringify(questions)}`,
     `Emails triaged for the user (counts only): ${JSON.stringify(emailCounts)}`,
     `Items the user delegated to you (counts only): ${JSON.stringify(delegationCounts)}`,
-    'The triaged emails and delegated items are listed in the brief separately: mention them in the headline if',
-    'notable, never in happened, handled or decisions.',
+    `Confirmed bills and payments coming due soon (count only): ${activity.obligations.length}`,
+    'The triaged emails, delegated items and bills coming due are listed in the brief separately: mention',
+    'them in the headline if notable, never in happened, handled or decisions.',
     '',
     'Reply with ONLY a JSON object, no code fence, in exactly this shape:',
     '{"headline": string (one sentence), "happened": string[] (notable events, at most 6),',
@@ -247,6 +266,27 @@ const delegationItem = (item: BriefDelegation): UnnumberedItem => ({
   text: item.result ?? `${DELEGATION_LEADS[item.status]}: "${item.intent}"`,
   source: { kind: 'delegation', delegationId: item.delegationId },
 });
+
+const formatAmount = (amount: number, currency: string): string => {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
+  } catch {
+    return `${amount} ${currency}`;
+  }
+};
+
+const formatDueDay = (day: string): string =>
+  new Date(`${day}T00:00:00.000Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+/** Written from the confirmed record, never by the model; null fields fall back to the extracted summary. */
+const obligationItem = (item: BriefObligation): UnnumberedItem => {
+  const amount = item.amount !== null && item.currency ? formatAmount(item.amount, item.currency) : null;
+  const what = item.payee && amount ? `${item.payee} ${amount}` : item.payee || amount || item.summary;
+  return {
+    text: `Due ${formatDueDay(item.dueDate)}: ${what || 'a payment'}`,
+    source: { kind: 'obligation', obligationId: item.obligationId },
+  };
+};
 
 /**
  * Validates the model reply and joins it to the real activity. Throws on a malformed reply so the
@@ -303,6 +343,7 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
       [
         // Reminders lead: the loader caps them at the section size, so the model can never push one out.
         ...reminderItems(activity),
+        ...activity.obligations.slice(0, BRIEF_OBLIGATION_LIMIT).map(obligationItem),
         ...emailsOfKind(activity, 'fyi').map(emailItem),
         ...delegationsOf(activity, ['pending', 'failed']).map(delegationItem),
       ],
