@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
   approve: vi.fn(),
   remove: vi.fn(),
   createFile: vi.fn(),
+  runExample: vi.fn(),
+  editExample: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
@@ -32,6 +34,9 @@ vi.mock('@client/app/hooks/data/skillTemplate', () => ({
   useGenerateSkillTemplateImage: () => ({ mutateAsync: h.generate, isPending: false }),
   useApproveSkillTemplateImage: () => ({ mutateAsync: h.approve, isPending: false }),
   useRemoveSkillTemplateImage: () => ({ mutateAsync: h.remove, isPending: false }),
+  useRunSkillTemplateExample: () => ({ mutateAsync: h.runExample, isPending: false }),
+  useEditSkillTemplateExample: () => ({ mutateAsync: h.editExample, isPending: false }),
+  useSkillTemplatePreviewHtml: () => ({ data: '<html><body>Saved page</body></html>', isLoading: false }),
 }));
 vi.mock('@client/app/hooks/data/fabFileMutations', () => ({ useCreateFabFileWithUpload: () => h.createFile }));
 
@@ -244,7 +249,7 @@ describe('TemplateEditor publishing', () => {
     );
     expect(byId('template-editor-publish-btn')).toBeDisabled();
     expect(byId('template-editor-publish-reason')).toHaveTextContent('Approve the preview image first.');
-    expect(byId('template-preview-image')).toHaveAttribute('src', 'https://img.example/f1.jpg');
+    expect(byId('template-image-current')).toHaveAttribute('src', 'https://img.example/f1.jpg');
   });
 
   it('holds Publish while there are unsaved changes', () => {
@@ -460,5 +465,25 @@ describe('TemplateEditor stale responses', () => {
     });
     expect(byId('template-editor-headline-input')).toHaveValue('B headline');
     expect(byId('template-editor-slug-input')).toHaveValue('b-slug');
+  });
+});
+
+describe('TemplateEditor live preview', () => {
+  it('shows the saved page in a sandboxed frame once the template exists, with a hint while edits are unsaved', () => {
+    renderEditor(viewOf());
+    const frame = byId('template-live-preview-frame');
+    expect(frame).toHaveAttribute('srcdoc', '<html><body>Saved page</body></html>');
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+    expect(screen.queryByTestId('template-preview')).toBeNull();
+    expect(screen.queryByTestId('template-live-preview-unsaved')).toBeNull();
+
+    fireEvent.change(byId('template-editor-headline-input'), { target: { value: 'Edited headline' } });
+    expect(byId('template-live-preview-unsaved')).toBeInTheDocument();
+  });
+
+  it('includes the example run section', () => {
+    renderEditor(viewOf());
+    expect(byId('template-editor-example')).toBeInTheDocument();
+    expect(byId('template-example-section')).toBeInTheDocument();
   });
 });

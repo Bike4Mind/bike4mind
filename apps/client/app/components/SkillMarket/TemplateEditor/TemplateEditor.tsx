@@ -53,6 +53,8 @@ import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { FindingsList, formatCount } from '@client/app/components/SkillMarket/parts';
 import TemplatePreview from './TemplatePreview';
 import TemplateImageSection from './TemplateImageSection';
+import TemplateExampleSection from './TemplateExampleSection';
+import TemplateLivePreview from './TemplateLivePreview';
 import {
   EMPTY_DRAFT,
   formFromDraft,
@@ -503,6 +505,10 @@ const TemplateEditor: FC<{ listingId: string }> = ({ listingId }) => {
               </Section>
             )}
 
+            <Section title="Example run" testId="template-editor-example">
+              <TemplateExampleSection listingId={listingId} view={view} />
+            </Section>
+
             <Section title="Preview image" testId="template-editor-image">
               <TemplateImageSection listingId={listingId} view={view} />
             </Section>
@@ -595,13 +601,17 @@ const TemplateEditor: FC<{ listingId: string }> = ({ listingId }) => {
           </Stack>
 
           <Box sx={{ position: { md: 'sticky' }, top: { md: 0 }, alignSelf: 'start' }}>
-            <TemplatePreview
-              skillName={view.listing.name}
-              headline={form?.headline ?? ''}
-              inputs={form?.inputs ?? []}
-              examplePrompt={form?.examplePrompt ?? ''}
-              imageUrl={view.previewImageUrl}
-            />
+            {template ? (
+              <TemplateLivePreview listingId={listingId} template={template} unsavedChanges={dirty} />
+            ) : (
+              <TemplatePreview
+                skillName={view.listing.name}
+                headline={form?.headline ?? ''}
+                inputs={form?.inputs ?? []}
+                examplePrompt={form?.examplePrompt ?? ''}
+                imageUrl={view.previewImageUrl}
+              />
+            )}
           </Box>
         </Box>
       </Stack>

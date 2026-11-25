@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get } }));
 
-import { waitForGeneratedImage } from './skillTemplate';
+import type { SkillTemplateEditorView } from '@bike4mind/common';
+import { skillTemplatePollMs, waitForGeneratedImage } from './skillTemplate';
 
 const quest = (data: Record<string, unknown>) => ({ data });
 
@@ -40,5 +41,26 @@ describe('waitForGeneratedImage', () => {
     h.get.mockResolvedValue(quest({ images: [] }));
     await expect(waitForGeneratedImage('q1', { intervalMs: 0, maxPolls: 3 })).rejects.toThrow('taking too long');
     expect(h.get).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('skillTemplatePollMs', () => {
+  const withExample = (status: string) =>
+    ({ template: { example: { status } }, previewImageStatus: null }) as unknown as SkillTemplateEditorView;
+
+  it('polls while the example runs and stops once it is ready or failed', () => {
+    expect(skillTemplatePollMs(withExample('running'), 1)).toBe(3000);
+    expect(skillTemplatePollMs(withExample('ready'), 2)).toBe(false);
+    expect(skillTemplatePollMs(withExample('failed'), 2)).toBe(false);
+  });
+
+  it('gives up on a run that never settles', () => {
+    expect(skillTemplatePollMs(withExample('running'), 300)).toBe(false);
+  });
+
+  it('still polls a pending preview image', () => {
+    const view = { template: null, previewImageStatus: 'pending' } as unknown as SkillTemplateEditorView;
+    expect(skillTemplatePollMs(view, 1)).toBe(3000);
+    expect(skillTemplatePollMs(undefined, 1)).toBe(false);
   });
 });

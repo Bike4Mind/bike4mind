@@ -1,9 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type {
   ISkillListingTemplate,
   SkillTemplateDraft,
   SkillTemplateEditorView,
+  SkillTemplateExampleRun,
+  SkillTemplateExampleUpdate,
   SkillTemplateUpdate,
 } from '@bike4mind/common';
 
@@ -15,19 +17,26 @@ const MAX_IMAGE_STATUS_POLLS = 100;
 const GENERATION_POLL_MS = 3000;
 const MAX_GENERATION_POLLS = 100;
 const MAX_CONSECUTIVE_POLL_ERRORS = 3;
+const EXAMPLE_RUN_POLL_MS = 3000;
+// About as long as the server waits before it treats a run as lost (EXAMPLE_RUN_STALE_MS).
+const MAX_EXAMPLE_RUN_POLLS = 300;
 
 type TemplateResponse = { template: ISkillListingTemplate };
 
 export const skillTemplateKey = (listingId: string) => ['skill-market', 'template', listingId] as const;
 
+/** Poll while an example run or an image check is in flight; stop once it settles. */
+export function skillTemplatePollMs(data: SkillTemplateEditorView | undefined, polls: number): number | false {
+  if (data?.template?.example?.status === 'running' && polls < MAX_EXAMPLE_RUN_POLLS) return EXAMPLE_RUN_POLL_MS;
+  if (data?.previewImageStatus === 'pending' && polls < MAX_IMAGE_STATUS_POLLS) return IMAGE_STATUS_POLL_MS;
+  return false;
+}
+
 export const useSkillTemplate = (listingId: string) =>
   useQuery({
     queryKey: skillTemplateKey(listingId),
     queryFn: async () => (await api.get<SkillTemplateEditorView>(`/api/skills/market/${listingId}/template`)).data,
-    refetchInterval: query =>
-      query.state.data?.previewImageStatus === 'pending' && query.state.dataUpdateCount < MAX_IMAGE_STATUS_POLLS
-        ? IMAGE_STATUS_POLL_MS
-        : false,
+    refetchInterval: query => skillTemplatePollMs(query.state.data, query.state.dataUpdateCount),
     retry: false,
   });
 
@@ -135,6 +144,38 @@ export const useRemoveSkillTemplateImage = (listingId: string) =>
   useTemplateMutation(async () => {
     const url = `/api/skills/market/${listingId}/template/image`;
     return (await api.delete<TemplateResponse>(url)).data;
+  });
+
+/** Starts an example run on the platform's keys; the template comes back `running` (202). */
+export const useRunSkillTemplateExample = (listingId: string) =>
+  useTemplateMutation(async (body: SkillTemplateExampleRun) => {
+    const url = `/api/skills/market/${listingId}/template/example`;
+    return (await api.post<TemplateResponse>(url, body)).data;
+  });
+
+/** The demo switch, a reply trim or the sample file. */
+export const useEditSkillTemplateExample = (listingId: string) =>
+  useTemplateMutation(async (body: SkillTemplateExampleUpdate) => {
+    const url = `/api/skills/market/${listingId}/template/example`;
+    return (await api.put<TemplateResponse>(url, body)).data;
+  });
+
+/**
+ * The author's page as the public page draws it. Fetched with the API's token, since an iframe `src`
+ * cannot send it; `stamp` changes whenever the stored template does, which refetches it.
+ */
+export const useSkillTemplatePreviewHtml = (listingId: string, stamp: string, enabled: boolean) =>
+  useQuery({
+    queryKey: [...skillTemplateKey(listingId), 'preview', stamp],
+    queryFn: async () =>
+      (
+        await api.get<string>(`/api/skills/market/${encodeURIComponent(listingId)}/template/preview`, {
+          responseType: 'text',
+        })
+      ).data,
+    enabled,
+    placeholderData: keepPreviousData,
+    retry: false,
   });
 
 export type SkillTemplateTryResult = { skillName: string; examplePrompt: string; imported: boolean };
