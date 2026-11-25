@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * The quest export queue carries one live job, the organization feedback summary. The v4 plan
  * export that used to share it is retired: its `questmasterplans` collection is dropped, so a
  * message of that shape must be acknowledged and discarded without reading a plan or chat history.
- * This drives the REAL `dispatch`; the database module is replaced with a proxy that throws on any
- * access, so a reader coming back fails here.
+ * This drives the REAL `dispatch`. The worker imports no database model; the three models the old
+ * export read are replaced with a proxy that throws, so re-adding one of those reads fails here.
  */
 const h = vi.hoisted(() => ({
   runOrgFeedbackSummary: vi.fn<
@@ -89,7 +89,8 @@ describe('questExport queue routing', () => {
     };
 
     const remaining = vi.fn(() => 120000);
-    await dispatch(event as never, { getRemainingTimeInMillis: remaining } as never, makeLogger() as never);
+    const logger = makeLogger();
+    await dispatch(event as never, { getRemainingTimeInMillis: remaining } as never, logger as never);
 
     expect(h.runOrgFeedbackSummary).toHaveBeenCalledWith(
       expect.objectContaining({ summaryJobId: 'sum-1' }),
@@ -97,6 +98,8 @@ describe('questExport queue routing', () => {
       expect.any(Function)
     );
     expect(h.databaseAccess).not.toHaveBeenCalled();
+    // A summary is never also reported as a discarded plan export.
+    expect(logger.warn).not.toHaveBeenCalled();
 
     const checkBudget = h.runOrgFeedbackSummary.mock.calls[0][2];
     expect(() => checkBudget(120000)).not.toThrow();
@@ -137,6 +140,7 @@ describe('retired v4 plan export messages', () => {
   it('still rejects a message that is neither a summary nor a retired plan export', async () => {
     await expect(run({ jobType: 'orgFeedbackSummary', summaryJobId: 'sum-1' })).rejects.toThrow();
     await expect(run({ planId: 'plan-1' })).rejects.toThrow();
+    await expect(run({ ...planExport, jobType: 'somethingElse' })).rejects.toThrow();
     expect(h.runOrgFeedbackSummary).not.toHaveBeenCalled();
   });
 });
