@@ -81,7 +81,7 @@ const schema = new Schema<IObligation>(
   { timestamps: true, versionKey: false, collection: 'Obligation' }
 );
 
-schema.index({ userId: 1, fileId: 1 }, { unique: true, partialFilterExpression: { fileId: { $type: 'string' } } });
+schema.index({ userId: 1, fileId: 1 }, { unique: true });
 schema.index({ userId: 1, status: 1, dueDate: 1 });
 schema.index({ userId: 1, _id: -1 });
 
