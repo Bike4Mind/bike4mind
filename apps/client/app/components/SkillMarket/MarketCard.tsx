@@ -62,7 +62,9 @@ const MarketCard: FC<{ listing: MarketListing }> = ({ listing }) => {
               by {listing.authorName || 'a Bike4Mind user'}
             </Typography>
           </Box>
-          {listing.visibility !== 'public' ? <VisibilityChip visibility={listing.visibility} /> : null}
+          {listing.visibility !== 'public' ? (
+            <VisibilityChip visibility={listing.visibility} spaceId={listing.spaceId} />
+          ) : null}
         </Stack>
 
         <Typography level="body-sm" sx={clamp(2)}>

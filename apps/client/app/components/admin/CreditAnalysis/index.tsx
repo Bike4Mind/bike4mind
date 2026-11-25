@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Stack, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import { MarginDashboard } from './components/MarginDashboard';
 import { UsageDashboard } from './components/UsageDashboard';
@@ -15,13 +15,19 @@ import { AdminPageHeader } from '../shared';
 import { ADMIN_REGION_GAP, adminTabStrip } from '../shared/adminStyles';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { CreditEconomy } from './components/CreditEconomy';
+import { creditTabSearchValue, parseCreditTab } from './creditTabSearch';
 
 export const CreditAnalyticsTab: React.FC = () => {
   const activeTab = useCreditAnalysisStore(state => state.activeTab);
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
   const search = useSearch({ strict: false });
   const navigate = useNavigate();
-  const selectedTab = search.creditView === 'economy' ? 'economy' : activeTab;
+  const linkedTab = parseCreditTab(search.creditTab);
+  const selectedTab = search.creditView === 'economy' ? 'economy' : (linkedTab ?? activeTab);
+
+  useEffect(() => {
+    if (linkedTab) setActiveTab(linkedTab);
+  }, [linkedTab, setActiveTab]);
 
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }}>
@@ -37,7 +43,11 @@ export const CreditAnalyticsTab: React.FC = () => {
           void navigate({
             to: '/admin',
             replace: true,
-            search: previous => ({ ...previous, creditView: value === 'economy' ? 'economy' : undefined }),
+            search: previous => ({
+              ...previous,
+              creditView: value === 'economy' ? 'economy' : undefined,
+              creditTab: creditTabSearchValue(value as CreditAnalysisTab),
+            }),
           });
         }}
         sx={{ minWidth: 0, gap: ADMIN_REGION_GAP }}

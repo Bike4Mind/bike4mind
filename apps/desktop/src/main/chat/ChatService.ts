@@ -66,6 +66,7 @@ import type {
   ChatSentRound,
   ChatSettledCharge,
   ChatSession,
+  ChatSessionMode,
   ChatSessionStatusEvent,
   ChatSessionSummary,
   RaiseRunBudgetResult,
@@ -94,6 +95,7 @@ import type {
   WorkspacePreparation,
   ContextNoticeKind,
   ChatChildReport,
+  EventCursor,
 } from '@shared/chat';
 import {
   awaitsWorktree,
@@ -122,7 +124,8 @@ import { carriedNotes, isTypedPrompt, regenerableReply } from '@shared/threadRew
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { requestGeneration, type GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
-import { applyLiveEvent, startReply } from '@shared/liveReply';
+import { applyLiveEvent, mergeDelta, startReply } from '@shared/liveReply';
+import { SessionEventLog, type EventsSinceResult } from './SessionEventLog';
 import { serverIdOfRuntime } from '@shared/modelServers';
 import { findSessionMentions, mentionTitle } from '@shared/sessionMention';
 import { NO_SKILLS, type SkillsScope, type SkillsState } from '@shared/skills';
@@ -205,6 +208,8 @@ import type { ComposerDraftStore } from './ComposerDraftStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { childReplyBlock, childReportDetails, cutReply, lastAssistantMessage } from './childReport';
+import { canExtendTurn, TurnClock } from './turnClock';
+import { DEFAULT_TURN_EXTENSIONS, parseTurnExtensions } from '@shared/turnExtensionSetting';
 import { sideChatOpening } from './sideChat';
 import { summarizeSession } from '@shared/agentOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
@@ -214,6 +219,7 @@ import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import {
   DEFAULT_COMPLETIONS_PATH,
+  payerOption,
   streamCompletion,
   supportsPromptCache,
   withCacheBreakpoints,
@@ -257,6 +263,8 @@ import { findStaleResults, historyRounds, sentHistory, toolResultContent } from 
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient, type MediaRun } from './media/MediaApiClient';
+import type { BillingPayer } from '@shared/account';
+import { currentBillingPayer } from '../account/billingPayer';
 import { type MediaStore, parseMediaUrl } from './media/MediaStore';
 import { fitToolImage, MAX_TOOL_IMAGE_INPUT_BYTES, sniffImageType } from './tools/toolImages';
 import type { VideoJobScheduler } from './media/VideoJobScheduler';
@@ -426,7 +434,16 @@ type TaskDecisionIndexLoad = {
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 type AuxiliaryPurpose = Extract<CompletionRunAttribution['purpose'], 'title' | 'compaction' | 'suggestion'>;
-type AuxiliaryRun = { session: ChatSession; run: CompletionRunAttribution; budgeted: boolean };
+type AuxiliaryRun = { session: ChatSession; run: CompletionRunAttribution; budgeted: boolean; payer: BillingPayer };
+
+/** A server run and the account it was minted for, which pays for every call attached to it. */
+type ServerRun = { runId: string; payer: BillingPayer };
+
+/** The server run a policy recorded, with the payer it was minted for (Personal when none was stored). */
+function recordedServerRun(policy: RootPolicy | undefined): ServerRun | undefined {
+  if (!policy?.serverRunId) return undefined;
+  return { runId: policy.serverRunId, payer: { organization_id: policy.serverRunOrganizationId ?? null } };
+}
 
 /** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
 const MID_TURN_NOTE =
@@ -733,6 +750,11 @@ export interface ChatServiceDeps {
    * to do at full size.
    */
   turnLimits?: Partial<TurnLimits>;
+  /**
+   * The Settings cap on automatic extensions of a productive turn that reached its budget; see
+   * @shared/turnExtensionSetting. Absent in tests, where a budget stop ends the turn as before.
+   */
+  turnExtensions?: () => Promise<number>;
   /** Diagnosis only: logs each round's phases. See createRoundProbe. */
   turnTiming?: boolean;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
@@ -746,7 +768,13 @@ export interface ChatServiceDeps {
   isDeviceLocal?(): boolean;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
   getEnvironmentUrl(): string;
+  /** Every event `emit` receives is already stamped with its `seq` from this log. */
   emit(event: ChatStreamEvent): void;
+  /**
+   * Shared with emitters outside the service (background processes, video jobs) so one session
+   * has one sequence. The service creates its own when absent.
+   */
+  eventLog?: SessionEventLog;
   loopChanged?(sessionId: string, state: LoopState | null): void;
   /**
    * A session's stored summary changed outside any reply, such as its title or worktree binding.
@@ -1192,7 +1220,10 @@ export class ChatService {
   /** Background commands that ended on their own, waiting to be told to their conversation. */
   private readonly wake?: BackgroundWake;
 
+  private readonly eventLog: SessionEventLog;
+
   constructor(private readonly deps: ChatServiceDeps) {
+    this.eventLog = deps.eventLog ?? new SessionEventLog();
     this.wake = deps.background
       ? new BackgroundWake(
           deps.background,
@@ -1483,10 +1514,12 @@ export class ChatService {
    * The catalog lookup is awaited rather than skipped: it is one cached round trip on a
    * deliberate click, and starting a thread on a model the server does not have means the
    * user's first message is the thing that discovers it.
+   *
+   * 'studio' starts the Studio place's own conversation; a Code session has createCodeSession.
    */
-  async createSession(): Promise<ChatSessionSummary> {
+  async createSession(mode: Exclude<ChatSessionMode, 'code'> = 'chat'): Promise<ChatSessionSummary> {
     const catalog = await this.listModels();
-    return this.deps.store.create(await this.startModel(catalog.models));
+    return this.deps.store.create(await this.startModel(catalog.models), mode === 'studio' ? { mode } : {});
   }
 
   /** The model a new conversation would start on, for a session the Claude importer writes. */
@@ -1867,6 +1900,8 @@ export class ChatService {
     // Folders the user clicked "Add folder" for in THIS conversation. A projectless Code session
     // takes these too: unlike the global grants, nobody shared them for some other conversation.
     const own = session.grantedDirectories ?? [];
+    // A Studio session runs nothing locally: no grant, global or its own, ever reaches its tools.
+    if (session.mode === 'studio') return { roots: [], listedRoots: [] };
     const project = await this.repairBareWorkingDirectory(session);
     if (!project) {
       const global = session.mode === 'code' ? [] : await this.deps.access.list();
@@ -2058,7 +2093,7 @@ export class ChatService {
    * Server run ids by local `rootRunId`, for a worker whose root no longer carries the policy (its
    * orchestrate flag expired on restart) and whose own copy predates the id.
    */
-  private serverRuns = new Map<string, string>();
+  private serverRuns = new Map<string, ServerRun>();
 
   /**
    * Mint the server's run id for an orchestration root and record it on the root's policy and on
@@ -2068,30 +2103,41 @@ export class ChatService {
     requesterId: string,
     policy: RootPolicy,
     scope: string | null
-  ): Promise<string | undefined> {
+  ): Promise<ServerRun | undefined> {
     const api = this.deps.getApiClient();
     if (!api || !this.deps.mintCompletionRun) return undefined;
+    // Read once: the run is bound to this payer for its whole life, whatever is selected later.
+    const payer = await currentBillingPayer();
     const run = await this.deps.mintCompletionRun(
-      policy.rootRunId,
+      // Per payer, so a mint shared by concurrent turns never pairs one payer with another's run.
+      `${policy.rootRunId}|${payer.organization_id ?? ''}`,
       api.getAxiosInstance(),
       policy.rootSessionId,
-      policy.budgetCredits
+      policy.budgetCredits,
+      payer
     );
     if (!run) return undefined;
-    this.serverRuns.set(policy.rootRunId, run.runId);
-    await this.recordServerRun(requesterId, policy, run.runId, scope);
-    return run.runId;
+    const minted: ServerRun = { runId: run.runId, payer };
+    this.serverRuns.set(policy.rootRunId, minted);
+    await this.recordServerRun(requesterId, policy, minted, scope);
+    return minted;
   }
 
   private async recordServerRun(
     requesterId: string,
     policy: RootPolicy,
-    serverRunId: string,
+    serverRun: ServerRun,
     scope: string | null
   ): Promise<void> {
     try {
       for (const id of new Set([policy.rootSessionId, requesterId])) {
-        await this.deps.store.setServerRunId(id, policy.rootRunId, serverRunId, scope);
+        await this.deps.store.setServerRunId(
+          id,
+          policy.rootRunId,
+          serverRun.runId,
+          scope,
+          serverRun.payer.organization_id
+        );
       }
     } catch (err) {
       this.deps.logger.warn(`CHAT: could not record run attribution: ${err instanceof Error ? err.message : err}`);
@@ -2122,7 +2168,7 @@ export class ChatService {
    */
   private async runAttribution(
     session: ChatSession
-  ): Promise<{ run: CompletionRunAttribution; budgeted: boolean } | undefined> {
+  ): Promise<{ run: CompletionRunAttribution; budgeted: boolean; payer: BillingPayer } | undefined> {
     const policy = session.orchestrationPolicy;
     if (!policy || !this.deps.mintCompletionRun) return undefined;
     const scope = this.deps.store.scopeKey();
@@ -2130,10 +2176,10 @@ export class ChatService {
     const budgeted = governing.budgetCredits !== undefined;
     if (governing.budgetPaused) throw new RunBudgetExhaustedError(runBudgetPausedMessage(governing.budgetCredits));
     const rootPolicy = governing === policy && policy.rootSessionId !== session.id ? undefined : governing;
-    const known = rootPolicy?.serverRunId ?? policy.serverRunId ?? this.serverRuns.get(policy.rootRunId);
-    if (known && known !== policy.serverRunId) await this.recordServerRun(session.id, policy, known, scope);
-    const serverRunId = known ?? (await this.mintServerRun(session.id, governing, scope));
-    if (!serverRunId) {
+    const known = recordedServerRun(rootPolicy) ?? recordedServerRun(policy) ?? this.serverRuns.get(policy.rootRunId);
+    if (known && known.runId !== policy.serverRunId) await this.recordServerRun(session.id, policy, known, scope);
+    const serverRun = known ?? (await this.mintServerRun(session.id, governing, scope));
+    if (!serverRun) {
       if (budgeted) {
         throw new Error(
           'Could not start the budgeted run with the server, so this turn was not sent. Try again in a minute.'
@@ -2145,8 +2191,9 @@ export class ChatService {
     const attemptId = session.workerTask?.attempts.at(-1)?.id;
     return {
       budgeted,
+      payer: serverRun.payer,
       run: {
-        runId: serverRunId,
+        runId: serverRun.runId,
         role: session.origin ? 'worker' : 'root',
         purpose: 'turn',
         // A worker session carries exactly one task, so its id names the task. Sent for a worker with
@@ -2161,9 +2208,9 @@ export class ChatService {
   /** Root runs whose usage is being read for the 80% warning, so overlapping rounds read once. */
   private budgetChecks = new Set<string>();
 
-  /** The server's run id for a policy: its own record, else the one minted this app run. */
-  private serverRunIdOf(policy: RootPolicy): string | undefined {
-    return policy.serverRunId ?? this.serverRuns.get(policy.rootRunId);
+  /** The server run for a policy: its own record, else the one minted this app run. */
+  private serverRunOf(policy: RootPolicy): ServerRun | undefined {
+    return recordedServerRun(policy) ?? this.serverRuns.get(policy.rootRunId);
   }
 
   /** The sessions sharing `rootRunId`: the root and every worker that copied its policy. */
@@ -2188,12 +2235,12 @@ export class ChatService {
     } catch (err) {
       this.deps.logger.warn(`CHAT: could not record the run pause: ${err instanceof Error ? err.message : err}`);
     }
-    const serverRunId = this.serverRunIdOf(policy);
+    const serverRun = this.serverRunOf(policy);
     const api = this.deps.getApiClient();
     // Already paused locally: the run's numbers are only detail for the message.
     const state =
-      serverRunId && api
-        ? await fetchRunBudget(api.getAxiosInstance(), serverRunId).catch((err: unknown) => {
+      serverRun && api
+        ? await fetchRunBudget(api.getAxiosInstance(), serverRun.runId, serverRun.payer).catch((err: unknown) => {
             this.deps.logger.warn(`CHAT: could not read the run budget: ${err instanceof Error ? err.message : err}`);
             return undefined;
           })
@@ -2209,14 +2256,14 @@ export class ChatService {
   private async checkRunBudget(session: ChatSession): Promise<void> {
     const policy = await this.governingPolicy(session);
     const budget = policy?.budgetCredits;
-    const serverRunId = policy ? this.serverRunIdOf(policy) : undefined;
+    const serverRun = policy ? this.serverRunOf(policy) : undefined;
     const api = this.deps.getApiClient();
-    if (!policy || budget === undefined || !serverRunId || !api || policy.budgetWarnedAt === budget) return;
+    if (!policy || budget === undefined || !serverRun || !api || policy.budgetWarnedAt === budget) return;
     const key = `${policy.rootRunId}:${budget}`;
     if (this.budgetChecks.has(key)) return;
     this.budgetChecks.add(key);
     try {
-      const state = await fetchRunBudget(api.getAxiosInstance(), serverRunId);
+      const state = await fetchRunBudget(api.getAxiosInstance(), serverRun.runId, serverRun.payer);
       const warning = state ? runBudgetWarning(state) : undefined;
       if (!warning) return;
       // Recorded only while the budget is still the one read: a raise during the read makes it stale.
@@ -2254,18 +2301,18 @@ export class ChatService {
     const session = await this.deps.store.get(sessionId);
     const policy = session ? await this.governingPolicy(session) : undefined;
     if (!session || !policy) return { ok: false, error: 'This conversation is not part of an orchestration run.' };
-    const serverRunId = this.serverRunIdOf(policy);
-    if (serverRunId && policy.budgetCredits === undefined) {
+    const serverRun = this.serverRunOf(policy);
+    if (serverRun && policy.budgetCredits === undefined) {
       return {
         ok: false,
         error: 'This run started without a budget. Turn Orchestrate off and on to start a budgeted run.',
       };
     }
-    if (serverRunId) {
+    if (serverRun) {
       const api = this.deps.getApiClient();
       if (!api) return { ok: false, error: 'Sign in to raise the budget.' };
       try {
-        await raiseRunBudget(api.getAxiosInstance(), serverRunId, budgetCredits);
+        await raiseRunBudget(api.getAxiosInstance(), serverRun.runId, budgetCredits, serverRun.payer);
       } catch (err) {
         if (err instanceof RunBudgetNotRaisedError) {
           return {
@@ -2288,7 +2335,7 @@ export class ChatService {
       // The 80% warning named the old budget.
       this.emit({ type: 'context-notice-cleared', sessionId: id, kind: 'run-budget' });
     }
-    if (!serverRunId) return { ok: true, resumed: 0 };
+    if (!serverRun) return { ok: true, resumed: 0 };
     let resumed = 0;
     for (const id of ids) {
       const member = await this.deps.store.get(id);
@@ -2307,11 +2354,7 @@ export class ChatService {
    * as history, and a refusal that still names the old shortfall reads as final (seen on Haiku and
    * Sonnet), so the result says the budget is now higher and the call should be made again.
    */
-  private async reofferBudgetRefusedTools(
-    sessionId: string,
-    reply: ChatMessage,
-    budgetCredits: number
-  ): Promise<void> {
+  private async reofferBudgetRefusedTools(sessionId: string, reply: ChatMessage, budgetCredits: number): Promise<void> {
     const refused = (call: ChatToolCall) => call.status === 'error' && call.error?.endsWith(RUN_BUDGET_REFUSAL_NOTE);
     if (!reply.toolCalls?.some(refused)) return;
     const note =
@@ -2329,7 +2372,7 @@ export class ChatService {
     const policy = session.orchestrationPolicy;
     if (!policy) return;
     this.deps.logger.warn(`CHAT: server refused run attribution for session ${session.id}; resending without it`);
-    if (this.serverRuns.get(policy.rootRunId) === refusedRunId) this.serverRuns.delete(policy.rootRunId);
+    if (this.serverRuns.get(policy.rootRunId)?.runId === refusedRunId) this.serverRuns.delete(policy.rootRunId);
     const scope = this.deps.store.scopeKey();
     try {
       for (const id of new Set([policy.rootSessionId, session.id])) {
@@ -2363,7 +2406,7 @@ export class ChatService {
     if (!api) {
       return { status: 'unavailable', runId: run.serverRunId, local, reason: 'Sign in to read the settled total.' };
     }
-    const read = await readCompletionRunUsage(api.getAxiosInstance(), run.serverRunId);
+    const read = await readCompletionRunUsage(api.getAxiosInstance(), run.serverRunId, run.payer);
     if (!read.ok) {
       this.deps.logger.warn(`CHAT: could not read the spend of run ${run.serverRunId}: ${read.reason}`);
       return { status: 'unavailable', runId: run.serverRunId, local, reason: read.reason };
@@ -2380,10 +2423,12 @@ export class ChatService {
   private currentRunOf(
     rootSessionId: string,
     summaries: readonly ChatSessionSummary[]
-  ): { rootRunId: string; serverRunId: string } | undefined {
+  ): { rootRunId: string; serverRunId: string; payer: BillingPayer } | undefined {
     const withId = (policy: RootPolicy | undefined) => {
-      const serverRunId = policy && (policy.serverRunId ?? this.serverRuns.get(policy.rootRunId));
-      return policy && serverRunId ? { rootRunId: policy.rootRunId, serverRunId } : undefined;
+      const serverRun = policy && this.serverRunOf(policy);
+      return policy && serverRun
+        ? { rootRunId: policy.rootRunId, serverRunId: serverRun.runId, payer: serverRun.payer }
+        : undefined;
     };
     const root = summaries.find(summary => summary.id === rootSessionId)?.orchestrationPolicy;
     if (root?.rootSessionId === rootSessionId) return withId(root);
@@ -2406,8 +2451,14 @@ export class ChatService {
   private async currentPolicyFor(parent: ChatSession, snapshot: RootPolicy): Promise<RootPolicy> {
     const stored = (await this.deps.store.get(parent.id).catch(() => null))?.orchestrationPolicy;
     const current = stored?.rootRunId === snapshot.rootRunId ? stored : snapshot;
-    const serverRunId = current.serverRunId ?? this.serverRuns.get(current.rootRunId);
-    return serverRunId ? { ...current, serverRunId } : current;
+    const serverRun = this.serverRunOf(current);
+    if (!serverRun) return current;
+    const { serverRunOrganizationId: _recorded, ...rest } = current;
+    return {
+      ...rest,
+      serverRunId: serverRun.runId,
+      ...(serverRun.payer.organization_id ? { serverRunOrganizationId: serverRun.payer.organization_id } : {}),
+    };
   }
 
   getRolePolicy(): Promise<RolePolicy> {
@@ -3025,7 +3076,9 @@ export class ChatService {
    */
   async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
     if (viewed) this.deps.activity?.viewed(sessionId);
-    let session = await this.deps.store.get(sessionId);
+    // Ordered behind any write already queued, so a reply that settles during the read is in it
+    // when the cursor below says the 'done' is reflected.
+    let session = await this.deps.store.getAfterWrites(sessionId);
     const task = session?.workerTask;
     if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
       const updated = await this.deps.store.updateWorkerTask(sessionId, current => {
@@ -3033,12 +3086,16 @@ export class ChatService {
         return { ...current, attentionViewed: true };
       });
       if (updated) this.emitSummary(updated);
-      session = await this.deps.store.get(sessionId);
+      session = await this.deps.store.getAfterWrites(sessionId);
     }
+    // From here to each return there is no await: the cursor must name exactly the events the
+    // live fold below reflects, or a client resuming from it would lose or repeat one.
+    if (!session) return null;
+    const eventCursor = this.eventLog.cursor(sessionId);
     const preparing = this.preparing.get(sessionId);
-    if (session && preparing) return { ...session, preparingWorkspace: { ...preparing } };
+    if (preparing) return { ...session, preparingWorkspace: { ...preparing }, eventCursor };
     const live = this.live.get(sessionId);
-    if (!session || !live) return session;
+    if (!live) return { ...session, eventCursor };
     let messages = session.messages;
     for (const event of live.events) {
       messages =
@@ -3046,7 +3103,20 @@ export class ChatService {
           ? startReply(messages, event.messageId)
           : messages.map(message => applyLiveEvent(message, event));
     }
-    return { ...session, messages, replyInFlight: { messageId: live.messageId, startedAt: live.startedAt } };
+    return {
+      ...session,
+      messages,
+      replyInFlight: { messageId: live.messageId, startedAt: live.startedAt },
+      eventCursor,
+    };
+  }
+
+  /**
+   * The events after `after` for a client resuming from a snapshot cursor, or 'snapshot-required'
+   * when they are no longer all held and the client must read the session again.
+   */
+  eventsSince(sessionId: string, after: EventCursor): EventsSinceResult {
+    return this.eventLog.since(sessionId, after);
   }
 
   private withLivePlan(summary: ChatSessionSummary): ChatSessionSummary {
@@ -3092,8 +3162,9 @@ export class ChatService {
   }
 
   private emit(event: ChatStreamEvent): void {
-    this.trackLive(event);
-    this.deps.emit(event);
+    const stamped = this.eventLog.append(event);
+    this.trackLive(stamped);
+    this.deps.emit(stamped);
   }
 
   private trackLive(event: ChatStreamEvent): void {
@@ -3117,7 +3188,8 @@ export class ChatService {
       // Merged, so a long reply is a handful of entries rather than one per token.
       const last = events[events.length - 1];
       if (last?.type === 'delta' && last.messageId === event.messageId) {
-        events[events.length - 1] = { ...last, text: last.text + event.text };
+        // The merged entry stands for every delta up to this one, so it takes the newer seq.
+        events[events.length - 1] = mergeDelta(last, event);
         return;
       }
     }
@@ -3345,6 +3417,7 @@ export class ChatService {
     // Once the serialized delete has finished, no later append can resurrect the session.
     this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
+    this.eventLog.forget(sessionId);
     this.waitingTasks.delete(sessionId);
     if (this.decisionIndex.delete(sessionId)) this.announceTaskDecisions();
     this.deps.queue?.forget(sessionId);
@@ -4436,6 +4509,18 @@ export class ChatService {
     }
   }
 
+  /** Read at each budget stop, so a Settings change applies to a turn already running. */
+  private async turnExtensionCap(): Promise<number> {
+    const read = this.deps.turnExtensions;
+    if (!read) return 0;
+    try {
+      return parseTurnExtensions(await read());
+    } catch (error) {
+      this.deps.logger.warn(`CHAT: could not read the turn extension setting: ${String(error)}`);
+      return DEFAULT_TURN_EXTENSIONS;
+    }
+  }
+
   /** Only reached with `turnTiming` on; see createRoundProbe. */
   private logRoundPhases(sessionId: string, model: string, round: number, phases: RoundPhases): void {
     const line = `CHAT_TIMING ${JSON.stringify({ model, round, ...phases })}`;
@@ -4467,7 +4552,12 @@ export class ChatService {
     let replyId = firstReplyId;
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
     const turnStartedAt = Date.now();
-    const deadline = turnStartedAt + limits.wallClockMs;
+    // Waits on the user and on background processes stop this clock; see TurnClock.
+    const clock = new TurnClock();
+    // Both moved on by each automatic extension; see the budget check after the tools run.
+    let deadline = turnStartedAt + limits.wallClockMs;
+    let roundCeiling = limits.rounds;
+    let extensions = 0;
     // Where the interrupted run had got to, so a consumer can report the resumed run's totals as
     // only what they add; see ChatStreamEvent's `start`.
     this.emit({
@@ -4530,6 +4620,8 @@ export class ChatService {
       // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
       const attribution = api && !localTurn ? await this.runAttribution(session) : undefined;
       let run = attribution?.run;
+      // Fixed for the turn, even once `run` is dropped: the server bound the run to this payer.
+      const runPayer = attribution?.payer;
       // Never resent unattributed, and the refused id is kept: minting a fresh one would restart
       // the budget at zero. See withRunFallback.
       const runBudgeted = attribution?.budgeted ?? false;
@@ -4549,7 +4641,7 @@ export class ChatService {
       let { roots, listedRoots, workingDirectory } = await this.resolveToolScope(session);
       // Paid tools draw on the same run as the turn's completions; see MediaApiClient.withRun.
       const mediaRun: MediaRun | undefined = attribution
-        ? { current: () => run, budgeted: runBudgeted, onRejected: dropRun }
+        ? { current: () => run, budgeted: runBudgeted, onRejected: dropRun, payer: attribution.payer }
         : undefined;
       const media = api ? this.buildMediaContext(api, mediaRun) : undefined;
       // Set by a paid tool the run's budget refused. The round still records every call's
@@ -4671,6 +4763,7 @@ export class ChatService {
               run: () => (run ? { ...run, purpose: 'explore' } : undefined),
               runBudgeted,
               onRunRejected: dropRun,
+              runPayer,
               onUsage: spent => {
                 usage = addUsage(usage, spent);
                 if (usage) this.emit({ type: 'usage', sessionId, messageId: replyId, usage });
@@ -4700,10 +4793,13 @@ export class ChatService {
       const videoModels = await videoModelsRead;
       // Cleared when the server-fixed context cannot hold Desktop's prompt with tools; see toolPromptOverflow.
       let roomForTools = true;
+      // The generation tools alone: toolsForRequest, the prompt below and the per-call check all follow this.
+      const studio = session.mode === 'studio';
       const offeredTools = (granted: readonly string[]) =>
         (localTurn && !modelOption) || !roomForTools
           ? []
           : toolsForRequest({
+              studio,
               modelId: session.model,
               roots: granted,
               media: !!media,
@@ -4835,27 +4931,30 @@ export class ChatService {
         // Replayed images exist only on this turn's wire, so next turn the cached prefix changes at this user message and the rest is re-written to the cache once (accepted).
         prependToPrompt(wire, await this.previousReplyImages(session, images));
       }
+      // A Studio session is offered the generation tools alone (see toolsForRequest), so the prompt
+      // describes only those: naming a family it cannot call teaches the model to keep trying it.
+      const offersMore = toolsSupported && !studio;
       const systemMessage = () =>
         buildSystemMessage(
-          toolsSupported ? listedRoots : [],
+          offersMore ? listedRoots : [],
           toolsSupported && !!media,
-          toolsSupported && !!host,
-          toolsSupported && !!explore,
-          toolsSupported && this.deps.mcp ? mcpServers : null,
+          offersMore && !!host,
+          offersMore && !!explore,
+          offersMore && this.deps.mcp ? mcpServers : null,
           session.project,
           this.deps.dependencies?.promptLines(session.id, { spawned: !!session.origin }) ?? [],
           projectContext,
-          toolsSupported && !!browser,
+          offersMore && !!browser,
           patchEdits,
-          toolsSupported && !!memory,
-          toolsSupported ? skillsSection : '',
-          toolsSupported && ask,
+          offersMore && !!memory,
+          offersMore ? skillsSection : '',
+          offersMore && ask,
           session.model,
-          toolsSupported && !!web,
-          toolsSupported && !!screen,
-          toolsSupported && !!simulator,
+          offersMore && !!web,
+          offersMore && !!screen,
+          offersMore && !!simulator,
           orchestrating,
-          toolsSupported
+          offersMore
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -4960,7 +5059,7 @@ export class ChatService {
       // Wire positions of the screenshot messages this turn added, oldest first; see pruneScreenshots.
       const screenshotTurns: number[] = [];
 
-      for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
+      for (let roundIndex = 0; roundIndex < roundCeiling; roundIndex++) {
         if (controller.signal.aborted) break;
         if (liveState && roundIndex > 0) {
           const next = toolState();
@@ -5126,7 +5225,8 @@ export class ChatService {
                           ...(maxTokens ? { maxTokens } : {}),
                         },
                         onCompletionEvent,
-                        controller.signal
+                        controller.signal,
+                        payerOption(runPayer)
                       ),
                     dropRun,
                     { budgeted: runBudgeted }
@@ -5261,10 +5361,12 @@ export class ChatService {
                 ask,
                 attended,
                 isLoopTurn,
+                clock,
                 title: session.title,
                 directories: directoryTurn,
                 budgetStop,
-                ...(deferred ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) } : {}),
+                // A Studio session checks too: a call to a tool it was never offered must not run.
+                ...(deferred || studio ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) } : {}),
                 permissions: {
                   project: session.project?.directory ?? null,
                   workingDirectory: session.project ? (workingDirectory ?? session.project.workingDirectory) : null,
@@ -5373,13 +5475,26 @@ export class ChatService {
         if (budgetStop.error) throw budgetStop.error;
         // Checked after a round rather than before one, so a turn is never cut between asking
         // for a tool and reporting what it returned.
-        if (Date.now() >= deadline) {
-          stopReason = 'turn_time_limit';
-          break;
-        }
-        if (roundIndex === limits.rounds - 1) {
-          stopReason = 'tool_turn_limit';
-          break;
+        const outOfTime = Date.now() - clock.idleMs() >= deadline;
+        const outOfRounds = roundIndex === roundCeiling - 1;
+        if (outOfTime || outOfRounds) {
+          // A turn still making progress is carried on rather than handed back for a human to type
+          // "continue"; a stalled one is not (the stall check above already ended a looping one).
+          const allowed = controller.signal.aborted ? 0 : await this.turnExtensionCap();
+          if (!canExtendTurn({ extensions, allowed, stalled })) {
+            stopReason = outOfTime ? 'turn_time_limit' : 'tool_turn_limit';
+            break;
+          }
+          extensions += 1;
+          deadline = Date.now() - clock.idleMs() + limits.wallClockMs;
+          roundCeiling = roundIndex + 1 + limits.rounds;
+          this.deps.logger.debug(`CHAT: turn budget extended automatically (${extensions} of ${allowed})`);
+          // Carried the same way as the plan nudge, so later turns replay it where this one sent it.
+          const extendNote = `[The turn budget was extended automatically (${extensions} of ${allowed}) because you are making progress. Carry on; finish the task or say where you got to.]`;
+          if (lastResult && typeof resultBase === 'string' && typeof lastResult.content === 'string') {
+            lastResult.content = `${lastResult.content}\n\n${extendNote}`;
+            round.sent.resultNote = lastResult.content.slice(resultBase.length);
+          }
         }
 
         // Only where another request is certain to follow, so nothing taken here waits on a turn
@@ -5980,6 +6095,8 @@ export class ChatService {
       attended: boolean;
       /** Captured when the reply starts; stopping its schedule does not change its origin. */
       isLoopTurn: boolean;
+      /** The turn's budget clock, stopped while a call waits on the user or a background process. */
+      clock?: TurnClock;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
@@ -6156,6 +6273,7 @@ export class ChatService {
           callId: call.id,
           background: this.deps.background,
           foreground: this.deps.foreground,
+          ...(scope.clock ? { pauseTurnClock: scope.clock.pause } : {}),
           ...(media ? { media } : {}),
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
@@ -6195,6 +6313,8 @@ export class ChatService {
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
         // while it is still waiting on the user, and nothing has run if they say no.
+        // A card waits on the user, which is not the agent working; see TurnClock.
+        const resumeClock = scope.clock?.pause();
         const gated = await this.awaitApproval(
           tool,
           call,
@@ -6205,7 +6325,7 @@ export class ChatService {
           looping,
           scope.directories,
           scope.permissions
-        );
+        ).finally(() => resumeClock?.());
         // Logged from the input the call settled with: an MCP config call's is masked by then.
         if (gated.approval) {
           // The mode the gate decided under, or - on a path no mode can answer - the one in force now.
@@ -6258,10 +6378,7 @@ export class ChatService {
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
           if (err instanceof RunBudgetExhaustedError && scope.budgetStop) scope.budgetStop.error ??= err;
           // The model reads this after a raise resumes the turn; without it, it takes the refusal as final.
-          const stored =
-            err instanceof RunBudgetExhaustedError
-              ? `${message} ${RUN_BUDGET_REFUSAL_NOTE}`
-              : message;
+          const stored = err instanceof RunBudgetExhaustedError ? `${message} ${RUN_BUDGET_REFUSAL_NOTE}` : message;
           settled = decorate({
             ...call,
             // A refusal is its own state: the UI says "denied", not "something broke".
@@ -6308,7 +6425,9 @@ export class ChatService {
     // A ref is matched against the caller's own project first, so a title another project happens
     // to share cannot make it ambiguous; only a miss widens to every project.
     const resolveAnywhere = async (ref: string) => {
-      const all = (await this.deps.store.list()).map(entry => ({ ...entry, title: visibleTitle(entry) }));
+      const all = (await this.deps.store.list())
+        .filter(entry => entry.mode !== 'studio')
+        .map(entry => ({ ...entry, title: visibleTitle(entry) }));
       const inProject = resolveSessionRef(
         ref,
         all.filter(entry => entry.project?.directory === project.directory)
@@ -6344,6 +6463,7 @@ export class ChatService {
       listSessions: async ({ includeArchived, scope, childrenOnly }) => {
         const all = await this.deps.store.list();
         return all
+          .filter(entry => entry.mode !== 'studio')
           .filter(entry =>
             childrenOnly
               ? entry.origin?.parentSessionId === session.id
@@ -9079,7 +9199,8 @@ export class ChatService {
           endpoint,
           attribution ? { ...request, run: attribution } : request,
           onEvent,
-          signal
+          signal,
+          payerOption(attributed?.payer)
         ),
       // A budgeted run keeps its id: re-minting would restart the budget at zero.
       () =>
@@ -9100,7 +9221,9 @@ export class ChatService {
   ): Promise<AuxiliaryRun | undefined> {
     if (isLocalModel(model)) return undefined;
     const attribution = await this.runAttribution(session);
-    return attribution ? { session, run: { ...attribution.run, purpose }, budgeted: attribution.budgeted } : undefined;
+    return attribution
+      ? { session, run: { ...attribution.run, purpose }, budgeted: attribution.budgeted, payer: attribution.payer }
+      : undefined;
   }
 
   /**
@@ -10236,7 +10359,7 @@ function describeChildOutcome(child: ChatSession): string {
     case 'failed':
       return `${header}\nIt failed: ${last?.error ?? 'no reason was given'}`;
     case 'turn-budget':
-      return `${header} It ran out of its turn budget rather than finishing, so its work may be incomplete.\n${read}`;
+      return `The session you started, "${child.title}" (${child.id}), paused at its turn budget before finishing, so its work is incomplete. Its last step is in its transcript; send it a message if it should carry on.\n${read}`;
     case 'context-limit':
       return `${header} It filled the model context and stopped, so its work may be incomplete.\n${read}`;
     case 'max-tokens':

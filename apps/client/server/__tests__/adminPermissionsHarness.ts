@@ -46,15 +46,28 @@ export function describeAdminPermissionCases(
     return next;
   };
 
+  const capturedByFile = new Map<string, AdminPermissionsState>();
+
   describe.each(cases)(
     '$file ($method, $permission)',
     ({ file, method, permission, allowedMethods, rejectedPermission }) => {
-      // The guard checks are pure, so one fresh import per case serves all seven tests.
+      // The guard checks are pure, so one import per route serves every case on it. Resetting the
+      // module graph is the fallback only: it re-evaluates the route's whole dependency tree, and a
+      // route that has not been imported yet registers its guard without it.
       beforeAll(async () => {
-        vi.resetModules();
+        const captured = capturedByFile.get(file);
+        if (captured) {
+          Object.assign(state, captured);
+          return;
+        }
         state.guard = undefined;
         state.options = undefined;
         await importRoute(file);
+        if (!state.guard) {
+          vi.resetModules();
+          await importRoute(file);
+        }
+        capturedByFile.set(file, { guard: state.guard, options: state.options });
       });
 
       it('allows a delegate holding the declared permission without isAdmin', () => {

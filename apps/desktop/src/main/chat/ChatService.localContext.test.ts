@@ -135,7 +135,7 @@ it('uses measured Ollama input tokens to compact before the next local turn', as
   await send('second prompt');
   expect(requests).toHaveLength(3);
   expect(requests[1].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
-  expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, running: true });
+  expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: true });
   expect((await store.get(id))?.messages.some(message => message.boundary)).toBe(true);
 });
 
@@ -148,7 +148,7 @@ it('compacts at the old window when growing the local model fails', async () => 
     expect(grow).toHaveBeenCalled();
     expect(requests).toHaveLength(3);
     expect(requests[1].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
-    expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, running: true });
+    expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: true });
     expect((await store.get(id))?.messages.some(message => message.boundary)).toBe(true);
   } finally {
     grow.mockRestore();
@@ -173,11 +173,11 @@ it('drops the oldest turns of an overflowing prompt, says so, and compacts befor
   expect(requests).toHaveLength(3);
   expect(requests[2].messages.map(message => message.content)).not.toContain('first prompt');
   expect(requests[2].messages.at(-1)?.content).toBe('second prompt');
-  expect(events).toContainEqual({ type: 'context-trimmed', sessionId: id, dropped: 2 });
+  expect(events).toContainEqual({ type: 'context-trimmed', sessionId: id, seq: expect.any(Number), dropped: 2 });
   expect((await store.get(id))?.messages.at(-1)?.usage).toMatchObject({ inputTokens: 17_000 });
   await send('third prompt');
   expect(requests[3].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
-  expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, running: true });
+  expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: true });
 });
 
 it('sizes a local summary request to the model window', async () => {
@@ -291,6 +291,7 @@ it('tells the conversation when Auto grows the context past what fits on the GPU
   expect(events).toContainEqual({
     type: 'context-notice',
     sessionId: id,
+    seq: expect.any(Number),
     message: expect.stringContaining('replies will be slower'),
     kind: 'context-size',
   });

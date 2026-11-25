@@ -117,6 +117,8 @@ describe('developer dollar cost preference', () => {
         getSpawnLocation: async () => 'worktree',
         setSpawnLocation: async () => 'worktree',
         onSpawnLocation: () => () => undefined,
+        getTurnExtensions: async () => 3,
+        setTurnExtensions: async (extensions: number) => extensions,
       },
     });
   };

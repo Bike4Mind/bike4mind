@@ -1,4 +1,4 @@
-import React, { FormEvent, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -9,11 +9,10 @@ import {
   FormLabel,
   Grid,
   Input,
-  Modal,
-  ModalClose,
   Sheet,
   Typography,
 } from '@mui/joy';
+import { AdminDialog, AdminDialogFooter } from '@client/app/components/admin/shared/AdminDialog';
 import { createPortal } from 'react-dom';
 import { PREDEFINED_USER_TAGS } from '@bike4mind/common';
 import { useGetUserTags } from '@client/app/hooks/data/user';
@@ -132,8 +131,7 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
     onSubmit(payload);
   };
 
-  const handleClose = () => {
-    setOpenCreate(false);
+  const resetForm = () => {
     clearErrors();
     setUnlimitedUse(false);
     setGrantPackageId(null);
@@ -145,257 +143,255 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
     setShowTagDropdown(false);
   };
 
+  // The parent closes the dialog through the store after a successful create, so reset on any close.
+  useEffect(() => {
+    if (!openCreate) resetForm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCreate]);
+
+  const handleClose = () => setOpenCreate(false);
+
   return (
-    <Modal
+    <AdminDialog
       open={openCreate}
-      onClose={handleClose}
-      sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}
+      onClose={() => {
+        if (!isLoading) handleClose();
+      }}
+      closeDisabled={isLoading}
+      title="Create registration invites"
+      width={460}
+      data-testid="create-invite-modal"
     >
-      <Sheet
-        sx={{
-          width: '460px',
-          boxShadow: 'lg',
-          borderRadius: '8px',
-          padding: '0px',
-        }}
-      >
-        <ModalClose />
-        <Box textAlign={'center'}>
-          <Typography data-testid="create-invite-modal" mt={'30px'} mb={'20px'} component={'h2'} level="h4">
-            Create Registration Invites
-          </Typography>
-
-          <form onSubmit={handleSubmit}>
-            <Box sx={{ display: 'grid', gap: '1em', px: '2em', pb: '1.5em' }}>
-              <Grid container spacing={2}>
-                <Grid xs={12}>
-                  <FormControl required id="multiple">
-                    <FormLabel id="multiple-label">Number of Invites to create</FormLabel>
-                    <Input
-                      fullWidth
-                      error={!!errors.multiple}
-                      type={'number'}
-                      defaultValue={1}
-                      variant={'outlined'}
-                      name={'multiple'}
-                    />
-                    <FormHelperText>
-                      <Typography level={'body-xs'} color={'danger'}>
-                        {errors.multiple}
-                      </Typography>
-                    </FormHelperText>
-                  </FormControl>
-                </Grid>
-
-                <Grid xs={12}>
-                  <FormControl>
-                    <FormLabel>Allow unlimited use</FormLabel>
-                    <Typography level="body-xs" sx={{ opacity: 0.7, mb: 0.5, textAlign: 'left' }}>
-                      Keeps the invite reusable even after the first signup. Type &quot;spicy&quot; to enable.
-                    </Typography>
-                    <Input
-                      placeholder='Type "spicy" to enable unlimited use'
-                      value={spicyConfirm}
-                      onChange={e => {
-                        setSpicyConfirm(e.target.value);
-                        setUnlimitedUse(e.target.value.toLowerCase().trim() === 'spicy');
-                      }}
-                      color={unlimitedUse ? 'danger' : 'neutral'}
-                    />
-                    {unlimitedUse && (
-                      <Typography level="body-xs" color="danger" sx={{ mt: 0.5 }}>
-                        Unlimited use enabled. Invites will automatically expire 90 days after creation.
-                      </Typography>
-                    )}
-                  </FormControl>
-                </Grid>
-
-                {/* Tags */}
-                <Grid xs={12}>
-                  <FormControl>
-                    <FormLabel>Tags</FormLabel>
-                    <Box ref={tagAnchorRef} sx={{ position: 'relative' }}>
-                      <Box
-                        sx={{
-                          display: 'flex',
-                          flexWrap: 'wrap',
-                          gap: 0.5,
-                          alignItems: 'center',
-                          border: '1px solid',
-                          borderColor: 'neutral.outlinedBorder',
-                          borderRadius: 'sm',
-                          p: 0.5,
-                          minHeight: 36,
-                          cursor: 'text',
-                        }}
-                        onClick={() => tagInputRef.current?.focus()}
-                      >
-                        {tags.map(tag => (
-                          <Chip
-                            key={tag}
-                            size="sm"
-                            variant="soft"
-                            sx={{ bgcolor: getTagColor(tag) + '22', color: getTagColor(tag) }}
-                            endDecorator={<ChipDelete onDelete={() => removeTag(tag)} />}
-                          >
-                            {tag}
-                          </Chip>
-                        ))}
-                        <input
-                          ref={tagInputRef}
-                          value={tagInput}
-                          onChange={e => setTagInput(e.target.value)}
-                          onFocus={() => setShowTagDropdown(true)}
-                          onBlur={() => setTimeout(() => setShowTagDropdown(false), 200)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter' && tagInput.trim()) {
-                              e.preventDefault();
-                              addTag(tagInput.trim());
-                            }
-                            if (e.key === 'Backspace' && !tagInput && tags.length > 0) {
-                              removeTag(tags[tags.length - 1]);
-                            }
-                          }}
-                          placeholder={tags.length === 0 ? 'Add tags...' : ''}
-                          style={{
-                            border: 'none',
-                            outline: 'none',
-                            background: 'transparent',
-                            fontSize: '0.85rem',
-                            minWidth: 60,
-                            flex: 1,
-                          }}
-                        />
-                      </Box>
-                      {showTagDropdown &&
-                        hasDropdownContent &&
-                        createPortal(
-                          <Sheet
-                            variant="outlined"
-                            sx={{
-                              position: 'absolute',
-                              zIndex: 1400,
-                              top: dropdownPos.top,
-                              left: dropdownPos.left,
-                              width: dropdownPos.width,
-                              maxHeight: 250,
-                              overflow: 'auto',
-                              borderRadius: 'sm',
-                              boxShadow: 'lg',
-                            }}
-                          >
-                            {filteredTags.slice(0, 10).map(tag => (
-                              <Box
-                                key={tag}
-                                onMouseDown={e => {
-                                  e.preventDefault();
-                                  addTag(tag);
-                                }}
-                                sx={{
-                                  px: 1,
-                                  py: 0.5,
-                                  cursor: 'pointer',
-                                  fontSize: '0.85rem',
-                                  '&:hover': { bgcolor: 'background.level1' },
-                                }}
-                              >
-                                {tag}
-                              </Box>
-                            ))}
-                            {showCreate && (
-                              <Box
-                                onMouseDown={e => {
-                                  e.preventDefault();
-                                  addTag(tagInput.trim());
-                                }}
-                                sx={{
-                                  px: 1,
-                                  py: 0.5,
-                                  cursor: 'pointer',
-                                  fontSize: '0.85rem',
-                                  fontStyle: 'italic',
-                                  '&:hover': { bgcolor: 'background.level1' },
-                                }}
-                              >
-                                Create &quot;{tagInput.trim()}&quot;
-                              </Box>
-                            )}
-                          </Sheet>,
-                          document.body
-                        )}
-                    </Box>
-                    <FormHelperText>
-                      <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                        Tags assigned to users who redeem these invite codes.
-                      </Typography>
-                    </FormHelperText>
-                  </FormControl>
-                </Grid>
-
-                <Grid xs={12}>
-                  <GrantPackageSelect
-                    value={grantPackageId}
-                    onChange={setGrantPackageId}
-                    testId="create-invite-grant-package-select"
-                    helperText="A package supplies the credits and storage below and enforces its signup caps."
+      <Box>
+        <form onSubmit={handleSubmit}>
+          <Box sx={{ display: 'grid', gap: '1em' }}>
+            <Grid container spacing={2}>
+              <Grid xs={12}>
+                <FormControl required id="multiple">
+                  <FormLabel id="multiple-label">Number of Invites to create</FormLabel>
+                  <Input
+                    fullWidth
+                    error={!!errors.multiple}
+                    type={'number'}
+                    defaultValue={1}
+                    variant={'outlined'}
+                    name={'multiple'}
                   />
-                </Grid>
-
-                {/* Credits & Storage */}
-                <Grid xs={6}>
-                  <FormControl>
-                    <FormLabel>Starting Credits</FormLabel>
-                    <Input
-                      disabled={grantPackageId !== null}
-                      type="number"
-                      value={selectedPackage ? String(selectedPackage.credits) : startingCredits}
-                      onChange={e => setStartingCredits(e.target.value)}
-                      slotProps={{ input: { min: 0, 'data-testid': 'create-invite-credits-input' } }}
-                    />
-                    <FormHelperText>
-                      <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                        Half of one month&apos;s subscription.
-                      </Typography>
-                    </FormHelperText>
-                  </FormControl>
-                </Grid>
-                <Grid xs={6}>
-                  <FormControl>
-                    <FormLabel>Starting Storage (MB)</FormLabel>
-                    <Input
-                      disabled={selectedPackage?.storageMb != null}
-                      type="number"
-                      value={selectedPackage?.storageMb != null ? String(selectedPackage.storageMb) : startingStorage}
-                      onChange={e => setStartingStorage(e.target.value)}
-                      slotProps={{ input: { min: 0, 'data-testid': 'create-invite-storage-input' } }}
-                    />
-                    <FormHelperText>
-                      <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                        Default: 1 GB.
-                      </Typography>
-                    </FormHelperText>
-                  </FormControl>
-                </Grid>
-
-                <Grid xs={12}>
-                  <Box display={'flex'} justifyContent={'center'}>
-                    <Button
-                      data-testid="create-invite-submit-btn"
-                      loading={isLoading}
-                      type="submit"
-                      sx={{ width: '50%' }}
-                      color={'primary'}
-                      variant={'solid'}
-                    >
-                      Submit
-                    </Button>
-                  </Box>
-                </Grid>
+                  <FormHelperText>
+                    <Typography level={'body-xs'} color={'danger'}>
+                      {errors.multiple}
+                    </Typography>
+                  </FormHelperText>
+                </FormControl>
               </Grid>
-            </Box>
-          </form>
-        </Box>
-      </Sheet>
-    </Modal>
+
+              <Grid xs={12}>
+                <FormControl>
+                  <FormLabel>Allow unlimited use</FormLabel>
+                  <Typography level="body-xs" sx={{ opacity: 0.7, mb: 0.5, textAlign: 'left' }}>
+                    Keeps the invite reusable even after the first signup. Type &quot;spicy&quot; to enable.
+                  </Typography>
+                  <Input
+                    placeholder='Type "spicy" to enable unlimited use'
+                    value={spicyConfirm}
+                    onChange={e => {
+                      setSpicyConfirm(e.target.value);
+                      setUnlimitedUse(e.target.value.toLowerCase().trim() === 'spicy');
+                    }}
+                    color={unlimitedUse ? 'danger' : 'neutral'}
+                  />
+                  {unlimitedUse && (
+                    <Typography level="body-xs" color="danger" sx={{ mt: 0.5 }}>
+                      Unlimited use enabled. Invites will automatically expire 90 days after creation.
+                    </Typography>
+                  )}
+                </FormControl>
+              </Grid>
+
+              {/* Tags */}
+              <Grid xs={12}>
+                <FormControl>
+                  <FormLabel>Tags</FormLabel>
+                  <Box ref={tagAnchorRef} sx={{ position: 'relative' }}>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 0.5,
+                        alignItems: 'center',
+                        border: '1px solid',
+                        borderColor: 'neutral.outlinedBorder',
+                        borderRadius: 'sm',
+                        p: 0.5,
+                        minHeight: 36,
+                        cursor: 'text',
+                      }}
+                      onClick={() => tagInputRef.current?.focus()}
+                    >
+                      {tags.map(tag => (
+                        <Chip
+                          key={tag}
+                          size="sm"
+                          variant="soft"
+                          sx={{ bgcolor: getTagColor(tag) + '22', color: getTagColor(tag) }}
+                          endDecorator={<ChipDelete onDelete={() => removeTag(tag)} />}
+                        >
+                          {tag}
+                        </Chip>
+                      ))}
+                      <input
+                        ref={tagInputRef}
+                        value={tagInput}
+                        onChange={e => setTagInput(e.target.value)}
+                        onFocus={() => setShowTagDropdown(true)}
+                        onBlur={() => setTimeout(() => setShowTagDropdown(false), 200)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && tagInput.trim()) {
+                            e.preventDefault();
+                            addTag(tagInput.trim());
+                          }
+                          if (e.key === 'Backspace' && !tagInput && tags.length > 0) {
+                            removeTag(tags[tags.length - 1]);
+                          }
+                        }}
+                        placeholder={tags.length === 0 ? 'Add tags...' : ''}
+                        style={{
+                          border: 'none',
+                          outline: 'none',
+                          background: 'transparent',
+                          fontSize: '0.85rem',
+                          minWidth: 60,
+                          flex: 1,
+                        }}
+                      />
+                    </Box>
+                    {showTagDropdown &&
+                      hasDropdownContent &&
+                      createPortal(
+                        <Sheet
+                          variant="outlined"
+                          sx={{
+                            position: 'absolute',
+                            zIndex: 1400,
+                            top: dropdownPos.top,
+                            left: dropdownPos.left,
+                            width: dropdownPos.width,
+                            maxHeight: 250,
+                            overflow: 'auto',
+                            borderRadius: 'sm',
+                            boxShadow: 'lg',
+                          }}
+                        >
+                          {filteredTags.slice(0, 10).map(tag => (
+                            <Box
+                              key={tag}
+                              onMouseDown={e => {
+                                e.preventDefault();
+                                addTag(tag);
+                              }}
+                              sx={{
+                                px: 1,
+                                py: 0.5,
+                                cursor: 'pointer',
+                                fontSize: '0.85rem',
+                                '&:hover': { bgcolor: 'background.level1' },
+                              }}
+                            >
+                              {tag}
+                            </Box>
+                          ))}
+                          {showCreate && (
+                            <Box
+                              onMouseDown={e => {
+                                e.preventDefault();
+                                addTag(tagInput.trim());
+                              }}
+                              sx={{
+                                px: 1,
+                                py: 0.5,
+                                cursor: 'pointer',
+                                fontSize: '0.85rem',
+                                fontStyle: 'italic',
+                                '&:hover': { bgcolor: 'background.level1' },
+                              }}
+                            >
+                              Create &quot;{tagInput.trim()}&quot;
+                            </Box>
+                          )}
+                        </Sheet>,
+                        document.body
+                      )}
+                  </Box>
+                  <FormHelperText>
+                    <Typography level="body-xs" sx={{ opacity: 0.7 }}>
+                      Tags assigned to users who redeem these invite codes.
+                    </Typography>
+                  </FormHelperText>
+                </FormControl>
+              </Grid>
+
+              <Grid xs={12}>
+                <GrantPackageSelect
+                  value={grantPackageId}
+                  onChange={setGrantPackageId}
+                  testId="create-invite-grant-package-select"
+                  helperText="A package supplies the credits and storage below and enforces its signup caps."
+                />
+              </Grid>
+
+              {/* Credits & Storage */}
+              <Grid xs={6}>
+                <FormControl>
+                  <FormLabel>Starting Credits</FormLabel>
+                  <Input
+                    disabled={grantPackageId !== null}
+                    type="number"
+                    value={selectedPackage ? String(selectedPackage.credits) : startingCredits}
+                    onChange={e => setStartingCredits(e.target.value)}
+                    slotProps={{ input: { min: 0, 'data-testid': 'create-invite-credits-input' } }}
+                  />
+                  <FormHelperText>
+                    <Typography level="body-xs" sx={{ opacity: 0.7 }}>
+                      Half of one month&apos;s subscription.
+                    </Typography>
+                  </FormHelperText>
+                </FormControl>
+              </Grid>
+              <Grid xs={6}>
+                <FormControl>
+                  <FormLabel>Starting Storage (MB)</FormLabel>
+                  <Input
+                    disabled={selectedPackage?.storageMb != null}
+                    type="number"
+                    value={selectedPackage?.storageMb != null ? String(selectedPackage.storageMb) : startingStorage}
+                    onChange={e => setStartingStorage(e.target.value)}
+                    slotProps={{ input: { min: 0, 'data-testid': 'create-invite-storage-input' } }}
+                  />
+                  <FormHelperText>
+                    <Typography level="body-xs" sx={{ opacity: 0.7 }}>
+                      Default: 1 GB.
+                    </Typography>
+                  </FormHelperText>
+                </FormControl>
+              </Grid>
+            </Grid>
+          </Box>
+          <AdminDialogFooter>
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={handleClose}
+              disabled={isLoading}
+              data-testid="create-invite-cancel-btn"
+            >
+              Cancel
+            </Button>
+            <Button data-testid="create-invite-submit-btn" loading={isLoading} type="submit">
+              Submit
+            </Button>
+          </AdminDialogFooter>
+        </form>
+      </Box>
+    </AdminDialog>
   );
 };

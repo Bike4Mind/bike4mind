@@ -166,6 +166,10 @@ export function useAcceptDocument({
           queryClient.invalidateQueries({ queryKey: ['users', 'organization', result.documentId] });
           if (result.acceptOutcome !== 'already-member') toast.success('Successfully joined the organization');
           break;
+        case InviteType.Space:
+          queryClient.invalidateQueries({ queryKey: ['spaces'] });
+          if (result.acceptOutcome !== 'already-member') toast.success('Space invite accepted');
+          break;
         default:
           toast.success('Document share accepted successfully');
       }
@@ -200,11 +204,11 @@ export function useRefuseDocument({
 
   return useMutation({
     mutationFn: async (id: string) => await refuseDocument(id, isPublic),
-    onSuccess: () => {
+    onSuccess: result => {
       queryClient.invalidateQueries({ queryKey: ['invites/refuse'] });
       queryClient.invalidateQueries({ queryKey: ['invites', 'inbox'] });
       invalidateOrganizationInviteeSearch(queryClient);
-      toast.success('Document share refused successfully');
+      toast.success(result?.type === InviteType.Space ? 'Space invite refused' : 'Document share refused successfully');
       if (onSuccess) onSuccess();
     },
     onError: error => {
@@ -229,6 +233,7 @@ export function useRespondToInvites({ onSettled }: { onSettled?: () => void } = 
     mutationFn: async ({ action, ids }: { action: 'accept' | 'refuse'; ids: string[] }) => {
       let okCount = 0;
       const organizationIds = new Set<string>();
+      let joinedSpace = false;
       let failureMessage: string | undefined;
       for (let i = 0; i < ids.length; i += MAX_BULK_ITEMS) {
         try {
@@ -242,6 +247,9 @@ export function useRespondToInvites({ onSettled }: { onSettled?: () => void } = 
               organizationIds.add(result.invite.documentId);
             }
           }
+          if (action === 'accept' && data.results.some(result => result.ok && result.type === InviteType.Space)) {
+            joinedSpace = true;
+          }
           failureMessage ??= data.results.find(result => !result.ok)?.error;
         } catch (error) {
           // Earlier chunks are committed server-side, so report them as a partial result.
@@ -250,9 +258,10 @@ export function useRespondToInvites({ onSettled }: { onSettled?: () => void } = 
           break;
         }
       }
-      return { action, okCount, total: ids.length, failureMessage, organizationIds: [...organizationIds] };
+      return { action, okCount, total: ids.length, failureMessage, organizationIds: [...organizationIds], joinedSpace };
     },
-    onSuccess: ({ action, okCount, total, failureMessage, organizationIds }) => {
+    onSuccess: ({ action, okCount, total, failureMessage, organizationIds, joinedSpace }) => {
+      if (joinedSpace) queryClient.invalidateQueries({ queryKey: ['spaces'] });
       if (okCount > 0) {
         queryClient.invalidateQueries({ queryKey: [action === 'accept' ? 'invites/accept' : 'invites/refuse'] });
         if (action === 'refuse') invalidateOrganizationInviteeSearch(queryClient);

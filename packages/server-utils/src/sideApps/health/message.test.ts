@@ -30,7 +30,9 @@ describe('formatSideAppAlertMessage', () => {
     expect(text).toContain('requests are failing');
     expect(text).toContain('10 attempts, 1 succeeded, 9 failed (8 on our side)');
     expect(text).toContain('agent_failed (8)');
-    expect(text).toContain('https://app.example.test/admin?tab=credit-analytics');
+    expect(text).toContain(
+      'https://app.example.test/admin?tab=credit-analytics&creditTab=side-apps|Open the Side apps board>'
+    );
     expect(text).toContain('[Staging]');
   });
 
@@ -66,6 +68,17 @@ describe('formatSideAppAlertMessage', () => {
     expect(text).toContain('recovered');
     expect(text).toContain('open for 3h');
     expect(text).not.toContain('Top failure reasons');
+  });
+
+  it.each([
+    [0, 'under 1h'],
+    [59 * 60 * 1000, 'under 1h'],
+    [60 * 60 * 1000, '1h'],
+  ])('prints the open time for %i ms as %s', (openedForMs, expected) => {
+    const text = bodyOf(
+      formatSideAppAlertMessage({ phase: 'resolved', rule: 'failing', appName: 'Notes', verdict, openedForMs })
+    );
+    expect(text).toContain(`open for ${expected}.`);
   });
 
   it('says an untracked alert closed for lack of traffic, without calling it recovered', () => {

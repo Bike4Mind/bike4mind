@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1283 routes: 132 contracted, 11 aliases of another route, 356 with no static caller in `apps/client/app`.
+1287 routes: 138 contracted, 11 aliases of another route, 358 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 382 | 0 | 201 | 174 | 0 | 7 | 69 |
+| admin | 376 | 0 | 195 | 174 | 0 | 7 | 69 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -59,12 +59,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | business-links | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
-| callable-functions | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
+| callable-functions | 8 | 0 | 0 | 8 | 0 | 0 | 0 |
 | cc-bridge | 6 | 0 | 5 | 0 | 0 | 1 | 4 |
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | credits | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
-| data-lakes | 60 | 0 | 59 | 1 | 0 | 0 | 8 |
+| data-lakes | 61 | 0 | 59 | 2 | 0 | 0 | 8 |
 | deep-agent | 5 | 0 | 3 | 2 | 0 | 0 | 0 |
 | documentation | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | elabs | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
@@ -138,7 +138,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | skills | 22 | 0 | 3 | 19 | 0 | 0 | 0 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | slack | 16 | 0 | 7 | 1 | 0 | 8 | 8 |
-| spaces | 13 | 0 | 0 | 13 | 0 | 0 | 13 |
+| spaces | 13 | 0 | 0 | 13 | 0 | 0 | 9 |
 | sre | 12 | 0 | 11 | 0 | 0 | 1 | 1 |
 | stripe | 5 | 0 | 2 | 2 | 0 | 1 | 1 |
 | studio | 7 | 0 | 0 | 7 | 0 | 0 | 0 |
@@ -154,7 +154,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 27 | 9 | 0 | 0 | 5 |
-| v1 | 130 | 126 | 111 | 12 | 0 | 7 | 116 |
+| v1 | 136 | 132 | 117 | 12 | 0 | 7 | 122 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -306,12 +306,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/integration-health-dashboard` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/IntegrationHealth/hooks/useIntegrationHealthDashboard.ts` |
 | `/api/admin/integrations/demand` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/integrationDemand.ts` |
 | `/api/admin/integrations/demand/[integrationId]/requesters` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/integrationDemand.ts` |
-| `/api/admin/liveops-triage-configs` | GET, POST | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-configs/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-configs/[id]/health` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-configs/[id]/trigger` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-configs/runs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-env` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/llm-models/configurations` | GET, PUT | jwt+key | `admin:*` | - | no | - | 2: `hooks/data/adminModels.ts`, `hooks/data/llmModelConfig.ts` |
 | `/api/admin/mcp-connections` | GET, POST | jwt | `admin:*` | GET: ?; POST: `settings:manage` | no | - | 1: `hooks/data/mcpConnections.ts` |
 | `/api/admin/mcp-connections/[id]` | GET, PATCH, DELETE | jwt | `admin:*` | GET: ?; PATCH: `settings:manage`; DELETE: `settings:manage` | no | - | 0 |
@@ -448,7 +442,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/slack-app/reconnect` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
 | `/api/admin/slack-app/update-manifest` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
 | `/api/admin/slack-audit-logs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
-| `/api/admin/slack-workspaces` | GET, PATCH | jwt+key | `admin:*` | GET: `settings:manage`; PATCH: `settings:manage` | no | - | 5: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx`, `components/admin/ContextInspectorTab.tsx`, `components/admin/SecurityDashboard/IssueFilingSettingsDialog.tsx` +2 more |
+| `/api/admin/slack-workspaces` | GET, PATCH | jwt+key | `admin:*` | GET: `settings:manage`; PATCH: `settings:manage` | no | - | 4: `components/admin/ContextInspectorTab.tsx`, `components/admin/SecurityDashboard/IssueFilingSettingsDialog.tsx`, `components/admin/SlackWorkspacesTab.tsx` +1 more |
 | `/api/admin/spend` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/ModelMetrics/hooks/useSpend.ts` |
 | `/api/admin/spend-explorer/accounts` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/SpendExplorer/useSpendExplorer.ts` |
 | `/api/admin/spend-explorer/feature-users` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/SpendExplorer/useFeatureCost.ts` |
@@ -763,7 +757,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/callable-functions` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/calls` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/examples` | PUT | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/pin` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/promote` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/test-run` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/status` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 
@@ -806,6 +803,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/data-lakes/[id]/access` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
 | `/api/data-lakes/[id]/articles` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
 | `/api/data-lakes/[id]/config-history` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/config-history/[eventId]/undo` | POST | jwt | - | - | no | - | 1: `hooks/data/dataLakes.ts` |
 | `/api/data-lakes/[id]/converge` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
 | `/api/data-lakes/[id]/drive-connection` | GET, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/googleDrive.ts` |
 | `/api/data-lakes/[id]/files/[fabFileId]` | POST, DELETE | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
@@ -1121,7 +1119,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/invites` | GET | jwt+key | - | - | no | - | 0 |
-| `/api/invites/[id]` | GET, DELETE | jwt+key | - | - | no | - | 2: `hooks/data/invites.ts`, `utils/invitesAPICalls.ts` |
+| `/api/invites/[id]` | GET, DELETE | jwt+key | - | - | no | - | 3: `hooks/data/invites.ts`, `hooks/data/spaces.ts`, `utils/invitesAPICalls.ts` |
 | `/api/invites/[id]/accept` | POST | jwt+key | - | - | no | - | 1: `utils/invitesAPICalls.ts` |
 | `/api/invites/[id]/refuse` | POST | jwt+key | - | - | no | - | 1: `utils/invitesAPICalls.ts` |
 | `/api/invites/batch` | POST | jwt | - | - | no | - | 1: `hooks/data/invites.ts` |
@@ -1665,10 +1663,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/spaces` | GET, POST | jwt | - | - | no | - | 0 |
-| `/api/spaces/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 0 |
+| `/api/spaces` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/spaces.ts` |
+| `/api/spaces/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/spaces.ts` |
 | `/api/spaces/[id]/domain-join` | POST | jwt | - | - | no | - | 0 |
-| `/api/spaces/[id]/domains` | GET, POST | jwt | - | - | no | - | 0 |
+| `/api/spaces/[id]/domains` | GET, POST | jwt | - | - | no | - | 1: `utils/spaceDomainAPICalls.ts` |
 | `/api/spaces/[id]/domains/[claimId]` | PATCH, DELETE | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/domains/[claimId]/verify` | POST | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/invite-links` | GET, POST | jwt | - | - | no | - | 0 |
@@ -1677,7 +1675,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/spaces/[id]/leave` | POST | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/members/[userId]` | PATCH, DELETE | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/transfer-ownership` | POST | jwt | - | - | no | - | 0 |
-| `/api/spaces/domain-suggestions` | GET | jwt | - | - | no | - | 0 |
+| `/api/spaces/domain-suggestions` | GET | jwt | - | - | no | - | 1: `hooks/data/spaces.ts` |
 
 ### sre
 
@@ -1901,6 +1899,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/data-lakes` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/config-history` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/config-history/[event_id]/undo` | POST | jwt+key | `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/files/[file_id]` | GET, POST, DELETE | jwt+key | GET: `datalake:query`, `datalake:read`, `datalake:write`; POST, DELETE: `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/proposals` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/proposals/[proposal_id]` | POST | jwt+key | `datalake:write` | - | yes | - | 0 |
@@ -1911,6 +1910,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/data-lakes/[id]/search` | POST | jwt+key | `datalake:query` | - | yes | - | 0 |
 | `/api/v1/decision-models` | GET | jwt+key | `ai:decide`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/decisions` | POST | jwt+key | `ai:decide`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/delegations` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/delegations/[id]` | GET | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/docs` | GET | handler | - | - | no | - | 1: `utils/externalLinks.ts` |
 | `/api/v1/embedding-models` | GET | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/embeddings` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
@@ -1921,6 +1922,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/files/bulk-delete` | POST | jwt+key | `files:write` | - | yes | - | 0 |
 | `/api/v1/files/by-ids` | GET | jwt+key | `files:read` | - | yes | - | 0 |
 | `/api/v1/files/search` | GET | jwt+key | `files:read` | - | yes | - | 0 |
+| `/api/v1/functions` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
+| `/api/v1/functions/[id]` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/invoke` | POST | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/handoff-devices` | GET | jwt | - | - | yes | - | 1: `components/Session/SessionHandoff.tsx` |
 | `/api/v1/image-edits` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |

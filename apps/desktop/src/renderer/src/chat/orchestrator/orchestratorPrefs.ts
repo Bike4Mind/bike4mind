@@ -1,4 +1,4 @@
-import { parseStoredLayout, singlePaneLayout, type OrchestratorLayout } from './orchestratorLayout';
+import { parseStoredLayout, singlePaneLayout, withoutPins, type OrchestratorLayout } from './orchestratorLayout';
 import { toViewId, type OrchestratorViewId } from './orchestratorViews';
 
 export { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorViews';
@@ -103,13 +103,14 @@ export function readLayout(sessionId: string, projectDirectory?: string): Orches
 
 /**
  * Records the layout wherever writeView records a view. The first pane's view is written as the single view
- * too, so a level whose layout is later unreadable still opens on it.
+ * too, so a level whose layout is later unreadable still opens on it. Session pins are kept at the session
+ * level only: at the project and global levels they would name a session unrelated to the next one opened.
  */
 export function writeLayout(sessionId: string, layout: OrchestratorLayout, projectDirectory?: string): void {
-  const stored = JSON.stringify(layout);
-  writeItem(LAYOUT_KEY + sessionId, stored);
-  if (projectDirectory) writeItem(PROJECT_LAYOUT_KEY + projectDirectory, stored);
-  writeItem(LAST_LAYOUT_KEY, stored);
+  writeItem(LAYOUT_KEY + sessionId, JSON.stringify(layout));
+  const shared = JSON.stringify(withoutPins(layout));
+  if (projectDirectory) writeItem(PROJECT_LAYOUT_KEY + projectDirectory, shared);
+  writeItem(LAST_LAYOUT_KEY, shared);
   writeView(sessionId, layout.panes[0].view, projectDirectory);
 }
 

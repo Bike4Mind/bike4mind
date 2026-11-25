@@ -1313,50 +1313,6 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// LiveOps Triage Queue (Multi-Config)
-// Handles triage jobs dispatched by liveopsTriageDispatcher.
-// Each message contains a configId for independent processing.
-const liveOpsTriageQueueDLQ = new sst.aws.Queue('liveOpsTriageQueueDLQ', {
-  visibilityTimeout: '10 minutes',
-  transform: {
-    queue: {
-      messageRetentionSeconds: 1209600, // 14 days for forensics
-    },
-  },
-});
-const liveOpsTriageQueue = new sst.aws.Queue('liveOpsTriageQueue', {
-  visibilityTimeout: '8 minutes', // Lambda timeout (5 min) + 3 min safety buffer
-  dlq: {
-    queue: liveOpsTriageQueueDLQ.arn,
-    retry: 2, // Retry twice to handle transient failures
-  },
-});
-const liveOpsTriageQueueSubscription = subscribeUnlessPreview(
-  isPreviewStage,
-  'liveOpsTriageQueue',
-  liveOpsTriageQueue,
-  {
-    handler: 'apps/workers/src/cron/liveopsTriageWorker.handler',
-    runtime: 'nodejs24.x',
-    timeout: '5 minutes',
-    memory: '512 MB',
-    vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus, mcpHandler],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-      ...mailBodyEnvironment(appFilesBucket),
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-      mailBodyPutPermission(appFilesBucket),
-    ],
-  },
-  SINGLE_RECORD_BATCH
-);
-
 // SecOps Triage Queue
 // Receives full ZAP scan payloads (including instances/URLs/evidence) fanned out
 // from the web-owasp-ingest endpoint. Creates/updates GitHub issues via b4m-prod App.
@@ -1895,7 +1851,6 @@ export {
   githubLakeIngestQueue,
   githubLakeRevokeQueue,
   generatedMediaPurgeQueue,
-  liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
   sreFixQueue,
@@ -1936,7 +1891,6 @@ export {
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
   generatedMediaPurgeQueueDLQ,
-  liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
   sreFixQueueDLQ,
@@ -1979,7 +1933,6 @@ export {
   githubLakeIngestQueueSubscription,
   githubLakeRevokeQueueSubscription,
   generatedMediaPurgeQueueSubscription,
-  liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
   sreJobQueueSubscription,

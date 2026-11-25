@@ -2,6 +2,11 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
+  // Historical rows remain until their existing TTL, with erased actors anonymized immediately.
+  LiveopsTriageConfigAuditLog: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userName'] }],
+  },
   GeneratedFileCleanup: {
     kind: 'noUserData',
     note: 'Exact server-generated UUID Files paths awaiting cleanup; no account or session identifier.',
@@ -430,16 +435,6 @@ export const infraHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   LakeConnectorClaim: { kind: 'noUserData', note: 'Uniqueness claim tying a lake to a connection.' },
-  LiveopsTriageConfig: {
-    kind: 'noUserData',
-    note: 'Platform ops configuration.',
-    unrelatedPaths: ['githubOwner'],
-  },
-  LiveopsTriageConfigAuditLog: {
-    kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userName'] }],
-  },
-  LiveopsTriageRun: { kind: 'noUserData', note: 'Platform triage run status.' },
   MarketingReport: {
     kind: 'holder',
     references: [

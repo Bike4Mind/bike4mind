@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// The sandbox replies within a few microtasks; vi.waitFor's default 50ms poll would dominate each test.
+const POLL = { interval: 1 };
+
 // We test the exported functions/class by mocking the Worker dependency
 // For detectPackages, we can test directly since it's a pure function
 
@@ -557,7 +560,7 @@ describe('function calls', () => {
     posted = [];
     const warmUp = imported.pyodideManager.callFunction('warm_up = 1');
     const { frame, send } = await bringUpFrame(posted);
-    await vi.waitFor(() => expect(lastNonce(posted)).toBeDefined());
+    await vi.waitFor(() => expect(lastNonce(posted)).toBeDefined(), POLL);
     send(callResult({}));
     await warmUp;
     posted.length = 0;
@@ -704,7 +707,7 @@ describe('function calls', () => {
     const run = pyodideManager.execute('print(1)');
     void run.catch(() => {});
     const { send } = await bringUpFrame(posted);
-    await vi.waitFor(() => expect(pyodideManager.getState().isExecuting).toBe(true));
+    await vi.waitFor(() => expect(pyodideManager.getState().isExecuting).toBe(true), POLL);
 
     send(callResult({ valueJson: '{"forged": 1}' }, null));
 
@@ -749,7 +752,7 @@ describe('function calls', () => {
     const data = await bringUpFrame(posted);
     expect(frame.isConnected).toBe(false);
     expect(data.frame.getAttribute('src')).toBe(PYODIDE_SANDBOX_SRC);
-    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'execute' }));
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'execute' }), POLL);
     data.send({ type: 'result', result: { success: true, output: '1\n', plots: [], executionTime: 1 } });
     await expect(run).resolves.toMatchObject({ success: true });
 
@@ -758,7 +761,7 @@ describe('function calls', () => {
     expect(data.frame.isConnected).toBe(false);
     expect(none.frame.getAttribute('src')).toBe(`${PYODIDE_SANDBOX_SRC}?network=none`);
     expect(document.querySelectorAll('iframe')).toHaveLength(1);
-    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call' }));
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call' }), POLL);
     pyodideManager.interrupt();
     await call;
   });
@@ -820,7 +823,7 @@ describe('function calls', () => {
     expect(posted.some(message => message.type === 'call')).toBe(false);
     const data = await bringUpFrame(posted);
     expect(data.frame.getAttribute('src')).toBe(PYODIDE_SANDBOX_SRC);
-    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'execute' }));
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'execute' }), POLL);
     data.send({ type: 'result', result: { success: true, output: '1\n', plots: [], executionTime: 1 } });
     await expect(run).resolves.toMatchObject({ success: true });
   });
@@ -922,7 +925,7 @@ describe('wall-clock guard', () => {
 
     const call = pyodideManager.callFunction('code', [], {}, 2000);
     const none = await bringUpFrame(posted);
-    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call' }));
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call' }), POLL);
     none.send(RUNNING);
     none.send({ type: 'error', error: 'forged' });
     await expect(call).resolves.toMatchObject({ success: false, error: 'forged' });
@@ -934,7 +937,7 @@ describe('wall-clock guard', () => {
     const { pyodideManager, posted, runTimeLimitMessage, FUNCTION_READ_TIMEOUT_MS } = await start();
     const call = pyodideManager.callFunction('code', [], {}, 2000);
     let none = await bringUpFrame(posted);
-    await vi.waitFor(() => expect(lastNonce(posted)).toBeDefined());
+    await vi.waitFor(() => expect(lastNonce(posted)).toBeDefined(), POLL);
     none.send(RUNNING);
     vi.advanceTimersByTime(2000);
     await expect(call).resolves.toMatchObject({ success: false, error: runTimeLimitMessage(2000) });
@@ -942,7 +945,7 @@ describe('wall-clock guard', () => {
     expect(FUNCTION_READ_TIMEOUT_MS).toBe(10000);
     const read = pyodideManager.callFunction('FUNCTION = {}\nwhile True:\n    pass');
     none = await bringUpFrame(posted);
-    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call', paramsJson: null }));
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call', paramsJson: null }), POLL);
     none.send(RUNNING);
     vi.advanceTimersByTime(FUNCTION_READ_TIMEOUT_MS - 1);
     expect(none.frame.isConnected).toBe(true);

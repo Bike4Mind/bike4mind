@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
 import type { AppMenuAction, RendererErrorReport } from '@shared/appShell';
 import type { SpawnLocation } from '@shared/spawnLocation';
+import type { AccountSelection } from '@shared/account';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
@@ -190,6 +191,13 @@ const api: DesktopApi = {
     purchaseCredits: (packageId, acceptedTerms) =>
       ipcRenderer.invoke(IPC_CHANNELS.accountPurchaseCredits, packageId, acceptedTerms),
     sendFeedback: (content: string) => ipcRenderer.invoke(IPC_CHANNELS.accountSendFeedback, content),
+    getSelection: (fresh?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.accountGetSelection, fresh ?? false),
+    selectPayer: (organizationId: string | null) => ipcRenderer.invoke(IPC_CHANNELS.accountSelectPayer, organizationId),
+    onSelectionChanged: listener => {
+      const handler = (_event: unknown, selection: AccountSelection) => listener(selection);
+      ipcRenderer.on(IPC_CHANNELS.accountSelectionChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.accountSelectionChanged, handler);
+    },
   },
   usage: {
     getHistory: (window: UsageWindowId, force?: boolean) =>
@@ -244,6 +252,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
     setSessionPromptCacheTtl: (sessionId: string, ttl: PromptCacheTtl) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPromptCacheTtl, sessionId, ttl),
+    getTurnExtensions: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetTurnExtensions),
+    setTurnExtensions: (extensions: number) => ipcRenderer.invoke(IPC_CHANNELS.chatSetTurnExtensions, extensions),
     setSessionGeneration: (sessionId: string, generation: GenerationSettings) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionGeneration, sessionId, generation),
     getModelSettings: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetModelSettings, modelId),

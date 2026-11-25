@@ -63,7 +63,6 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
     <SessionList
       sessions={sessions}
       mode={mode}
-      onModeChange={() => {}}
       loading={loading}
       activeId={activeId}
       statuses={statuses}
@@ -278,14 +277,14 @@ describe('renaming a session from the sidebar', () => {
     expect(query('chat-rename-error')).toBeNull();
   });
 
-  it('does not open the session while editing, nor fire the Cmd shortcuts', async () => {
+  it('does not open the session while editing, nor fire the session shortcuts', async () => {
     await mount([summary('a', 'Alpha'), summary('b', 'Beta')]);
     doubleClickTitle('Beta');
     onSelect.mockClear();
 
     act(() => renameInput().click());
     act(() => renameInput().closest<HTMLElement>('[data-testid="chat-session-item"]')?.click());
-    press('1', { code: 'Digit1', metaKey: true });
+    press('1', { code: 'Digit1', altKey: true });
     press(' ');
 
     expect(onSelect).not.toHaveBeenCalled();
@@ -411,12 +410,12 @@ describe('sessions imported from Claude, in their own section', () => {
     expect(titles()).toEqual(['Imported work']);
   });
 
-  it('lets the Cmd shortcuts reach imported rows a search has put on screen', async () => {
+  it('lets the session shortcuts reach imported rows a search has put on screen', async () => {
     await mount([summary('own', 'My own chat'), summary('cc-1', 'Imported work', { importOrigin: origin })]);
     typeSearch('imported');
     onSelect.mockClear();
     act(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1', metaKey: true, bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1', altKey: true, bubbles: true }));
     });
     expect(onSelect).toHaveBeenCalledWith('cc-1');
   });

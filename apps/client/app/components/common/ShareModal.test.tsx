@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -99,9 +99,20 @@ beforeEach(() => {
   mocks.currentUser = { id: 'u1', email: 'me@test.com', username: 'me' };
 });
 
+const setupUser = () => userEvent.setup({ delay: null });
+
+const commitRecipient = (value: string) => {
+  const input = screen.getByTestId('share-modal-recipients-input');
+  fireEvent.change(input, { target: { value } });
+  fireEvent.keyDown(input, { key: 'Enter' });
+};
+
+const typeRecipient = (value: string) =>
+  fireEvent.change(screen.getByTestId('share-modal-recipients-input'), { target: { value } });
+
 const openByUsersTab = async (files?: IFabFileDocument[]) => {
   renderModal(files);
-  const user = userEvent.setup();
+  const user = setupUser();
   await user.click(screen.getByText('By Users'));
   return user;
 };
@@ -115,7 +126,7 @@ describe('ShareModal - By Link tab', () => {
     await screen.findByTestId('share-modal-policy-explanation');
     expect(screen.getByTestId('share-modal-link-tab')).not.toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByTestId('share-modal-submit-button')).toBeDisabled();
-    await userEvent.setup().click(screen.getByTestId('share-modal-turn-off-links-button'));
+    await setupUser().click(screen.getByTestId('share-modal-turn-off-links-button'));
     const confirmation = mocks.confirm.mock.calls.at(-1)?.[0] as { onOk: () => void };
     confirmation.onOk();
     expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'notebook-1', type: InviteType.Session });
@@ -128,19 +139,11 @@ describe('ShareModal - By Link tab', () => {
     ).toBeInTheDocument();
   });
 
-  it('marks the Description field as optional', () => {
+  it('marks Description optional, enables Generate with it empty, and tells a notebook owner the link reaches its shareable attached files', () => {
     renderModal();
     // The "By Link" tab is the default (tabIndex 1), so the Description field is visible.
     expect(screen.getByTestId('share-modal-description-label')).toHaveTextContent('Description (Optional)');
-  });
-
-  it('enables the Generate button with an empty Description (description is not required)', () => {
-    renderModal();
     expect(screen.getByTestId('share-modal-submit-button')).not.toBeDisabled();
-  });
-
-  it('tells a notebook owner the link reaches its shareable attached files, before anything is generated', () => {
-    renderModal();
     expect(screen.queryByTestId('share-modal-generated-link')).not.toBeInTheDocument();
     expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
       "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off."
@@ -207,7 +210,7 @@ describe('ShareModal - By Link tab', () => {
         <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u1" open onClose={vi.fn()} />
       </TestWrapper>
     );
-    await userEvent.setup().click(screen.getByTestId('share-modal-turn-off-links-button'));
+    await setupUser().click(screen.getByTestId('share-modal-turn-off-links-button'));
     mocks.confirm.mock.calls[0][0].onOk();
     expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'file-1', type: InviteType.FabFile });
   });
@@ -222,7 +225,7 @@ describe('ShareModal - By Link tab', () => {
 
   it('turns off links for the document only after confirmation', async () => {
     renderModal();
-    const user = userEvent.setup();
+    const user = setupUser();
     await user.click(screen.getByTestId('share-modal-turn-off-links-button'));
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1);
@@ -248,11 +251,8 @@ describe('ShareModal - By Link tab', () => {
 describe('ShareModal - By Users tab', () => {
   it('blocks more recipients than the invite route accepts without calling the API', async () => {
     const user = await openByUsersTab();
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.click(input);
     for (let i = 0; i <= MAX_INVITE_RECIPIENTS; i++) {
-      await user.paste(`u${i}@example.com`);
-      await user.keyboard('{Enter}');
+      commitRecipient(`u${i}@example.com`);
     }
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
@@ -270,8 +270,7 @@ describe('ShareModal - By Users tab', () => {
 
   it('fires the share request when a recipient is committed with Enter', async () => {
     const user = await openByUsersTab();
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.type(input, 'friend@test.com{Enter}');
+    commitRecipient('friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() =>
@@ -281,8 +280,7 @@ describe('ShareModal - By Users tab', () => {
 
   it('fires the share request from the typed value alone, without pressing Enter', async () => {
     const user = await openByUsersTab();
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.type(input, 'friend@test.com');
+    typeRecipient('friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() =>
@@ -295,8 +293,8 @@ describe('ShareModal - By Users tab', () => {
     // to one unique person - the toast must say "1 recipient", not "2 recipients".
     mocks.mutateAsync.mockResolvedValue({ recipients: { pending: ['friend@test.com'] } });
     const user = await openByUsersTab();
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.type(input, 'friend@test.com{Enter}friend{Enter}');
+    commitRecipient('friend@test.com');
+    commitRecipient('friend');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() =>
@@ -307,8 +305,7 @@ describe('ShareModal - By Users tab', () => {
   it('still fires the share request when currentUser has not loaded yet (regression guard)', async () => {
     mocks.currentUser = null;
     const user = await openByUsersTab();
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.type(input, 'friend@test.com{Enter}');
+    commitRecipient('friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() =>
@@ -318,11 +315,10 @@ describe('ShareModal - By Users tab', () => {
 
   it('blocks self-sharing and surfaces one error, without ever calling the API', async () => {
     const user = await openByUsersTab();
-    const input = screen.getByTestId('share-modal-recipients-input');
     // Deliberately not pressing Enter: the Autocomplete's onChange filter already strips a
     // self-share chip on commit, so this exercises the submit-time backstop check instead
     // (the currentInputValue merge at handleShareSubmit), which is what surfaces this message.
-    await user.type(input, 'me@test.com');
+    typeRecipient('me@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('You cannot share files to yourself'));
@@ -336,8 +332,7 @@ describe('ShareModal - By Users tab', () => {
     // the onChange filter instead (also fixed, but then the array is empty by submit time and
     // "Recipients is required" fires first) - the backstop path is what this test targets.
     const user = await openByUsersTab();
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.type(input, 'Me@Test.com');
+    typeRecipient('Me@Test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('You cannot share files to yourself'));
@@ -348,8 +343,7 @@ describe('ShareModal - By Users tab', () => {
     // Exercises the OTHER guard (the Autocomplete onChange filter, not the submit backstop):
     // committing a case-varied self-share with Enter must still end up with nothing to submit.
     const user = await openByUsersTab();
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.type(input, 'Me@Test.com{Enter}');
+    commitRecipient('Me@Test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Recipients is required'));
@@ -359,8 +353,7 @@ describe('ShareModal - By Users tab', () => {
   it('shows exactly one error toast, with the server message, when the share request fails', async () => {
     rejectWith({ isAxiosError: true, response: { data: { message: 'File no longer exists' } } });
     const user = await openByUsersTab();
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.type(input, 'friend@test.com{Enter}');
+    commitRecipient('friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('File no longer exists'));
@@ -377,7 +370,7 @@ describe('ShareModal - By Users tab', () => {
   it('shares a bulk selection with one batch request instead of one per item', async () => {
     mocks.batchShare.mockImplementation(allOk);
     const user = await openByUsersTab(files(5));
-    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
+    commitRecipient('friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.toast.success).toHaveBeenCalledWith('Successfully shared 5 files'));
@@ -395,7 +388,7 @@ describe('ShareModal - By Users tab', () => {
   it('splits a selection larger than MAX_BULK_ITEMS into one request per chunk', async () => {
     mocks.batchShare.mockImplementation(allOk);
     const user = await openByUsersTab(files(MAX_BULK_ITEMS + 1));
-    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
+    commitRecipient('friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.batchShare).toHaveBeenCalledTimes(2));
@@ -412,7 +405,7 @@ describe('ShareModal - By Users tab', () => {
       okCount: 1,
     });
     const user = await openByUsersTab(files(2));
-    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
+    commitRecipient('friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.toast.warning).toHaveBeenCalledWith('Shared 1 file, but 1 failed: f2.pdf'));
@@ -430,7 +423,7 @@ describe('ShareModal - By Users tab', () => {
       rateLimitMessage: 'Too many invitations. Try again later.',
     });
     const user = await openByUsersTab(files(3));
-    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
+    commitRecipient('friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() =>
@@ -447,7 +440,7 @@ describe('ShareModal - By Users tab', () => {
       response: { status: 429, data: { message: 'Slow down.' } },
     });
     const user = await openByUsersTab(files(MAX_BULK_ITEMS + 1));
-    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
+    commitRecipient('friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledTimes(1));
@@ -470,7 +463,7 @@ describe('ShareModal - bulk By Link tab', () => {
       { id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument,
       { id: 'file-2', fileName: 'b.pdf' } as IFabFileDocument,
     ]);
-    await userEvent.setup().click(screen.getByTestId('share-modal-submit-button'));
+    await setupUser().click(screen.getByTestId('share-modal-submit-button'));
     await waitFor(() =>
       expect(mocks.toast.error).toHaveBeenCalledWith(
         'Too many invitations. Try again later. Generated links for 1 of 2 files. No link for: b.pdf'
@@ -491,7 +484,7 @@ describe('ShareModal - bulk By Link tab', () => {
       { id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument,
       { id: 'file-2', fileName: 'b.pdf' } as IFabFileDocument,
     ]);
-    await userEvent.setup().click(screen.getByTestId('share-modal-submit-button'));
+    await setupUser().click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() =>
       expect(screen.getByTestId('share-modal-generated-link')).toHaveTextContent('https://app.example.com/share/t1,t2')
@@ -511,21 +504,20 @@ describe('ShareModal - Email tab', () => {
         <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u1" open onClose={vi.fn()} />
       </TestWrapper>
     );
-    const user = userEvent.setup();
+    const user = setupUser();
     await user.click(screen.getByText('Email'));
     return user;
   };
 
-  const addRecipients = async (user: ReturnType<typeof userEvent.setup>, count: number) => {
-    const input = screen.getByTestId('share-modal-recipients-input');
+  const addRecipients = (count: number) => {
     for (let i = 0; i < count; i++) {
-      await user.type(input, `u${i}@example.com{Enter}`);
+      commitRecipient(`u${i}@example.com`);
     }
   };
 
   it('blocks more recipients than the server accepts without calling the API', async () => {
     const user = await openEmailTab();
-    await addRecipients(user, MAX_EMAIL_RECIPIENTS + 1);
+    addRecipients(MAX_EMAIL_RECIPIENTS + 1);
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith(MAX_EMAIL_RECIPIENTS_ERROR));
@@ -535,7 +527,7 @@ describe('ShareModal - Email tab', () => {
   it('sends a recipient list at the maximum', async () => {
     mocks.apiPost.mockResolvedValue({ data: { success: true, message: 'sent' } });
     const user = await openEmailTab();
-    await addRecipients(user, MAX_EMAIL_RECIPIENTS);
+    addRecipients(MAX_EMAIL_RECIPIENTS);
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledTimes(1));
@@ -548,7 +540,7 @@ describe('ShareModal - Email tab', () => {
       response: { status: 429, data: { message: 'Email limit reached. Try again in 1800 seconds.' } },
     });
     const user = await openEmailTab();
-    await addRecipients(user, 1);
+    addRecipients(1);
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() =>

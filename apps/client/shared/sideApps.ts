@@ -39,6 +39,11 @@ export interface SideAppRefusalSummary {
   byReason: SideAppRefusalReason[];
 }
 
+export interface SideAppFailureCode {
+  code: string;
+  count: number;
+}
+
 export interface SideAppRow {
   clientId: string;
   name: string;
@@ -54,6 +59,8 @@ export interface SideAppRow {
     byEndpoint: SideAppEndpointRequests[];
   };
   outcomes: SideAppOutcomeSummary;
+  /** Most frequent completion failure codes over the request window, at most five. */
+  topFailureCodes: SideAppFailureCode[];
   refusals: SideAppRefusalSummary;
 }
 

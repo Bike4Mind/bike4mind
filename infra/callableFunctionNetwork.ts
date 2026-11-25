@@ -1,4 +1,5 @@
-// The callable function runtime's network layout, route check, and role policy (infra/callableFunctionRuntime.ts).
+// The callable function runtime's network layout, route check, role policy, and function-data policies
+// (infra/callableFunctionRuntime.ts, infra/callableFunctionData.ts).
 // Imports nothing and uses no sst global, so its test loads it outside `sst`.
 
 /** One route's targets, named as the route table data source names them; an unset target is empty. */
@@ -50,6 +51,14 @@ const TARGET_FIELDS: Array<[Exclude<keyof RouteTarget, 'origin'>, string]> = [
   ['destinationPrefixListId', 'a prefix list'],
 ];
 
+/** The subnet ids in a CALLABLE_FUNCTION_SUBNET_IDS value. */
+export function namedSubnetIdsOf(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean);
+}
+
 /** One subnet per CIDR, each in its own zone, all on the one empty route table. */
 export const DEDICATED_SUBNET_CIDRS = ['10.0.0.0/20', '10.0.16.0/20'];
 
@@ -60,6 +69,18 @@ export function distinctZones(zoneIds: string[], count: number): string[] {
   return zones;
 }
 
+/** What the deploy read about the endpoint named in CALLABLE_FUNCTION_DATA_ENDPOINT_ID. */
+export interface DataEndpoint {
+  id: string;
+  vpcId?: string;
+  vpcEndpointType?: string;
+  serviceName?: string;
+  state?: string;
+  prefixListId?: string;
+  routeTableIds: string[];
+  policy?: string;
+}
+
 /** Whether each filtered route table lookup found the table; one lookup per kind of route the data source omits. */
 export interface RouteProbes {
   local: boolean;
@@ -67,9 +88,14 @@ export interface RouteProbes {
   propagated: boolean;
   endpoint: boolean;
   created: boolean;
+  networkInterface: boolean;
+  /** A route to any prefix list but the data endpoint's; see otherPrefixListFilters. */
+  otherPrefixList: boolean;
 }
 
-const ROUTE_PROBES: Record<keyof RouteProbes, { filter: { name: string; values: string[] }; route: RouteTarget }> = {
+export type FixedProbe = Exclude<keyof RouteProbes, 'otherPrefixList'>;
+
+const ROUTE_PROBES: Record<FixedProbe, { filter: { name: string; values: string[] }; route: RouteTarget }> = {
   local: { filter: { name: 'route.gateway-id', values: ['local'] }, route: { gatewayId: 'local' } },
   lattice: { filter: { name: 'route.gateway-id', values: ['VpcLattice'] }, route: { gatewayId: 'VpcLattice' } },
   propagated: {
@@ -78,20 +104,108 @@ const ROUTE_PROBES: Record<keyof RouteProbes, { filter: { name: string; values: 
   },
   endpoint: { filter: { name: 'route.gateway-id', values: ['vpce-*'] }, route: { gatewayId: 'vpce-*' } },
   created: { filter: { name: 'route.origin', values: ['CreateRoute'] }, route: { origin: 'CreateRoute' } },
+  networkInterface: {
+    filter: { name: 'route.network-interface-id', values: ['eni-*'] },
+    route: { networkInterfaceId: 'eni-*' },
+  },
 };
 
 /** The `getRouteTables` filters that match `routeTableId` only when its table holds a route of the probed kind. */
-export function routeProbeFilters(routeTableId: string, probe: keyof RouteProbes) {
+export function routeProbeFilters(routeTableId: string, probe: FixedProbe) {
   return [{ name: 'route-table-id', values: [routeTableId] }, ROUTE_PROBES[probe].filter];
+}
+
+/**
+ * Filters matching the table when it routes to any visible prefix list but `exceptId`; undefined when there is none
+ * to look for. A table holds one route per destination, so with the data endpoint's prefix list excepted this finds
+ * every other endpoint route.
+ */
+export function otherPrefixListFilters(routeTableId: string, prefixListIds: string[], exceptId?: string) {
+  const values = prefixListIds.filter(id => id !== exceptId);
+  if (values.length === 0) return undefined;
+  return [
+    { name: 'route-table-id', values: [routeTableId] },
+    { name: 'route.destination-prefix-list-id', values },
+  ];
 }
 
 /** A probe lookup's result: the kind of route is in the table when the lookup returned the table. */
 export const probeMatched = (ids: string[]): boolean => ids.length > 0;
 
-/** The table's listed routes plus one route for each probe that matched. */
-export function tableRoutes(listed: RouteTarget[], probes: RouteProbes): RouteTarget[] {
-  const found = (Object.keys(ROUTE_PROBES) as Array<keyof RouteProbes>).filter(probe => probes[probe]);
-  return [...listed, ...found.map(probe => ROUTE_PROBES[probe].route)];
+const OTHER_PREFIX_LIST_ROUTE: RouteTarget = { destinationPrefixListId: 'pl-*' };
+
+/**
+ * The table's listed routes plus one route for each probe that matched. An endpoint route counts as the data
+ * endpoint's own route when that endpoint lists the table; any other endpoint route matches `otherPrefixList`.
+ */
+export function tableRoutes(
+  listed: RouteTarget[],
+  probes: RouteProbes,
+  routeTableId?: string,
+  dataEndpoint?: DataEndpoint
+): RouteTarget[] {
+  const dataRoute =
+    routeTableId && dataEndpoint?.routeTableIds.includes(routeTableId)
+      ? { gatewayId: dataEndpoint.id, destinationPrefixListId: dataEndpoint.prefixListId }
+      : undefined;
+  // The endpoint route itself may read back with origin CreateRoute. Every other route the data source omits has a
+  // probe of its own, so `created` adds nothing once the data route is accounted for.
+  const skipCreated = !!dataRoute && probes.endpoint;
+  const found = (Object.keys(ROUTE_PROBES) as FixedProbe[]).filter(
+    probe => probes[probe] && !(probe === 'created' && skipCreated)
+  );
+  const probed = found.map(probe => (probe === 'endpoint' && dataRoute ? dataRoute : ROUTE_PROBES[probe].route));
+  return [...listed, ...probed, ...(probes.otherPrefixList ? [OTHER_PREFIX_LIST_ROUTE] : [])];
+}
+
+/** Every function-data key starts with it; must match callableFunctionDataKey (packages/server-utils). */
+export const FUNCTION_DATA_KEY_PREFIX = 'data/';
+
+const BUCKET_DATA_OBJECTS = /^[a-z0-9][a-z0-9.-]*\/data\/\*$/;
+const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
+
+/** True only for one Allow statement of `s3:GetObject` on one bucket's `data/` objects, for any principal. */
+export function isGetObjectOnlyPolicy(policy: string | undefined, partition: string): boolean {
+  let document: unknown;
+  try {
+    document = JSON.parse(policy ?? '');
+  } catch {
+    return false;
+  }
+  if (typeof document !== 'object' || document === null) return false;
+  const statements = asList((document as Record<string, unknown>).Statement);
+  if (statements.length !== 1 || typeof statements[0] !== 'object' || statements[0] === null) return false;
+  const statement = statements[0] as Record<string, unknown>;
+  const principal = statement.Principal;
+  const resources = asList(statement.Resource);
+  return (
+    Object.keys(statement).every(key => ['Sid', 'Effect', 'Principal', 'Action', 'Resource'].includes(key)) &&
+    statement.Effect === 'Allow' &&
+    (principal === '*' || JSON.stringify(principal) === '{"AWS":"*"}') &&
+    JSON.stringify(asList(statement.Action)) === '["s3:GetObject"]' &&
+    resources.length === 1 &&
+    typeof resources[0] === 'string' &&
+    partition !== '' &&
+    resources[0].startsWith(`arn:${partition}:s3:::`) &&
+    BUCKET_DATA_OBJECTS.test(resources[0].slice(`arn:${partition}:s3:::`.length))
+  );
+}
+
+/** Why the endpoint in CALLABLE_FUNCTION_DATA_ENDPOINT_ID cannot be the runtime's one route out of `vpcId`. */
+function dataEndpointFaults(
+  { id, ...endpoint }: DataEndpoint,
+  { s3ServiceName, partition }: { s3ServiceName: string; partition: string },
+  vpcId?: string
+): string[] {
+  const faults: string[] = [];
+  if (endpoint.vpcEndpointType !== 'Gateway') faults.push(`endpoint ${id} is not a gateway endpoint`);
+  if (endpoint.serviceName !== s3ServiceName) faults.push(`endpoint ${id} is not for ${s3ServiceName}`);
+  if (endpoint.state?.toLowerCase() !== 'available') faults.push(`endpoint ${id} is not available`);
+  if (vpcId && endpoint.vpcId !== vpcId) faults.push(`endpoint ${id} is not in VPC ${vpcId}`);
+  if (!isGetObjectOnlyPolicy(endpoint.policy, partition)) {
+    faults.push(`endpoint ${id} has a policy that allows more than s3:GetObject on one bucket's data objects`);
+  }
+  return faults;
 }
 
 /** `local` for the VPC's own route, otherwise what the route leads to. */
@@ -107,11 +221,24 @@ function routeTargetName(route: RouteTarget): string {
 
 /**
  * Why the named subnets cannot hold the function; empty only when they share one VPC with DNS support off and each
- * subnet's route table holds the local route and nothing else.
+ * subnet's route table holds the local route and nothing else but, when `data` names one, that S3 gateway
+ * endpoint's own prefix-list route.
  */
-export function subnetNetworkFaults(subnets: SubnetNetwork[]): string[] {
+export function subnetNetworkFaults(
+  subnets: SubnetNetwork[],
+  data?: { endpoint: DataEndpoint; s3ServiceName: string; partition: string }
+): string[] {
   if (subnets.length === 0) return ['no subnet is named'];
-  const faults: string[] = [];
+  const vpcIds = new Set(subnets.map(subnet => subnet.vpcId).filter(Boolean));
+  const endpointFaults = data ? dataEndpointFaults(data.endpoint, data, [...vpcIds][0]) : [];
+  const isDataRoute = (route: RouteTarget, routeTableId: string) =>
+    !!data &&
+    endpointFaults.length === 0 &&
+    route.gatewayId === data.endpoint.id &&
+    !!route.destinationPrefixListId &&
+    route.destinationPrefixListId === data.endpoint.prefixListId &&
+    data.endpoint.routeTableIds.includes(routeTableId);
+  const faults: string[] = [...endpointFaults];
   for (const { subnetId, vpcId, enableDnsSupport, routeTableId, routes } of subnets) {
     if (!vpcId) faults.push(`subnet ${subnetId}: its VPC was not found`);
     else if (enableDnsSupport === true) faults.push(`subnet ${subnetId}: VPC ${vpcId} has DNS support on`);
@@ -123,10 +250,11 @@ export function subnetNetworkFaults(subnets: SubnetNetwork[]): string[] {
     if (routes.length === 0) faults.push(`subnet ${subnetId}: route table ${routeTableId} returned no routes`);
     for (const route of routes) {
       const target = routeTargetName(route);
-      if (target !== 'local') faults.push(`subnet ${subnetId}: route table ${routeTableId} has a route to ${target}`);
+      if (target !== 'local' && !isDataRoute(route, routeTableId)) {
+        faults.push(`subnet ${subnetId}: route table ${routeTableId} has a route to ${target}`);
+      }
     }
   }
-  const vpcIds = new Set(subnets.map(subnet => subnet.vpcId).filter(Boolean));
   if (vpcIds.size > 1) faults.push(`the subnets are in more than one VPC (${[...vpcIds].join(', ')})`);
   return faults;
 }
@@ -152,6 +280,83 @@ export function callableFunctionRolePolicy(logGroupArn: string) {
         Effect: 'Allow',
         Action: ['logs:CreateLogStream', 'logs:PutLogEvents'],
         Resource: `${logGroupArn}:*`,
+      },
+    ],
+  };
+}
+
+/** The data endpoint's policy: GetObject on the function-data bucket's `data/` objects, for any principal. */
+export function callableFunctionDataEndpointPolicy(bucketArn: string) {
+  return {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Sid: 'FunctionDataReads',
+        Effect: 'Allow',
+        Principal: '*',
+        Action: 's3:GetObject',
+        Resource: `${bucketArn}/${FUNCTION_DATA_KEY_PREFIX}*`,
+      },
+    ],
+  };
+}
+
+/** What the web API function's role may do to the function-data bucket's `data/` objects. */
+export const FUNCTION_DATA_DISPATCHER_ACTIONS = ['s3:PutObject', 's3:GetObject', 's3:DeleteObject'];
+
+export const FUNCTION_DATA_READ_ACTIONS = ['s3:GetObject*', 's3:ListBucket*'];
+export const FUNCTION_DATA_WRITE_ACTIONS = ['s3:PutObject*', 's3:DeleteObject*', 's3:Replicate*'];
+
+/**
+ * The function-data bucket's policy: HTTPS only; reads, object writes, and deletes by the dispatcher's role only,
+ * from anywhere when signed in the header; its signed links only through `endpointId`, and none without one.
+ */
+export function callableFunctionDataBucketPolicy({
+  bucketArn,
+  dispatcherRoleArn,
+  endpointId,
+}: {
+  bucketArn: string;
+  dispatcherRoleArn: string;
+  endpointId?: string;
+}) {
+  const notDispatcher = { ArnNotEquals: { 'aws:PrincipalArn': dispatcherRoleArn } };
+  const notThroughEndpoint = endpointId ? { StringNotEquals: { 'aws:SourceVpce': endpointId } } : {};
+  const signedLink = { StringEquals: { 's3:authType': 'REST-QUERY-STRING' } };
+  return {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Sid: 'HttpsOnly',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: 's3:*',
+        Resource: [bucketArn, `${bucketArn}/*`],
+        Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+      },
+      {
+        Sid: 'ReadsByDispatcher',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: FUNCTION_DATA_READ_ACTIONS,
+        Resource: [bucketArn, `${bucketArn}/*`],
+        Condition: notDispatcher,
+      },
+      {
+        Sid: 'SignedLinksThroughDataEndpoint',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: 's3:GetObject*',
+        Resource: `${bucketArn}/*`,
+        Condition: { ...signedLink, ...notThroughEndpoint },
+      },
+      {
+        Sid: 'WritesByDispatcher',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: FUNCTION_DATA_WRITE_ACTIONS,
+        Resource: `${bucketArn}/*`,
+        Condition: notDispatcher,
       },
     ],
   };

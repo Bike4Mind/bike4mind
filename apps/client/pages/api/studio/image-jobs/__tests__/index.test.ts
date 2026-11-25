@@ -181,6 +181,19 @@ describe('/api/studio/image-jobs', () => {
       expect(mocks.createImageJobs).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ['null', null],
+      ['org-2', 'org-2'],
+      ['undefined', undefined],
+    ])('passes organization_id %s from the body to the billing resolver', async (_label, organizationId) => {
+      mocks.createImageJobs.mockResolvedValue({ ok: true, created: true, groupId: 'g', jobs: [] });
+      await call({
+        method: 'POST',
+        body: { count: 1, request: REQUEST, ...(organizationId !== undefined && { organization_id: organizationId }) },
+      });
+      expect(mocks.resolveMediaBillingOrgId).toHaveBeenCalledWith(expect.anything(), organizationId);
+    });
+
     it('omits the idempotency key when the header is absent', async () => {
       mocks.createImageJobs.mockResolvedValue({ ok: true, created: true, groupId: 'g', jobs: [] });
       await call({ method: 'POST', body: { count: 1, request: REQUEST } });

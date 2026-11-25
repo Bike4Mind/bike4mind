@@ -7,17 +7,17 @@ import type { JiraConfig } from '../api';
  *
  * `searchIssues()` returns AI-facing formatted issues (flattened fields, description
  * reduced to plain text with HTML stripped). `searchIssuesRaw()` returns the raw Jira
- * response. Server-side analytics (liveops issue-tracker fingerprinting, history
- * analysis) MUST use the raw variant: the liveops fingerprint lives in an
- * `<!-- fingerprint:... -->` HTML comment that the formatter's HTML-stripping destroys,
- * and time-tracking fields are dropped entirely by the formatter.
+ * response. Server-side analytics (issue-tracker fingerprinting, history analysis) MUST
+ * use the raw variant: a fingerprint embedded in an `<!-- fingerprint:... -->` HTML
+ * comment is destroyed by the formatter's HTML-stripping, and time-tracking fields are
+ * dropped entirely by the formatter.
  */
 describe('JiraApi searchIssues vs searchIssuesRaw', () => {
   const FINGERPRINT = 'a'.repeat(40);
   let mockConfig: JiraConfig;
   let jiraApi: JiraApi;
 
-  // A single raw issue whose description (ADF) embeds the liveops fingerprint comment.
+  // A single raw issue whose description (ADF) embeds a fingerprint comment.
   const rawIssue = {
     id: '10001',
     key: 'PROJ-1',
@@ -25,7 +25,7 @@ describe('JiraApi searchIssues vs searchIssuesRaw', () => {
       summary: 'Login is broken',
       status: { name: 'Done' },
       issuetype: { name: 'Bug' },
-      labels: ['liveops-triage'],
+      labels: ['triage'],
       created: '2026-01-01T00:00:00.000Z',
       resolutiondate: '2026-01-02T00:00:00.000Z',
       timespent: 3600,

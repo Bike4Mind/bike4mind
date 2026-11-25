@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   reads: [] as unknown[][],
   calls: [] as unknown[][],
   results: [] as unknown[],
+  recorded: [] as unknown[][],
 }));
 
 vi.mock('./access', async () => {
@@ -31,6 +32,10 @@ vi.mock('@bike4mind/database', () => ({
     findByIdForOwner: vi.fn(async (id: string, owner: { ownerType: string; ownerKey: string }) =>
       h.fn && h.fn.id === id && h.fn.ownerType === owner.ownerType && h.fn.ownerKey === owner.ownerKey ? h.fn : null
     ),
+    recordCaseResults: vi.fn(async (...args: unknown[]) => {
+      h.recorded.push(args);
+      return true;
+    }),
   },
   artifactRepository: { findOne: vi.fn(async () => h.artifact) },
   callableFunctionCallRepository: { record: vi.fn() },
@@ -55,6 +60,7 @@ import {
   CALLABLE_FUNCTION_TEST_CASE_MIN_MS,
   CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS,
   CALLABLE_FUNCTION_TEST_RUN_MARGIN_MS,
+  callableFunctionCaseHash,
   callableFunctionTestRunBudget,
   runCallableFunctionTests,
 } from './testRun';
@@ -127,6 +133,7 @@ beforeEach(() => {
   h.reads = [];
   h.calls = [];
   h.results = [];
+  h.recorded = [];
 });
 
 afterEach(() => {
@@ -364,5 +371,69 @@ describe('the test run budget', () => {
     for (const caps of Object.values(CALLABLE_FUNCTION_SURFACE_CAPS)) {
       expect(caps.waitMs + CALLABLE_FUNCTION_TEST_RUN_MARGIN_MS).toBeLessThanOrEqual(routeLimitMs);
     }
+  });
+});
+
+describe('recording server results for promotion', () => {
+  const LOCK = 'a'.repeat(64);
+  const CONTENT_HASH = 'c'.repeat(64);
+  const stamp = { runtime: { kind: 'pyodide-server', version: '0.25.1', lock_hash: LOCK }, packages: [] };
+  const EXAMPLE = { name: 'handbook case', input: { span: 3 }, expected: { deflection: 6 }, citation: 'ref' };
+  const entry = (testCase: { input: unknown; expected: unknown; tolerance?: unknown }, name: string) => ({
+    caseHash: callableFunctionCaseHash(testCase as never),
+    name,
+    kind: name === EXAMPLE.name ? 'example' : 'test',
+    passed: true,
+    outcome: 'ok',
+    durationMs: 5,
+    callId: 'earlier',
+    at: new Date(0),
+  });
+
+  it('records each test that ran on the runtime, a failure over an earlier pass, and keeps the example passes', async () => {
+    const [shortSpan, longSpan] = CONTRACT.tests!;
+    h.fn = {
+      ...h.fn,
+      pin: { artifactId: 'a1', version: 4, contentHash: CONTENT_HASH, source: 'code' },
+      examples: [EXAMPLE],
+      caseResults: {
+        pinVersion: 4,
+        contentHash: CONTENT_HASH,
+        runtimeVersion: '0.25.1',
+        lockHash: LOCK,
+        cases: [
+          entry(longSpan!, 'long span'),
+          entry(EXAMPLE, EXAMPLE.name),
+          entry({ input: { span: 99 }, expected: {} }, 'removed case'),
+        ],
+      },
+    };
+    h.read = { ...(h.read as object), runtime: { kind: 'pyodide-server', version: '0.25.1', lockHash: LOCK } };
+    h.results = [
+      dispatched({ outputs: { deflection: 4 }, callId: 'call-1', stamp: stamp as never }),
+      dispatched({ outputs: { deflection: 30 }, callId: 'call-2', stamp: stamp as never }),
+    ];
+    await runCallableFunctionTests(OWNER, FUNCTION_ID, { runner });
+    const [id, owner, results] = h.recorded[0]! as [string, unknown, { cases: { name: string }[] }];
+    expect([id, owner]).toEqual([FUNCTION_ID, { ownerType: 'user', ownerKey: OWNER.id }]);
+    expect(results).toMatchObject({
+      pinVersion: 4,
+      contentHash: CONTENT_HASH,
+      runtimeVersion: '0.25.1',
+      lockHash: LOCK,
+    });
+    const byName = Object.fromEntries(results.cases.map(item => [item.name, item]));
+    expect(Object.keys(byName).sort()).toEqual(['handbook case', 'long span', 'short span']);
+    expect(byName['short span']).toMatchObject({ kind: 'test', passed: true, callId: 'call-1' });
+    expect(byName['long span']).toMatchObject({ kind: 'test', passed: false, callId: 'call-2' });
+    expect(byName['handbook case']).toMatchObject({ kind: 'example', passed: true, callId: 'earlier' });
+    expect(callableFunctionCaseHash(shortSpan!)).toBe(callableFunctionCaseHash({ ...shortSpan!, name: 'renamed' }));
+  });
+
+  it('records nothing for a case without a stamp on the runtime that read the contract', async () => {
+    h.read = { ...(h.read as object), runtime: { kind: 'pyodide-server', version: '0.25.1', lockHash: LOCK } };
+    h.results = [dispatched({ outputs: { deflection: 4 } }), dispatched({ outcome: 'timeout' })];
+    await runCallableFunctionTests(OWNER, FUNCTION_ID, { runner });
+    expect(h.recorded).toEqual([]);
   });
 });

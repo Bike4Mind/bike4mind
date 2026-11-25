@@ -10,7 +10,7 @@ import { ChatShell } from './ChatShell';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 // Never looked at here, and its pickers and menus are a good share of every render.
 vi.mock('./Composer', () => ({ Composer: () => null }));
 // The 3D engine's iframe would make jsdom boot a whole extra window on every mount.

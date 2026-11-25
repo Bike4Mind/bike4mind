@@ -18,8 +18,11 @@ import { NeedsYouStrip } from './NeedsYouStrip';
 import { toMiniPayload, useOrchestrateMiniWindow, usePublishOrchestrateMini } from './orchestrateMini';
 import { numberAgents, redactForPresenter, restorePresentedAction, type PresentedStage } from './presenter';
 import type { OrchestratorViewId } from './orchestratorPrefs';
-import type { OrchestratorLayout } from './orchestratorLayout';
+import type { OrchestratorLayout, OrchestratorPane } from './orchestratorLayout';
 import { StageLayout } from './StageLayout';
+import { StageDropZones } from './StageDropZones';
+import { pinLabel, resolvePaneSession } from './panePins';
+import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
@@ -138,13 +141,18 @@ export interface OrchestratorStageProps {
   /** Showing the parent conversation takes precedence over an agent peek. */
   conversationRequest?: number;
   presenter?: StagePresenter;
+  /**
+   * The shell's sessions, so a pane in a split can be pinned to another session (panePins.ts) and draw its
+   * roster. Without it every pane shows this stage's roster.
+   */
+  paneSessions?: PaneSessionSource;
 }
 
 const NO_PARENT: ParentView = {};
 const NO_NUMBERS: ReadonlyMap<string, number> = new Map();
 
 /** Presenter mode's agent numbers: given in roster order as agents first show, kept until the mode is turned off. */
-function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
+export function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
   const numbers = useRef(NO_NUMBERS);
   // Written during render on purpose: numberAgents is deterministic and idempotent, so a double render is
   // harmless, and moving it to an effect would flash the real titles for a frame.
@@ -181,6 +189,7 @@ export function OrchestratorStage({
   focus,
   conversationRequest,
   presenter,
+  paneSessions,
 }: OrchestratorStageProps) {
   const [prAgentId, setPrAgentId] = useState<string | null>(null);
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
@@ -359,6 +368,7 @@ export function OrchestratorStage({
         actions={actions}
         skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
         visible={!settled}
+        onOpenPr={openPr}
       />
     </Box>
   );
@@ -380,6 +390,30 @@ export function OrchestratorStage({
     settled: ambient?.settled === true,
     restoreAction,
   };
+
+  // A pane pinned to another session draws that session's roster; the stage's selection, drawer, finale and
+  // desk stay the active session's, so a click there opens the agent's session instead.
+  const renderPane = (pane: OrchestratorPane) => {
+    if (!renderView) return null;
+    const pinned =
+      paneSessions && resolvePaneSession(pane, { activeId: rootId, sessions: paneSessions.sessions, split });
+    if (!paneSessions || !pinned) return renderView(pane.view, viewProps);
+    return (
+      <PinnedPane
+        key={pinned.id}
+        rootId={pinned.id}
+        view={pane.view}
+        label={pinLabel(pinned, rootId, paneSessions.sessions, { presenting })}
+        source={paneSessions}
+        renderView={renderView}
+        onOpenSession={actions.open}
+        presenting={presenting}
+        settled={settled}
+      />
+    );
+  };
+
+  const isListedSession = (id: string) => paneSessions?.sessions.some(session => session.id === id) === true;
 
   const snapshot = useMemo(
     () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
@@ -464,7 +498,7 @@ export function OrchestratorStage({
           </Typography>
         </Box>
       ) : (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1, minWidth: 0 }}>
           <ViewSwitcher
             layout={layout}
             onLayoutChange={onLayoutChange}
@@ -472,6 +506,7 @@ export function OrchestratorStage({
             focus={focus}
             presenter={presenter}
             miniWindow={miniWindow}
+            paneSessions={paneSessions && { activeId: rootId, sessions: paneSessions.sessions, presenting }}
           />
           {presenting && <PresentingBadge />}
           <Typography
@@ -542,12 +577,17 @@ export function OrchestratorStage({
             />
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
-          ) : renderView ? (
-            <StageLayout
+          ) : renderView && paneSessions ? (
+            <StageDropZones
               layout={layout}
               onLayoutChange={onLayoutChange}
-              renderPane={paneView => renderView(paneView, viewProps)}
-            />
+              activeId={rootId}
+              isListed={isListedSession}
+            >
+              <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
+            </StageDropZones>
+          ) : renderView ? (
+            <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
           ) : (
             <TableView {...viewProps} />
           )}

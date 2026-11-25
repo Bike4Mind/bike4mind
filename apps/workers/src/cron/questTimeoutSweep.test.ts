@@ -130,7 +130,7 @@ describe('questTimeoutSweep cron', () => {
     await handler();
 
     // The Slack error channel is fed only by ERROR-level lines (infra/logMonitor.ts);
-    // a warn-level recovery is invisible to LiveOps triage. The message is the shared
+    // a warn-level recovery is invisible to LiveOps. The message is the shared
     // recovery constant so the same filter catches every settle site.
     expect(mockLogger.error).toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, {
       questId: 'q-1',

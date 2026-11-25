@@ -20,6 +20,7 @@ import { useHeldRelays } from '../useHeldRelays';
 import { TaskDecisionPanel } from './TaskDecisionPanel';
 import { markSessionViewed } from '../markSessionViewed';
 import { activityLabel } from './activity';
+import { AgentPrIndicator } from './AgentPrIndicator';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
 import type { AgentView } from './roster';
@@ -41,6 +42,8 @@ interface AgentPeekDrawerProps {
   actions: AgentActions;
   skin?: AgentDetailsSkin;
   visible?: boolean;
+  /** Opens the in-app PR details, as the views' badges do. */
+  onOpenPr?(id: string): void;
 }
 
 function errorText(error: unknown): string {
@@ -292,7 +295,7 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
   );
 }
 
-export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true }: AgentPeekDrawerProps) {
+export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true, onOpenPr }: AgentPeekDrawerProps) {
   const mode = useTheme().palette.mode;
   const palette = skin?.[mode];
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -381,6 +384,12 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
             {agent.title}
           </Typography>
         </Box>
+        <AgentPrIndicator
+          agentId={agent.id}
+          pr={agent.pr}
+          onOpen={onOpenPr && (() => onOpenPr(agent.id))}
+          testId="orchestrator-peek-pr"
+        />
         <AgentStateChip
           state={agent.state}
           preparing={agent.preparing !== undefined}

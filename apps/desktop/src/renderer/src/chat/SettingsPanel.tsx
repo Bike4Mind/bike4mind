@@ -27,6 +27,7 @@ import type { ModelServerView } from '@shared/modelServers';
 import { ModelServersSettings, modelServersSummary, useModelServers } from './ModelServersSettings';
 import { WorktreesSettings } from './WorktreesSettings';
 import { AutoFixAttemptsSettings, autoFixAttemptsSummary, useAutoFixAttempts } from './AutoFixAttemptsSettings';
+import { TurnExtensionsSettings, turnExtensionsSummary, useTurnExtensions } from './TurnExtensionsSettings';
 import type { CuratedListSettings as CuratedListSettingsState } from '@shared/models';
 import { CuratedListSettings, curatedListSummary, useCuratedListSettings } from './CuratedListSettings';
 import { SettingsRow, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
@@ -195,6 +196,22 @@ function autoFixAttemptsEntry(
     description:
       'How many times auto-fix tries a pull request before it stops. Takes effect when you next turn auto-fix on. Raising it also applies where auto-fix is already on.',
     control: <AutoFixAttemptsSettings attempts={attempts} onChange={onChange} error={error} />,
+  };
+}
+
+function turnExtensionsEntry(
+  extensions: number | null,
+  onChange: (extensions: number) => void,
+  error: string | null
+): ConfigEntry {
+  return {
+    id: 'turn-extensions',
+    icon: <SlidersIcon />,
+    label: 'Long-running agents',
+    summary: turnExtensionsSummary(extensions),
+    description:
+      'When an agent reaches its turn budget while still making progress, it carries on by itself up to this many times per message. Each extension spends more credits. An agent repeating the same step always stops.',
+    control: <TurnExtensionsSettings extensions={extensions} onChange={onChange} error={error} />,
   };
 }
 
@@ -698,6 +715,7 @@ function useSettingsEntries(
   const setSortByAttention = usePrAttentionSort(state => state.setSortByAttention);
   const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
   const [autoFixAttempts, setAutoFixAttempts, autoFixAttemptsError] = useAutoFixAttempts();
+  const [turnExtensions, setTurnExtensions, turnExtensionsError] = useTurnExtensions();
   const [menuBar, toggleMenuBar] = useMenuBarSetting();
   const [notifyScope, setNotifyScope] = useNotifyScope();
   const [spawnLocation, setSpawnLocation] = useSpawnLocation();
@@ -712,6 +730,7 @@ function useSettingsEntries(
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       spawnLocationEntry(spawnLocation, setSpawnLocation),
       autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
+      turnExtensionsEntry(turnExtensions, next => void setTurnExtensions(next), turnExtensionsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       prAttentionSortEntry(sortByAttention, setSortByAttention),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
@@ -793,7 +812,14 @@ const GENERAL_GROUPS = [
   {
     id: 'conversations',
     label: 'Conversations & code',
-    entries: ['prompt-suggestions', 'worktree-default', 'spawn-location', 'autofix-attempts', 'orchestration-policy'],
+    entries: [
+      'prompt-suggestions',
+      'worktree-default',
+      'spawn-location',
+      'autofix-attempts',
+      'turn-extensions',
+      'orchestration-policy',
+    ],
   },
   { id: 'models', label: 'Models', entries: ['local-context', 'reply-stats', 'curated-list'] },
   { id: 'data', label: 'Data & privacy', entries: ['local-history', 'local-data-export'] },

@@ -124,6 +124,7 @@ export const USAGE_EVENT_OPERATIONS = [
   'context_summary',
   'memento',
   'assistant_brief',
+  'delegated_item',
   'org_feedback_summary',
 ] as const;
 

@@ -222,6 +222,11 @@ function managedSpawnSchema(modelHint: string | null): ToolSchema {
  * nothing from a folder.
  */
 export function toolsForRequest(options: {
+  /**
+   * A Studio session: the generation tools and nothing else, whatever the other flags say. No
+   * shell, file, browser, host or MCP tool, because a Studio conversation runs nothing locally.
+   */
+  studio?: boolean;
   roots: readonly string[];
   media: boolean;
   /**
@@ -298,6 +303,7 @@ export function toolsForRequest(options: {
    */
   pullRequest?: boolean;
 }): { toolSchema: ToolSchema }[] {
+  if (options.studio) return studioTools(options);
   // Shared families first and per-session ones last, so a spawned worker's list is a prefix of
   // its parent's and sibling workers share one cached prefix; see ChatService.promptPrefix.test.ts.
   const available = [
@@ -342,5 +348,13 @@ export function toolsForRequest(options: {
     ...(options.media && options.video?.length ? [{ toolSchema: generateVideoSchema(options.video) }] : []),
     ...(options.mcp ?? []).map(toolSchema => ({ toolSchema })),
     ...sessionSpecific.map(tool => ({ toolSchema: schemaOf(tool) })),
+  ];
+}
+
+function studioTools(options: { media: boolean; video?: readonly VideoModel[] }): { toolSchema: ToolSchema }[] {
+  if (!options.media) return [];
+  return [
+    ...MEDIA_TOOLS.map(tool => ({ toolSchema: tool.schema })),
+    ...(options.video?.length ? [{ toolSchema: generateVideoSchema(options.video) }] : []),
   ];
 }

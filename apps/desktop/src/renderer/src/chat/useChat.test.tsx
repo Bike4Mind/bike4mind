@@ -371,6 +371,175 @@ describe('opening a chat', () => {
       expect(conversation.turn).toBeNull();
     });
   });
+
+  // getSession hands back the cursor its snapshot reflects; what lands while it is in flight is
+  // held and applied after it only when the snapshot does not already hold it.
+  describe('a stream event landing while the chat is being read', () => {
+    let emit: (event: ChatStreamEvent) => void = () => {};
+    let answer: (session: ChatSession) => void = () => {};
+    const prompt = { id: 'p', role: 'user', content: 'hi', createdAt: at } as const;
+    const reply = (content: string) => ({ id: 'r', role: 'assistant', content, createdAt: at }) as const;
+    const delta = (seq: number, text: string): ChatStreamEvent => ({
+      type: 'delta',
+      sessionId: 's1',
+      messageId: 'r',
+      text,
+      seq,
+    });
+    // A non-live event folds the queued live ones at once rather than on the next frame.
+    const flush = (seq: number): ChatStreamEvent => ({
+      type: 'phase',
+      sessionId: 's1',
+      messageId: 'r',
+      phase: { kind: 'responding' },
+      seq,
+    });
+    const midTurn = (seq: number) =>
+      sessionFor('s1', {
+        messages: [prompt, reply('Hi ')],
+        replyInFlight: { messageId: 'r', startedAt: 10 },
+        eventCursor: { epoch: 'e', seq },
+      });
+
+    beforeEach(() => {
+      window.b4m.chat.onStreamEvent = listener => {
+        emit = listener;
+        return () => {};
+      };
+      getSession.mockImplementation(id =>
+        id === 's1' ? new Promise<ChatSession>(done => (answer = done)) : Promise.resolve(sessionFor(id))
+      );
+    });
+
+    it('applies one after the cursor exactly once and drops one the snapshot holds', async () => {
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => {
+        emit(delta(3, 'Hi '));
+        emit(delta(4, 'there'));
+      });
+      expect(conversation.messages).toEqual([]);
+      await act(async () => answer(midTurn(3)));
+      await act(async () => emit(flush(5)));
+      expect(conversation.messages.at(-1)?.content).toBe('Hi there');
+
+      // Anything at or below the cursor stays dropped after the read too.
+      await act(async () => {
+        emit(delta(2, 'stale '));
+        emit(delta(6, '!'));
+        emit(flush(7));
+      });
+      expect(conversation.messages.at(-1)?.content).toBe('Hi there!');
+      expect(getSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('ends the turn with a done that lands after the cursor, without reading again', async () => {
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => emit({ type: 'done', sessionId: 's1', messageId: 'r', content: 'Hi all', seq: 4 }));
+      await act(async () => answer(midTurn(3)));
+      expect(getSession).toHaveBeenCalledTimes(1);
+      expect(conversation.streaming).toBe(false);
+      expect(conversation.turn).toBeNull();
+      expect(conversation.messages.map(message => message.content)).toEqual(['hi', 'Hi all']);
+    });
+
+    it('drops a done the snapshot already holds', async () => {
+      const settled = sessionFor('s1', { messages: [prompt, reply('Hi all')], eventCursor: { epoch: 'e', seq: 4 } });
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => emit({ type: 'done', sessionId: 's1', messageId: 'r', content: 'Hi all', seq: 4 }));
+      await act(async () => answer(settled));
+      expect(conversation.messages.map(message => message.content)).toEqual(['hi', 'Hi all']);
+      expect(conversation.streaming).toBe(false);
+    });
+
+    it('still shows a notice the snapshot reflects, since the snapshot does not carry notices', async () => {
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () =>
+        emit({ type: 'context-notice', sessionId: 's1', kind: 'run-budget', message: 'budget 80%', seq: 2 })
+      );
+      await act(async () => answer(midTurn(3)));
+      expect(conversation.notice).toBe('budget 80%');
+      expect(conversation.messages.at(-1)?.content).toBe('Hi ');
+    });
+
+    it('clears a notice that a reflected clear removed', async () => {
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () =>
+        emit({ type: 'context-notice', sessionId: 's1', kind: 'run-budget', message: 'budget 80%', seq: 1 })
+      );
+      await act(async () => emit({ type: 'context-notice-cleared', sessionId: 's1', kind: 'run-budget', seq: 2 }));
+      await act(async () => answer(midTurn(3)));
+      expect(conversation.notice).toBeNull();
+    });
+
+    it('counts a settled turn the snapshot already holds', async () => {
+      const settled = sessionFor('s1', { messages: [prompt, reply('Hi all')], eventCursor: { epoch: 'e', seq: 4 } });
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => emit({ type: 'done', sessionId: 's1', messageId: 'r', content: 'Hi all', seq: 4 }));
+      await act(async () => answer(settled));
+      expect(conversation.settledTurns).toBe(1);
+    });
+
+    it('applies what it held when the read fails', async () => {
+      let fail: (error: Error) => void = () => {};
+      getSession.mockImplementation(id =>
+        id === 's1' ? new Promise<ChatSession>((_, reject) => (fail = reject)) : Promise.resolve(sessionFor(id))
+      );
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => {
+        emit({ type: 'context-notice', sessionId: 's1', kind: 'run-budget', message: 'budget 80%', seq: 1 });
+        emit({ type: 'done', sessionId: 's1', messageId: 'r', content: 'x', seq: 2 });
+      });
+      expect(conversation.notice).toBeNull();
+      await act(async () => fail(new Error('database locked')));
+      expect(conversation.notice).toBe('budget 80%');
+      expect(conversation.settledTurns).toBe(1);
+    });
+
+    it('applies what it held when the read finds no chat', async () => {
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () =>
+        emit({ type: 'context-notice', sessionId: 's1', kind: 'run-budget', message: 'budget 80%', seq: 1 })
+      );
+      await act(async () => answer(null as unknown as ChatSession));
+      expect(conversation.notice).toBe('budget 80%');
+    });
+
+    it('counts a settled turn held for a chat that is left before its read lands', async () => {
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => emit({ type: 'done', sessionId: 's1', messageId: 'r', content: 'x', seq: 4 }));
+      expect(conversation.settledTurns).toBe(0);
+      await act(async () => root.render(<Harness id="s2" />));
+      expect(conversation.settledTurns).toBe(1);
+      await act(async () => answer(midTurn(3)));
+      expect(conversation.messages).toEqual([]);
+    });
+
+    it('counts a settled turn held when the window unmounts mid-read', async () => {
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => emit({ type: 'done', sessionId: 's1', messageId: 'r', content: 'x', seq: 4 }));
+      await act(async () => root.unmount());
+      await act(async () => answer(midTurn(3)));
+      expect(getSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves events of another chat alone', async () => {
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => emit({ type: 'context-notice', sessionId: 's2', message: 'notice for s2', seq: 1 }));
+      await act(async () => answer(midTurn(3)));
+      await act(async () => root.render(<Harness id="s2" />));
+      expect(conversation.notice).toBe('notice for s2');
+    });
+
+    it('opens a chat with no turn in flight and follows the next one', async () => {
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => answer(sessionFor('s1', { messages: [prompt], eventCursor: { epoch: 'e', seq: 0 } })));
+      expect(conversation.messages).toEqual([prompt]);
+      expect(conversation.streaming).toBe(false);
+      await act(async () => emit({ type: 'start', sessionId: 's1', messageId: 'r', seq: 1 }));
+      expect(conversation.streaming).toBe(true);
+      expect(conversation.messages.map(message => message.id)).toEqual(['p', 'r']);
+    });
+  });
 });
 
 describe('per-chat setters', () => {

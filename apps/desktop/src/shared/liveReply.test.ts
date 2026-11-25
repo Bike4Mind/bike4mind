@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from './liveReply';
+import { applyLiveEvent, coalesceLiveEvents, mergeDelta, startReply, type LiveReplyEvent } from './liveReply';
 import { readReplyStats } from './replyStats';
 import { localRunSettlement } from './runSpend';
 import type { ChatMessage, ChatStreamEvent, ChatToolCall } from './chat';
@@ -96,6 +96,24 @@ describe('liveReply', () => {
         { text: 'Found it.', toolCallIds: [], reasoning: 'next' },
       ]);
       expect(reply.content).toBe('Looking.Found it.');
+    });
+
+    describe('mergeDelta', () => {
+      const piece = (text: string, seq?: number): Extract<LiveReplyEvent, { type: 'delta' }> => ({
+        type: 'delta',
+        sessionId: 's',
+        messageId: 'm',
+        text,
+        ...(seq === undefined ? {} : { seq }),
+      });
+
+      it('joins the text and keeps the newer seq', () => {
+        expect(mergeDelta(piece('a', 1), piece('b', 2))).toMatchObject({ text: 'ab', seq: 2 });
+      });
+
+      it('keeps the earlier seq when the newer one is unsequenced', () => {
+        expect(mergeDelta(piece('a', 1), piece('b'))).toMatchObject({ text: 'ab', seq: 1 });
+      });
     });
 
     describe('coalesceLiveEvents', () => {

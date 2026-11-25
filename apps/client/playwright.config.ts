@@ -251,6 +251,13 @@ const config = defineConfig({
       testMatch: [/(?:^|\/)websocket-auth\.spec\.ts$/],
       dependencies: ['setup-core'],
     },
+    // Admin setup: signs the setup admin in again. Depending on `unauthenticated` keeps it in the
+    // last phase before `admin`, so the new token is minted right before the admin specs use it.
+    {
+      name: 'setup-admin',
+      testMatch: /(?:^|\/)admin\.setup\.ts$/,
+      dependencies: ['setup-core', 'unauthenticated'],
+    },
     // Admin specs
     {
       name: 'admin',
@@ -258,7 +265,7 @@ const config = defineConfig({
         ...devices['Desktop Chrome'],
         storageState: adminAuthFile,
       },
-      dependencies: ['setup-core', 'unauthenticated'],
+      dependencies: ['setup-admin'],
       testMatch: [
         /(?:^|\/)admin\.spec\.ts$/,
         /(?:^|\/)admin-access-review\.spec\.ts$/,

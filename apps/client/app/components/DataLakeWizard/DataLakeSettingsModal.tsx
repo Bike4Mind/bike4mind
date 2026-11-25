@@ -33,6 +33,7 @@ import {
   useDataLakeSpend,
   useDeleteDataLakeResearchConfig,
   useLakeConfigHistory,
+  useUndoLakeConfigChange,
   useReviewDataLakeProposal,
   reviewProposalFailureMessage,
   serverRefusalMessage,
@@ -215,6 +216,7 @@ export function DataLakeSettingsModal({
   // The config history is manage-gated server-side, so the tab follows `canManage` and retracts on a
   // rejection - same derive-at-render shape as the spend tab, for the same reason (no error paint).
   const history = useLakeConfigHistory(lake?.id ?? null, !!lake?.canManage && tab === 'history');
+  const undoChange = useUndoLakeConfigChange(lake?.id ?? null);
   const showHistoryTab = !!lake?.canManage && !history.isForbidden;
   // Fetched whenever a manager opens the modal, unlike spend (whose tab is decided by a field the
   // lake list already carries): there is no precomputed "has proposals" signal, and a queue tab
@@ -893,6 +895,11 @@ export function DataLakeSettingsModal({
                     view={history.data}
                     isLoading={history.isLoading}
                     error={history.isForbidden ? null : history.error}
+                    onUndo={eventId =>
+                      undoChange.mutateAsync(eventId).catch((err: unknown) => {
+                        throw new Error(serverRefusalMessage(err) ?? 'Could not undo this change.');
+                      })
+                    }
                   />
                 </TabPanel>
                 {/* Kept mounted, guarded and keyed like the Research panel below, because a

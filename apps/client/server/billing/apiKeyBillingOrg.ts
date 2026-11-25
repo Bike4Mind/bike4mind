@@ -33,7 +33,7 @@ export type ApiKeyBillingOrg =
   | { kind: 'mismatch'; message: string }
   | { kind: 'stale'; message: string };
 
-const MISMATCH_MESSAGE =
+export const MISMATCH_MESSAGE =
   "This API key bills its own organization; omit the billing organization or set it to the key's.";
 const MISSING_ORG_MESSAGE = 'This API key bills an organization that no longer exists. Re-mint the key to continue.';
 

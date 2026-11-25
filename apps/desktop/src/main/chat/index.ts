@@ -67,6 +67,7 @@ import { createMainLogger } from '../logger';
 import { createCompletionRunMinter } from './completionRuns';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
+import { TurnExtensionsPreference } from './TurnExtensionsPreference';
 import { LocalContextPreference } from './LocalContextPreference';
 import { SpawnLocationPreference } from './SpawnLocationPreference';
 import { registerSpawnLocationIpc } from './spawnLocationIpc';
@@ -102,6 +103,7 @@ import { ModelLiveViews } from './model3d/ModelLiveViews';
 import { ModelVersionStore } from './model3d/ModelVersionStore';
 import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
+import { SessionEventLog } from './SessionEventLog';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
 import { logDownstream } from './devLogDownstream';
 import { McpManager } from './mcp/McpManager';
@@ -632,6 +634,8 @@ export function registerChat(
     logger,
     send,
   });
+  // One sequence per session across the service and the emitters below that bypass it.
+  const eventLog = new SessionEventLog();
   const broadcast = (event: ChatStreamEvent) => {
     send(IPC_CHANNELS.chatStreamEvent, event);
     if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
@@ -653,7 +657,7 @@ export function registerChat(
         : null;
     },
     emit: (sessionId, job) => {
-      broadcast({ type: 'video-job', sessionId, job });
+      broadcast(eventLog.append({ type: 'video-job', sessionId, job }));
       if (job.state === 'succeeded' && job.media)
         void studioIntegration
           .indexChatSession(sessionId, true)
@@ -704,9 +708,9 @@ export function registerChat(
   );
   const background = new BackgroundProcessRegistry({
     output: (sessionId, processId, stream, text) =>
-      broadcast({ type: 'background-output', sessionId, processId, stream, text }),
+      broadcast(eventLog.append({ type: 'background-output', sessionId, processId, stream, text })),
     status: (sessionId, process) => {
-      broadcast({ type: 'background-status', sessionId, process });
+      broadcast(eventLog.append({ type: 'background-status', sessionId, process }));
       // Only ever fires from start/finish, after `background` below has been assigned.
       backgroundJobs.update(sessionId, background.wakingJobs(sessionId), process.status);
     },
@@ -773,6 +777,7 @@ export function registerChat(
     { available: process.platform === 'darwin' }
   );
 
+  const turnExtensions = new TurnExtensionsPreference(join(userData, 'turn-extensions.json'));
   const service = new ChatService({
     store,
     access,
@@ -788,6 +793,7 @@ export function registerChat(
     turnTiming: TURN_TIMING,
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
+    turnExtensions: () => turnExtensions.read(),
     approvals,
     permissions,
     capabilities: {
@@ -841,6 +847,7 @@ export function registerChat(
     getApiClient: () => auth.getApiClient(),
     isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
     getEnvironmentUrl: () => auth.getState().environment.url,
+    eventLog,
     emit: event => {
       broadcast(event);
       try {
@@ -973,6 +980,11 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
     isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
   );
+  ipcMain.handle(IPC_CHANNELS.chatGetTurnExtensions, () => turnExtensions.read());
+  // Coerced by the preference: anything out of range is saved as the default.
+  ipcMain.handle(IPC_CHANNELS.chatSetTurnExtensions, (_event, extensions: unknown) =>
+    turnExtensions.record(extensions)
+  );
   registerGenerationIpc(ipcMain, service);
   registerModelSettingsIpc(ipcMain, modelSettings, {
     offer: (modelId, draftTokens) => local.loadOffer(modelId, draftTokens),
@@ -1094,7 +1106,7 @@ export function registerChat(
       .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
   };
   registerSessionCreateIpc(ipcMain, {
-    createSession: () => service.createSession(),
+    createSession: mode => service.createSession(mode),
     createCodeSession: request => service.createCodeSession(request),
     place: (sessionId, sectionId) =>
       placeNewSession(sidebarSections, sessionId, sectionId, error =>
