@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Button, Typography, Tabs, TabList, Tab, TabPanel, Stack } from '@mui/joy';
+import { Button, Tabs, TabList, Tab, TabPanel, Stack } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { AdminPageHeader, DataTable, EmptyState, LoadingState, StatStrip, StatTile } from '../shared';
 import { snapshotColumns } from './snapshotColumns';

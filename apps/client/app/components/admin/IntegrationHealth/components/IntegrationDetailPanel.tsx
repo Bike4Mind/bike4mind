@@ -76,7 +76,7 @@ function Section({ title, children, testId }: { title: string; children: React.R
 
 type RecentErrorRow = { err: IntegrationDashboardEntry['recentErrors'][number]; key: string };
 
-// DataTable requires a retry handler; this table renders only with rows and gets no `error`, so none is offered.
+// DataTable requires a retry handler; this table is never given `error`, so it is never called.
 const noRetry = () => undefined;
 
 const recentErrorColumns: DataColumn<RecentErrorRow>[] = [

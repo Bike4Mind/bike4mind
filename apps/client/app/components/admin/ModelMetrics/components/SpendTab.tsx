@@ -131,7 +131,7 @@ const KpiCard: React.FC<{ kpi: SpendKpi }> = ({ kpi }) => {
   );
 };
 
-export type SpendAccountRow = SpendData['byAccount'][number];
+type SpendAccountRow = SpendData['byAccount'][number];
 
 // DataTable requires a retry handler; the parent owns the spend query's error state and `empty` has no action.
 const noRetry = () => undefined;
@@ -209,7 +209,7 @@ const accountColumns: DataColumn<SpendAccountRow>[] = [
   },
 ];
 
-const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
+export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
   const theme = useTheme();
 
   // Duplicated from AnalyticsTab's chartTheme (hand-rolled, not shared code).
