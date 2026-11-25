@@ -761,9 +761,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:accountDataExportQueueDLQ',
     '8234bb46aa2d71c0b2303134eb96ad2918c4735483c21631faa46b1b27736d60'
   ),
+  // The erasure also deletes callable function data: the data bucket when hosted, the files bucket on self-host.
   wired(
     'queue:infra/queues.ts:accountErasureQueue',
-    '746c040649f74b43385f01ce1a47a1e98222ef0ae70cac9cdaf49cfee41d0464',
+    '071a9ee21367c30d5f70bc395418e2ab3dceda40b00e2f6f2817ba56a563aafb',
     {
       source: 'apps/workers/src/selfhost/accountErasureQueue.ts',
       symbol: 'registerAccountErasureQueue',
@@ -1256,9 +1257,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
       fingerprint: '969bed6cde6dafb23b320883c779caff4c30686bce073f671c27da06190f92a6',
     }
   ),
+  // The sweep also deletes callable function data: the data bucket when hosted, the files bucket on self-host.
   wired(
     'schedule:infra/cron.ts:accountDeletionSweep',
-    '3c9574bcf45752d386991c362252400f0bbdd3987f1e455ed6ef6cb0b3e1ab8c',
+    '7c605bb8b6920ebdb9a49b03ffbc54f0d72e99682fe29a9127e830bddaa30c8a',
     {
       source: 'apps/workers/src/selfhost/accountDeletionSweep.ts',
       symbol: 'registerAccountDeletionSweep',
