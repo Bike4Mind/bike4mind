@@ -190,12 +190,18 @@ export const USAGE_EVENT_OWNER_TYPES: readonly UsageEventOwnerType[] = [
   PLATFORM_USAGE_OWNER_TYPE,
 ];
 
-export const PLATFORM_PAID_REASONS = ['template_example_run'] as const;
+/**
+ * template_example_run: an author's example run and its sample file. template_draft: the drafted copy
+ * for an author's template page. template_free_run: a signed-out visitor's run on a public template page.
+ */
+export const PLATFORM_PAID_REASONS = ['template_example_run', 'template_draft', 'template_free_run'] as const;
+
+export type PlatformPaidReason = (typeof PLATFORM_PAID_REASONS)[number];
 
 /** What a platform-paid row was spent on. Set only on rows owned by PLATFORM_USAGE_OWNER_TYPE. */
 export const UsageEventPlatformPaid = z.object({
   reason: z.enum(PLATFORM_PAID_REASONS),
-  /** The skill listing whose template example ran. */
+  /** The skill listing the call was for. */
   listingId: z.string().optional(),
 });
 

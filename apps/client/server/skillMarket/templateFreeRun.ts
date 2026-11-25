@@ -11,15 +11,18 @@ import {
   wrapUntrustedSkillBody,
   type IAdminSettings,
   type ISkillSnapshot,
+  type IUsageEventRepository,
 } from '@bike4mind/common';
-import { buildApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { buildApiKeyTable, getAvailableModels, getLlmByModel, type CompletionInfo } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
+import { hasReportedUsage, latchUsage, type CompletionUsage } from '@bike4mind/services/billing/completionMeter';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getTurnstileFreeRunPolicy } from '@server/utils/auth/turnstile';
 import { approvedSnapshotOf } from './template';
+import { platformCompletionUsageEvent } from './templateExampleSampleUsage';
 import { freeRunFileMaxBytes, type FreeRunFile } from './templateFreeRunFile';
 import { isPublicTemplatePage } from './templateImage';
 import type { ServableTemplate, TemplatePageView } from './templatePage';
@@ -255,7 +258,11 @@ export class FreeRunTimeoutError extends Error {}
 // Under the 60 s server Lambda timeout (infra/web.ts), so a slow run ends in a refusal, not a killed function.
 const FREE_RUN_TIMEOUT_MS = 45_000;
 
-/** One non-streaming completion on platform keys. Throws on any failure, including an empty answer. */
+/**
+ * One non-streaming completion on platform keys. Throws on any failure, including an empty answer.
+ * Its provider-reported usage is recorded as platform-paid for the listing, with nothing about the
+ * visitor, including a call that outlives the timeout once the provider ends it.
+ */
 export async function completeFreeRun(args: {
   model: string;
   system: string;
@@ -263,33 +270,69 @@ export async function completeFreeRun(args: {
   /** A `data:` URL; the model must accept images (freeRunAcceptsFiles). */
   image?: string;
   maxTokens: number;
+  listingId: string;
+  ledger: { usageEvents: Pick<IUsageEventRepository, 'record'> };
   logger: Logger;
 }): Promise<string> {
   const { modelInfo, llm } = await resolveFreeRunBackend(args.model, args.logger);
+  const { ledger, listingId } = args;
+  const usage: CompletionUsage = {};
+  const startedAt = Date.now();
+  let timedOut = false;
   let raw = '';
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const call = llm.complete(
+    modelInfo.id,
+    [
+      { role: 'system' as const, content: args.system },
+      {
+        role: 'user' as const,
+        content: args.image
+          ? [
+              { type: 'text' as const, text: args.user },
+              { type: 'image_url' as const, image_url: { url: args.image } },
+            ]
+          : args.user,
+      },
+    ],
+    { maxTokens: args.maxTokens, stream: false },
+    async (parts: (string | null | undefined)[], info?: CompletionInfo) => {
+      latchUsage(usage, info);
+      raw += parts.filter(Boolean).join('');
+    }
+  );
+  void call
+    .then(
+      () => 'ok' as const,
+      () => 'error' as const
+    )
+    .then(async outcome => {
+      if (!hasReportedUsage(usage)) return;
+      await ledger.usageEvents
+        .record(
+          platformCompletionUsageEvent({
+            modelInfo,
+            usage,
+            status: timedOut ? 'timeout' : outcome,
+            startedAt,
+            reason: 'template_free_run',
+            listingId,
+          })
+        )
+        .catch(error =>
+          args.logger.warn('skill-free-run: could not record the run usage', {
+            listingId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        );
+    });
   await Promise.race([
-    llm.complete(
-      modelInfo.id,
-      [
-        { role: 'system' as const, content: args.system },
-        {
-          role: 'user' as const,
-          content: args.image
-            ? [
-                { type: 'text' as const, text: args.user },
-                { type: 'image_url' as const, image_url: { url: args.image } },
-              ]
-            : args.user,
-        },
-      ],
-      { maxTokens: args.maxTokens, stream: false },
-      async (parts: (string | null | undefined)[]) => {
-        raw += parts.filter(Boolean).join('');
-      }
-    ),
+    call,
     new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new FreeRunTimeoutError('Free run timed out')), FREE_RUN_TIMEOUT_MS);
+      timer = setTimeout(() => {
+        timedOut = true;
+        reject(new FreeRunTimeoutError('Free run timed out'));
+      }, FREE_RUN_TIMEOUT_MS);
     }),
   ]).finally(() => clearTimeout(timer));
   if (!raw.trim()) throw new Error('Free run returned no text');

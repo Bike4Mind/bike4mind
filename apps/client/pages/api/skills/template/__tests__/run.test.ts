@@ -184,7 +184,7 @@ describe('POST /api/skills/template/run/[slug]', () => {
     expect(res.getHeader('Set-Cookie')).toContain('b4m_template_free_run=');
     expect(h.complete).toHaveBeenCalledTimes(1);
     const args = h.complete.mock.calls[0][0];
-    expect(args).toMatchObject({ model: 'operations', maxTokens: 1500 });
+    expect(args).toMatchObject({ model: 'operations', maxTokens: 1500, listingId: 'listing-1' });
     expect(args.system).toContain('Summarize [the visitor input in the user message] as five bullets.');
     expect(args.system).not.toContain('An article.');
     expect(args.user).toContain('An article.');

@@ -2,8 +2,10 @@ import { randomUUID } from 'crypto';
 import {
   PLATFORM_USAGE_OWNER_ID,
   PLATFORM_USAGE_OWNER_TYPE,
+  type IUsageEventInput,
   type IUsageEventRepository,
   type ModelInfo,
+  type PlatformPaidReason,
 } from '@bike4mind/common';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
@@ -14,6 +16,46 @@ import {
   type CompletionUsage,
 } from '@bike4mind/services/billing/completionMeter';
 import { platformPaidUsageEvent } from '@bike4mind/services/llm';
+
+/**
+ * The usage row for one platform-paid operations call: priced from the provider-reported usage, owned
+ * by the platform and charged 0 credits. Callers record it with `ledger.usageEvents.record` in the
+ * function that sends the call, which is what the provider call inventory checks.
+ */
+export function platformCompletionUsageEvent(args: {
+  modelInfo: ModelInfo;
+  usage: CompletionUsage;
+  status: 'ok' | 'error' | 'timeout';
+  startedAt: number;
+  reason: PlatformPaidReason;
+  listingId: string;
+}): IUsageEventInput {
+  const { modelInfo, usage } = args;
+  const { costUsd, priceStamp, ...tokens } = priceCompletionUsage(modelInfo, usage);
+  return platformPaidUsageEvent(
+    {
+      requestId: randomUUID(),
+      userId: PLATFORM_USAGE_OWNER_ID,
+      ownerId: PLATFORM_USAGE_OWNER_ID,
+      ownerType: PLATFORM_USAGE_OWNER_TYPE,
+      feature: 'operations',
+      provider: modelInfo.backend,
+      model: modelInfo.id,
+      ...tokens,
+      settledBasis: 'provider',
+      providerInputTokens: usage.inputTokens,
+      providerOutputTokens: usage.outputTokens,
+      costUsd,
+      creditsCharged: 0,
+      ...priceStamp,
+      status: args.status,
+      latencyMs: Date.now() - args.startedAt,
+      source: 'system',
+    },
+    args.listingId,
+    args.reason
+  );
+}
 
 export type SampleCompletion = {
   llm: Pick<ICompletionBackend, 'complete'>;
@@ -55,31 +97,16 @@ export async function completeSample(opts: SampleCompletion, system: string, use
     )
     .then(async outcome => {
       if (!hasReportedUsage(usage)) return;
-      const { costUsd, priceStamp, ...tokens } = priceCompletionUsage(modelInfo, usage);
       await ledger.usageEvents
         .record(
-          platformPaidUsageEvent(
-            {
-              requestId: randomUUID(),
-              userId: PLATFORM_USAGE_OWNER_ID,
-              ownerId: PLATFORM_USAGE_OWNER_ID,
-              ownerType: PLATFORM_USAGE_OWNER_TYPE,
-              feature: 'operations',
-              provider: modelInfo.backend,
-              model: modelInfo.id,
-              ...tokens,
-              settledBasis: 'provider',
-              providerInputTokens: usage.inputTokens,
-              providerOutputTokens: usage.outputTokens,
-              costUsd,
-              creditsCharged: 0,
-              ...priceStamp,
-              status: timedOut ? 'timeout' : outcome,
-              latencyMs: Date.now() - startedAt,
-              source: 'system',
-            },
-            listingId
-          )
+          platformCompletionUsageEvent({
+            modelInfo,
+            usage,
+            status: timedOut ? 'timeout' : outcome,
+            startedAt,
+            reason: 'template_example_run',
+            listingId,
+          })
         )
         .catch(error =>
           logger.warn('[template-example] could not record the sample file usage', {

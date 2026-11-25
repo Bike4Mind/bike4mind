@@ -4,6 +4,7 @@ import {
   getToolSideEffects,
   type IUsageEventInput,
   type IUsageEventRepository,
+  type PlatformPaidReason,
 } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
@@ -276,7 +277,11 @@ type UsageRecorder = Pick<IUsageEventRepository, 'record'>;
  * The run's usage rows as platform-paid: owned by the platform, not the author or their org, and
  * never charged, so no per-user/per-org spend view, cap, budget or freeze counts them.
  */
-export function platformPaidUsageEvent(event: IUsageEventInput, listingId: string | undefined): IUsageEventInput {
+export function platformPaidUsageEvent(
+  event: IUsageEventInput,
+  listingId: string | undefined,
+  reason: PlatformPaidReason = 'template_example_run'
+): IUsageEventInput {
   return {
     ...event,
     userId: PLATFORM_USAGE_OWNER_ID,
@@ -290,7 +295,7 @@ export function platformPaidUsageEvent(event: IUsageEventInput, listingId: strin
     apiKeyId: undefined,
     // Platform-initiated, so user-activity analytics that skip 'system' traffic skip these rows.
     source: 'system',
-    platformPaid: { reason: 'template_example_run', listingId },
+    platformPaid: { reason, listingId },
   };
 }
 

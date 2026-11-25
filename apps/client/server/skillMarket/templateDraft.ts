@@ -6,10 +6,14 @@ import {
   SKILL_TEMPLATE_MAX_INPUTS,
   type ISkillSnapshot,
   type ISkillTemplateInput,
+  type IUsageEventRepository,
   type SkillTemplateDraft,
 } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
+import { hasReportedUsage, latchUsage, type CompletionUsage } from '@bike4mind/services/billing/completionMeter';
 import { tryParseJsonObject } from '@server/utils/resolveImagePrompt';
-import type { ClassifierLlm } from './classifySkill';
+import type { OperationsClassifierLlm } from './classifySkill';
+import { platformCompletionUsageEvent } from './templateExampleSampleUsage';
 
 /**
  * First-draft copy for a listing's template page, from its approved version snapshot. Best-effort
@@ -74,15 +78,63 @@ export function normalizeTemplateDraft(value: unknown): SkillTemplateDraft {
   };
 }
 
-export async function draftTemplateCopy(snapshot: ISkillSnapshot, llm: ClassifierLlm): Promise<SkillTemplateDraft> {
+export type TemplateDraftUsage = {
+  ledger: { usageEvents: Pick<IUsageEventRepository, 'record'> };
+  listingId: string;
+  logger: Logger;
+};
+
+/**
+ * The call runs on the platform's operations model, so its usage is recorded as platform-paid for the
+ * listing, including a call that outlives the timeout once the provider ends it.
+ */
+export async function draftTemplateCopy(
+  snapshot: ISkillSnapshot,
+  llm: OperationsClassifierLlm,
+  { ledger, listingId, logger }: TemplateDraftUsage
+): Promise<SkillTemplateDraft> {
   // Random per call so the body cannot close the data block early.
   const nonce = randomBytes(9).toString('hex');
+  const usage: CompletionUsage = {};
+  const startedAt = Date.now();
+  let timedOut = false;
   try {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const call = llm.complete(SYSTEM_PROMPT, buildTemplateDraftUserMessage(snapshot, nonce), info =>
+      latchUsage(usage, info)
+    );
+    void call
+      .then(
+        () => 'ok' as const,
+        () => 'error' as const
+      )
+      .then(async outcome => {
+        if (!hasReportedUsage(usage)) return;
+        await ledger.usageEvents
+          .record(
+            platformCompletionUsageEvent({
+              modelInfo: llm.modelInfo,
+              usage,
+              status: timedOut ? 'timeout' : outcome,
+              startedAt,
+              reason: 'template_draft',
+              listingId,
+            })
+          )
+          .catch(error =>
+            logger.warn('[skill-market] could not record the template draft usage', {
+              listingId,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          );
+      });
     const raw = await Promise.race([
-      llm.complete(SYSTEM_PROMPT, buildTemplateDraftUserMessage(snapshot, nonce)),
+      call,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Template draft timed out')), DRAFT_TIMEOUT_MS);
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(new Error('Template draft timed out'));
+        }, DRAFT_TIMEOUT_MS);
       }),
     ]).finally(() => clearTimeout(timer));
     return normalizeTemplateDraft(tryParseJsonObject(raw));
