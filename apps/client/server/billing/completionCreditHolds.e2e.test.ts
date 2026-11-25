@@ -171,23 +171,29 @@ describe('durable platform completion holds', () => {
           debit,
           { runId: run.runId, wantedCredits: 30, minimumCredits: 10 }
         );
-      return { committed, reserveWith };
+      return { committed, reserveWith, runId: run.runId };
     }
 
     it('leaves a concurrent worker room to start after a full-output claim', async () => {
       const { lifecycle, ownerId } = await fixture();
-      const { committed, reserveWith } = await budgetedRun(ownerId);
-      const debit = async () => {
-        const user = await userRepository.incrementCredits(ownerId, -30);
-        if (!user) throw new Error('User missing');
-        return user;
-      };
+      const { committed, runId } = await budgetedRun(ownerId);
+      const reserveFullOutput = (holds: ReturnType<typeof createCompletionCreditHolds>) =>
+        holds.reserve(
+          { ownerId, ownerType: CreditHolderType.User, userId: ownerId, organizationId: null, reservedCredits: 10 },
+          async () => {
+            const user = await userRepository.incrementCredits(ownerId, -10);
+            if (!user) throw new Error('User missing');
+            return user;
+          },
+          { runId, wantedCredits: 200, minimumCredits: 10 }
+        );
 
-      await expect(reserveWith(lifecycle, debit)).resolves.toBe(25);
+      // Budget 50: the parent takes 10 + half of 40, and the worker 10 + half of the remaining 10.
+      await expect(reserveFullOutput(lifecycle)).resolves.toBe(30);
       await expect(
-        reserveWith(createCompletionCreditHolds(new Logger({ metadata: { test: 'worker' } })), debit)
-      ).resolves.toBe(13);
-      expect(await committed()).toBe(38);
+        reserveFullOutput(createCompletionCreditHolds(new Logger({ metadata: { test: 'worker' } })))
+      ).resolves.toBe(15);
+      expect(await committed()).toBe(45);
     });
 
     it('rolls the run claim back when the balance debit fails after the claim', async () => {

@@ -181,9 +181,10 @@ export class CompletionRunRepository {
    * completions of one run never claim the same credits. Inside a transaction, concurrent claims on one
    * run conflict on its document and `withTransaction` retries them, as it already does for the balance.
    *
-   * `maxShareOfRemaining` (0-1] caps one claim at that share of what is left, never below
-   * `minimumCredits`, so a claim that can shrink (a completion) leaves room for the run's concurrent
-   * work. Must stay in sync with `claimableCredits`, which sizes the same claim on the read side.
+   * `maxShareOfRemaining` (0-1] caps what one claim takes above its `minimumCredits` at that share of
+   * the rest, so a claim that can shrink (a completion) leaves room for the run's concurrent work.
+   * The share applies past the minimum, not to the whole remainder: a completion's minimum carries its
+   * input cost, and halving the whole remainder would squeeze a long-context round to a short answer. Must stay in sync with `claimableCredits`, which sizes the same claim on the read side.
    */
   async claimBudget(
     runId: string,
@@ -195,7 +196,8 @@ export class CompletionRunRepository {
       throw new Error(`maxShareOfRemaining must be in (0, 1], got ${maxShareOfRemaining}`);
     }
     const remaining = { $subtract: ['$budgetCredits', '$committedCredits'] };
-    const shareCap = { $max: [minimumCredits, { $ceil: { $multiply: [remaining, maxShareOfRemaining] } }] };
+    const aboveMinimum = { $max: [0, { $subtract: [remaining, minimumCredits] }] };
+    const shareCap = { $add: [minimumCredits, { $ceil: { $multiply: [aboveMinimum, maxShareOfRemaining] } }] };
     const before = await CompletionRunModel.findOneAndUpdate(
       {
         _id: runId,
@@ -265,7 +267,8 @@ function claimableCredits(
   minimumCredits: number,
   maxShareOfRemaining: number
 ): number {
-  const shareCap = Math.max(minimumCredits, Math.ceil(remainingCredits * maxShareOfRemaining));
+  const aboveMinimum = Math.max(0, remainingCredits - minimumCredits);
+  const shareCap = minimumCredits + Math.ceil(aboveMinimum * maxShareOfRemaining);
   return Math.min(wantedCredits, remainingCredits, shareCap);
 }
 
