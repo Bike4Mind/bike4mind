@@ -1,4 +1,5 @@
 import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, isSpendFrozenError, type ApiCompletionOutcome } from '@bike4mind/common';
+import { resolveCompletionBillingOrgId } from '@server/billing/resolveCompletionBillingOrgId';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { assertEvaluationAuthorized, evaluationTransport } from '@server/completionRuns/evaluation';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
@@ -380,12 +381,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         }
       }
 
+      const billingOrganizationId = await resolveCompletionBillingOrgId({
+        apiKeyInfo,
+        requestedOrgId: body.organization_id,
+        userId,
+      });
+
       const run = body.run
-        ? await verifyRunOwnership(
-            body.run,
-            { userId, billingOrganizationId: apiKeyInfo?.organizationId },
-            Boolean(body.evaluation)
-          )
+        ? await verifyRunOwnership(body.run, { userId, billingOrganizationId }, Boolean(body.evaluation))
         : undefined;
       if (body.evaluation && !run) throw new BadRequestError('Evaluation requires a verified completion run.');
       if (body.evaluation) assertEvaluationAuthorized(userId);
@@ -404,7 +407,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       // Before the free-tier cap and every hold; executeCompletion skips its own lookup once this has run.
       await assertSpendNotFrozen(
-        spendFreezeSubjectForRequest({ user: { id: userId }, apiKeyInfo }, apiKeyInfo?.organizationId ?? null),
+        spendFreezeSubjectForRequest({ user: { id: userId }, apiKeyInfo }, billingOrganizationId ?? null),
         { db: { spendFreezes: spendFreezeRepository } }
       );
 
@@ -412,7 +415,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       await checkFreeTierDailySpendCap({
         userId,
         userRepository,
-        billingOrganizationId: apiKeyInfo?.organizationId,
+        billingOrganizationId,
         usageEventRepository,
         logger,
       });
@@ -449,7 +452,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         scopeActor: actorScopeForKey(apiKeyInfo),
         // Org-billed API keys route spend to the org's shared pool (invariant:
         // organizationId is set iff the key's billingOwnerType is Organization).
-        billingOrganizationId: apiKeyInfo?.organizationId,
+        billingOrganizationId,
         apiKeyBillingOwnerType: apiKeyInfo?.billingOwnerType,
         spendFreezeChecked: true,
         // Correlation id for the usage-event dual write (synthesized downstream if absent).

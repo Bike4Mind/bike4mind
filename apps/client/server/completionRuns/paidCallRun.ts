@@ -2,13 +2,14 @@ import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   BadRequestError,
   CreditHolderType,
+  NotFoundError,
   UnauthorizedError,
   type CompletionRunAttribution,
 } from '@bike4mind/common';
 import type { ApiKeyHolder } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
-import { findCallerCompletionRun } from './callerCompletionRun';
+import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
+import { findCallerCompletionRun, resolveCompletionRunCaller } from './callerCompletionRun';
 
 /** A paid tool call's run, once the caller is confirmed to have minted it. */
 export type PaidCallRun = {
@@ -42,10 +43,7 @@ export async function resolvePaidCallRun(
 ): Promise<PaidCallRun | undefined> {
   if (!run) return undefined;
   if (!req.user) throw new UnauthorizedError('Sign in to charge a call to a completion run');
-  const stored = await findCallerCompletionRun(run.runId, {
-    userId: req.user.id,
-    billingOrganizationId: req.apiKeyInfo?.organizationId ?? undefined,
-  });
+  const stored = await findPaidCallRun(run.runId, req.user.id, req.apiKeyInfo, requestedOrganizationId);
   const billingOrganizationId = stored.ownerType === CreditHolderType.Organization ? stored.ownerId : null;
   if (requestedOrganizationId !== undefined && requestedOrganizationId !== billingOrganizationId) {
     throw new ForbiddenError('This run bills a different account than the requested organization_id', {
@@ -62,4 +60,28 @@ export async function resolvePaidCallRun(
     throw new ForbiddenError(keyBilling.message, { errorCode: BILLING_ORGANIZATION_MISMATCH_ERROR_CODE });
   }
   return { attribution: { ...run, runId: stored.runId, purpose: 'tool' }, billingOrganizationId };
+}
+
+/**
+ * The caller's run: first under the user (or an org-billed key's org), then, for a caller that is not an
+ * org-billed key and names an organization, under that organization once resolveCompletionBillingOrgId
+ * confirms the caller may use it (403 otherwise). A run minted with `organization_id` is bound to that
+ * org, so a signed-in caller only finds it this way.
+ */
+async function findPaidCallRun(
+  runId: string,
+  userId: string,
+  apiKeyInfo: PaidCallRequest['apiKeyInfo'],
+  requestedOrganizationId: string | null | undefined
+) {
+  try {
+    return await findCallerCompletionRun(runId, {
+      userId,
+      billingOrganizationId: apiKeyInfo?.organizationId ?? undefined,
+    });
+  } catch (error) {
+    if (!(error instanceof NotFoundError) || apiKeyBillingOrgId(apiKeyInfo) || !requestedOrganizationId) throw error;
+    const caller = await resolveCompletionRunCaller({ userId, apiKeyInfo }, requestedOrganizationId);
+    return findCallerCompletionRun(runId, caller);
+  }
 }

@@ -2681,6 +2681,7 @@
             "type": "string",
             "enum": [
               "account_suspended",
+              "billing_organization_mismatch",
               "model_requires_subscription",
               "org_model_not_allowed",
               "spend_frozen"
@@ -3441,6 +3442,14 @@
             "type": "string",
             "description": "Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: \"invalid_end_user_id\"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: \"end_user_id_not_allowed\"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier."
           },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Organization whose credit pool pays for this call, or null for personal credits. Omitted: personal credits for a signed-in user. With `run`, send the `organization_id` the run was minted with. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
+          },
           "options": {
             "type": "object",
             "properties": {
@@ -3954,6 +3963,31 @@
           "createdAt": "2026-11-10T12:00:00.000Z"
         }
       },
+      "createCompletionRunResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "createCompletionRunRequest": {
         "type": "object",
         "properties": {
@@ -4011,6 +4045,14 @@
             "minimum": 1,
             "maximum": 1000000000,
             "description": "Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one."
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Organization whose credit pool the run's completions pay from, or null for personal credits. Omitted: personal credits for a signed-in user. A completion matches the run only when it bills the same account, so send this same `organization_id` on those completions and on the run's budget, usage and evaluation requests. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
           }
         },
         "example": {
@@ -4247,6 +4289,31 @@
           "committedTokens",
           "committedRequests",
           "receipts"
+        ]
+      },
+      "getCompletionRunEvaluationResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
         ]
       },
       "getCompletionRunEvaluationResponse404": {
@@ -4651,6 +4718,31 @@
           }
         }
       },
+      "getCompletionRunUsageResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "getCompletionRunUsageResponse404": {
         "type": "object",
         "properties": {
@@ -4940,6 +5032,31 @@
           "createdAt": "2026-11-10T12:00:00.000Z"
         }
       },
+      "raiseCompletionRunBudgetResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "raiseCompletionRunBudgetResponse404": {
         "type": "object",
         "properties": {
@@ -5000,6 +5117,14 @@
             "minimum": 1,
             "maximum": 1000000000,
             "description": "The run's new budget, in credits. Must be above the current one: a budget is only ever raised."
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
           }
         },
         "required": [
@@ -40053,7 +40178,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, the account is suspended (`errorCode: \"account_suspended\"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: \"model_requires_subscription\"`), or the caller's organization policy does not allow the model (`errorCode: \"org_model_not_allowed\"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted.",
+            "description": "The API key does not hold any of the required scopes, the account is suspended (`errorCode: \"account_suspended\"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: \"model_requires_subscription\"`), the caller's organization policy does not allow the model (`errorCode: \"org_model_not_allowed\"`), a signed-in caller named an `organization_id` they are not a member of, or an organization-billed API key named a different `organization_id` (`errorCode: \"billing_organization_mismatch\"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -40272,7 +40397,7 @@
       "post": {
         "operationId": "createCompletionRun",
         "summary": "Create a completion run",
-        "description": "Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: \"run_not_found\"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.\n\nWith `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the model, each completion claims what its first round can cost at its full output budget (less, down to what a short answer costs, when the run has less left) and is capped to that claim, so concurrent completions can never together be admitted past the budget. The claim is priced from an estimate of the input, so a completion that costs more than it claimed is still charged its actual cost, up to what the balance can pay; the run counts that cost and refuses later claims it can no longer cover. A run can go over its budget by at most that miss for each completion in flight. A completion that runs server-side tools claims more the same way before each further round, and ends with `stopReason: \"max_tokens\"` when the run cannot cover one. A completion the budget cannot cover is refused with `422` (`errorCode: \"run_budget_exhausted\"`) before anything is charged. Claims return to the run when their completion settles, fails or is abandoned. The account balance and any organization member caps still apply on their own, and buying credits does not raise a run budget. The budget bounds charged credits, so a deployment that does not charge for completions counts nothing against it.",
+        "description": "Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key or the `organization_id` sent, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: \"run_not_found\"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.\n\nWith `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the model, each completion claims what its first round can cost at its full output budget (less, down to what a short answer costs, when the run has less left) and is capped to that claim, so concurrent completions can never together be admitted past the budget. The claim is priced from an estimate of the input, so a completion that costs more than it claimed is still charged its actual cost, up to what the balance can pay; the run counts that cost and refuses later claims it can no longer cover. A run can go over its budget by at most that miss for each completion in flight. A completion that runs server-side tools claims more the same way before each further round, and ends with `stopReason: \"max_tokens\"` when the run cannot cover one. A completion the budget cannot cover is refused with `422` (`errorCode: \"run_budget_exhausted\"`) before anything is charged. Claims return to the run when their completion settles, fails or is abandoned. The account balance and any organization member caps still apply on their own, and buying credits does not raise a run budget. The budget bounds charged credits, so a deployment that does not charge for completions counts nothing against it.",
         "tags": [
           "AI"
         ],
@@ -40422,11 +40547,11 @@
             }
           },
           "403": {
-            "description": "Evaluation execution is not enabled for this account.",
+            "description": "Evaluation execution is not enabled for this account; an organization-billed API key named another `organization_id` (`errorCode: \"billing_organization_mismatch\"`); or the caller cannot use the named organization.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/createCompletionRunResponse403"
                 }
               }
             },
@@ -40766,6 +40891,17 @@
             "description": "A run id issued by `POST /api/v1/completion-runs`.",
             "name": "runId",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
+            },
+            "required": false,
+            "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403.",
+            "name": "organization_id",
+            "in": "query"
           }
         ],
         "responses": {
@@ -40806,11 +40942,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "description": "An organization-billed API key named another `organization_id` (`errorCode: \"billing_organization_mismatch\"`), or the caller cannot use the named organization.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/getCompletionRunEvaluationResponse403"
                 }
               }
             },
@@ -40953,6 +41089,17 @@
             "description": "A run id issued by `POST /api/v1/completion-runs`.",
             "name": "runId",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
+            },
+            "required": false,
+            "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403.",
+            "name": "organization_id",
+            "in": "query"
           }
         ],
         "responses": {
@@ -41029,11 +41176,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "description": "An organization-billed API key named another `organization_id` (`errorCode: \"billing_organization_mismatch\"`), or the caller cannot use the named organization.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/getCompletionRunUsageResponse403"
                 }
               }
             },
@@ -41042,6 +41189,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -41423,11 +41606,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "description": "An organization-billed API key named another `organization_id` (`errorCode: \"billing_organization_mismatch\"`), or the caller cannot use the named organization.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/raiseCompletionRunBudgetResponse403"
                 }
               }
             },
@@ -41436,6 +41619,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
