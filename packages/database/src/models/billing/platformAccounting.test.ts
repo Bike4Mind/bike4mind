@@ -125,6 +125,70 @@ describe('platform accounting prerequisites', () => {
     expect(await UsageEvent.countDocuments()).toBe(0);
   });
 
+  it('rejects personal context in the journal at validated Mongo create and whole-field update boundaries', async () => {
+    await dispatched();
+    const contexts = [
+      { userId: 'subject' },
+      { ownerId: 'subject' },
+      { ownerType: 'User' },
+      { sessionId: 'subject-session' },
+      { projectId: 'subject-project' },
+      { dataLakeId: 'subject-lake' },
+      { apiKeyId: 'subject-key' },
+      { run: { runId: 'subject-run', role: 'worker' } },
+      { requestMeta: { operation: 'memento' } },
+    ];
+    for (const context of contexts) {
+      const usage = { ...fact(), ...context };
+      await expect(
+        PlatformAttempt.create({ ...registration(), state: 'usage_known', dispatchedAt: at, usage })
+      ).rejects.toThrow('Invalid platform attempt usage');
+      await expect(
+        PlatformAttempt.updateOne(
+          { providerCallId: 'call-1' },
+          { $set: { state: 'usage_known', usage } },
+          { runValidators: true }
+        )
+      ).rejects.toThrow('Invalid platform attempt usage');
+    }
+    const personalAttribution = { ...attribution, actorUserId: 'subject' };
+    await expect(
+      PlatformAttempt.create({ ...registration('another-call'), attribution: personalAttribution, state: 'registered' })
+    ).rejects.toThrow();
+    await expect(
+      PlatformAttempt.updateOne(
+        { providerCallId: 'call-1' },
+        { $set: { attribution: personalAttribution } },
+        { runValidators: true }
+      )
+    ).rejects.toThrow('Invalid platform attempt attribution');
+    expect((await platformAttemptRepository.get('call-1'))?.state).toBe('dispatched');
+    expect((await platformAttemptRepository.get('call-1'))?.usage).toBeUndefined();
+  });
+
+  it('rejects dotted context updates, rename destinations and update pipelines before Mixed validation can be bypassed', async () => {
+    await dispatched();
+    const filter = { providerCallId: 'call-1' };
+    await expect(
+      PlatformAttempt.updateOne(filter, { $set: { 'usage.userId': 'subject' } }, { runValidators: true })
+    ).rejects.toThrow('context must be replaced');
+    await expect(
+      PlatformAttempt.findOneAndUpdate(
+        filter,
+        { $set: { 'attribution.actorUserId': 'subject' } },
+        { runValidators: true }
+      )
+    ).rejects.toThrow('context must be replaced');
+    await expect(
+      PlatformAttempt.updateMany(filter, { $rename: { provider: 'usage.userId' } }, { runValidators: true })
+    ).rejects.toThrow('context must be replaced');
+    await expect(
+      PlatformAttempt.findOneAndUpdate(filter, [{ $set: { usage: { userId: 'subject' } } }], { runValidators: true })
+    ).rejects.toThrow('update pipelines are not supported');
+    expect((await platformAttemptRepository.get('call-1'))?.attribution).toEqual(attribution);
+    expect((await platformAttemptRepository.get('call-1'))?.usage).toBeUndefined();
+  });
+
   it('enforces the real partial unique index without constraining legacy request IDs', async () => {
     const indexes = await UsageEvent.collection.indexes();
     expect(indexes.find(index => index.key.providerCallId === 1)).toMatchObject({

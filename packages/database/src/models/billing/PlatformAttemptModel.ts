@@ -1,6 +1,7 @@
 import mongoose, { Schema, model, type Model } from 'mongoose';
 import {
   PlatformAttemptRegistration,
+  PlatformAttribution,
   PlatformUsageEvent,
   PlatformAccountingConflictError,
   PLATFORM_ATTEMPT_STATES,
@@ -19,13 +20,31 @@ import {
 const PlatformAttemptSchema = new Schema<IPlatformAttempt>(
   {
     providerCallId: { type: String, required: true },
-    attribution: { type: Schema.Types.Mixed, required: true },
+    attribution: {
+      type: Schema.Types.Mixed,
+      required: true,
+      validate: {
+        validator: (value: unknown) => PlatformAttribution.safeParse(value).success,
+        message: 'Invalid platform attempt attribution',
+      },
+    },
     provider: { type: String, required: true },
     model: { type: String, required: true },
     leaseExpiresAt: { type: Date, required: true },
     state: { type: String, enum: [...PLATFORM_ATTEMPT_STATES], required: true },
     dispatchedAt: { type: Date },
-    usage: { type: Schema.Types.Mixed },
+    usage: {
+      type: Schema.Types.Mixed,
+      validate: {
+        validator: (value: unknown) =>
+          value === undefined ||
+          (value !== null &&
+            typeof value === 'object' &&
+            !Array.isArray(value) &&
+            PlatformUsageEvent.safeParse({ ...value, createdAt: new Date(), updatedAt: new Date() }).success),
+        message: 'Invalid platform attempt usage',
+      },
+    },
     unresolvedReason: { type: String, enum: [...PLATFORM_UNRESOLVED_REASONS] },
   },
   { timestamps: true }
@@ -33,6 +52,26 @@ const PlatformAttemptSchema = new Schema<IPlatformAttempt>(
 PlatformAttemptSchema.index({ providerCallId: 1 }, { unique: true });
 PlatformAttemptSchema.index({ state: 1, leaseExpiresAt: 1 });
 PlatformAttemptSchema.index({ 'attribution.executionId': 1, state: 1 });
+// Mixed-field validators do not run for dotted writes or update pipelines.
+PlatformAttemptSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], function () {
+  const update = this.getUpdate();
+  if (Array.isArray(update)) throw new Error('Platform attempt update pipelines are not supported');
+  const protectedPath = (path: string) =>
+    path === 'usage' || path === 'attribution' || path.startsWith('usage.') || path.startsWith('attribution.');
+  for (const [operator, value] of Object.entries(update ?? {})) {
+    const changes: [string, unknown][] =
+      operator.startsWith('$') && value && typeof value === 'object' ? Object.entries(value) : [[operator, value]];
+    for (const [path, destination] of changes) {
+      if (
+        (operator === '$rename' && typeof destination === 'string' && protectedPath(destination)) ||
+        (protectedPath(path) &&
+          (path.includes('.') || (operator.startsWith('$') && operator !== '$set' && operator !== '$setOnInsert')))
+      ) {
+        throw new Error('Platform attempt context must be replaced and validated as a whole');
+      }
+    }
+  }
+});
 PlatformAttemptSchema.pre('validate', function () {
   PlatformAttemptRegistration.parse({
     providerCallId: this.providerCallId,
