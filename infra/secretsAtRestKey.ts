@@ -107,7 +107,8 @@ export function secretsAtRestDecryptDeniedEventPattern(input: { keyArn: string }
       eventSource: ['kms.amazonaws.com'],
       eventName: ['Decrypt'],
       errorCode: ['AccessDenied', 'AccessDeniedException'],
-      resources: { ARN: [input.keyArn] },
+      // A refused call has no `resources` or `requestParameters` in CloudTrail; only the message names the key.
+      errorMessage: [{ wildcard: `*${input.keyArn}*` }],
     },
   };
 }

@@ -107,7 +107,7 @@ describe('Decrypt-denied event pattern', () => {
       eventSource: ['kms.amazonaws.com'],
       eventName: ['Decrypt'],
       errorCode: ['AccessDenied', 'AccessDeniedException'],
-      resources: { ARN: ['key-arn'] },
+      errorMessage: [{ wildcard: '*key-arn*' }],
     });
     expect(JSON.stringify(pattern)).not.toContain('userIdentity');
   });
