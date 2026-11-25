@@ -82,7 +82,7 @@ function remapVoiceModel(modelId: ChatModelName): ChatModelName {
     // CloudWatch-searchable signal so ops can quantify impact and confirm when
     // the workaround is safe to remove. Mirrors the [model-sunset] convention
     // used by resolveDeprecatedModelId.
-    logger.warn('Voice model remapped: marketplace subscription pending', { modelId, remapped });
+    logger.warn('[voice-model-remap] marketplace subscription pending', { modelId, remapped });
     return remapped;
   }
   return modelId;
