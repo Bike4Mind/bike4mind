@@ -12,6 +12,9 @@ import {
   postSreScopeBlockedMessage,
 } from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 const mockGetSettingsValue = vi.fn();
 const mockFindFullById = vi.fn();
