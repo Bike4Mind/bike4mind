@@ -56,6 +56,8 @@ final class AppServices {
   let busyBlocks: any BusyBlocksAPI
   let busyBlockReader: any BusyBlockReader
   let busyBlockSyncer: BusyBlockSyncer
+  /// Which run updates stay quiet after a busy block.
+  let interruptionFeedback: any InterruptionFeedbackAPI
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
   /// How many decisions wait on the user, for the lock-screen widget.
@@ -165,6 +167,12 @@ final class AppServices {
     busyBlocks = busyBlocksAPI
     busyBlockReader = EventKitBusyBlockReader()
     busyBlockSyncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
+    interruptionFeedback = ForwardingInterruptionFeedbackAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.interruptionFeedback }
+      #endif
+      return InterruptionFeedbackClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG
@@ -523,6 +531,18 @@ struct ForwardingBusyBlocksAPI: BusyBlocksAPI {
 
   func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
     try await provider().save(enabled: enabled, blocks: blocks)
+  }
+}
+
+struct ForwardingInterruptionFeedbackAPI: InterruptionFeedbackAPI {
+  let provider: @MainActor @Sendable () -> any InterruptionFeedbackAPI
+
+  func feedback() async throws -> InterruptionFeedback {
+    try await provider().feedback()
+  }
+
+  func save(_ patch: InterruptionFeedback) async throws -> InterruptionFeedback {
+    try await provider().save(patch)
   }
 }
 
