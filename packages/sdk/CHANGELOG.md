@@ -1,5 +1,25 @@
 # @bike4mind/sdk
 
+## 5.1.0
+
+### Minor Changes
+
+- [#7845](https://github.com/Bike4Mind/bike4mind/pull/7845) [`f28a090`](https://github.com/Bike4Mind/bike4mind/commit/f28a090645ff945d019aa62d5719b0998282538a) Thanks [@onoya](https://github.com/onoya)! - charge paid tool calls to an orchestration run budget
+
+- [#8014](https://github.com/Bike4Mind/bike4mind/pull/8014) [`5e1ddd9`](https://github.com/Bike4Mind/bike4mind/commit/5e1ddd92ad5c2beba33bf62f78462ec80961d67d) Thanks [@jebie](https://github.com/jebie)! - share-sheet delegation to the assistant
+
+- [#8276](https://github.com/Bike4Mind/bike4mind/pull/8276) [`3d1cd9b`](https://github.com/Bike4Mind/bike4mind/commit/3d1cd9b781fcd8ddf72ef2e3249f444bb3b367c0) Thanks [@vinchi777](https://github.com/vinchi777)! - add budgeted live orchestration evaluation
+
+- [#8371](https://github.com/Bike4Mind/bike4mind/pull/8371) [`49327ae`](https://github.com/Bike4Mind/bike4mind/commit/49327aeddd54a337a934c6e54300422c953cc01c) Thanks [@onoya](https://github.com/onoya)! - account for credit expiry in the credits runway
+
+- [#8380](https://github.com/Bike4Mind/bike4mind/pull/8380) [`0efae7c`](https://github.com/Bike4Mind/bike4mind/commit/0efae7cdb2551dc0ece4ffe9ea335acf42222ea0) Thanks [@maconard](https://github.com/maconard)! - public functions API with invoke, a confined scope, and stamped results
+
+- [#8406](https://github.com/Bike4Mind/bike4mind/pull/8406) [`4625562`](https://github.com/Bike4Mind/bike4mind/commit/4625562326fb3ce70d1553ba64eefd98ee14fe91) Thanks [@onoya](https://github.com/onoya)! - let a signed-in caller choose the paying organization
+
+- [#8436](https://github.com/Bike4Mind/bike4mind/pull/8436) [`88f0eed`](https://github.com/Bike4Mind/bike4mind/commit/88f0eed44cc701cea5b1f08e58e43616b1e922b0) Thanks [@ken-b4m](https://github.com/ken-b4m)! - undo a lake change through the public API and MCP
+
+- [#8465](https://github.com/Bike4Mind/bike4mind/pull/8465) [`8ba6c23`](https://github.com/Bike4Mind/bike4mind/commit/8ba6c23d597ff8dfdf966418b1b1818dbe3592a3) Thanks [@maconard](https://github.com/maconard)! - asynchronous function calls for runs longer than a request can wait
+
 ## 5.0.0
 
 ### Major Changes

@@ -1,4 +1,4 @@
-import type { AccountSegment, SpendSplitDimension } from '@bike4mind/common';
+import type { SpendSegment, SpendSplitDimension } from '@bike4mind/common';
 
 export const SPLIT_OPTIONS: ReadonlyArray<{ value: SpendSplitDimension; label: string }> = [
   { value: 'provider', label: 'Provider' },
@@ -15,16 +15,18 @@ const PROVIDER_LABELS: Record<string, string> = {
   bedrock: 'Bedrock (AWS)',
 };
 
-export const SEGMENT_LABELS: Record<AccountSegment, string> = {
+export const SEGMENT_LABELS: Record<SpendSegment, string> = {
   internal: 'Internal',
   partner: 'Partner',
   customer: 'Customer',
+  platform: 'Platform operations',
 };
 
 const FUNDING_LABELS: Record<string, string> = {
   granted: 'Granted credits',
   paid: 'Paid credits',
   unknown: 'Unattributed',
+  platform: 'Platform operations',
 };
 
 const sentenceCase = (value: string) => {
@@ -39,7 +41,7 @@ export function seriesLabel(split: SpendSplitDimension, key: string): string {
     case 'provider':
       return PROVIDER_LABELS[key] ?? sentenceCase(key);
     case 'segment':
-      return SEGMENT_LABELS[key as AccountSegment] ?? sentenceCase(key);
+      return SEGMENT_LABELS[key as SpendSegment] ?? sentenceCase(key);
     case 'funding':
       return FUNDING_LABELS[key] ?? sentenceCase(key);
     case 'source':

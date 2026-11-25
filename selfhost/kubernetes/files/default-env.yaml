@@ -15,6 +15,7 @@ ACCOUNT_ERASURE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/accountE
 ACCOUNT_ERASURE_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/accountErasureQueueDLQ
 AGENT_CONTINUATION_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/agentContinuationQueue
 AGENT_PROACTIVE_MESSAGE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/agentProactiveMessageQueue
+CALLABLE_FUNCTION_CALL_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/callableFunctionCallQueue
 DATA_LAKE_RESEARCH_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeResearchQueue
 DATA_LAKE_TAXONOMY_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeTaxonomyQueue
 DEEP_AGENT_WAKE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/deepAgentWakeQueue

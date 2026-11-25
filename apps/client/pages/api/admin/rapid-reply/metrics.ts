@@ -18,8 +18,6 @@ const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
   requiredScopes: [ApiKeyScope.ADMIN],
 }).get(async (req, res) => {
-  console.log('📊 Rapid Reply metrics API called');
-
   const { startDate, endDate, mainModelId, rapidModelId, userId, timeRange = 'last30d' } = req.query as MetricsFilters;
 
   // Calculate date range based on timeRange parameter
@@ -131,7 +129,6 @@ const handler = adminApi({
     },
   };
 
-  console.log(`✅ Returning rapid reply metrics for ${metrics.totalRequests} requests`);
   return res.json(response);
 });
 

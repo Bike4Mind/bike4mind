@@ -124,11 +124,21 @@ describe('empty sidebar card', () => {
 
     await click('sidebar-empty-sync-code-btn');
     await click('sidebar-empty-sync-chat-btn');
-    await click('sidebar-empty-sync-web-btn');
+    await click('sidebar-empty-sync-web-settings-link');
     expect(onOpenSettings.mock.calls).toEqual([['claude-code'], ['claude-chat'], ['b4m-web']]);
+    expect(setWebSettings).not.toHaveBeenCalled();
 
     await click('sidebar-empty-sync-export-help-link');
     expect(openExternal).toHaveBeenCalledWith(expect.stringContaining('export'));
+  });
+
+  it('turns web sync on from the card, which then hands the sidebar to the status line', async () => {
+    await mount(stateWith(), true, true);
+    await click('sidebar-empty-sync-web-btn');
+    expect(setWebSettings).toHaveBeenCalledExactlyOnceWith({ enabled: true });
+    expect(onOpenSettings).not.toHaveBeenCalled();
+    expect(query('sidebar-empty-sync-web-btn')).toBeNull();
+    expect(query('sidebar-web-sync-status')?.dataset.kind).not.toBe('off');
   });
 
   it('offers only what there is to bring in', async () => {
@@ -227,6 +237,16 @@ describe('web sync status line', () => {
     expect(query('sidebar-web-sync-now-btn')).toBeNull();
   });
 
+  it('counts a long first sync through the notebooks it has to read', async () => {
+    await mount(synced(null, { running: true, progress: { done: 125, total: 1274 } }), false, true);
+    expect(text()).toBe(`Syncing from web - 125 of ${(1274).toLocaleString()}`);
+  });
+
+  it('says only "Syncing" while the run is still listing notebooks', async () => {
+    await mount(synced(null, { running: true, progress: { done: 0, total: 0 } }), false, true);
+    expect(text()).toBe('Syncing from web...');
+  });
+
   it('shows a failed sync, with a retry', async () => {
     await mount(
       synced(new Date().toISOString(), { error: 'Could not read your notebooks from Bike4Mind web.' }),
@@ -238,12 +258,19 @@ describe('web sync status line', () => {
     expect(syncWeb).toHaveBeenCalledOnce();
   });
 
-  it('points a user with web notebooks but sync off at the setting', async () => {
+  it('offers Turn on to a user with web notebooks but sync off', async () => {
     await mount(stateWith({ webNotebooks: 30 }), false, true);
     expect(text()).toBe('Web conversations not synced');
-    await click('sidebar-web-sync-setup-btn');
-    expect(onOpenSettings).toHaveBeenCalledExactlyOnceWith('b4m-web');
-    expect(setWebSettings).not.toHaveBeenCalled();
+    await click('sidebar-web-sync-turn-on-btn');
+    expect(setWebSettings).toHaveBeenCalledExactlyOnceWith({ enabled: true });
+    expect(onOpenSettings).not.toHaveBeenCalled();
+    expect(query('sidebar-web-sync-status')?.dataset.kind).not.toBe('off');
+  });
+
+  it('keeps offering Turn on after the empty-sidebar card was dismissed', async () => {
+    await mount(stateWith({ dismissed: ['sidebar-empty'] }), true, true);
+    expect(query('sidebar-empty-sync-card')).toBeNull();
+    expect(query('sidebar-web-sync-turn-on-btn')).not.toBeNull();
   });
 
   it.each([

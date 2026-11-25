@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import type { SecretCipher } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import { loadSecretKey, secretKeyItem } from './keychainKey';
 import type { ProcessRunner } from './runProcess';
 import { isSecretKeyBlob, SecretKeyCipher } from './secretKeyCipher';

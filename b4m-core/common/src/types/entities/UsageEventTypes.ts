@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PlatformAttribution, platformAccountingPayload } from './PlatformAccountingTypes';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
@@ -125,6 +126,7 @@ export const USAGE_EVENT_OPERATIONS = [
   'memento',
   'assistant_brief',
   'delegated_item',
+  'document_obligation',
   'org_feedback_summary',
 ] as const;
 
@@ -180,7 +182,11 @@ export type IUsageEventRun = z.infer<typeof UsageEventRun>;
  * model/user is queryable. Dual-written at settlement time; never part of the
  * billing path itself.
  */
-export const UsageEvent = z.object({
+export const AttributedUsageEvent = z.object({
+  attribution: z.undefined().optional(),
+  providerCallId: z.undefined().optional(),
+  usageOccurredAt: z.undefined().optional(),
+  recordedAt: z.undefined().optional(),
   id: z.string().optional(), // MongoDB ObjectId
   /** App-level correlation id: questId for chat/image/video, session/run id otherwise. */
   requestId: z.string(),
@@ -302,12 +308,119 @@ export const UsageEvent = z.object({
   updatedAt: z.date(),
 });
 
+export const PlatformUsageEvent = AttributedUsageEvent.omit({
+  attribution: true,
+  providerCallId: true,
+  usageOccurredAt: true,
+  recordedAt: true,
+})
+  .extend({
+    attribution: PlatformAttribution,
+    providerCallId: z.string().min(1).max(128),
+    usageOccurredAt: z.date(),
+    recordedAt: z.date(),
+    timestampSource: z.enum(['provider', 'dispatch']),
+    dispatchedAt: z.date(),
+    completedAt: z.date(),
+    providerRequestId: z.string().max(256).optional(),
+    userId: z.never().optional(),
+    ownerId: z.never().optional(),
+    ownerType: z.never().optional(),
+    sessionId: z.never().optional(),
+    projectId: z.never().optional(),
+    dataLakeId: z.never().optional(),
+    apiKeyId: z.never().optional(),
+    fundingBreakdown: z.never().optional(),
+    writtenOffCredits: z.never().optional(),
+    reservedCredits: z.never().optional(),
+    units: z.never().optional(),
+    turnUsage: z.never().optional(),
+    turnUsageTruncated: z.never().optional(),
+    requestMeta: z.never().optional(),
+    run: z.never().optional(),
+    latencyMs: z.number().finite().nonnegative().optional(),
+    feature: z.literal('operations'),
+    source: z.literal('system'),
+    keySource: z.literal('platform'),
+    creditsCharged: z.literal(0),
+    costUsd: z.number().finite().nonnegative(),
+    provider: z.string().min(1).max(128),
+    model: z.string().min(1).max(256),
+    providerInputTokens: z.number().int().nonnegative(),
+    providerOutputTokens: z.number().int().nonnegative(),
+    inputTokens: z.literal(0).default(0),
+    outputTokens: z.literal(0).default(0),
+    cachedInputTokens: z.number().int().nonnegative(),
+    cacheWriteTokens: z.number().int().nonnegative(),
+    cacheWrite1hTokens: z.number().int().nonnegative().optional(),
+    settledBasis: z.literal('provider'),
+    priceSource: z.enum(USAGE_PRICE_SOURCES),
+    executedProvider: z.never().optional(),
+    executedModel: z.never().optional(),
+    rates: UsageEventRates.extend({
+      tierKey: z.number().finite().nonnegative(),
+      input: z.number().finite().nonnegative(),
+      output: z.number().finite().nonnegative(),
+      cacheRead: z.number().finite().nonnegative().optional(),
+      cacheWrite: z.number().finite().nonnegative().optional(),
+      cacheWrite1h: z.number().finite().nonnegative().optional(),
+    }),
+  })
+  .strict()
+  .superRefine((event, ctx) => {
+    const oneHour = event.cacheWrite1hTokens ?? 0;
+    if (
+      oneHour > event.cacheWriteTokens ||
+      (event.cachedInputTokens > 0 && event.rates.cacheRead === undefined) ||
+      (event.cacheWriteTokens > oneHour && event.rates.cacheWrite === undefined) ||
+      (oneHour > 0 && event.rates.cacheWrite1h === undefined) ||
+      (event.priceSource === 'catalog' && !event.priceRowId)
+    ) {
+      ctx.addIssue({ code: 'custom', message: 'Incomplete platform pricing provenance' });
+    }
+    const expected =
+      event.providerInputTokens * event.rates.input +
+      event.providerOutputTokens * event.rates.output +
+      event.cachedInputTokens * (event.rates.cacheRead ?? 0) +
+      (event.cacheWriteTokens - oneHour) * (event.rates.cacheWrite ?? 0) +
+      oneHour * (event.rates.cacheWrite1h ?? 0);
+    if (Math.abs(expected - event.costUsd) > Math.max(1e-12, Math.abs(expected) * 1e-9)) {
+      ctx.addIssue({ code: 'custom', message: 'Platform cost does not match measured usage and rates' });
+    }
+    if (
+      event.requestId !== event.attribution.executionId ||
+      event.usageOccurredAt > event.completedAt ||
+      (event.timestampSource === 'dispatch' && event.usageOccurredAt.getTime() !== event.dispatchedAt.getTime()) ||
+      event.completedAt < event.dispatchedAt ||
+      event.recordedAt < event.completedAt
+    ) {
+      ctx.addIssue({ code: 'custom', message: 'Invalid platform accounting timestamps' });
+    }
+  });
+
+export const UsageEvent = z.union([PlatformUsageEvent, AttributedUsageEvent]);
+export type IAttributedUsageEvent = z.infer<typeof AttributedUsageEvent>;
+export type IPlatformUsageEvent = z.infer<typeof PlatformUsageEvent>;
 export type IUsageEvent = z.infer<typeof UsageEvent>;
+export type IAttributedUsageEventInput = Omit<IAttributedUsageEvent, 'id' | 'createdAt' | 'updatedAt'>;
+export type IPlatformUsageEventInput = Omit<IPlatformUsageEvent, 'id' | 'createdAt' | 'updatedAt'>;
+
+export function platformUsagePayload(event: IPlatformUsageEvent | IPlatformUsageEventInput): string {
+  const {
+    id: _id,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    recordedAt: _recordedAt,
+    ...fact
+  } = event as IPlatformUsageEvent;
+  return platformAccountingPayload(fact);
+}
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 
 /** Input for recording an event (server sets id/timestamps). */
-export type IUsageEventInput = Omit<IUsageEvent, 'id' | 'createdAt' | 'updatedAt'>;
+export type IUsageEventInput = IAttributedUsageEventInput;
+export type IAnyUsageEventInput = IAttributedUsageEventInput | IPlatformUsageEventInput;
 
 /** The price-stamp fields of a UsageEvent, as built by buildUsagePriceStamp. */
 export type UsagePriceStamp = Pick<
@@ -383,6 +496,7 @@ export interface IFundingCohortCost {
    * stamping, and rows whose funding lookup failed.
    */
   unattributedCostUsd: number;
+  platformCostUsd: number;
 }
 
 /** Shared spend totals for any owner-scoped usage aggregation bucket. */
@@ -487,7 +601,7 @@ export interface IProviderUnitsRow {
   day: string; // YYYY-MM-DD (UTC)
   feature: UsageEventFeature;
   model: string;
-  userId: string;
+  userId?: string;
   keySource: UsageKeySource | null;
   status: UsageEventStatus;
   /** True for the bucket of rows whose units equal params.defaultUnits; always false without it. */
@@ -871,7 +985,9 @@ export interface IUserUsageActivity {
 
 export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
   /** Append one event. Must never throw into the billing path; callers fire-and-forget. */
-  record(event: IUsageEventInput): Promise<IUsageEventDocument | null>;
+  record(event: IAttributedUsageEventInput): Promise<IUsageEventDocument | null>;
+  recordPlatform(event: IPlatformUsageEventInput): Promise<IPlatformUsageEvent & IMongoDocument>;
+  findPlatformCall(providerCallId: string): Promise<IPlatformUsageEvent | null>;
 
   /** Margin buckets per model per day since the given date (default 30 days back). */
   marginByModelDay(since?: Date): Promise<IModelDayMargin[]>;

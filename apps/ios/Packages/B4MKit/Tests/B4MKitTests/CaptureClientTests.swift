@@ -134,7 +134,7 @@ final class CaptureClientTests: XCTestCase {
       (
         200,
         Data(
-          #"{"data":[{"id":"l1","name":"Research","slug":"research","file_count":3,"built_in":false},{"id":"l2","name":"Docs","slug":"docs","file_count":0,"built_in":true}],"next_cursor":"c2"}"#
+          #"{"data":[{"id":"l1","name":"Research","slug":"research","file_count":3,"built_in":false,"can_manage":true},{"id":"l2","name":"Docs","slug":"docs","file_count":0,"built_in":true,"can_manage":false}],"next_cursor":"c2"}"#
             .utf8)
       )
     }
@@ -143,7 +143,7 @@ final class CaptureClientTests: XCTestCase {
       page.items,
       [
         LakeSummary(id: "l1", name: "Research", fileCount: 3, isBuiltIn: false),
-        LakeSummary(id: "l2", name: "Docs", fileCount: 0, isBuiltIn: true),
+        LakeSummary(id: "l2", name: "Docs", fileCount: 0, isBuiltIn: true, canManage: false),
       ])
     XCTAssertEqual(page.nextCursor, "c2")
     let requests = await transport.requests

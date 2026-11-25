@@ -43,14 +43,44 @@ function mount(node: React.ReactNode) {
 const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
 describe('the place rail', () => {
-  it('shows Chat, Code and Studio, then the account slot, and no Agents or Library yet', () => {
+  it('shows Chat, Code, Studio, Agents and Library, then the account slot', () => {
     mount(<PlaceRail place="chat" onSelect={() => {}} account={<span data-testid="account-probe" />} />);
     const ids = [...document.querySelectorAll('[data-testid^="place-rail-"]')].map(node =>
       node.getAttribute('data-testid')
     );
-    expect(ids).toEqual(['place-rail-chat-btn', 'place-rail-code-btn', 'place-rail-studio-btn']);
+    expect(ids).toEqual([
+      'place-rail-chat-btn',
+      'place-rail-code-btn',
+      'place-rail-studio-btn',
+      'place-rail-agents-btn',
+      'place-rail-library-btn',
+    ]);
     expect(byTestId('place-rail')?.lastElementChild).toBe(byTestId('rail-foot'));
     expect(byTestId('rail-foot')?.lastElementChild).toBe(byTestId('account-probe'));
+  });
+
+  it('badges Agents with the needs-you count, capped, and only when there is one', () => {
+    mount(<PlaceRail place="chat" onSelect={() => {}} needsYou={0} />);
+    expect(byTestId('place-rail-agents-badge')).toBeNull();
+    expect(byTestId('place-rail-agents-btn')?.getAttribute('aria-label')).toBe('Agents');
+    act(() =>
+      root?.render(
+        <CssVarsProvider>
+          <PlaceRail place="chat" onSelect={() => {}} needsYou={3} />
+        </CssVarsProvider>
+      )
+    );
+    expect(byTestId('place-rail-agents-badge')?.textContent).toBe('3');
+    expect(byTestId('place-rail-agents-btn')?.getAttribute('aria-label')).toBe('Agents, 3 need you');
+    act(() =>
+      root?.render(
+        <CssVarsProvider>
+          <PlaceRail place="chat" onSelect={() => {}} needsYou={120} />
+        </CssVarsProvider>
+      )
+    );
+    expect(byTestId('place-rail-agents-badge')?.textContent).toBe('99+');
+    expect(byTestId('place-rail-chat-badge')).toBeNull();
   });
 
   it('scrolls the places on a short window, keeping the account cluster outside the scroller', () => {

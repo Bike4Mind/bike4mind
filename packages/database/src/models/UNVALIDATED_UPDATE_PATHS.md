@@ -144,6 +144,14 @@ The table below remains the literal-update inventory, not proof that all databas
 | CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `trustLabel` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `reason` | match | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `reason` | match | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.claim` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.finish` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionReview | `approval` | enum | `ai/CallableFunctionReviewModel.ts#CallableFunctionReviewRepository.save` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionReview | `reviewHash` | match | `ai/CallableFunctionReviewModel.ts#CallableFunctionReviewRepository.save` | schema | `runValidators` | update call passes runValidators |
 | CompletionRun | `budgetCredits` | min | `billing/CompletionRunModel.ts#CompletionRunRepository.raiseBudget` | schema | `runValidators` | Passes runValidators; the sole caller (POST completion-runs/{runId}/budget) also validates the body as an int of at least 1. |
@@ -264,6 +272,11 @@ The table below remains the literal-update inventory, not proof that all databas
 | PaymentAttempt | `outcome` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordCheckoutStart` | repository-check | `literal` | writes "started" |
 | PaymentAttempt | `outcome` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordOutcome` | route-schema | `apps/client/pages/api/stripe/webhook.ts#screenPaymentOutcome` | Webhook passes literals succeeded or failed only |
 | PaymentAttempt | `outcome` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordStart` | repository-check | `literal` | writes "started" |
+| PlatformAttempt | `state` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.claimDispatch` | schema | `runValidators` | writes "dispatched" |
+| PlatformAttempt | `state` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.markRecorded` | schema | `runValidators` | writes "recorded" |
+| PlatformAttempt | `state` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.markUnresolved` | schema | `runValidators` | writes "unresolved" |
+| PlatformAttempt | `state` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.stageUsage` | schema | `runValidators` | writes "usage_known" |
+| PlatformAttempt | `unresolvedReason` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.markUnresolved` | schema | `runValidators` | validates the runtime unresolved reason |
 | Project | `groups.permissions` | enum | `content/ProjectModel.ts#ProjectRepository.setOwnedGroupReadAccess` | repository-check | `packages/database/src/models/content/ProjectModel.ts#ProjectRepository.setOwnedGroupReadAccess` | Snapshot-checked ordinary updates preserve or remove stored grants; new grants contain only the literal permission 'read' |
 | PublishedArtifactReport | `status` | enum | `content/purgeOwnerPublishedArtifacts.ts#purgeMatchingPublishedArtifacts` | repository-check | `literal` | writes "actioned" |
 | Quest | `callback.state` | enum | `content/QuestModel.ts#QuestRepository.armCallback` | repository-check | `packages/database/src/models/content/QuestModel.ts#QuestRepository.armCallback` | Writer hardcodes state 'pending' |

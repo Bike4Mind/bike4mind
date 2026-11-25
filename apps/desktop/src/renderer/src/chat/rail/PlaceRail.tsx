@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
+import Badge from '@mui/joy/Badge';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import { RailChatIcon, RailCodeIcon, RailStudioIcon } from '../icons';
+import { stateJoyColor } from '../orchestrator/statePalette';
+import { RailAgentsIcon, RailChatIcon, RailCodeIcon, RailLibraryIcon, RailStudioIcon } from '../icons';
 import { hiddenScrollbarSx } from '../layout';
-import { PLACES, type Place } from './places';
+import { PLACES, placeHasSidebar, type Place } from './places';
 import { placeShortcutLabel, sidebarShortcutLabel } from './shortcuts';
 
 export const RAIL_WIDTH = 48;
@@ -29,6 +31,8 @@ const ICONS: Record<Place, () => ReactNode> = {
   chat: RailChatIcon,
   code: RailCodeIcon,
   studio: RailStudioIcon,
+  agents: RailAgentsIcon,
+  library: RailLibraryIcon,
 };
 
 /** A tooltip's label with its shortcut beside it, dimmer, so the label is read first. */
@@ -66,11 +70,14 @@ export function PlaceRail({
   place,
   sidebarCollapsed = false,
   onSelect,
+  needsYou = 0,
   account,
 }: {
   place: Place;
   sidebarCollapsed?: boolean;
   onSelect: (place: Place) => void;
+  /** Sessions waiting on the user, badged on Agents: the dock badge's count (needsYouBadgeCount). */
+  needsYou?: number;
   /** The avatar slot at the foot of the rail. */
   account?: ReactNode;
 }) {
@@ -111,11 +118,12 @@ export function PlaceRail({
         {PLACES.map(({ place: value, label, digit }) => {
           const Icon = ICONS[value];
           const active = place === value;
+          const badge = value === 'agents' ? needsYou : 0;
           return (
             <Tooltip
               key={value}
               title={
-                active ? (
+                active && placeHasSidebar(value) ? (
                   <RailTooltipTitle
                     label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
                     shortcut={sidebarShortcutLabel()}
@@ -131,13 +139,27 @@ export function PlaceRail({
             >
               <IconButton
                 variant="plain"
-                aria-label={label}
+                aria-label={badge > 0 ? `${label}, ${badge} ${badge === 1 ? 'needs' : 'need'} you` : label}
                 aria-current={active ? 'page' : undefined}
                 onClick={() => onSelect(value)}
                 sx={railButtonSx(active)}
                 data-testid={`place-rail-${value}-btn`}
               >
-                <Icon />
+                {badge > 0 ? (
+                  <Badge
+                    badgeContent={badge}
+                    max={99}
+                    size="sm"
+                    color={stateJoyColor('needs-you')}
+                    badgeInset="-2px -4px auto auto"
+                    slotProps={{ badge: { 'aria-hidden': true, 'data-testid': `place-rail-${value}-badge` } }}
+                    sx={{ '--Badge-minHeight': '15px', '--Badge-paddingX': '3px' }}
+                  >
+                    <Icon />
+                  </Badge>
+                ) : (
+                  <Icon />
+                )}
               </IconButton>
             </Tooltip>
           );

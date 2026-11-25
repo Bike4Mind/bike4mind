@@ -171,7 +171,7 @@ const handler = adminApi({
           : `Weekly ${scanType} scan disabled`,
       });
     } catch (error) {
-      console.error('Failed to update security scan schedule', {
+      req.logger.error('Failed to update security scan schedule', {
         scanType,
         stage,
         enabled,

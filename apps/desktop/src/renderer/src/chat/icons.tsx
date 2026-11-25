@@ -735,17 +735,6 @@ export function ExternalLinkIcon() {
   );
 }
 
-/** Opens in a window of its own inside this app: a window frame with an arrow leaving it. */
-export function NewWindowIcon() {
-  return (
-    <Glyph>
-      <path d="M7 3.5H3.5a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V9" />
-      <path d="M2.5 6.5H5" />
-      <path d="M9.5 2.5h4v4M13.5 2.5 8.5 7.5" />
-    </Glyph>
-  );
-}
-
 /** Blank-chat suggestion: a framed picture, a sun over a hill. */
 export function ImageIcon() {
   return (
@@ -941,12 +930,34 @@ export function RailCodeIcon() {
   );
 }
 
+/** A tray with an item landing in it: what is waiting on the user, across every place. */
+export function RailAgentsIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M2.5 9.5h3l1 1.75h3l1-1.75h3" />
+      <path d="M2.5 9.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3L12 4.5a1 1 0 0 0-.95-.7h-6.1a1 1 0 0 0-.95.7z" />
+      <path d="M6.25 6.75h3.5" />
+    </Glyph>
+  );
+}
+
 /** A four-point spark: making something, rather than any one medium. */
 export function RailStudioIcon() {
   return (
     <Glyph size={RAIL_GLYPH}>
       <path d="M8 2.5c.4 2.6 1.9 4.1 4.5 4.5-2.6.4-4.1 1.9-4.5 4.5-.4-2.6-1.9-4.1-4.5-4.5 2.6-.4 4.1-1.9 4.5-4.5z" />
       <path d="M12.5 11v2.5M11.25 12.25h2.5" />
+    </Glyph>
+  );
+}
+
+/** Stacked frames: everything made, kept. */
+export function RailLibraryIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <rect x="2.5" y="5" width="9" height="8.5" rx="1.5" />
+      <path d="M5 2.5h7a1.5 1.5 0 0 1 1.5 1.5v7" />
+      <path d="m2.5 11.5 2.5-2.5 2 2 1.5-1.5 3 3" />
     </Glyph>
   );
 }

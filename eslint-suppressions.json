@@ -610,7 +610,7 @@
   },
   "apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 3
+      "count": 2
     }
   },
   "apps/client/app/components/ProfileModal/ImportHistoryJobsList.tsx": {
@@ -908,22 +908,7 @@
       "count": 2
     }
   },
-  "apps/client/app/components/admin/ModelMetrics/components/AnalyticsTab.test.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/ModelMetrics/components/AnalyticsTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/ModelMetrics/components/RawDataTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/ModelMetrics/components/SpendTab.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -4095,16 +4080,6 @@
   "b4m-core/services/src/llm/tools/implementation/excelGeneration/index.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "b4m-core/services/src/llm/tools/implementation/knowledgeBaseRetrieve/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
-    }
-  },
-  "b4m-core/services/src/llm/tools/implementation/knowledgeBaseSearch/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 9
     }
   },
   "b4m-core/services/src/llm/tools/implementation/recharts/index.ts": {

@@ -11,6 +11,9 @@ import {
 import { creditService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/utils';
 import { AgentValidationError, validateAgentUpdate } from '@server/utils/agentValidation';
+import { Logger } from '@bike4mind/observability';
+
+const moduleLogger = new Logger({ metadata: { service: 'createAgent' } });
 
 const AGENT_LIMITS: Record<UserLevelType, number> = {
   DemoUser: 2,
@@ -79,7 +82,7 @@ export async function createAgent(
         ...parsedCapabilities,
       };
     } catch (parseError) {
-      console.error('Error parsing capabilities JSON:', parseError);
+      moduleLogger.error('Error parsing capabilities JSON', { error: parseError });
     }
   }
 

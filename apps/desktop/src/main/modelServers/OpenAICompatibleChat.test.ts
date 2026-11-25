@@ -17,7 +17,8 @@ import { inertLaunchers } from './testLaunchers';
 import type { FetchLike, OpenAICompatibleProduct } from '@bike4mind/local-models';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import type { ModelLoadSettings } from '@shared/modelSettings';
-import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import type { CompletionRequest } from '../chat/completions';
 
 // Conditions here hold a few promise turns in; vi.waitFor's default 50ms poll would wait each one out.

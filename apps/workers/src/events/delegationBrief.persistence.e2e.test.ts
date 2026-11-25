@@ -90,6 +90,7 @@ async function composeNextBrief(complete: BriefComposeDeps['complete'] = async (
           status: item.status,
           result: item.result,
         })),
+        obligations: [],
       }),
       canCompose: async () => 'ok',
       complete,

@@ -47,6 +47,7 @@ import {
   isKontextModel,
   MAX_REFERENCE_IMAGES,
   requiresImageInput,
+  formatZodError,
   getQuestErrorCode,
   resolveImageDimensions,
   BFL_DIMENSION_BOUNDS,
@@ -90,7 +91,6 @@ import mongoose from 'mongoose';
 import { z } from 'zod';
 import { recordGeneratedImages } from './recordGeneratedImages';
 import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
-import { fromZodError } from 'zod-validation-error';
 import { resolveBilledImageQuality } from '../imageCost';
 import { OpenAICostInput, OpenAIImageCostCalculator } from './imageCostCalculator/OpenAIImageCostCalculator';
 import { FluxImageCostCalculator } from './imageCostCalculator/FluxImageCostCalculator';
@@ -522,7 +522,7 @@ export class ImageGenerationService {
 
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
-        errorMessage = fromZodError(error).message;
+        errorMessage = formatZodError(error);
       } else if (error instanceof Error) {
         errorMessage = error.message;
       }

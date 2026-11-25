@@ -221,7 +221,11 @@ export function SpendDrillDown({
           loading={isLoading && !accounts}
           error={error}
           onRetry={onRetry}
-          empty={<Typography level="body-sm">No recorded spend in this window.</Typography>}
+          empty={
+            <Typography level="body-sm">
+              {total > 0 ? 'No user-attributed spend in this window.' : 'No recorded spend in this window.'}
+            </Typography>
+          }
           pagination={false}
           framed={false}
           minWidth="28rem"

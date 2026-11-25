@@ -18,6 +18,9 @@ import {
 } from '@bike4mind/database';
 import { decryptStoredSecret, encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { PKCE_CODE_VERIFIER_RE, PKCE_S256_CHALLENGE_RE } from './pkce';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'oauthServer' } });
 
 // ─── RSA key pair (RS256) ─────────────────────────────────────────────────────
 // A stage that sets OAUTH_RSA_PRIVATE_KEY (base64-encoded PEM) signs with it. A stage without one
@@ -79,8 +82,8 @@ async function loadOrCreateSharedPrivateKey(): Promise<string> {
     isOverridable: false,
     description: 'Auto-generated OAuth/OIDC ID token signing key, used when OAUTH_RSA_PRIVATE_KEY is not set',
   });
-  console.warn(
-    '[OAuthServer] OAUTH_RSA_PRIVATE_KEY not set - using a generated RSA key pair shared through the database. Set this secret before going to production.'
+  logger.warn(
+    'OAUTH_RSA_PRIVATE_KEY not set - using a generated RSA key pair shared through the database. Set this secret before going to production.'
   );
   return decryptStoredSecret(stored.encryptedValue);
 }
@@ -111,7 +114,7 @@ async function getSigningKey(): Promise<SigningKey> {
       // is cached for good, so the store is retried once the backoff passes.
       sharedKeyLoad = null;
       storeRetryAfter = Date.now() + STORE_RETRY_BACKOFF_MS;
-      console.error('[OAuthServer] Could not load the shared OAuth signing key; using an instance-local key.', error);
+      logger.error('Could not load the shared OAuth signing key; using an instance-local key', { error });
       instanceFallbackKey ??= toSigningKey(generatePrivateKeyPem(), true);
       return instanceFallbackKey;
     });

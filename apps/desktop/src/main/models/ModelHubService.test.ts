@@ -50,7 +50,8 @@ import { inertLaunchers } from '../modelServers/testLaunchers';
 import type { ModelServerSpecs, QuantizedKvCacheType } from '@shared/modelServers';
 import type { OllamaBuild } from './ollamaWslPatch';
 import type { AddressInfo } from 'node:net';
-import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import http from 'node:http';
 
 vi.mock('@bike4mind/common', async importOriginal => {

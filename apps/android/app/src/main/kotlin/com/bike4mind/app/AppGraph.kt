@@ -43,6 +43,7 @@ import com.bike4mind.kit.briefs.BriefWire
 import com.bike4mind.kit.chat.ChatController
 import com.bike4mind.kit.chat.ChatSendWire
 import com.bike4mind.kit.chat.LiveChatBackend
+import com.bike4mind.kit.credits.CreditsController
 import com.bike4mind.kit.environment.ServerEnvironment
 import com.bike4mind.kit.media.FileMediaListCache
 import com.bike4mind.kit.media.MediaDetailController
@@ -55,6 +56,8 @@ import com.bike4mind.kit.networking.ClientIdentity
 import com.bike4mind.kit.networking.ClientUpgradeSignal
 import com.bike4mind.kit.networking.UpgradeRequiredException
 import com.bike4mind.kit.networking.requireBody
+import com.bike4mind.kit.obligations.ObligationHandoffController
+import com.bike4mind.kit.obligations.ObligationsWire
 import com.bike4mind.kit.push.PushRegistrationCoordinator
 import com.bike4mind.kit.push.PushTokenWire
 import com.bike4mind.kit.realtime.RealtimeConnection
@@ -133,6 +136,10 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     val mediaImages = MediaImageLoader(storageHttp, File(context.cacheDir, "media-thumbnails"), environment)
     private val captureWire = CaptureWire(environment, http, storageHttp)
     private val transcription = TranscriptionWire(environment, http, storageHttp)
+    private val obligations = ObligationsWire(environment, http)
+
+    /** One "Hand to assistant" run for a scanned bill. */
+    fun obligationHandoff() = ObligationHandoffController(captureWire, obligations)
 
     /** Shares from other apps, run by app/capture/CaptureWorker. One queue per server, like the tokens. */
     val capture = CaptureEngine(
@@ -176,6 +183,8 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     }
 
     fun settings(scope: CoroutineScope) = SettingsController(account, scope)
+
+    fun credits(scope: CoroutineScope) = CreditsController({ accountApi.getCreditBalance().requireBody().balance }, scope)
 
     fun accountDeletion(scope: CoroutineScope) = AccountDeletionController(account, scope, ::endSessionAfterDeletion)
 

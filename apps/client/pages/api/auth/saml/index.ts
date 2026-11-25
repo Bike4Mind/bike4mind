@@ -21,7 +21,7 @@ const handler = ipGatedApi.get(async (req, res) => {
   try {
     identityProvider = await identityProviderRepository.findByIdWithSecrets(idp);
   } catch (error) {
-    console.error('SAML identity provider lookup failed:', error);
+    req.logger.error('SAML identity provider lookup failed', { error });
     return res.redirect('/login?error=saml_setup_failed');
   }
 
@@ -49,7 +49,6 @@ const handler = ipGatedApi.get(async (req, res) => {
     }
 
     // RelayState carries a caller-supplied redirectTo and is never logged.
-    console.log('Starting SAML authentication for IDP:', identityProvider.id);
 
     passport.authenticate(strategyName, <AuthenticateOptions>{
       successRedirect: undefined,
@@ -59,7 +58,7 @@ const handler = ipGatedApi.get(async (req, res) => {
       },
     })(req, res);
   } catch (error) {
-    console.error('SAML authentication error:', error);
+    req.logger.error('SAML authentication error', { error });
     return res.redirect('/login?error=saml_setup_failed');
   }
 });

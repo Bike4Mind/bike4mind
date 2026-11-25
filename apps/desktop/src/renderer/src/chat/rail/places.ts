@@ -6,9 +6,13 @@ import type { ChatSessionMode } from '@shared/chat';
  * Chat and Code are the session places: either one filters the session list and is what New
  * starts. Studio keeps its own conversation (a 'studio' session, never listed) for Create to save
  * into, and leaves the Chat or Code conversation open underneath, so coming back lands where the
- * user left.
+ * user left. Library is the account's generated media; like Studio it leaves the conversation
+ * underneath alone.
+ *
+ * Agents is a board, not a list: every session waiting on the user, whatever place it lives in.
+ * It has no sidebar of its own, and opening an entry takes the user to that session's place.
  */
-export type Place = 'chat' | 'code' | 'studio';
+export type Place = 'chat' | 'code' | 'studio' | 'agents' | 'library';
 
 /** The session modes a sidebar lists and New starts. */
 export type SessionPlace = Exclude<ChatSessionMode, 'studio'>;
@@ -19,12 +23,19 @@ export const PLACES: readonly { place: Place; label: string; digit: number }[] =
   { place: 'chat', label: 'Chat', digit: 1 },
   { place: 'code', label: 'Code', digit: 2 },
   { place: 'studio', label: 'Studio', digit: 3 },
+  { place: 'agents', label: 'Agents', digit: 4 },
+  { place: 'library', label: 'Library', digit: 5 },
 ];
 
 export const placeLabel = (place: Place) => PLACES.find(entry => entry.place === place)?.label ?? place;
 
 export function isSessionPlace(place: Place): place is SessionPlace {
   return place === 'chat' || place === 'code';
+}
+
+/** Whether the place has a sidebar beside it, which its active rail icon shows and hides. */
+export function placeHasSidebar(place: Place): boolean {
+  return place !== 'agents';
 }
 
 /**
@@ -43,7 +54,7 @@ export interface PlaceMemory {
 
 const STORAGE_KEY = 'b4m.chat.places';
 
-const isPlace = (value: unknown): value is Place => value === 'chat' || value === 'code' || value === 'studio';
+const isPlace = (value: unknown): value is Place => PLACES.some(entry => entry.place === value);
 
 export function readPlaceMemory(): PlaceMemory | null {
   try {

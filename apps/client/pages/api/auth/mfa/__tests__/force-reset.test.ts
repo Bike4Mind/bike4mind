@@ -64,7 +64,6 @@ const post = (body: Record<string, unknown>, user: Record<string, unknown> | und
 
 beforeEach(() => {
   txEvents.length = 0;
-  vi.spyOn(console, 'error').mockImplementation(() => undefined);
   mockForceResetMFA.mockReset().mockResolvedValue({
     success: true,
     user: { id: 'target1', name: 'Target', username: 'target', email: 'target@example.com' },

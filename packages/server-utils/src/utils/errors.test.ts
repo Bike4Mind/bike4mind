@@ -69,4 +69,8 @@ describe('parseOrBadRequest', () => {
       expect((err as BadRequestError).statusCode).toBe(400);
     }
   });
+
+  it('names the field after a Validation error prefix', () => {
+    expect(() => parseOrBadRequest(schema, { name: '' })).toThrow(/^Validation error: [\s\S]*\bname\b/);
+  });
 });

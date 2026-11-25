@@ -301,7 +301,6 @@ describe('/api/subscribers/create - Slack alert cap', () => {
 
   it('keeps the signup when reserving an alert slot fails', async () => {
     cache.failKeys.add('subscriber-limit:slack-alerts');
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const res = await submit(person);
 

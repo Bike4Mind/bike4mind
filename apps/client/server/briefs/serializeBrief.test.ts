@@ -92,6 +92,27 @@ describe('serializeBrief', () => {
     expect(wire.handled[0].source).toEqual({ kind: 'delegation', delegationId: 'g1' });
   });
 
+  it('carries an obligation source through to the wire', async () => {
+    const stored = {
+      _id: { toString: () => 'b4' },
+      status: 'ready',
+      createdAt: new Date('2026-11-17T00:00:00Z'),
+      composedAt: new Date('2026-11-17T00:01:00Z'),
+      periodStart: new Date('2026-11-16T00:00:00Z'),
+      periodEnd: new Date('2026-11-17T00:00:00Z'),
+      headline: 'A bill is due.',
+      happened: [
+        { id: 'x1', text: 'Due Nov 20: Example Utilities', source: { kind: 'obligation', obligationId: 'o1' } },
+      ],
+      handled: [],
+      decisions: [],
+    } as unknown as IAssistantBrief;
+
+    const wire = await serializeBrief(stored);
+    expect(BriefSchema.parse(wire)).toEqual(wire);
+    expect(wire.happened[0].source).toEqual({ kind: 'obligation', obligationId: 'o1' });
+  });
+
   it('serializes a composing brief with no composed time yet', async () => {
     const stored = {
       _id: { toString: () => 'b4' },

@@ -194,7 +194,7 @@ const handler = baseApi()
             // Continue with other sessions even if one fails. `deletedCount` already excludes this
             // one (the increment is past the await), so the response under-reports rather than
             // claiming a delete that rolled back.
-            console.error(`Failed to delete session ${sessionId}:`, error);
+            req.logger.error('Failed to delete session', { sessionId, error });
           }
         }
 

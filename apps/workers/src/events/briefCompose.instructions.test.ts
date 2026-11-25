@@ -20,6 +20,7 @@ const activeActivity: BriefActivity = {
   questions: [],
   emails: [],
   delegations: [],
+  obligations: [],
 } as unknown as BriefActivity;
 
 const emptyActivity = { ...activeActivity, runs: [], approvals: [] } as BriefActivity;

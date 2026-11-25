@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hostMethods, hostNotifications, type HostMethod, type HostNotificationName } from './methods';
+import { hostErrorData, hostMethods, hostNotifications, type HostMethod, type HostNotificationName } from './methods';
 
 const cursor = { epoch: 'e1', seq: 4 };
 const summary = { id: 's1' };
@@ -44,8 +44,8 @@ const methodSamples: Record<HostMethod, { params: unknown; badParams: unknown; r
     result: { summary: null },
   },
   'session/setArchived': {
-    params: { sessionId: 's1', archived: true },
-    badParams: { sessionId: 's1', archived: 'yes' },
+    params: { sessionId: 's1', archived: true, confirmed: true, archiveChildIds: ['c1'] },
+    badParams: { sessionId: 's1', archived: true, archiveChildIds: 'c1' },
     result: { summary },
   },
   'session/delete': { params: { sessionId: 's1', removeWorktree: false }, badParams: {}, result: {} },
@@ -70,17 +70,28 @@ const methodSamples: Record<HostMethod, { params: unknown; badParams: unknown; r
   'queue/list': { params: { sessionId: 's1' }, badParams: {}, result: { queued: [queued] } },
   'queue/cancel': { params: { sessionId: 's1', queuedId: 'q1' }, badParams: { sessionId: 's1' }, result: {} },
   'queue/sendNow': { params: { sessionId: 's1', queuedId: 'q1' }, badParams: { queuedId: 'q1' }, result: {} },
-  'background/stop': { params: { sessionId: 's1', processId: 'p1' }, badParams: { sessionId: 's1' }, result: {} },
+  'background/stop': {
+    params: { sessionId: 's1', processId: 'p1' },
+    badParams: { sessionId: 's1' },
+    result: { process: { id: 'p1', sessionId: 's1', status: 'killed' } },
+  },
   'fs/browse': {
     params: { path: '/home/dev' },
     badParams: { path: 3 },
     result: {
       path: '/home/dev',
       parent: '/home',
-      entries: [{ name: 'repo', path: '/home/dev/repo', isGitRepository: true }],
+      entries: [{ name: 'repo', path: '/home/dev/repo', isGitRepository: true, isHidden: false, isSymlink: false }],
+      truncated: false,
     },
   },
   'project/recent': { params: {}, badParams: 'nope', result: { folders: [{ path: '/work', name: 'work' }] } },
+  'project/forgetRecent': { params: { path: '/work' }, badParams: {}, result: { folders: [] } },
+  'project/inspect': {
+    params: { directory: '/work' },
+    badParams: { directory: 1 },
+    result: { inspection: { directory: '/work', name: 'work', isRepository: true, branches: ['main'] } },
+  },
   'model/list': { params: { force: 'local' }, badParams: { force: 'remote' }, result: { models: { models: [] } } },
   'draft/defaults': { params: {}, badParams: 'nope', result: { defaults: { model: 'm', approvalMode: 'ask' } } },
 };
@@ -120,6 +131,33 @@ describe('hostMethods', () => {
     expect(hostMethods['session/create'].params.safeParse(undefined).success).toBe(true);
   });
 
+  it('carries the archive question when a parent needs confirming, and rejects a malformed one', () => {
+    const { result } = hostMethods['session/setArchived'];
+    const confirmationRequired = {
+      parentTitle: 'Parent',
+      finished: [{ id: 'c1', title: 'Done' }],
+      kept: [{ id: 'c2', title: 'Busy', status: 'running' }],
+    };
+    expect(result.safeParse({ summary: null, confirmationRequired }).success).toBe(true);
+    expect(result.safeParse({ summary: null, confirmationRequired: { parentTitle: 'Parent' } }).success).toBe(false);
+  });
+
+  it('accepts the fs/browse result of a 1.0 host, which has no flags or truncation', () => {
+    const legacy = { path: '/a', parent: '/', entries: [{ name: 'b', path: '/a/b', isGitRepository: false }] };
+    expect(hostMethods['fs/browse'].result.safeParse(legacy).success).toBe(true);
+  });
+
+  it('rejects a background/stop result whose process is not one', () => {
+    expect(hostMethods['background/stop'].result.safeParse({}).success).toBe(true);
+    expect(hostMethods['background/stop'].result.safeParse({ process: { id: 'p1' } }).success).toBe(false);
+  });
+
+  it('rejects a project/inspect result without the fields a client relies on', () => {
+    expect(
+      hostMethods['project/inspect'].result.safeParse({ inspection: { directory: '/w', isRepository: true } }).success
+    ).toBe(false);
+  });
+
   it('discriminates request/respond on kind', () => {
     const { params } = hostMethods['request/respond'];
     expect(
@@ -146,4 +184,13 @@ describe('hostNotifications', () => {
       expect(hostNotifications[name].params.safeParse(badParams).success).toBe(false);
     }
   );
+});
+
+describe('hostErrorData', () => {
+  it('types the data of a path that cannot be browsed and of an unknown process', () => {
+    expect(hostErrorData.pathUnavailable.safeParse({ path: '/gone', reason: 'notFound' }).success).toBe(true);
+    expect(hostErrorData.pathUnavailable.safeParse({ reason: 'notFound' }).success).toBe(false);
+    expect(hostErrorData.processNotFound.safeParse({ sessionId: 's1', processId: 'p1' }).success).toBe(true);
+    expect(hostErrorData.processNotFound.safeParse({ sessionId: 's1' }).success).toBe(false);
+  });
 });

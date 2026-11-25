@@ -23,7 +23,7 @@ const handler = baseApi().patch(
     const groupId = req.query.groupId;
     if (!organizationId || !groupId) throw new BadRequestError('Organization id and group id are required');
 
-    // Let a ZodError propagate to the central errorHandler (maps it to 422 via fromZodError) rather
+    // Let a ZodError propagate to the central errorHandler (maps it to 422 via formatZodError) rather
     // than hand-rolling a divergent 400 here.
     const { name, expectedName } = bodySchema.parse(req.body);
 

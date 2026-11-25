@@ -13,6 +13,7 @@ import {
   userFileCspInjection as userFileCspInjectionFor,
 } from './routerFunctionCode';
 import { AUTH_NETWORK_HEADERS, authNetworkCacheBehaviors, authNetworkJa4Injection } from './authNetworkForwarding';
+import { deleteRouterKvDataWithRouter } from './routerKvData';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -87,7 +88,7 @@ export const routePrefix = $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? `/${
 // itself lives in routerFunctionCode.ts). routePrefix is baked in so the prefixes are the
 // literal URIs the viewer requests on EVERY stage that owns its router - '' on deployed
 // stages, '/<stage>' on `sst dev --stage shared-dev` (routeBucket registers
-// `${routePrefix}/generated`, etc.), where a bare '/generated/' would never match.
+// `${routePrefix}/org-files`, etc.), where a bare '/org-files/' would never match.
 const userFileCdnPrefixes = bareUserFileCdnPrefixes.map(prefix => `${routePrefix}${prefix}`);
 
 // Defense-in-depth CSP backstop for hosted/CDN-served user files. A user-supplied file
@@ -96,9 +97,9 @@ const userFileCdnPrefixes = bareUserFileCdnPrefixes.map(prefix => `${routePrefix
 // Function (viewer-request) plus ONE viewer-response function, with no per-route cache
 // behaviors or ResponseHeadersPolicy to attach to. The catch: SST rewrites event.request.uri
 // INSIDE the viewer-request function (verified against the SST 4.17.1 Router source), so by
-// the viewer-response stage the URI is the rewritten S3 key (e.g. /generated/x -> /x), not
+// the viewer-response stage the URI is the rewritten S3 key (e.g. /org-files/x -> /organizations/x), not
 // the public prefix. Matching prefixes at response time would therefore silently miss the
-// three rewritten prefixes (/generated, /admin-logos, /org-files) - the very case
+// rewritten prefixes (/admin-logos, /org-files) - the very case
 // this backstop exists to cover. So we stamp a marker in the viewer-REQUEST injection, which
 // SST emits as the FIRST statement of the routing function (before its own rewrite), where
 // the URI is still the original prefix; the viewer-response function then keys off that
@@ -362,6 +363,16 @@ function bareOrigin(url: typeof routerInstance.url) {
  */
 export function cdnUrlForLambdaEnv() {
   return $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? LOCAL_FILE_PROXY_BASE : bareOrigin(routerInstance.url);
+}
+
+// Previews are created and torn down many times a day, and `sst remove` otherwise deletes
+// every routing key through the billed KeyValueStore API right before deleting the store
+// itself. Tie those keys to this router so a teardown skips them; see routerKvData.ts. The
+// transformation only sees resources registered after this line, which holds for every
+// route, site and function-URL key: they come from modules that import `router` below.
+// Preview-only, and never for a shared Router.get() router, whose store outlives this stage.
+if (isPreviewStage && !$dev && !shouldUseSharedRouter) {
+  $util.runtime.registerStackTransformation(args => deleteRouterKvDataWithRouter(args, routerInstance));
 }
 
 // Export router for other infrastructure to use
