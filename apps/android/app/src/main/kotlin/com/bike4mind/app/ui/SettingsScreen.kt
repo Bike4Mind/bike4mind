@@ -48,11 +48,14 @@ import com.bike4mind.app.AppGraph
 import com.bike4mind.app.R
 import com.bike4mind.kit.account.AccountCallError
 import com.bike4mind.kit.account.AccountDeletionController
+import com.bike4mind.kit.credits.CreditsController
+import com.bike4mind.kit.credits.CreditsState
 import com.bike4mind.kit.push.NotificationCategory
 import kotlinx.coroutines.launch
 
 class SettingsViewModel(graph: AppGraph) : ViewModel() {
     val controller = graph.settings(viewModelScope).also { it.load() }
+    val credits = graph.credits(viewModelScope).also { it.load() }
 }
 
 /** The profile header, a switch per push category, sign out and the way to account deletion. Twin of apps/ios SettingsView. */
@@ -61,6 +64,7 @@ class SettingsViewModel(graph: AppGraph) : ViewModel() {
 fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onDeleteAccount: () -> Unit) {
     val model = viewModel { SettingsViewModel(graph) }
     val state by model.controller.state.collectAsStateWithLifecycle()
+    val credits by model.credits.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var systemAllows by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
@@ -146,6 +150,7 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onDeleteAccount: () -> U
             }
 
             item { SectionHeader(stringResource(R.string.settings_account)) }
+            item { CreditsRow(credits, onRetry = model.credits::load) }
             item {
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.settings_sign_out)) },
@@ -196,6 +201,30 @@ private fun ProfileHeader(name: String?, email: String?, initial: String?, loadi
             email?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
+}
+
+@Composable
+private fun CreditsRow(state: CreditsState, onRetry: () -> Unit) {
+    val balance = state.balance
+    val error = state.error.takeIf { balance == null }
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.settings_credits)) },
+        supportingContent = error?.let { { Text(accountErrorText(it), color = MaterialTheme.colorScheme.error) } },
+        trailingContent = {
+            when {
+                balance != null -> Text(
+                    CreditsController.formatted(balance),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontFeatureSettings = "tnum"),
+                    modifier = Modifier.testTag("settings-credits-balance"),
+                )
+                error != null -> TextButton(onClick = onRetry, modifier = Modifier.testTag("settings-credits-retry-btn")) {
+                    Text(stringResource(R.string.action_try_again))
+                }
+                state.loading -> CircularProgressIndicator(modifier = Modifier.size(Spacing.l))
+            }
+        },
+        modifier = Modifier.testTag("settings-credits-row"),
+    )
 }
 
 @Composable

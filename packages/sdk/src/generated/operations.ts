@@ -333,6 +333,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/functions/{id}',
   },
+  getFunctionCall: {
+    method: 'GET',
+    path: '/api/v1/functions/calls/{call_id}',
+  },
   getImageJob: {
     method: 'GET',
     path: '/api/v1/image-jobs/{id}',

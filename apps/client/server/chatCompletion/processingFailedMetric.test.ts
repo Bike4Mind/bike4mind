@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 
@@ -76,7 +77,7 @@ describe('emitProcessingFailed', () => {
   });
 
   it('resolves without throwing when building the datums fails', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleError = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     mockResource.App = undefined;
 
     await expect(emitProcessingFailed('cli-sse', new Error('boom'))).resolves.toBeUndefined();

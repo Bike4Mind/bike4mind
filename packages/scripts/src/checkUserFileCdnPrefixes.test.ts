@@ -29,7 +29,7 @@ const APP_FILE_PROXY_TS = path.join(REPO_ROOT, 'packages', 'server-utils', 'src'
 // list still carries them so the backstop covers them at runtime.
 const OVERLAY_ONLY_PREFIXES = new Set(['tavern-sounds', 'tavern-icons']);
 
-/** The names inside `userFileCdnPrefixes = [ '/generated/', ... ]` in infra/routerFunctionCode.ts. */
+/** The names inside `userFileCdnPrefixes = [ '/proxied-images/', ... ]` in infra/routerFunctionCode.ts. */
 function readCspPrefixes(contents: string): string[] {
   const block = /const userFileCdnPrefixes = \[([\s\S]*?)\]/.exec(contents);
   if (!block) throw new Error('userFileCdnPrefixes array not found in infra/routerFunctionCode.ts');
@@ -37,7 +37,7 @@ function readCspPrefixes(contents: string): string[] {
 }
 
 /**
- * The names inside `router.routeBucket(`${routePrefix}/generated`, ...)` in infra/buckets.ts.
+ * The names inside `router.routeBucket(`${routePrefix}/org-files`, ...)` in infra/buckets.ts.
  * Matches every `routeBucket(...)` call indiscriminately - it assumes all of them are
  * user-file routes, which holds today but isn't enforced. A future non-user-file
  * `routeBucket` route would be swept in here and forced into `userFileCdnPrefixes` just to
@@ -48,7 +48,7 @@ function readRouteBucketPrefixes(contents: string): string[] {
   return [...contents.matchAll(/routeBucket\(`\$\{routePrefix\}\/([a-z0-9-]+)`/g)].map(m => m[1]);
 }
 
-/** The names inside `cdnPath.startsWith('generated/')` in appFileProxy.ts resolveProxyTarget. */
+/** The names inside `cdnPath.startsWith('org-files/')` in appFileProxy.ts resolveProxyTarget. */
 function readProxyPrefixes(contents: string): string[] {
   return [...contents.matchAll(/cdnPath\.startsWith\('([a-z0-9-]+)\/'\)/g)].map(m => m[1]);
 }

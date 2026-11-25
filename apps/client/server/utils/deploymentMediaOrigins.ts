@@ -1,3 +1,6 @@
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'deploymentMediaOrigins' } });
 // The origin of a configured URL, or '' when it is unset or unsafe to place in a CSP source list.
 function cspSafeOrigin(raw: string | undefined, name: string, protocols: readonly string[]): string {
   const configured = raw?.trim();
@@ -14,7 +17,7 @@ function cspSafeOrigin(raw: string | undefined, name: string, protocols: readonl
     if (/[\s;,'"*\\]/.test(url.origin)) throw new Error('Invalid origin');
     return url.origin;
   } catch {
-    console.warn(`[csp] ignoring invalid ${name}`);
+    logger.warn('[csp] ignoring invalid deployment media origin', { name });
     return '';
   }
 }
