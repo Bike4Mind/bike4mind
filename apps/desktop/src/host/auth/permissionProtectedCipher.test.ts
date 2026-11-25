@@ -8,7 +8,7 @@ describe('permissionProtectedCipher', () => {
   });
 
   it('round-trips text, including non-ASCII', () => {
-    const text = '{"refreshToken":"réfresh"}';
+    const text = '{"refreshToken":"r\u00e9fresh"}';
     expect(permissionProtectedCipher.decryptString(permissionProtectedCipher.encryptString(text))).toBe(text);
   });
 });
