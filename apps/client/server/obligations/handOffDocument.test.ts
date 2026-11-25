@@ -130,4 +130,37 @@ describe('handOffDocument', () => {
     await expect(handOffDocument('user-me', { file_id: FILE_ID }, deps)).rejects.toThrow('provider down');
     expect(deps.obligations.create).not.toHaveBeenCalled();
   });
+
+  it('returns the winning row and still charges the reading when a concurrent hand-off stored first', async () => {
+    const winner = { fileId: FILE_ID, status: 'pending' } as unknown as IObligation;
+    const { deps, recordUsage } = makeDeps({
+      obligations: {
+        findByFileForUser: vi.fn(async () => null),
+        create: vi.fn(async () => ({ obligation: winner, created: false })),
+      },
+    });
+    await expect(handOffDocument('user-me', { file_id: FILE_ID }, deps)).resolves.toEqual({
+      obligation: winner,
+      created: false,
+    });
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not charge when storing the row fails', async () => {
+    const { deps, recordUsage } = makeDeps({
+      obligations: {
+        findByFileForUser: vi.fn(async () => null),
+        create: vi.fn(async () => Promise.reject(new Error('db down'))),
+      },
+    });
+    await expect(handOffDocument('user-me', { file_id: FILE_ID }, deps)).rejects.toThrow('db down');
+    expect(recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('looks a mixed-case file id up in canonical form', async () => {
+    const { deps } = makeDeps();
+    await handOffDocument('user-me', { file_id: FILE_ID.toUpperCase() }, deps);
+    expect(deps.obligations.findByFileForUser).toHaveBeenCalledWith(FILE_ID, 'user-me');
+    expect(vi.mocked(deps.obligations.create).mock.calls[0][0].fileId).toBe(FILE_ID);
+  });
 });

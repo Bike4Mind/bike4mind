@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
 }));
 
+vi.mock('@server/dataLakes/lakeMembershipWrite', () => ({ lakeAccessDb: {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { listDataLakes: mocks.listDataLakes, isFallbackLake: mocks.isFallbackLake },
 }));

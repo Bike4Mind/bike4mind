@@ -2,9 +2,6 @@ import mongoose from 'mongoose';
 import { insufficientCreditsError, type AccessContext, type ObligationHandoffRequest } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import {
-  adminSettingsRepository,
-  dataLakeAccessGrantRepository,
-  dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
   obligationDayToDate,
@@ -19,10 +16,12 @@ import {
   NotFoundError,
   UnprocessableEntityError,
 } from '@bike4mind/server-utils/utils/errors';
+import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { recordSessionOperationalUsage } from '@bike4mind/server-utils/billing/recordSessionOperationalUsage';
 import { checkSessionOperationalCredits } from '@bike4mind/server-utils/utils/sessionOperationalCreditPreflight';
+import { lakeAccessDb } from '@server/dataLakes/lakeMembershipWrite';
 import {
   buildExtractionPrompt,
   parseExtraction,
@@ -61,10 +60,13 @@ export async function handOffDocument(
   body: ObligationHandoffRequest,
   deps: HandOffDeps
 ): Promise<HandOffResult> {
-  const existing = await deps.obligations.findByFileForUser(body.file_id, userId);
+  // Canonical form, so a differently-cased id cannot slip past the duplicate lookup into a second row and charge.
+  const fileId = toObjectIdString(body.file_id);
+  if (!fileId) throw new NotFoundError('File not found');
+  const existing = await deps.obligations.findByFileForUser(fileId, userId);
   if (existing) return { obligation: existing, created: false };
 
-  const file = mongoose.isValidObjectId(body.file_id) ? await deps.findFile(body.file_id, userId) : null;
+  const file = await deps.findFile(fileId, userId);
   if (!file) throw new NotFoundError('File not found');
   if (file.moderationStatus === 'pending' || file.moderationStatus === 'scanning') {
     throw new ConflictError('The file is still being checked; retry shortly');
@@ -73,7 +75,7 @@ export async function handOffDocument(
     throw new UnprocessableEntityError('This file cannot be processed');
   }
 
-  const text = body.text?.trim() || (await deps.fileText(body.file_id)).trim();
+  const text = body.text?.trim() || (await deps.fileText(fileId)).trim();
   if (!text) throw new UnprocessableEntityError('There is nothing readable in this document');
 
   const lakes = await deps.listLakes();
@@ -90,7 +92,7 @@ export async function handOffDocument(
     extraction = parseExtraction(reply, lakes);
   } catch (error) {
     if (!(error instanceof ObligationExtractionParseError)) throw error;
-    deps.logger.warn('[obligations] model reply was not JSON; nothing stored', { fileId: body.file_id });
+    deps.logger.warn('[obligations] model reply was not JSON; nothing stored', { fileId });
     await recordUsage(id.toString());
     throw new BadGatewayError('The assistant could not read this document; try again');
   }
@@ -98,7 +100,7 @@ export async function handOffDocument(
   const result = await deps.obligations.create({
     _id: id,
     userId,
-    fileId: body.file_id,
+    fileId,
     documentKind: extraction.documentKind,
     amountValue: extraction.amount?.value ?? null,
     currency: extraction.amount?.currency ?? null,
@@ -124,13 +126,7 @@ export function createHandOffDeps(ctx: AccessContext, logger: Logger, opts: { of
     },
     listLakes: async () => {
       if (!opts.offerLakes || !(await isFeatureEnabled('EnableDataLakes'))) return [];
-      const lakes = await dataLakeService.listDataLakes(ctx, {
-        db: {
-          dataLakes: dataLakeRepository,
-          dataLakeAccessGrants: dataLakeAccessGrantRepository,
-          settings: adminSettingsRepository,
-        },
-      });
+      const lakes = await dataLakeService.listDataLakes(ctx, { db: lakeAccessDb });
       return lakes
         .filter(lake => lake.canManage === true && !dataLakeService.isFallbackLake(lake))
         .map(lake => ({ id: lake.id, name: lake.name }));
