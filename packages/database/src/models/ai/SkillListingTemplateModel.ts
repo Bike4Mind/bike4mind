@@ -12,6 +12,7 @@ import {
   SKILL_TEMPLATE_MAX_INPUTS,
   SKILL_TEMPLATE_SLUG_MAX,
   type ISkillListingTemplate,
+  type ISkillTemplateExample,
 } from '@bike4mind/common';
 import { SkillScanFindingSchema } from './SkillListingVersionModel';
 
@@ -280,6 +281,88 @@ export async function unpublishListingTemplate(listingId: string): Promise<void>
     { runValidators: true }
   );
   await settleVoidedScan(listingId);
+}
+
+/** What a finished example run writes; the author's `enabled` switch is kept. */
+export type SkillTemplateExampleResult = Pick<
+  ISkillTemplateExample,
+  'prompt' | 'reply' | 'artifact' | 'media' | 'sampleFile' | 'steps' | 'generatedFromVersionId'
+>;
+
+/**
+ * Mark an example run as started at `runAt`. Refused (null) while another run is in flight unless
+ * it started before `staleBefore`. A previous example's content stays until the new run finishes.
+ */
+export async function startSkillTemplateExampleRun(listingId: string, runAt: Date, staleBefore: Date) {
+  const first = await SkillListingTemplate.findOneAndUpdate(
+    { listingId, example: { $exists: false } },
+    { $set: { example: { status: 'running', enabled: true, prompt: '', reply: '', steps: [], runAt } } },
+    { new: true, runValidators: true }
+  );
+  if (first) return first;
+  return SkillListingTemplate.findOneAndUpdate(
+    {
+      listingId,
+      example: { $exists: true },
+      $or: [{ 'example.status': { $ne: 'running' } }, { 'example.runAt': { $lt: staleBefore } }],
+    },
+    { $set: { 'example.status': 'running', 'example.runAt': runAt }, $unset: { 'example.error': 1 } },
+    { new: true, runValidators: true }
+  );
+}
+
+/** Store a finished run, only if `runAt` is still the run in flight. Returns whether it landed. */
+export async function writeSkillTemplateExampleResult(
+  listingId: string,
+  runAt: Date,
+  result: SkillTemplateExampleResult
+): Promise<boolean> {
+  const res = await SkillListingTemplate.updateOne(
+    { listingId, 'example.status': 'running', 'example.runAt': runAt },
+    {
+      $set: {
+        'example.status': 'ready',
+        'example.prompt': result.prompt,
+        'example.reply': result.reply,
+        'example.replyTrimmedTo': null,
+        'example.artifact': result.artifact ?? null,
+        'example.media': result.media ?? null,
+        'example.sampleFile': result.sampleFile ?? null,
+        'example.steps': result.steps,
+        'example.generatedFromVersionId': result.generatedFromVersionId ?? null,
+      },
+      $unset: { 'example.error': 1 },
+    },
+    { runValidators: true }
+  );
+  return res.modifiedCount > 0;
+}
+
+/** Mark the run in flight at `runAt` failed; the previous example's content is kept. */
+export async function failSkillTemplateExampleRun(listingId: string, runAt: Date, error: string): Promise<boolean> {
+  const res = await SkillListingTemplate.updateOne(
+    { listingId, 'example.status': 'running', 'example.runAt': runAt },
+    { $set: { 'example.status': 'failed', 'example.error': error.slice(0, 500) } },
+    { runValidators: true }
+  );
+  return res.modifiedCount > 0;
+}
+
+export type SkillTemplateExampleEdit = Partial<
+  Pick<ISkillTemplateExample, 'enabled' | 'replyTrimmedTo' | 'sampleFile'>
+>;
+
+/** The author's edits to a stored example (switch, trim, sample file). Null when there is no example. */
+export async function editSkillTemplateExample(listingId: string, edit: SkillTemplateExampleEdit) {
+  const set: Record<string, unknown> = {};
+  if (edit.enabled !== undefined) set['example.enabled'] = edit.enabled;
+  if (edit.replyTrimmedTo !== undefined) set['example.replyTrimmedTo'] = edit.replyTrimmedTo;
+  if (edit.sampleFile !== undefined) set['example.sampleFile'] = edit.sampleFile;
+  return SkillListingTemplate.findOneAndUpdate(
+    { listingId, example: { $exists: true } },
+    { $set: set },
+    { new: true, runValidators: true }
+  );
 }
 
 export default SkillListingTemplate;

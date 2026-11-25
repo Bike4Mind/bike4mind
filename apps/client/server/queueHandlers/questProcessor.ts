@@ -44,7 +44,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { z } from 'zod';
-import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
+import { QuestStartBodySchema, ChatCompletionProcess, type ExampleRunMode } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
@@ -310,7 +310,15 @@ export const getImageJobsResolver = (apiKeyId: string | undefined) =>
  * `apps/client/server/chatCompletion/server.ts`). The caller has already validated
  * `params` against `QuestStartBodySchema` (= `LLMEvents.CompletionStart.schema`).
  */
-export async function processQuest(params: z.infer<typeof QuestStartBodySchema>, logger: Logger): Promise<void> {
+export async function processQuest(
+  params: z.infer<typeof QuestStartBodySchema>,
+  logger: Logger,
+  /**
+   * A skill template's platform-paid example run (server/skillMarket/templateExample.ts). Only the
+   * ChatCompletion's own template-example route passes it; it never rides in a QuestStartBody.
+   */
+  exampleRun?: ExampleRunMode
+): Promise<void> {
   const handlerStartTime = Date.now();
   logger.debug('Quest processor start');
 
@@ -367,39 +375,42 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     // Every quest-creating surface (web app, public chat API, Slack, voice proxy) lands here, so this
     // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
     // quest with the reason instead of throwing into the route's generic-failure reply and metric.
-    try {
-      // Ahead of the cap and the turn: a frozen subject is refused before any context is assembled.
-      await assertSpendNotFrozen(
-        spendFreezeSubjectForRequest(
-          {
-            user: { id: params.userId },
-            apiKeyInfo: params.apiKeyId ? { keyId: params.apiKeyId } : undefined,
-          },
-          params.organizationId ?? null
-        ),
-        { db: { spendFreezes: spendFreezeRepository } }
-      );
-      await checkFreeTierDailySpendCap({
-        user: storedUser,
-        billingOrganizationId: params.organizationId,
-        usageEventRepository,
-        logger,
-      });
-    } catch (error) {
-      const frozen = isSpendFrozenError(error);
-      if (!frozen && !isFreeTierDailyCapError(error)) throw error;
-      logger.info(`Quest refused by the ${frozen ? 'spend freeze' : 'free-tier daily spend cap'}`, {
-        questId: params.questId,
-      });
-      await questRepository.settleIfUnfinished(params.questId, {
-        status: 'stopped',
-        type: 'error',
-        reply: error.message,
-        replies: [error.message],
-        ...(frozen ? { errorCode: SPEND_FROZEN_ERROR_CODE } : {}),
-      });
-      await liveActivity.end('failed');
-      return;
+    // The platform pays for an example run, so the author's own spend limits do not apply.
+    if (!exampleRun) {
+      try {
+        // Ahead of the cap and the turn: a frozen subject is refused before any context is assembled.
+        await assertSpendNotFrozen(
+          spendFreezeSubjectForRequest(
+            {
+              user: { id: params.userId },
+              apiKeyInfo: params.apiKeyId ? { keyId: params.apiKeyId } : undefined,
+            },
+            params.organizationId ?? null
+          ),
+          { db: { spendFreezes: spendFreezeRepository } }
+        );
+        await checkFreeTierDailySpendCap({
+          user: storedUser,
+          billingOrganizationId: params.organizationId,
+          usageEventRepository,
+          logger,
+        });
+      } catch (error) {
+        const frozen = isSpendFrozenError(error);
+        if (!frozen && !isFreeTierDailyCapError(error)) throw error;
+        logger.info(`Quest refused by the ${frozen ? 'spend freeze' : 'free-tier daily spend cap'}`, {
+          questId: params.questId,
+        });
+        await questRepository.settleIfUnfinished(params.questId, {
+          status: 'stopped',
+          type: 'error',
+          reply: error.message,
+          replies: [error.message],
+          ...(frozen ? { errorCode: SPEND_FROZEN_ERROR_CODE } : {}),
+        });
+        await liveActivity.end('failed');
+        return;
+      }
     }
 
     // Withholding mutates the document, so do it after the billing exemption check.
@@ -437,15 +448,19 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       tokenizer: getSharedTokenizer(logger),
       sessionId: params.sessionId,
       user,
-      audioToolJobs: buildAudioToolJobs(),
+      // Generation jobs bill the requester when they are created, so an example run (platform-paid)
+      // starts none: images render in-process with credits off, video, music and audio jobs are unavailable.
+      audioToolJobs: exampleRun ? undefined : buildAudioToolJobs(),
       onStatusUpdate: liveActivity.onStatusUpdate,
-      createCompletionMeter: ({ organizationId, featureLabel }) =>
-        createCompletionMeter(user, logger, featureLabel, {
-          sessionId: params.sessionId,
-          organizationId,
-          apiKeyId: params.apiKeyId,
-          apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
-        }),
+      createCompletionMeter: exampleRun
+        ? undefined
+        : ({ organizationId, featureLabel }) =>
+            createCompletionMeter(user, logger, featureLabel, {
+              sessionId: params.sessionId,
+              organizationId,
+              apiKeyId: params.apiKeyId,
+              apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
+            }),
     });
     logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 
@@ -489,11 +504,12 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       body: requestBody,
       logger,
       externalTools,
-      videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
-      musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
-      imageJobsResolver: getImageJobsResolver(params.apiKeyId),
+      videoToolConfigResolver: exampleRun ? undefined : getVideoToolConfigResolver(params.apiKeyId, user.id),
+      musicToolConfigResolver: exampleRun ? undefined : getMusicToolConfigResolver(params.apiKeyId, user.id),
+      imageJobsResolver: exampleRun ? undefined : getImageJobsResolver(params.apiKeyId),
       imageJobFilesResolver: resolveImageJobFiles,
       callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
+      exampleRun,
     });
   } catch (error) {
     await liveActivity.end('failed');
@@ -511,6 +527,8 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     throw error;
   }
   await liveActivity.end();
+  // An example run is the platform's, not a conversation of the author's.
+  if (exampleRun) return;
 
   await recordFirstChatValue({
     user,

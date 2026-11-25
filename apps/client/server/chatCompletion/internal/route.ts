@@ -13,6 +13,12 @@ import {
   QUEST_DISPATCH_TIMESTAMP_HEADER,
   verifyQuestDispatch,
 } from '@server/utils/questDispatchSignature';
+import {
+  TEMPLATE_EXAMPLE_DISPATCH_PATH,
+  TemplateExampleDispatchSchema,
+  templateExampleDispatchIdentity,
+} from '@server/skillMarket/templateExample';
+import { runTemplateExample, templateExampleRunDeps } from '@server/skillMarket/templateExampleRun';
 import { emitProcessingFailed } from '../processingFailedMetric';
 
 /**
@@ -180,5 +186,29 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       }
     });
     track(task);
+  });
+
+  /**
+   * A skill template's example run (server/skillMarket/templateExample.ts), signed like `/process`.
+   * The run executes here, where there is no request timeout, and stores its own result.
+   */
+  app.post(TEMPLATE_EXAMPLE_DISPATCH_PATH, requireAuth, parseJson, (req: Request, res: Response) => {
+    const parsed = TemplateExampleDispatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      routeLogger.warn('Rejected malformed template example payload', { issues: parsed.error.issues });
+      res.status(400).json({ error: 'Invalid template example payload' });
+      return;
+    }
+    const payload = parsed.data;
+    if (!hasValidDispatchSignature(req, templateExampleDispatchIdentity(payload))) {
+      routeLogger.warn('Rejected template example request with a missing or invalid dispatch signature');
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    res.status(202).json({ accepted: true });
+    const logger = new Logger({
+      metadata: { service: 'chatCompletion', listingId: payload.listingId, userId: payload.userId },
+    });
+    track(runTemplateExample(payload, logger, templateExampleRunDeps(processQuest)));
   });
 }

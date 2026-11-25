@@ -1,0 +1,238 @@
+import { getToolSideEffects } from '@bike4mind/common';
+import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+
+/**
+ * The dry run behind a skill template's example (apps/client/server/skillMarket/templateExample.ts).
+ * The run is public, so no tool may touch a real account or the author's private data: those tools
+ * return made-up placeholder data instead, and every call is recorded as a short step line.
+ */
+
+export interface ExampleRunStep {
+  label: string;
+  simulated: boolean;
+}
+
+/** Passed to ChatCompletionProcess.process only by server code; no request body can carry it. */
+export interface ExampleRunMode {
+  onStep: (step: ExampleRunStep) => void;
+}
+
+export type ExampleRunToolMode = 'real' | 'simulated';
+
+/** Built-in tools that read the author's own workspace (files, knowledge, notebooks, skills). */
+const WORKSPACE_READS: ReadonlySet<string> = new Set([
+  'search_knowledge_base',
+  'retrieve_knowledge_content',
+  'count_knowledge_base',
+  'describe_knowledge_base',
+  'list_my_data_lakes',
+  'skill',
+  'file_read',
+  'glob_files',
+  'grep_search',
+  'recent_changes',
+  'check_shell_output',
+  'list_background_shells',
+  'lattice_query',
+  'lattice_explain',
+  'list_curated_files',
+  'notebook_status',
+  'mission_status',
+]);
+
+/**
+ * Generation tools that store their output for the author but reach no outside account. A subagent
+ * runs too: its own tools pass through this policy (ToolBuilder's wrapChildTools).
+ */
+const REAL_GENERATION: ReadonlySet<string> = new Set([
+  'image_generation',
+  'edit_image',
+  'video_generation',
+  'music_generation',
+  'audio_generation',
+  'delegate_to_agent',
+]);
+
+/**
+ * Whether a tool runs for real in an example run. Connector (MCP, `server__tool`) tools are always
+ * simulated, reads included; so is anything undeclared or with outside side effects.
+ */
+export function exampleRunToolMode(name: string): ExampleRunToolMode {
+  if (name.includes('__')) return 'simulated';
+  if (WORKSPACE_READS.has(name)) return 'simulated';
+  if (REAL_GENERATION.has(name)) return 'real';
+  const sideEffects = getToolSideEffects(name);
+  return sideEffects === 'none' || sideEffects === 'local' ? 'real' : 'simulated';
+}
+
+const READ_VERBS = new Set([
+  'search',
+  'list',
+  'get',
+  'read',
+  'fetch',
+  'retrieve',
+  'find',
+  'query',
+  'describe',
+  'count',
+]);
+
+const VERB_LABELS: Record<string, string> = {
+  search: 'Searched',
+  list: 'Listed',
+  get: 'Read',
+  read: 'Read',
+  fetch: 'Read',
+  retrieve: 'Read',
+  find: 'Found',
+  query: 'Queried',
+  describe: 'Described',
+  count: 'Counted',
+  create: 'Created',
+  add: 'Added',
+  update: 'Updated',
+  edit: 'Updated',
+  set: 'Updated',
+  delete: 'Deleted',
+  remove: 'Removed',
+  post: 'Posted',
+  send: 'Sent',
+  comment: 'Commented on',
+  reply: 'Replied to',
+  publish: 'Published',
+  close: 'Closed',
+  merge: 'Merged',
+  assign: 'Assigned',
+  label: 'Labeled',
+  generate: 'Generated',
+};
+
+/** Connectors whose placeholder workspace reads best as a repository. */
+const REPO_SERVERS = new Set(['github', 'gitlab', 'bitbucket']);
+
+export const EXAMPLE_PLACEHOLDER = {
+  org: 'example-org',
+  repository: 'example-org/app',
+  user: 'example-user',
+  email: 'user@example.com',
+} as const;
+
+function splitToolName(name: string): { server: string | null; words: string[] } {
+  const at = name.indexOf('__');
+  const server = at > 0 ? name.slice(0, at) : null;
+  const tool = at > 0 ? name.slice(at + 2) : name;
+  return {
+    server,
+    words: tool
+      .split(/[_\-\s]+/)
+      .filter(Boolean)
+      .map(w => w.toLowerCase()),
+  };
+}
+
+/** Made-up data a simulated tool returns: never a real account, repo or person. */
+export function simulatedToolResult(name: string): string {
+  const { words } = splitToolName(name);
+  const reads = READ_VERBS.has(words[0] ?? '');
+  const item = (n: number) => ({
+    id: `example-${n}`,
+    title: `Example item ${n}`,
+    owner: EXAMPLE_PLACEHOLDER.user,
+    repository: EXAMPLE_PLACEHOLDER.repository,
+    url: `https://example.com/${EXAMPLE_PLACEHOLDER.repository}/${n}`,
+  });
+  return JSON.stringify({
+    simulated: true,
+    note:
+      'Example run: no real account was read or changed. The data below is placeholder sample data; ' +
+      'use it as the result of this step.',
+    result: reads
+      ? { items: [item(1), item(2)] }
+      : { status: 'ok', id: 'example-1', repository: EXAMPLE_PLACEHOLDER.repository, user: EXAMPLE_PLACEHOLDER.user },
+  });
+}
+
+const STEP_LABEL_MAX = 80;
+
+const clip = (label: string) => (label.length > STEP_LABEL_MAX ? `${label.slice(0, STEP_LABEL_MAX - 3)}...` : label);
+
+const param = (parameters: unknown, key: string): unknown =>
+  typeof parameters === 'object' && parameters !== null ? (parameters as Record<string, unknown>)[key] : undefined;
+
+function sizeOf(parameters: unknown): string | null {
+  const width = param(parameters, 'width');
+  const height = param(parameters, 'height');
+  if (typeof width === 'number' && typeof height === 'number') return `${width}x${height}`;
+  const size = param(parameters, 'size');
+  return typeof size === 'string' && /^\d{2,5}x\d{2,5}$/.test(size) ? size : null;
+}
+
+function builtInLabel(name: string, parameters: unknown): string | null {
+  const size = sizeOf(parameters);
+  switch (name) {
+    case 'image_generation':
+      return size ? `Generated a ${size} image` : 'Generated an image';
+    case 'edit_image':
+      return 'Edited an image';
+    case 'video_generation':
+      return size ? `Rendered ${size} video` : 'Rendered a video';
+    case 'music_generation':
+      return 'Composed a music track';
+    case 'audio_generation':
+      return 'Generated audio';
+    case 'web_search': {
+      const query = param(parameters, 'query');
+      return typeof query === 'string' && query.trim() ? `Searched the web for "${query.trim()}"` : 'Searched the web';
+    }
+    case 'web_fetch': {
+      const url = param(parameters, 'url');
+      try {
+        return typeof url === 'string' ? `Read ${new URL(url).hostname}` : 'Read a web page';
+      } catch {
+        return 'Read a web page';
+      }
+    }
+    case 'deep_research':
+      return 'Researched the topic';
+    case 'delegate_to_agent':
+      return 'Handed a subtask to an agent';
+    case 'math_evaluate':
+      return 'Calculated a result';
+    case 'mermaid_chart':
+      return 'Drew a diagram';
+    case 'recharts':
+      return 'Drew a chart';
+    default:
+      return null;
+  }
+}
+
+/** A short human line for one tool call, e.g. "Searched issues in example-org/app". */
+export function exampleStepLabel(name: string, parameters: unknown): string {
+  const known = builtInLabel(name, parameters);
+  if (known) return clip(known);
+  const { server, words } = splitToolName(name);
+  const [verb, ...rest] = words;
+  const head = (verb && VERB_LABELS[verb]) ?? 'Ran';
+  const object = (verb && VERB_LABELS[verb] ? rest : words).join(' ');
+  const where = server
+    ? ` in ${REPO_SERVERS.has(server.toLowerCase()) ? EXAMPLE_PLACEHOLDER.repository : server.replace(/[_-]+/g, ' ')}`
+    : '';
+  return clip(`${head}${object ? ` ${object}` : ''}${where}`);
+}
+
+/** Wraps every tool with the example-run policy and records one step per call. */
+export function applyExampleRunPolicy(tools: ICompletionOptionTools[], mode: ExampleRunMode): ICompletionOptionTools[] {
+  return tools.map(tool => {
+    const name = tool.toolSchema.name;
+    const simulated = exampleRunToolMode(name) === 'simulated';
+    return {
+      ...tool,
+      toolFn: async (parameters, apiKey) => {
+        mode.onStep({ label: exampleStepLabel(name, parameters), simulated });
+        return simulated ? simulatedToolResult(name) : tool.toolFn(parameters, apiKey);
+      },
+    };
+  });
+}

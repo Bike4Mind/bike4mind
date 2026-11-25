@@ -4,10 +4,14 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createM
 import {
   SkillListingTemplate,
   claimSkillTemplateScan,
+  editSkillTemplateExample,
+  failSkillTemplateExampleRun,
   markListingTemplateStale,
   releaseStaleSkillTemplateScan,
+  startSkillTemplateExampleRun,
   unpublishListingTemplate,
   unpublishSkillTemplate,
+  writeSkillTemplateExampleResult,
   writeSkillTemplateScanVerdict,
 } from './SkillListingTemplateModel';
 
@@ -260,5 +264,63 @@ describe('lifecycle rules', () => {
       await writeSkillTemplateScanVerdict('listing-1', claimedAt, { scanStatus: 'passed', scanFindings: [] }, true)
     ).toBe(false);
     expect(await find()).toMatchObject({ status: 'draft', scanStatus: 'error' });
+  });
+});
+
+describe('example runs', () => {
+  const t0 = new Date('2026-11-25T12:00:00Z');
+  const t1 = new Date('2026-11-25T12:05:00Z');
+  const stale = (at: Date) => new Date(at.getTime() - 15 * 60_000);
+  const result = {
+    prompt: 'Plan the launch',
+    reply: 'Here is the plan',
+    artifact: { type: 'markdown', title: 'Plan', html: '<p>Plan</p>' },
+    media: null,
+    sampleFile: null,
+    steps: [{ label: 'Searched issues in example-org/app', simulated: true }],
+    generatedFromVersionId: 'v1',
+  };
+
+  it('starts a first run, refuses a second while it is in flight and stores the result', async () => {
+    await create();
+    expect((await startSkillTemplateExampleRun('listing-1', t0, stale(t0)))?.example).toMatchObject({
+      status: 'running',
+      enabled: true,
+      reply: '',
+    });
+    expect(await startSkillTemplateExampleRun('listing-1', t1, stale(t1))).toBeNull();
+    expect(await writeSkillTemplateExampleResult('listing-1', t0, result)).toBe(true);
+    expect((await find()).example).toMatchObject({ ...result, status: 'ready', enabled: true, replyTrimmedTo: null });
+  });
+
+  it('keeps the previous example while a re-run is in flight and after it fails', async () => {
+    await create();
+    await startSkillTemplateExampleRun('listing-1', t0, stale(t0));
+    await writeSkillTemplateExampleResult('listing-1', t0, result);
+    await editSkillTemplateExample('listing-1', { enabled: false, replyTrimmedTo: 4 });
+    expect(await startSkillTemplateExampleRun('listing-1', t1, stale(t1))).not.toBeNull();
+    expect(await failSkillTemplateExampleRun('listing-1', t1, 'provider down')).toBe(true);
+    expect((await find()).example).toMatchObject({
+      status: 'failed',
+      error: 'provider down',
+      reply: 'Here is the plan',
+      enabled: false,
+      replyTrimmedTo: 4,
+    });
+  });
+
+  it('lets a lost run be replaced and drops its late result', async () => {
+    await create();
+    await startSkillTemplateExampleRun('listing-1', t0, stale(t0));
+    const later = new Date(t0.getTime() + 20 * 60_000);
+    expect(await startSkillTemplateExampleRun('listing-1', later, stale(later))).not.toBeNull();
+    expect(await writeSkillTemplateExampleResult('listing-1', t0, result)).toBe(false);
+    expect(await failSkillTemplateExampleRun('listing-1', t0, 'late')).toBe(false);
+    expect((await find()).example?.status).toBe('running');
+  });
+
+  it('edits nothing on a template without an example', async () => {
+    await create();
+    expect(await editSkillTemplateExample('listing-1', { enabled: false })).toBeNull();
   });
 });

@@ -249,6 +249,7 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { applyExampleRunPolicy, type ExampleRunMode } from './tools/exampleRunTools';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
@@ -2221,6 +2222,7 @@ export class ChatCompletionProcess {
     imageJobFilesResolver,
     callableFunctionsResolver,
     abortSignal,
+    exampleRun,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -2261,6 +2263,12 @@ export class ChatCompletionProcess {
      * in apps/client/pages/api/chat.ts).
      */
     abortSignal?: AbortSignal;
+    /**
+     * A skill template's example run (apps/client/server/skillMarket/templateExample.ts): platform
+     * keys, no credit reservation or settlement, no research mode, and every tool behind the dry-run
+     * policy (tools/exampleRunTools.ts). Server-set only; QuestStartBodySchema has no such field.
+     */
+    exampleRun?: ExampleRunMode;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
@@ -2555,7 +2563,11 @@ export class ChatCompletionProcess {
               ? this.db.organizations.findById(organizationId)
               : Promise.resolve(null)
         ),
-        timeCall('apiKeys', getEffectiveLLMApiKeys(this.user.id, { db: this.db, getSettingsByNames }, { logger })),
+        timeCall(
+          'apiKeys',
+          // Null resolves the platform's admin-setting keys only.
+          getEffectiveLLMApiKeys(exampleRun ? null : this.user.id, { db: this.db, getSettingsByNames }, { logger })
+        ),
         // Never rejects (see resolveToolAvailability's doc comment), so it's safe alongside the
         // "essential" calls above that re-throw on failure. Fail-closed here (unlike the Tools
         // picker UI's fail-open default): a tool this lookup couldn't confirm works should not
@@ -2643,7 +2655,7 @@ export class ChatCompletionProcess {
       // the rule; the one site that cannot is the navigate_view auto-add, which runs in
       // initializeProcessContext before this exists and so calls the same helper directly.
       const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
-      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
+      const isResearchMode = !exampleRun && !!researchMode?.enabled && researchMode.configurations?.length > 0;
       // Whether REPLY_CHOICES_GUIDANCE ships this turn. Decided here, ahead of the history fetch,
       // because history re-attaches stored choices only when the guidance is offered (see
       // fetchAndProcessPreviousMessages `includeReplyChoices`); voice reads the raw stream aloud.
@@ -2980,8 +2992,9 @@ export class ChatCompletionProcess {
           return keys;
         },
         models,
-        enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
-        freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
+        // An example run is paid by the platform on a model it picked, so the payer gates do not apply.
+        enforceCredits: !exampleRun && getSettingsValue('enforceCredits', defaultAdminSettings) === true,
+        freeTierAllowedModels: exampleRun ? undefined : await loadFreeTierAllowedModels(this.db.adminSettings),
         orgModelPolicy,
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
@@ -3058,7 +3071,9 @@ export class ChatCompletionProcess {
       // Schema-aware reads: an absent row takes the setting's default (enforceCredits is on for
       // hosted), not false, so a missing row can never switch billing off.
       const adminModerationEnabled = getSettingsValue('ModerationEnabled', defaultAdminSettings) === true;
-      const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', defaultAdminSettings) === true;
+      // An example run is platform-paid: off means no reservation, settlement or tool charge.
+      const adminSettingsEnforceCredits =
+        !exampleRun && getSettingsValue('enforceCredits', defaultAdminSettings) === true;
       const enableMCPServer = getSettingsValue('EnableMCPServer', defaultAdminSettings) === true;
       if (adminSettingsEnforceCredits && !this.db.creditTransactions) {
         throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
@@ -4002,6 +4017,7 @@ export class ChatCompletionProcess {
         agentStore,
         externalTools,
         toolAvailability,
+        wrapChildTools: exampleRun ? childTools => applyExampleRunPolicy(childTools, exampleRun) : undefined,
       };
       let allTools = toolBuilder.buildTools(buildToolsArgs);
 
@@ -4031,6 +4047,7 @@ export class ChatCompletionProcess {
       if (allTools && !isResearchMode) {
         allTools = toolFailureGuard.apply(webSearchBudget.apply(allTools));
       }
+      if (allTools && exampleRun) allTools = applyExampleRunPolicy(allTools, exampleRun);
 
       // Local (Ollama) models are small and easily confused by tools they weren't
       // asked to use - they pick the wrong one or loop. Restrict them to the tools
@@ -4316,6 +4333,7 @@ export class ChatCompletionProcess {
           toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames, undeclarable);
         }
       }
+      if (exampleRun) removedToolDeclarations = applyExampleRunPolicy(removedToolDeclarations, exampleRun);
       const loadedStartTools = toolTimeline?.loaded ?? new Set<string>();
       // Guidance for a tool a change adds rides with that addition, whether or not it is offered now. A
       // start-set tool keeps its guidance in the system prompt even after a removal, so the head holds.
