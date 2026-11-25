@@ -2,8 +2,8 @@ import { defineConfig } from 'tsdown';
 import { cpSync, readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { collectGraphSpecifiers, findUndeclaredBundleDeps } from './src/verifyBundleExternals.ts';
-import type { ModuleGraph } from './src/verifyBundleExternals.ts';
+import { collectChunkImports, findUndeclaredBundleDeps } from './src/verifyBundleExternals.ts';
+import type { EmittedBundle } from './src/verifyBundleExternals.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -15,9 +15,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * dependency of the CLI - otherwise the published binary dies at startup with
  * ERR_MODULE_NOT_FOUND once npm installs only the declared closure.
  *
- * Walks rolldown's module graph (external imports keep their bare-specifier id;
- * internal modules are absolute paths) rather than pattern-matching emitted
- * source, and validates against packages/cli/package.json's declared deps rather
+ * Reads the imports rolldown records on each emitted chunk (see collectChunkImports)
+ * rather than the pre-tree-shake module graph, which still names imports the output
+ * dropped, and validates against packages/cli/package.json's declared deps rather
  * than whatever happens to be resolvable on the build machine (a hoisted-but-
  * undeclared transitive dep would otherwise pass). Fails the build, not the user.
  */
@@ -25,10 +25,8 @@ function verifyBundleExternalsPlugin(pkgDir: string) {
   return {
     name: 'verify-bundle-externals',
     // generateBundle (an output hook) rather than buildEnd: tsdown only invokes
-    // user plugins' output hooks, and generateBundle's PluginContext still
-    // exposes the full module graph via getModuleIds()/getModuleInfo().
-    generateBundle() {
-      const ctx = this as unknown as ModuleGraph;
+    // user plugins' output hooks, and only the output knows what survived tree-shaking.
+    generateBundle(_outputOptions: unknown, bundle: EmittedBundle) {
       const pkg = JSON.parse(readFileSync(resolve(pkgDir, 'package.json'), 'utf8')) as {
         dependencies?: Record<string, string>;
         optionalDependencies?: Record<string, string>;
@@ -38,15 +36,14 @@ function verifyBundleExternalsPlugin(pkgDir: string) {
         ...Object.keys(pkg.optionalDependencies ?? {}),
       ]);
 
-      const specifiers = collectGraphSpecifiers(ctx);
+      const specifiers = collectChunkImports(bundle);
 
-      // Fail loud if the graph walk found nothing: the guard would silently pass
-      // (and stop guarding) if rolldown's plugin-context shape ever drifts and the
-      // `this as ModuleGraph` cast starts resolving to an empty/incompatible object.
+      // Fail loud if the chunks name no imports at all: the guard would silently pass
+      // (and stop guarding) if rolldown's output chunk shape ever drifts.
       if (specifiers.size === 0) {
         throw new Error(
-          'tsdown: verify-bundle-externals found an empty module graph - the ' +
-            'generateBundle PluginContext API may have changed. The guard is not running.'
+          'tsdown: verify-bundle-externals found no imports on the emitted chunks - the ' +
+            'generateBundle output chunk API may have changed. The guard is not running.'
         );
       }
 
@@ -103,6 +100,9 @@ export default defineConfig({
   target: 'node24',
   platform: 'node',
   clean: true,
+  // Externals are imported only for their bindings: drop unused ones rather than keep a bare `import "x"`
+  // (loaded at startup, must be installed). Not 'no-external', which also overrides local sideEffects: false.
+  treeshake: { moduleSideEffects: [{ external: true, sideEffects: false }] },
   plugins: [verifyBundleExternalsPlugin(__dirname), curatedBuildInfoPlugin()],
   banner: {
     js: '#!/usr/bin/env node',
