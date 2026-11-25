@@ -182,9 +182,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
 
-    // Handle case where quest creation failed (session or quest not found during invoke)
+    // invoke throws NotFoundError for a missing session or retried quest; an undefined return
+    // means the quest create itself produced nothing.
     if (!quest) {
-      req.logger.error('Quest creation failed - invoke returned undefined (session or quest not found)');
+      req.logger.error('Quest creation failed - invoke returned undefined');
       return res.status(404).json({
         error: 'Session not found',
         message: 'The session may have been deleted or expired. Please start a new session.',
