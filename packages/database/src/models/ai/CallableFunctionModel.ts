@@ -470,7 +470,7 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
           ],
         },
         // A recipient reviews the contract; the pinned code never leaves the server.
-        { 'pin.source': 0, lastServerRun: 0, promoted: 0 }
+        OFFERABLE_PROJECTION
       )
       .sort({ updatedAt: -1 })
       // Capped before the caller's membership filter drops stale project/organization grants, so the cap counts them too;

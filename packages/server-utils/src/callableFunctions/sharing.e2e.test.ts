@@ -213,7 +213,7 @@ describe('the access matrix, through the dispatcher', () => {
     expect(await callAs(STRANGER, byOrg)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
     expect(runner).toHaveBeenCalledTimes(1);
 
-    const rows = await CallableFunctionCall.find({ functionId: byOrg }).sort({ startedAt: 1 }).lean();
+    const rows = await CallableFunctionCall.find({ functionId: byOrg }).sort({ startedAt: 1, _id: 1 }).lean();
     expect(rows.map(row => [row.callerUserId, row.outcome, row.reason ?? null])).toEqual([
       [OWNER.id, 'ok', null],
       [PERSON.id, 'refused', 'review_required'],
@@ -547,7 +547,7 @@ describe('a recipient review', () => {
     expect((await updateSharedCallableFunctionReview(PERSON, id, { enabled: true })).status).toBe('reviewed');
     expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
 
-    const rows = await CallableFunctionCall.find({ functionId: id }).sort({ startedAt: 1 }).lean();
+    const rows = await CallableFunctionCall.find({ functionId: id }).sort({ startedAt: 1, _id: 1 }).lean();
     expect(rows.map(row => [row.outcome, row.reason ?? null])).toEqual([
       ['refused', 'review_required'],
       ['ok', null],
@@ -622,7 +622,7 @@ describe('a recipient review', () => {
     await revokeCallableFunctionShare(OWNER, id);
     expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
     expect(runner).not.toHaveBeenCalled();
-    const rows = await CallableFunctionCall.find({ functionId: id }).sort({ startedAt: 1 }).lean();
+    const rows = await CallableFunctionCall.find({ functionId: id }).sort({ startedAt: 1, _id: 1 }).lean();
     expect(rows.map(row => [row.callerUserId, row.reason])).toEqual([
       [STRANGER.id, 'not_caller'],
       [PERSON.id, 'not_caller'],

@@ -197,7 +197,7 @@ export default function SharedFunctionsSection() {
     <Stack gap="8px" data-testid="shared-functions-section">
       <Typography level="title-sm">Functions shared with you</Typography>
       {data.map(fn => (
-        <SharedFunctionCard key={fn.id} fn={fn} />
+        <SharedFunctionCard key={`${fn.id}:${fn.reviewHash}`} fn={fn} />
       ))}
     </Stack>
   );

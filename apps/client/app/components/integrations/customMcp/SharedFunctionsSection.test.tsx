@@ -138,6 +138,27 @@ describe('SharedFunctionsSection', () => {
     );
   });
 
+  it('shows a generic message when saving a review fails for another reason', () => {
+    h.review.mockImplementation((_vars: unknown, options: { onError: (error: unknown) => void }) =>
+      options.onError({ isAxiosError: true, response: { status: 500, data: {} } })
+    );
+    renderSection();
+    fireEvent.click(screen.getByTestId('shared-function-open-btn'));
+    fireEvent.click(screen.getByTestId('shared-function-review-btn'));
+    expect(screen.getByTestId('shared-function-error').textContent).toBe('Could not save the review. Try again.');
+  });
+
+  it('shows an error when a settings change fails to save', () => {
+    h.shared = [REVIEWED];
+    h.update.mockImplementation((_vars: unknown, options: { onError: (error: unknown) => void }) =>
+      options.onError(new Error('boom'))
+    );
+    renderSection();
+    fireEvent.click(screen.getByTestId('shared-function-open-btn'));
+    fireEvent.click(screen.getByTestId('shared-function-enabled'));
+    expect(screen.getByTestId('shared-function-error').textContent).toBe('Could not save the change. Try again.');
+  });
+
   it('changes the approval mode and turns a reviewed function off', () => {
     h.shared = [REVIEWED];
     renderSection();
