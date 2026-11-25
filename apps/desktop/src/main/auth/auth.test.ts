@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { openedAs, sealedAs, versionedCipher } from '../secrets/versionedCipher.testHelper';
-import { TokenVault, type SecretCipher, type VaultFile } from './tokenVault';
+import { TokenVault, type VaultFile } from './tokenVault';
+import type { SecretCipher } from '../../host/ports';
 import { migrateSelection, normalizeSelection, resolveEnvironment, validateSelection } from './environment';
 import { SessionRevokedError, type AuthTokens, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { classifyIdentifyFailure } from './identifyFailure';

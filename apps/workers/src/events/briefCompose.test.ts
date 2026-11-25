@@ -21,6 +21,7 @@ const activeActivity = {
   emails: [],
   delegations: [],
   reminders: [],
+  obligations: [],
 };
 
 function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
@@ -243,6 +244,31 @@ describe('composeBrief', () => {
 
     expect(deps.briefs.discardComposing).not.toHaveBeenCalled();
     expect(deps.complete).toHaveBeenCalledOnce();
+    expect(deps.push).toHaveBeenCalledOnce();
+  });
+
+  it('composes a scheduled brief whose only activity is an obligation coming due', async () => {
+    const obligation = {
+      obligationId: 'o1',
+      payee: 'Example Utilities',
+      amount: 120.5,
+      currency: 'USD',
+      dueDate: '2026-11-20',
+      summary: 'Power bill',
+    };
+    const deps = makeDeps({
+      loadActivity: vi
+        .fn()
+        .mockResolvedValue({ ...activeActivity, runs: [], approvals: [], obligations: [obligation] }),
+      complete: vi.fn().mockResolvedValue(JSON.stringify({ headline: 'A bill is due.' })),
+    });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+    expect(deps.briefs.discardComposing).not.toHaveBeenCalled();
+    expect(deps.complete).toHaveBeenCalledOnce();
+    expect(deps.briefs.markReady.mock.calls[0][1].happened).toMatchObject([
+      { source: { kind: 'obligation', obligationId: 'o1' } },
+    ]);
     expect(deps.push).toHaveBeenCalledOnce();
   });
 

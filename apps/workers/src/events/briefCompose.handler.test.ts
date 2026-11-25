@@ -45,6 +45,10 @@ vi.mock('@bike4mind/database', () => ({
   delegatedItemRepository: { markBriefed: mocks.markDelegationsBriefed },
 }));
 vi.mock('./loadPendingBriefEmails', () => ({ loadPendingBriefEmails: mocks.loadEmails }));
+vi.mock('./loadDueBriefObligations', () => ({
+  loadDueBriefObligations: vi.fn(async () => []),
+  toBriefObligation: vi.fn(),
+}));
 vi.mock('./loadPendingBriefDelegations', () => ({ loadPendingBriefDelegations: mocks.loadDelegations }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mocks.getOperationsModel },

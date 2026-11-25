@@ -17,6 +17,7 @@ struct CaptureMenu: View {
     case followUp
     case followUpBrief(String)
     case composer([ShareItem], ask: Bool = false)
+    case handoff(ObligationHandoffModel)
 
     var id: String {
       switch self {
@@ -26,6 +27,7 @@ struct CaptureMenu: View {
       case .followUp: "followUp"
       case .followUpBrief(let id): "followUpBrief-\(id)"
       case .composer: "composer"
+      case .handoff: "handoff"
       }
     }
   }
@@ -35,6 +37,9 @@ struct CaptureMenu: View {
   @State private var pickedPhotos: [PhotosPickerItem] = []
   @State private var problem: String?
   @State private var pendingCapture: (url: URL, ask: Bool)?
+  @State private var pendingScan: ScannedPages?
+  /// A finished scan waiting on the choice between the normal composer and handing it to the assistant.
+  @State private var offeredScan: ScannedPages?
   /// Items that did load when some did not: the composer opens once the notice about the rest is dismissed.
   @State private var afterProblem: [ShareItem]?
   @State private var isSendingFollowUp = false
@@ -74,7 +79,7 @@ struct CaptureMenu: View {
           DocumentScanner { result in
             flow = nil
             switch result {
-            case .success(let url): pendingCapture = (url, false)
+            case .success(let scan): pendingScan = scan
             case .failure: problem = "The scan couldn't be saved. Please try again."
             case nil: break
             }
@@ -110,9 +115,24 @@ struct CaptureMenu: View {
         ShareComposerView(
           model: services.capture.composerModel(items: items), onFinish: { flow = nil }, onCancel: { flow = nil },
           asksQuestion: ask)
+      case .handoff(let model):
+        ObligationConfirmSheet(model: model, onClose: { flow = nil })
       case .camera, .scanner:
         EmptyView()
       }
+    }
+    .confirmationDialog(
+      "Use this scan", isPresented: Binding(get: { offeredScan != nil }, set: { if !$0 { offeredScan = nil } }),
+      presenting: offeredScan
+    ) { scan in
+      Button("Hand to assistant") {
+        flow = .handoff(services.obligationHandoffModel(file: scan.url, text: scan.text))
+      }
+      .accessibilityIdentifier("capture-handoff-btn")
+      Button("Save or send") { Task { await present(files: [scan.url]) } }
+        .accessibilityIdentifier("capture-scan-compose-btn")
+    } message: { _ in
+      Text("Hand a bill or letter to the assistant to track what's owed and when.")
     }
     .alert(
       afterProblem == nil ? "Couldn't use that" : "Some photos were skipped",
@@ -175,6 +195,11 @@ struct CaptureMenu: View {
   private static let maxFollowUpTranscript = 6000
 
   private func completeCapture() {
+    if let scan = pendingScan {
+      pendingScan = nil
+      offeredScan = scan
+      return
+    }
     guard let capture = pendingCapture else { return }
     pendingCapture = nil
     Task { await present(files: [capture.url], ask: capture.ask) }

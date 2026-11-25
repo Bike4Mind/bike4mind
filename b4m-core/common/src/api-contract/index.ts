@@ -36,6 +36,12 @@ export {
   getPendingDecisionCountContract,
 } from './contracts/briefs.contract';
 export { createDelegationContract, getDelegationContract } from './contracts/delegations.contract';
+export {
+  getObligationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  updateObligationContract,
+} from './contracts/obligations.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { listHandoffDevicesContract, sendSessionHandoffContract } from './contracts/sessionHandoff.contract';
 export {
