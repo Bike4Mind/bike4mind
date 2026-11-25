@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { link, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { restrictMode } from '../auth/privateDirectory';
+import { restrictMode } from './auth/privateDirectory';
 
 const HOST_ID_FILE_NAME = 'host-id';
 const OWNER_ONLY_FILE = 0o600;
@@ -36,8 +36,11 @@ export async function loadHostId(dataDirectory: string): Promise<string> {
     return existing;
   }
   const created = randomUUID();
+  // Written whole under a temp name and linked into place, so no process ever sees `host-id` empty.
+  const temp = `${path}.${randomUUID()}`;
+  await writeFile(temp, `${created}\n`, { flag: 'wx', mode: OWNER_ONLY_FILE });
   try {
-    await writeFile(path, `${created}\n`, { flag: 'wx', mode: OWNER_ONLY_FILE });
+    await link(temp, path);
     return created;
   } catch (err) {
     // Another process made it first; theirs is the one that stays.
@@ -45,5 +48,7 @@ export async function loadHostId(dataDirectory: string): Promise<string> {
     const raced = await readHostId(path);
     if (!raced) throw err;
     return raced;
+  } finally {
+    await rm(temp, { force: true });
   }
 }

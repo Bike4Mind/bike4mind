@@ -1,5 +1,6 @@
 import { appendFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import type { AuthLogger } from '@bike4mind/client-auth';
+import { redact } from '../../main/devlog/redact';
 
 export type HostLogger = AuthLogger;
 
@@ -12,7 +13,7 @@ const describe = (err: unknown): string => (err instanceof Error ? (err.stack ??
 
 function line(level: Level, message: string, err?: unknown): string {
   const suffix = err === undefined ? '' : `: ${describe(err)}`;
-  return `${new Date().toISOString()} ${level} ${message}${suffix}\n`;
+  return `${new Date().toISOString()} ${level} ${redact(`${message}${suffix}`)}\n`;
 }
 
 /** Lines to stderr: what `connect` and the short commands write, since their stdout belongs to the protocol or to output. */
@@ -54,14 +55,19 @@ export function createFileLogger(options: FileLoggerOptions): HostLogger {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
       }
     }
-    renameSync(path, `${path}.1`);
+    try {
+      renameSync(path, `${path}.1`);
+    } catch (err) {
+      // Already rotated by another process: start counting from the fresh file.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
     size = 0;
   };
 
   const write = (level: Level, message: string, err?: unknown) => {
     const text = line(level, message, err);
     try {
-      if (size > 0 && size + text.length > maxBytes) rotate();
+      if (size > 0 && size + Buffer.byteLength(text) > maxBytes) rotate();
       appendFileSync(path, text, { mode: OWNER_ONLY_FILE });
       size += Buffer.byteLength(text);
     } catch {

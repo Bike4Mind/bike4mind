@@ -1,10 +1,19 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { loadHostId } from './hostIdentity';
 
-const dataDirectory = () => mkdtemp(join(tmpdir(), 'b4m-host-id-'));
+const directories: string[] = [];
+const dataDirectory = async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'b4m-host-id-'));
+  directories.push(directory);
+  return directory;
+};
+
+afterEach(async () => {
+  await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
+});
 
 describe('loadHostId', () => {
   it('makes a random UUID once and returns the same one after a restart', async () => {
@@ -24,7 +33,6 @@ describe('loadHostId', () => {
     expect((await stat(join(directory, 'host-id'))).mode & 0o777).toBe(0o600);
 
     await writeFile(join(directory, 'host-id'), id, { mode: 0o644 });
-    const { chmod } = await import('node:fs/promises');
     await chmod(join(directory, 'host-id'), 0o644);
     await loadHostId(directory);
 
@@ -37,6 +45,21 @@ describe('loadHostId', () => {
     const ids = await Promise.all(Array.from({ length: 8 }, () => loadHostId(directory)));
 
     expect(new Set(ids).size).toBe(1);
+  });
+
+  it('leaves only the id file behind, never a half-written one or a temp copy', async () => {
+    const directory = await dataDirectory();
+
+    await Promise.all(Array.from({ length: 8 }, () => loadHostId(directory)));
+
+    expect(await readdir(directory)).toEqual(['host-id']);
+  });
+
+  it('surfaces a read error other than a missing file', async () => {
+    const directory = await dataDirectory();
+    await mkdir(join(directory, 'host-id'));
+
+    await expect(loadHostId(directory)).rejects.toThrow(/EISDIR/);
   });
 
   it('refuses a file that does not hold an id rather than replacing it', async () => {
