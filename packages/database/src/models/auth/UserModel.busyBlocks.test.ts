@@ -45,6 +45,12 @@ describe('normalizeBusyBlocks', () => {
     expect(norm([block(90, 120), block(0, 30), block(20, 60), block(60, 70)])).toEqual([block(0, 70), block(90, 120)]);
   });
 
+  it('never merges past the 12h block limit: the later block keeps only its part after the earlier one ends', () => {
+    expect(norm([block(0, 480), block(480, 960)])).toEqual([block(0, 480), block(480, 960)]);
+    expect(norm([block(0, 480), block(360, 840), block(400, 420)])).toEqual([block(0, 480), block(480, 840)]);
+    expect(norm([block(0, 480), block(240, 720)])).toEqual([block(0, 720)]);
+  });
+
   it('drops blocks past the retry window and beyond the 72h horizon, keeps one just inside each', () => {
     expect(
       norm([block(-200, -61), block(-60, -30), block(72 * 60, 72 * 60 + 10), block(72 * 60 + 20, 72 * 60 + 30)])
@@ -145,6 +151,44 @@ describe('userRepository block brief claims', () => {
     const doc = await raw(userId);
     expect(doc?.nextBlockBriefAt).toEqual(at(-10));
     expect(doc?.lastBlockBriefEnd).toBeUndefined();
+  });
+
+  it('hands a claimed block back even after a sync dropped it, and not once a later claim moved past it', async () => {
+    const userId = await insertUser({
+      preferences: { busyBlockBrief: { enabled: true } },
+      busyBlocks: [block(-30, -10), block(10, 20)],
+      nextBlockBriefAt: at(-10),
+    });
+    await userRepository.advanceNextBlockBriefAt(
+      userId,
+      { nextBlockBriefAt: at(-10), lastBlockBriefEnd: null },
+      { nextBlockBriefAt: at(20), lastBlockBriefEnd: at(-10) }
+    );
+    const synced = await userRepository.setBusyBlocks(
+      userId,
+      { enabled: true, blocks: [block(-30, -10), block(5, 15)] },
+      NOW
+    );
+    expect(synced.blocks).toEqual([block(5, 15)]);
+
+    expect(await userRepository.releaseBlockBriefClaim(userId, block(-30, -10), null)).toBe(true);
+    const doc = await raw(userId);
+    expect(doc?.busyBlocks).toEqual([block(-30, -10), block(5, 15)]);
+    expect(doc?.nextBlockBriefAt).toEqual(at(-10));
+    expect(doc?.lastBlockBriefEnd).toBeUndefined();
+
+    await userRepository.advanceNextBlockBriefAt(
+      userId,
+      { nextBlockBriefAt: at(-10), lastBlockBriefEnd: null },
+      { nextBlockBriefAt: at(15), lastBlockBriefEnd: at(-10) }
+    );
+    await userRepository.advanceNextBlockBriefAt(
+      userId,
+      { nextBlockBriefAt: at(15), lastBlockBriefEnd: at(-10) },
+      { nextBlockBriefAt: null, lastBlockBriefEnd: at(15) }
+    );
+    expect(await userRepository.releaseBlockBriefClaim(userId, block(-30, -10), null)).toBe(false);
+    expect((await raw(userId))?.lastBlockBriefEnd).toEqual(at(15));
   });
 
   it('unsets the due time when the last block is claimed', async () => {

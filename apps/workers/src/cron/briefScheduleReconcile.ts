@@ -18,6 +18,7 @@
  * Schedule: rate(5 minutes). Self-host twin: apps/workers/src/selfhost/briefScheduleReconcile.ts.
  */
 import type { Context } from 'aws-lambda';
+import { BUSY_BLOCK_LIMITS } from '@bike4mind/common';
 import { connectDB, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { computeNextBriefAt } from '@bike4mind/server-utils/briefs/briefSchedule';
@@ -37,13 +38,18 @@ const logger = new Logger({ metadata: { service: 'briefScheduleReconcile' } });
 export const BRIEF_SCHEDULE_BATCH_LIMIT = 100;
 // Headroom left on the Lambda clock when the run stops claiming new users (ms).
 const STOP_BEFORE_TIMEOUT_MS = 30_000;
-// How long after its due time a slot whose start failed is still retried by later runs (ms).
-export const RETRY_WINDOW_MS = 60 * 60 * 1000;
+// How long after its due time a slot whose start failed is still retried by later runs (ms). Shared with
+// the busy-block normalizer, which drops blocks that ended before it.
+export const RETRY_WINDOW_MS = BUSY_BLOCK_LIMITS.retryWindowMs;
 
 export type BriefScheduleReconcileDeps = {
   users: Pick<
     typeof userRepository,
-    'findDueBriefSchedules' | 'advanceNextBriefAt' | 'findDueBlockBriefs' | 'advanceNextBlockBriefAt'
+    | 'findDueBriefSchedules'
+    | 'advanceNextBriefAt'
+    | 'findDueBlockBriefs'
+    | 'advanceNextBlockBriefAt'
+    | 'releaseBlockBriefClaim'
   >;
   startScheduledBrief: (userId: string) => Promise<ScheduledBriefOutcome>;
   startBlockBrief: (userId: string, block: { start: Date; end: Date }) => Promise<BlockBriefOutcome>;
@@ -211,21 +217,31 @@ async function reconcileBlockBriefs(
       continue;
     }
 
+    const release = async () => {
+      try {
+        const released = await deps.users.releaseBlockBriefClaim(user.id, block, user.lastBlockBriefEnd);
+        if (!released) logger.warn('[briefScheduleReconcile] claimed block not handed back', { userId: user.id });
+      } catch (releaseErr) {
+        logger.error('[briefScheduleReconcile] failed to release a claimed block for retry', {
+          userId: user.id,
+          err: releaseErr,
+        });
+      }
+    };
+
+    let outcome: BlockBriefOutcome;
     try {
-      result[await deps.startBlockBrief(user.id, block)]++;
+      outcome = await deps.startBlockBrief(user.id, block);
     } catch (err) {
       result.failed++;
       const retry = !(err instanceof BriefComposeStartError && !err.retrySafe);
       logger.error('[briefScheduleReconcile] failed to start a block brief', { userId: user.id, retry, err });
-      if (retry) {
-        await deps.users.advanceNextBlockBriefAt(user.id, claimedPair, expected).catch((releaseErr: unknown) => {
-          logger.error('[briefScheduleReconcile] failed to release a claimed block for retry', {
-            userId: user.id,
-            err: releaseErr,
-          });
-        });
-      }
+      if (retry) await release();
+      continue;
     }
+    result[outcome]++;
+    // Another brief is composing; hand the block back so a later run starts it once that one settles.
+    if (outcome === 'in_flight') await release();
   }
   return due.length;
 }

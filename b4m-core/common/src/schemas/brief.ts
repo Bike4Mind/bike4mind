@@ -185,7 +185,7 @@ export const BriefScheduleResponseSchema = z.object({
     .describe('ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset.'),
 });
 
-/** Bounds on a synced busy-block list. The retry window must stay in step with the reconciler's (apps/workers/src/cron/briefScheduleReconcile.ts). */
+/** Bounds on a synced busy-block list. `retryWindowMs` is also the reconciler's retry window (apps/workers/src/cron/briefScheduleReconcile.ts). */
 export const BUSY_BLOCK_LIMITS = {
   maxBlocks: 48,
   maxDurationMs: 12 * 60 * 60 * 1000,

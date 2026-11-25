@@ -249,7 +249,9 @@ const defaultBlockDeps: BlockBriefDeps = {
 };
 
 /**
- * Starts the brief for one ended busy block, covering only what arrived during it. Skips users who turned
+ * Starts the brief for one ended busy block, covering email that arrived during it and runs created from the
+ * block start, or from the earliest run still going at block start (so runs created after that one are
+ * listed too, even ones that finished before the block). Skips users who turned
  * the opt-in or brief pushes off and blocks with no runs and no triaged email. No debounce claim: the
  * caller's per-block claim on `nextBlockBriefAt` is the idempotency. Published as scheduled, so the
  * composer drops a brief that comes out empty or cannot be paid for.

@@ -2059,8 +2059,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   /**
    * Compare-and-set on the block-brief pair (`nextBlockBriefAt`, `lastBlockBriefEnd`); null means unset.
-   * Claiming a due block moves the pair forward, and releasing it for a retry moves it back. False means
-   * the pair changed since the caller read it (another run claimed the block, or a sync re-armed it).
+   * Claiming a due block moves the pair forward. False means the pair changed since the caller read it
+   * (another run claimed the block, or a sync re-armed it).
    */
   async advanceNextBlockBriefAt(
     userId: string,
@@ -2080,6 +2080,40 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { runValidators: true }
     );
     return result.modifiedCount === 1;
+  }
+
+  /**
+   * Hands a claimed block back so a later run retries it: restores `lastBlockBriefEnd`, re-adds the block
+   * when a sync since the claim dropped it, and moves `nextBlockBriefAt` back to its end. False when a later
+   * claim moved past it or the opt-in was turned off.
+   */
+  async releaseBlockBriefClaim(
+    userId: string,
+    block: BusyBlockInterval,
+    previousLastBlockBriefEnd: Date | null
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const user = await this.model
+        .findById(userId, { 'preferences.busyBlockBrief': 1, busyBlocks: 1, nextBlockBriefAt: 1, lastBlockBriefEnd: 1 })
+        .lean<Pick<IUserDocument, 'preferences' | 'busyBlocks' | 'nextBlockBriefAt' | 'lastBlockBriefEnd'>>();
+      if (user?.preferences?.busyBlockBrief?.enabled !== true) return false;
+      if (user.lastBlockBriefEnd?.getTime() !== block.end.getTime()) return false;
+      const stored = (user.busyBlocks ?? []).map(({ start, end }) => ({ start, end }));
+      const blocks = stored.some(b => b.end.getTime() === block.end.getTime())
+        ? stored
+        : [...stored, block].sort((a, b) => a.start.getTime() - b.start.getTime());
+      const current = user.nextBlockBriefAt ?? null;
+      const next = current && current.getTime() < block.end.getTime() ? current : block.end;
+      const result = await this.model.updateOne(
+        { _id: userId, lastBlockBriefEnd: block.end, nextBlockBriefAt: current },
+        previousLastBlockBriefEnd
+          ? { $set: { busyBlocks: blocks, nextBlockBriefAt: next, lastBlockBriefEnd: previousLastBlockBriefEnd } }
+          : { $set: { busyBlocks: blocks, nextBlockBriefAt: next }, $unset: { lastBlockBriefEnd: 1 } },
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return true;
+    }
+    return false;
   }
 
   /**

@@ -114,8 +114,7 @@ export const emailTriageItemRepository = {
     return (await EmailTriageItemModel.exists({ emailId })) !== null;
   },
 
-  /** Items no ready brief has carried yet, created before `end`, oldest first. */
-  /** Unbriefed items created before `end`, and at or after `since` when given. */
+  /** Items no ready brief has carried yet, created before `end` and at or after `since` when given, oldest first. */
   async listPending(
     userId: string,
     end: Date,

@@ -177,6 +177,20 @@ describe('assistantBriefRepository.findLatestReadyDecisionRefs', () => {
     expect(refs?.decisions).toEqual([{}, { approval }]);
   });
 
+  it('skips a newer busy-block brief, so the regular brief keeps counting', async () => {
+    const regular = await settle('owner', [{ id: 'd1', text: 'Approve the deploy', approval }]);
+    const blockBrief = await assistantBriefRepository.createComposing({
+      userId: 'owner',
+      periodStart: NOW,
+      periodEnd: NOW,
+      trigger: 'busy_block',
+      busyBlock: { start: NOW, end: NOW },
+    });
+    await assistantBriefRepository.markReady(String(blockBrief._id), { ...content, decisions: [] }, NOW);
+
+    expect(String((await assistantBriefRepository.findLatestReadyDecisionRefs('owner'))?._id)).toBe(regular);
+  });
+
   it('is null when the owner has no ready brief', async () => {
     await createBrief();
 

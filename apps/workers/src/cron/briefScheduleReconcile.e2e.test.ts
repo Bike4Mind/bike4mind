@@ -462,6 +462,19 @@ describe('runBriefScheduleReconcile block briefs', () => {
     expect((await run()).blocks.enqueued).toBe(1);
   });
 
+  it('hands a block back when another brief is composing, so a later run starts it', async () => {
+    const userId = await insertBlockUser();
+    await insertEmail(userId, 'inside', minutesAgo(20));
+    const composing = await assistantBriefRepository.createComposing({ userId, periodStart: now, periodEnd: now });
+
+    expect((await run()).blocks.in_flight).toBe(1);
+    expect(await blockState(userId)).toEqual({ next: block.end, last: null });
+
+    await AssistantBriefModel.deleteOne({ _id: composing._id });
+    expect((await run()).blocks.enqueued).toBe(1);
+    expect(await AssistantBriefModel.findOne({ userId }).lean()).toMatchObject({ busyBlock: block });
+  });
+
   it('claims and drops a block that ended past the retry window', async () => {
     const old = { start: new Date(now.getTime() - RETRY_WINDOW_MS - 30 * 60_000), end: minutesAgo(61) };
     const userId = await insertUser({

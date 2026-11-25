@@ -4,7 +4,9 @@ export type BusyBlockInterval = { start: Date; end: Date };
 export type BusyBlocksState = { enabled: boolean; blocks: BusyBlockInterval[]; nextBlockBriefAt: Date | null };
 
 /**
- * Sorts and merges overlapping or touching blocks, then drops what can no longer get a brief: blocks ending
+ * Sorts and merges overlapping or touching blocks while the merged block stays within
+ * BUSY_BLOCK_LIMITS.maxDurationMs; past that the later block keeps only the part after the earlier one ends.
+ * Then drops what can no longer get a brief: blocks ending
  * at or before `lastBlockBriefEnd` (already briefed), past the reconciler's retry window, or starting beyond
  * the sync horizon. A block straddling `lastBlockBriefEnd` keeps only its unbriefed tail.
  */
@@ -20,7 +22,9 @@ export function normalizeBusyBlocks(
   for (const block of sorted) {
     const last = merged[merged.length - 1];
     if (last && block.start.getTime() <= last.end.getTime()) {
-      if (block.end.getTime() > last.end.getTime()) last.end = block.end;
+      if (block.end.getTime() <= last.end.getTime()) continue;
+      if (block.end.getTime() - last.start.getTime() <= BUSY_BLOCK_LIMITS.maxDurationMs) last.end = block.end;
+      else merged.push({ start: last.end, end: block.end });
     } else {
       merged.push(block);
     }

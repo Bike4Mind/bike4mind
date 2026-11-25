@@ -185,8 +185,13 @@ export async function deliverPush(
     logger.info('[Push] category disabled by user preference', { category: event.category });
     return { status: 'skipped', reason: 'category_disabled' };
   }
-  // Held, not queued: the brief composed when the block ends reports these runs.
-  if (recipient.inBusyBlock && isHeldDuringBusyBlock(event.category)) {
+  // Held, not queued: the brief composed when the block ends reports these runs. With brief_ready off no
+  // block brief is composed (startBlockBrief returns push_off), so nothing is held.
+  if (
+    recipient.inBusyBlock &&
+    isHeldDuringBusyBlock(event.category) &&
+    isPushCategoryEnabled(recipient.preferences, 'brief_ready')
+  ) {
     logger.info('[Push] held during a calendar busy block', { category: event.category });
     return { status: 'skipped', reason: 'busy_block_hold' };
   }
