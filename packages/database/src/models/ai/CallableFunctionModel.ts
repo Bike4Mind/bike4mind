@@ -1,6 +1,7 @@
 import {
   CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS,
   CALLABLE_FUNCTION_EXAMPLE_LIMITS,
+  CALLABLE_FUNCTION_GRANT_LIMITS,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_OWNER_TYPES,
   CALLABLE_FUNCTION_PROTECTED_FIELDS,
@@ -8,9 +9,11 @@ import {
   CALLABLE_FUNCTION_STATES,
   CALLABLE_FUNCTION_TRUST_LABELS,
   CallableFunctionCapError,
+  CallableFunctionGrantVisibilitySchema,
   CallableFunctionProtectedFieldError,
   CallableFunctionSlugConflictError,
   FUNCTION_CONTRACT_LIMITS,
+  MCP_TOOL_APPROVAL_MODES,
   type CallableFunctionCaseResults,
   type CallableFunctionCreateInput,
   type CallableFunctionExample,
@@ -19,7 +22,11 @@ import {
   type CallableFunctionPromote,
   type CallableFunctionRepin,
   type ICallableFunctionDocument,
+  type ICallableFunctionGrants,
+  type ICallableFunctionOfferable,
   type ICallableFunctionRepository,
+  type ICallableFunctionSharedSource,
+  type McpToolApprovalMode,
   type ICallableFunctionSummary,
   type IMongoDocument,
   type RepositoryPatch,
@@ -83,6 +90,23 @@ const CallableFunctionExampleSchema = new Schema(
   { _id: false }
 );
 
+const CallableFunctionGrantsSchema = new Schema(
+  {
+    visibility: { type: String, enum: CallableFunctionGrantVisibilitySchema.options, required: true },
+    projectId: { type: String },
+    organizationId: { type: String },
+    userIds: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (userIds: string[]) => userIds.length <= CALLABLE_FUNCTION_GRANT_LIMITS.maxUserIds,
+        message: `At most ${CALLABLE_FUNCTION_GRANT_LIMITS.maxUserIds} people`,
+      },
+    },
+  },
+  { _id: false }
+);
+
 const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
   {
     ownerType: { type: String, enum: CALLABLE_FUNCTION_OWNER_TYPES, required: true },
@@ -92,6 +116,7 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
     description: { type: String, required: true, maxlength: FUNCTION_CONTRACT_LIMITS.maxDescriptionLength },
     state: { type: String, enum: CALLABLE_FUNCTION_STATES, default: 'draft' },
     enabled: { type: Boolean, required: true, default: true },
+    approval: { type: String, enum: MCP_TOOL_APPROVAL_MODES, default: 'default' },
     pin: { type: CallableFunctionPinSchema, required: true },
     // Property names are identifiers (FUNCTION_PROPERTY_NAME_PATTERN), so no key escaping is needed.
     contract: { type: Schema.Types.Mixed, required: true },
@@ -117,6 +142,7 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
       ),
     },
     caseResults: { type: Schema.Types.Mixed },
+    grants: { type: CallableFunctionGrantsSchema },
   },
   {
     timestamps: true,
@@ -133,6 +159,10 @@ CallableFunctionSchema.pre('validate', function () {
 
 // Its owner prefix serves the owner's list. One artifact may hold several tools, each under its own name.
 CallableFunctionSchema.index({ ownerType: 1, ownerKey: 1, slug: 1 }, { unique: true, name: 'callablefn_owner_slug' });
+// The three arms of listSharedWith.
+CallableFunctionSchema.index({ 'grants.userIds': 1 }, { name: 'callablefn_grant_users' });
+CallableFunctionSchema.index({ 'grants.organizationId': 1, state: 1 }, { name: 'callablefn_grant_org_state' });
+CallableFunctionSchema.index({ 'grants.projectId': 1 }, { name: 'callablefn_grant_project' });
 
 export interface ICallableFunctionModel extends Model<ICallableFunctionDocument & IMongoDocument> {}
 export const CallableFunction: ICallableFunctionModel =
@@ -141,6 +171,7 @@ export const CallableFunction: ICallableFunctionModel =
 type FunctionDoc = ICallableFunctionDocument & IMongoDocument;
 
 const SUMMARY_PROJECTION = { contract: 0, 'pin.source': 0, lastServerRun: 0, promoted: 0, caseResults: 0 };
+const OFFERABLE_PROJECTION = { 'pin.source': 0, lastServerRun: 0, promoted: 0, caseResults: 0 };
 
 const newPin = (pin: CallableFunctionNewPin): CallableFunctionNewPin => ({
   artifactId: pin.artifactId,
@@ -264,6 +295,12 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     return docs.map(doc => doc.toObject() as ICallableFunctionSummary);
   }
 
+  /** Ids of the functions a person owns directly, not through a team. */
+  async listIdsForUser(userId: string): Promise<string[]> {
+    const docs = await this.model.find(ownerFilter({ ownerType: 'user', ownerKey: userId }), { _id: 1 }).lean();
+    return docs.map(doc => String(doc._id));
+  }
+
   async countForOwner(owner: CallableFunctionOwner): Promise<number> {
     return this.model.countDocuments(ownerFilter(owner));
   }
@@ -280,6 +317,39 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
+  }
+
+  async setApproval(
+    id: string,
+    owner: CallableFunctionOwner,
+    approval: McpToolApprovalMode
+  ): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ...ownerFilter(owner) },
+      { $set: { approval } },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async listLiveForOwner(
+    owner: CallableFunctionOwner,
+    { limit, excludeAlwaysAsk }: { limit?: number; excludeAlwaysAsk?: boolean } = {}
+  ): Promise<ICallableFunctionOfferable[]> {
+    const query = this.model
+      .find(
+        {
+          ...ownerFilter(owner),
+          state: 'live',
+          enabled: true,
+          ...(excludeAlwaysAsk ? { approval: { $ne: 'always_ask' } } : {}),
+        },
+        OFFERABLE_PROJECTION
+      )
+      .sort({ createdAt: 1 });
+    const docs = await (limit ? query.limit(limit) : query);
+    return docs.map(doc => doc.toObject() as ICallableFunctionOfferable);
   }
 
   async repin(
@@ -359,6 +429,54 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
+  }
+
+  async setGrants(
+    id: string,
+    owner: CallableFunctionOwner,
+    grants: ICallableFunctionGrants | null
+  ): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    // A share covers the live pin, so only a live function takes one; removing one works in any state.
+    const result = grants
+      ? await this.model.findOneAndUpdate(
+          { _id: id, ...ownerFilter(owner), state: 'live' },
+          { $set: { grants } },
+          { new: true, runValidators: true }
+        )
+      : await this.model.findOneAndUpdate(
+          { _id: id, ...ownerFilter(owner) },
+          { $unset: { grants: 1 } },
+          { new: true, runValidators: true }
+        );
+    return result?.toJSON() ?? null;
+  }
+
+  async listSharedWith(reach: {
+    userId: string;
+    projectIds: string[];
+    organizationIds: string[];
+  }): Promise<ICallableFunctionSharedSource[]> {
+    const docs = await this.model
+      .find(
+        {
+          state: 'live',
+          enabled: true,
+          ownerKey: { $ne: reach.userId },
+          $or: [
+            { 'grants.userIds': reach.userId },
+            { 'grants.visibility': 'project', 'grants.projectId': { $in: reach.projectIds } },
+            { 'grants.visibility': 'organization', 'grants.organizationId': { $in: reach.organizationIds } },
+          ],
+        },
+        // A recipient reviews the contract; the pinned code never leaves the server.
+        OFFERABLE_PROJECTION
+      )
+      .sort({ updatedAt: -1 })
+      // Capped before the caller's membership filter drops stale project/organization grants, so the cap counts them too;
+      // shares past the most recent are not listed but stay callable.
+      .limit(CALLABLE_FUNCTION_LIMITS.maxPerOwner);
+    return docs.map(doc => doc.toObject() as ICallableFunctionSharedSource);
   }
 
   async deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean> {

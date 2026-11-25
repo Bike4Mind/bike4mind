@@ -26,7 +26,11 @@ import {
   stripSearchResultCardFences,
   type CitableSource,
 } from '@bike4mind/common';
-import { OrgFeedbackSummaryPayload, runOrgFeedbackSummary } from '@workers/queueHandlers/orgFeedbackSummary';
+import {
+  OrgFeedbackSummaryPayload,
+  runOrgFeedbackSummary,
+  type CheckRunBudget,
+} from '@workers/queueHandlers/orgFeedbackSummary';
 import { getSubQuestStatusIcon } from '@bike4mind/server-utils/shared/subQuestStatusPresentation';
 import { extractReplies } from '@bike4mind/server-utils/shared/replyUtils';
 import { z } from 'zod';
@@ -334,8 +338,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // a malformed message into a 422 the wrapper swallows instead of a retry loop into the DLQ.
   const message = secureParameters(JSON.parse(body), QueuePayload);
 
-  const checkBudget = () => {
-    if (context.getRemainingTimeInMillis() < 1000) throw new Error('Quest export run budget exhausted');
+  const checkBudget: CheckRunBudget = (minimumRemainingMs = 1000) => {
+    if (context.getRemainingTimeInMillis() < minimumRemainingMs) throw new Error('Quest export run budget exhausted');
   };
   if (message.jobType === ORG_FEEDBACK_SUMMARY_JOB_TYPE) {
     await runOrgFeedbackSummary(message, logger, checkBudget);

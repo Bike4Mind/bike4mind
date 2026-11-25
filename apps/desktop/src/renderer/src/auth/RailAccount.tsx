@@ -20,9 +20,9 @@ import { updateAttention } from '@shared/update';
 import {
   BillingIcon,
   ConversationIcon,
-  ExternalLinkIcon,
   GearIcon,
   ModelsIcon,
+  NewWindowIcon,
   SignOutIcon,
   SlidersIcon,
   UserIcon,
@@ -54,6 +54,10 @@ function initials(name: string): string {
 
 const displayNameOf = (state: AuthState) =>
   state.user?.nickname || state.user?.username || state.user?.email || state.user?.id || 'Signed in';
+
+// Says where the click goes, so it is not mistaken for syncing web conversations into this app: that is
+// the 'Bike4Mind web' group in the session list (see chat/WebSyncStatus).
+const OPEN_WEB_HINT = 'Opens the full web app in its own window, signed in';
 
 type DotTone = 'warning' | 'neutral';
 
@@ -128,20 +132,28 @@ function Row({
   label,
   onClick,
   end,
+  tooltip,
   testId,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
   end?: ReactNode;
+  tooltip?: string;
   testId: string;
 }) {
-  return (
+  const item = (
     <MenuItem onClick={onClick} data-testid={testId}>
       <ListItemDecorator>{icon}</ListItemDecorator>
       <Box sx={{ flex: 1 }}>{label}</Box>
       {end}
     </MenuItem>
+  );
+  if (!tooltip) return item;
+  return (
+    <Tooltip title={tooltip} placement="right" variant="soft" size="sm" data-testid={`${testId}-tooltip`}>
+      {item}
+    </Tooltip>
   );
 }
 
@@ -311,10 +323,11 @@ export function SignedInRailAccount({
           testId="account-feedback-btn"
         />
         <Row
-          icon={<ExternalLinkIcon />}
-          label="Open web conversations"
+          icon={<NewWindowIcon />}
+          label="Open Bike4Mind web"
+          tooltip={OPEN_WEB_HINT}
           onClick={() => void window.b4m.attention.openServerSessions()}
-          testId="account-web-conversations-btn"
+          testId="account-open-web-btn"
         />
         <ListDivider />
         <Row

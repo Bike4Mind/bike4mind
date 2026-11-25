@@ -30,6 +30,10 @@
       "types": "./dist/models/billing/index.d.mts",
       "default": "./dist/models/billing/index.mjs"
     },
+    "./zero-credit-operational-usage": {
+      "types": "./dist/utils/zeroCreditOperationalUsage.d.mts",
+      "default": "./dist/utils/zeroCreditOperationalUsage.mjs"
+    },
     "./ai": {
       "types": "./dist/models/ai/index.d.mts",
       "default": "./dist/models/ai/index.mjs"

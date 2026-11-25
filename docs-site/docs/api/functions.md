@@ -10,7 +10,7 @@ A function is a Python artifact you saved as a function and promoted to live aft
 
 ## Create a Functions key
 
-In your profile, open the API keys tab, choose **New key**, and pick the **Functions** access level. The key holds the `functions:invoke` scope and nothing else: it reaches only these three routes, and a request to mint `functions:invoke` together with any other scope is refused. The Functions level appears only while callable functions are turned on for your account.
+In your profile, open the API keys tab, choose **New key**, and pick the **Functions** access level. The key holds the `functions:invoke` scope and nothing else: it reaches only these three routes and the [MCP endpoint](./functions-mcp.md), and a request to mint `functions:invoke` together with any other scope is refused. The Functions level appears only while callable functions are turned on for your account.
 
 Each call answers for the key's owner. A key reaches only the live functions its owner owns. A draft, a turned-off function, a function whose artifact was deleted, and another person's function all answer `404`, the same as an id that does not exist.
 

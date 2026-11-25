@@ -1883,39 +1883,9 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 1.2.1
         version: 1.2.1(zod@4.6.6)
-      '@anthropic-ai/sdk':
-        specifier: ^0.111.0
-        version: 0.111.0(zod@4.6.6)
-      '@aws-sdk/client-apigatewaymanagementapi':
-        specifier: ^3.1150.0
-        version: 3.1151.0
-      '@aws-sdk/client-bedrock-runtime':
-        specifier: ^3.1150.0
-        version: 3.1151.0
-      '@aws-sdk/client-cloudwatch':
-        specifier: ^3.1150.0
-        version: 3.1151.0
-      '@aws-sdk/client-lambda':
-        specifier: ^3.1150.0
-        version: 3.1151.0
-      '@aws-sdk/client-s3':
-        specifier: ^3.1150.0
-        version: 3.1151.0
-      '@aws-sdk/client-sqs':
-        specifier: ^3.1150.0
-        version: 3.1151.0
       '@aws-sdk/client-sts':
         specifier: ^3.1150.0
         version: 3.1151.0
-      '@aws-sdk/credential-provider-node':
-        specifier: ^3.972.86
-        version: 3.972.86
-      '@aws-sdk/s3-request-presigner':
-        specifier: ^3.1150.0
-        version: 3.1151.0
-      '@google/genai':
-        specifier: ^1.46.0
-        version: 1.46.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.6))
       '@joplin/turndown-plugin-gfm':
         specifier: ^1.0.67
         version: 1.0.67
@@ -1925,12 +1895,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(zod@4.6.6)
-      '@opensearch-project/opensearch':
-        specifier: 2.11.0
-        version: 2.11.0
-      '@smithy/node-http-handler':
-        specifier: ^4.12.1
-        version: 4.12.1
       axios:
         specifier: 1.20.0
         version: 1.20.0
@@ -1955,9 +1919,6 @@ importers:
       eventsource-parser:
         specifier: ^3.1.0
         version: 3.1.0
-      file-type:
-        specifier: ^22.1.0
-        version: 22.1.0
       fuse.js:
         specifier: ^7.5.0
         version: 7.5.0
@@ -1985,24 +1946,15 @@ importers:
       ink-text-input:
         specifier: ^6.0.0
         version: 6.0.0(ink@7.1.1(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
-      jszip:
-        specifier: ^3.10.2
-        version: 3.10.2
       lodash:
         specifier: ^4.18.1
         version: 4.18.1
-      mammoth:
-        specifier: ^1.12.3
-        version: 1.12.3
       marked:
         specifier: ^15.0.11
         version: 15.0.12
       mathjs:
         specifier: ^15.2.0
         version: 15.2.0
-      mime-types:
-        specifier: ^3.0.2
-        version: 3.0.2
       mongoose:
         specifier: ^8.24.7
         version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
@@ -2039,9 +1991,6 @@ importers:
       undici:
         specifier: ^7.30.1
         version: 7.30.1
-      unpdf:
-        specifier: ^1.6.2
-        version: 1.6.2(@napi-rs/canvas@0.1.100)
       web-tree-sitter:
         specifier: 0.25.10
         version: 0.25.10(@types/emscripten@1.41.5)
@@ -7666,6 +7615,10 @@ packages:
   content-type@1.0.5:
     resolution: {integrity: sha512-nTjqfcBFEipKdXCv4YDQWCfmcLZKm81ldF0pAopTvyrFGVbcR6P/VAAd5G7N+0tTr8QqiU0tFadD6FK4NtJwOA==}
     engines: {node: '>= 0.6'}
+
+  content-type@2.0.0:
+    resolution: {integrity: sha512-j/O/d7GcZCyNl7/hwZAb606rzqkyvaDctLmckbxLzHvFBzTJHuGEdodATcP3yIRoDrLHkIATJuvzbFlp/ki2cQ==}
+    engines: {node: '>=18'}
 
   content-type@2.1.0:
     resolution: {integrity: sha512-mj7UPXE0jaqaOsukNZRUEfEi2AcL7C/vwmwcHV0O97eO1E1pxBZuyjlZrx5seTaNBg1U6+o35wpa35Qfcc+7ag==}
@@ -19493,6 +19446,8 @@ snapshots:
 
   content-type@1.0.5: {}
 
+  content-type@2.0.0: {}
+
   content-type@2.1.0: {}
 
   conventional-changelog-angular@9.2.1:
@@ -25680,7 +25635,7 @@ snapshots:
 
   type-is@2.1.0:
     dependencies:
-      content-type: 2.1.0
+      content-type: 2.0.0
       media-typer: 1.1.0
       mime-types: 3.0.2
 

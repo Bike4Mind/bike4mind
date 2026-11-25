@@ -5,6 +5,7 @@ import LanguageIcon from '@mui/icons-material/Language';
 import DateTimeIcon from '@mui/icons-material/Schedule';
 import DiceIcon from '@mui/icons-material/Casino';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import FunctionsIcon from '@mui/icons-material/DataObject';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import ImageIcon from '@mui/icons-material/Image';
 import MusicIcon from '@mui/icons-material/MusicNote';
@@ -42,7 +43,14 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
-import { B4MLLMTools, IMcpServerResponse, type McpConnectionListEntry } from '@bike4mind/common';
+import {
+  CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
+  B4MLLMTools,
+  IMcpServerResponse,
+  type ICallableFunctionPublic,
+  type McpConnectionListEntry,
+  MAX_CALLABLE_FUNCTIONS_PER_TURN,
+} from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
@@ -60,6 +68,7 @@ import {
 } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
+import { useCallableFunctionList, useCallableFunctionsEnabled } from '@client/app/hooks/data/callableFunctions';
 import {
   connectionMenuText,
   isComposerConnectionOn,
@@ -261,6 +270,25 @@ const ToolLabel = ({ name, description, descriptionTitle, dim = false, agentOnly
 
 const AGENT_ONLY_MCP_NOTE = 'Agent mode only - mention an @agent to use it in chat';
 
+// The function host's offer is switched like a user's own connector, by its reserved slug `fn`.
+const FUNCTIONS_CONNECTION = {
+  id: CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
+  slug: CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
+  ownerType: 'user',
+} as const;
+
+// Chat offers the oldest MAX_CALLABLE_FUNCTIONS_PER_TURN live tools, the same order the list arrives in.
+const functionsRowDescription = (functions: ICallableFunctionPublic[]) => {
+  if (functions.length === 0) return 'No live tools yet. Promote a saved tool to offer it in chat.';
+  const offered = functions
+    .slice(0, MAX_CALLABLE_FUNCTIONS_PER_TURN)
+    .map(fn => `${fn.slug} (${fn.trustLabel ?? 'unverified'})`)
+    .join(', ');
+  const rest = functions.length - MAX_CALLABLE_FUNCTIONS_PER_TURN;
+  return rest > 0 ? `${offered}, and ${rest} more not offered` : offered;
+};
+const FUNCTIONS_ROW_DETAIL = `Up to ${MAX_CALLABLE_FUNCTIONS_PER_TURN} of your live tools, run on the server with a stamp`;
+
 // Tools rendered under the "Fun & Novelty" section. They count toward that section's
 // own pinned tally, not the Individual tools one. Must stay in sync with the tools
 // rendered in that section below.
@@ -339,6 +367,9 @@ const ToolsSection = ({
   const { offered: customConnections } = useComposerMcpConnections();
   const disabledMcpConnections = useLLM(state => state.disabledMcpConnections) ?? [];
   const enabledPlatformMcpConnections = useLLM(state => state.enabledPlatformMcpConnections) ?? [];
+  const callableFunctionsOn = useCallableFunctionsEnabled();
+  const { data: savedFunctions } = useCallableFunctionList(callableFunctionsOn);
+  const liveFunctions = (savedFunctions ?? []).filter(fn => fn.status === 'live');
 
   // Must stay above the unsupported-model early return further down, which cuts off hooks.
   const isMobile = useIsMobile();
@@ -1020,6 +1051,31 @@ const ToolsSection = ({
               </Grid>
             );
           })}
+          {callableFunctionsOn && (
+            <Grid xs={12} className="tool-item tool-item-functions">
+              <ToolContainer sx={toolContainerSx}>
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
+                >
+                  <FunctionsIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel
+                    name="Functions"
+                    description={functionsRowDescription(liveFunctions)}
+                    descriptionTitle={functionsRowDescription(liveFunctions)}
+                    detail={FUNCTIONS_ROW_DETAIL}
+                  />
+                </Box>
+                <SquareSlideToggle
+                  data-testid="tool-toggle-functions"
+                  onChange={() => setLLM(toggleComposerConnection(FUNCTIONS_CONNECTION, connectionChoices))}
+                  checked={isComposerConnectionOn(FUNCTIONS_CONNECTION, connectionChoices)}
+                />
+              </ToolContainer>
+            </Grid>
+          )}
           {/* Prompt Enhancement */}
           <Grid xs={12} className="tool-item tool-item-prompt-enhancement">
             <ToolContainer sx={toolContainerSx} toolId="prompt_enhancement">

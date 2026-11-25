@@ -656,6 +656,14 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return docs.map(d => String(d._id));
   }
 
+  /** Whether some live organization counts both users as members, by the findMembershipOrgIds predicate. */
+  async sharesMembership(userId: string, otherUserId: string): Promise<boolean> {
+    const shared = await this.organizationModel.exists({
+      $and: [orgMembershipFilter(userId), orgMembershipFilter(otherUserId)],
+    });
+    return shared !== null;
+  }
+
   /**
    * Membership (owner + users[] ACL) widened with adminUserIds, so an org manager without a member
    * row still resolves the org plan. Plan resolution only: deliberately a

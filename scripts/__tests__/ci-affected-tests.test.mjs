@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { affectedPackages, planAffected, planShard, resolveFilter } from '../ci-affected-tests.mjs';
+import { planClientRelated, conservativeSeeds } from '../ci-related-tests.mjs';
 import { WHOLE_REPO_TEST_PACKAGES } from '../turbo-test-cache.mjs';
 import { readPackageDirs, readTurboJson } from '../verify-affected.mjs';
 
@@ -41,6 +42,22 @@ function legsFor(changedFiles) {
 const clientLegs = ['client 1/3', 'client 2/3', 'client 3/3'];
 
 describe('test-shards selection for a PR diff (real turbo graph and ci.yml)', () => {
+  it.each([
+    'apps/workers/src/services/newProvider.ts',
+    'b4m-core/services/src/newProvider.ts',
+    'packages/server-utils/src/newProvider.ts',
+    'scripts/unmetered-provider-call-allowlist.txt',
+  ])('selects the client guard and full client lane for foreign input %s', file => {
+    const legs = legsFor([file]);
+    for (const name of clientLegs) expect(legs[name].unitFilter).toBe('--filter @bike4mind/client');
+    expect(planClientRelated([file], true)).toEqual({ mode: 'full' });
+  });
+
+  it('seeds the filesystem-reading provider guard for client-only related selection', () => {
+    const file = 'apps/client/server/__tests__/aiRoutesMeterPlatformCompletions.test.ts';
+    expect(conservativeSeeds([file], name => fs.readFileSync(path.join(repoRoot, name), 'utf8'))).toEqual([file]);
+  });
+
   it('reads every leg of the matrix', () => {
     expect(readLegs().map(leg => leg.name)).toEqual(expect.arrayContaining([...clientLegs, 'misc']));
   });
