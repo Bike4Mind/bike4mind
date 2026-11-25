@@ -171,9 +171,14 @@ class ReleaseWorkflowTest(unittest.TestCase):
     def test_windows_leg_packages_installs_and_uploads(self):
         build = job('build')
         self.assertIn('--win --publish never', build)
-        self.assertIn("if: matrix.platform == 'mac'\n        run: pnpm --filter @bike4mind/desktop test", build)
         self.assertIn(
-            "if: matrix.platform != 'mac'\n        run: pnpm --filter @bike4mind/desktop exec node --test scripts/test_package_local.cjs",
+            "if: matrix.platform == 'mac' && github.event_name != 'pull_request'\n"
+            "        run: pnpm --filter @bike4mind/desktop test",
+            build,
+        )
+        self.assertIn(
+            "if: matrix.platform != 'mac' || github.event_name == 'pull_request'\n"
+            "        run: pnpm --filter @bike4mind/desktop exec node --test scripts/test_package_local.cjs",
             build,
         )
         step = '- name: Install and launch packaged Windows installer'
