@@ -71,6 +71,21 @@ export const PushNotificationPreferencesSchema = z.object({
 
 export type PushNotificationPreferences = z.infer<typeof PushNotificationPreferencesSchema>;
 
+/**
+ * Categories not delivered while the user is inside a synced calendar busy block: run and session
+ * content the block brief covers once the block ends. The rest stay live because the user is waiting on
+ * them (approval_needed) or asked for them in the foreground.
+ */
+export const BUSY_BLOCK_HELD_CATEGORIES = [
+  'agent_completed',
+  'agent_failed',
+  'agent_message',
+] as const satisfies readonly PushNotificationCategory[];
+
+export function isHeldDuringBusyBlock(category: PushNotificationCategory): boolean {
+  return (BUSY_BLOCK_HELD_CATEGORIES as readonly PushNotificationCategory[]).includes(category);
+}
+
 export function isPushCategoryEnabled(
   preferences: PushNotificationPreferences | null | undefined,
   category: PushNotificationCategory

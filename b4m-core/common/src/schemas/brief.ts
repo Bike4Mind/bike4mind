@@ -191,7 +191,29 @@ export const BUSY_BLOCK_LIMITS = {
   maxDurationMs: 12 * 60 * 60 * 1000,
   horizonMs: 72 * 60 * 60 * 1000,
   retryWindowMs: 60 * 60 * 1000,
+  /** Pushes are held only while the last sync is at most this old, so a client that stopped syncing cannot mute them. */
+  syncFreshMs: 24 * 60 * 60 * 1000,
 } as const;
+
+/**
+ * Whether `now` falls inside one of the user's synced busy blocks (start inclusive, end exclusive). False
+ * when the opt-in is off or the last sync is older than BUSY_BLOCK_LIMITS.syncFreshMs.
+ */
+export function isInBusyBlock(
+  user: {
+    preferences?: { busyBlockBrief?: { enabled?: boolean } | null } | null;
+    busyBlocks?: { start: Date; end: Date }[] | null;
+    busyBlocksSyncedAt?: Date | null;
+  },
+  now: Date
+): boolean {
+  if (user.preferences?.busyBlockBrief?.enabled !== true || !user.busyBlocksSyncedAt) return false;
+  if (now.getTime() - new Date(user.busyBlocksSyncedAt).getTime() > BUSY_BLOCK_LIMITS.syncFreshMs) return false;
+  const t = now.getTime();
+  return (user.busyBlocks ?? []).some(
+    ({ start, end }) => new Date(start).getTime() <= t && t < new Date(end).getTime()
+  );
+}
 
 export const BusyBlockSchema = z
   .object({

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { BRIEF_LIMITS, BriefDecisionSchema, BriefItemSchema, PutBusyBlocksSchema } from './brief';
+import {
+  BRIEF_LIMITS,
+  BUSY_BLOCK_LIMITS,
+  BriefDecisionSchema,
+  BriefItemSchema,
+  PutBusyBlocksSchema,
+  isInBusyBlock,
+} from './brief';
 
 const draft = { to: 'sender@example.com', subject: 'Re: Renewal', body: 'Confirming the date.' };
 
@@ -90,5 +97,29 @@ describe('PutBusyBlocksSchema', () => {
       blocks: [{ ...block(0, 30), title: 'Board meeting', attendees: ['a@example.com'] }],
     });
     expect(parsed.blocks[0]).toEqual(block(0, 30));
+  });
+});
+
+describe('isInBusyBlock', () => {
+  const now = new Date('2026-11-20T15:00:00.000Z');
+  const at = (minutes: number) => new Date(now.getTime() + minutes * 60_000);
+  const user = (blocks: { start: Date; end: Date }[], syncedAt: Date | null = at(-5), enabled = true) => ({
+    preferences: { busyBlockBrief: { enabled } },
+    busyBlocks: blocks,
+    busyBlocksSyncedAt: syncedAt,
+  });
+
+  it('is true from a block start up to, not including, its end', () => {
+    expect(isInBusyBlock(user([{ start: now, end: at(30) }]), now)).toBe(true);
+    expect(isInBusyBlock(user([{ start: at(-30), end: now }]), now)).toBe(false);
+  });
+
+  it('is false with no blocks, opted out, never synced, or a stale sync', () => {
+    expect(isInBusyBlock(user([]), now)).toBe(false);
+    expect(isInBusyBlock(user([{ start: at(-5), end: at(5) }], at(-5), false), now)).toBe(false);
+    expect(isInBusyBlock(user([{ start: at(-5), end: at(5) }], null), now)).toBe(false);
+    const stale = new Date(now.getTime() - BUSY_BLOCK_LIMITS.syncFreshMs - 1);
+    expect(isInBusyBlock(user([{ start: at(-5), end: at(5) }], stale), now)).toBe(false);
+    expect(isInBusyBlock({ preferences: null }, now)).toBe(false);
   });
 });

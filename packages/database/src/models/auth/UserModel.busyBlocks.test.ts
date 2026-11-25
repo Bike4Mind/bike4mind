@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import mongoose from 'mongoose';
+import { isInBusyBlock } from '@bike4mind/common';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
 import { User, userRepository } from './UserModel';
 import { normalizeBusyBlocks } from './busyBlocks';
@@ -159,5 +160,16 @@ describe('userRepository block brief claims', () => {
     const doc = await raw(userId);
     expect(doc?.nextBlockBriefAt).toBeUndefined();
     expect(doc?.lastBlockBriefEnd).toEqual(at(-10));
+  });
+});
+
+describe('isInBusyBlock on a stored user', () => {
+  it('reads the synced block back from the real schema', async () => {
+    const userId = await insertUser();
+    await userRepository.setBusyBlocks(userId, { enabled: true, blocks: [block(-10, 20)] }, NOW);
+    const user = await userRepository.findById(userId);
+
+    expect(isInBusyBlock(user!, NOW)).toBe(true);
+    expect(isInBusyBlock(user!, at(20))).toBe(false);
   });
 });

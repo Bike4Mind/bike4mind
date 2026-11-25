@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import type { EventBridgeEvent } from 'aws-lambda';
-import type { LiveActivityPushEvent, PushNotificationEvent } from '@bike4mind/common';
+import {
+  BUSY_BLOCK_HELD_CATEGORIES,
+  PUSH_NOTIFICATION_CATEGORIES,
+  type LiveActivityPushEvent,
+  type PushNotificationEvent,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   createTransport: vi.fn(),
@@ -544,6 +549,44 @@ describe('deliverPush', () => {
     });
   });
 
+  it.each(PUSH_NOTIFICATION_CATEGORIES)(
+    'holds %s only when it is a held category inside a busy block',
+    async category => {
+      const { deps } = makeDeps([{ token: 'tok-a', environment: 'production', id: 'dest-1' }], {
+        loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false, inBusyBlock: true })),
+      });
+      const event = { ...EVENT, category, destinationId: 'dest-1', destinationSid: 'sid-live' };
+
+      const result = await deliverPush(event, deps, logger);
+
+      if ((BUSY_BLOCK_HELD_CATEGORIES as readonly string[]).includes(category)) {
+        expect(result).toEqual({ status: 'skipped', reason: 'busy_block_hold' });
+        expect(deps.transport.send).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({ status: 'sent', delivered: 1 });
+      }
+    }
+  );
+
+  it('delivers a held category outside a busy block, and reports a switched-off one as disabled inside it', async () => {
+    const outside = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false, inBusyBlock: false })),
+    });
+    await expect(deliverPush(EVENT, outside.deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+
+    const disabled = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({
+        preferences: { agent_completed: false },
+        redactContent: false,
+        inBusyBlock: true,
+      })),
+    });
+    await expect(deliverPush(EVENT, disabled.deps, logger)).resolves.toEqual({
+      status: 'skipped',
+      reason: 'category_disabled',
+    });
+  });
+
   it('drops the event when the user no longer exists', async () => {
     const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
       loadRecipient: vi.fn(async () => null),
@@ -666,14 +709,30 @@ describe('loadPushRecipient', () => {
     await expect(loadPushRecipient('u1')).resolves.toEqual({
       preferences: { agent_message: false },
       redactContent: true,
+      inBusyBlock: false,
     });
     expect(h.orgFindById).toHaveBeenCalledWith('org-1');
   });
 
   it('does not redact for a user without an organization', async () => {
     h.userFindById.mockResolvedValue({ organizationId: null, preferences: null });
-    await expect(loadPushRecipient('u1')).resolves.toEqual({ preferences: undefined, redactContent: false });
+    await expect(loadPushRecipient('u1')).resolves.toEqual({
+      preferences: undefined,
+      redactContent: false,
+      inBusyBlock: false,
+    });
     expect(h.orgFindById).not.toHaveBeenCalled();
+  });
+
+  it('reports a user inside a freshly synced busy block', async () => {
+    const now = Date.now();
+    h.userFindById.mockResolvedValue({
+      organizationId: null,
+      preferences: { busyBlockBrief: { enabled: true } },
+      busyBlocks: [{ start: new Date(now - 60_000), end: new Date(now + 60_000) }],
+      busyBlocksSyncedAt: new Date(now - 60_000),
+    });
+    await expect(loadPushRecipient('u1')).resolves.toMatchObject({ inBusyBlock: true });
   });
 });
 
