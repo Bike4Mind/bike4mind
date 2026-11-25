@@ -1115,6 +1115,7 @@ const GitHubConnectionTab: React.FC = () => {
               initialDate={() => getLocalDate(PAT_DEFAULT_EXPIRY_DAYS)}
               max={getLocalDate(PAT_MAX_EXPIRY_DAYS)}
               aria-label="Expiration date"
+              disabled={connecting}
               testId="github-pat-expiry-input"
             />
             <Typography level="body-xs" sx={{ mt: 0.5, color: 'admin.inkMuted' }}>
