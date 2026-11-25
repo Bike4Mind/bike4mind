@@ -1,0 +1,116 @@
+/**
+ * Process-wide at-rest key ring.
+ *
+ * State lives on a `globalThis` slot rather than in module scope so every copy of this module in a
+ * process (the hosted ChatCompletion process loads an ESM and a CJS copy of @bike4mind/utils) reads
+ * and writes the same keys. Keys are loaded once, asynchronously, by `ensureKeyring`; everything
+ * else reads them synchronously and throws if nothing has loaded, so a missed boot call is loud
+ * instead of a silent fallback to some other key source.
+ */
+import { isValidEncryptionKey } from './secretEncryption';
+
+export interface StageDataKey {
+  /** Provisional, non-secret identifier. Never derived from the plaintext key. */
+  id: string;
+  /** 32-byte hex key. */
+  key: string;
+}
+
+export interface KeyProvider {
+  name: 'static' | 'aws-kms';
+  /** Resolves null when the provider has no key (self-host without one). Rejects on a failed unwrap. */
+  load(): Promise<StageDataKey | null>;
+}
+
+export interface AtRestKeys {
+  current?: string;
+  previous?: string;
+}
+
+export class KeyringNotLoadedError extends Error {
+  constructor() {
+    super('At-rest keyring is not loaded; call ensureKeyring (connectDB or ensureKeyringLoaded) first');
+    this.name = 'KeyringNotLoadedError';
+  }
+}
+
+interface KeyringState {
+  legacy: AtRestKeys | null;
+  stageDataKey: StageDataKey | null;
+  providerSettled: boolean;
+  inflight: Promise<void> | null;
+}
+
+const SLOT = Symbol.for('bike4mind.secretsAtRest.keyring');
+type GlobalWithKeyring = typeof globalThis & { [SLOT]?: KeyringState };
+
+function state(): KeyringState {
+  const g = globalThis as GlobalWithKeyring;
+  return (g[SLOT] ??= { legacy: null, stageDataKey: null, providerSettled: false, inflight: null });
+}
+
+const usable = (key: string | undefined): string | undefined => (key && isValidEncryptionKey(key) ? key : undefined);
+
+export interface EnsureKeyringOptions {
+  provider: KeyProvider;
+  /** Static SECRET_ENCRYPTION_KEY, used for v1/v2 ciphertext. */
+  legacyKey?: string;
+  legacyPrevious?: string;
+}
+
+/**
+ * Loads the keyring. Legacy keys are available as soon as this is called, even if the provider
+ * then fails. A failed provider load is never cached: the next call retries it. Concurrent calls
+ * share one provider load; once a load has settled, later calls are no-ops.
+ */
+export function ensureKeyring(opts: EnsureKeyringOptions): Promise<void> {
+  const s = state();
+  if (s.providerSettled) return Promise.resolve();
+  if (s.inflight) return s.inflight;
+  s.legacy = { current: usable(opts.legacyKey), previous: usable(opts.legacyPrevious) };
+  const run = opts.provider.load().then(
+    key => {
+      s.stageDataKey = key;
+      s.providerSettled = true;
+      s.inflight = null;
+    },
+    (error: unknown) => {
+      s.inflight = null;
+      throw error;
+    }
+  );
+  s.inflight = run;
+  return run;
+}
+
+/** Synchronously loads a static keyring (self-host, scripts, tests). */
+export function loadStaticKeyring(key: string | undefined, previous?: string): void {
+  const s = state();
+  const current = usable(key);
+  s.legacy = { current, previous: usable(previous) };
+  s.stageDataKey = current ? { id: 'static', key: current } : null;
+  s.providerSettled = true;
+  s.inflight = null;
+}
+
+export function isKeyringLoaded(): boolean {
+  return state().legacy !== null;
+}
+
+/** The static keys for v1/v2 ciphertext. Throws KeyringNotLoadedError before any load. */
+export function getAtRestKeys(): AtRestKeys {
+  const { legacy } = state();
+  if (!legacy) throw new KeyringNotLoadedError();
+  return legacy;
+}
+
+/** The provider-supplied data key, or null when the provider has none or has not succeeded yet. */
+export function getStageDataKey(): StageDataKey | null {
+  const s = state();
+  if (!s.legacy) throw new KeyringNotLoadedError();
+  return s.stageDataKey;
+}
+
+export function resetKeyringForTests(): void {
+  delete (globalThis as GlobalWithKeyring)[SLOT];
+}

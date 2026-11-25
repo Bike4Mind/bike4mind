@@ -1,18 +1,35 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { resetKeyringForTests } from '@bike4mind/utils/security';
 import { encryptSecret, generateEncryptionKey } from './secretEncryption';
 import { configureSecretsAtRest, decryptAtRest } from '@bike4mind/utils/security';
 
-// Mock config before importing tokenEncryption
-const mockConfig: Record<string, string | undefined> = {};
-vi.mock('../utils/config', () => ({
-  Config: new Proxy({}, { get: (_, key: string) => mockConfig[key] }),
-}));
+import {
+  encryptToken,
+  decryptToken,
+  decryptStoredSecret,
+  encryptEnvVariables,
+  decryptEnvVariables,
+} from './tokenEncryption';
 
-// Import after mock
-const { encryptToken, decryptToken, decryptStoredSecret, encryptEnvVariables, decryptEnvVariables } =
-  await import('./tokenEncryption');
+// Assigning a key loads the keyring, so the cases below read as they did when they mocked Config.
+const keyValues: Record<string, string | undefined> = {};
+const mockConfig = new Proxy(keyValues, {
+  set(target, prop: string, value) {
+    target[prop] = value;
+    configureSecretsAtRest(target.SECRET_ENCRYPTION_KEY, target.SECRET_ENCRYPTION_KEY_PREVIOUS);
+    return true;
+  },
+});
 
 const defaultMcpOwner = { id: 'mcp-record', name: 'test-server', userId: 'test-user' };
+
+describe('tokenEncryption before the keyring loads', () => {
+  it('throws instead of falling back to any other key source', () => {
+    resetKeyringForTests();
+    expect(() => encryptToken('t')).toThrow('not loaded');
+    expect(() => decryptToken(encryptSecret('t', generateEncryptionKey()))).toThrow('not loaded');
+  });
+});
 
 describe('tokenEncryption', () => {
   const key1 = generateEncryptionKey();

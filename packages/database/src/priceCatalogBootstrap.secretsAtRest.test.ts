@@ -1,35 +1,69 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { configureSecretsAtRest, decryptAtRest, encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
+import {
+  decryptAtRest,
+  encryptSecret,
+  generateEncryptionKey,
+  getStageDataKey,
+  resetKeyringForTests,
+} from '@bike4mind/utils/security';
 
 const KEY = generateEncryptionKey();
+const DATA_KEY = Buffer.from(generateEncryptionKey(), 'hex');
+
+const resource = vi.hoisted(() => ({
+  values: {} as Record<string, string | undefined>,
+}));
+const kms = vi.hoisted(() => ({ decrypt: vi.fn() }));
 
 // Stand in for the SST runtime so this test proves the connectDB seam can source the key
 // from Resource - the path a scripts/cron process (which never imports apps/client Config) takes.
 vi.mock('sst', () => ({
-  Resource: {
-    SECRET_ENCRYPTION_KEY: { value: KEY },
-    SECRET_ENCRYPTION_KEY_PREVIOUS: { value: undefined },
-    App: { stage: 'test' },
-  },
+  Resource: new Proxy(
+    { App: { stage: 'test' } },
+    {
+      get: (target, name: string) =>
+        name in target ? target[name as 'App'] : { value: resource.values[name] },
+    }
+  ),
 }));
+// Route the aws-kms provider's unwrap to a fake instead of a real KMS client.
+vi.mock('@bike4mind/utils/security', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils/security')>();
+  return {
+    ...actual,
+    createAwsKmsKeyProvider: (opts: Parameters<typeof actual.createAwsKmsKeyProvider>[0]) =>
+      actual.createAwsKmsKeyProvider({ ...opts, decrypt: kms.decrypt }),
+  };
+});
 
-describe('connectDB seam registers the at-rest key from SST resources', () => {
+describe('loadKeyringFromResource', () => {
   beforeEach(() => {
-    // Simulate a fresh process that has NOT imported @server/utils/config: no key registered.
-    configureSecretsAtRest(undefined);
+    resetKeyringForTests();
+    kms.decrypt.mockReset();
+    resource.values = { SECRET_ENCRYPTION_KEY: KEY };
   });
 
-  it('lets a config-less process decrypt a stored sensitive value after the seam runs', async () => {
-    const cipher = encryptSecret('sk-secret-from-a-script', KEY);
+  it('self-host: no wrapped blob selects the static provider and decrypts v1/v2 values', async () => {
+    const { loadKeyringFromResource, selectKeyProvider } = await import('./security/loadKeyringFromResource');
+    expect(selectKeyProvider(KEY, () => undefined).name).toBe('static');
+    await loadKeyringFromResource();
+    expect(getStageDataKey()?.id).toBe('static');
+    expect(decryptAtRest(encryptSecret('sk-secret-from-a-script', KEY))).toBe('sk-secret-from-a-script');
+    expect(kms.decrypt).not.toHaveBeenCalled();
+  });
 
-    // Before the seam runs this is the P1 gap: unconfigured, so it cannot decrypt and
-    // returns '' (never the raw ciphertext).
-    expect(decryptAtRest(cipher)).toBe('');
+  it('a wrapped blob selects aws-kms; a failed unwrap is retried by the next load', async () => {
+    resource.values.SECRET_DATA_KEY_WRAPPED = Buffer.from('blob').toString('base64');
+    const { loadKeyringFromResource } = await import('./security/loadKeyringFromResource');
+    kms.decrypt.mockRejectedValueOnce(new Error('kms down')).mockResolvedValueOnce(new Uint8Array(DATA_KEY));
 
-    const { configureSecretsAtRestFromResource } = await import('./priceCatalogBootstrap');
-    configureSecretsAtRestFromResource();
+    await expect(loadKeyringFromResource()).rejects.toThrow('kms down');
+    // Legacy keys still serve v1/v2 while the unwrap is down.
+    expect(decryptAtRest(encryptSecret('still-readable', KEY))).toBe('still-readable');
+    expect(getStageDataKey()).toBeNull();
 
-    // The seam sourced the key from Resource, so the same module-scoped state now decrypts.
-    expect(decryptAtRest(cipher)).toBe('sk-secret-from-a-script');
+    await loadKeyringFromResource();
+    expect(getStageDataKey()?.key).toBe(DATA_KEY.toString('hex'));
+    expect(kms.decrypt).toHaveBeenCalledTimes(2);
   });
 });
