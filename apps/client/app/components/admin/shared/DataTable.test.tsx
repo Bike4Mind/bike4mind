@@ -67,6 +67,16 @@ describe('DataTable', () => {
     expect(getComputedStyle(frame).borderWidth).toBe('0px');
   });
 
+  it('stripes alternate rows only when asked', () => {
+    const cellBackground = () =>
+      getComputedStyle(screen.getAllByRole('row')[1].querySelector('td') as HTMLElement).backgroundColor;
+    const { unmount } = renderTable();
+    const plain = cellBackground();
+    unmount();
+    renderTable({ stripe: 'odd' });
+    expect(cellBackground()).not.toBe(plain);
+  });
+
   it('offers a way back from an empty server page past the end', () => {
     const onPageChange = vi.fn();
     renderTable({
