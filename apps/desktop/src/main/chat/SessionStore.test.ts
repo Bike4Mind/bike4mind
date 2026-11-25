@@ -55,6 +55,15 @@ describe('SessionStore', () => {
     expect((await new SessionStore(directory, MODEL).get(created.id))?.historyEnabled).toBe(true);
   });
 
+  it('reads after a write already queued for the session', async () => {
+    const { id } = await store.create();
+    const message = { id: 'm1', role: 'user', content: 'hello', createdAt: new Date().toISOString() } as const;
+    const write = store.appendMessage(id, message);
+    const read = store.getAfterWrites(id);
+    await write;
+    expect((await read)?.messages.map(stored => stored.id)).toEqual(['m1']);
+  });
+
   it('keeps a title given at creation over the first prompt, in one write', async () => {
     const { id } = await store.create(MODEL, { title: 'Tidy imports' });
     await store.appendMessage(id, {
@@ -958,6 +967,29 @@ describe('modes', () => {
 
       expect(await store.get(created.id)).toBeNull();
     });
+  });
+});
+
+describe('Studio mode', () => {
+  it('keeps a Studio session Studio across a fresh read, with no project', async () => {
+    const { store, directory } = await freshStore();
+    const created = await store.create(MODEL, { mode: 'studio' });
+    expect(created.mode).toBe('studio');
+
+    const reopened = new SessionStore(directory, MODEL);
+    const read = await reopened.get(created.id);
+    expect(read?.mode).toBe('studio');
+    expect(read?.project).toBeUndefined();
+    expect((await reopened.list()).find(entry => entry.id === created.id)?.mode).toBe('studio');
+  });
+
+  it('reads a mode it does not know as Chat', async () => {
+    const { store, directory } = await freshStore();
+    const created = await store.create(MODEL);
+    const file = join(directory, `${created.id}.json`);
+    const raw = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    await writeFile(file, JSON.stringify({ ...raw, mode: 'agents' }), 'utf8');
+    expect((await new SessionStore(directory, MODEL).get(created.id))?.mode).toBe('chat');
   });
 });
 

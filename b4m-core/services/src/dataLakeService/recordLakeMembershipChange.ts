@@ -36,6 +36,8 @@ export interface RecordLakeMembershipChangeParams {
   undoesEventId?: string;
   /** This row is a side effect of that event, so it has no Undo of its own. */
   causedByEventId?: string;
+  /** A pre-minted id, for a caller that must name the row before it is written. */
+  eventId?: string;
 }
 
 /**
@@ -45,7 +47,7 @@ export interface RecordLakeMembershipChangeParams {
  * of truth), so throwing here would report a failed join/leave that in fact succeeded.
  */
 export async function recordLakeMembershipChange(
-  { actor, lake, fabFileId, action, origin, undoesEventId, causedByEventId }: RecordLakeMembershipChangeParams,
+  { actor, lake, fabFileId, action, origin, undoesEventId, causedByEventId, eventId }: RecordLakeMembershipChangeParams,
   { db, logger }: LakeMembershipAuditAdapters
 ): Promise<void> {
   const events = db.lakeMembershipChangeEvents;
@@ -79,6 +81,7 @@ export async function recordLakeMembershipChange(
       origin,
       undoesEventId,
       causedByEventId,
+      eventId,
     });
   } catch (err) {
     logAuditLoss('[dataLakes] lake membership changed but the audit event did not persist', {

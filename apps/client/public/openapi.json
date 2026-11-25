@@ -2681,6 +2681,7 @@
             "type": "string",
             "enum": [
               "account_suspended",
+              "billing_organization_mismatch",
               "model_requires_subscription",
               "org_model_not_allowed",
               "spend_frozen"
@@ -3441,6 +3442,14 @@
             "type": "string",
             "description": "Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: \"invalid_end_user_id\"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: \"end_user_id_not_allowed\"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier."
           },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Organization whose credit pool pays for this call, or null for personal credits. Omitted: personal credits for a signed-in user. With `run`, send the `organization_id` the run was minted with. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
+          },
           "options": {
             "type": "object",
             "properties": {
@@ -3954,6 +3963,31 @@
           "createdAt": "2026-11-10T12:00:00.000Z"
         }
       },
+      "createCompletionRunResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "createCompletionRunRequest": {
         "type": "object",
         "properties": {
@@ -4011,6 +4045,14 @@
             "minimum": 1,
             "maximum": 1000000000,
             "description": "Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one."
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Organization whose credit pool the run's completions pay from, or null for personal credits. Omitted: personal credits for a signed-in user. A completion matches the run only when it bills the same account, so send this same `organization_id` on those completions and on the run's budget, usage and evaluation requests. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
           }
         },
         "example": {
@@ -4247,6 +4289,31 @@
           "committedTokens",
           "committedRequests",
           "receipts"
+        ]
+      },
+      "getCompletionRunEvaluationResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
         ]
       },
       "getCompletionRunEvaluationResponse404": {
@@ -4651,6 +4718,31 @@
           }
         }
       },
+      "getCompletionRunUsageResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "getCompletionRunUsageResponse404": {
         "type": "object",
         "properties": {
@@ -4940,6 +5032,31 @@
           "createdAt": "2026-11-10T12:00:00.000Z"
         }
       },
+      "raiseCompletionRunBudgetResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "raiseCompletionRunBudgetResponse404": {
         "type": "object",
         "properties": {
@@ -5000,6 +5117,14 @@
             "minimum": 1,
             "maximum": 1000000000,
             "description": "The run's new budget, in credits. Must be above the current one: a budget is only ever raised."
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
           }
         },
         "required": [
@@ -21324,6 +21449,17 @@
                             "null"
                           ]
                         },
+                        "undoable": {
+                          "type": "boolean",
+                          "description": "True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported."
+                        },
+                        "undone_by_event_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The row that undid this one. Null when this row was not undone, or the undoing row is outside the window."
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -21515,6 +21651,8 @@
                         "changed_at",
                         "principal_kind",
                         "principal_name",
+                        "undoable",
+                        "undone_by_event_id",
                         "manage_rung",
                         "action",
                         "changes"
@@ -21550,6 +21688,17 @@
                             "null"
                           ]
                         },
+                        "undoable": {
+                          "type": "boolean",
+                          "description": "True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported."
+                        },
+                        "undone_by_event_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The row that undid this one. Null when this row was not undone, or the undoing row is outside the window."
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -21570,6 +21719,13 @@
                             "id"
                           ],
                           "description": "The file the row is about."
+                        },
+                        "file_name": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The name of the file. Null when the file no longer exists."
                         },
                         "action": {
                           "type": "string",
@@ -21598,7 +21754,10 @@
                         "changed_at",
                         "principal_kind",
                         "principal_name",
+                        "undoable",
+                        "undone_by_event_id",
                         "target",
+                        "file_name",
                         "action",
                         "origin"
                       ]
@@ -21634,6 +21793,373 @@
         },
         "required": [
           "data"
+        ]
+      },
+      "undoDataLakeConfigChangeResponse200": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "config"
+                    ]
+                  },
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "changed_at": {
+                    "type": "string"
+                  },
+                  "principal_kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "apiKey",
+                      "system"
+                    ]
+                  },
+                  "principal_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "undoable": {
+                    "type": "boolean",
+                    "description": "True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported."
+                  },
+                  "undone_by_event_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The row that undid this one. Null when this row was not undone, or the undoing row is outside the window."
+                  },
+                  "target": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "researchConfig",
+                          "proposal",
+                          "file"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "description": "The thing the row is about. Absent on older rows."
+                  },
+                  "manage_rung": {
+                    "type": "string",
+                    "enum": [
+                      "platform-admin",
+                      "grant-owner",
+                      "creator",
+                      "grant-curator",
+                      "org-admin",
+                      "org-grant",
+                      "system"
+                    ]
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "update",
+                      "visibility",
+                      "transfer-ownership",
+                      "archive",
+                      "unarchive",
+                      "delete",
+                      "restore",
+                      "promote",
+                      "demote",
+                      "purge",
+                      "auto-activate",
+                      "grant-access",
+                      "revoke-access",
+                      "membership-succession",
+                      "approve-proposal",
+                      "auto-approve-proposal",
+                      "decline-proposal",
+                      "restore-proposal",
+                      "create-research-config",
+                      "update-research-config",
+                      "delete-research-config",
+                      "start-research-run",
+                      "complete-research-run",
+                      "create",
+                      "upload-files"
+                    ]
+                  },
+                  "changes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "literal",
+                            "fingerprint"
+                          ]
+                        },
+                        "before": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "A literal change only. Absent means unset on that side."
+                        },
+                        "after": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "A literal change only. Absent means unset on that side."
+                        },
+                        "truncated": {
+                          "type": "boolean",
+                          "description": "A literal string value was clipped."
+                        },
+                        "before_fingerprint": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "length": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "present",
+                            "length"
+                          ],
+                          "description": "A fingerprint change only. Size, never the text."
+                        },
+                        "after_fingerprint": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "length": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "present",
+                            "length"
+                          ],
+                          "description": "A fingerprint change only. Size, never the text."
+                        },
+                        "text_unchanged": {
+                          "type": "boolean",
+                          "description": "A fingerprint change only. The two sides are the same text."
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "kind"
+                      ]
+                    }
+                  },
+                  "lever_changes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "lever": {
+                          "type": "string"
+                        },
+                        "before": {
+                          "description": "Absent or null means unset. A feed address is origin and path only."
+                        },
+                        "after": {
+                          "description": "Null on a delete, which records the setting as it stood."
+                        }
+                      },
+                      "required": [
+                        "lever"
+                      ]
+                    },
+                    "description": "Absent on older rows."
+                  },
+                  "admitted_fab_file_id": {
+                    "type": "string",
+                    "description": "The file an approval admitted."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "event_id",
+                  "changed_at",
+                  "principal_kind",
+                  "principal_name",
+                  "undoable",
+                  "undone_by_event_id",
+                  "manage_rung",
+                  "action",
+                  "changes"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "file"
+                    ]
+                  },
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "changed_at": {
+                    "type": "string"
+                  },
+                  "principal_kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "apiKey",
+                      "system"
+                    ]
+                  },
+                  "principal_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "undoable": {
+                    "type": "boolean",
+                    "description": "True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported."
+                  },
+                  "undone_by_event_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The row that undid this one. Null when this row was not undone, or the undoing row is outside the window."
+                  },
+                  "target": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "researchConfig",
+                          "proposal",
+                          "file"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "description": "The file the row is about."
+                  },
+                  "file_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The name of the file. Null when the file no longer exists."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "file-added",
+                      "file-removed"
+                    ]
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": [
+                      "connector",
+                      "person"
+                    ]
+                  },
+                  "undoes_event_id": {
+                    "type": "string"
+                  },
+                  "caused_by_event_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "event_id",
+                  "changed_at",
+                  "principal_kind",
+                  "principal_name",
+                  "undoable",
+                  "undone_by_event_id",
+                  "target",
+                  "file_name",
+                  "action",
+                  "origin"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The History row the undo wrote. Null when that best-effort write did not persist; the undo still happened."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Consequences of the undo in words, for example a schedule put on hold."
+          }
+        },
+        "required": [
+          "data",
+          "notes"
         ]
       },
       "listImageModelsResponse200": {
@@ -40366,7 +40892,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, the account is suspended (`errorCode: \"account_suspended\"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: \"model_requires_subscription\"`), or the caller's organization policy does not allow the model (`errorCode: \"org_model_not_allowed\"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted.",
+            "description": "The API key does not hold any of the required scopes, the account is suspended (`errorCode: \"account_suspended\"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: \"model_requires_subscription\"`), the caller's organization policy does not allow the model (`errorCode: \"org_model_not_allowed\"`), a signed-in caller named an `organization_id` they are not a member of, or an organization-billed API key named a different `organization_id` (`errorCode: \"billing_organization_mismatch\"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -40585,7 +41111,7 @@
       "post": {
         "operationId": "createCompletionRun",
         "summary": "Create a completion run",
-        "description": "Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: \"run_not_found\"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.\n\nWith `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the model, each completion claims what its first round can cost at its full output budget (less, down to what a short answer costs, when the run has less left) and is capped to that claim, so concurrent completions can never together be admitted past the budget. The claim is priced from an estimate of the input, so a completion that costs more than it claimed is still charged its actual cost, up to what the balance can pay; the run counts that cost and refuses later claims it can no longer cover. A run can go over its budget by at most that miss for each completion in flight. A completion that runs server-side tools claims more the same way before each further round, and ends with `stopReason: \"max_tokens\"` when the run cannot cover one. A completion the budget cannot cover is refused with `422` (`errorCode: \"run_budget_exhausted\"`) before anything is charged. Claims return to the run when their completion settles, fails or is abandoned. The account balance and any organization member caps still apply on their own, and buying credits does not raise a run budget. The budget bounds charged credits, so a deployment that does not charge for completions counts nothing against it.",
+        "description": "Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key or the `organization_id` sent, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: \"run_not_found\"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.\n\nWith `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the model, each completion claims what its first round can cost at its full output budget (less, down to what a short answer costs, when the run has less left) and is capped to that claim, so concurrent completions can never together be admitted past the budget. The claim is priced from an estimate of the input, so a completion that costs more than it claimed is still charged its actual cost, up to what the balance can pay; the run counts that cost and refuses later claims it can no longer cover. A run can go over its budget by at most that miss for each completion in flight. A completion that runs server-side tools claims more the same way before each further round, and ends with `stopReason: \"max_tokens\"` when the run cannot cover one. A completion the budget cannot cover is refused with `422` (`errorCode: \"run_budget_exhausted\"`) before anything is charged. Claims return to the run when their completion settles, fails or is abandoned. The account balance and any organization member caps still apply on their own, and buying credits does not raise a run budget. The budget bounds charged credits, so a deployment that does not charge for completions counts nothing against it.",
         "tags": [
           "AI"
         ],
@@ -40735,11 +41261,11 @@
             }
           },
           "403": {
-            "description": "Evaluation execution is not enabled for this account.",
+            "description": "Evaluation execution is not enabled for this account; an organization-billed API key named another `organization_id` (`errorCode: \"billing_organization_mismatch\"`); or the caller cannot use the named organization.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/createCompletionRunResponse403"
                 }
               }
             },
@@ -41079,6 +41605,17 @@
             "description": "A run id issued by `POST /api/v1/completion-runs`.",
             "name": "runId",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
+            },
+            "required": false,
+            "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403.",
+            "name": "organization_id",
+            "in": "query"
           }
         ],
         "responses": {
@@ -41119,11 +41656,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "description": "An organization-billed API key named another `organization_id` (`errorCode: \"billing_organization_mismatch\"`), or the caller cannot use the named organization.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/getCompletionRunEvaluationResponse403"
                 }
               }
             },
@@ -41266,6 +41803,17 @@
             "description": "A run id issued by `POST /api/v1/completion-runs`.",
             "name": "runId",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403."
+            },
+            "required": false,
+            "description": "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: \"billing_organization_mismatch\"`). A caller who cannot use the named organization gets a 403.",
+            "name": "organization_id",
+            "in": "query"
           }
         ],
         "responses": {
@@ -41342,11 +41890,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "description": "An organization-billed API key named another `organization_id` (`errorCode: \"billing_organization_mismatch\"`), or the caller cannot use the named organization.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/getCompletionRunUsageResponse403"
                 }
               }
             },
@@ -41355,6 +41903,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -41736,11 +42320,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "description": "An organization-billed API key named another `organization_id` (`errorCode: \"billing_organization_mismatch\"`), or the caller cannot use the named organization.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/raiseCompletionRunBudgetResponse403"
                 }
               }
             },
@@ -41749,6 +42333,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -71329,6 +71949,486 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/data-lakes/<id>/config-history\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/data-lakes/{id}/config-history/{event_id}/undo": {
+      "post": {
+        "operationId": "undoDataLakeConfigChange",
+        "summary": "Undo a config change",
+        "description": "Reverses one config-history row through the ordinary service for the inverse change: a lever edit, a config create or delete, a proposal approval, decline or restore, or a file add or remove. Take `event_id` from the config-history route, and only rows with `undoable: true` apply. A change can be undone once. Returns the row the undo wrote, which may itself be undoable, and `notes` for consequences such as a schedule put on hold. The refusal is a 409 when the row was already undone, a later change touched the same item, the old value no longer passes the current checks (the message names the field), the config no longer exists, or the stored copy needed to restore it has expired.",
+        "tags": [
+          "Data Lake Research"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "event_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The undo was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/undoDataLakeConfigChangeResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `datalake:write`, the caller can read this lake but may not manage it, or Data Lakes are disabled on this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No lake with that id is visible to the caller. A lake that exists but is not yours to read is reported as 404 too, so lake ids cannot be probed through this endpoint. The same 404 answers a history row that does not exist in this lake.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already undone, a later change touched the same item, the old value is no longer valid, the config no longer exists, or the stored copy to restore from has expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "datalake:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/data-lakes/<id>/config-history/<event_id>/undo\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/data-lakes/<id>/config-history/<event_id>/undo\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/data-lakes/<id>/config-history/<event_id>/undo\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }

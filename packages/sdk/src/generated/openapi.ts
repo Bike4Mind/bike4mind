@@ -228,7 +228,7 @@ export interface paths {
     put?: never;
     /**
      * Create a completion run
-     * @description Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: "run_not_found"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.
+     * @description Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key or the `organization_id` sent, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: "run_not_found"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.
      *
      *     With `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the model, each completion claims what its first round can cost at its full output budget (less, down to what a short answer costs, when the run has less left) and is capped to that claim, so concurrent completions can never together be admitted past the budget. The claim is priced from an estimate of the input, so a completion that costs more than it claimed is still charged its actual cost, up to what the balance can pay; the run counts that cost and refuses later claims it can no longer cover. A run can go over its budget by at most that miss for each completion in flight. A completion that runs server-side tools claims more the same way before each further round, and ends with `stopReason: "max_tokens"` when the run cannot cover one. A completion the budget cannot cover is refused with `422` (`errorCode: "run_budget_exhausted"`) before anything is charged. Claims return to the run when their completion settles, fails or is abandoned. The account balance and any organization member caps still apply on their own, and buying credits does not raise a run budget. The budget bounds charged credits, so a deployment that does not charge for completions counts nothing against it.
      */
@@ -1550,6 +1550,26 @@ export interface paths {
     get: operations['getDataLakeConfigHistory'];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/data-lakes/{id}/config-history/{event_id}/undo': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Undo a config change
+     * @description Reverses one config-history row through the ordinary service for the inverse change: a lever edit, a config create or delete, a proposal approval, decline or restore, or a file add or remove. Take `event_id` from the config-history route, and only rows with `undoable: true` apply. A change can be undone once. Returns the row the undo wrote, which may itself be undoable, and `notes` for consequences such as a schedule put on hold. The refusal is a 409 when the row was already undone, a later change touched the same item, the old value no longer passes the current checks (the message names the field), the config no longer exists, or the stored copy needed to restore it has expired.
+     */
+    post: operations['undoDataLakeConfigChange'];
     delete?: never;
     options?: never;
     head?: never;
@@ -3933,7 +3953,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'model_requires_subscription' | 'org_model_not_allowed' | 'spend_frozen';
+      errorCode?:
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'model_requires_subscription'
+        | 'org_model_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -4220,6 +4245,8 @@ export interface components {
       };
       /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier. */
       end_user_id?: string;
+      /** @description Organization whose credit pool pays for this call, or null for personal credits. Omitted: personal credits for a signed-in user. With `run`, send the `organization_id` the run was minted with. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: "billing_organization_mismatch"`). A caller who cannot use the named organization gets a 403. */
+      organization_id?: string | null;
       options?: {
         temperature?: number;
         maxTokens?: number;
@@ -4373,6 +4400,17 @@ export interface components {
       /** Format: date-time */
       createdAt: string;
     };
+    createCompletionRunResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     /**
      * @example {
      *       "rootSessionId": "session-42",
@@ -4392,6 +4430,8 @@ export interface components {
       rootSessionId?: string;
       /** @description Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one. */
       budgetCredits?: number;
+      /** @description Organization whose credit pool the run's completions pay from, or null for personal credits. Omitted: personal credits for a signed-in user. A completion matches the run only when it bills the same account, so send this same `organization_id` on those completions and on the run's budget, usage and evaluation requests. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: "billing_organization_mismatch"`). A caller who cannot use the named organization gets a 403. */
+      organization_id?: string | null;
     };
     getCompletionRunEvaluationResponse200: {
       /** @enum {number} */
@@ -4445,6 +4485,17 @@ export interface components {
           cacheWrite1h?: number;
         }[];
       }[];
+    };
+    getCompletionRunEvaluationResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
     };
     getCompletionRunEvaluationResponse404: {
       error: string;
@@ -4610,6 +4661,17 @@ export interface components {
         remainingCredits: number;
       };
     };
+    getCompletionRunUsageResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     getCompletionRunUsageResponse404: {
       error: string;
       request_id?: string;
@@ -4694,6 +4756,17 @@ export interface components {
       /** Format: date-time */
       createdAt: string;
     };
+    raiseCompletionRunBudgetResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     raiseCompletionRunBudgetResponse404: {
       error: string;
       request_id?: string;
@@ -4724,6 +4797,8 @@ export interface components {
     raiseCompletionRunBudgetRequest: {
       /** @description The run's new budget, in credits. Must be above the current one: a budget is only ever raised. */
       budgetCredits: number;
+      /** @description The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: "billing_organization_mismatch"`). A caller who cannot use the named organization gets a 403. */
+      organization_id?: string | null;
     };
     /**
      * @example {
@@ -10597,6 +10672,10 @@ export interface components {
               /** @enum {string} */
               principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
               principal_name: string | null;
+              /** @description True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported. */
+              undoable: boolean;
+              /** @description The row that undid this one. Null when this row was not undone, or the undoing row is outside the window. */
+              undone_by_event_id: string | null;
               /** @description The thing the row is about. Absent on older rows. */
               target?: {
                 /** @enum {string} */
@@ -10675,12 +10754,18 @@ export interface components {
               /** @enum {string} */
               principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
               principal_name: string | null;
+              /** @description True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported. */
+              undoable: boolean;
+              /** @description The row that undid this one. Null when this row was not undone, or the undoing row is outside the window. */
+              undone_by_event_id: string | null;
               /** @description The file the row is about. */
               target: {
                 /** @enum {string} */
                 kind: 'researchConfig' | 'proposal' | 'file';
                 id: string;
               };
+              /** @description The name of the file. Null when the file no longer exists. */
+              file_name: string | null;
               /** @enum {string} */
               action: 'file-added' | 'file-removed';
               /** @enum {string} */
@@ -10695,6 +10780,122 @@ export interface components {
         window_starts_at: string | null;
         generated_at: string;
       };
+    };
+    undoDataLakeConfigChangeResponse200: {
+      /** @description The History row the undo wrote. Null when that best-effort write did not persist; the undo still happened. */
+      data:
+        | {
+            /** @enum {string} */
+            kind: 'config';
+            event_id: string;
+            changed_at: string;
+            /** @enum {string} */
+            principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
+            principal_name: string | null;
+            /** @description True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported. */
+            undoable: boolean;
+            /** @description The row that undid this one. Null when this row was not undone, or the undoing row is outside the window. */
+            undone_by_event_id: string | null;
+            /** @description The thing the row is about. Absent on older rows. */
+            target?: {
+              /** @enum {string} */
+              kind: 'researchConfig' | 'proposal' | 'file';
+              id: string;
+            };
+            /** @enum {string} */
+            manage_rung:
+              'platform-admin' | 'grant-owner' | 'creator' | 'grant-curator' | 'org-admin' | 'org-grant' | 'system';
+            /** @enum {string} */
+            action:
+              | 'update'
+              | 'visibility'
+              | 'transfer-ownership'
+              | 'archive'
+              | 'unarchive'
+              | 'delete'
+              | 'restore'
+              | 'promote'
+              | 'demote'
+              | 'purge'
+              | 'auto-activate'
+              | 'grant-access'
+              | 'revoke-access'
+              | 'membership-succession'
+              | 'approve-proposal'
+              | 'auto-approve-proposal'
+              | 'decline-proposal'
+              | 'restore-proposal'
+              | 'create-research-config'
+              | 'update-research-config'
+              | 'delete-research-config'
+              | 'start-research-run'
+              | 'complete-research-run'
+              | 'create'
+              | 'upload-files';
+            changes: {
+              field: string;
+              /** @enum {string} */
+              kind: 'literal' | 'fingerprint';
+              /** @description A literal change only. Absent means unset on that side. */
+              before?: string | number | boolean | null;
+              /** @description A literal change only. Absent means unset on that side. */
+              after?: string | number | boolean | null;
+              /** @description A literal string value was clipped. */
+              truncated?: boolean;
+              /** @description A fingerprint change only. Size, never the text. */
+              before_fingerprint?: {
+                present: boolean;
+                length: number;
+              };
+              /** @description A fingerprint change only. Size, never the text. */
+              after_fingerprint?: {
+                present: boolean;
+                length: number;
+              };
+              /** @description A fingerprint change only. The two sides are the same text. */
+              text_unchanged?: boolean;
+            }[];
+            /** @description Absent on older rows. */
+            lever_changes?: {
+              lever: string;
+              /** @description Absent or null means unset. A feed address is origin and path only. */
+              before?: unknown;
+              /** @description Null on a delete, which records the setting as it stood. */
+              after?: unknown;
+            }[];
+            /** @description The file an approval admitted. */
+            admitted_fab_file_id?: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'file';
+            event_id: string;
+            changed_at: string;
+            /** @enum {string} */
+            principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
+            principal_name: string | null;
+            /** @description True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported. */
+            undoable: boolean;
+            /** @description The row that undid this one. Null when this row was not undone, or the undoing row is outside the window. */
+            undone_by_event_id: string | null;
+            /** @description The file the row is about. */
+            target: {
+              /** @enum {string} */
+              kind: 'researchConfig' | 'proposal' | 'file';
+              id: string;
+            };
+            /** @description The name of the file. Null when the file no longer exists. */
+            file_name: string | null;
+            /** @enum {string} */
+            action: 'file-added' | 'file-removed';
+            /** @enum {string} */
+            origin: 'connector' | 'person';
+            undoes_event_id?: string;
+            caused_by_event_id?: string;
+          }
+        | null;
+      /** @description Consequences of the undo in words, for example a schedule put on hold. */
+      notes: string[];
     };
     listImageModelsResponse200: {
       /** @description Best first for a plain text-to-image request: generally available before preview, then flagship tier first, then newest release first. */
@@ -17478,7 +17679,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), or the caller's organization policy does not allow the model (`errorCode: "org_model_not_allowed"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
+      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), the caller's organization policy does not allow the model (`errorCode: "org_model_not_allowed"`), a signed-in caller named an `organization_id` they are not a member of, or an organization-billed API key named a different `organization_id` (`errorCode: "billing_organization_mismatch"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17664,7 +17865,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Evaluation execution is not enabled for this account. */
+      /** @description Evaluation execution is not enabled for this account; an organization-billed API key named another `organization_id` (`errorCode: "billing_organization_mismatch"`); or the caller cannot use the named organization. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17684,7 +17885,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createCompletionRunResponse403'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -17796,7 +17997,10 @@ export interface operations {
   };
   getCompletionRunEvaluation: {
     parameters: {
-      query?: never;
+      query?: {
+        /** @description The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: "billing_organization_mismatch"`). A caller who cannot use the named organization gets a 403. */
+        organization_id?: string;
+      };
       header?: never;
       path: {
         /** @description A run id issued by `POST /api/v1/completion-runs`. */
@@ -17828,7 +18032,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      /** @description An organization-billed API key named another `organization_id` (`errorCode: "billing_organization_mismatch"`), or the caller cannot use the named organization. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17836,7 +18040,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['getCompletionRunEvaluationResponse403'];
         };
       };
       /** @description Evaluation run not found for this owner. */
@@ -17900,7 +18104,10 @@ export interface operations {
   };
   getCompletionRunUsage: {
     parameters: {
-      query?: never;
+      query?: {
+        /** @description The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: "billing_organization_mismatch"`). A caller who cannot use the named organization gets a 403. */
+        organization_id?: string;
+      };
       header?: never;
       path: {
         /** @description A run id issued by `POST /api/v1/completion-runs`. */
@@ -17944,15 +18151,27 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      /** @description An organization-billed API key named another `organization_id` (`errorCode: "billing_organization_mismatch"`), or the caller cannot use the named organization. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['getCompletionRunUsageResponse403'];
         };
       };
       /** @description The run does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`). */
@@ -18112,15 +18331,27 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      /** @description An organization-billed API key named another `organization_id` (`errorCode: "billing_organization_mismatch"`), or the caller cannot use the named organization. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['raiseCompletionRunBudgetResponse403'];
         };
       };
       /** @description The run does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`). */
@@ -30750,6 +30981,205 @@ export interface operations {
         };
       };
       /** @description `limit` is not an integer from 1 to 500. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  undoDataLakeConfigChange: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        event_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The undo was applied. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['undoDataLakeConfigChangeResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `datalake:write`, the caller can read this lake but may not manage it, or Data Lakes are disabled on this deployment. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No lake with that id is visible to the caller. A lake that exists but is not yours to read is reported as 404 too, so lake ids cannot be probed through this endpoint. The same 404 answers a history row that does not exist in this lake. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Already undone, a later change touched the same item, the old value is no longer valid, the config no longer exists, or the stored copy to restore from has expired. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

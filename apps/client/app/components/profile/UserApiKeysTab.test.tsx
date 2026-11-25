@@ -41,7 +41,7 @@ const keyWithSigningSecret = {
 };
 
 const h = vi.hoisted(() => ({
-  keys: [] as any[],
+  keys: [] as Record<string, unknown>[],
   deleteMutate: vi.fn(),
   revokeMutate: vi.fn(),
   createResult: { key: 'b4m_live_newkey123' } as Partial<CreateUserApiKeyResponse>,

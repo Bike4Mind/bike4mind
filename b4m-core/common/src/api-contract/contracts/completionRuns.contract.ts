@@ -1,9 +1,15 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
-import { ApiErrorSchema, RunBudgetNotRaisedErrorSchema, RunNotFoundErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  CompletionRunForbiddenErrorSchema,
+  RunBudgetNotRaisedErrorSchema,
+  RunNotFoundErrorSchema,
+} from '../../schemas/chat';
 import {
   CompletionRunIdParamSchema,
+  CompletionRunOwnerQuerySchema,
   CompletionRunSchema,
   CompletionRunUsageSchema,
   CreateCompletionRunRequestSchema,
@@ -24,7 +30,7 @@ export const createCompletionRunContract = defineEndpoint({
     'Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a ' +
     'root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those ' +
     'requests. The run is bound to the credential that minted it: the same user and the same billing owner ' +
-    '(the organization for an organization-billed API key, otherwise the user), and a completion naming a run ' +
+    '(the organization for an organization-billed API key or the `organization_id` sent, otherwise the user), and a completion naming a run ' +
     'minted by anyone else is refused with `404` (`errorCode: "run_not_found"`). Minting a run charges nothing, ' +
     'and attributing a completion to it never charges that completion twice.\n\n' +
     'With `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the ' +
@@ -60,7 +66,11 @@ export const createCompletionRunContract = defineEndpoint({
       },
     },
     400: { description: 'Evaluation requires a stable rootSessionId.', schema: ApiErrorSchema },
-    403: { description: 'Evaluation execution is not enabled for this account.', schema: ApiErrorSchema },
+    403: {
+      description:
+        'Evaluation execution is not enabled for this account; an organization-billed API key named another `organization_id` (`errorCode: "billing_organization_mismatch"`); or the caller cannot use the named organization.',
+      schema: CompletionRunForbiddenErrorSchema,
+    },
     409: {
       description: 'The evaluation identity already exists with different limits or models.',
       schema: ApiErrorSchema,
@@ -109,6 +119,11 @@ export const raiseCompletionRunBudgetContract = defineEndpoint({
         createdAt: '2026-11-10T12:00:00.000Z',
       },
     },
+    403: {
+      description:
+        'An organization-billed API key named another `organization_id` (`errorCode: "billing_organization_mismatch"`), or the caller cannot use the named organization.',
+      schema: CompletionRunForbiddenErrorSchema,
+    },
     404: {
       description: 'The run does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`).',
       schema: RunNotFoundErrorSchema,
@@ -134,8 +149,14 @@ export const getCompletionRunEvaluationContract = defineEndpoint({
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
   pathParams: CompletionRunIdParamSchema,
+  queryParams: CompletionRunOwnerQuerySchema,
   responses: {
     200: { description: 'Evaluation state and durable request receipts.', schema: CompletionEvaluationStateSchema },
+    403: {
+      description:
+        'An organization-billed API key named another `organization_id` (`errorCode: "billing_organization_mismatch"`), or the caller cannot use the named organization.',
+      schema: CompletionRunForbiddenErrorSchema,
+    },
     404: { description: 'Evaluation run not found for this owner.', schema: RunNotFoundErrorSchema },
     429: { description: 'Rate limit exceeded.', schema: ApiErrorSchema },
   },
@@ -173,6 +194,7 @@ export const getCompletionRunUsageContract = defineEndpoint({
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
   pathParams: CompletionRunIdParamSchema,
+  queryParams: CompletionRunOwnerQuerySchema,
   emitsRateLimitHeaders: true,
   responses: {
     200: {
@@ -190,6 +212,11 @@ export const getCompletionRunUsageContract = defineEndpoint({
         byAttemptTruncated: false,
         budget: { budgetCredits: 5000, committedCredits: 1012, reservedCredits: 600, remainingCredits: 3988 },
       },
+    },
+    403: {
+      description:
+        'An organization-billed API key named another `organization_id` (`errorCode: "billing_organization_mismatch"`), or the caller cannot use the named organization.',
+      schema: CompletionRunForbiddenErrorSchema,
     },
     404: {
       description: 'The run does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`).',

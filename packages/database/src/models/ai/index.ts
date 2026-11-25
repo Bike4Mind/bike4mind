@@ -25,6 +25,7 @@ export * from './DataLakeResearchRunModel';
 export * from './LakeAccessQueryTextModel';
 export * from './LakeConfigChangeEventModel';
 export * from './LakeConfigSnapshotModel';
+export * from './LakeConfigUndoClaimModel';
 export * from './LakeMembershipChangeEventModel';
 export * from './LakeMembershipDecisionModel';
 export * from './LakeMembershipRemovalModel';

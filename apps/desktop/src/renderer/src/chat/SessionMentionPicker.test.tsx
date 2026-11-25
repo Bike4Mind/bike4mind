@@ -107,7 +107,7 @@ describe('sessionMentionMenu', () => {
   }
 
   describe('mentionableSessions', () => {
-    it('drops the open session and archived ones, newest first, with the project folder name', () => {
+    it('drops the open session, archived ones and Studio sessions, newest first, with the project folder name', () => {
       const list = mentionableSessions(
         [
           summary('old', 'Old', { updatedAt: '2026-01-01T00:00:00.000Z' }),
@@ -117,6 +117,7 @@ describe('sessionMentionMenu', () => {
           }),
           summary('cur', 'Current'),
           summary('arch', 'Archived', { archived: true }),
+          summary('studio', 'Poster', { mode: 'studio' }),
         ],
         'cur'
       );

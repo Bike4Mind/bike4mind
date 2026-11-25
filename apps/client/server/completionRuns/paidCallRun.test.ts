@@ -1,12 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, NotFoundError } from '@bike4mind/common';
+import { CreditHolderType, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
-const { findById, resolveApiKeyBillingOrg } = vi.hoisted(() => ({
+const { findById, resolveApiKeyBillingOrg, findUserById, resolveActiveOrg } = vi.hoisted(() => ({
   findById: vi.fn(),
   resolveApiKeyBillingOrg: vi.fn(),
+  findUserById: vi.fn(),
+  resolveActiveOrg: vi.fn(),
 }));
-vi.mock('@bike4mind/database', () => ({ completionRunRepository: { findById } }));
-vi.mock('@server/billing/apiKeyBillingOrg', () => ({ resolveApiKeyBillingOrg }));
+vi.mock('@bike4mind/database', () => ({
+  completionRunRepository: { findById },
+  userRepository: { findById: findUserById },
+}));
+vi.mock('@server/billing/apiKeyBillingOrg', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/apiKeyBillingOrg')>()),
+  resolveApiKeyBillingOrg,
+}));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg }));
 
 import { resolvePaidCallRun } from './paidCallRun';
 
@@ -19,6 +28,8 @@ const orgKeyReq = { user: { id: 'u1' }, apiKeyInfo: { organizationId: 'org-1' } 
 describe('resolvePaidCallRun', () => {
   beforeEach(() => {
     findById.mockReset();
+    findUserById.mockReset();
+    resolveActiveOrg.mockReset();
     resolveApiKeyBillingOrg.mockReset().mockResolvedValue({ kind: 'not_org_billed' });
   });
 
@@ -110,5 +121,38 @@ describe('resolvePaidCallRun', () => {
     const resolved = await resolvePaidCallRun(orgKeyReq, { runId: RUN_ID, role: 'root' }, 'org-1');
 
     expect(resolved?.billingOrganizationId).toBe('org-1');
+  });
+
+  describe('a run bound to the organization the signed-in caller names', () => {
+    const jwtUser = { id: 'u1', isAdmin: false };
+    const org2Run = { runId: RUN_ID, userId: 'u1', ownerType: CreditHolderType.Organization, ownerId: 'org-2' };
+
+    it('finds it under that organization and bills it', async () => {
+      findById.mockResolvedValueOnce(org2Run).mockResolvedValueOnce(org2Run);
+      findUserById.mockResolvedValue(jwtUser);
+      resolveActiveOrg.mockResolvedValue('org-2');
+
+      const resolved = await resolvePaidCallRun(jwtReq, { runId: RUN_ID, role: 'root' }, 'org-2');
+
+      expect(resolveActiveOrg).toHaveBeenCalledWith({ user: jwtUser }, 'org-2');
+      expect(resolved?.billingOrganizationId).toBe('org-2');
+    });
+
+    it('refuses an organization the caller cannot use with a 403', async () => {
+      findById.mockResolvedValue(org2Run);
+      findUserById.mockResolvedValue(jwtUser);
+      resolveActiveOrg.mockRejectedValue(new ForbiddenError('You are not a member of the selected organization.'));
+
+      await expect(resolvePaidCallRun(jwtReq, { runId: RUN_ID, role: 'root' }, 'org-2')).rejects.toMatchObject({
+        statusCode: 403,
+      });
+    });
+
+    it('keeps the plain 404 when no organization is named', async () => {
+      findById.mockResolvedValue(org2Run);
+
+      await expect(resolvePaidCallRun(jwtReq, { runId: RUN_ID, role: 'root' })).rejects.toBeInstanceOf(NotFoundError);
+      expect(resolveActiveOrg).not.toHaveBeenCalled();
+    });
   });
 });

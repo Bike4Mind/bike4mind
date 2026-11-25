@@ -3,7 +3,7 @@ import Link from '@mui/joy/Link';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import type { AccountTier } from '@shared/account';
+import type { AccountTier, BillingAccount } from '@shared/account';
 import { HourglassIcon } from '../chat/icons';
 import {
   FULL_RUNWAY_DAYS,
@@ -159,6 +159,58 @@ export function creditsRingLabel(outlook: CreditOutlook): string {
   }
 }
 
+function PayerCaption({ organization }: { organization: BillingAccount | null }) {
+  return (
+    <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="credits-payer">
+      {organization ? `Paid by ${organization.name}` : 'Personal'}
+    </Typography>
+  );
+}
+
+/**
+ * An organization pool: its balance and nothing projected. The personal burn rate and renewal
+ * describe a different ledger, and the pool's own spend is not readable from here.
+ */
+function OrganizationCreditsHeader({
+  organization,
+  outlook,
+}: {
+  organization: BillingAccount;
+  outlook: CreditOutlook;
+}) {
+  return (
+    <Stack spacing={0.5} sx={{ px: 1, pt: 0.5, pb: 1 }} data-testid="credits-glance" data-payer="organization">
+      <PayerCaption organization={organization} />
+      {organization.credits === null ? (
+        <Typography level="body-sm" textColor="text.tertiary" data-testid="credits-glance-unavailable">
+          Pool balance unavailable.
+        </Typography>
+      ) : (
+        <Typography
+          level="body-sm"
+          fontWeight="lg"
+          sx={{ fontVariantNumeric: 'tabular-nums' }}
+          data-testid="credits-balance"
+        >
+          {formatCredits(organization.credits)} credits
+        </Typography>
+      )}
+      <Typography level="body-xs" textColor="text.tertiary" noWrap>
+        {organization.seats ? `Organization pool \u00b7 ${organization.seats} seats` : 'Organization pool'}
+      </Typography>
+      {outlook.kind === 'empty' && (
+        <Typography
+          level="body-xs"
+          sx={{ px: 1, py: 0.75, borderRadius: 'sm', bgcolor: 'danger.softBg', color: 'danger.softColor' }}
+          data-testid="credits-verdict"
+        >
+          Out of credits.
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+
 /** "1,800 credits expire Nov 27": the next grant to expire within two weeks, as it stands now. */
 export function creditsExpiryNotice(expiry: { amount: number; expiresAt: number }): string {
   const amount = formatCredits(expiry.amount);
@@ -167,7 +219,8 @@ export function creditsExpiryNotice(expiry: { amount: number; expiresAt: number 
 
 /** The credits block at the top of the account menu. */
 export function CreditsMenuHeader({ glance, onTopUp }: { glance: CreditsGlance; onTopUp?: () => void }) {
-  const { outlook, profile } = glance;
+  const { outlook, profile, organization } = glance;
+  if (organization) return <OrganizationCreditsHeader organization={organization} outlook={outlook} />;
   if (outlook.kind === 'unknown') {
     if (!profile) return null;
     return (
@@ -190,7 +243,8 @@ export function CreditsMenuHeader({ glance, onTopUp }: { glance: CreditsGlance; 
   const expiry = upcomingExpiry(profile?.credits.expiring, at);
 
   return (
-    <Stack spacing={1} sx={{ px: 1, pt: 0.5, pb: 1 }} data-testid="credits-glance">
+    <Stack spacing={1} sx={{ px: 1, pt: 0.5, pb: 1 }} data-testid="credits-glance" data-payer="personal">
+      <PayerCaption organization={null} />
       <Stack direction="row" spacing={1.25} alignItems="center">
         <Tooltip title={creditsRingLabel(outlook)} size="sm" placement="bottom-start" variant="soft">
           <Box role="img" aria-label={creditsRingLabel(outlook)} sx={{ display: 'inline-flex', flexShrink: 0 }}>

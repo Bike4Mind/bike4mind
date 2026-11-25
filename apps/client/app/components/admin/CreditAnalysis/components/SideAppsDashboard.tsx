@@ -283,7 +283,14 @@ export const SideAppsDashboard: React.FC = () => {
                 id: 'failure',
                 label: 'Failure rate',
                 numeric: true,
-                render: row => formatPercent(row.outcomes.failureRate),
+                render: row => (
+                  <span
+                    data-testid={`side-apps-failure-rate-${row.clientId}`}
+                    title={row.topFailureCodes?.map(entry => `${entry.code}: ${entry.count}`).join('\n') || undefined}
+                  >
+                    {formatPercent(row.outcomes.failureRate)}
+                  </span>
+                ),
               },
               { id: 'refusals', label: 'Refusals', numeric: true, render: row => row.refusals.total.toLocaleString() },
             ]}

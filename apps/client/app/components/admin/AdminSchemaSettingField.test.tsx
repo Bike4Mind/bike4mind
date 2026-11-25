@@ -9,9 +9,9 @@ const mutateAsync = vi.fn();
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({ data: [{ label: 'quest' }], isError: false }),
 }));
-let updateError: unknown;
+const settingsMockState = vi.hoisted(() => ({ updateError: undefined as unknown }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useUpdateSettings: () => ({ mutate, mutateAsync, isPending: false, error: updateError }),
+  useUpdateSettings: () => ({ mutate, mutateAsync, isPending: false, error: settingsMockState.updateError }),
 }));
 vi.mock('@tanstack/react-router', () => ({
   useBlocker: () => ({ status: 'idle' }),
@@ -45,19 +45,26 @@ const renderField = (key: Key, storedValue: unknown = settingsMap[key].defaultVa
 };
 
 const byId = (id: string) => screen.getByTestId(id);
+// A role query walks the whole field tree, which is large for adminAiConfig, so read the options
+// straight from the listbox the open select controls.
+const openOptions = (selectTestId: string) => {
+  const listbox = document.getElementById(byId(selectTestId).getAttribute('aria-controls') ?? '');
+  expect(listbox).not.toBeNull();
+  return Array.from(listbox?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+};
 const pick = (selectTestId: string, option: string) => {
   fireEvent.click(byId(selectTestId));
-  fireEvent.click(screen.getByRole('option', { name: option }));
+  const match = openOptions(selectTestId).filter(element => element.textContent === option);
+  expect(match).toHaveLength(1);
+  fireEvent.click(match[0]);
 };
 const type = (testId: string, value: string) => fireEvent.change(byId(testId), { target: { value } });
 
 describe('AdminSchemaSettingField', () => {
-  it('never renders [object Object] in hints for an object default', () => {
-    const { container } = renderField('adminAiConfig');
-    const hints = Array.from(container.querySelectorAll('[data-testid$="-hint"]'));
-    expect(hints.length).toBeGreaterThan(0);
-    expect(hints.some(hint => hint.textContent?.includes('{}'))).toBe(true);
-    expect(container.innerHTML).not.toContain('[object Object]');
+  beforeEach(() => {
+    mutate.mockReset();
+    mutateAsync.mockReset();
+    settingsMockState.updateError = undefined;
   });
 
   it('edits and saves per-queue DLQ modes through the existing setting', () => {
@@ -73,26 +80,29 @@ describe('AdminSchemaSettingField', () => {
     );
   });
 
-  beforeEach(() => {
-    mutate.mockReset();
-    mutateAsync.mockReset();
-    updateError = undefined;
-  });
-
   it('renders a select for an enum, with None for a nullable one', () => {
     renderField('abuseAssessmentConfig');
     const model = byId('admin-setting-abuseAssessmentConfig-model-input');
     expect(model).toHaveTextContent('None');
     fireEvent.click(model);
-    const options = screen.getAllByRole('option').map(option => option.textContent);
-    expect(options).toEqual(['None', 'test-decisions', 'gpt-6-luna', 'jev-1.13.0', 'jev-latest']);
+    expect(openOptions('admin-setting-abuseAssessmentConfig-model-input').map(option => option.textContent)).toEqual([
+      'None',
+      'test-decisions',
+      'gpt-6-luna',
+      'jev-1.13.0',
+      'jev-latest',
+    ]);
     expect(byId('admin-setting-abuseAssessmentConfig-model-field')).toHaveTextContent('Model');
   });
 
   it('renders mode as off/shadow/enforce without a None option', () => {
     renderField('autoContainmentConfig');
     fireEvent.click(byId('admin-setting-autoContainmentConfig-mode-input'));
-    expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['off', 'shadow', 'enforce']);
+    expect(openOptions('admin-setting-autoContainmentConfig-mode-input').map(option => option.textContent)).toEqual([
+      'off',
+      'shadow',
+      'enforce',
+    ]);
   });
 
   it('renders a number input with its range, default and help text', () => {
@@ -304,7 +314,7 @@ describe('AdminSchemaSettingField', () => {
   });
 
   it('reads a stored JSON string and shows a save error', () => {
-    updateError = new Error('Server refused the value');
+    settingsMockState.updateError = new Error('Server refused the value');
     renderField('abuseAssessmentConfig', JSON.stringify({ dailyBudgetUsd: 3 }));
     expect((byId('admin-setting-abuseAssessmentConfig-dailyBudgetUsd-input') as HTMLInputElement).value).toBe('3');
     expect(byId('admin-setting-abuseAssessmentConfig-error')).toHaveTextContent('Server refused the value');
@@ -313,8 +323,12 @@ describe('AdminSchemaSettingField', () => {
   describe('adminAiConfig', () => {
     const mode = (feature: string) => `admin-setting-adminAiConfig-features.${feature}.mode-input`;
 
-    it('renders each feature as a nested group with mode off by default', () => {
-      renderField('adminAiConfig');
+    it('renders each feature as a nested group with mode off by default, and no [object Object] hint', () => {
+      const { container } = renderField('adminAiConfig');
+      const hints = Array.from(container.querySelectorAll('[data-testid$="-hint"]'));
+      expect(hints.length).toBeGreaterThan(0);
+      expect(hints.some(hint => hint.textContent?.includes('{}'))).toBe(true);
+      expect(container.innerHTML).not.toContain('[object Object]');
       const group = byId('admin-setting-adminAiConfig-features.feedbackTriage-group');
       expect(group.tagName).toBe('FIELDSET');
       expect(within(group).getByText('Feedback triage')).toBeInTheDocument();

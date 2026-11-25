@@ -4,15 +4,19 @@ import {
   ApiKeyScope,
   CompletionRunUsageSchema,
   CreditHolderType,
+  ForbiddenError,
   NotFoundError,
   RUN_NOT_FOUND_ERROR_CODE,
 } from '@bike4mind/common';
 
-const { contracts, completionRunRepository, creditTransactionRepository } = vi.hoisted(() => ({
-  contracts: [] as { operationId: string; auth: string; scopes?: readonly string[] }[],
-  completionRunRepository: { findById: vi.fn() },
-  creditTransactionRepository: { completionRunSpend: vi.fn() },
-}));
+const { contracts, completionRunRepository, creditTransactionRepository, userRepository, resolveActiveOrg } =
+  vi.hoisted(() => ({
+    contracts: [] as { operationId: string; auth: string; scopes?: readonly string[] }[],
+    completionRunRepository: { findById: vi.fn() },
+    creditTransactionRepository: { completionRunSpend: vi.fn() },
+    userRepository: { findById: vi.fn() },
+    resolveActiveOrg: vi.fn(),
+  }));
 
 vi.mock('@server/middlewares/defineNextRoute', () => ({
   nextRouteForContract: (contract: (typeof contracts)[number]) => {
@@ -25,7 +29,8 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   },
 }));
 vi.mock('@server/middlewares/perUserRateLimit', () => ({ perUserRateLimit: () => vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ completionRunRepository, creditTransactionRepository }));
+vi.mock('@bike4mind/database', () => ({ completionRunRepository, creditTransactionRepository, userRepository }));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg }));
 
 import handler from '../usage';
 
@@ -68,7 +73,7 @@ const storedRun = (overrides: Record<string, unknown> = {}) => ({
 
 const call = async (extra: Record<string, unknown> = {}, runId = RUN_ID) => {
   const { req, res } = createMocks({ method: 'GET' });
-  Object.assign(req, { user: { id: 'user-1' }, validatedParams: { runId }, ...extra });
+  Object.assign(req, { user: { id: 'user-1' }, validatedParams: { runId }, validatedQuery: {}, ...extra });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return res;
 };
@@ -128,6 +133,40 @@ describe('GET /api/v1/completion-runs/{runId}/usage', () => {
       ownerId: 'org-1',
       ownerType: CreditHolderType.Organization,
     });
+  });
+
+  it('finds a signed-in caller run bound to the organization named in the organization_id query', async () => {
+    const jwtUser = { id: 'user-1', isAdmin: false };
+    userRepository.findById.mockResolvedValueOnce(jwtUser);
+    resolveActiveOrg.mockResolvedValueOnce('org-2');
+    completionRunRepository.findById.mockResolvedValue(
+      storedRun({ ownerType: CreditHolderType.Organization, ownerId: 'org-2' })
+    );
+
+    const res = await call({ validatedQuery: { organization_id: 'org-2' } });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(resolveActiveOrg).toHaveBeenCalledWith({ user: jwtUser }, 'org-2');
+    expect(creditTransactionRepository.completionRunSpend).toHaveBeenCalledWith(RUN_ID, {
+      ownerId: 'org-2',
+      ownerType: CreditHolderType.Organization,
+    });
+  });
+
+  it('refuses an organization_id query naming an organization the caller may not use, reading nothing', async () => {
+    userRepository.findById.mockResolvedValueOnce({ id: 'user-1', isAdmin: false });
+    resolveActiveOrg.mockRejectedValueOnce(new ForbiddenError('You are not a member of the selected organization.'));
+
+    await expect(call({ validatedQuery: { organization_id: 'org-9' } })).rejects.toMatchObject({ statusCode: 403 });
+    expect(completionRunRepository.findById).not.toHaveBeenCalled();
+  });
+
+  it('refuses an org-billed key whose organization_id query names another organization', async () => {
+    await expect(call({ apiKeyInfo: ORG_KEY, validatedQuery: { organization_id: 'org-2' } })).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { errorCode: 'billing_organization_mismatch' },
+    });
+    expect(completionRunRepository.findById).not.toHaveBeenCalled();
   });
 
   it('reports a budgeted run against its budget, separating unsettled claims from settled spend', async () => {

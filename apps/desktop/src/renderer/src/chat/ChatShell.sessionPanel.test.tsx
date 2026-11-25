@@ -21,7 +21,7 @@ import { SESSION_PANEL_SPACE } from './sessionPanelState';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 // The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
 vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
   ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),

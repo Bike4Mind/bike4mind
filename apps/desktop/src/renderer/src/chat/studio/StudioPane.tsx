@@ -19,6 +19,7 @@ import type { StudioAsset, StudioMediaKind } from '@shared/studio';
 import { studioAssetTitle } from '@shared/studioAssetTitle';
 import { ArrowLeftIcon, CloseIcon, ImageIcon, MusicIcon, SoundIcon, VideoIcon, VoiceIcon } from '../icons';
 import { thinScrollbarSx } from '../layout';
+import { GenerationPayerNote } from '../../credits/GenerationPayerNote';
 import type { StudioController, StudioCreationDraft } from './controller';
 import { STUDIO_PANE_WIDTH } from './layout';
 import { StudioSettings, defaultStudioSettings } from './StudioSettings';
@@ -31,7 +32,7 @@ export const STUDIO_TILES: readonly { kind: StudioMediaKind; label: string; icon
   { kind: 'sound-effect', label: 'Sound FX', icon: <SoundIcon />, accent: 'danger' },
 ];
 
-const mediaLabel = (kind: StudioMediaKind) => STUDIO_TILES.find(tile => tile.kind === kind)?.label ?? kind;
+export const mediaLabel = (kind: StudioMediaKind) => STUDIO_TILES.find(tile => tile.kind === kind)?.label ?? kind;
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Studio could not complete this operation.';
 const selectSx = {
@@ -245,6 +246,7 @@ function CreationForm({
       >
         Generate
       </Button>
+      <GenerationPayerNote data-testid="studio-payer-note" />
       {error && (
         <Alert size="sm" color="danger" data-testid="studio-creation-error">
           {error}
@@ -472,7 +474,21 @@ function AssetPreview({
   );
 }
 
-function StudioContent({
+/** Why a medium cannot be started right now, or null when it can. Shared with the Studio place's sidebar. */
+export function tileUnavailableReason(
+  controller: StudioController | undefined,
+  kind: StudioMediaKind,
+  unavailableReason?: string
+): string | null {
+  const capability = controller?.capabilities[kind];
+  if (!controller) return unavailableReason ?? 'Studio is not connected yet.';
+  if (!capability) return 'Not supported.';
+  if (capability.status !== 'available') return capability.reason;
+  return controller.busy ? 'Studio is busy.' : null;
+}
+
+/** The pane's body - the medium tiles, a creation form, or an asset preview - with the medium owned by the caller. */
+export function StudioContent({
   controller,
   kind,
   setKind,
@@ -525,16 +541,7 @@ function StudioContent({
         sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.25 }}
       >
         {STUDIO_TILES.map(tile => {
-          const capability = controller?.capabilities[tile.kind];
-          const reason = !controller
-            ? (unavailableReason ?? 'Studio is not connected yet.')
-            : !capability
-              ? 'Not supported.'
-              : capability.status !== 'available'
-                ? capability.reason
-                : controller.busy
-                  ? 'Studio is busy.'
-                  : null;
+          const reason = tileUnavailableReason(controller, tile.kind, unavailableReason);
           return (
             <Box key={tile.kind}>
               <Button

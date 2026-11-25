@@ -195,6 +195,10 @@ export const aiHolders = {
       { path: 'config.lastUpdatedByUserId', matchBy: 'userId', action: 'anonymize' },
     ],
   },
+  LakeConfigUndoClaim: {
+    kind: 'noUserData',
+    note: 'Lake and event ids marking which History rows were undone; names no person.',
+  },
   LakeMembershipChangeEvent: {
     kind: 'holder',
     references: [

@@ -768,7 +768,9 @@ describe('runBudget', () => {
       await service.send(root.id, 'Plan the work');
       await waitStream(0);
 
-      expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), root.id, 500);
+      expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), root.id, 500, {
+        organization_id: null,
+      });
       expect(wire(0).run?.runId).toBe(RUN_A);
       finish(0);
       await idle(root.id);
@@ -815,7 +817,12 @@ describe('runBudget', () => {
       await expect(service.raiseRunBudget(root.id, 1500)).resolves.toEqual({ ok: true, resumed: 1 });
       expect(raise).toHaveBeenCalledWith(BUDGET_PATH, { budgetCredits: 1500 }, expect.anything());
       // The 80% warning named the old budget, so the raise withdraws it.
-      expect(events).toContainEqual({ type: 'context-notice-cleared', sessionId: root.id, kind: 'run-budget' });
+      expect(events).toContainEqual({
+        type: 'context-notice-cleared',
+        sessionId: root.id,
+        seq: expect.any(Number),
+        kind: 'run-budget',
+      });
       await waitStream(0);
       expect(wire(1).run?.runId).toBe(RUN_A);
       finish(0, 'Carried on');
@@ -966,6 +973,7 @@ describe('runBudget', () => {
         {
           type: 'context-notice',
           sessionId: root.id,
+          seq: expect.any(Number),
           message:
             'This orchestration run has committed 82% of its 500-credit budget (350 spent, 60 reserved, 90 left). It pauses when the budget runs out.',
           kind: 'run-budget',

@@ -8,7 +8,7 @@ import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
 import type { AppMenuAction, RendererErrorReport } from './appShell';
-import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
+import type { AccountBilling, AccountCredits, AccountProfile, AccountSelection, SubscribePlanResult } from './account';
 import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -61,6 +61,7 @@ import type {
   ChatQueueEvent,
   ChatQueuedMessage,
   ChatSession,
+  ChatSessionMode,
   ChatSessionStatusEvent,
   ChatSessionExportResult,
   ChatSessionSummary,
@@ -199,6 +200,9 @@ export const IPC_CHANNELS = {
   accountSubscribePlan: 'account:subscribe-plan',
   accountPurchaseCredits: 'account:purchase-credits',
   accountSendFeedback: 'account:send-feedback',
+  accountGetSelection: 'account:get-selection',
+  accountSelectPayer: 'account:select-payer',
+  accountSelectionChanged: 'account:selection-changed',
   usageGetHistory: 'usage:get-history',
   usageGetLocal: 'usage:get-local',
   fleetGetState: 'fleet:get-state',
@@ -786,6 +790,8 @@ export interface CreateSessionRequest {
    * id and before replying, so the row never shows in the default groups first.
    */
   sectionId?: string;
+  /** Omitted means Chat. Code sessions start through their own request; see CreateCodeSessionRequest. */
+  mode?: Exclude<ChatSessionMode, 'code'>;
 }
 
 /**
@@ -937,6 +943,15 @@ export interface DesktopApi {
     /** Resolves when the payment window closes, not as proof of payment. */
     purchaseCredits(packageId: string, acceptedTerms?: boolean): Promise<SubscribePlanResult>;
     sendFeedback(content: string): Promise<FeedbackSubmitResult>;
+    /**
+     * Who pays for credit-spending calls, and the accounts that could. `fresh` re-reads balances
+     * and organizations; otherwise main answers from its last read.
+     */
+    getSelection(fresh?: boolean): Promise<AccountSelection>;
+    /** Null is Personal. Rejects for an organization the user is not listed in. */
+    selectPayer(organizationId: string | null): Promise<AccountSelection>;
+    /** Any pick (this window's included), a fallback to Personal, or a sign-in or out; returns the unsubscribe. */
+    onSelectionChanged(listener: (selection: AccountSelection) => void): () => void;
   };
   usage: {
     /**

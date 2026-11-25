@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -26,7 +26,7 @@ const testFiles = [
 ] as unknown as IFabFileDocument[];
 
 // Every search term the hook is asked for, in order - the observable signal that the debounced
-// filter change has reached the query, so the test never has to sleep on the 500ms debounce.
+// filter change has reached the query.
 const searchParams: (string | undefined)[] = [];
 
 vi.mock('./Item', async () => {
@@ -145,11 +145,20 @@ const renderContent = () => {
   fireEvent.click(screen.getAllByTestId('stub-view-mode-list')[0]);
 };
 
-/** Type a term and wait for the debounced filter change to reach the query. */
+/**
+ * Type a term and run out Filter's 500ms debounce on fake timers. The debounce is module-level, so
+ * the clock must pass it fully before going back to real timers or its pending timer is lost.
+ */
 const search = async (term: string) => {
   const input = screen.getByTestId('file-browser-search-input').querySelector('input');
-  fireEvent.change(input as HTMLInputElement, { target: { value: term } });
-  await waitFor(() => expect(searchParams).toContain(term), { timeout: 2_000 });
+  vi.useFakeTimers();
+  try {
+    fireEvent.change(input as HTMLInputElement, { target: { value: term } });
+    await act(() => vi.advanceTimersByTimeAsync(500));
+  } finally {
+    vi.useRealTimers();
+  }
+  expect(searchParams).toContain(term);
 };
 
 describe('FileBrowserContent - list survives the unfiltered/filtered switch', () => {

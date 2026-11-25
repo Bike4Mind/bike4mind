@@ -40,6 +40,9 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) =>
     lakeConfigSnapshots: {
       deleteForLake: vi.fn(async () => 0),
     },
+    lakeConfigUndoClaims: {
+      deleteForLake: vi.fn(async () => 0),
+    },
     batches: {
       find: vi.fn(async () => [] as never),
       delete: vi.fn(async () => {}),
@@ -334,6 +337,23 @@ describe('cleanupDeletedDataLake', () => {
 
     expect(db.lakeConfigSnapshots.deleteForLake).toHaveBeenCalledWith('lake-1');
     expect(order).toEqual(['configSnapshots', 'lake']);
+  });
+
+  it("cascade-drops the lake's undo claims, before the lake record itself", async () => {
+    const db = makeDb();
+    const order: string[] = [];
+    db.lakeConfigUndoClaims.deleteForLake = vi.fn(async () => {
+      order.push('undoClaims');
+      return 0;
+    });
+    db.dataLakes.delete = vi.fn(async () => {
+      order.push('lake');
+    });
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(db.lakeConfigUndoClaims.deleteForLake).toHaveBeenCalledWith('lake-1');
+    expect(order).toEqual(['undoClaims', 'lake']);
   });
 
   it("sweeps each destroyed document's findings GLOBALLY, so a co-tagged lake keeps no excerpt of it", async () => {
