@@ -23,8 +23,14 @@ vi.mock('@client/app/hooks/useChatInput', () => ({
   useChatInput: { getState: () => ({ setDraft: vi.fn(), setChatInputValue: vi.fn(), requestFocus: vi.fn() }) },
 }));
 
-import { resetTutorialStores } from '../useTutorialStore';
-import { RESUME_FAILED_NOTICE, RESUME_FELL_BACK_NOTICE, useCoreTutorialLauncher } from './useCoreTutorialLauncher';
+import { CORE_TUTORIALS_API_BASE } from '../hostBase';
+import { resetTutorialStores, tutorialStoreFor } from '../useTutorialStore';
+import {
+  RESUME_FAILED_NOTICE,
+  RESUME_FELL_BACK_NOTICE,
+  START_FAILED_NOTICE,
+  useCoreTutorialLauncher,
+} from './useCoreTutorialLauncher';
 
 const firstSteps = {
   id: 'first-steps',
@@ -75,6 +81,15 @@ describe('useCoreTutorialLauncher', () => {
     });
     expect(transport.start).toHaveBeenCalledTimes(1);
     expect(navigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: 'new' } });
+  });
+
+  it('tells the user when the tutorial cannot be started, and goes nowhere', async () => {
+    transport.start.mockRejectedValue(new Error('Network Error'));
+    const launcher = renderLauncher();
+    await act(() => launcher.current.start('first-steps'));
+    expect(toast).toHaveBeenCalledWith(START_FAILED_NOTICE);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(tutorialStoreFor(CORE_TUTORIALS_API_BASE).getState().active).toBeNull();
   });
 
   it('starts over with a notice when the server refuses the resume', async () => {
