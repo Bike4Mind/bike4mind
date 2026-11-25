@@ -1,15 +1,23 @@
 import type { CreditsGlance } from './useCreditsGlance';
-import type { CreditTone } from './creditOutlook';
+import {
+  CRITICAL_RUNWAY_DAYS,
+  formatRunway,
+  LOW_RUNWAY_DAYS_WITHOUT_REFILL,
+  type CreditOutlook,
+  type CreditTone,
+} from './creditOutlook';
 import { formatCredits } from './CreditsGlance';
 
 export type CreditsOrbTone = CreditTone | 'unknown';
 
 export type CreditsOrbState = {
   tone: CreditsOrbTone;
-  /** How full the orb is, 0 to 1. The same runway scale as the menu's ring. */
-  level: number;
   /** The balance being shown, or null when none has been read. */
   balance: number | null;
+  /** The balance as the orb prints it ("38k"), or null when none has been read. */
+  compact: string | null;
+  /** One line on how long the balance lasts, for the popover. Null when there is nothing honest to say. */
+  runway: string | null;
 };
 
 const TONE_PHRASE: Record<CreditsOrbTone, string> = {
@@ -20,33 +28,62 @@ const TONE_PHRASE: Record<CreditsOrbTone, string> = {
 };
 
 /**
- * What the rail orb shows. Tone and level come straight from the outlook, so the orb flips to
- * low and critical on exactly the thresholds the avatar dot used.
+ * What the rail orb shows: the balance as text and a status tone, never a fill. Credits are a
+ * balance with no maximum, so there is no honest denominator for a fill; the tone answers the
+ * real question, how long the balance lasts at the recent pace (expiry-aware, see
+ * `projectRunwayDays`). With no pace to project from, the tone stays neutral.
  */
 export function creditsOrbState({ outlook, organization, profile }: CreditsGlance): CreditsOrbState {
   const balance = organization ? organization.credits : (profile?.credits.balance ?? null);
-  if (outlook.kind === 'unknown') return { tone: 'unknown', level: 0, balance };
-  // The ring leaves `idle` (no burn to project from) empty because a number sits beside it; the
-  // orb has none until clicked, so an idle balance that is positive reads as full, not out.
-  // A level that is not a number (a bad burn read, say) must not read as out while credits remain.
-  const hasBalance = balance !== null && balance > 0;
-  const level = (outlook.kind === 'idle' || !Number.isFinite(outlook.ringFill)) && hasBalance ? 1 : outlook.ringFill;
-  return { tone: outlook.tone, level: Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0, balance };
+  const compact = balance === null ? null : compactCredits(balance);
+  if (outlook.kind === 'unknown') return { tone: 'unknown', balance, compact, runway: null };
+  return {
+    tone: orbTone(outlook),
+    balance,
+    compact,
+    runway: runwayLine(outlook, organization !== null),
+  };
 }
 
-/** The lowest and highest liquid line, as a percent of the orb's height. */
-export const ORB_FILL_FLOOR_PERCENT = 16;
-export const ORB_FILL_CEILING_PERCENT = 78;
+/**
+ * The orb's tone from days of runway alone: low inside a week, critical inside two days or at
+ * zero. Unlike the menu ring's tone, a refill landing later does not turn a long runway amber:
+ * the orb is a glance, and "short of the refill" by a day on a month of runway is not urgent.
+ */
+function orbTone(outlook: Exclude<CreditOutlook, { kind: 'unknown' }>): CreditTone {
+  if (outlook.kind === 'empty') return 'critical';
+  if (outlook.kind === 'idle') return 'ok';
+  if (outlook.runwayDays < CRITICAL_RUNWAY_DAYS) return 'critical';
+  if (outlook.runwayDays < LOW_RUNWAY_DAYS_WITHOUT_REFILL) return 'low';
+  return 'ok';
+}
+
+function runwayLine(outlook: Exclude<CreditOutlook, { kind: 'unknown' }>, organizationPays: boolean): string | null {
+  if (outlook.kind === 'empty') return 'Out of credits';
+  if (outlook.kind === 'idle') return organizationPays ? 'Organization pool' : null;
+  const span = formatRunway(outlook.runwayDays, outlook.expiryKnown);
+  const lead = /^(over|under) /.test(span) ? span.charAt(0).toUpperCase() + span.slice(1) : `About ${span}`;
+  return `${lead} at your recent usage`;
+}
 
 /**
- * How high the orb's liquid stands for a level. A full orb stops below the rim so its surface
- * stays visible (filled to the brim it is a flat disc that reads as empty), and any positive
- * level shows at least a sliver, so only a level of 0 is drawn empty.
+ * A balance in at most four characters, for the 28px orb: "850", "4.2k", "38k", "999k", "2.5M",
+ * "12M", "1B". Always rounded down, so the orb never shows more than there is; the popover
+ * carries the exact figure.
  */
-export function orbFillPercent(level: number): number {
-  if (!Number.isFinite(level) || level <= 0) return 0;
-  const span = ORB_FILL_CEILING_PERCENT - ORB_FILL_FLOOR_PERCENT;
-  return Math.round(ORB_FILL_FLOOR_PERCENT + Math.min(1, level) * span);
+export function compactCredits(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  const whole = Math.floor(value);
+  if (whole < 1_000) return String(whole);
+  if (whole < 10_000) return `${trimDecimal(Math.floor(whole / 100) / 10)}k`;
+  if (whole < 1_000_000) return `${Math.floor(whole / 1_000)}k`;
+  if (whole < 10_000_000) return `${trimDecimal(Math.floor(whole / 100_000) / 10)}M`;
+  if (whole < 1_000_000_000) return `${Math.floor(whole / 1_000_000)}M`;
+  return `${Math.floor(whole / 1_000_000_000)}B`;
+}
+
+function trimDecimal(value: number): string {
+  return value.toFixed(1).replace(/\.0$/, '');
 }
 
 /** The orb's accessible name; always carries the state, since colour alone cannot. */

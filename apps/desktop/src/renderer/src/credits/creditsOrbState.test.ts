@@ -1,19 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountProfile, BillingAccount } from '@shared/account';
 import { creditOutlook, DAY_MS, nextRefillAt } from './creditOutlook';
-import {
-  creditsOrbLabel,
-  creditsOrbState,
-  ORB_FILL_CEILING_PERCENT,
-  ORB_FILL_FLOOR_PERCENT,
-  orbFillPercent,
-} from './creditsOrbState';
+import { compactCredits, creditsOrbLabel, creditsOrbState } from './creditsOrbState';
 import type { CreditsGlance } from './useCreditsGlance';
 
 const NOW = Date.parse('2026-11-24T12:00:00Z');
+const ORGANIZATION: BillingAccount = { id: 'org-1', name: 'Acme', personal: false, credits: 48_200 };
 
-function personal(balance: number, burnPerDay: number, refillInDays: number | null): CreditsGlance {
-  const profile = { credits: { balance, monthlyAllowance: 10_000 }, tier: 'pro' } as AccountProfile;
+function personal(
+  balance: number,
+  burnPerDay: number,
+  refillInDays: number | null,
+  monthlyAllowance: number | null = 10_000
+): CreditsGlance {
+  const profile = { credits: { balance, monthlyAllowance }, tier: 'pro' } as AccountProfile;
   const outlook = creditOutlook({
     balance,
     burnPerDay,
@@ -24,31 +24,80 @@ function personal(balance: number, burnPerDay: number, refillInDays: number | nu
   return { profile, organization: null, outlook, burnPerDay, readAt: NOW };
 }
 
+function organizationPays(credits: number): CreditsGlance {
+  const organization = { ...ORGANIZATION, credits };
+  const outlook = creditOutlook({ balance: credits, burnPerDay: 0, refillAt: null, expiring: undefined, now: NOW });
+  return { ...personal(38_099, 500, null), organization, outlook };
+}
+
 describe('creditsOrbState', () => {
-  it('is ok, filled to the runway, while the balance outlasts the period', () => {
-    const state = creditsOrbState(personal(300_000, 1000, 7));
-    expect(state).toMatchObject({ tone: 'ok', level: 1, balance: 300_000 });
+  it('is neutral with the compact balance and a runway line while the balance lasts', () => {
+    expect(creditsOrbState(personal(38_099, 1800, null))).toEqual({
+      tone: 'ok',
+      balance: 38_099,
+      compact: '38k',
+      runway: 'About 3 weeks at your recent usage',
+    });
   });
 
-  it('is low when credits run out before the refill, with a partial fill', () => {
-    const state = creditsOrbState(personal(4000, 1000, 10));
-    expect(state.tone).toBe('low');
-    expect(state.level).toBeCloseTo(4 / 30);
+  it('stays neutral, with no runway claim, when there is no recent burn', () => {
+    expect(creditsOrbState(personal(38_099, 0, null))).toMatchObject({ tone: 'ok', compact: '38k', runway: null });
+  });
+
+  it('projects a runway for an account with no monthly allowance', () => {
+    const refillAt = nextRefillAt(null, null, NOW);
+    expect(refillAt).toBeNull();
+    const state = creditsOrbState(personal(38_099, 100, null, null));
+    expect(state).toMatchObject({ tone: 'ok', compact: '38k' });
+    expect(state.runway).toMatch(/at your recent usage$/);
+  });
+
+  it('is low inside a week of runway', () => {
+    expect(creditsOrbState(personal(4212, 800, null))).toMatchObject({
+      tone: 'low',
+      compact: '4.2k',
+      runway: 'About 5 days at your recent usage',
+    });
   });
 
   it('is critical inside two days of runway', () => {
-    expect(creditsOrbState(personal(1500, 1000, 10)).tone).toBe('critical');
+    expect(creditsOrbState(personal(900, 1000, null))).toMatchObject({
+      tone: 'critical',
+      runway: 'Under a day at your recent usage',
+    });
   });
 
-  it('is critical and empty at zero credits', () => {
-    expect(creditsOrbState(personal(0, 1000, 10))).toMatchObject({ tone: 'critical', level: 0, balance: 0 });
+  it('is critical and out at zero credits', () => {
+    expect(creditsOrbState(personal(0, 1000, 10))).toMatchObject({
+      tone: 'critical',
+      compact: '0',
+      runway: 'Out of credits',
+    });
   });
 
-  it('is full, not empty, for a positive balance with no recent burn', () => {
-    expect(creditsOrbState(personal(10_000, 0, null))).toMatchObject({ tone: 'ok', level: 1 });
+  it('does not turn amber for a long runway that falls a little short of the refill', () => {
+    // 20 days of runway, refill in 25: the menu calls this short, the orb is a glance.
+    expect(creditsOrbState(personal(20_000, 1000, 25)).tone).toBe('ok');
   });
 
-  it('is unknown, with no fill, before any balance is read', () => {
+  it("shows an organization pool's balance, neutral, since its burn is not known", () => {
+    expect(creditsOrbState(organizationPays(48_200))).toEqual({
+      tone: 'ok',
+      balance: 48_200,
+      compact: '48k',
+      runway: 'Organization pool',
+    });
+  });
+
+  it('is critical and out for an organization pool at zero', () => {
+    expect(creditsOrbState(organizationPays(0))).toMatchObject({
+      tone: 'critical',
+      compact: '0',
+      runway: 'Out of credits',
+    });
+  });
+
+  it('is unknown before any balance is read', () => {
     const glance: CreditsGlance = {
       profile: null,
       organization: null,
@@ -56,92 +105,45 @@ describe('creditsOrbState', () => {
       burnPerDay: null,
       readAt: null,
     };
-    expect(creditsOrbState(glance)).toEqual({ tone: 'unknown', level: 0, balance: null });
-  });
-
-  it("reports an organization pool's balance, not the personal one", () => {
-    const organization: BillingAccount = { id: 'org-1', name: 'Acme', personal: false, credits: 48_200 };
-    const outlook = creditOutlook({ balance: 48_200, burnPerDay: 0, refillAt: null, expiring: undefined, now: NOW });
-    const glance: CreditsGlance = { ...personal(5, 1, null), organization, outlook };
-    expect(creditsOrbState(glance)).toMatchObject({ balance: 48_200, level: 1, tone: 'ok' });
+    expect(creditsOrbState(glance)).toEqual({ tone: 'unknown', balance: null, compact: null, runway: null });
   });
 });
 
-describe('creditsOrbState for the denominators the runway may lack', () => {
-  const organization: BillingAccount = { id: 'org-1', name: 'Acme', personal: false, credits: 48_200 };
-
-  it('is full for a personal payer with no monthly allowance and no burn', () => {
-    const refillAt = nextRefillAt(null, null, NOW);
-    const outlook = creditOutlook({ balance: 38_099, burnPerDay: 0, refillAt, expiring: undefined, now: NOW });
-    const profile = { credits: { balance: 38_099, monthlyAllowance: null }, tier: 'free' } as AccountProfile;
-    const glance: CreditsGlance = { profile, organization: null, outlook, burnPerDay: null, readAt: NOW };
-    expect(creditsOrbState(glance)).toMatchObject({ tone: 'ok', level: 1, balance: 38_099 });
+describe('compactCredits', () => {
+  it.each([
+    [0, '0'],
+    [-5, '0'],
+    [Number.NaN, '0'],
+    [850, '850'],
+    [999.9, '999'],
+    [1000, '1k'],
+    [4212, '4.2k'],
+    [9999, '9.9k'],
+    [38_099, '38k'],
+    [300_000, '300k'],
+    [999_800, '999k'],
+    [1_000_000, '1M'],
+    [2_570_339, '2.5M'],
+    [12_400_000, '12M'],
+    [123_000_000, '123M'],
+    [1_500_000_000, '1B'],
+  ])('prints %s as %s, never rounding up', (value, expected) => {
+    expect(compactCredits(value)).toBe(expected);
   });
 
-  it('projects a runway with no allowance once there is burn, and is ok while it is long', () => {
-    expect(creditsOrbState(personal(38_099, 200, null))).toMatchObject({ tone: 'ok', level: 1 });
-  });
-
-  it('is low with a partial fill when the balance is small and no refill is coming', () => {
-    const state = creditsOrbState(personal(1000, 200, null));
-    expect(state.tone).toBe('low');
-    expect(state.level).toBeCloseTo(5 / 30);
-  });
-
-  it('falls back to full, not empty, when the projected fill is not a number', () => {
-    const projected = creditOutlook({ balance: 38_099, burnPerDay: 1, refillAt: null, expiring: undefined, now: NOW });
-    if (projected.kind !== 'no-refill') throw new Error(`expected a no-refill projection, got ${projected.kind}`);
-    const glance: CreditsGlance = { ...personal(38_099, 0, null), outlook: { ...projected, ringFill: Number.NaN } };
-    expect(creditsOrbState(glance).level).toBe(1);
-  });
-
-  it('shows the organization pool for an org payer and the personal balance otherwise', () => {
-    const personalGlance = personal(38_099, 0, null);
-    const orgOutlook = creditOutlook({ balance: 48_200, burnPerDay: 0, refillAt: null, expiring: undefined, now: NOW });
-    expect(creditsOrbState(personalGlance)).toMatchObject({ balance: 38_099, level: 1, tone: 'ok' });
-    expect(creditsOrbState({ ...personalGlance, organization, outlook: orgOutlook })).toMatchObject({
-      balance: 48_200,
-      level: 1,
-      tone: 'ok',
-    });
-  });
-
-  it('is critical and empty for an organization pool at zero', () => {
-    const empty = { ...organization, credits: 0 };
-    const outlook = creditOutlook({ balance: 0, burnPerDay: 0, refillAt: null, expiring: undefined, now: NOW });
-    expect(creditsOrbState({ ...personal(38_099, 0, null), organization: empty, outlook })).toMatchObject({
-      tone: 'critical',
-      level: 0,
-      balance: 0,
-    });
-  });
-});
-
-describe('orbFillPercent', () => {
-  it('stops a full orb below the rim so its surface stays visible', () => {
-    expect(orbFillPercent(1)).toBe(ORB_FILL_CEILING_PERCENT);
-    expect(ORB_FILL_CEILING_PERCENT).toBeLessThan(100);
-  });
-
-  it('shows at least a sliver for any positive level', () => {
-    expect(orbFillPercent(0.001)).toBeGreaterThanOrEqual(ORB_FILL_FLOOR_PERCENT);
-  });
-
-  it.each([0, -1, Number.NaN, Number.NEGATIVE_INFINITY])('is empty for %s', level => {
-    expect(orbFillPercent(level)).toBe(0);
-  });
-
-  it('rises with the level', () => {
-    expect(orbFillPercent(0.25)).toBeLessThan(orbFillPercent(0.75));
+  it('fits in four characters across every scale', () => {
+    for (const value of [999, 9999, 99_999, 999_999, 9_999_999, 999_999_999, 999_999_999_999]) {
+      expect(compactCredits(value).length).toBeLessThanOrEqual(4);
+    }
   });
 });
 
 describe('creditsOrbLabel', () => {
   it.each([
-    [{ tone: 'ok', level: 1, balance: 1234 }, `Credits: ok, ${(1234).toLocaleString()} credits`],
-    [{ tone: 'low', level: 0.2, balance: 500 }, 'Credits: running low, 500 credits'],
-    [{ tone: 'critical', level: 0, balance: 0 }, 'Credits: almost out, 0 credits'],
-    [{ tone: 'unknown', level: 0, balance: null }, 'Credits: balance unavailable'],
+    [{ tone: 'ok', balance: 1234, compact: '1.2k', runway: null }, `Credits: ok, ${(1234).toLocaleString()} credits`],
+    [{ tone: 'low', balance: 500, compact: '500', runway: null }, 'Credits: running low, 500 credits'],
+    [{ tone: 'critical', balance: 0, compact: '0', runway: 'Out of credits' }, 'Credits: almost out, 0 credits'],
+    [{ tone: 'unknown', balance: null, compact: null, runway: null }, 'Credits: balance unavailable'],
   ] as const)('names the state for %j', (state, label) => {
     expect(creditsOrbLabel(state)).toBe(label);
   });
