@@ -15,8 +15,6 @@ import {
   randomUuid,
 } from '@bike4mind/common';
 
-const makeNonce = randomUuid;
-
 /**
  * The outcome of a launch, so callers can distinguish "text placed in the input"
  * from "dispatched to send" from "skipped because another launch is in flight" -
@@ -111,7 +109,7 @@ export function useLaunchPrompt() {
         setChatInputValue(content);
         const dispatch: IResolvedPromptDispatch = {
           promptId,
-          dispatchNonce: makeNonce(),
+          dispatchNonce: randomUuid(),
           promptContent: content,
           promptName: prompt.name,
           isHidden: false,

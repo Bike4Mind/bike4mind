@@ -21,8 +21,6 @@ import { generateNewSession } from '@client/app/utils/sessionsAPICalls';
 const BRIEF_MAX_LENGTH = 1000;
 const SESSION_NAME_BRIEF_LENGTH = 40;
 
-const makeNonce = randomUuid;
-
 const productLines = (picked: IFabFileDocument | null, brandProducts: readonly string[]): string[] => {
   if (picked) return [`Product photo (Files id): ${picked.id}`];
   const [onFile] = brandProducts;
@@ -112,7 +110,7 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
       ].join('\n');
       const dispatch: IResolvedPromptDispatch = {
         promptId: 'production-direct',
-        dispatchNonce: makeNonce(),
+        dispatchNonce: randomUuid(),
         promptContent,
         promptName: 'Direct production',
         isHidden: false,

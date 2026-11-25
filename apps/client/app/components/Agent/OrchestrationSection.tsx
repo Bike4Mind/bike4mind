@@ -66,8 +66,6 @@ const PICKABLE_TOOLS: string[] = B4MLLMToolsList.filter(t => t in TOOL_MAPPING).
 
 const ITERATION_BOUNDS = { min: 1, max: 100 } as const;
 
-const newVariableId = randomUuid;
-
 const OrchestrationSection: React.FC<OrchestrationSectionProps> = ({ value, onChange, readOnly = false }) => {
   const [expanded, setExpanded] = useState(false);
   const { accessibleTextModels } = useAccessibleModels();
@@ -107,7 +105,7 @@ const OrchestrationSection: React.FC<OrchestrationSectionProps> = ({ value, onCh
 
   const handleAddVariable = useCallback(() => {
     update({
-      defaultVariables: [...value.defaultVariables, { id: newVariableId(), key: '', value: '' }],
+      defaultVariables: [...value.defaultVariables, { id: randomUuid(), key: '', value: '' }],
     });
   }, [update, value.defaultVariables]);
 
