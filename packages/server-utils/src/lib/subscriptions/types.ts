@@ -184,8 +184,9 @@ export interface ISubscription {
   /** When the owner was emailed that dunning cancelled the subscription; the once-only claim. */
   nonPaymentCancelNotifiedAt?: Date;
   /**
-   * Once-only claims for the confirm-payment and unpaid notices, as `<kind>:<invoiceId>`, newest
-   * last and capped. Keyed by invoice so a later invoice that needs the same notice still sends.
+   * Once-only claims for the confirm-payment and unpaid notices, newest last and capped.
+   * Confirm-payment is `payment_action_required:<invoiceId>`, so a later invoice still sends;
+   * unpaid is `unpaid:<subscriptionId>`, released when the subscription recovers.
    */
   billingNoticeKeys?: string[];
   /**
