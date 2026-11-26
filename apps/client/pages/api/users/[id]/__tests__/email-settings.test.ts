@@ -133,7 +133,10 @@ describe('email-settings released platform addresses', () => {
     expect(res._getStatusCode()).toBe(409);
     expect(mockFindOne).toHaveBeenCalledWith({
       _id: { $ne: 'u1' },
-      $or: [{ platformEmailAddress: 'old@example.com' }, { releasedPlatformEmailAddresses: 'old@example.com' }],
+      $or: [
+        { platformEmailAddress: 'old@example.com' },
+        { 'releasedPlatformEmailAddresses.address': 'old@example.com' },
+      ],
     });
     expect(mockUpdate).not.toHaveBeenCalled();
   });
@@ -148,7 +151,7 @@ describe('email-settings released platform addresses', () => {
       'u1',
       {
         $set: { platformEmailAddress: 'new@example.com' },
-        $addToSet: { releasedPlatformEmailAddresses: 'old@example.com' },
+        $push: { releasedPlatformEmailAddresses: { address: 'old@example.com', releasedAt: expect.any(Date) } },
       },
       expect.any(Object)
     );

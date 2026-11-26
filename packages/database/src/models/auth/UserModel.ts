@@ -2663,7 +2663,15 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     platformEmailAddress: { type: String, unique: true, sparse: true },
     authorizedEmailAddresses: { type: [String], default: [] },
     // Addresses this user held before; never reassigned to anyone else.
-    releasedPlatformEmailAddresses: { type: [String], default: undefined },
+    releasedPlatformEmailAddresses: {
+      type: [
+        new Schema(
+          { address: { type: String, required: true }, releasedAt: { type: Date, required: true } },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     preferredVoice: { type: String, default: null },
     voiceOverrideId: { type: String, default: null },
     voiceSystemPromptOverride: { type: String, default: null },
@@ -2967,7 +2975,10 @@ UserSchema.index(
   { partialFilterExpression: { nextBlockBriefAt: { $type: 'date' } }, name: 'user_nextBlockBriefAt' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
-UserSchema.index({ releasedPlatformEmailAddresses: 1 }, { sparse: true, name: 'user_releasedPlatformEmailAddresses' });
+UserSchema.index(
+  { 'releasedPlatformEmailAddresses.address': 1 },
+  { sparse: true, name: 'user_releasedPlatformEmailAddresses_address' }
+);
 
 // Add text index for fast user search in admin panel
 UserSchema.index(

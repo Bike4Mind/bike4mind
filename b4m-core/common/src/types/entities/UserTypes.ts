@@ -919,7 +919,7 @@ export interface IUser extends ICreditHolder {
   authorizedEmailAddresses?: string[];
 
   /** Platform addresses this user held before; they are never reassigned to another user. */
-  releasedPlatformEmailAddresses?: string[];
+  releasedPlatformEmailAddresses?: { address: string; releasedAt: Date }[];
 
   /**
    * User's preferred voice for voice sessions

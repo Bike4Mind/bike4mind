@@ -85,10 +85,11 @@ const handler = baseApi()
           }
 
           // An address stays bound to every user who has held it, so mail still sent to a
-          // released address can never be routed to a different account.
+          // released address can never be routed to a different account. releasedAt is kept so
+          // a cool-down can be added later without a backfill.
           const existingUser = await User.findOne({
             _id: { $ne: userId },
-            $or: [{ platformEmailAddress: requested }, { releasedPlatformEmailAddresses: requested }],
+            $or: [{ platformEmailAddress: requested }, { 'releasedPlatformEmailAddresses.address': requested }],
           });
 
           if (existingUser) {
@@ -110,7 +111,10 @@ const handler = baseApi()
         const updatedUser = await User.findByIdAndUpdate(
           userId,
           releasedAddress
-            ? { $set: updateFields, $addToSet: { releasedPlatformEmailAddresses: releasedAddress } }
+            ? {
+                $set: updateFields,
+                $push: { releasedPlatformEmailAddresses: { address: releasedAddress, releasedAt: new Date() } },
+              }
             : { $set: updateFields },
           { new: true, runValidators: true }
         ).select('platformEmailAddress authorizedEmailAddresses');
