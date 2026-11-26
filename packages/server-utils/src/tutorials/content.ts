@@ -5,6 +5,9 @@ import firstStepsTranscript from './modules/first-steps/transcript.json';
 import { switchingModelsModule } from './modules/switching-models/module';
 import { SWITCHING_MODELS_STEPS } from './modules/switching-models/steps';
 import switchingModelsTranscript from './modules/switching-models/transcript.json';
+import { groundedAnswersModule } from './modules/grounded-answers/module';
+import { GROUNDED_ANSWERS_STEPS } from './modules/grounded-answers/steps';
+import groundedAnswersTranscript from './modules/grounded-answers/transcript.json';
 import { artifactsModule } from './modules/artifacts/module';
 import { ARTIFACTS_STEPS } from './modules/artifacts/steps';
 import artifactsTranscript from './modules/artifacts/transcript.json';
@@ -18,6 +21,13 @@ export const CORE_TUTORIAL_CONTENT: readonly RepoTutorial[] = [
     enabled: true,
     steps: SWITCHING_MODELS_STEPS,
     transcript: switchingModelsTranscript,
+  },
+  {
+    intro: groundedAnswersModule,
+    version: 1,
+    enabled: true,
+    steps: GROUNDED_ANSWERS_STEPS,
+    transcript: groundedAnswersTranscript,
   },
   { intro: artifactsModule, version: 1, enabled: true, steps: ARTIFACTS_STEPS, transcript: artifactsTranscript },
 ];

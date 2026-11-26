@@ -31,6 +31,7 @@ const SETTLE_MS = 2000;
 const QUIET_MS = 150;
 // Any of these means the user took over the page, so the card stops pulling the anchor back.
 const USER_INPUT = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
+const SETTLED = ['transitionend', 'animationend'] as const;
 // Above the host's side drawer and any modal, since an anchor such as a nav item or a solver panel's race
 // button sits in one and the card has to stay pressable over its backdrop.
 const LAYER = 'calc(var(--joy-zIndex-modal, 1300) + 1)';
@@ -155,6 +156,8 @@ function useAnchorRect(anchor: string | undefined, scope: string | undefined, st
     if (container) resize.observe(container);
     window.addEventListener('resize', onLayout);
     window.addEventListener('scroll', onLayout, true);
+    // A drawer or menu that slides in by CSS fires none of the above when it lands, as the phone attach menu does.
+    for (const type of SETTLED) window.addEventListener(type, onLayout, true);
     // A layout shift elsewhere moves the anchor without resizing it, and a modal opening covers it.
     let pending = 0;
     const schedule = () => {
@@ -190,6 +193,7 @@ function useAnchorRect(anchor: string | undefined, scope: string | undefined, st
       resize.disconnect();
       window.removeEventListener('resize', onLayout);
       window.removeEventListener('scroll', onLayout, true);
+      for (const type of SETTLED) window.removeEventListener(type, onLayout, true);
     };
   }, [element, scope, stepKey]);
 

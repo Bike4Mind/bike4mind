@@ -23,6 +23,14 @@ export const CORE_TUTORIALS: readonly CoreTutorial[] = [
     order: 20,
   },
   {
+    id: 'grounded-answers',
+    title: 'Answers from your files',
+    visibility: { public: true },
+    enabled: true,
+    track: 'different',
+    order: 30,
+  },
+  {
     id: 'artifacts',
     title: 'Make a page you can keep',
     visibility: { public: true },

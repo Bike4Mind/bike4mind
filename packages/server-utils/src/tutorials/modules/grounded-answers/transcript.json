@@ -1,0 +1,7 @@
+[
+  {
+    "prompt": "Using sample-team-faq.csv, how many vacation days do new staff get, and who approves them? Quote the line you used.",
+    "reply": "New staff get **22 vacation days a year**, and **their team lead approves each request**.\n\nQuoted line from the file:\n\n> \"New staff get 22 vacation days a year. Your team lead approves each request.\"\n\n(from the `vacation days` row of sample-team-faq.csv)",
+    "attachSheet": true
+  }
+]
