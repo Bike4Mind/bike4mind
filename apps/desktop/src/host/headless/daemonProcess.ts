@@ -29,6 +29,19 @@ export async function runDaemonProcess(options: DaemonProcessOptions): Promise<H
     process.exit(HOST_EXIT_CODES.failure);
   });
 
+  // Installed before the start: the socket answers while the host composes, so `stop` can
+  // signal then, and the shutdown runs once the daemon is up.
+  let received: NodeJS.Signals | null = null;
+  let stop: (() => void) | null = null;
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (received) return;
+    received = signal;
+    logger.warn(`HOST: received ${signal}`);
+    stop?.();
+  };
+  process.once('SIGTERM', onSignal);
+  process.once('SIGINT', onSignal);
+
   let daemon;
   try {
     daemon = await startDaemon({
@@ -51,8 +64,7 @@ export async function runDaemonProcess(options: DaemonProcessOptions): Promise<H
 
   const running = daemon;
   return new Promise(resolve => {
-    const stop = (signal: NodeJS.Signals) => {
-      logger.warn(`HOST: received ${signal}`);
+    stop = () => {
       running.close().then(
         () => resolve(HOST_EXIT_CODES.ok),
         error => {
@@ -61,7 +73,6 @@ export async function runDaemonProcess(options: DaemonProcessOptions): Promise<H
         }
       );
     };
-    process.once('SIGTERM', stop);
-    process.once('SIGINT', stop);
+    if (received) stop();
   });
 }
