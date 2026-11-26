@@ -9,6 +9,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -29,10 +31,13 @@ class BusyBlockBriefControllerTest {
         availability = Availability.BUSY,
     )
 
-    private fun TestScope.controller(syncer: BusyBlockSyncer = BusyBlockSyncer(api, reader) { now }) = BusyBlockBriefController(
+    private fun TestScope.controller(
+        syncer: BusyBlockSyncer = BusyBlockSyncer(api, reader) { now },
+        scope: CoroutineScope = this,
+    ) = BusyBlockBriefController(
         api,
         syncer,
-        this,
+        scope,
         io = StandardTestDispatcher(testScheduler),
         onSaved = { saved += it },
     )
@@ -162,6 +167,24 @@ class BusyBlockBriefControllerTest {
         assertFalse(api.enabled)
         assertEquals(listOf(true, false), saved)
         assertFalse(controller.state.value.isEnabled)
+    }
+
+    @Test
+    fun leavingTheScreenWhileTurningOffStillSendsTheDisable() = runTest {
+        api.enabled = true
+        val screen = Job(coroutineContext[Job])
+        val controller = controller(scope = CoroutineScope(coroutineContext + screen))
+        val gate = CompletableDeferred<Unit>()
+        api.saveGate = gate
+
+        controller.setEnabled(false)
+        runCurrent()
+        screen.cancel()
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(api.enabled)
+        assertEquals(listOf(false), saved)
     }
 
     private class FakeApi : BusyBlocksApi {

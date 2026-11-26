@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -66,7 +67,8 @@ class BusyBlockBriefController(
         }
         scope.launch {
             try {
-                val saved = withContext(io) {
+                // Turning off must reach the server even if the user leaves the screen mid-request.
+                val saved = withContext(if (on) io else io + NonCancellable) {
                     syncer.userSave {
                         api.save(enabled = on, blocks = if (on) syncer.currentBlocks() else emptyList()).also { onSaved(it.enabled) }
                     }
