@@ -568,6 +568,15 @@ describe('WorkItemRepository', () => {
       expect(listed.map(item => item.title)).toEqual(['Open', 'New']);
     });
 
+    it('listForLoop caps the open tickets at the oldest ones', async () => {
+      await ticket('First');
+      await ticket('Second');
+      await ticket('Third');
+
+      const listed = await workItemRepository.listForLoop(USER, LOOP, 1, 2);
+      expect(listed.map(item => item.title)).toEqual(['First', 'Second']);
+    });
+
     it('listReadyForLoop puts a ticket further along before an older one in an earlier stage', async () => {
       const oldest = await ticket('Oldest');
       const along = await ticket('Along', { stage: 'doing' });

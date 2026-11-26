@@ -21,6 +21,9 @@ export {
 /** Closed tickets returned per loop by the tickets route; older ones stay in the DB. */
 export const LOOP_TICKET_CLOSED_WINDOW = 50;
 
+/** Open tickets returned per loop by the tickets route; the oldest come first. */
+export const LOOP_TICKET_OPEN_WINDOW = 500;
+
 /** A ticket parked on its dependencies needs at least one still open, or nothing would ever reopen it. */
 export async function assertBlockedOnSatisfiable(
   userId: string,

@@ -362,8 +362,8 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   /** The loop's tickets the stats read: every non-closed one plus those closed or updated since `since`. */
   listForLoopStats(userId: string, loopId: string, since: Date): Promise<{ items: IWorkItem[]; truncated: boolean }>;
 
-  /** A loop's live tickets: every non-closed one plus the `closedLimit` most recently closed. */
-  listForLoop(userId: string, loopId: string, closedLimit: number): Promise<IWorkItem[]>;
+  /** A loop's live tickets: the oldest `openLimit` non-closed ones (all when omitted) plus the `closedLimit` most recently closed. */
+  listForLoop(userId: string, loopId: string, closedLimit: number, openLimit?: number): Promise<IWorkItem[]>;
 
   softDeleteByLoop(userId: string, loopId: string): Promise<number>;
 

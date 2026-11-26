@@ -4,7 +4,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { loopRepository, loopRunnerPresenceRepository, workItemRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
-import { LOOP_TICKET_CLOSED_WINDOW, ticketRunLimit } from '@server/utils/loopTickets';
+import { LOOP_TICKET_CLOSED_WINDOW, LOOP_TICKET_OPEN_WINDOW, ticketRunLimit } from '@server/utils/loopTickets';
 
 /** A loop's tickets grouped by stage, in the loop's stage order. A ticket in a stage the loop no longer has lists under the first stage. */
 const handler = baseApi({ auth: 'jwtOnly' })
@@ -15,7 +15,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const loop = await loopRepository.findByIdAndUserId(id, req.user!.id);
     if (!loop) throw new NotFoundError('Loop not found for id: ' + id);
 
-    const tickets = await workItemRepository.listForLoop(req.user!.id, loop.id, LOOP_TICKET_CLOSED_WINDOW);
+    const tickets = await workItemRepository.listForLoop(
+      req.user!.id,
+      loop.id,
+      LOOP_TICKET_CLOSED_WINDOW,
+      LOOP_TICKET_OPEN_WINDOW
+    );
     const deps = await workItemRepository.findManyByIdsForUser(
       [...new Set(tickets.flatMap(ticket => ticket.dependencies))],
       req.user!.id

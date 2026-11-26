@@ -1016,7 +1016,7 @@ describe('GET /api/loops/:id/tickets', () => {
     ]);
     expect(stages[1].tickets[0]).toMatchObject({ id: 'a', ready: true });
     expect(stages[2].tickets[0]).toMatchObject({ id: 'c', ready: false });
-    expect(tickets.listForLoop).toHaveBeenCalledWith('u1', OID, 50);
+    expect(tickets.listForLoop).toHaveBeenCalledWith('u1', OID, 50, 500);
   });
 
   it('returns each ticket priority (absent: untriaged, never ready), blockedOn, demoted, epic and stale', async () => {

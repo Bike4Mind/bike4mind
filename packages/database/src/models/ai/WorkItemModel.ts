@@ -320,10 +320,13 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return result.modifiedCount > 0;
   }
 
-  async listForLoop(userId: string, loopId: string, closedLimit: number): Promise<IWorkItem[]> {
+  async listForLoop(userId: string, loopId: string, closedLimit: number, openLimit?: number): Promise<IWorkItem[]> {
     const scope = { userId, loopId, deletedAt: null };
     const [active, closed] = await Promise.all([
-      this.workItemModel.find({ ...scope, status: { $ne: 'closed' } }).sort({ createdAt: 1 }),
+      this.workItemModel
+        .find({ ...scope, status: { $ne: 'closed' } })
+        .sort({ createdAt: 1 })
+        .limit(openLimit ?? 0),
       this.workItemModel
         .find({ ...scope, status: 'closed' })
         .sort({ closedAt: -1 })
