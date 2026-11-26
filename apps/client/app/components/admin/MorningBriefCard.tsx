@@ -15,8 +15,9 @@ export function MorningBriefCard() {
     staleTime: 60_000,
     enabled: allowed,
   });
-  if (!allowed) return null;
   const brief = data?.brief;
+  // Delivery is opt-in per environment, so most environments never have a brief; an empty card is noise.
+  if (!allowed || (data && !brief)) return null;
   return (
     <SectionCard
       title="Morning brief"
