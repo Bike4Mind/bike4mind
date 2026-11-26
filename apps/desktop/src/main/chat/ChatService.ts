@@ -6583,15 +6583,23 @@ export class ChatService {
 
       listSessions: async ({ includeArchived, scope, childrenOnly }) => {
         const all = await this.deps.store.list();
-        return all
+        const rows = all
           .filter(entry => entry.mode !== 'studio')
           .filter(entry =>
             childrenOnly
               ? entry.origin?.parentSessionId === session.id
               : scope === 'all' || entry.project?.directory === project.directory
           )
-          .filter(entry => includeArchived || !entry.archived)
-          .map(entry => ({ ...this.toHostView(entry), title: visibleTitle(entry) }));
+          .filter(entry => includeArchived || !entry.archived);
+        // A reply excerpt is transcript content, so it follows readSession's rule for other projects.
+        const known = rows.some(entry => entry.project?.directory !== project.directory)
+          ? await this.knownSessionIds(session.id)
+          : new Set<string>();
+        return rows.map(entry => {
+          const { lastSnippet, ...view } = this.toHostView(entry);
+          const readable = entry.project?.directory === project.directory || known.has(entry.id);
+          return { ...view, ...(readable && lastSnippet ? { lastSnippet } : {}), title: visibleTitle(entry) };
+        });
       },
 
       readSession: async ref => {
@@ -7496,18 +7504,27 @@ export class ChatService {
    * turn asking about it.
    */
   private async knownTo(callerId: string, targetId: string): Promise<boolean> {
+    return (await this.knownSessionIds(callerId)).has(targetId);
+  }
+
+  /** Every session knownTo would admit for `callerId`, read from one load of its transcript. */
+  private async knownSessionIds(callerId: string): Promise<Set<string>> {
     const caller = await this.deps.store.get(callerId);
-    return (caller?.messages ?? []).some(
-      message =>
-        message.relay?.fromSessionId === targetId ||
-        (message.role === 'user' &&
-          !message.system &&
-          !message.seed &&
-          !message.skill &&
-          // Content, not a flag: a run-here task can merge into a queued typed message on its way in.
-          !message.content.includes(RUN_HERE_PREAMBLE) &&
-          findSessionMentions(message.content).some(mention => mention.sessionId === targetId))
-    );
+    const known = new Set<string>();
+    for (const message of caller?.messages ?? []) {
+      if (message.relay?.fromSessionId) known.add(message.relay.fromSessionId);
+      if (
+        message.role === 'user' &&
+        !message.system &&
+        !message.seed &&
+        !message.skill &&
+        // Content, not a flag: a run-here task can merge into a queued typed message on its way in.
+        !message.content.includes(RUN_HERE_PREAMBLE)
+      ) {
+        for (const mention of findSessionMentions(message.content)) known.add(mention.sessionId);
+      }
+    }
+    return known;
   }
 
   /**

@@ -74,32 +74,46 @@ export function crossingEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 export type ConfigEntry = { scope: string; key: string; value: string };
 export type ScopedConfigReader = (cwd: string) => Promise<ConfigEntry[]>;
 
-const NETWORK_KEYS = '^(credential\\.(.*\\.)?helper|core\\.sshcommand|core\\.askpass)$';
+const NETWORK_KEYS =
+  '^(credential\\.(.*\\.)?helper|core\\.sshcommand|core\\.askpass|core\\.gitproxy|remote\\..+\\.(uploadpack|receivepack))$';
 
-const readScopedConfig: ScopedConfigReader = async directory => {
+/** Repository settings that name a program git runs while it reads or writes work-tree files. */
+const PROGRAM_KEYS =
+  '^(filter\\..+\\.(clean|smudge|process|required)|diff\\..+\\.(textconv|command)|merge\\..+\\.driver)$';
+
+/** `git config --show-scope --get-regexp pattern` in `directory`: [] when nothing matches, null when git could not answer. */
+async function scopedConfig(directory: string, pattern: string, keepValueless: boolean): Promise<ConfigEntry[] | null> {
   const env = await gitCommandEnv(directory);
-  const command = await gitCommand(directory, ['config', '--show-scope', '-z', '--get-regexp', NETWORK_KEYS]);
+  const command = await gitCommand(directory, ['config', '--show-scope', '-z', '--get-regexp', pattern]);
   return new Promise(resolve => {
+    // With no git there is no call to protect; the caller's own lookup reports it.
     if (!command) return resolve([]);
     const { file, args, cwd } = command;
-    execFile(file, args, { cwd, env, timeout: quickGitTimeout(env), windowsHide: true }, (error, stdout) => {
-      if (error) return resolve([]);
+    execFile(file, args, { cwd, env, timeout: quickGitTimeout(env), windowsHide: true }, (error, stdout, stderr) => {
+      if (error) return resolve(error.code === 1 && !error.killed && !stdout && !stderr ? [] : null);
       // `-z` output is `scope\0key\nvalue\0` per entry; a key written without `=` has no value line.
       const fields = stdout.split('\0');
       const entries: ConfigEntry[] = [];
       for (let i = 0; i + 1 < fields.length; i += 2) {
         const newline = fields[i + 1].indexOf('\n');
-        if (newline === -1) continue;
-        entries.push({
-          scope: fields[i],
-          key: fields[i + 1].slice(0, newline),
-          value: fields[i + 1].slice(newline + 1),
-        });
+        if (newline !== -1) {
+          entries.push({
+            scope: fields[i],
+            key: fields[i + 1].slice(0, newline),
+            value: fields[i + 1].slice(newline + 1),
+          });
+        } else if (keepValueless) entries.push({ scope: fields[i], key: fields[i + 1], value: '' });
       }
       resolve(entries);
     });
   });
-};
+}
+
+const readScopedConfig: ScopedConfigReader = async directory =>
+  (await scopedConfig(directory, NETWORK_KEYS, false)) ?? [];
+
+export type ProgramConfigReader = (cwd: string) => Promise<ConfigEntry[] | null>;
+const readProgramConfig: ProgramConfigReader = directory => scopedConfig(directory, PROGRAM_KEYS, true);
 
 // Apple Git reports its bundled config (which sets the osxkeychain helper) as `unknown`.
 const TRUSTED_SCOPES = new Set(['system', 'global', 'unknown']);
@@ -135,5 +149,53 @@ export async function hostNetworkGitArgs(
   if (!env.GIT_ASKPASS && setByRepo('core.askpass')) {
     overrides.push('-c', `core.askPass=${lastTrusted('core.askpass') ?? env.SSH_ASKPASS ?? ''}`);
   }
+  // git keeps the first value of these, so a later `-c` cannot pin them: the transport that runs one is refused instead.
+  const repoSets = (pattern: RegExp) =>
+    entries.some(entry => pattern.test(entry.key) && !TRUSTED_SCOPES.has(entry.scope));
+  if (repoSets(/^remote\..+\.(uploadpack|receivepack)$/)) overrides.push('-c', 'protocol.file.allow=never');
+  if (repoSets(/^core\.gitproxy$/)) overrides.push('-c', 'protocol.git.allow=never');
+  overrides.push('-c', 'protocol.ext.allow=never', '-c', 'fetch.recurseSubmodules=false');
   return [...configArgsFor(cwd, platform), ...overrides, ...args];
+}
+
+/** Thrown when git cannot list the repository's driver programs, or sets one under a name `-c` cannot override. */
+export class UnpinnableGitConfigError extends Error {
+  constructor() {
+    super('The repository config sets a filter, diff or merge program the app does not run.');
+    this.name = 'UnpinnableGitConfigError';
+  }
+}
+
+const programReads = new Map<string, Promise<ConfigEntry[] | null>>();
+
+/**
+ * hostGitArgs for a call that may read or write work-tree files: every filter, diff and merge driver setting the
+ * repository's own config makes is pinned to the user's system/global value, or emptied, which git treats as no
+ * program. Throws when git cannot list the settings or one cannot be pinned.
+ */
+export async function hostWorkTreeGitArgs(
+  args: readonly string[],
+  cwd: string,
+  readConfig: ProgramConfigReader = readProgramConfig,
+  platform: NodeJS.Platform = process.platform
+): Promise<string[]> {
+  let read = readConfig === readProgramConfig ? programReads.get(cwd) : undefined;
+  if (!read) {
+    read = readConfig(cwd);
+    if (readConfig === readProgramConfig) {
+      // Shared only while in flight, so a status and a diff started together read once.
+      programReads.set(cwd, read);
+      const clear = () => programReads.delete(cwd);
+      read.then(clear, clear);
+    }
+  }
+  const entries = await read;
+  if (entries === null) throw new UnpinnableGitConfigError();
+  const pins: string[] = [];
+  for (const key of new Set(entries.filter(entry => !TRUSTED_SCOPES.has(entry.scope)).map(entry => entry.key))) {
+    if (key.includes('=') || key.includes('\n')) throw new UnpinnableGitConfigError();
+    const trusted = entries.filter(entry => entry.key === key && TRUSTED_SCOPES.has(entry.scope)).at(-1)?.value;
+    pins.push('-c', `${key}=${trusted ?? (key.endsWith('.required') ? 'false' : '')}`);
+  }
+  return [...configArgsFor(cwd, platform), ...pins, ...args];
 }
