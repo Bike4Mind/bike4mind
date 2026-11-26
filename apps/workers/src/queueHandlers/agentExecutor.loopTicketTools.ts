@@ -170,6 +170,19 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
     return loop;
   };
 
+  /** A loop whose tickets this run may read: its own, one on its hand-off list, or one it oversees. */
+  const readableLoop = async (id: unknown): Promise<ILoop> => {
+    const loop = await ownLoop(id);
+    if (loop.id === loopId) return loop;
+    const runLoop = await ownLoop(loopId);
+    if (!runLoop.handoffTargets?.includes(loop.id) && !runLoop.oversees?.includes(loop.id)) {
+      throw new BadRequestError(
+        "only this loop's tickets, or those of a loop it hands off to or oversees, can be listed"
+      );
+    }
+    return loop;
+  };
+
   /** A run hand-off of a ticket of this run's loop; shared by loop_ticket_handoff and loop_ticket_update. */
   const handOff = async (params: { id?: unknown; loopId?: unknown; stage?: unknown; note?: unknown }) => {
     const ticket = typeof params.id === 'string' ? await workItemRepository.findByIdForUser(params.id, userId) : null;
@@ -233,7 +246,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
       toolFn: async value =>
         asToolResult(async () => {
           const params = (value ?? {}) as { loopId?: string; stage?: string; status?: string };
-          const loop = await ownLoop(params.loopId ?? loopId);
+          const loop = await readableLoop(params.loopId ?? loopId);
           const statusGiven = WORK_ITEM_STATUSES.includes(params.status as WorkItemStatus);
           const tickets = await workItemRepository.listForUser(
             userId,
@@ -274,11 +287,15 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
       toolSchema: {
         name: 'loop_ticket_list',
         description:
-          "List the tickets of this loop (or another of the owner's loops by loopId), with their stage and status. Closed tickets are left out unless you pass status: 'closed'; closedOmitted counts them. Tickets marked desktopRunner sit in a stage the owner's desktop app works: never work, edit or move them.",
+          "List the tickets of this loop (or, by loopId, of a loop on its hand-off list or one it oversees), with their stage and status. Closed tickets are left out unless you pass status: 'closed'; closedOmitted counts them. Tickets marked desktopRunner sit in a stage the owner's desktop app works: never work, edit or move them.",
         parameters: {
           type: 'object',
           properties: {
-            loopId: { type: 'string', description: 'Defaults to the loop this run belongs to.' },
+            loopId: {
+              type: 'string',
+              description:
+                'Defaults to the loop this run belongs to. Otherwise a loop on its hand-off list or one it oversees.',
+            },
             stage: { type: 'string', description: 'Only tickets in this stage.' },
             status: { type: 'string', enum: [...WORK_ITEM_STATUSES], description: 'Only tickets with this status.' },
           },

@@ -673,6 +673,23 @@ describe('loop_ticket_list', () => {
     expect(asked).not.toHaveProperty('closedOmitted');
   });
 
+  it('lists a loop on the hand-off list or one this loop oversees, never another of the owner', async () => {
+    const OVERSEEN = '507f1f77bcf86cd799439014';
+    const OTHER = '507f1f77bcf86cd799439015';
+    loops.findByIdAndUserId.mockImplementation(async (id: string) =>
+      id === OWN ? loop(OWN, { oversees: [OVERSEEN] }) : [SIBLING, OVERSEEN, OTHER].includes(id) ? loop(id) : null
+    );
+    expect(JSON.parse(await run(tools(), 'loop_ticket_list', { loopId: SIBLING })).loopId).toBe(SIBLING);
+    expect(JSON.parse(await run(tools(), 'loop_ticket_list', { loopId: OVERSEEN })).loopId).toBe(OVERSEEN);
+    expect(await run(tools(), 'loop_ticket_list', { loopId: OTHER })).toMatch(/^Error: only this loop's tickets/);
+    expect(items.listForUser).not.toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ loopId: OTHER }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it('says in its description that closed tickets are left out', () => {
     const schema = tools().loop_ticket_list.implementation({ userId: 'u1' } as never).toolSchema;
     expect(schema.description).toMatch(/status: 'closed'/);
