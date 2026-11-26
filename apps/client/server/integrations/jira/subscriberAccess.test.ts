@@ -42,6 +42,29 @@ describe('canSubscriberViewJiraEvent', () => {
     );
   });
 
+  it('checks the comment itself for comment events, so comment visibility applies', async () => {
+    const payload = {
+      webhookEvent: 'comment_created',
+      issue: { key: 'SEC-7', fields: {} },
+      comment: { id: '10042', visibility: { type: 'role', value: 'Administrators' } },
+    };
+    fetchMock.mockImplementation(async (url: string) => ({ ok: !url.includes('/comment/') }));
+    await expect(canSubscriberViewJiraEvent({ subscriberUserId: 'u1', config, payload })).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.atlassian.com/ex/jira/cloud-1/rest/api/3/issue/SEC-7/comment/10042',
+      expect.anything()
+    );
+  });
+
+  it('checks the issue for comment_deleted, which has no readable comment', async () => {
+    const payload = { webhookEvent: 'comment_deleted', issue: { key: 'SEC-7', fields: {} }, comment: { id: '10042' } };
+    await expect(canSubscriberViewJiraEvent({ subscriberUserId: 'u1', config, payload })).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.atlassian.com/ex/jira/cloud-1/rest/api/3/issue/SEC-7?fields=project',
+      expect.anything()
+    );
+  });
+
   it('denies a subscriber no longer connected to the config site', async () => {
     mockGetValidTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt', cloudId: 'other', siteUrl: 'x' });
     await expect(canSubscriberViewJiraEvent({ subscriberUserId: 'u1', config, payload: issuePayload })).resolves.toBe(

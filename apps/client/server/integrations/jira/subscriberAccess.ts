@@ -14,6 +14,12 @@ function issueKeyOf(payload: Record<string, unknown>): string | undefined {
   return typeof key === 'string' && ISSUE_KEY_PATTERN.test(key) ? key : undefined;
 }
 
+function commentIdOf(payload: Record<string, unknown>): string | undefined {
+  const id = (payload.comment as { id?: unknown } | undefined)?.id;
+  const value = typeof id === 'number' ? String(id) : id;
+  return typeof value === 'string' && /^\d+$/.test(value) ? value : undefined;
+}
+
 function projectKeyOf(payload: Record<string, unknown>): string | undefined {
   const issue = payload.issue as { fields?: { project?: { key?: unknown } } } | undefined;
   const key = issue?.fields?.project?.key ?? (payload.project as { key?: unknown } | undefined)?.key;
@@ -74,6 +80,14 @@ export async function canSubscriberViewJiraEvent({
 
   const issueKey = issueKeyOf(payload);
   if (issueKey && payload.webhookEvent !== 'jira:issue_deleted') {
+    // A comment can carry its own role/group visibility; reading it also proves issue access.
+    const commentId = payload.webhookEvent === 'comment_deleted' ? undefined : commentIdOf(payload);
+    if (commentId) {
+      return canRead(
+        `${apiBase}/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment/${commentId}`,
+        tokens.accessToken
+      );
+    }
     return canRead(`${apiBase}/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=project`, tokens.accessToken);
   }
 
