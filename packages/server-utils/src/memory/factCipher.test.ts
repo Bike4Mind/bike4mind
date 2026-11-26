@@ -270,6 +270,29 @@ describe('master key rotation (previous slot)', () => {
     expect(await createKeyProvider(keyring, newKey, newKey).getDek(user)).toEqual(dek);
   });
 
+  it('keeps explicitly configured providers independent of ambient previous keys', async () => {
+    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'old-secret');
+    try {
+      const { keyring } = await seed(wrapDekUnder(oldKey, dek));
+      await expect(createKeyProvider(keyring, newKey).getDek(user)).rejects.toThrow(/no configured master key/);
+      await expect(createKeyProvider(keyring, undefined).getDek(user)).rejects.toThrow(/no master key configured/);
+      expect(await createKeyProvider(keyring, newKey, oldKey).getDek(user)).toEqual(dek);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('resolves both slots from the environment only for the implicit provider', async () => {
+    vi.stubEnv('MEMORY_KEY_SECRET', 'new-secret');
+    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'old-secret');
+    try {
+      const { keyring } = await seed(wrapDekUnder(oldKey, dek));
+      expect(await createKeyProvider(keyring).getDek(user)).toEqual(dek);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('reports which key opened the value', () => {
     expect(openWrappedDek(wrapDekUnder(oldKey, dek), [newKey, oldKey])?.keyIndex).toBe(1);
     expect(openWrappedDek('raw:abc', [newKey])).toBeNull();

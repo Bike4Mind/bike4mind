@@ -60,7 +60,13 @@ instances that cannot open each other's keys.
    credential backfill in `SELF_HOST.md` does, then run the same three commands with the `tsx --import`
    form shown there. The command prints counts only and is safe to repeat; a second run rewraps 0. It stops
    with exit 2 if any key is stored unwrapped (run `migrate:protect-credentials --maintenance-window` first).
-   `--verify` also decrypts the newest stored fact per principal under the rewrapped key.
+   The initial raw-key census stops before writes. If a raw key appears later, counts include any
+   completed rewraps; those are safe to keep when repeating the procedure.
+   `--dry-run` exits 1 while keys still need rewrapping. The command resolves memory-key secrets in
+   the same environment-first order as the runtime, then falls back to SST resources.
+   `--verify` also decrypts the newest stored fact from the current key incarnation per principal.
+   After an erase and remint, facts created at or before the last erase cannot verify the new key;
+   a principal with no newer encrypted fact is counted as `principals-without-facts`.
 5. Once `--verify` exits 0, clear `MEMORY_KEY_SECRET_PREVIOUS` (`not-configured`) and deploy, then run
    `--verify` again.
 

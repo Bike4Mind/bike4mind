@@ -208,7 +208,8 @@ const isDeployedEnv = (): boolean => {
  * - still SHRED-safe (deletion destroys the key), but NOT confidential against a full DB/backup read.
  *
  * `previousMasterKey` (MEMORY_KEY_SECRET_PREVIOUS) is read-only: it opens DEKs not yet rewrapped during a
- * rotation, and new DEKs are always wrapped under `masterKey`. See docs/security/credential-storage.md.
+ * rotation, and new DEKs are always wrapped under `masterKey`. Omit both key arguments to resolve
+ * configuration; explicit key arguments are independent of the environment. See docs/security/credential-storage.md.
  *
  * Running a deployed stage without the secret voids the "unreadable even in backups" promise -
  * the raw DEK would sit next to the ciphertext - so MINTING a key refuses there. Reads refuse on
@@ -217,9 +218,10 @@ const isDeployedEnv = (): boolean => {
  */
 export function createKeyProvider(
   keyring: Keyring,
-  masterKey = resolveMasterKey(),
-  previousMasterKey = resolvePreviousMasterKey()
+  ...configuredKeys: [] | [masterKey: Buffer | undefined, previousMasterKey?: Buffer]
 ): KeyProvider {
+  const masterKey = configuredKeys.length === 0 ? resolveMasterKey() : configuredKeys[0];
+  const previousMasterKey = configuredKeys.length === 0 ? resolvePreviousMasterKey() : configuredKeys[1];
   const readKeys = [masterKey, previousMasterKey].filter((key): key is Buffer => key !== undefined);
   const store = (dek: Buffer): string => (masterKey ? wrapDekUnder(masterKey, dek) : RAW + dek.toString('base64'));
   return {

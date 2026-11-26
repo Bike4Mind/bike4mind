@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import mongoose, { type mongo } from 'mongoose';
 import { encryptFact, openWrappedDek, wrapDekUnder } from '@bike4mind/server-utils/memory/factCipher';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
-import { rewrapRow, sweepExitCode, sweepMemoryKeys } from './rewrap-memory-keys-sweep';
+import { formatSweep, rewrapRow, sweepExitCode, sweepMemoryKeys } from './rewrap-memory-keys-sweep';
 import { run } from './rewrap-memory-keys';
 
 const mocks = vi.hoisted(() => ({ resources: {} as Record<string, string | undefined> }));
@@ -43,7 +43,10 @@ beforeEach(async () => {
     MONGODB_URI: server.getUri().replace(/\/?$/, '/rewrap_main'),
   };
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 /** Seeds one principal key wrapped under `wrapKey` plus one encrypted fact under its data key. */
 async function seed(wrapKey: Buffer | null, extra: Record<string, unknown> = {}) {
@@ -100,6 +103,68 @@ describe('sweepMemoryKeys', () => {
     const counts = await sweepMemoryKeys(db, keys, 'dry-run');
     expect(counts.wouldRewrap).toBe(2);
     expect(await snapshot()).toBe(before);
+  });
+
+  it('reports unfinished rewraps in the dry-run exit code', async () => {
+    await seed(oldKey);
+    expect(sweepExitCode(await sweepMemoryKeys(db, keys, 'dry-run'))).toBe(1);
+  });
+
+  it('reports a raw key inserted after the preflight count', async () => {
+    await seed(newKey);
+    const count = vi.spyOn(mongoose.mongo.Collection.prototype, 'countDocuments');
+    count.mockImplementationOnce(async () => {
+      await keysColl.insertOne({ principalKind: 'user', principalId: 'late-raw', dek: 'raw:late' });
+      return 0;
+    });
+    const counts = await sweepMemoryKeys(db, keys, 'verify');
+    expect(counts).toMatchObject({ scanned: 2, alreadyCurrent: 1, raw: 1 });
+    expect(sweepExitCode(counts)).toBe(2);
+  });
+
+  it('reports partial progress if a raw key appears during a rewrite', async () => {
+    const row = await seed(oldKey);
+    vi.spyOn(mongoose.mongo.Collection.prototype, 'countDocuments').mockImplementationOnce(async () => {
+      await keysColl.insertOne({ principalKind: 'user', principalId: 'late-rewrite-raw', dek: 'raw:late' });
+      return 0;
+    });
+    const counts = await sweepMemoryKeys(db, keys, 'rewrite');
+    expect(counts).toMatchObject({ scanned: 2, rewrapped: 1, raw: 1 });
+    expect(sweepExitCode(counts)).toBe(2);
+    expect(openWrappedDek((await keysColl.findOne({ _id: row._id }))!.dek, [newKey])?.dek).toEqual(row.dek);
+    expect(formatSweep(counts, 'rewrite')).not.toContain('nothing was written');
+  });
+
+  it('does not treat facts from a destroyed key as evidence against a reminted key', async () => {
+    const destroyedAt = new Date('2026-11-25T10:00:00Z');
+    await seed(newKey, { destroyedAt });
+    const principalId = `u${counter}`;
+    const old = encryptFact(randomBytes(32), 'erased fact');
+    await db.collection('memoryledgerevents').updateOne(
+      { principalId },
+      {
+        $set: {
+          factCipher: old.cipher,
+          factIv: old.iv,
+          factTag: old.tag,
+          createdAt: new Date(destroyedAt.getTime() - 1),
+        },
+      }
+    );
+    const counts = await sweepMemoryKeys(db, keys, 'verify');
+    expect(counts).toMatchObject({ factsChecked: 0, factsUnreadable: 0, principalsWithoutFacts: 1 });
+    expect(sweepExitCode(counts)).toBe(0);
+  });
+
+  it('still verifies a fact created after the latest key destruction', async () => {
+    const destroyedAt = new Date('2026-11-25T10:00:00Z');
+    await seed(newKey, { destroyedAt });
+    await db
+      .collection('memoryledgerevents')
+      .updateOne({ principalId: `u${counter}` }, { $set: { createdAt: new Date(destroyedAt.getTime() + 1) } });
+    const counts = await sweepMemoryKeys(db, keys, 'verify');
+    expect(counts).toMatchObject({ factsChecked: 1, factsUnreadable: 0, principalsWithoutFacts: 0 });
+    expect(sweepExitCode(counts)).toBe(0);
   });
 
   it('leaves a tombstone byte-identical', async () => {
@@ -240,6 +305,27 @@ describe('run (CLI)', () => {
     mocks.resources.MEMORY_KEY_SECRET_PREVIOUS = undefined;
     expect(await run([])).toBe(2);
     expect(await run(['--verify'])).toBe(0);
+  });
+
+  it('uses exported secrets when SST resources contain placeholders', async () => {
+    captureOutput();
+    await seed(oldKey);
+    mocks.resources.MEMORY_KEY_SECRET = 'not-configured';
+    mocks.resources.MEMORY_KEY_SECRET_PREVIOUS = 'not-configured';
+    vi.stubEnv('MEMORY_KEY_SECRET', 'new-secret');
+    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'old-secret');
+    expect(await run([])).toBe(0);
+    expect(await run(['--verify'])).toBe(0);
+  });
+
+  it('uses the same environment-first key precedence as the runtime', async () => {
+    captureOutput();
+    const row = await seed(sha('exported-old'));
+    vi.stubEnv('MEMORY_KEY_SECRET', 'exported-new');
+    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'exported-old');
+    expect(await run([])).toBe(0);
+    const stored = await keysColl.findOne({ _id: row._id });
+    expect(openWrappedDek(stored!.dek, [sha('exported-new')])?.dek).toEqual(row.dek);
   });
 
   it('rejects previous equal to current', async () => {

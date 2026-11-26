@@ -34,6 +34,7 @@ interface KeyRow {
   dek?: string;
   principalKind?: string;
   principalId?: string;
+  destroyedAt?: Date;
 }
 
 type RowOutcome = 'tombstone' | 'raw' | 'current' | 'wouldRewrap' | 'rewrapped' | 'changed' | 'neither';
@@ -84,8 +85,13 @@ const emptySweep = (): MemoryKeySweep => ({
 async function checkFact(db: mongo.Db, row: KeyRow, current: Buffer, counts: MemoryKeySweep): Promise<void> {
   const dek = openWrappedDek(row.dek!, [current])!.dek;
   const event = await db.collection('memoryledgerevents').findOne(
-    { principalKind: row.principalKind, principalId: row.principalId, factCipher: { $type: 'string' } },
-    // Newest first: an older fact can still be sealed under a key destroyed by a partial shred.
+    {
+      principalKind: row.principalKind,
+      principalId: row.principalId,
+      factCipher: { $type: 'string' },
+      ...(row.destroyedAt ? { createdAt: { $gt: row.destroyedAt } } : {}),
+    },
+    // Facts from a previous key incarnation cannot verify the reminted key.
     { sort: { seq: -1 }, projection: { factCipher: 1, factIv: 1, factTag: 1 } }
   );
   if (!event) {
@@ -99,19 +105,27 @@ async function checkFact(db: mongo.Db, row: KeyRow, current: Buffer, counts: Mem
 
 /**
  * Walks every memory principal key once through the raw driver (no hooks, no timestamp changes).
- * Rows stored unwrapped stop a rewrite before any write: they need migrate:protect-credentials.
+ * The initial raw-key census stops a rewrite before writes. Raw keys found later are reported
+ * alongside completed rewraps; they need migrate:protect-credentials before a retry.
  */
 export async function sweepMemoryKeys(db: mongo.Db, keys: MemoryKeys, mode: SweepMode): Promise<MemoryKeySweep> {
   const collection = db.collection<KeyRow>('memoryprincipalkeys');
   const counts = emptySweep();
 
-  counts.raw = await collection.countDocuments({ dek: { $type: 'string', $ne: '', $not: /^enc:/ } });
-  if (counts.raw > 0 && mode !== 'verify') return counts;
+  const rawBeforeWalk = await collection.countDocuments({ dek: { $type: 'string', $ne: '', $not: /^enc:/ } });
+  if (rawBeforeWalk > 0 && mode !== 'verify') {
+    counts.raw = rawBeforeWalk;
+    return counts;
+  }
 
-  for await (const row of collection.find({}, { projection: { dek: 1, principalKind: 1, principalId: 1 } })) {
+  for await (const row of collection.find(
+    {},
+    { projection: { dek: 1, principalKind: 1, principalId: 1, destroyedAt: 1 } }
+  )) {
     counts.scanned++;
     const outcome = await rewrapRow(collection, row, keys, mode);
-    if (outcome === 'tombstone') counts.tombstones++;
+    if (outcome === 'raw') counts.raw++;
+    else if (outcome === 'tombstone') counts.tombstones++;
     else if (outcome === 'current') {
       counts.alreadyCurrent++;
       if (mode === 'verify') await checkFact(db, row, keys.current, counts);
@@ -129,7 +143,11 @@ export async function sweepMemoryKeys(db: mongo.Db, keys: MemoryKeys, mode: Swee
  * stage legitimately has no keys.
  */
 export const sweepExitCode = (counts: MemoryKeySweep): 0 | 1 | 2 =>
-  counts.raw > 0 ? 2 : counts.openedByNeither + counts.changedDuringWrite + counts.factsUnreadable > 0 ? 1 : 0;
+  counts.raw > 0
+    ? 2
+    : counts.openedByNeither + counts.changedDuringWrite + counts.factsUnreadable + counts.wouldRewrap > 0
+      ? 1
+      : 0;
 
 /** Counts only: no key row id and no stored value is ever printed. */
 export function formatSweep(counts: MemoryKeySweep, mode: SweepMode): string {
@@ -149,7 +167,7 @@ export function formatSweep(counts: MemoryKeySweep, mode: SweepMode): string {
   }
   if (counts.raw > 0) {
     lines.push(
-      `raw=${counts.raw}  (stored unwrapped: run migrate:protect-credentials first${mode === 'verify' ? '' : '; nothing was written'})`
+      `raw=${counts.raw}  (stored unwrapped: run migrate:protect-credentials first${mode === 'verify' || counts.rewrapped > 0 ? '' : '; nothing was written'})`
     );
   }
   if (counts.scanned === 0 && counts.raw === 0)

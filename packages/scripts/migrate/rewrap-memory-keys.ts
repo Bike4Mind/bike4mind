@@ -9,18 +9,19 @@
  *               the previous key and write it back under the current key. A second run rewraps 0.
  *   --dry-run   Same walk, no writes.
  *   --verify    Uses the current key alone, reports every key it does not open, and decrypts one
- *               stored fact per principal. Exit 0 here is the condition for clearing
+ *               stored fact from the current key incarnation per principal. Exit 0 here is the condition for clearing
  *               MEMORY_KEY_SECRET_PREVIOUS.
  *
  * Output: counts only. No key row id and no stored value is printed. Exit code: 0 when every key is
  * under the current key, 1 when any key is unreadable or changed while it was written (run again),
  * 2 on a usage or connection error, or when keys are stored unwrapped (run
- * migrate:protect-credentials first; nothing is written). Destroyed principals are skipped.
+ * migrate:protect-credentials first). A preflight raw-key census stops before writes; a raw key
+ * discovered later reports partial progress. Destroyed principals are skipped.
  *
  * Writes go through the raw driver and are conditional on the exact value that was read.
  *
- * Config: MEMORY_KEY_SECRET, MEMORY_KEY_SECRET_PREVIOUS and MONGODB_URI from SST resources (run under
- * `sst shell`), each falling back to the process env (self-host). Procedure:
+ * Config: memory keys use the runtime's process-env-first order, then SST resources. MONGODB_URI
+ * comes from SST resources (`sst shell`), falling back to process env (self-host). Procedure:
  * docs/security/credential-storage.md.
  *
  * Usage:
@@ -53,7 +54,7 @@ const MODE_TITLE: Record<SweepMode, string> = {
   verify: 'VERIFY (current key only)',
 };
 
-const secret = (name: string): string | undefined => getResource(name) ?? process.env[name];
+const secret = (name: string): string | undefined => process.env[name] || getResource(name);
 
 export async function run(argv: string[] = process.argv.slice(2)): Promise<number> {
   if (argv.includes('--help')) {
