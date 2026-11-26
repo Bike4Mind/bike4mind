@@ -86,6 +86,13 @@ public final class BusyBlockSyncer {
     lastOutcome = enabled ? .synced : .skipped(.disabled)
   }
 
+  /// Forgets the last outcome and throttle at a sign-in: a signed-out or opted-out result belongs to the
+  /// previous session and would otherwise keep the background edge from re-arming for the new one.
+  public func sessionDidStart() {
+    lastOutcome = nil
+    lastSync = nil
+  }
+
   private func perform() async -> BusyBlockSyncOutcome {
     do {
       guard try await api.state().enabled else {

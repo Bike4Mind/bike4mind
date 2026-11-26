@@ -138,6 +138,7 @@ struct RootView: View {
       // First sign-in (or a restored launch) is the moment to ask for quiet push authorization.
       Task { await services.push.sessionDidStart() }
       services.questActivities.sessionDidStart()
+      services.busyBlockSyncer.sessionDidStart()
     }
     if plan.releasesPendingRoute {
       services.navigator.releasePendingRoute()

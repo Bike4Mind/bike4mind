@@ -14,7 +14,7 @@ private actor FakeBusyBlocksAPI: BusyBlocksAPI {
 
   init(enabled: Bool) { stored = BusyBlocksState(enabled: enabled, blocks: []) }
 
-  func failState(with error: any Error) { stateError = error }
+  func failState(with error: (any Error)?) { stateError = error }
   func failSave(with error: (any Error)?) { saveError = error }
   func holdState() { holdsState = true }
   func release() {
@@ -304,6 +304,22 @@ final class BusyBlockSyncerTests: XCTestCase {
     let skipped = await syncer.sync()
     XCTAssertEqual(skipped, .skipped(.throttled))
     XCTAssertEqual(syncer.lastOutcome, .skipped(.disabled))
+  }
+
+  func testSessionStartForgetsTheSignedOutOutcomeAndTheThrottle() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+    await syncer.sync()
+    await api.failState(with: APIError.signedOut)
+    await syncer.sync(force: true)
+    XCTAssertEqual(syncer.lastOutcome, .skipped(.signedOut))
+
+    syncer.sessionDidStart()
+
+    XCTAssertNil(syncer.lastOutcome)
+    await api.failState(with: nil)
+    let outcome = await syncer.sync()
+    XCTAssertEqual(outcome, .synced)
   }
 
   func testEnablingWithDeniedAccessRevertsTheToggleAndWritesNothing() async {

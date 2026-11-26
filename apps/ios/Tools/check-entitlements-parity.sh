@@ -108,7 +108,7 @@ permitted=$(plist_values "$APP_INFO_PLIST" BGTaskSchedulerPermittedIdentifiers)
 [ "$permitted" = "\$(PRODUCT_BUNDLE_IDENTIFIER)$refresh_suffix" ] ||
   fail "$APP_INFO_PLIST BGTaskSchedulerPermittedIdentifiers is '$permitted', expected '\$(PRODUCT_BUNDLE_IDENTIFIER)$refresh_suffix'"
 # Without the fetch background mode BGTaskScheduler.submit throws, and that is only logged.
-modes=$(grep 'INFOPLIST_KEY_UIBackgroundModes' "$PROJECT_FILE")
+modes=$(grep 'INFOPLIST_KEY_UIBackgroundModes' "$PROJECT_FILE" || true)
 [ "$(printf '%s\n' "$modes" | grep -c '[" ]fetch[" ;]')" -ge 2 ] ||
   fail "$PROJECT_FILE INFOPLIST_KEY_UIBackgroundModes must include fetch in the Debug and Release app configs"
 [ -z "$(printf '%s\n' "$modes" | grep -v '[" ]fetch[" ;]')" ] ||
