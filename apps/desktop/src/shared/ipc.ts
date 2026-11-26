@@ -1,4 +1,5 @@
 import type { HostBridgeApi } from './hostBridge';
+import type { HostConnectionsApi } from './hostConnection';
 import type { HostResult } from './hostProtocol';
 import type { SkinSummary, SoundPackSummary } from './mods';
 import type { StudioApi } from './studioIpc';
@@ -174,6 +175,12 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
 export const IPC_CHANNELS = {
   hostRequest: 'host:request',
   hostNotification: 'host:notification',
+  hostList: 'host:list',
+  hostConnect: 'host:connect',
+  hostDisconnect: 'host:disconnect',
+  hostRemove: 'host:remove',
+  /** main -> renderer: the whole host list, on every change of any host's connection state. */
+  hostStateChanged: 'host:state-changed',
   studioGet: 'studio:get',
   studioPage: 'studio:page',
   studioJobAction: 'studio:job-action',
@@ -844,7 +851,7 @@ export interface OrchestrateMiniApi {
 
 export interface DesktopApi {
   studio: StudioApi;
-  host: HostBridgeApi;
+  host: HostBridgeApi & HostConnectionsApi;
   library: LibraryApi;
   productions: ProductionsApi;
   getAppInfo(): Promise<AppInfo>;

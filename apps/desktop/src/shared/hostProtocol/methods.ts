@@ -222,6 +222,10 @@ export const hostNotifications = {
   'session/queueChanged': { params: z.object({ event: chatQueueEventPayloadSchema }) },
   'session/taskDecisionsChanged': { params: z.object({ decisions: z.array(pendingTaskDecisionPayloadSchema) }) },
   'host/stateChanged': { params: z.object({ account: hostAccountSchema.nullable() }) },
+  // Never sent by a host: a client's connection layer raises it when it could not resume a
+  // subscription after a reconnect, so the subscriber reads the session with session/get and
+  // subscribes again from the cursor that returns.
+  'session/resyncRequired': { params: sessionIdParams },
 } as const satisfies Record<string, { params: ZodType }>;
 
 export type HostMethod = keyof typeof hostMethods;

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   HOST_ERROR_CODES,
+  HostConnectError,
   HostRequestError,
   hostFailure,
   hostNotification,
@@ -11,7 +12,7 @@ import {
 } from '@shared/hostProtocol';
 import { createInProcessTransport } from './inProcessTransport';
 
-function fakeServer(answer: (request: HostRequest) => HostResponse) {
+function fakeServer(answer: (request: HostRequest) => HostResponse | Promise<HostResponse>) {
   let notify: (message: unknown) => void = () => undefined;
   const handled: HostRequest[] = [];
   const close = vi.fn();
@@ -83,7 +84,9 @@ describe('createInProcessTransport', () => {
     const { server, close, push } = fakeServer(request => hostResult(request.id, {}));
     const transport = createInProcessTransport(server, vi.fn());
     const listener = vi.fn();
+    const closed = vi.fn();
     transport.onNotification(listener);
+    transport.onClose(closed);
 
     transport.close();
     transport.close();
@@ -91,6 +94,23 @@ describe('createInProcessTransport', () => {
 
     expect(close).toHaveBeenCalledTimes(1);
     expect(listener).not.toHaveBeenCalled();
-    await expect(transport.request('session/list')).rejects.toThrow('closed');
+    expect(closed).toHaveBeenCalledExactlyOnceWith({ initiator: 'client' });
+    await expect(transport.request('session/list')).rejects.toBeInstanceOf(HostConnectError);
+  });
+
+  it('rejects a request still pending when the connection closes', async () => {
+    let answer: ((response: HostResponse) => void) | undefined;
+    const { server } = fakeServer(
+      () =>
+        new Promise<HostResponse>(resolve => {
+          answer = resolve;
+        })
+    );
+    const transport = createInProcessTransport(server, vi.fn());
+    const pending = transport.request('session/list');
+    await Promise.resolve();
+    transport.close();
+    answer?.(hostResult(1, {}));
+    await expect(pending).rejects.toThrow('closed');
   });
 });

@@ -13,6 +13,7 @@ import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
 import { localHostControl } from './host/localHostControl';
 import { registerHostConnections } from './host/registerHostConnections';
+import { electronSystemSignals } from './host/systemSignals';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './chat/sessionScope';
 import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
@@ -237,8 +238,7 @@ void app.whenReady().then(async () => {
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
       models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
-  registerHostConnections({
-    ...host,
+  registerHostConnections(host, {
     control: localHostControl({
       auth,
       onAuthStateChanged,
@@ -246,6 +246,10 @@ void app.whenReady().then(async () => {
       homeDirectory: app.getPath('home'),
       version: currentVersion(),
     }),
+    auth,
+    onAuthStateChanged,
+    version: currentVersion(),
+    signals: electronSystemSignals(),
   });
   const models = registerModels(
     modelServers,

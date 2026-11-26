@@ -1,26 +1,35 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostNotificationDelivery } from '@shared/hostBridge';
+import type { HostAccount, HostConnectionState, HostKind } from '@shared/hostConnection';
 import {
   HOST_ERROR_CODES,
+  HOST_PROTOCOL_VERSION,
   HostRequestError,
   hostNotification,
-  type HostNotification,
-  type HostTransport,
+  type HostConnectFailure,
+  type HostConnectFailureKind,
 } from '@shared/hostProtocol';
+import { ACCOUNT, FakeHost, sessionEvent } from './__fixtures__/fakeHost';
 import { ConnectionManager, LOCAL_HOST_ID, type HostClientEndpoint } from './ConnectionManager';
+import type { HostLinkTuning } from './HostLink';
 
-function fakeTransport(answer: (method: string, params: unknown) => unknown = () => ({})) {
-  const listeners = new Set<(notification: HostNotification) => void>();
-  const transport = {
-    request: vi.fn(async (method: string, params?: unknown) => answer(method, params)),
-    onNotification: (listener: (notification: HostNotification) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    close: vi.fn(),
-  } satisfies HostTransport;
-  return { transport, push: (notification: HostNotification) => listeners.forEach(listener => listener(notification)) };
-}
+const CLIENT = { clientId: 'client-1', clientName: 'Desktop', clientVersion: '1.0.0' };
+const TUNING: HostLinkTuning = {
+  backoff: { baseMs: 1_000, capMs: 8_000 },
+  offlineAfterAttempts: 3,
+  stableAfterMs: 30_000,
+  heartbeatMs: 30_000,
+  requestTimeoutMs: 5_000,
+};
+
+const failure = (kind: HostConnectFailureKind): HostConnectFailure => ({
+  kind,
+  detail: `${kind} happened`,
+  stderrTail: '',
+});
+
+/** Lets every pending promise chain run, and any zero-delay timer with it. */
+const settle = () => vi.advanceTimersByTimeAsync(0);
 
 function fakeWindow(id: number) {
   const delivered: HostNotificationDelivery[] = [];
@@ -32,146 +41,577 @@ function fakeWindow(id: number) {
       closed = listener;
     },
   };
-  return { endpoint, delivered, destroy: () => closed?.() };
+  const seqs = (sessionId: string) =>
+    delivered.flatMap(({ notification }) => {
+      if (notification.method !== 'session/event') return [];
+      const params = notification.params as { sessionId: string; seq: number };
+      return params.sessionId === sessionId ? [params.seq] : [];
+    });
+  const resyncs = () =>
+    delivered
+      .filter(({ notification }) => notification.method === 'session/resyncRequired')
+      .map(d => d.notification.params);
+  return { endpoint, delivered, seqs, resyncs, destroy: () => closed?.() };
 }
 
-function managerWithLocalHost(answer?: (method: string, params: unknown) => unknown) {
-  const transports: Array<ReturnType<typeof fakeTransport>> = [];
-  const manager = new ConnectionManager();
-  manager.register(LOCAL_HOST_ID, {
-    connect: () => {
-      const created = fakeTransport(answer);
-      transports.push(created);
-      return created.transport;
+type SetUpOptions = {
+  kind?: HostKind;
+  account?: HostAccount;
+  connect?: boolean;
+  tuning?: Partial<HostLinkTuning>;
+  /** Failures the first connects reject with; connect() runs as soon as the host is registered. */
+  failures?: HostConnectFailure[];
+  online?: boolean;
+};
+
+function setUp(options: SetUpOptions = {}) {
+  const host = new FakeHost();
+  host.connectFailures.push(...(options.failures ?? []));
+  let account: HostAccount = options.account === undefined ? ACCOUNT : options.account;
+  let online = options.online ?? true;
+  const accountListeners = new Set<(account: HostAccount) => void>();
+  const wakeListeners = new Set<() => void>();
+  const onlineListeners = new Set<() => void>();
+  const manager = new ConnectionManager({
+    client: CLIENT,
+    account: {
+      current: () => account,
+      onChanged: listener => {
+        accountListeners.add(listener);
+        return () => accountListeners.delete(listener);
+      },
     },
+    signals: {
+      isOnline: () => online,
+      onWake: listener => {
+        wakeListeners.add(listener);
+        return () => wakeListeners.delete(listener);
+      },
+      onOnline: listener => {
+        onlineListeners.add(listener);
+        return () => onlineListeners.delete(listener);
+      },
+    },
+    tuning: { ...TUNING, ...options.tuning },
+    // The top of the jitter range, so each wait is exactly the backoff ceiling.
+    random: () => 1,
   });
-  return { manager, transports };
+  const history: HostConnectionState['status'][] = [];
+  manager.onStateChanged(hosts => {
+    const state = hosts.find(entry => entry.hostId === 'devbox')?.state;
+    if (state && history.at(-1) !== state.status) history.push(state.status);
+  });
+  manager.register('devbox', host.connector, {
+    label: 'devbox',
+    kind: options.kind ?? 'remote',
+    ...(options.connect === undefined ? {} : { connect: options.connect }),
+  });
+  const state = () => manager.list().find(entry => entry.hostId === 'devbox')?.state;
+  return {
+    host,
+    manager,
+    history,
+    state,
+    setAccount(next: HostAccount) {
+      account = next;
+      for (const listener of accountListeners) listener(next);
+    },
+    setOnline(next: boolean) {
+      online = next;
+      if (next) for (const listener of onlineListeners) listener();
+    },
+    wake: () => wakeListeners.forEach(listener => listener()),
+  };
 }
 
-describe('ConnectionManager', () => {
-  it('registers the local host as connected and refuses a second registration', () => {
-    const { manager } = managerWithLocalHost();
-    expect(manager.hostStates()).toEqual([{ hostId: 'local', state: { status: 'connected' } }]);
-    expect(() => manager.register(LOCAL_HOST_ID, { connect: () => fakeTransport().transport })).toThrow(
+beforeEach(() => {
+  vi.useFakeTimers({ now: 1_000_000 });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('ConnectionManager: connection states', () => {
+  it('connects through the handshake and reports the host and a measured latency', async () => {
+    const { state, host, manager, history } = setUp();
+    expect(state()).toEqual({ status: 'connecting' });
+    await settle();
+
+    expect(state()).toMatchObject({
+      status: 'connected',
+      info: { hostId: 'devbox-id', account: ACCOUNT },
+      latencyMs: 0,
+    });
+    expect(history).toEqual(['connecting', 'connected']);
+    expect(host.connections[0].requests.map(request => request.method)).toEqual(['host/initialize', 'host/info']);
+    expect(host.connections[0].requests[0].params).toEqual({ ...CLIENT, protocol: HOST_PROTOCOL_VERSION });
+    expect(manager.list()).toEqual([{ hostId: 'devbox', label: 'devbox', kind: 'remote', state: state() }]);
+  });
+
+  it('connects the local host whether or not Desktop is signed in, with no account check', async () => {
+    const { state, host } = setUp({ kind: 'local', account: null });
+    host.account = { userId: 'someone-else', environmentUrl: 'https://elsewhere.test' };
+    await settle();
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
+  it('waits for sign-in on a host with no account, then connects once it signs in', async () => {
+    const { state, host } = setUp();
+    host.account = null;
+    await settle();
+    expect(state()).toEqual({ status: 'needsSignIn' });
+
+    host.setAccount(ACCOUNT);
+    await settle();
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
+  it('refuses a host signed in to another account or environment', async () => {
+    const { state, host } = setUp();
+    const other = { userId: 'u1', environmentUrl: 'https://staging.example.test' };
+    host.account = other;
+    await settle();
+    expect(state()).toEqual({ status: 'accountMismatch', hostAccount: other });
+  });
+
+  it.each<[HostConnectFailureKind, HostConnectionState]>([
+    ['notInstalled', { status: 'needsInstall' }],
+    ['daemonVersionMismatch', { status: 'needsUpdate', required: false }],
+    ['protocolMismatch', { status: 'needsUpdate', required: true }],
+    ['nodeMissing', { status: 'failed', failure: failure('nodeMissing') }],
+    ['nodeTooOld', { status: 'failed', failure: failure('nodeTooOld') }],
+    ['unsupportedPlatform', { status: 'failed', failure: failure('unsupportedPlatform') }],
+  ])('turns a %s connect failure into a state that waits for the user', async (kind, expected) => {
+    const { state, host } = setUp({ failures: [failure(kind)] });
+    await settle();
+    expect(state()).toEqual(expected);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(host.connections).toHaveLength(0);
+  });
+
+  it('asks for a host update when the host speaks an older protocol major', async () => {
+    const { state, host } = setUp();
+    host.protocol = { major: HOST_PROTOCOL_VERSION.major - 1, minor: 0 };
+    await settle();
+    expect(state()).toEqual({ status: 'needsUpdate', required: true });
+    expect(host.open).toHaveLength(0);
+  });
+
+  it('fails with a Desktop update message when the host speaks a newer protocol major', async () => {
+    const { state, host } = setUp();
+    host.protocol = { major: HOST_PROTOCOL_VERSION.major + 1, minor: 0 };
+    await settle();
+    expect(state()).toMatchObject({
+      status: 'failed',
+      failure: { kind: 'protocolMismatch', detail: expect.stringContaining('Update Bike4Mind Desktop') },
+    });
+  });
+
+  it('retries transient failures with capped exponential backoff, then shows the host offline', async () => {
+    const { state, host } = setUp({ failures: Array.from({ length: 5 }, () => failure('sshFailed')) });
+    await settle();
+    expect(state()).toEqual({ status: 'reconnecting', attempt: 1, nextRetryAt: Date.now() + 1_000 });
+
+    const attemptsAfter = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+      return 5 - host.connectFailures.length;
+    };
+    expect(await attemptsAfter(999)).toBe(1);
+    expect(await attemptsAfter(1)).toBe(2);
+    expect(state()).toEqual({ status: 'reconnecting', attempt: 2, nextRetryAt: Date.now() + 2_000 });
+    expect(await attemptsAfter(2_000)).toBe(3);
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 3 });
+    expect(await attemptsAfter(4_000)).toBe(4);
+    // Past offlineAfterAttempts the host shows as offline, and keeps retrying at the cap.
+    expect(state()).toEqual({ status: 'offline', reason: 'unreachable', lastSeenAt: null });
+    expect(await attemptsAfter(7_999)).toBe(4);
+    expect(await attemptsAfter(1)).toBe(5);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
+  it('waits for the network instead of retrying while offline, then retries when it is back', async () => {
+    const { state, host, setOnline } = setUp({ online: false, failures: [failure('sshFailed')] });
+    await settle();
+    expect(state()).toEqual({ status: 'offline', reason: 'noNetwork', lastSeenAt: null });
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(host.connections).toHaveLength(0);
+
+    setOnline(true);
+    await settle();
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
+  it('retries at once on wake instead of waiting out the backoff', async () => {
+    const { state, wake } = setUp({
+      tuning: { backoff: { baseMs: 60_000, capMs: 60_000 } },
+      failures: [failure('daemonStartTimeout')],
+    });
+    await settle();
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 1 });
+
+    wake();
+    await settle();
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
+  it('notices a host that stops answering its heartbeat, and one that closes the link', async () => {
+    const { state, host } = setUp();
+    await settle();
+    host.silent = true;
+    await vi.advanceTimersByTimeAsync(TUNING.heartbeatMs + TUNING.requestTimeoutMs);
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 1 });
+    expect(host.connections[0].closedBy).toBe('client');
+
+    host.silent = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(state()).toMatchObject({ status: 'connected' });
+
+    host.open[0].cut();
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 2 });
+    expect(state()).toMatchObject({ nextRetryAt: Date.now() + 2_000 });
+  });
+
+  it('starts the attempt count again only once a connection has lasted', async () => {
+    const { state, host } = setUp();
+    await settle();
+    host.open[0].cut();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(state()).toMatchObject({ status: 'connected' });
+
+    await vi.advanceTimersByTimeAsync(TUNING.stableAfterMs);
+    host.open[0].cut();
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 1 });
+  });
+
+  it('disconnects on request and stays offline until connect, which skips the backoff', async () => {
+    const { state, host, manager } = setUp();
+    await settle();
+    manager.disconnect('devbox');
+    expect(state()).toEqual({ status: 'offline', reason: 'disconnected', lastSeenAt: Date.now() });
+    expect(host.open).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(host.connections).toHaveLength(1);
+
+    manager.connect('devbox');
+    expect(state()).toEqual({ status: 'connecting' });
+    await settle();
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
+  it('registers a host without connecting when asked to', async () => {
+    const { state, host } = setUp({ connect: false });
+    await settle();
+    expect(state()).toEqual({ status: 'offline', reason: 'disconnected', lastSeenAt: null });
+    expect(host.connections).toHaveLength(0);
+  });
+
+  it('disconnects remote hosts on sign-out and reconnects them on sign-in, leaving the local host alone', async () => {
+    const { state, host, manager, setAccount } = setUp();
+    const local = new FakeHost();
+    manager.register(LOCAL_HOST_ID, local.connector, { label: 'This computer', kind: 'local' });
+    await settle();
+
+    setAccount(null);
+    expect(state()).toEqual({ status: 'offline', reason: 'signedOut', lastSeenAt: Date.now() });
+    expect(host.open).toHaveLength(0);
+    expect(manager.list().find(entry => entry.hostId === LOCAL_HOST_ID)?.state).toMatchObject({ status: 'connected' });
+    expect(local.open).toHaveLength(1);
+
+    setAccount(ACCOUNT);
+    await settle();
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
+  it('checks the account again after an environment switch', async () => {
+    const { state, host, setAccount } = setUp();
+    await settle();
+
+    setAccount({ userId: 'u1', environmentUrl: 'https://staging.example.test' });
+    expect(host.connections[0].closedBy).toBe('client');
+    await settle();
+    expect(state()).toEqual({ status: 'accountMismatch', hostAccount: ACCOUNT });
+  });
+
+  it('removes a remote host, closing its connections, but never the local host', async () => {
+    const { host, manager } = setUp();
+    const states: string[][] = [];
+    manager.onStateChanged(hosts => states.push(hosts.map(entry => entry.hostId)));
+    manager.register(LOCAL_HOST_ID, new FakeHost().connector, { label: 'This computer', kind: 'local' });
+    await settle();
+
+    manager.remove('devbox');
+    expect(manager.list().map(entry => entry.hostId)).toEqual([LOCAL_HOST_ID]);
+    expect(states.at(-1)).toEqual([LOCAL_HOST_ID]);
+    expect(host.open).toHaveLength(0);
+    expect(() => manager.remove(LOCAL_HOST_ID)).toThrow('cannot be removed');
+    expect(() => manager.connect('devbox')).toThrow('not registered');
+    expect(() => manager.register(LOCAL_HOST_ID, new FakeHost().connector, { label: 'x', kind: 'local' })).toThrow(
       'already registered'
     );
   });
+});
 
+describe('ConnectionManager: requests', () => {
   it.each([['session/explode'], ['host:request'], [42], [undefined]])(
     'rejects %s, which is not a host method, without opening a connection',
     async method => {
-      const { manager, transports } = managerWithLocalHost();
-      const response = await manager.request(fakeWindow(1).endpoint, LOCAL_HOST_ID, method, {});
+      const { manager, host } = setUp();
+      await settle();
+      const response = await manager.request(fakeWindow(1).endpoint, 'devbox', method, {});
       expect(response).toMatchObject({ ok: false, error: { code: HOST_ERROR_CODES.methodNotFound } });
-      expect(transports).toEqual([]);
+      expect(host.connections).toHaveLength(1);
     }
   );
 
-  it('rejects invalid params before dispatch', async () => {
-    const { manager, transports } = managerWithLocalHost();
-    const response = await manager.request(fakeWindow(1).endpoint, LOCAL_HOST_ID, 'session/get', { sessionId: 1 });
-    expect(response).toMatchObject({ ok: false, error: { code: HOST_ERROR_CODES.invalidParams } });
-    expect(transports).toEqual([]);
-  });
-
-  it('rejects an unknown host and a disconnected one', async () => {
-    const { manager } = managerWithLocalHost();
-    manager.register(
-      'devbox',
-      { connect: () => fakeTransport().transport },
-      { status: 'disconnected', reason: 'offline' }
-    );
+  it('rejects invalid params and an unknown host before dispatch', async () => {
+    const { manager, host } = setUp();
+    await settle();
     const window = fakeWindow(1).endpoint;
-
+    await expect(manager.request(window, 'devbox', 'session/get', { sessionId: 1 })).resolves.toMatchObject({
+      ok: false,
+      error: { code: HOST_ERROR_CODES.invalidParams },
+    });
     await expect(manager.request(window, 'nowhere', 'session/list', undefined)).resolves.toMatchObject({
       ok: false,
       error: { code: HOST_ERROR_CODES.invalidParams },
     });
+    expect(host.connections).toHaveLength(1);
+  });
+
+  it('fails fast with capabilityUnavailable when the host is not connected', async () => {
+    const { manager, host } = setUp({ failures: [failure('notInstalled')] });
+    await settle();
+    await expect(manager.request(fakeWindow(1).endpoint, 'devbox', 'session/list', undefined)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: HOST_ERROR_CODES.capabilityUnavailable,
+        message: 'Host devbox is not connected (needsInstall)',
+        data: { state: 'needsInstall' },
+      },
+    });
+    expect(host.connections).toHaveLength(0);
+  });
+
+  it('lets the host/* methods through to a host that waits for sign-in, and nothing else', async () => {
+    const { manager, host } = setUp();
+    host.account = null;
+    await settle();
+    const window = fakeWindow(1).endpoint;
+    await expect(manager.request(window, 'devbox', 'host/auth/status', undefined)).resolves.toMatchObject({ ok: true });
     await expect(manager.request(window, 'devbox', 'session/list', undefined)).resolves.toMatchObject({
       ok: false,
-      error: { code: HOST_ERROR_CODES.capabilityUnavailable, message: expect.stringContaining('offline') },
+      error: { code: HOST_ERROR_CODES.capabilityUnavailable },
     });
   });
 
-  it('opens one connection per window and host, and returns results and host errors as data', async () => {
-    const { manager, transports } = managerWithLocalHost(method => {
+  it('holds a request made while the host first connects until the handshake settles', async () => {
+    const { manager } = setUp();
+    const response = manager.request(fakeWindow(1).endpoint, 'devbox', 'session/list', undefined);
+    await settle();
+    await expect(response).resolves.toEqual({ ok: true, result: {} });
+  });
+
+  it('opens one handshaken connection per window, and returns results and host errors as data', async () => {
+    const { manager, host } = setUp();
+    host.handle = method => {
       if (method === 'session/get')
         throw new HostRequestError({ code: HOST_ERROR_CODES.sessionNotFound, message: 'gone' });
       return { sessions: [] };
-    });
+    };
+    await settle();
     const first = fakeWindow(1).endpoint;
     const second = fakeWindow(2).endpoint;
 
-    await expect(manager.request(first, LOCAL_HOST_ID, 'session/list', undefined)).resolves.toEqual({
+    await expect(manager.request(first, 'devbox', 'session/list', undefined)).resolves.toEqual({
       ok: true,
       result: { sessions: [] },
     });
-    await manager.request(first, LOCAL_HOST_ID, 'session/statuses', undefined);
-    await expect(manager.request(second, LOCAL_HOST_ID, 'session/get', { sessionId: 's1' })).resolves.toEqual({
+    await manager.request(first, 'devbox', 'session/statuses', undefined);
+    await expect(manager.request(second, 'devbox', 'session/get', { sessionId: 's1' })).resolves.toEqual({
       ok: false,
       error: { code: HOST_ERROR_CODES.sessionNotFound, message: 'gone' },
     });
 
-    expect(transports).toHaveLength(2);
-    expect(transports[0].transport.request).toHaveBeenCalledTimes(2);
+    expect(host.connections).toHaveLength(3);
+    expect(host.connections[1].requests.map(request => request.method)).toEqual([
+      'host/initialize',
+      'session/list',
+      'session/statuses',
+    ]);
   });
 
-  it('answers a transport that throws something else with an internal error', async () => {
-    const { manager } = managerWithLocalHost(() => {
-      throw new Error('pipe closed');
-    });
-    await expect(manager.request(fakeWindow(1).endpoint, LOCAL_HOST_ID, 'session/list', undefined)).resolves.toEqual({
+  it('answers a host method that throws something else with an internal error', async () => {
+    const { manager, host } = setUp();
+    host.handle = () => {
+      throw new Error('boom');
+    };
+    await settle();
+    await expect(manager.request(fakeWindow(1).endpoint, 'devbox', 'session/list', undefined)).resolves.toEqual({
       ok: false,
-      error: { code: HOST_ERROR_CODES.internalError, message: 'pipe closed' },
+      error: { code: HOST_ERROR_CODES.internalError, message: 'boom' },
+    });
+  });
+
+  it('answers a request cut off mid-flight with capabilityUnavailable, and serves the next one', async () => {
+    const { manager, host } = setUp();
+    await settle();
+    const window = fakeWindow(1).endpoint;
+    await manager.request(window, 'devbox', 'session/list', undefined);
+    host.handle = method => (method === 'turn/stop' ? new Promise(() => undefined) : {});
+
+    const cutOff = manager.request(window, 'devbox', 'turn/stop', { sessionId: 's1' });
+    await settle();
+    host.connections[1].cut();
+    await expect(cutOff).resolves.toMatchObject({ ok: false, error: { code: HOST_ERROR_CODES.capabilityUnavailable } });
+
+    await expect(manager.request(window, 'devbox', 'session/list', undefined)).resolves.toEqual({
+      ok: true,
+      result: {},
     });
   });
 
   it('delivers a connection notifications to its own window, tagged with the host', async () => {
-    const { manager, transports } = managerWithLocalHost();
+    const { manager, host } = setUp();
+    await settle();
     const first = fakeWindow(1);
     const second = fakeWindow(2);
-    await manager.request(first.endpoint, LOCAL_HOST_ID, 'session/list', undefined);
-    await manager.request(second.endpoint, LOCAL_HOST_ID, 'session/list', undefined);
+    await manager.request(first.endpoint, 'devbox', 'session/list', undefined);
+    await manager.request(second.endpoint, 'devbox', 'session/list', undefined);
 
     const notification = hostNotification('session/summaryChanged', { summary: { id: 's1' } });
-    transports[0].push(notification);
+    host.connections[1].push(notification);
 
-    expect(first.delivered).toEqual([{ hostId: LOCAL_HOST_ID, notification }]);
+    expect(first.delivered).toEqual([{ hostId: 'devbox', notification }]);
     expect(second.delivered).toEqual([]);
   });
 
   it('tracks answered subscribes and unsubscribes, but not failed ones', async () => {
-    const { manager } = managerWithLocalHost((method, params) => {
-      if ((params as { sessionId?: string }).sessionId === 'stale') {
-        throw new HostRequestError({ code: HOST_ERROR_CODES.snapshotRequired, message: 'stale' });
-      }
-      return method === 'session/subscribe' ? { cursor: { epoch: 'e', seq: 0 } } : {};
-    });
+    const { manager } = setUp();
+    await settle();
     const window = fakeWindow(1).endpoint;
 
-    await manager.request(window, LOCAL_HOST_ID, 'session/subscribe', { sessionId: 's1' });
-    await manager.request(window, LOCAL_HOST_ID, 'session/subscribe', { sessionId: 's2' });
-    await manager.request(window, LOCAL_HOST_ID, 'session/subscribe', {
-      sessionId: 'stale',
-      after: { epoch: 'x', seq: 1 },
-    });
-    await manager.request(window, LOCAL_HOST_ID, 'session/unsubscribe', { sessionId: 's1' });
+    await manager.request(window, 'devbox', 'session/subscribe', { sessionId: 's1' });
+    await manager.request(window, 'devbox', 'session/subscribe', { sessionId: 's2' });
+    await manager.request(window, 'devbox', 'session/subscribe', { sessionId: 'stale', after: { epoch: 'x', seq: 1 } });
+    await manager.request(window, 'devbox', 'session/unsubscribe', { sessionId: 's1' });
 
-    expect([...manager.subscriptions(1, LOCAL_HOST_ID)]).toEqual(['s2']);
+    expect([...manager.subscriptions(1, 'devbox')]).toEqual(['s2']);
   });
 
   it('closes a destroyed window connections and drops its subscriptions, leaving other windows alone', async () => {
-    const { manager, transports } = managerWithLocalHost(() => ({ cursor: { epoch: 'e', seq: 0 } }));
+    const { manager, host } = setUp();
+    await settle();
     const first = fakeWindow(1);
     const second = fakeWindow(2);
-    await manager.request(first.endpoint, LOCAL_HOST_ID, 'session/subscribe', { sessionId: 's1' });
-    await manager.request(second.endpoint, LOCAL_HOST_ID, 'session/subscribe', { sessionId: 's1' });
+    await manager.request(first.endpoint, 'devbox', 'session/subscribe', { sessionId: 's1' });
+    await manager.request(second.endpoint, 'devbox', 'session/subscribe', { sessionId: 's1' });
 
     first.destroy();
 
-    expect(transports[0].transport.close).toHaveBeenCalledTimes(1);
-    expect(transports[1].transport.close).not.toHaveBeenCalled();
-    expect(manager.subscriptions(1, LOCAL_HOST_ID).size).toBe(0);
-    expect([...manager.subscriptions(2, LOCAL_HOST_ID)]).toEqual(['s1']);
+    expect(host.connections[1].closedBy).toBe('client');
+    expect(host.connections[2].closedBy).toBeNull();
+    expect(manager.subscriptions(1, 'devbox').size).toBe(0);
+    expect([...manager.subscriptions(2, 'devbox')]).toEqual(['s1']);
+  });
+});
+
+describe('ConnectionManager: resuming across a cut', () => {
+  async function subscribedWindow() {
+    const setup = setUp();
+    await settle();
+    const window = fakeWindow(1);
+    await setup.manager.request(window.endpoint, 'devbox', 'session/subscribe', { sessionId: 's1' });
+    setup.host.emit('s1');
+    setup.host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2]);
+    return { ...setup, window, windowConnection: () => setup.host.open[1] };
+  }
+
+  it('loses and repeats no event when the window connection is cut and resumed', async () => {
+    const { host, window, manager } = await subscribedWindow();
+    const cut = host.open[1];
+    cut.cut();
+    host.emit('s1');
+    host.emit('s1');
+    await settle();
+
+    expect(host.open[1].requests.at(-1)).toEqual({
+      method: 'session/subscribe',
+      params: { sessionId: 's1', after: { epoch: 'epoch-1', seq: 2 } },
+    });
+    host.emit('s1');
+    // A notification the old connection had buffered, delivered after its close, changes nothing.
+    cut.pushLate(sessionEvent('s1', 3));
+    expect(window.seqs('s1')).toEqual([1, 2, 3, 4, 5]);
+    expect([...manager.subscriptions(1, 'devbox')]).toEqual(['s1']);
+  });
+
+  it('loses and repeats no event when the resubscribe answer overtakes the replay', async () => {
+    const { host, window } = await subscribedWindow();
+    host.answerBeforeReplay = true;
+    host.open[1].cut();
+    host.emit('s1');
+    await settle();
+    host.emit('s1');
+    await settle();
+    expect(window.seqs('s1')).toEqual([1, 2, 3, 4]);
+  });
+
+  it('drops a replayed event the window already has', async () => {
+    const { host, window } = await subscribedWindow();
+    host.open[1].push(sessionEvent('s1', 2));
+    host.open[1].push(sessionEvent('s1', 1));
+    host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2, 3]);
+  });
+
+  it('resumes windows once a host that dropped entirely is connected again', async () => {
+    const { host, window, state } = await subscribedWindow();
+    for (const connection of host.open) connection.cut();
+    expect(state()).toMatchObject({ status: 'reconnecting' });
+    host.emit('s1');
+    expect(host.open).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(state()).toMatchObject({ status: 'connected' });
+    host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2, 3, 4]);
+  });
+
+  it('closes window connections while disconnected and resumes them on connect', async () => {
+    const { host, window, manager } = await subscribedWindow();
+    manager.disconnect('devbox');
+    expect(host.open).toHaveLength(0);
+    host.emit('s1');
+
+    manager.connect('devbox');
+    await settle();
+    host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2, 3, 4]);
+  });
+
+  it('asks the window to read the session again when the host cannot replay', async () => {
+    const { host, window, manager } = await subscribedWindow();
+    host.restart();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(window.resyncs()).toEqual([{ sessionId: 's1' }]);
+    expect(manager.subscriptions(1, 'devbox').size).toBe(0);
+    host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2]);
+  });
+
+  it('treats a window connection that cannot reopen as a lost link, with backoff', async () => {
+    const { host, state } = await subscribedWindow();
+    host.connectFailures.push(failure('sshFailed'));
+    host.open[1].cut();
+    await settle();
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 1 });
+    expect(host.open).toHaveLength(0);
   });
 });
