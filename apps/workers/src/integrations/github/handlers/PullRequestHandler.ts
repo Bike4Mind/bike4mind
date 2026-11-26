@@ -7,7 +7,7 @@
  *   - review_requested -> notify the requested reviewer
  */
 
-import { IMcpServerDocument, InboxType } from '@bike4mind/common';
+import { IMcpServerDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import {
   GitHubEventHandler,
@@ -23,20 +23,9 @@ import {
   buildPRMergedBlocks,
   buildReviewRequestedBlocks,
 } from '@bike4mind/slack';
-import { inboxRepository, sreErrorTrackingRepository } from '@bike4mind/database';
 import { toHandlerResult } from './notifyResultUtils';
 
 const EMPTY_NOTIFY_RESULT: NotifyResult = { notifiedUserIds: [], failedNotifications: [] };
-
-/**
- * PR labels a human applies to record whether a merged SRE fix was correct (#271),
- * mapped to the verdict value persisted on the tracking doc. A merge alone is not
- * proof the fix worked, so this captures the explicit thumbs up/down signal.
- */
-const SRE_FIX_VERDICT_LABELS: Record<string, 'correct' | 'incorrect'> = {
-  'sre-fix-correct': 'correct',
-  'sre-fix-incorrect': 'incorrect',
-};
 
 export class PullRequestHandler implements GitHubEventHandler {
   eventType = 'pull_request' as const;
@@ -79,10 +68,6 @@ export class PullRequestHandler implements GitHubEventHandler {
 
       case 'review_requested':
         result = await this.handleReviewRequested(pr, repo, notifyOptions);
-        break;
-
-      case 'labeled':
-        await this.handleLabeled(pr, repo);
         break;
     }
 
@@ -133,58 +118,22 @@ export class PullRequestHandler implements GitHubEventHandler {
     // Notify the PR author that their PR was merged (unless they merged it themselves)
     const targets = prAuthor.toLowerCase() !== mergedBy.toLowerCase() ? [prAuthor] : [];
 
-    const result: NotifyResult =
-      targets.length > 0
-        ? await this.notifier.notify(
-            'prMerged',
-            targets,
-            () =>
-              buildPRMergedBlocks({
-                prNumber: pr.pull_request.number,
-                prTitle: pr.pull_request.title,
-                prUrl: pr.pull_request.html_url,
-                mergedBy,
-                repo,
-                baseBranch: pr.pull_request.base.ref,
-              }),
-            options
-          )
-        : EMPTY_NOTIFY_RESULT;
+    if (targets.length === 0) return EMPTY_NOTIFY_RESULT;
 
-    // SRE Concierge (Phase 1.5): Notify affected users when an SRE fix PR is merged
-    try {
-      const branchName = pr.pull_request.head.ref;
-      if (branchName.startsWith('sre-fix/')) {
-        const prNumber = pr.pull_request.number;
-        const tracking = await sreErrorTrackingRepository.findByPrNumber(prNumber, repo);
-        if (tracking && tracking.affectedUserIds?.length > 0) {
-          this.logger?.info('[SRE-CONCIERGE] SRE fix merged, notifying affected users', {
-            prNumber,
-            branchName,
-            userCount: tracking.affectedUserIds.length,
-          });
-          await Promise.allSettled(
-            tracking.affectedUserIds.map(affectedUserId =>
-              inboxRepository.createInboxMessage({
-                userId: 'SYSTEM',
-                receiverId: affectedUserId,
-                title: 'Bug fix deployed for an issue affecting you',
-                message: `A fix for "${tracking.errorMessage?.slice(0, 200) || 'a production error'}" has been merged. The issue should be resolved shortly.`,
-                type: InboxType.COMMON,
-              })
-            )
-          );
-          await sreErrorTrackingRepository.updateStatus(tracking.id, 'fixed', {
-            fixMergedAt: new Date(),
-            userNotifiedAt: new Date(),
-          });
-        }
-      }
-    } catch (err) {
-      this.logger?.error('[SRE-CONCIERGE] Failed to process SRE fix merge notification', { error: err });
-    }
-
-    return result;
+    return this.notifier.notify(
+      'prMerged',
+      targets,
+      () =>
+        buildPRMergedBlocks({
+          prNumber: pr.pull_request.number,
+          prTitle: pr.pull_request.title,
+          prUrl: pr.pull_request.html_url,
+          mergedBy,
+          repo,
+          baseBranch: pr.pull_request.base.ref,
+        }),
+      options
+    );
   }
 
   private async handleReviewRequested(
@@ -210,55 +159,5 @@ export class PullRequestHandler implements GitHubEventHandler {
         }),
       options
     );
-  }
-
-  /**
-   * Handle 'labeled' - record a human verdict on whether a merged SRE fix was
-   * correct (#271). A reviewer applies `sre-fix-correct` / `sre-fix-incorrect` to
-   * the fix PR; we map it back to the tracking doc via its PR number and persist
-   * the verdict (last-write-wins, so the opposite label overrides a prior one).
-   * Non-verdict labels and labels on non-SRE PRs are ignored gracefully.
-   */
-  private async handleLabeled(pr: GitHubPullRequestPayload, repo: string): Promise<void> {
-    const labelName = pr.label?.name;
-    if (!labelName) return;
-
-    const value = SRE_FIX_VERDICT_LABELS[labelName];
-    if (!value) return; // not a verdict label - ignore
-
-    // Only SRE fix PRs carry a verdict. Cheap branch-prefix gate (mirrors
-    // handleMerged) skips the DB hit for the vast majority of PRs.
-    if (!pr.pull_request.head.ref.startsWith('sre-fix/')) return;
-
-    const prNumber = pr.pull_request.number;
-    const by = pr.sender?.login || 'unknown';
-
-    try {
-      // Scope the lookup by repoSlug: PR numbers are unique per-repo, not
-      // globally, so a labeled PR in one repo must not write a verdict onto a
-      // tracking doc for the same PR number in another repo.
-      const updated = await sreErrorTrackingRepository.setFixVerdict(
-        prNumber,
-        {
-          value,
-          by,
-          at: new Date(),
-        },
-        repo
-      );
-      if (!updated) {
-        // No tracking doc for this SRE-branch PR - nothing to record against.
-        this.logger?.info('[SRE-VERDICT] No tracking doc for SRE PR, verdict skipped', { prNumber, labelName });
-        return;
-      }
-      this.logger?.info('[SRE-VERDICT] Recorded fix verdict', {
-        prNumber,
-        value,
-        by,
-        trackingId: updated.id,
-      });
-    } catch (err) {
-      this.logger?.error('[SRE-VERDICT] Failed to record fix verdict', { prNumber, labelName, error: err });
-    }
   }
 }

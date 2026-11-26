@@ -692,7 +692,8 @@ function RepoConfigCard({
                       }
                     />
                     <FormHelperText>
-                      Configure this URL in your GitHub App or repository webhook settings
+                      Configure this URL in your GitHub App or repository webhook settings, sending Issues, Pull
+                      requests and Pull request reviews events
                     </FormHelperText>
                   </FormControl>
                   <FormControl sx={{ flex: 1 }}>

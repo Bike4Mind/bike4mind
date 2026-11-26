@@ -55,6 +55,8 @@ vi.mock('@server/integrations/jira/webhookUtils', () => ({
   validateJiraPayloadTimestamp: vi.fn(() => ({ valid: true })),
   PayloadTooLargeError: class PayloadTooLargeError extends Error {},
 }));
+const { mockCanView } = vi.hoisted(() => ({ mockCanView: vi.fn() }));
+vi.mock('@server/integrations/jira/subscriberAccess', () => ({ canSubscriberViewJiraEvent: mockCanView }));
 vi.mock('@server/integrations/jira/types', () => ({
   extractIssueInfo: vi.fn(() => ({ projectKey: 'P', issueKey: 'P-1', summary: 'Summary' })),
   matchesFilters: vi.fn(() => true),
@@ -102,7 +104,15 @@ async function deliver() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockFindConfig.mockResolvedValue({ id: 'cfg-1', enabled: true, secret: 'enc', atlassianSiteUrl: 'https://x.test' });
+  mockFindConfig.mockResolvedValue({
+    id: 'cfg-1',
+    enabled: true,
+    secret: 'enc',
+    atlassianSiteUrl: 'https://x.test',
+    atlassianCloudId: 'cloud-1',
+    createdBy: 'admin-1',
+  });
+  mockCanView.mockResolvedValue(true);
   mockFindSubscriptions.mockResolvedValue([subscription]);
   mockResetFailures.mockResolvedValue(undefined);
   mockIncrementFailures.mockResolvedValue({ wasAutoDisabled: false });
@@ -125,6 +135,26 @@ describe('POST /api/webhooks/jira/[token] delivery', () => {
       )
     );
     expect(mockIncrementFailures).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing to a subscriber who cannot view the event in Jira', async () => {
+    mockCanView.mockResolvedValue(false);
+
+    const res = await deliver();
+
+    expect(res._getStatusCode()).toBe(200);
+    await vi.waitFor(() => expect(mockRecordDelivery).toHaveBeenCalled());
+    expect(mockCanView).toHaveBeenCalledWith({
+      subscriberUserId: 'user-1',
+      config: { atlassianCloudId: 'cloud-1', createdBy: 'admin-1' },
+      payload: expect.objectContaining({ webhookEvent: 'jira:issue_updated' }),
+    });
+    expect(mockResolveDestination).not.toHaveBeenCalled();
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockIncrementFailures).not.toHaveBeenCalled();
+    expect(mockRecordDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ status: JiraWebhookDeliveryStatus.Filtered })
+    );
   });
 
   it('sends nothing and records a failure without counting it when the destination check refuses', async () => {

@@ -918,6 +918,9 @@ export interface IUser extends ICreditHolder {
    */
   authorizedEmailAddresses?: string[];
 
+  /** Platform addresses this user held before; they are never reassigned to another user. */
+  releasedPlatformEmailAddresses?: string[];
+
   /**
    * User's preferred voice for voice sessions
    * Falls back to admin setting if not set
