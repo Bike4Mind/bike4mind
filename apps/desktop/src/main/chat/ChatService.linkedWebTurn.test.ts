@@ -7,6 +7,7 @@ import type { ChatSession, ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { AttachmentStore } from './AttachmentStore';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -48,6 +49,10 @@ describe('ChatService linked web turns', () => {
   let events: ChatStreamEvent[];
   let streams: PassThrough[];
   let post: ReturnType<typeof vi.fn>;
+  let queue: MessageQueue;
+  let stopReplyAnswer: () => Promise<unknown>;
+  const turnPosts = () => post.mock.calls.filter(call => !String(call[0]).includes('stop-reply'));
+  const stopPosts = () => post.mock.calls.filter(call => String(call[0]).includes('stop-reply'));
 
   const streamFor = (index: number) => {
     streams[index] ??= new PassThrough();
@@ -55,16 +60,22 @@ describe('ChatService linked web turns', () => {
   };
   const waitForEvent = (type: ChatStreamEvent['type']) =>
     vi.waitUntil(() => events.some(event => event.type === type), { timeout: 2000, interval: 5 });
-  const waitForPost = () => vi.waitUntil(() => post.mock.calls.length > 0, { timeout: 2000, interval: 5 });
+  const waitForPost = (count = 1) => vi.waitUntil(() => turnPosts().length >= count, { timeout: 2000, interval: 5 });
 
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-linked-')), 'test-model');
     events = [];
     const emitted = events;
     streams = [];
+    stopReplyAnswer = async () => ({ data: { status: 'cancelled', questId: 'q1' }, status: 200 });
+    let streamCount = 0;
     const boundPost = vi
       .fn()
-      .mockImplementation(() => Promise.resolve({ data: streamFor(boundPost.mock.calls.length - 1), status: 200 }));
+      .mockImplementation((url: string) =>
+        url.includes('stop-reply')
+          ? stopReplyAnswer()
+          : Promise.resolve({ data: streamFor(streamCount++), status: 200 })
+      );
     post = boundPost;
     const apiClient = {
       get: vi.fn().mockResolvedValue({ sseCompletionsUrl: '' }),
@@ -78,6 +89,7 @@ describe('ChatService linked web turns', () => {
       }),
       access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
+      queue: (queue = new MessageQueue(() => undefined)),
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => emitted.push(event),
@@ -210,6 +222,41 @@ describe('ChatService linked web turns', () => {
     await waitForEvent('done');
 
     expect((await store.get(SESSION_ID))?.importOrigin?.running).toBeUndefined();
+  });
+
+  it('sends a message queued during the turn once the turn completes', async () => {
+    await sendLinked();
+    queue.enqueueRelay(SESSION_ID, 'relayed in', { fromSessionId: 'other', fromTitle: 'Other', hops: 1 });
+    streamFor(0).write(frame({ type: 'delta', quest_id: 'q1', slot: 0, text: 'Hello' }));
+    streamFor(0).write(frame('[DONE]'));
+
+    await waitForPost(2);
+    // A relay is automated, so it takes the local path rather than a second server turn.
+    expect(turnPosts()[1]?.[0]).not.toBe('/api/v1/turns');
+    expect(queue.list(SESSION_ID)).toHaveLength(0);
+  });
+
+  it('stops the server turn on Stop and frees the chat once the server confirms', async () => {
+    await sendLinked();
+    service.stop(SESSION_ID);
+    await waitForEvent('done');
+
+    expect(stopPosts()).toEqual([['/api/sessions/nb1/chat/stop-reply', { questId: 'q1' }]]);
+    const stored = await store.get(SESSION_ID);
+    expect(stored?.messages.at(-1)).toMatchObject({ id: 'bw-q1-r', stopReason: 'aborted' });
+    expect(stored?.importOrigin?.running).toBeUndefined();
+  });
+
+  it('keeps the chat busy after Stop when the server does not confirm the stop', async () => {
+    stopReplyAnswer = () => Promise.reject(new Error('Network Error'));
+    await sendLinked();
+    service.stop(SESSION_ID);
+    await waitForEvent('done');
+
+    expect((await store.get(SESSION_ID))?.importOrigin?.running).toBe(true);
+    const next = await service.send(SESSION_ID, 'next question');
+    expect(next).toMatchObject({ ok: false, busy: true });
+    expect(turnPosts()).toHaveLength(1);
   });
 
   it('still forks on the local paths: an edit rewinds the thread and marks it continued', async () => {

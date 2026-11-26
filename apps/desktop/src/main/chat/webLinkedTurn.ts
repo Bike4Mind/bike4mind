@@ -53,8 +53,26 @@ export function parseSessionTurnFrame(data: string): SessionTurnStreamEvent | nu
 }
 
 /**
+ * Ask the server to stop one quest of the web session, the way the web composer's Stop does.
+ * True only when the server answered for that quest, i.e. it is no longer running: anything else
+ * (a network error, another quest, a refusal) leaves the caller to treat it as still running.
+ */
+export async function stopSessionTurn(axios: AxiosInstance, sessionId: string, questId: string): Promise<boolean> {
+  try {
+    const response = await axios.post<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/chat/stop-reply`, {
+      questId,
+    });
+    const data = response.data;
+    return typeof data === 'object' && data !== null && (data as { questId?: unknown }).questId === questId;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * POST the turn and hand each event to `onEvent` until `[DONE]`. Resolves on a clean end or an
- * abort (the server keeps running a turn the client walks away from, as it does on the web).
+ * abort (the server keeps running a turn the client walks away from, as it does on the web;
+ * stopSessionTurn is what ends it).
  * Rejects with SessionTurnRequestError on a pre-stream refusal, and with an Error for an `error`
  * frame or a dropped connection. Never retried: a resend would add a second turn.
  */

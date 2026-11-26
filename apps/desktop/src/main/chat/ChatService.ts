@@ -292,7 +292,7 @@ import {
 import { endsUnread, type SessionActivity, type TurnOutcome } from './SessionActivity';
 import { isLinkedWebSend } from '@shared/webLinkedChat';
 import { webQuestMessageId } from '@shared/claudeImport';
-import { LinkedReplySlots, sessionTurnsEndpoint, streamSessionTurn } from './webLinkedTurn';
+import { LinkedReplySlots, sessionTurnsEndpoint, stopSessionTurn, streamSessionTurn } from './webLinkedTurn';
 import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
 import { resolveInlineSkills } from './skills/inline';
@@ -3837,6 +3837,9 @@ export class ChatService {
         if (this.active.get(sessionId) !== controller) return;
         this.active.delete(sessionId);
         this.deps.activity?.replyEnded(sessionId, endsUnread(outcome, replyText));
+        // The same end-of-turn hand-off as a local turn: a relay queued meanwhile is sent now (it
+        // is automated, so it runs locally), and a stopped or failed turn hands it back instead.
+        this.settleQueue(sessionId, outcome);
         this.loops.idle(sessionId);
       });
     return { ok: true, messageId: await accepted };
@@ -3864,7 +3867,7 @@ export class ChatService {
       report(id);
       return id;
     };
-    const storeReply = (changes: Partial<ChatMessage>) => {
+    const storeReply = (changes: Partial<ChatMessage>, running = false) => {
       // Dropped before the write, as settleReply does, so no read folds the stream onto it twice.
       this.live.delete(sessionId);
       return this.deps.store.putLinkedMessage(
@@ -3877,7 +3880,7 @@ export class ChatService {
           model: session.model,
           ...changes,
         },
-        { settled: true }
+        { running }
       );
     };
 
@@ -3937,7 +3940,13 @@ export class ChatService {
         return 'failed';
       }
       const stopReason = controller.signal.aborted ? 'aborted' : undefined;
-      await storeReply(stopReason ? { stopReason } : {});
+      // Walking away from the stream does not end the turn on the server. Until it confirms the
+      // stop, the chat stays busy, so a next message cannot start a turn that misses this reply.
+      const stoppedQuest: string | null = questId;
+      const stillRunning =
+        stopReason !== undefined &&
+        (stoppedQuest === null || !(await stopSessionTurn(api.getAxiosInstance(), sourceId, stoppedQuest)));
+      await storeReply(stopReason ? { stopReason } : {}, stillRunning);
       this.emit({ type: 'done', sessionId, messageId, content: slots.text, ...(stopReason ? { stopReason } : {}) });
       return stopReason ? 'aborted' : 'completed';
     } catch (err) {

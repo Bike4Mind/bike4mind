@@ -1553,13 +1553,15 @@ export class SessionStore implements SessionWritesStore {
   /**
    * Write a message of a turn the web session ran (ChatService.sendLinkedTurn), under the id the
    * importer gives that quest: replaced in place when a sync already brought it in, appended
-   * otherwise. The ids are imported ones, so the session stays synced; `settled` also clears the
-   * import's running mark, which the next sync would otherwise only clear on its own schedule.
+   * otherwise. The ids are imported ones, so the session stays synced. `running` sets or clears
+   * the import's running mark (left as is when absent): cleared once the turn is known to have
+   * ended, which the next sync would otherwise only do on its own schedule, and set when the
+   * server may still be writing it, until a sync sees the quest settle.
    */
   async putLinkedMessage(
     id: string,
     message: ChatMessage,
-    options: { settled?: boolean } = {}
+    options: { running?: boolean } = {}
   ): Promise<ChatSession | null> {
     if (!isImportedMessageId(message.id)) throw new Error(`Not an imported message id: ${message.id}`);
     return this.serialize(id, async () => {
@@ -1571,7 +1573,9 @@ export class SessionStore implements SessionWritesStore {
       if (at >= 0) session.messages[at] = message;
       else session.messages.push(message);
       session.updatedAt = new Date().toISOString();
-      if (options.settled && session.importOrigin?.running) {
+      if (options.running === true && session.importOrigin) {
+        session.importOrigin = { ...session.importOrigin, running: true };
+      } else if (options.running === false && session.importOrigin?.running) {
         const { running: _running, ...origin } = session.importOrigin;
         session.importOrigin = origin;
       }
