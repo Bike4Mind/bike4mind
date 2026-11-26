@@ -149,6 +149,19 @@ describe('createWsSender with viewers', () => {
     expect(targetsOf()).toEqual(['conn-1', 'viewer-1']);
   });
 
+  it('reuses an empty viewer read for steps but re-reads it before a terminal frame', async () => {
+    findViewers.mockResolvedValue([]);
+    const { createWsSender } = await import('./agentExecutor');
+    const send = createWsSender(HEADLESS_CONNECTION_ID, logger as never, 'exec1');
+    await send('iteration_step', {});
+    await send('iteration_step', {});
+    await send('resumed', {});
+    expect(findViewers).toHaveBeenCalledTimes(1);
+    await send('failed', {});
+    expect(findViewers).toHaveBeenCalledTimes(2);
+    expect(postToConnection).not.toHaveBeenCalled();
+  });
+
   it("sends a permission request only to the owner's own viewer connections", async () => {
     vi.spyOn(agentExecutionRepository, 'findById').mockResolvedValue({ userId: 'owner' } as never);
     const find = vi.spyOn(Connection, 'find').mockReturnValue({
