@@ -32,6 +32,9 @@ const SVG_ARTIFACT_TAGS = [
   'image',
   'title',
   'desc',
+  'foreignObject',
+  'switch',
+  'metadata',
   // SMIL `animate` and `set` are deliberately left out: they can rewrite an <a href> to
   // javascript: at runtime.
 ];

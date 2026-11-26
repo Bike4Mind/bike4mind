@@ -22,6 +22,18 @@ describe('sanitizeArtifactSvg', () => {
     expect(clean).not.toContain('javascript:');
   });
 
+  it('keeps switch, foreignObject and metadata but still removes scripts inside them', () => {
+    const clean = sanitizeArtifactSvg(
+      svg(
+        '<metadata>info</metadata><switch><foreignObject width="10" height="10"><div>hi<script>alert(1)</script></div></foreignObject><text>fallback</text></switch>'
+      )
+    );
+    expect(clean).toContain('<switch');
+    expect(clean).toContain('<foreignObject');
+    expect(clean).toContain('<metadata');
+    expect(clean).not.toContain('<script');
+  });
+
   it('keeps ordinary shapes, gradients and in-document references', () => {
     const clean = sanitizeArtifactSvg(
       svg(
