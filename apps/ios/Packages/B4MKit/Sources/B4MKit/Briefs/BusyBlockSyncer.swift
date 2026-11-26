@@ -68,7 +68,7 @@ public final class BusyBlockSyncer {
     let started = session
     let task = Task { await perform(session: started) }
     current = task
-    defer { current = nil }
+    defer { if session == started { current = nil } }
     let outcome = await withTaskCancellationHandler {
       await task.value
     } onCancel: {
@@ -92,8 +92,11 @@ public final class BusyBlockSyncer {
 
   /// Forgets the last outcome and throttle at a sign-in: a signed-out or opted-out result belongs to the
   /// previous session and would otherwise keep the background edge from re-arming for the new one.
+  /// A sync still running for the previous account is cancelled and let go, so the new session's sync can start.
   public func sessionDidStart() {
     session += 1
+    current?.cancel()
+    current = nil
     lastOutcome = nil
     lastSync = nil
   }
@@ -104,6 +107,8 @@ public final class BusyBlockSyncer {
         markSynced(session: started)
         return .skipped(.disabled)
       }
+      // The opt-in just read belongs to the previous account; saving now would write under the new one.
+      guard session == started else { return .skipped(.signedOut) }
       _ = try await api.save(enabled: true, blocks: currentBlocks())
       markSynced(session: started)
       return .synced
