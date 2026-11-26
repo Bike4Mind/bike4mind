@@ -2,7 +2,7 @@ import { ToolDefinition } from '../../base/types';
 import { promises as fs } from 'fs';
 import { existsSync, statSync } from 'fs';
 import path from 'path';
-import { assertPathAllowed } from '../../utils/pathValidation';
+import { assertWritablePath } from '../../utils/pathValidation';
 
 interface DeleteFileParams {
   path: string;
@@ -13,7 +13,7 @@ async function deleteFile(params: DeleteFileParams, allowedDirectories?: string[
   const { path: filePath, recursive = false } = params;
 
   // Validate path is within allowed directories (cwd is always included)
-  const resolvedPath = assertPathAllowed(filePath, allowedDirectories, 'delete');
+  const resolvedPath = assertWritablePath(filePath, allowedDirectories, 'delete');
 
   // Check if file/directory exists
   if (!existsSync(resolvedPath)) {

@@ -303,7 +303,7 @@ function optionsAreReadOnly(args: readonly string[], grammar: OptionGrammar): bo
 
 /** Options controlling how a deliberately approved build/script executes still need a fresh ask. */
 const REFUSED_OPTIONS: Readonly<Record<string, { long: readonly string[]; short?: string }>> = {
-  go: { long: ['-exec', '-toolexec', '-vettool'] },
+  go: { long: ['-exec', '--exec', '-toolexec', '--toolexec', '-vettool', '--vettool'] },
   cargo: { long: ['--config'] },
 };
 
@@ -509,7 +509,9 @@ export function sessionCommandPrefixes(command: string): string[] | null {
   const text = command.replace(/\s+$/, '');
   if (text.length === 0) return null;
   if (hasShellExpansion(text)) return null;
-  if (/[\n\r`]/.test(text) || text.includes('$(') || text.includes('<(') || text.includes('>(')) return null;
+  // Bash splits words only on space and tab; any other whitespace would tokenize differently.
+  if (/[^\S \t]/.test(text) || /`/.test(text) || text.includes('$(') || text.includes('<(') || text.includes('>('))
+    return null;
   if (classifyCommandRisk(text).level === 'high') return null;
 
   let tokens: ShellToken[];
@@ -530,6 +532,9 @@ export function sessionCommandPrefixes(command: string): string[] | null {
     words = [];
     return true;
   };
+
+  // shell-quote ends parsing at an unquoted `#`; bash may still run what follows it.
+  if (tokens.some(token => typeof token === 'object' && token !== null && 'comment' in token)) return null;
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];

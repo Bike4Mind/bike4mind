@@ -104,3 +104,24 @@ export function assertPathAllowed(filePath: string, allowedDirectories?: string[
 
   return result.resolvedPath;
 }
+
+/**
+ * Whether a path lies inside a git directory. Git runs programs named in its config and hooks,
+ * so a file tool writing there could make a later git command run code nobody approved.
+ */
+export function isInsideGitDirectory(resolvedPath: string): boolean {
+  // Windows ignores trailing dots and spaces in a name, and macOS/Windows compare names case-insensitively.
+  return resolvedPath.split(/[\\/]/).some(segment => segment.replace(/[. ]+$/, '').toLowerCase() === '.git');
+}
+
+/**
+ * {@link assertPathAllowed} for a tool that creates, edits or deletes files: also refuses any path
+ * inside a git directory (see {@link isInsideGitDirectory}).
+ */
+export function assertWritablePath(filePath: string, allowedDirectories?: string[], operation = 'write'): string {
+  const resolvedPath = assertPathAllowed(filePath, allowedDirectories, operation);
+  if (isInsideGitDirectory(resolvedPath)) {
+    throw new Error(`Access denied: Cannot ${operation} files inside a .git directory.`);
+  }
+  return resolvedPath;
+}

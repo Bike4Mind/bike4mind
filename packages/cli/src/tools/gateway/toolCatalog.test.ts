@@ -55,6 +55,15 @@ describe('ToolCatalog MCP and skill defaults', () => {
 
   it('refuses to register into the MCP namespace', () => {
     expect(() => new ToolCatalog().register('mcp__github__create_issue', moduleReader)).toThrow(/reserved namespace/);
+    expect(() => new ToolCatalog().register('github__create_issue', moduleReader)).toThrow(/reserved namespace/);
+  });
+
+  it('recognises the <server>__<tool> names generateMcpTools gives real MCP tools', () => {
+    const catalog = new ToolCatalog();
+    expect(resolveStaticToolDescriptor('github__create_issue')?.source).toEqual({ kind: 'mcp', server: 'github' });
+    expect(catalog.category('github__create_issue')).toBe('prompt_always');
+    expect(catalog.canTrust('github__create_issue')).toBe(false);
+    expect(catalog.isReadOnly('github__create_issue')).toBe(false);
   });
 });
 

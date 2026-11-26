@@ -389,6 +389,81 @@ function isOperator(token: ShellToken): token is { op: string } {
   return typeof token === 'object' && token !== null && 'op' in token;
 }
 
+function isComment(token: ShellToken): boolean {
+  return typeof token === 'object' && token !== null && 'comment' in token;
+}
+
+const SHELL_METACHARACTERS = new Set([';', '&', '|', '(', ')', '<', '>']);
+const BASH_BLANKS = new Set([' ', '\t', '\n']);
+
+/**
+ * Rewrite a bash command so shell-quote tokenizes it the way bash does. shell-quote reads a
+ * newline as plain whitespace and starts a comment at any unquoted `#`, while bash ends a command
+ * at a newline and starts a comment only at the start of a word. Bash comments are dropped,
+ * unquoted newlines become `;`, and a mid-word `#` or a character bash does not treat as a blank
+ * but shell-quote does (`\v`, `\f`, `\r`, Unicode spaces) is escaped as a literal.
+ */
+export function toShellQuoteSyntax(command: string): string {
+  let out = '';
+  let quote: "'" | '"' | null = null;
+  let wordStart = true;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (quote === "'") {
+      out += character;
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      out += character;
+      if (character === '\\' && index + 1 < command.length) {
+        index += 1;
+        out += command[index];
+      } else if (character === '"') {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '\\') {
+      if (command[index + 1] === '\n') {
+        index += 1;
+        continue;
+      }
+      out += character + (command[index + 1] ?? '');
+      index += 1;
+      wordStart = false;
+      continue;
+    }
+    if (character === '#') {
+      if (wordStart) {
+        while (index + 1 < command.length && command[index + 1] !== '\n') index += 1;
+        continue;
+      }
+      out += '\\#';
+      continue;
+    }
+    if (character === '\n') {
+      out += ';';
+      wordStart = true;
+      continue;
+    }
+    if (BASH_BLANKS.has(character) || SHELL_METACHARACTERS.has(character)) {
+      out += character;
+      wordStart = true;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      out += `\\${character}`;
+      wordStart = false;
+      continue;
+    }
+    if (character === "'" || character === '"') quote = character;
+    out += character;
+    wordStart = false;
+  }
+  return out;
+}
+
 function asString(token: ShellToken): string | null {
   if (typeof token === 'string') return token;
   // shell-quote emits globs as { op: 'glob', pattern }. Keep the pattern so
@@ -637,9 +712,13 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
 
   let tokens: ShellToken[];
   try {
-    tokens = shellParse(trimmed);
+    tokens = shellParse(toShellQuoteSyntax(trimmed));
   } catch {
     return { level: 'high', reasons: ['command could not be parsed (fail closed)'] };
+  }
+
+  if (tokens.some(isComment)) {
+    return { level: 'high', reasons: ['command text could not be fully analyzed (fail closed)'] };
   }
 
   if (tokens.length === 0) {

@@ -3,6 +3,8 @@ import type { ToolCategory, ToolDescriptor } from './toolDescriptor.js';
 import { canTrustTool, isReadOnlyTool, toolCategory } from './toolPolicy.js';
 
 const MCP_PREFIX = 'mcp__';
+/** generateMcpTools names server tools `<server>__<tool>`; no core or registered tool uses `__`. */
+const MCP_SEPARATOR = '__';
 const HOOK_PREFIXES = ['agent_hook:', 'skill_hook:'] as const;
 
 function isHookName(toolName: string): boolean {
@@ -10,8 +12,9 @@ function isHookName(toolName: string): boolean {
 }
 
 /**
- * Resolve a tool name without a catalog instance: the core table, then the MCP namespace
- * (`mcp__<server>__<tool>`), then the lifecycle-hook namespaces. Undefined means unknown.
+ * Resolve a tool name without a catalog instance: the core table, then the MCP namespaces
+ * (`mcp__<server>__<tool>` and `<server>__<tool>`), then the lifecycle-hook namespaces.
+ * Undefined means unknown.
  * ToolCatalog.resolve falls back to this after its registered descriptors.
  */
 export function resolveStaticToolDescriptor(toolName: string): ToolDescriptor | undefined {
@@ -20,6 +23,14 @@ export function resolveStaticToolDescriptor(toolName: string): ToolDescriptor | 
   if (toolName.startsWith(MCP_PREFIX)) {
     const server = toolName.slice(MCP_PREFIX.length).split('__')[0];
     return { source: { kind: 'mcp', server }, effect: 'execute', approval: 'prompt_always' };
+  }
+  const separator = toolName.indexOf(MCP_SEPARATOR);
+  if (separator > 0) {
+    return {
+      source: { kind: 'mcp', server: toolName.slice(0, separator) },
+      effect: 'execute',
+      approval: 'prompt_always',
+    };
   }
   if (isHookName(toolName)) {
     return { source: { kind: 'hook' }, effect: 'execute', approval: 'prompt_always' };
@@ -41,7 +52,7 @@ export class ToolCatalog {
    * namespace whose descriptor comes from the name alone, with a lower tier.
    */
   register(toolName: string, descriptor: ToolDescriptor): void {
-    if (toolName.startsWith(MCP_PREFIX) || isHookName(toolName)) {
+    if (toolName.startsWith(MCP_PREFIX) || toolName.includes(MCP_SEPARATOR) || isHookName(toolName)) {
       throw new Error(`Tool name "${toolName}" is in a reserved namespace and cannot be registered`);
     }
     if (CORE_TOOL_DESCRIPTORS.has(toolName)) {

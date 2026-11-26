@@ -53,7 +53,7 @@ describe('requestShellCommandPermission', () => {
     const pm = new PermissionManager(new ToolCatalog());
     const prompt = promptReturning('allow-session');
     await requestShellCommandPermission('agent_hook:Stop', 'ls', '/proj', { permissionManager: pm, promptFn: prompt });
-    expect(pm.isSessionTrusted('agent_hook:Stop')).toBe(true);
+    expect(pm.isExactCommandSessionTrusted('agent_hook:Stop', 'ls')).toBe(true);
 
     // A second call is allowed without prompting again.
     const prompt2 = promptReturning('deny');
@@ -63,6 +63,23 @@ describe('requestShellCommandPermission', () => {
     });
     expect(res.allowed).toBe(true);
     expect(prompt2).not.toHaveBeenCalled();
+  });
+
+  it('allow-session covers only the approved command, not every hook on the same event', async () => {
+    const pm = new PermissionManager(new ToolCatalog());
+    await requestShellCommandPermission('skill_hook:pre-invoke', 'echo ready', '/proj', {
+      permissionManager: pm,
+      promptFn: promptReturning('allow-session'),
+    });
+    expect(pm.needsPermission('skill_hook:pre-invoke')).toBe(true);
+
+    const prompt = promptReturning('deny');
+    const res = await requestShellCommandPermission('skill_hook:pre-invoke', 'touch /tmp/pwned', '/proj', {
+      permissionManager: pm,
+      promptFn: prompt,
+    });
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(res.allowed).toBe(false);
   });
 
   it('never permanently trusts a hook, even when repo trustedTools list its name', async () => {
@@ -183,7 +200,7 @@ describe('retired hook permissions', () => {
     ended = true;
     resolve({ action: 'allow-session' });
     expect((await running).decision).toBe('deny');
-    expect(manager.isSessionTrusted('agent_hook:Stop')).toBe(false);
+    expect(manager.isExactCommandSessionTrusted('agent_hook:Stop', 'echo old-session')).toBe(false);
     expect(mockRun).not.toHaveBeenCalled();
   });
 

@@ -58,7 +58,7 @@ async function findFiles(params: GlobFilesParams, allowedDirectories?: string[])
 
   const ignorePatterns = respect_git_ignore ? DEFAULT_IGNORE_PATTERNS : [];
 
-  const matches = await glob(pattern, {
+  const expanded = await glob(pattern, {
     cwd: targetDir,
     dot: false, // Don't match hidden files by default
     ignore: ignorePatterns,
@@ -67,6 +67,9 @@ async function findFiles(params: GlobFilesParams, allowedDirectories?: string[])
     nocase: !case_sensitive, // Case-insensitive if requested
     maxDepth: 20, // Reasonable depth limit
   });
+  // Brace expansion can turn a relative-looking pattern into `..` or absolute paths, so
+  // the pattern check above is not enough: every match is validated on its own.
+  const matches = expanded.filter(match => isPathAllowed(match, allowedDirectories).allowed);
 
   if (matches.length === 0) {
     return `No files found matching pattern: ${pattern}${dir_path ? ` in ${dir_path}` : ''}`;
