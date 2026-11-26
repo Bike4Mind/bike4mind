@@ -62,6 +62,8 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
   }
 
   async findByIdAndUserId(id: string, userId: string) {
+    // Callers pass request values straight through; a non-id (e.g. a query object) must not match.
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.agentModel.findOne({ _id: id, userId });
     return result?.toJSON() ?? null;
   }

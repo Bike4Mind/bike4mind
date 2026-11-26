@@ -179,4 +179,22 @@ describe('AgentModel', () => {
       expect(await agentRepository.countByUserId(baseAgentData.userId)).toBe(0);
     });
   });
+
+  describe('findByIdAndUserId', () => {
+    it("returns the caller's own agent", async () => {
+      const agent = await Agent.create(baseAgentData);
+      expect((await agentRepository.findByIdAndUserId(agent.id, baseAgentData.userId))?.id).toBe(agent.id);
+    });
+
+    it('returns null for an agent owned by someone else', async () => {
+      const agent = await Agent.create({ ...baseAgentData, userId: 'someone-else' });
+      expect(await agentRepository.findByIdAndUserId(agent.id, baseAgentData.userId)).toBeNull();
+    });
+
+    it('returns null for an id that is not an ObjectId string', async () => {
+      await Agent.create(baseAgentData);
+      const notAnId = { $ne: null } as unknown as string;
+      expect(await agentRepository.findByIdAndUserId(notAnId, baseAgentData.userId)).toBeNull();
+    });
+  });
 });
