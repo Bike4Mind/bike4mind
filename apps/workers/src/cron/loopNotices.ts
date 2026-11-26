@@ -156,7 +156,7 @@ export function desiredLoopNotices(
  * key (so is not re-sent) until its cause clears.
  *
  * Global, but bounded by what currently needs an owner rather than by all loops: each query reads
- * through an index and returns only loops in needs_you/error/paused ({status, nextRunAt}, bounded by MAX_NOTICE_LOOPS_READ), blocked loop
+ * through an index and returns only loops whose status needs their owner ({status, nextRunAt}, bounded by MAX_NOTICE_LOOPS_READ), blocked loop
  * tickets (the partial {status, loopId} index, entered at status 'blocked'), p0/p1  loop tickets not closed (the
  * partial {priority, status} index, bounded by MAX_URGENT_TICKETS_READ), alarmed loops (the partial
  * {alarm.kind} index) and held `loop:` notices (the partial
@@ -165,7 +165,14 @@ export function desiredLoopNotices(
  */
 export async function syncLoopNotices(logger: Logger): Promise<void> {
   const [statusLoops, tickets, held, alarmed, urgent] = await Promise.all([
-    loopRepository.find({ status: { $in: ['needs_you', 'error', 'paused'] } }, { limit: MAX_NOTICE_LOOPS_READ }),
+    // Mirrors loopStatusNeedsOwner, so owner pauses never fill the read. Newest first: past the cap, older
+    // loops keep their open notices (keepUnread) while a newly stopped loop still gets one.
+    loopRepository.find(
+      {
+        $or: [{ status: { $in: ['needs_you', 'error'] } }, { status: 'paused', statusReason: { $nin: [null, ''] } }],
+      },
+      { limit: MAX_NOTICE_LOOPS_READ, sort: { updatedAt: -1, _id: -1 } }
+    ),
     workItemRepository.find(
       {
         loopId: { $exists: true },

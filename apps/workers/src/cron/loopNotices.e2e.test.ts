@@ -8,6 +8,7 @@ import {
   Inbox,
   inboxRepository,
   Loop,
+  loopRepository,
   WorkItem,
   workItemRepository,
 } from '@bike4mind/database';
@@ -23,7 +24,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: vi.fn() }));
 
 import { runLoopSchedulerTick, USER_BUDGET_PAUSE_REASON } from './loopScheduler';
-import { MAX_BLOCKED_TICKETS_READ, MAX_URGENT_TICKETS_READ } from './loopNotices';
+import { MAX_BLOCKED_TICKETS_READ, MAX_NOTICE_LOOPS_READ, MAX_URGENT_TICKETS_READ } from './loopNotices';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -138,6 +139,22 @@ describe('loop notices', () => {
     await createLoop({ status: 'draft' });
     await tick();
     expect(await openNotices()).toHaveLength(0);
+  });
+
+  it('reads only loops needing their owner, newest first, so owner pauses never fill the read', async () => {
+    const older = await createLoop({ status: 'needs_you', statusReason: 'Needs a look' });
+    await createLoop({ status: 'paused' });
+    const newer = await createLoop({ status: 'paused', statusReason: 'Out of credits' });
+    await Loop.collection.updateOne({ _id: new mongoose.Types.ObjectId(older.id) }, { $set: { updatedAt: NOW } });
+    await Loop.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(newer.id) },
+      { $set: { updatedAt: new Date(NOW.getTime() + 1000) } }
+    );
+    const find = vi.spyOn(loopRepository, 'find');
+    await tick();
+    const read = find.mock.calls.findIndex(([, options]) => options?.limit === MAX_NOTICE_LOOPS_READ);
+    const loops = await find.mock.results[read].value;
+    expect(loops.map((loop: { id: string }) => loop.id)).toEqual([newer.id, older.id]);
   });
 
   it('writes nothing with EnableLoops off', async () => {
