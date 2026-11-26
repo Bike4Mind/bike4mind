@@ -265,13 +265,15 @@ describe('setupSamlStrategy - configuration and profile edges', () => {
 });
 
 describe('passport session serialization', () => {
+  // passport is one instance per worker and CI reuses workers across files, so each auth.ts load
+  // appends its own pair: the last one is this file's, bound to this file's User mock.
   const serialize = (user: unknown) =>
     new Promise((resolve, reject) =>
-      passportInternals._serializers[0](user, (err: unknown, id: unknown) => (err ? reject(err) : resolve(id)))
+      passportInternals._serializers.at(-1)!(user, (err: unknown, id: unknown) => (err ? reject(err) : resolve(id)))
     );
   const deserialize = (id: string) =>
     new Promise(resolve =>
-      passportInternals._deserializers[0](id, (err: unknown, user: unknown) => resolve({ err, user }))
+      passportInternals._deserializers.at(-1)!(id, (err: unknown, user: unknown) => resolve({ err, user }))
     );
 
   it('stores the user id and loads the user back by it', async () => {
