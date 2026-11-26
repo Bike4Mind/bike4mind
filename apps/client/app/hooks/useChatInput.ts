@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { IResolvedPromptDispatch } from '@bike4mind/common';
-import { CHAT_INPUT_DRAFTS_STORAGE_KEY, onIdentityReset } from '../utils/identityScopedStorage';
+import {
+  CHAT_INPUT_DRAFTS_STORAGE_KEY,
+  getSignedInUserId,
+  onIdentityReset,
+  onUserSignedIn,
+} from '../utils/identityScopedStorage';
 
 // Stable draft key for a brand-new / unsaved notebook that has no session id yet.
 // Lets the in-progress text ride the persisted `drafts` map (session-scoped) so a
@@ -18,8 +23,11 @@ interface ChatInputStore {
   chatInputValue: string;
   setChatInputValue: (value: string) => void;
 
-  // Per-session draft storage (persisted to localStorage)
+  // Per-session draft storage (persisted to localStorage), readable only by draftsOwnerId
   drafts: Record<string, string>;
+  draftsOwnerId: string | null;
+  /** Makes `userId` the drafts' owner, dropping any drafts another (or no) user left behind. */
+  claimDrafts: (userId: string) => void;
   setDraft: (sessionId: string, value: string) => void;
   getDraft: (sessionId: string) => string;
   clearDraft: (sessionId: string) => void;
@@ -63,9 +71,17 @@ export const useChatInput = create<ChatInputStore>()(
 
       // Per-session draft storage
       drafts: {},
+      draftsOwnerId: null,
+
+      claimDrafts: (userId: string) => {
+        if (get().draftsOwnerId === userId) return;
+        set({ drafts: {}, draftsOwnerId: userId });
+      },
 
       setDraft: (sessionId: string, value: string) => {
-        if (!sessionId) return;
+        const userId = getSignedInUserId();
+        if (!sessionId || !userId) return;
+        get().claimDrafts(userId);
         set(state => ({
           drafts: {
             ...state.drafts,
@@ -75,8 +91,9 @@ export const useChatInput = create<ChatInputStore>()(
       },
 
       getDraft: (sessionId: string) => {
-        if (!sessionId) return '';
-        return get().drafts[sessionId] || '';
+        const { drafts, draftsOwnerId } = get();
+        if (!sessionId || !draftsOwnerId || draftsOwnerId !== getSignedInUserId()) return '';
+        return drafts[sessionId] || '';
       },
 
       clearDraft: (sessionId: string) => {
@@ -115,9 +132,14 @@ export const useChatInput = create<ChatInputStore>()(
     {
       name: CHAT_INPUT_DRAFTS_STORAGE_KEY,
       // Only persist the drafts, not the transient state
-      partialize: state => ({ drafts: state.drafts }),
+      partialize: state => ({ drafts: state.drafts, draftsOwnerId: state.draftsOwnerId }),
     }
   )
 );
 
-onIdentityReset(() => useChatInput.setState({ drafts: {}, chatInputValue: '' }));
+onIdentityReset(({ sessionExpired }) =>
+  useChatInput.setState(
+    sessionExpired ? { chatInputValue: '' } : { drafts: {}, draftsOwnerId: null, chatInputValue: '' }
+  )
+);
+onUserSignedIn(userId => useChatInput.getState().claimDrafts(userId));

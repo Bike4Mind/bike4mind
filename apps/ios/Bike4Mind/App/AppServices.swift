@@ -280,13 +280,13 @@ final class AppServices {
     await auth.signOut(reason: reason)
   }
 
-  /// Session end, whether the user signed out or the server ended it: Studio tiles and queued captures belong
-  /// to the account that made them, so the next one must not see or send them.
-  func discardAccountContent() async {
+  /// Session end: Studio tiles and queued captures belong to the account that made them, so the next one must
+  /// not see or send them. `keepingCaptures` keeps the owner-stamped jobs for the same account's next sign-in.
+  func discardAccountContent(keepingCaptures: Bool) async {
     studioTrackerState?.tracker.reset()
     studioTrackerState = nil
     UserDefaultsGenerationStore(environment: auth.environment).save([])
-    await capture.signOut()
+    await capture.signOut(keepingJobs: keepingCaptures)
   }
 
   var sessionListCache: any SessionListCache { current.cache }

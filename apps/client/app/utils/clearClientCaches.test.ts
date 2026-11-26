@@ -18,6 +18,7 @@ import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
 import { MFA_ENROLLMENT_HINT_KEY } from './mfaEnrollmentHint';
 import { clearClientCaches } from './clearClientCaches';
 import { useChatInput } from '../hooks/useChatInput';
+import { setSignedInUserId } from './identityScopedStorage';
 import { getStoredJupyterConfig, subscribeStoredJupyterConfig } from './jupyterBrowserClient';
 
 function setPrefixes(prefixes: string[]) {
@@ -97,7 +98,8 @@ describe('clearClientCaches identity-scoped stores', () => {
     expect(localStorage.getItem(MFA_ENROLLMENT_HINT_KEY)).toBeNull();
   });
 
-  it('drops unsent chat drafts from storage and from the live store', async () => {
+  it('drops unsent chat drafts from storage and from the live store on sign-out', async () => {
+    setSignedInUserId('user-a');
     useChatInput.getState().setDraft('__new_notebook__', 'half-typed prompt');
     expect(localStorage.getItem('chat-input-drafts')).not.toBeNull();
 
@@ -105,6 +107,18 @@ describe('clearClientCaches identity-scoped stores', () => {
 
     expect(localStorage.getItem('chat-input-drafts')).toBeNull();
     expect(useChatInput.getState().getDraft('__new_notebook__')).toBe('');
+  });
+
+  it('keeps unsent chat drafts, with their owner, when the session expired', async () => {
+    setSignedInUserId('user-a');
+    useChatInput.getState().setDraft('__new_notebook__', 'half-typed prompt');
+
+    await clearClientCaches({ sessionExpired: true });
+
+    const persisted = JSON.parse(localStorage.getItem('chat-input-drafts') ?? '{}');
+    expect(persisted.state).toEqual({ drafts: { __new_notebook__: 'half-typed prompt' }, draftsOwnerId: 'user-a' });
+    expect(useChatInput.getState().getDraft('__new_notebook__')).toBe('half-typed prompt');
+    expect(useChatInput.getState().chatInputValue).toBe('');
   });
 
   it('drops the saved Jupyter server and token', async () => {

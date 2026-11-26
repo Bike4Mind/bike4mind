@@ -38,7 +38,13 @@ public struct CaptureStack: Sendable {
     let capture = CaptureClient(baseURL: baseURL, tokens: tokens)
     let engine = CaptureEngine(
       store: FileUploadJobStore(directory: directory), api: capture, ownIdentifier: ownIdentifier,
-      makeUploader: { URLSessionBackgroundUploader(identifier: $0) }, didSendToSession: didSendToSession)
+      makeUploader: { URLSessionBackgroundUploader(identifier: $0) }, didSendToSession: didSendToSession,
+      currentOwner: {
+        guard let token = try? await tokens.accessToken(),
+          let userID = AccountProfile.userID(fromAccessToken: token)
+        else { return nil }
+        return CaptureOwner(userID: userID, baseURL: baseURL)
+      })
     return CaptureStack(
       engine: engine,
       destinations: RemoteDestinationSource(capture: capture, api: APIClient(baseURL: baseURL, tokens: tokens)),
@@ -55,9 +61,14 @@ public struct CaptureStack: Sendable {
       delegator: CaptureFixtures.delegator)
   }
 
-  /// Session end: drops queued captures, their staged files and the remembered destination.
-  public func signOut() async {
-    await engine?.discardAll()
+  /// Session end: drops the remembered destination and, unless `keepingJobs`, queued captures and their staged
+  /// files. Kept jobs carry their owner, so the next sign-in sends them only if the same account returns.
+  public func signOut(keepingJobs: Bool = false) async {
+    if keepingJobs {
+      await engine?.releaseOwner()
+    } else {
+      await engine?.discardAll()
+    }
     destinationStore.forget()
   }
 

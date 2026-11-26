@@ -1,4 +1,5 @@
 import XCTest
+import os
 
 @testable import B4MKit
 
@@ -37,7 +38,8 @@ final class CaptureEngineTests: XCTestCase {
   private func rig(
     api: FakeCaptureAPI = FakeCaptureAPI(), store: FileUploadJobStore? = nil,
     identifier: String = BackgroundSessionIdentifier.app, uploader: FakeUploader? = nil,
-    didSendToSession: (@Sendable (String) async -> Void)? = nil
+    didSendToSession: (@Sendable (String) async -> Void)? = nil,
+    currentOwner: (@Sendable () async -> CaptureOwner?)? = nil
   ) -> Rig {
     let store = store ?? FileUploadJobStore(directory: temp.url)
     let uploader = uploader ?? FakeUploader(identifier: identifier)
@@ -45,7 +47,7 @@ final class CaptureEngineTests: XCTestCase {
     let engine = CaptureEngine(
       store: store, api: api, ownIdentifier: identifier, makeUploader: { _ in uploader }, now: { clock.now },
       sleep: { _ in }, configuration: Self.fastConfiguration,
-      didSendToSession: didSendToSession)
+      didSendToSession: didSendToSession, currentOwner: currentOwner)
     return Rig(engine: engine, api: api, uploader: uploader, store: store)
   }
 
@@ -137,6 +139,112 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertNil(try rig.store.load(id: job.id))
     let remaining = await rig.engine.jobs()
     XCTAssertEqual(remaining, [])
+  }
+
+  // MARK: - Ownership
+
+  private let alice = CaptureOwner(userID: "user-a", baseURL: URL(string: "https://app.example.com")!)
+  private let bob = CaptureOwner(userID: "user-b", baseURL: URL(string: "https://app.example.com")!)
+
+  private func ownedRig(_ signedIn: OSAllocatedUnfairLock<CaptureOwner?>) -> Rig {
+    rig(currentOwner: { signedIn.withLock { $0 } })
+  }
+
+  func testEnqueuedJobsRecordTheSignedInAccount() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let rig = ownedRig(signedIn)
+
+    let job = try only(try await rig.engine.submit([photo()], to: lake, note: nil))
+
+    XCTAssertEqual(try rig.store.load(id: job.id)?.owner, alice)
+  }
+
+  func testTheSameAccountKeepsItsCapturesAcrossAServerEndedSession() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let rig = ownedRig(signedIn)
+    _ = try await rig.engine.submit([photo()], to: lake, note: nil)
+    let stack = CaptureStack(
+      engine: rig.engine, destinations: CaptureFixtures.destinationSource, submitter: CaptureFixtures.submitter,
+      transcription: CaptureFixtures.transcription, destinationStore: InMemoryDestinationStore(),
+      jobs: CaptureFixtures.jobs)
+
+    signedIn.withLock { $0 = nil }
+    await stack.signOut(keepingJobs: true)
+    let listedWhileSignedOut = await rig.engine.jobs()
+    let alice = alice
+    signedIn.withLock { $0 = alice }
+    await rig.engine.resume()
+
+    XCTAssertEqual(listedWhileSignedOut, [])
+    let listed = await rig.engine.jobs()
+    XCTAssertEqual(listed.count, 1)
+    XCTAssertEqual(listed.first?.owner, alice)
+  }
+
+  func testAnotherAccountNeverSendsOrListsTheLastAccountsCaptures() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let rig = ownedRig(signedIn)
+    await rig.engine.resume()
+    let queued = try only(try await rig.engine.enqueue([photo()], to: lake, note: "private note"))
+    await rig.engine.releaseOwner()
+
+    let bob = bob
+    signedIn.withLock { $0 = bob }
+    await rig.engine.resume()
+
+    let listed = await rig.engine.jobs()
+    let calls = await rig.api.calls
+    XCTAssertEqual(listed, [])
+    XCTAssertNil(try rig.store.load(id: queued.id))
+    XCTAssertEqual(calls, [])
+    XCTAssertTrue(rig.uploader.started.isEmpty)
+  }
+
+  func testAnExplicitSignOutWipesCapturesEvenForTheSameAccount() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let rig = ownedRig(signedIn)
+    await rig.engine.resume()
+    let queued = try only(try await rig.engine.enqueue([photo()], to: lake, note: nil))
+    let stack = CaptureStack(
+      engine: rig.engine, destinations: CaptureFixtures.destinationSource, submitter: CaptureFixtures.submitter,
+      transcription: CaptureFixtures.transcription, destinationStore: InMemoryDestinationStore(),
+      jobs: CaptureFixtures.jobs)
+
+    await stack.signOut()
+    await rig.engine.resume()
+
+    XCTAssertNil(try rig.store.load(id: queued.id))
+    let listed = await rig.engine.jobs()
+    XCTAssertEqual(listed, [])
+  }
+
+  func testCapturesWithNoRecordedOwnerAreDroppedAtSignIn() async throws {
+    let store = FileUploadJobStore(directory: temp.url)
+    let legacy = UploadJob(destination: lake, payload: .message("from before owners"), note: nil, now: clock.now)
+    try store.save(legacy)
+    XCTAssertNil(try store.load(id: legacy.id)?.owner)
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let rig = rig(store: store, currentOwner: { signedIn.withLock { $0 } })
+
+    await rig.engine.resume()
+
+    XCTAssertNil(try store.load(id: legacy.id))
+    let calls = await rig.api.calls
+    XCTAssertEqual(calls, [])
+  }
+
+  func testNothingIsSentOrListedWhileNoAccountIsSignedIn() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: nil)
+    let rig = ownedRig(signedIn)
+
+    do {
+      _ = try await rig.engine.submit([photo()], to: lake, note: nil)
+      XCTFail("expected a refusal")
+    } catch {
+      XCTAssertEqual(error as? CaptureOwnershipError, .noSignedInAccount)
+    }
+    let listed = await rig.engine.jobs()
+    XCTAssertEqual(listed, [])
   }
 
   func testCaptureStackSignOutForgetsTheRememberedDestination() async throws {

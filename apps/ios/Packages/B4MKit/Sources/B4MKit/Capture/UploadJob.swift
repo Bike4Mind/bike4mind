@@ -21,6 +21,17 @@ public enum UploadPayload: Codable, Hashable, Sendable {
   case message(String)
 }
 
+/// The account a capture was queued under. Only that account may send or list it.
+public struct CaptureOwner: Codable, Hashable, Sendable {
+  public let userID: String
+  public let baseURL: URL
+
+  public init(userID: String, baseURL: URL) {
+    self.userID = userID
+    self.baseURL = baseURL
+  }
+}
+
 /// One persisted capture. Persisted on every transition so the app can finish what a reaped share
 /// extension (or a killed app) started.
 public struct UploadJob: Codable, Identifiable, Equatable, Sendable {
@@ -29,6 +40,8 @@ public struct UploadJob: Codable, Identifiable, Equatable, Sendable {
   public let payload: UploadPayload
   public let note: String?
   public let createdAt: Date
+  /// Optional on disk so records written before the field existed still decode; such jobs have no owner.
+  public let owner: CaptureOwner?
 
   public internal(set) var stage: UploadStage
   public internal(set) var ticket: UploadTicket?
@@ -53,9 +66,11 @@ public struct UploadJob: Codable, Identifiable, Equatable, Sendable {
   }
 
   public init(
-    id: UUID = UUID(), destination: CaptureDestination, payload: UploadPayload, note: String?, now: Date
+    id: UUID = UUID(), destination: CaptureDestination, payload: UploadPayload, note: String?, now: Date,
+    owner: CaptureOwner? = nil
   ) {
     self.id = id
+    self.owner = owner
     self.destination = destination
     self.payload = payload
     self.note = note

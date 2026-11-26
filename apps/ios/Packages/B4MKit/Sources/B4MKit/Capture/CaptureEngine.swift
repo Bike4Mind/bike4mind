@@ -34,6 +34,7 @@ public actor CaptureEngine {
   private let sleep: @Sendable (Duration) async -> Void
   private let configuration: Configuration
   private let didSendToSession: (@Sendable (String) async -> Void)?
+  private let currentOwner: (@Sendable () async -> CaptureOwner?)?
   private let logger = Logger(subsystem: "com.bike4mind.app", category: "capture")
 
   private var uploaders: [String: any BackgroundUploading] = [:]
@@ -41,11 +42,15 @@ public actor CaptureEngine {
   private var inFlight: Set<UUID> = []
   /// Jobs wiped by `discardAll()`; a pass still awaiting the network must not write them back.
   private var discarded: Set<UUID> = []
+  /// With `currentOwner` set, the account whose jobs this engine sends and lists; `nil` until `claim` runs.
+  private var claimedOwner: CaptureOwner?
   private var observers: [UUID: AsyncStream<[UploadJob]>.Continuation] = [:]
 
   /// - Parameters:
   ///   - ownIdentifier: this process's background session (`BackgroundSessionIdentifier.app` or `.shareExtension`).
   ///   - makeUploader: builds the session for an identifier; the app also asks for the extension's.
+  ///   - currentOwner: the signed-in account. When set, jobs are stamped with it at enqueue, and only its jobs
+  ///     are sent or listed; any other account's (or an unowned) job is discarded first.
   public init(
     store: any UploadJobStore,
     api: any CaptureAPI,
@@ -54,7 +59,8 @@ public actor CaptureEngine {
     now: @escaping @Sendable () -> Date = Date.init,
     sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
     configuration: Configuration = Configuration(),
-    didSendToSession: (@Sendable (String) async -> Void)? = nil
+    didSendToSession: (@Sendable (String) async -> Void)? = nil,
+    currentOwner: (@Sendable () async -> CaptureOwner?)? = nil
   ) {
     self.store = store
     self.api = api
@@ -64,12 +70,16 @@ public actor CaptureEngine {
     self.sleep = sleep
     self.configuration = configuration
     self.didSendToSession = didSendToSession
+    self.currentOwner = currentOwner
   }
 
   // MARK: - Observing
 
   public func jobs() -> [UploadJob] {
-    (try? store.loadAll()) ?? []
+    let all = (try? store.loadAll()) ?? []
+    guard currentOwner != nil else { return all }
+    guard let claimedOwner else { return [] }
+    return all.filter { $0.owner == claimedOwner }
   }
 
   /// The full job list, now and after every change.
@@ -98,6 +108,7 @@ public actor CaptureEngine {
 
   /// Persists a job per item. Nothing leaves the device yet; call `start(_:)`/`resume()` for that.
   public func enqueue(_ items: [ShareItem], to destination: CaptureDestination, note: String?) throws -> [UploadJob] {
+    if currentOwner != nil && claimedOwner == nil { throw CaptureOwnershipError.noSignedInAccount }
     let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     var created: [UploadJob] = []
     do {
@@ -121,6 +132,9 @@ public actor CaptureEngine {
   ) async throws
     -> [UploadJob]
   {
+    if currentOwner != nil {
+      guard await claim() else { throw CaptureOwnershipError.noSignedInAccount }
+    }
     let jobs = try enqueue(items, to: destination, note: note)
     for job in jobs { await advance(job.id) }
     // One job per item, in order (`CaptureSubmitting`): an unreadable record keeps its enqueued snapshot
@@ -130,6 +144,9 @@ public actor CaptureEngine {
 
   /// App launch / foreground: retry lost uploads, push every unfinished job forward, prune old results.
   public func resume() async {
+    if currentOwner != nil {
+      guard await claim() else { return }
+    }
     prune()
     // The share extension sends into sessions from its own process, so the app's cached transcripts for
     // those sessions can only be dropped here, when the app next comes forward.
@@ -182,14 +199,38 @@ public actor CaptureEngine {
   /// Session end: every job, staged file and note belongs to the account that queued it, so none may be
   /// sent or listed under the next one.
   public func discardAll() {
-    discarded.formUnion(jobs().map(\.id))
+    discarded.formUnion(((try? store.loadAll()) ?? []).map(\.id))
     discarded.formUnion(inFlight)
+    claimedOwner = nil
     do {
       try store.removeAll()
     } catch {
       logger.error("Clearing capture jobs failed: \(error, privacy: .public)")
     }
     notify()
+  }
+
+  /// Session end that keeps the jobs: none is sent or listed again until the next `claim`.
+  public func releaseOwner() {
+    claimedOwner = nil
+    notify()
+  }
+
+  /// Makes the signed-in account this engine's owner and discards every job it did not queue, unowned ones
+  /// included. `false` when no account is signed in, in which case nothing may be sent or listed.
+  private func claim() async -> Bool {
+    guard let owner = await currentOwner?() else { return false }
+    claimedOwner = owner
+    for job in (try? store.loadAll()) ?? [] where job.owner != owner {
+      discarded.insert(job.id)
+      do {
+        try store.remove(id: job.id)
+      } catch {
+        logger.error("Discarding another account's capture failed: \(error, privacy: .public)")
+      }
+    }
+    notify()
+    return true
   }
 
   // MARK: - Job creation
@@ -211,7 +252,7 @@ public actor CaptureEngine {
       _ = try store.stagePayload(copying: file.fileURL, jobID: id, fileName: file.fileName)
       payload = .file(name: file.fileName, mimeType: file.mimeType, byteCount: file.byteCount)
     }
-    let job = UploadJob(id: id, destination: destination, payload: payload, note: note, now: now())
+    let job = UploadJob(id: id, destination: destination, payload: payload, note: note, now: now(), owner: claimedOwner)
     do {
       try store.save(job)
     } catch {
@@ -495,6 +536,11 @@ public actor CaptureEngine {
       return false
     }
   }
+}
+
+public enum CaptureOwnershipError: Error, Equatable {
+  /// No account is signed in to own the capture.
+  case noSignedInAccount
 }
 
 extension String {

@@ -34,7 +34,6 @@ const USER_SPECIFIC_LS_KEYS = [
   // MFAEnforcementWrapper's "this user is enrolled" hint (mfaEnrollmentHint.ts). It is keyed to a
   // user id, so a stale one is already ignored for another account; removing it is hygiene.
   MFA_ENROLLMENT_HINT_KEY,
-  CHAT_INPUT_DRAFTS_STORAGE_KEY,
   JUPYTER_CONFIG_STORAGE_KEY,
 ];
 
@@ -43,14 +42,18 @@ const USER_SPECIFIC_LS_KEYS = [
  * Must be called on every identity-change path: logout, login-as-user,
  * return-to-admin, session expiry, and login page mount.
  *
+ * `sessionExpired` keeps unsent chat drafts: they record their owner, and the next sign-in drops
+ * them unless the same user returns (useChatInput's claimDrafts).
+ *
  * Failures are swallowed - cache clearing must never block logout.
  */
-export async function clearClientCaches(): Promise<void> {
+export async function clearClientCaches({ sessionExpired = false }: { sessionExpired?: boolean } = {}): Promise<void> {
   try {
     // Hooks first: a zustand persist store writes on every set, so resetting it after the key is
     // removed would put the key back.
-    runIdentityResetHooks();
+    runIdentityResetHooks({ sessionExpired });
     USER_SPECIFIC_LS_KEYS.forEach(key => localStorage.removeItem(key));
+    if (!sessionExpired) localStorage.removeItem(CHAT_INPUT_DRAFTS_STORAGE_KEY);
     removePremiumLocalStorageKeys();
 
     await Promise.all([

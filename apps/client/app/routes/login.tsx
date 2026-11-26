@@ -73,7 +73,8 @@ const LoginPage = () => {
         }
         setCheckingSession(false);
       }
-      await clearClientCaches();
+      // Explicit sign-out already wiped everything; reaching here otherwise means the session lapsed.
+      await clearClientCaches({ sessionExpired: true });
       if (cancelled) return;
       // clearClientCaches dropped the persisted 'llm-settings', but an in-app navigation here keeps
       // the in-memory store, which would re-persist the previous identity's model on its next write.

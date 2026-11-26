@@ -61,7 +61,7 @@ async function tearDownSessionAndRedirect(loginUrl: () => string): Promise<void>
   // previous user's cached data on disk (a concern on shared machines). The .catch
   // keeps the redirect firing even if a delete rejects; login-page mount also
   // re-clears as a backstop.
-  await clearClientCaches().catch(() => {});
+  await clearClientCaches({ sessionExpired: true }).catch(() => {});
   window.location.replace(loginUrl());
 }
 
