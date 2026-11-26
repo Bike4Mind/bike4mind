@@ -15,20 +15,13 @@ import type { Request } from 'express';
 import { z } from 'zod';
 import { approvalDetails } from './approval';
 
-/**
- * A held self-grant from the profile's credit adjustment (PUT /api/users/[id]/update). Stored as a delta, not
- * a target balance, so spend between request and approval is never refunded.
- */
+/** A held self-grant from the profile's credit adjustment. A delta, not a target balance, so spend before approval is kept. */
 export const SelfCreditAdjustmentParamsSchema = z
   .object({ userId: z.string(), creditDelta: z.number().int().positive(), creditReason: z.string() })
   .strict();
 export type SelfCreditAdjustmentParams = z.infer<typeof SelfCreditAdjustmentParamsSchema>;
 
-/**
- * Applies an approved self-grant, the `user.credits.self_grant` approval executor. The credit change runs as the
- * requester, who was a full admin when asking and must still be one, because the approver may be a delegate
- * without the full admin access this credit edit needs. The audit entry records the approver and the approval.
- */
+/** Applies an approved `user.credits.self_grant`, refusing one whose target is no longer the requester's account. The audit records the approver and approval. */
 export async function applyApprovedSelfCreditAdjustment(
   req: Request,
   { userId, creditDelta, creditReason }: SelfCreditAdjustmentParams,
