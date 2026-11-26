@@ -1,5 +1,4 @@
 import {
-  isReviewOnlyCompletionDetector,
   type AbuseAssessmentItem,
   type AutoContainmentConfig,
   type AutoContainmentDecisionItem,
@@ -22,7 +21,7 @@ import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@bike4mind/server
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
 import { cohortHashOf, resolveAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
-import { decideIntervention, type InterventionDecision, type InterventionSkipReason } from './policy';
+import { decideIntervention, linkRulesCanAct, type InterventionDecision, type InterventionSkipReason } from './policy';
 
 /**
  * Automated containment: turns an `abuse` judgment on a shadow detection into the admin bulk Contain
@@ -279,15 +278,13 @@ async function releaseContainedHolds(
   }
 }
 
-/** Skips the reads when the link rules could not act anyway: rules off, review-only evidence, or an admin verdict. */
+/** Skips the reads when the link rules could not act anyway (see linkRulesCanAct). */
 async function linkFactsFor(
   detection: ShadowDetectionItem,
   config: AutoContainmentConfig,
   deps: AutoContainmentDeps
 ): Promise<LinkRuleFacts[] | null> {
-  if (!config.linkRules.enabled || isReviewOnlyCompletionDetector(detection.detector) || detection.verdict !== null) {
-    return null;
-  }
+  if (!linkRulesCanAct(detection, config)) return null;
   try {
     return await deps.loadLinkRuleFacts(detection.userIds, config);
   } catch (error) {

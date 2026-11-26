@@ -166,6 +166,16 @@ type InterventionInput = {
   linkFacts?: LinkRuleFacts[] | null;
 };
 
+/** Whether link rules could decide anything for this detection, so callers can skip loading their facts. */
+export function linkRulesCanAct(detection: ShadowDetectionItem, config: AutoContainmentConfig): boolean {
+  if (!config.linkRules.enabled || config.mode === 'off') return false;
+  if (isReviewOnlyCompletionDetector(detection.detector) || detection.verdict !== null) return false;
+  if (!TIER_BY_ACTION[detection.wouldAction]) return false;
+  const accounts = new Set(detection.userIds).size;
+  if (accounts === 0 || accounts > config.maxAccountsPerDetection) return false;
+  return effectiveTierMode(config, 'limit') !== 'off' || effectiveTierMode(config, 'holdGrant') !== 'off';
+}
+
 /**
  * Which tier, if any, acts on one assessed detection. Contain keeps decideContainment's rules
  * unchanged; graduated tiers also refuse unusable or stale evidence and honor the tier's rollout.

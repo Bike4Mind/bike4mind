@@ -7,7 +7,7 @@ import {
   RISK_EVIDENCE_VERSION,
   SHADOW_DETECTION_ACTIONS,
 } from '@bike4mind/common';
-import { containmentReason, decideContainment, decideIntervention, rolloutBucket } from './policy';
+import { containmentReason, decideContainment, decideIntervention, linkRulesCanAct, rolloutBucket } from './policy';
 
 const config = AutoContainmentConfigSchema.parse({});
 const featureSummary = {
@@ -442,5 +442,42 @@ describe('decideIntervention link rules', () => {
         expect(decision).toMatchObject({ kind: 'act', tier: 'limit', decidedBy: 'link_rule' });
       }
     });
+  });
+});
+
+describe('linkRulesCanAct', () => {
+  const on = (over: Record<string, unknown> = {}) =>
+    AutoContainmentConfigSchema.parse({
+      mode: 'shadow',
+      tiers: { limit: { mode: 'shadow' }, holdGrant: { mode: 'shadow' } },
+      ...over,
+    });
+  const limitDetection = { ...detection, wouldAction: 'limit' as const };
+
+  it('is true when rules are enabled and a rule tier is on', () => {
+    expect(linkRulesCanAct(limitDetection, on())).toBe(true);
+  });
+
+  it('is true when only one of the rule tiers is on', () => {
+    expect(
+      linkRulesCanAct(limitDetection, on({ tiers: { limit: { mode: 'off' }, holdGrant: { mode: 'shadow' } } }))
+    ).toBe(true);
+  });
+
+  it.each([
+    ['link rules are disabled', limitDetection, on({ linkRules: { enabled: false } })],
+    ['the mode is off', limitDetection, on({ mode: 'off' })],
+    ['the detector is review-only', { ...limitDetection, detector: 'completionSequence' as const }, on()],
+    ['an admin verdict exists', { ...limitDetection, verdict: 'legitimate_human' as const }, on()],
+    ['the action is unmapped', { ...limitDetection, wouldAction: 'none' as const }, on()],
+    ['no accounts are named', { ...limitDetection, userIds: [] }, on()],
+    [
+      'too many accounts are named',
+      { ...limitDetection, userIds: ['a', 'b', 'c'] },
+      on({ maxAccountsPerDetection: 2 }),
+    ],
+    ['both rule tiers are off', limitDetection, on({ tiers: { limit: { mode: 'off' }, holdGrant: { mode: 'off' } } })],
+  ])('is false when %s', (_name, subject, cfg) => {
+    expect(linkRulesCanAct(subject, cfg)).toBe(false);
   });
 });

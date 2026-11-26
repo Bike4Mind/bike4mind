@@ -864,6 +864,16 @@ describe('applyAutoContainment link rules', () => {
     expect(reviewed.deps.loadLinkRuleFacts).not.toHaveBeenCalled();
   });
 
+  it('does not load facts when both rule tiers are off', async () => {
+    const tiersOff = makeDeps({
+      mode: 'shadow',
+      tiers: { limit: { mode: 'off' }, holdGrant: { mode: 'off' } },
+    } as Partial<AutoContainmentConfig>);
+    vi.mocked(tiersOff.deps.findDetection).mockResolvedValue(limitDetection);
+    await applyAutoContainment(abstained, tiersOff.deps);
+    expect(tiersOff.deps.loadLinkRuleFacts).not.toHaveBeenCalled();
+  });
+
   it('keeps the model skip when the fact load throws', async () => {
     const { deps, stored } = makeDeps(shadowLimit);
     vi.mocked(deps.findDetection).mockResolvedValue(limitDetection);
