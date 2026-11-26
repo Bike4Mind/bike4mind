@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
-import { closeSync, mkdirSync, openSync } from 'node:fs';
+import { closeSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { openDaemonOutput } from './daemonOutput';
 import { HOST_EXIT_CODES, type HostExitCode } from './exitCodes';
 import { HOST_BUILD_VERSION, MINIMUM_NODE_MAJOR } from './hostBuild';
 
@@ -43,14 +44,13 @@ function entryScript(): string {
 
 function spawnDetachedDaemon(dataDirectory: string, verbose: boolean): void {
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
-  // The daemon logs to this file itself; its stdio goes there too so a crash leaves its trace.
-  const log = openSync(join(dataDirectory, 'host.log'), 'a', 0o600);
+  const output = openDaemonOutput(dataDirectory);
   try {
     const args = [entryScript(), 'daemon', '--data-dir', dataDirectory, ...(verbose ? ['--verbose'] : [])];
-    const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', log, log], cwd: homedir() });
+    const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', output, output], cwd: homedir() });
     child.unref();
   } finally {
-    closeSync(log);
+    closeSync(output);
   }
 }
 

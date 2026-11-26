@@ -15,6 +15,7 @@ import {
   type HostResponse,
 } from '@shared/hostProtocol';
 import { ensurePrivateDirectory } from '../auth/privateDirectory';
+import { DAEMON_OUTPUT_FILE_NAME } from './daemonOutput';
 import { createPermissionProtectedCipher } from '../auth/permissionProtectedCipher';
 import { TokenVault } from '../../main/auth/tokenVault';
 import { createVaultFile } from '../../main/auth/vaultFile';
@@ -175,14 +176,16 @@ describePosix('the built b4m-host program', () => {
     const deadline = Date.now() + timeoutMs;
     while (!check()) {
       if (Date.now() > deadline) {
-        const log = (() => {
+        const tail = (name: string) => {
           try {
-            return readFileSync(join(dataDirectory, 'host.log'), 'utf8').slice(-4000);
+            return readFileSync(join(dataDirectory, name), 'utf8').slice(-4000);
           } catch {
-            return '(no host.log)';
+            return `(no ${name})`;
           }
-        })();
-        throw new Error(`Timed out waiting for ${what}. host.log tail:\n${log}`);
+        };
+        throw new Error(
+          `Timed out waiting for ${what}. host.log tail:\n${tail('host.log')}\n${DAEMON_OUTPUT_FILE_NAME} tail:\n${tail(DAEMON_OUTPUT_FILE_NAME)}`
+        );
       }
       await new Promise(resolve => setTimeout(resolve, 50));
     }

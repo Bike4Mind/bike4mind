@@ -1,5 +1,6 @@
 import { connect as connectSocket } from 'node:net';
 import type { Readable, Writable } from 'node:stream';
+import { DAEMON_OUTPUT_FILE_NAME } from './daemonOutput';
 import { daemonPaths, inspectDaemon, readLockRecord, socketAccepts, type DaemonPaths } from './daemonFiles';
 import { HOST_EXIT_CODES, type HostExitCode } from './exitCodes';
 import type { HostLogger } from './logging';
@@ -47,7 +48,9 @@ export async function runConnect(options: ConnectOptions): Promise<HostExitCode>
     options.spawnDaemon();
   }
   if (before.state !== 'running' && !(await waitForSocket(paths, timeoutMs))) {
-    logger.error(`b4m-host: the daemon did not start within ${timeoutMs / 1000}s; see ${paths.directory}/host.log`);
+    logger.error(
+      `b4m-host: the daemon did not start within ${timeoutMs / 1000}s; see host.log and ${DAEMON_OUTPUT_FILE_NAME} in ${paths.directory}`
+    );
     return HOST_EXIT_CODES.daemonStartTimeout;
   }
 
