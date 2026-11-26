@@ -494,6 +494,31 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
   });
 
   it.each([
+    ['key without read', VALID_KEY, [ApiKeyScope.AI_CHAT], false],
+    ['key with read', VALID_KEY, [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES], true],
+    ['session', null, [ApiKeyScope.AI_CHAT], true],
+  ] as const)('stamps trusted file admission for %s on both chat paths', async (_, apiKey, scopes, allowed) => {
+    validateWithScopes([...scopes]);
+    const { req, res } = fire({
+      apiKey,
+      body: {
+        message: 'hello',
+        sessionId: 'sess-1',
+        wait: true,
+        fileInputsAllowed: true,
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ fileInputsAllowed: allowed }));
+    expect(mockProcess.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        body: expect.objectContaining({ fileInputsAllowed: allowed }),
+      })
+    );
+  });
+
+  it.each([
     ['withholds', [ApiKeyScope.AI_CHAT], true],
     ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], false],
   ] as const)('%s the admin role on the queued quest for a key with scopes %j', async (_, scopes, withheld) => {

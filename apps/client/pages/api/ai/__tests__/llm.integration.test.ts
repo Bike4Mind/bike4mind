@@ -320,6 +320,21 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['key without read', VALID_KEY, [ApiKeyScope.AI_CHAT], false],
+    ['key with read', VALID_KEY, [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES], true],
+    ['session', null, [ApiKeyScope.AI_CHAT], true],
+  ] as const)('stamps trusted file admission for %s despite a forged body flag', async (_, apiKey, scopes, allowed) => {
+    validateWithScopes([...scopes]);
+    const { req, res } = fire({ apiKey, body: { fileInputsAllowed: true, fabFileIds: ['private-canary'] } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ fileInputsAllowed: allowed }));
+    expect(mockGetOrCreateSession.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ fabFileIds: allowed ? ['private-canary'] : [] })
+    );
+  });
+
   it.each([null, VALID_KEY])('withholds server-only quest fields from a %j caller', async apiKey => {
     validateWithScopes([ApiKeyScope.AI_CHAT]);
     mockInvoke.mockResolvedValue({

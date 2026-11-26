@@ -11,6 +11,7 @@ import {
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { NotFoundError, SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
+import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
@@ -88,6 +89,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // Everything that can reject the request runs before getOrCreateSession, so a rejected request
     // leaves no session behind. invoke() parses the body again, but only after that write.
     const body = LLMApiRequestBodySchema.parse(req.body);
+    const fileInputsAllowed = fileInputsAllowedFor(req);
     // agentIds and messageOnlyFileIds are destructured out so session-write input never rides into the
     // completion body.
     const { sessionId: reqSessionId, sessionName, agentIds, messageOnlyFileIds, ...invokeParams } = body;
@@ -118,7 +120,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       sessionId: reqSessionId,
       sessionName,
       projectId: body.projectId,
-      fabFileIds: body.fabFileIds,
+      fabFileIds: fileInputsAllowed ? body.fabFileIds : [],
       // In-app sends only: an API-key turn keeps its files per-run, as the v1 agent route does.
       ...(req.apiKeyInfo ? {} : { messageFileIds: body.messageFileIds, messageOnlyFileIds }),
       agentIds,
@@ -178,6 +180,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+      fileInputsAllowed,
       // The visit the question was asked in, so the turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });

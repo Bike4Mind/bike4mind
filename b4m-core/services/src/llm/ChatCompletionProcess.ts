@@ -249,6 +249,7 @@ import type { SubagentTelemetryData } from './tools/implementation/delegateToAge
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
 import { z } from 'zod';
+import { admitsPrivateFileInputs } from './questStartBody';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
@@ -2284,8 +2285,8 @@ export class ChatCompletionProcess {
       enableMementos: initialEnableMementos,
       enableAgents: initialEnableAgents,
       message,
-      messageFileIds,
-      sessionFabFileIds,
+      messageFileIds: requestedMessageFileIds,
+      sessionFabFileIds: requestedSessionFabFileIds,
       params,
       enabledTools,
       projectId,
@@ -2299,6 +2300,9 @@ export class ChatCompletionProcess {
       deepResearchConfig,
       userTimezone,
     } = initContext;
+    const fileInputsAllowed = admitsPrivateFileInputs(parsedBody);
+    const messageFileIds = fileInputsAllowed ? requestedMessageFileIds : [];
+    const sessionFabFileIds = fileInputsAllowed ? requestedSessionFabFileIds : [];
     let historyCount = initialHistoryCount;
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
@@ -2537,11 +2541,13 @@ export class ChatCompletionProcess {
         await saveQuest(quest);
         return;
       }
-      const session = await applyWorkspaceSessionSettings(
+      const workspaceSession = await applyWorkspaceSessionSettings(
         loadedSession,
         { user: this.user, logger },
         this.workspaceSessionSettings
       );
+      // Turn-local view: withholding input must never detach a notebook's stored files.
+      const session = fileInputsAllowed ? workspaceSession : { ...workspaceSession, knowledgeIds: [] };
       // The TTL this session's requests carry on a model; the reservation and every round resolve it here.
       const sessionCacheTtlFor = (model: ModelInfo): PromptCacheTtl =>
         resolvePromptCacheTtl({
@@ -2831,7 +2837,8 @@ export class ChatCompletionProcess {
       // offeredTools site further down stamps this onto promptMeta.retrieval.mode, and the two
       // must be the same value - a telemetry field that recomputes its own answer is a field that
       // can disagree with the behaviour it claims to describe.
-      const forcedRetrievalEnabled = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
+      const forcedRetrievalEnabled =
+        fileInputsAllowed && resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
       // The field, not a second vetPreauthorizedLakeIds call: the offer/classification path above
       // and the retrieval feature below must be admitted for the same lakes or they disagree.
       const vettedPreauthorizedLakeIds = this.turnPreauthorizedLakeIds;
@@ -2841,7 +2848,7 @@ export class ChatCompletionProcess {
         // opt-out and must stay distinguishable from absence (#1319, resolveMementoGates).
         enableMementos,
         enableAgents || false,
-        projectId,
+        fileInputsAllowed ? projectId : undefined,
         // Not built at all under a prompt mode, rather than built and filtered later: these
         // features have side effects (memory writes, reply replacement) that outlive the prompt.
         // Skills are the user's own authored instructions, so they go with their integrations.
@@ -3634,6 +3641,7 @@ export class ChatCompletionProcess {
       });
 
       const dataSources = await this.buildDataSources({
+        fileInputsAllowed,
         defaultAdminSettings,
         sessionFabFileIds,
         messageFileIds,
@@ -8854,6 +8862,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
    * Handles caching of system file IDs, deduplication, and parallel URL/fab file processing.
    */
   private async buildDataSources({
+    fileInputsAllowed = true,
     defaultAdminSettings,
     sessionFabFileIds,
     messageFileIds,
@@ -8868,6 +8877,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     logger,
     processStartTime,
   }: {
+    fileInputsAllowed?: boolean;
     defaultAdminSettings: Record<string, string>;
     sessionFabFileIds: string[];
     messageFileIds: string[];
@@ -8966,16 +8976,19 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.systemFilesCache.set(systemFilesCacheKey, [globalSystemFileIds, enabledSystemFileIds]);
     }
 
+    // Cache the configured IDs above, then apply this turn's admission without poisoning the cache.
+    if (!fileInputsAllowed) enabledSystemFileIds = [];
+
     // Defer the retrievable-corpus subset out of the inline set (resolveCorpusInlinePlan); the
     // offered search_knowledge_base tool fetches those on demand. Only knowledge IDs are affected -
     // message/session fab files and system files always inline.
     const deferred = new Set(deferredKnowledgeIds);
-    const inlineKnowledgeIds = sessionKnowledgeIds.filter(id => !deferred.has(id));
+    const inlineKnowledgeIds = fileInputsAllowed ? sessionKnowledgeIds.filter(id => !deferred.has(id)) : [];
 
     // Pre-compute file dedup (synchronous) before deciding whether to skip
     const allFileIdsBeforeDedup = [
-      ...sessionFabFileIds,
-      ...messageFileIds,
+      ...(fileInputsAllowed ? sessionFabFileIds : []),
+      ...(fileInputsAllowed ? messageFileIds : []),
       ...enabledSystemFileIds,
       ...globalSystemFileIds,
       ...inlineKnowledgeIds,
