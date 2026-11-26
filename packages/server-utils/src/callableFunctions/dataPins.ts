@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { Transform, type Readable } from 'node:stream';
+import { pipeline, Transform, type Readable } from 'node:stream';
 import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
 import {
   BadRequestError,
@@ -7,6 +7,7 @@ import {
   CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN,
   ConflictError,
   NotFoundError,
+  ServiceUnavailableError,
   canonicalJson,
   isImageServeable,
   toCallableFunctionPublic,
@@ -270,7 +271,9 @@ export async function pinCallableFunctionData(
   let sha256: string;
   try {
     const body = (await source.getContent(file.filePath)) as Readable;
-    await storage.uploadStream(body.pipe(counted), staging, size, { ContentType: 'application/octet-stream' });
+    // pipeline, not pipe: a source that fails mid-read fails the upload instead of leaving it waiting for bytes.
+    const hashed = pipeline(body, counted, () => {});
+    await storage.uploadStream(hashed, staging, size, { ContentType: 'application/octet-stream' });
     if (seen !== size) throw new Error('The file changed while it was being pinned.');
     sha256 = hash.digest('hex');
     await storage.copy(staging, callableFunctionDataKey(fn.id, sha256));
@@ -345,14 +348,25 @@ export async function linkCallableFunctionDataForBrowser(
       : !bucket && (await storage.browserSigningOrigin())
         ? storage
         : undefined;
-  const url = signer
-    ? await signer.getSignedUrl(callableFunctionDataKey(fn.id, pin.sha256), 'get', {
+  const sign = async (by: Pick<S3Storage, 'getSignedUrl'>) => {
+    try {
+      return await by.getSignedUrl(callableFunctionDataKey(fn.id, pin.sha256), 'get', {
         audience: 'browser',
         expiresIn: CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS,
         ResponseContentType: 'application/octet-stream',
         ResponseContentDisposition: 'attachment',
         ResponseCacheControl: 'private, no-store',
-      })
+      });
+    } catch (error) {
+      // No other signer is tried: a missing browser role or a refused assume leaves the browser with no link.
+      Logger.error('[CALLABLE_FUNCTION_DATA_BROWSER_LINK_FAILED]', { functionId: fn.id, error: String(error) });
+      throw new ServiceUnavailableError('Pinned data files cannot be read in the browser right now.', {
+        code: 'data_link_unavailable',
+      });
+    }
+  };
+  const url = signer
+    ? await sign(signer)
     : `/api/callable-functions/${encodeURIComponent(fn.id)}/data/${encodeURIComponent(pin.name)}?bytes=1`;
   return { name: pin.name, sha256: pin.sha256, bytes: pin.bytes, url };
 }

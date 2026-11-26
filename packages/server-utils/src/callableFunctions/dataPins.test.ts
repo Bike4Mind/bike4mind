@@ -248,6 +248,25 @@ describe('pinCallableFunctionData', () => {
     expect(objects.has(staging)).toBe(false);
   });
 
+  it('fails the pin, rather than waiting on the upload, when the source fails mid-read', async () => {
+    const { objects, storage } = memoryStorage();
+    const failing = new Readable({ read() {} });
+    failing.push(CSV.subarray(0, 3));
+    setImmediate(() => failing.destroy(new Error('source connection reset')));
+    const source = { getMetadata: h.sourceHead, getContent: vi.fn(async () => failing) };
+    await expect(
+      pinCallableFunctionData(
+        OWNER,
+        FN_ID,
+        { fileId: 'file1', name: 'points.csv' },
+        { storage, source: source as never, limits: LIMITS }
+      )
+    ).rejects.toThrow('source connection reset');
+    expect(storage.copy).not.toHaveBeenCalled();
+    expect(h.setDataPins).not.toHaveBeenCalled();
+    expect(objects.size).toBe(0);
+  });
+
   it('refuses bytes that run past the stored size and keeps no copy of them', async () => {
     h.sourceHead.mockResolvedValue({ size: 4 });
     const { objects, storage } = memoryStorage();
@@ -397,6 +416,19 @@ describe('linkCallableFunctionDataForBrowser', () => {
       expect((sts.send.mock.calls[0] as unknown[])[0]).toMatchObject({
         input: { RoleArn: ROLE, RoleSessionName: 'callable-function-data-browser', DurationSeconds: 900 },
       });
+      expect(storage.getSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('answers 503 and signs nothing else when the browser role cannot be assumed', async () => {
+      vi.stubEnv('CALLABLE_FUNCTION_DATA_BROWSER_ROLE_ARN', ROLE);
+      const { storage } = memoryStorage();
+      const sts = { send: vi.fn(async () => Promise.reject(new Error('AccessDenied: not authorized'))) };
+      await expect(
+        linkCallableFunctionDataForBrowser(OWNER, FN_ID, 'points.csv', {
+          storage,
+          sts: sts as unknown as CallableFunctionDataSts,
+        })
+      ).rejects.toMatchObject({ statusCode: 503, additionalInfo: { code: 'data_link_unavailable' } });
       expect(storage.getSignedUrl).not.toHaveBeenCalled();
     });
 
