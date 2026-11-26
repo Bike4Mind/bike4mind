@@ -43,7 +43,6 @@ export const AQUARIUM_SCENE: SceneDefinition = {
       { x: 30, y: 3, size: 22, kind: 'lamp', tone: 'blue' },
       { x: 70, y: 3, size: 22, kind: 'lamp', tone: 'blue' },
     ],
-    skinBackdrop: 'aquariumBackdrop',
   },
   cast: {
     spriteHeight: 12,
