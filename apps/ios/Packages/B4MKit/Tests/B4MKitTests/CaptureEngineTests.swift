@@ -235,6 +235,55 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertEqual(calls.count, 1, "only the ticket was minted: \(calls)")
   }
 
+  func testAnUploadFinishingInAFreshProcessIsRegisteredForTheSignedInAccount() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let first = ownedRig(signedIn)
+    let job = try only(try await first.engine.submit([photo()], to: lake, note: nil))
+    XCTAssertEqual(job.stage, .uploading)
+
+    // The system relaunches the app in the background to deliver the finished PUT, before any resume().
+    let second = rig(
+      api: first.api, store: first.store, uploader: FakeUploader(), currentOwner: { signedIn.withLock { $0 } })
+    await second.engine.reattach(identifier: BackgroundSessionIdentifier.app)
+    second.uploader.adopt(job)
+    second.uploader.finish(job.id)
+
+    try await eventually("done") { stage(second, job.id) == .done }
+    let calls = await second.api.calls
+    XCTAssertTrue(calls.contains(.addToLake(lake: "lake-1", file: "file-1")), "\(calls)")
+  }
+
+  func testEndingTheSessionWhileTheAccountIsLookedUpLeavesNothingClaimed() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let setup = ownedRig(signedIn)
+    await setup.engine.resume()
+    let queued = try only(try await setup.engine.enqueue([photo()], to: lake, note: nil))
+
+    let gate = ResumeInvalidationGate()
+    let owner = alice
+    let rig = rig(
+      store: setup.store,
+      currentOwner: {
+        await gate.pause()
+        return owner
+      })
+    let engine = rig.engine
+    let resumed = Task { await engine.resume() }
+    defer { Task { await gate.release() } }
+    try await eventually("the account lookup is suspended") { await gate.entered }
+
+    await rig.engine.releaseOwner()
+    await gate.release()
+    await resumed.value
+
+    let listed = await rig.engine.jobs()
+    let calls = await rig.api.calls
+    XCTAssertEqual(listed, [])
+    XCTAssertEqual(calls, [])
+    XCTAssertTrue(rig.uploader.started.isEmpty)
+    XCTAssertNotNil(try rig.store.load(id: queued.id))
+  }
+
   func testCapturesWithNoRecordedOwnerAreDroppedAtSignIn() async throws {
     let store = FileUploadJobStore(directory: temp.url)
     let legacy = UploadJob(destination: lake, payload: .message("from before owners"), note: nil, now: clock.now)

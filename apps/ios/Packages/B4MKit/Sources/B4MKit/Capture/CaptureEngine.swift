@@ -44,6 +44,8 @@ public actor CaptureEngine {
   private var discarded: Set<UUID> = []
   /// With `currentOwner` set, the account whose jobs this engine sends and lists; `nil` until `claim` runs.
   private var claimedOwner: CaptureOwner?
+  /// Bumped when ownership ends, so a `claim` suspended on `currentOwner` can tell its answer is stale.
+  private var ownershipGeneration = 0
   private var observers: [UUID: AsyncStream<[UploadJob]>.Continuation] = [:]
 
   /// - Parameters:
@@ -202,6 +204,7 @@ public actor CaptureEngine {
     discarded.formUnion(((try? store.loadAll()) ?? []).map(\.id))
     discarded.formUnion(inFlight)
     claimedOwner = nil
+    ownershipGeneration += 1
     do {
       try store.removeAll()
     } catch {
@@ -213,6 +216,7 @@ public actor CaptureEngine {
   /// Session end that keeps the jobs: none is sent or listed again until the next `claim`.
   public func releaseOwner() {
     claimedOwner = nil
+    ownershipGeneration += 1
     notify()
   }
 
@@ -223,7 +227,9 @@ public actor CaptureEngine {
   /// Makes the signed-in account this engine's owner and discards every job it did not queue, unowned ones
   /// included. `false` when no account is signed in, in which case nothing may be sent or listed.
   private func claim() async -> Bool {
+    let generation = ownershipGeneration
     guard let owner = await currentOwner?() else { return false }
+    guard generation == ownershipGeneration else { return false }
     claimedOwner = owner
     for job in (try? store.loadAll()) ?? [] where job.owner != owner {
       discarded.insert(job.id)
@@ -495,6 +501,10 @@ public actor CaptureEngine {
       job.stage = job.uploadAttempts < configuration.maxUploadAttempts ? .queued : .failed
     }
     persist(job)
+    // A background wake can deliver this before `resume()` has claimed an owner in this process.
+    if currentOwner != nil && claimedOwner == nil {
+      guard await claim() else { return }
+    }
     await advance(job.id)
   }
 
