@@ -43,11 +43,13 @@ export function TaskDecisionCard({
   title,
   decision,
   onOpenSession,
+  onAnswered,
 }: {
   sessionId: string;
   title: string;
   decision: PendingDecision;
   onOpenSession?: (sessionId: string) => void;
+  onAnswered?(): void;
 }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +59,7 @@ export function TaskDecisionCard({
     setError(null);
     try {
       await window.b4m.chat.answerTaskDecision(sessionId, decision.id, value);
+      onAnswered?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setSending(false);
@@ -114,7 +117,7 @@ export const TASK_DECISION_LIST_MAX_HEIGHT = '40vh';
 /** The decisions shown above a conversation's composer: asked by agents under it, and by it itself. */
 export function decisionsFor(
   sessionId: string | null,
-  decisions: readonly PendingTaskDecision[],
+  decisions: readonly PendingTaskDecision[]
 ): readonly PendingTaskDecision[] {
   if (!sessionId) return [];
   return decisions.filter(entry => entry.rootId === sessionId || entry.sessionId === sessionId);

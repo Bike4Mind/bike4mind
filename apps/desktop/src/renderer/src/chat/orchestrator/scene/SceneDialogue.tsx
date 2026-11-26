@@ -91,7 +91,7 @@ export interface SceneDialogueProps {
    */
   onAsksChange?(asks: ReadonlyMap<string, PendingDecision>): void;
   /** A request answered in this box, and how. */
-  onAnswered?(sessionId: string, outcome: Exclude<AskOutcome, 'elsewhere'>): void;
+  onAnswered?(decision: PendingDecision, outcome: Exclude<AskOutcome, 'elsewhere'>): void;
   onOpenDetails(sessionId: string): void;
   /** Bumped to bring the box forward and focus it (the stage's "N need you" pill). */
   focusRequest?: number;
@@ -168,7 +168,7 @@ export function SceneDialogue({
     onFrontChange(decisionKey(queue[(index + step + queue.length) % queue.length]));
   };
   const settle = (decision: PendingDecision, outcome: Exclude<AskOutcome, 'elsewhere'>) => {
-    onAnswered?.(decision.sessionId, outcome);
+    onAnswered?.(decision, outcome);
     setAnswered(previous => new Set(previous).add(decisionKey(decision)));
     refresh();
   };
@@ -496,7 +496,7 @@ function FrontBody({
         asker={{ name, path: [name] }}
         onOpenDetails={onOpenDetails}
         onSettled={onRefresh}
-        onAnswered={() => onSettled('answered')}
+        onAnswered={onSettled}
       />
       <Box sx={{ mt: '0.5em' }}>
         <Box

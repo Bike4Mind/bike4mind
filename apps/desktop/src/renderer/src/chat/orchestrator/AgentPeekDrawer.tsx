@@ -139,7 +139,13 @@ export function refreshKeyOf(agent: AgentView): string {
  * through the same `respondToApproval` call. An answered card goes at once rather than waiting for
  * the status push, so a second click can never answer it twice.
  */
-export function PendingRequests({ calls, onAnswered }: { calls: ChatToolCall[]; onAnswered?(): void }) {
+export function PendingRequests({
+  calls,
+  onAnswered,
+}: {
+  calls: ChatToolCall[];
+  onAnswered?(answer: ChatApprovalAnswer): void;
+}) {
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const open = calls.filter(call => call.approvalId && !answered.has(call.approvalId));
@@ -147,14 +153,17 @@ export function PendingRequests({ calls, onAnswered }: { calls: ChatToolCall[]; 
   const respond = (approvalId: string, answer: ChatApprovalAnswer) => {
     setError(null);
     setAnswered(current => new Set(current).add(approvalId));
-    window.b4m.chat.respondToApproval(approvalId, answer).then(onAnswered, (caught: unknown) => {
-      setAnswered(current => {
-        const next = new Set(current);
-        next.delete(approvalId);
-        return next;
-      });
-      setError(errorText(caught));
-    });
+    window.b4m.chat.respondToApproval(approvalId, answer).then(
+      () => onAnswered?.(answer),
+      (caught: unknown) => {
+        setAnswered(current => {
+          const next = new Set(current);
+          next.delete(approvalId);
+          return next;
+        });
+        setError(errorText(caught));
+      }
+    );
   };
 
   if (open.length === 0 && !error) return null;
