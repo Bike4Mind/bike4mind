@@ -769,8 +769,8 @@ jobs:
       - name: Export pinned MongoDB version
         if: steps.select.outputs.setup == 'true'
         run: |
-          v=$(node -p "require('./package.json').config.mongodbMemoryServer.version")
-          test -n "$v"
+          v=$(node -p "require('./package.json').config?.mongodbMemoryServer?.version ?? ''")
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           echo "MONGOMS_VERSION=$v" >> "$GITHUB_ENV"
 
       # Persist the downloaded mongod binary across runs so the pre-warm below is usually a

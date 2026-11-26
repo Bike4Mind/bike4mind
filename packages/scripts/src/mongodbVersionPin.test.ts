@@ -33,15 +33,15 @@ describe('MongoDB version pin', () => {
     }
   });
 
-  it('exports a non-empty MONGOMS_VERSION in CI from the root pin', () => {
+  it('exports a validated MONGOMS_VERSION in CI from the root pin', () => {
     const lines = read('.github/workflows/ci.yml')
       .split('\n')
       .map(line => line.trim())
       .filter(line => !line.startsWith('#'));
     // Separate lines on purpose: under `bash -e`, a failure on the left of `&&` does not abort.
-    const at = lines.indexOf(`v=$(node -p "require('./package.json').config.mongodbMemoryServer.version")`);
+    const at = lines.indexOf(`v=$(node -p "require('./package.json').config?.mongodbMemoryServer?.version ?? ''")`);
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(lines[at + 1]).toBe('test -n "$v"');
+    expect(lines[at + 1]).toBe('[[ "$v" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]');
     expect(lines).toContain('echo "MONGOMS_VERSION=$v" >> "$GITHUB_ENV"');
   });
 });
