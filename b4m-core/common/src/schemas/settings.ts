@@ -9196,6 +9196,12 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
   return typeof value === 'string' && MASK_WRITE_BACK_PATTERN.test(value);
 }
 
+/** Whether the setting's whole value is masked on read: tagged `isSensitive`, or with no definition at all. */
+export function isMaskedSetting(settingName: string): boolean {
+  const definition = resolveSettingDefinition(settingName);
+  return !definition || definition.isSensitive === true;
+}
+
 /**
  * Redact secrets from a single setting before it leaves the server.
  *
