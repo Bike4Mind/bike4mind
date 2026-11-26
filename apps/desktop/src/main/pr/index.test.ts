@@ -35,6 +35,7 @@ function register(session: StoredSession): PrChatHooks {
     store: { get: async () => session } as never,
     logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
     send: vi.fn(),
+    sessionSummary: vi.fn(),
   });
   if (!captured.chat) throw new Error('hooks not captured');
   return captured.chat;

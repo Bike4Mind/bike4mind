@@ -71,6 +71,8 @@ const requestRespondParams = z.discriminatedUnion('kind', [
   }),
 ]);
 
+const contextNoticeKindSchema = z.enum(['context-size', 'no-tools', 'run-budget']);
+
 export const hostMethods = {
   'host/initialize': {
     params: z.object({
@@ -100,7 +102,13 @@ export const hostMethods = {
   },
   'session/get': {
     params: z.object({ sessionId: z.string(), viewed: z.boolean().optional() }),
-    result: z.object({ session: chatSessionPayloadSchema.nullable(), cursor: eventCursorSchema }),
+    // `notices` (since 1.3) are the held context notices in force, for re-seeding a banner
+    // after a reconnect; absent when there are none.
+    result: z.object({
+      session: chatSessionPayloadSchema.nullable(),
+      cursor: eventCursorSchema,
+      notices: z.array(z.object({ kind: contextNoticeKindSchema, message: z.string() })).optional(),
+    }),
   },
   // Absent params start a plain chat session, like chatCreateSession; the reply is the Code
   // session's result shape, with a plain chat session reported as ok: true. Sidebar placement
@@ -207,16 +215,51 @@ export const hostMethods = {
     result: z.object({ models: chatModelCatalogPayloadSchema }),
   },
   'draft/defaults': { params: noParams, result: z.object({ defaults: newSessionDefaultsPayloadSchema }) },
+  // Every decision a worker in the signed-in account waits on the user for; what
+  // session/taskDecisionsChanged then replaces in full (since 1.3).
+  'taskDecision/list': {
+    params: noParams,
+    result: z.object({ decisions: z.array(pendingTaskDecisionPayloadSchema) }),
+  },
 } as const satisfies Record<string, { params: ZodType; result: ZodType }>;
+
+/*
+ * session/event goes only to the connections subscribed to its session, in seq order; `epoch` with
+ * `seq` is the event's cursor (epoch since 1.3; a 1.2 host leaves it out). The rest go to every
+ * connection. The queue and task-decision notifications carry their whole current state, so the
+ * next one repairs a missed one, and a client re-reads both (queue/list, taskDecision/list) after
+ * a resync.
+ */
+/** The context-notice and context-notice-cleared stream events (ChatStreamEvent). */
+const contextNoticeEventSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('context-notice'),
+    sessionId: z.string(),
+    message: z.string(),
+    kind: contextNoticeKindSchema.optional(),
+  }),
+  z.object({ type: z.literal('context-notice-cleared'), sessionId: z.string(), kind: contextNoticeKindSchema }),
+]);
 
 export const hostNotifications = {
   'session/event': {
     params: z.object({
       sessionId: z.string(),
       seq: z.number().int().nonnegative(),
+      epoch: z.string().min(1).optional(),
       event: chatStreamEventPayloadSchema,
     }),
   },
+  // A session that failed to start, sent whether or not anyone is subscribed to it: the session
+  // may already be gone, and the sidebar re-reads its list on (re)connect rather than relying on
+  // this (since 1.3).
+  'session/spawnFailed': {
+    params: z.object({ sessionId: z.string(), title: z.string(), message: z.string() }),
+  },
+  // A session's context notice set or withdrawn, sent to every connection whether or not it is
+  // subscribed, so a window learns of a session it is not showing (since 1.3). The same notice
+  // still rides in session/event for 1.2 clients; a 1.3 client takes notices from here only.
+  'session/contextNotice': { params: z.object({ event: contextNoticeEventSchema }) },
   'session/summaryChanged': { params: z.object({ summary: chatSessionSummaryPayloadSchema }) },
   'session/statusChanged': { params: z.object({ event: chatSessionStatusEventPayloadSchema }) },
   'session/queueChanged': { params: z.object({ event: chatQueueEventPayloadSchema }) },

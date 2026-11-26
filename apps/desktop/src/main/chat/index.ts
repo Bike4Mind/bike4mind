@@ -502,8 +502,9 @@ export function registerChat(
     logger.warn(`CHAT: local history is unavailable: ${err instanceof Error ? err.message : err}`);
   }
 
+  // Windows get stream events from the host protocol (HostServer); this is main's own reaction to them.
   const broadcast = (event: ChatStreamEvent) => {
-    send(IPC_CHANNELS.chatStreamEvent, event);
+    logDownstream('session/event', event);
     if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
     if (event.type === 'tool-end' && event.call.media?.length) {
       void studioIntegration
@@ -601,24 +602,27 @@ export function registerChat(
 
   const events: HostEventSink = {
     streamEvent: broadcast,
-    sessionSummary: summary => send(IPC_CHANNELS.chatSessionSummary, summary),
+    sessionSummary: summary => logDownstream('session/summaryChanged', summary),
     sessionStatus: (event, statusChanged) => {
-      send(IPC_CHANNELS.chatSessionStatus, event);
+      logDownstream('session/statusChanged', event);
       hooks.observeSessionStatus?.(event);
       // Only reached once a turn has run, long after pullRequests below exists. A background job
       // starting or ending re-sends 'done' without a new turn, so only a real change settles one.
       if (statusChanged && (event.status === 'done' || event.unreadReply)) pullRequests.turnSettled(event.sessionId);
     },
-    queueChanged: event => send(IPC_CHANNELS.chatQueueChanged, event),
-    taskDecisions: decisions => send(IPC_CHANNELS.chatTaskDecisions, decisions),
+    queueChanged: event => logDownstream('session/queueChanged', event),
+    taskDecisions: decisions => logDownstream('session/taskDecisionsChanged', decisions),
+    // Loops are not on the host protocol yet, so their state still reaches windows over IPC.
     loopChanged: (sessionId, state) => send(IPC_CHANNELS.chatLoopChanged, { sessionId, state }),
   };
 
   // Annotated: the machine tools' callbacks read the runtime's store, so inference would cycle.
   const hostEvents = new HostEventRelay(error => logger.warn(`HOST: a protocol listener failed: ${String(error)}`));
+  // The runtime's own sink, so a change main makes outside the runtime reaches the host protocol too.
+  const runtimeEvents = hostEvents.tee(events);
   const runtime: HostRuntime = new HostRuntime({
     environment,
-    events: hostEvents.tee(events),
+    events: runtimeEvents,
     auth,
     logger,
     protection,
@@ -686,6 +690,7 @@ export function registerChat(
     store,
     logger,
     send,
+    sessionSummary: summary => runtimeEvents.sessionSummary(summary),
   });
 
   const studioIntegration = registerStudio({
@@ -920,7 +925,6 @@ export function registerChat(
   });
   ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityIpc.getState());
   ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, (_event, grantId: unknown) => capabilityIpc.revoke(grantId));
-  ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => runtime.sessionStatuses());
   registerSessionCreateIpc(ipcMain, {
     createSession: mode => runtime.createSession(mode),
     place: (sessionId, sectionId) =>

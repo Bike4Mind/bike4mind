@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ChatHeldRelay } from '@shared/chat';
+import { useSessionEvents } from '../host/useSessionEvents';
 
 export interface HeldRelaysController {
   held: ChatHeldRelay[];
@@ -12,8 +13,8 @@ export interface HeldRelaysController {
  */
 export function useHeldRelays(sessionId: string | null): HeldRelaysController {
   const [held, setHeld] = useState<ChatHeldRelay[]>([]);
-  const activeSessionId = useRef(sessionId);
-  activeSessionId.current = sessionId;
+  // Bumped by a resync, which may have skipped a push: the list is read again.
+  const [reads, setReads] = useState(0);
 
   useEffect(() => {
     setHeld([]);
@@ -28,15 +29,14 @@ export function useHeldRelays(sessionId: string | null): HeldRelaysController {
     return () => {
       stale = true;
     };
-  }, [sessionId]);
+  }, [sessionId, reads]);
 
-  useEffect(
-    () =>
-      window.b4m.chat.onStreamEvent(event => {
-        if (event.type === 'held-relays' && event.sessionId === activeSessionId.current) setHeld(event.held);
-      }),
-    []
-  );
+  useSessionEvents(sessionId, {
+    event: event => {
+      if (event.type === 'held-relays') setHeld(event.held);
+    },
+    resync: () => setReads(count => count + 1),
+  });
 
   const resolve = useCallback(
     async (heldId: string, deliver: boolean) => {

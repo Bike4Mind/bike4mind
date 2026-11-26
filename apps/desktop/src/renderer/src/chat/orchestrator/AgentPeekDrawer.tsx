@@ -13,6 +13,9 @@ import { isStoppableState } from '@shared/agentState';
 import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall, SendMessageResult } from '@shared/chat';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { hostChat } from '../../host/hostChat';
+import { hostClient } from '../../host/HostClient';
+import { sessionEvents } from '../../host/sessionEvents';
+import { hostForSession } from '../../host/sessionHost';
 import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { MessageThread } from '../MessageThread';
@@ -97,11 +100,10 @@ export function useSessionMessages(
         void load();
       }, 200);
     };
-    const unsubscribe = window.b4m.chat.onStreamEvent(event => {
-      if (event.sessionId === agentId) schedule();
-    });
-    const unsubscribeQueue = window.b4m.chat.onQueueChanged(event => {
-      if (event.sessionId === agentId) schedule();
+    const hostId = hostForSession(agentId);
+    const unsubscribe = sessionEvents.subscribe({ hostId, sessionId: agentId }, { event: schedule, resync: schedule });
+    const unsubscribeQueue = hostClient.onNotification('session/queueChanged', ({ event }, from) => {
+      if (from === hostId && event.sessionId === agentId) schedule();
     });
     void load();
     return () => {
@@ -199,8 +201,9 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
   // Subscribed for the box's whole life, not just while a note shows: main can announce the enqueue
   // and the flush before `sendMessage` resolves, and a listener added after that would never hear it.
   useEffect(() => {
-    return window.b4m.chat.onQueueChanged(event => {
-      if (event.sessionId !== agentId) return;
+    const hostId = hostForSession(agentId);
+    return hostClient.onNotification('session/queueChanged', ({ event }, from) => {
+      if (from !== hostId || event.sessionId !== agentId) return;
       const ids = new Set(event.queued.map(message => message.id));
       latestQueue.current = { version: latestQueue.current.version + 1, ids };
       setQueued(current => (current && !ids.has(current.id) ? null : current));

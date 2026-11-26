@@ -6,7 +6,15 @@ import type { ChatSessionStatusEvent, ChatSessionSummary } from '@shared/chat';
 import { LOCAL_HOST_ID, type HostBridgeApi, type HostNotificationDelivery } from '@shared/hostBridge';
 import { hostNotification } from '@shared/hostProtocol';
 import { SESSION_PAGE_SIZE } from '@shared/sessionPage';
-import { useSessionStatusFeed, useSessions, type SessionStatusFeed, type SessionsController } from './useChat';
+import { sessionEvents } from '../host/sessionEvents';
+import {
+  useConversation,
+  useSessionStatusFeed,
+  useSessions,
+  type ConversationController,
+  type SessionStatusFeed,
+  type SessionsController,
+} from './useChat';
 
 const summary = (id: string, title = id) =>
   ({
@@ -113,13 +121,14 @@ describe('the session list through the local host', () => {
 
     expect(first().sessions[0].title).toBe('Renamed');
     expect(second().sessions[0].title).toBe('Renamed');
-    expect(listeners.size).toBe(2);
+    // Each window listens for summaries and for failed spawns.
+    expect(listeners.size).toBe(4);
   });
 
-  it('drops its notification listener on unmount', async () => {
+  it('drops its notification listeners on unmount', async () => {
     const { listeners } = stubHost({ 'session/page': page([]) });
     await render<SessionsController>(useSessions);
-    expect(listeners.size).toBe(1);
+    expect(listeners.size).toBe(2);
 
     for (const { root } of roots) act(() => root.unmount());
     roots.splice(0);
@@ -233,5 +242,88 @@ describe('session actions through the local host', () => {
       allowDiscard: true,
     });
     expect(sessions().sessions).toEqual([]);
+  });
+});
+
+describe('a held context notice across a reconnect', () => {
+  const budgetWarning = { kind: 'run-budget', message: 'This run has used 80% of its budget.' } as const;
+
+  function stubConversationHost(held: { notices: (typeof budgetWarning)[] }) {
+    return stubHost({
+      'session/get': () => ({
+        session: { id: 's1', title: 's1', mode: 'chat', messages: [] },
+        cursor: { epoch: 'e1', seq: 0 },
+        ...(held.notices.length > 0 ? { notices: held.notices } : {}),
+      }),
+      'session/subscribe': { cursor: { epoch: 'e1', seq: 0 } },
+      'session/unsubscribe': {},
+      'queue/list': { queued: [] },
+    });
+  }
+
+  const reconnect = () => act(async () => sessionEvents.resumeHost(LOCAL_HOST_ID));
+
+  it('takes the banner from session/contextNotice, then re-seeds it from session/get after a reconnect', async () => {
+    const held = { notices: [] as (typeof budgetWarning)[] };
+    const { push } = stubConversationHost(held);
+    const conversation = await render<ConversationController>(() => useConversation('s1', () => undefined));
+
+    // The host holds the warning from the moment it sends it.
+    held.notices = [budgetWarning];
+    push(LOCAL_HOST_ID, 'session/contextNotice', {
+      event: { type: 'context-notice', sessionId: 's1', ...budgetWarning },
+    });
+    expect(conversation().notice).toBe(budgetWarning.message);
+
+    // Cleared while the window was cut off: no push reaches it, and the read after the reconnect drops it.
+    await reconnect();
+    expect(conversation().notice).toBe(budgetWarning.message);
+    held.notices = [];
+    await reconnect();
+    expect(conversation().notice).toBeNull();
+
+    // Set while cut off: the read after the reconnect shows it.
+    held.notices = [budgetWarning];
+    await reconnect();
+    expect(conversation().notice).toBe(budgetWarning.message);
+  });
+
+  it('ignores a notice inside session/event, which a host still sends for 1.2 clients', async () => {
+    const { push } = stubConversationHost({ notices: [] });
+    const conversation = await render<ConversationController>(() => useConversation('s1', () => undefined));
+
+    push(LOCAL_HOST_ID, 'session/event', {
+      sessionId: 's1',
+      seq: 1,
+      epoch: 'e1',
+      event: { type: 'context-notice', sessionId: 's1', ...budgetWarning },
+    });
+
+    expect(conversation().notice).toBeNull();
+  });
+});
+
+describe('settled turns through the local host', () => {
+  it('counts a turn when a session status shows its settled counter rising, once per rise', async () => {
+    const { push } = stubHost({
+      'session/statuses': { statuses: [{ sessionId: 's1', status: 'done', settledTurns: 2 }] },
+    });
+    const conversation = await render<ConversationController>(() => useConversation(null, () => undefined));
+    expect(conversation().settledTurns).toBe(0);
+
+    push(LOCAL_HOST_ID, 'session/statusChanged', { event: { sessionId: 's1', status: 'processing', settledTurns: 2 } });
+    expect(conversation().settledTurns).toBe(0);
+    push(LOCAL_HOST_ID, 'session/statusChanged', { event: { sessionId: 's1', status: 'done', settledTurns: 3 } });
+    push(LOCAL_HOST_ID, 'session/statusChanged', { event: { sessionId: 's1', status: 'done', settledTurns: 3 } });
+    expect(conversation().settledTurns).toBe(1);
+  });
+
+  it('counts a reconnect as a turn that may have settled unheard', async () => {
+    stubHost({ 'session/statuses': { statuses: [] } });
+    const conversation = await render<ConversationController>(() => useConversation(null, () => undefined));
+
+    await act(async () => sessionEvents.resumeHost(LOCAL_HOST_ID));
+
+    expect(conversation().settledTurns).toBe(1);
   });
 });

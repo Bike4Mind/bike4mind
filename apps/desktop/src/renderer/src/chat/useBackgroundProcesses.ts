@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { BackgroundProcessInfo, ChatMoveToBackgroundResult } from '@shared/chat';
+import { useSessionEvents } from '../host/useSessionEvents';
 
 /** Per process, in the panel. Live output is a view, not a record - main holds the real buffer. */
 const MAX_PANEL_CHARS = 20_000;
@@ -31,11 +32,8 @@ export interface BackgroundProcessesController {
  */
 export function useBackgroundProcesses(sessionId: string | null): BackgroundProcessesController {
   const [processes, setProcesses] = useState<BackgroundProcessView[]>([]);
-
-  // Read inside the stream subscription, which is mounted once: rebuilding it per session
-  // change would drop whatever arrived during the swap.
-  const activeSessionId = useRef<string | null>(sessionId);
-  activeSessionId.current = sessionId;
+  // Bumped by a resync, which may have skipped output: the list and its tails are read again.
+  const [reads, setReads] = useState(0);
 
   useEffect(() => {
     if (!sessionId) {
@@ -57,12 +55,12 @@ export function useBackgroundProcesses(sessionId: string | null): BackgroundProc
     return () => {
       current = false;
     };
-  }, [sessionId]);
+  }, [sessionId, reads]);
 
-  useEffect(() => {
-    return window.b4m.chat.onStreamEvent(event => {
+  useSessionEvents(sessionId, {
+    resync: () => setReads(count => count + 1),
+    event: event => {
       if (event.type !== 'background-output' && event.type !== 'background-status') return;
-      if (event.sessionId !== activeSessionId.current) return;
 
       if (event.type === 'background-status') {
         setProcesses(current => {
@@ -81,8 +79,8 @@ export function useBackgroundProcesses(sessionId: string | null): BackgroundProc
           return { ...entry, output: next.length > MAX_PANEL_CHARS ? next.slice(-MAX_PANEL_CHARS) : next };
         })
       );
-    });
-  }, []);
+    },
+  });
 
   const stop = useCallback(
     (processId: string) => {
