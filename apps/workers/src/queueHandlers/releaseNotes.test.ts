@@ -41,6 +41,7 @@ vi.stubGlobal('fetch', h.fetch);
 import { dispatch } from './whatsNewJob';
 import { GENERATION_BUDGET_MS } from './releaseNotes';
 import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 
 const logger = h.logger;
 const run = (...bodies: string[]) =>
@@ -83,6 +84,7 @@ describe('releaseNotes queue handler', () => {
     h.writeReleaseNotes.mockResolvedValue(draft());
     h.upsertGenerated.mockImplementation(async (note: unknown) => ({ note, preserved: false }));
     h.config.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+    configureSecretsAtRest('a'.repeat(64));
     h.findWorkspace.mockResolvedValue({ slackBotToken: 'xoxb-test' });
     h.fetch.mockResolvedValue({ json: async () => ({ ok: true }) });
   });
@@ -187,8 +189,10 @@ describe('releaseNotes queue handler', () => {
   it('skips the post and logs no token value when the stored token cannot be decrypted', async () => {
     setConfig(enabledConfig);
     h.config.SECRET_ENCRYPTION_KEY = 'b'.repeat(64);
+    configureSecretsAtRest('b'.repeat(64));
     const stored = encryptToken('xoxb-plain')!;
     h.config.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+    configureSecretsAtRest('a'.repeat(64));
     h.findWorkspace.mockResolvedValue({ slackBotToken: stored });
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
     expect(slackPosts()).toHaveLength(0);

@@ -1,18 +1,40 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { KeyringNotLoadedError } from '@bike4mind/utils/security';
+import { resetKeyringForTests } from '@bike4mind/utils/security/testing';
 import { encryptSecret, generateEncryptionKey } from './secretEncryption';
 import { configureSecretsAtRest, decryptAtRest } from '@bike4mind/utils/security';
 
-// Mock config before importing tokenEncryption
-const mockConfig: Record<string, string | undefined> = {};
-vi.mock('../utils/config', () => ({
-  Config: new Proxy({}, { get: (_, key: string) => mockConfig[key] }),
-}));
+import {
+  encryptToken,
+  decryptToken,
+  decryptStoredSecret,
+  encryptEnvVariables,
+  decryptEnvVariables,
+} from './tokenEncryption';
 
-// Import after mock
-const { encryptToken, decryptToken, decryptStoredSecret, encryptEnvVariables, decryptEnvVariables } =
-  await import('./tokenEncryption');
+// Assigning a key loads the keyring, so the cases below read as they did when they mocked Config.
+const keyValues: Record<string, string | undefined> = {};
+const mockConfig = new Proxy(keyValues, {
+  set(target, prop: string, value) {
+    target[prop] = value;
+    configureSecretsAtRest(target.SECRET_ENCRYPTION_KEY, target.SECRET_ENCRYPTION_KEY_PREVIOUS);
+    return true;
+  },
+});
 
 const defaultMcpOwner = { id: 'mcp-record', name: 'test-server', userId: 'test-user' };
+
+describe('tokenEncryption before the keyring loads', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('throws instead of falling back to any other key source, even with a valid key in env', () => {
+    resetKeyringForTests();
+    const key = generateEncryptionKey();
+    vi.stubEnv('SECRET_ENCRYPTION_KEY', key);
+    expect(() => encryptToken('t')).toThrow(KeyringNotLoadedError);
+    expect(() => decryptToken(encryptSecret('t', key))).toThrow(KeyringNotLoadedError);
+  });
+});
 
 describe('tokenEncryption', () => {
   const key1 = generateEncryptionKey();

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
+import { encryptSecret, generateEncryptionKey, configureSecretsAtRest } from '@bike4mind/utils/security';
 
 type Handler = (req: unknown, res: unknown) => unknown;
 
@@ -52,6 +52,7 @@ describe('organization GitHub webhook config with a secret stored under the prev
     const previousKey = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY = currentKey;
     h.config.SECRET_ENCRYPTION_KEY_PREVIOUS = previousKey;
+    configureSecretsAtRest(h.config.SECRET_ENCRYPTION_KEY, h.config.SECRET_ENCRYPTION_KEY_PREVIOUS);
     const stored = {
       id: 'cfg1',
       organizationId: ORG_ID,

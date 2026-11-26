@@ -3,7 +3,10 @@ import { GetInsightRuleReportCommand, type GetInsightRuleReportCommandOutput } f
 
 vi.mock('sst', () => ({ Resource: {} }));
 vi.mock('@bike4mind/db-core', () => ({ connectDB: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ userRepository: { findIdsBySignupIp: vi.fn() } }));
+vi.mock('@bike4mind/database', () => ({
+  loadKeyringInBackground: vi.fn(),
+  userRepository: { findIdsBySignupIp: vi.fn() },
+}));
 vi.mock('./relayDb', () => ({ connectRelayDb: vi.fn() }));
 
 import {
