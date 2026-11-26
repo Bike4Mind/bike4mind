@@ -348,6 +348,7 @@ export class KimiBackend implements ICompletionBackend {
       // is wrapped into streamedText too, so a guard keyed there cannot tell a
       // budget-exhausted reasoning turn from an answered one.
       let sawProse = false;
+      let sawReasoning = false;
 
       if (!response.choices || response.choices.length === 0) {
         throw new Error('No choices returned from the Moonshot API');
@@ -365,6 +366,7 @@ export class KimiBackend implements ICompletionBackend {
         // hypothetical for Kimi - the k2.7-code ids cannot turn thinking off, and
         // they are the agentic models most likely to call something.
         const reasoningContent = (c.message as any).reasoning_content as string | undefined;
+        if (reasoningContent) sawReasoning = true;
 
         if (!retrySignal && c.message.tool_calls && c.message.tool_calls.length > 0) {
           for (const toolCall of c.message.tool_calls) {
@@ -593,6 +595,14 @@ export class KimiBackend implements ICompletionBackend {
       if (!sawProse && toolsUsed.length === 0) {
         const finish = response.choices[0]?.finish_reason;
         if (finish === 'length') throw new OutputBudgetExhaustedError('Moonshot', model);
+        // Not the capped round (tools stripped at maxToolCalls), whose empty is deterministic.
+        if (sawReasoning && finish !== undefined && toolCallCount < maxToolCalls) {
+          throw new HiddenReasoningOnlyEmptyError(
+            'Moonshot',
+            model,
+            `Moonshot returned only reasoning for ${model}, with no displayed text and no tool call (finish_reason: ${finish}).`
+          );
+        }
         throw new Error(`Moonshot returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`);
       }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ExpectedToolError, ModelBackend, type IMessage } from '@bike4mind/common';
+import { ExpectedToolError, ModelBackend, type ICompletionOptions, type IMessage } from '@bike4mind/common';
 import { createServerFetch, credentialRedactor, type FetchLike } from '@bike4mind/local-models/servers';
 import {
   json,
@@ -464,6 +464,25 @@ describe('OpenAICompatibleBackend reasoning-only turns', () => {
 
     expect(isHiddenReasoningOnlyEmptyError(error)).toBe(true);
     expect((error as Error).message).not.toMatch(/abort|overload|timeout/i);
+  });
+
+  it('does not type the empty turn left by the max-tool-calls cap', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => sse(res, [{ reasoning_content: 'hmm' }]),
+    });
+    const { backend } = make(server.baseUrl, null);
+    const error = await backend
+      .complete(
+        'm',
+        userMessage('hi'),
+        { stream: true, tools: [], _internal: { toolCallCount: 5, maxToolCalls: 5 } } as Partial<ICompletionOptions>,
+        async () => {}
+      )
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(isHiddenReasoningOnlyEmptyError(error)).toBe(false);
+    expect((error as Error).message).toMatch(/returned no content/);
   });
 });
 
