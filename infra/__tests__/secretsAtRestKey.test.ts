@@ -148,6 +148,17 @@ describe('key policy statements', () => {
   });
 });
 
+describe('dedicated policy follows the stage input', () => {
+  it('differs from the production policy only in the two stage conditions', async () => {
+    const { secretsAtRestKeyPolicy } = await load('dev');
+    const dev = secretsAtRestKeyPolicy({ ...policyInput, stage: 'dev' });
+    const prod = secretsAtRestKeyPolicy(policyInput);
+    expect(JSON.parse(JSON.stringify(dev).replaceAll('"dev"', '"production"'))).toEqual(prod);
+    expect(JSON.stringify(dev)).not.toContain('production');
+    expect(JSON.stringify(dev).match(/"dev"/g)).toHaveLength(2);
+  });
+});
+
 describe('shared preview key policy', () => {
   const previewStatements = async () => {
     const { secretsAtRestPreviewKeyPolicy } = await load('production');
