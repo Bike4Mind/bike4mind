@@ -388,10 +388,12 @@ describe('ChatCompletionProcess admin assistant gate', () => {
   });
 
   it('admin-assistant session, admin: web and integration tools are withheld alongside the admin tools', async () => {
-    const withheld = ['web_search', 'web_fetch'];
-    // web_search needs a provider key this harness does not supply, so web_fetch is the probe.
+    const withheld = ['web_search', 'web_fetch', 'save_content_to_data_lake', 'iss_tracker', 'current_datetime'];
+    // web_search needs a provider key this harness does not supply; the others are offered on a normal turn.
     const control = await runTurn({ isAdmin: true, surface: null, requestTools: withheld });
-    expect(control.offeredToolNames).toContain('web_fetch');
+    expect(control.offeredToolNames).toEqual(
+      expect.arrayContaining(['web_fetch', 'save_content_to_data_lake', 'iss_tracker', 'current_datetime'])
+    );
 
     const turn = await runTurn({
       isAdmin: true,

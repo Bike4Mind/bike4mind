@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ADMIN_ASSISTANT_TOOL_NAMES, ADMIN_ASSISTANT_WITHHELD_TOOL_NAMES } from '@bike4mind/common';
+import { ADMIN_ASSISTANT_TOOL_NAMES, B4MLLMToolsList } from '@bike4mind/common';
 import { resolveAdminAssistantTools } from './adminAssistantGate';
 import { ADMIN_ASSISTANT_SYSTEM_PROMPT, withAdminAssistantPrompt } from './adminAssistantPrompt';
 
@@ -18,8 +18,10 @@ describe('resolveAdminAssistantTools', () => {
     expect(plan.open).toBe(true);
     expect(plan.enable).toHaveLength(ADMIN_ASSISTANT_TOOL_NAMES.length + 1);
     expect(plan.enable).toEqual(expect.arrayContaining([...ADMIN_ASSISTANT_TOOL_NAMES, 'navigate_view']));
-    expect(plan.deny).toEqual([...ADMIN_ASSISTANT_WITHHELD_TOOL_NAMES]);
-    expect(plan.deny).toEqual(expect.arrayContaining(['web_search', 'web_fetch']));
+    // Allowlist: every built-in except navigate_view is denied, so a new built-in is withheld by default.
+    expect(new Set(plan.deny)).toEqual(new Set(B4MLLMToolsList.filter(name => name !== 'navigate_view')));
+    expect(plan.deny).toEqual(expect.arrayContaining(['web_search', 'web_fetch', 'save_content_to_data_lake']));
+    expect(plan.deny).not.toContain('navigate_view');
     expect(plan.disableUserIntegrations).toBe(true);
   });
 
@@ -34,7 +36,7 @@ describe('resolveAdminAssistantTools', () => {
 
     expect(plan.open).toBe(true);
     expect(plan.enable).toEqual(['admin_get_user', 'navigate_view']);
-    expect(plan.deny).toEqual([...ADMIN_ASSISTANT_WITHHELD_TOOL_NAMES]);
+    expect(plan.deny).not.toContain('navigate_view');
   });
 
   it('denies every admin tool for a non-admin on the admin surface', () => {

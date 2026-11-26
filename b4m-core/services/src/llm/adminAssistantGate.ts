@@ -1,8 +1,4 @@
-import {
-  ADMIN_ASSISTANT_TOOL_NAMES,
-  ADMIN_ASSISTANT_WITHHELD_TOOL_NAMES,
-  isAdminAssistantGateOpen,
-} from '@bike4mind/common';
+import { ADMIN_ASSISTANT_TOOL_NAMES, B4MLLMToolsList, isAdminAssistantGateOpen } from '@bike4mind/common';
 
 export type AdminAssistantToolPlan = {
   open: boolean;
@@ -14,9 +10,9 @@ export type AdminAssistantToolPlan = {
 /**
  * Per-turn admin assistant tool plan. Open (admin surface + server-loaded isAdmin === true + the
  * acting user owns the session): offer the admin tools whose definitions the host supplied, plus
- * navigate_view for hand-offs to admin views, and withhold web and integration tools (MCP servers,
- * agents, the built-ins in ADMIN_ASSISTANT_WITHHELD_TOOL_NAMES) since admin tool results carry
- * customer-written text. Closed: deny every admin tool name so no other channel (request tools,
+ * navigate_view for hand-offs to admin views, and withhold everything else (every other built-in
+ * tool, MCP servers, agents) since admin tool results carry customer-written text. The built-in
+ * deny is an allowlist, so a tool added to b4mLLMTools later is withheld by default. Closed: deny every admin tool name so no other channel (request tools,
  * session.enabledTools, sticky auto-adds) can reach the model. Never persisted - see
  * adminAssistant.ts in @bike4mind/common.
  */
@@ -38,7 +34,7 @@ export function resolveAdminAssistantTools(input: {
   return {
     open: true,
     enable: [...available, 'navigate_view'],
-    deny: [...ADMIN_ASSISTANT_WITHHELD_TOOL_NAMES],
+    deny: B4MLLMToolsList.filter(name => name !== 'navigate_view'),
     disableUserIntegrations: true,
   };
 }
