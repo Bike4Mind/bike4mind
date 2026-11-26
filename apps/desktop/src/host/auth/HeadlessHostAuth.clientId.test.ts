@@ -17,9 +17,6 @@ vi.mock('@bike4mind/client-auth', async importOriginal => {
     initiateDeviceFlow(): Promise<never> {
       return Promise.reject(new Error('recording client'));
     }
-    initiateDeviceFlow(): Promise<never> {
-      return Promise.reject(new Error('recording client'));
-    }
   }
   return { ...actual, DeviceFlowClient: RecordingDeviceFlowClient };
 });
