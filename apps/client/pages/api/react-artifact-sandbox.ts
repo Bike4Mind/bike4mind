@@ -7,6 +7,7 @@ import {
   LUCIDE_WRAPPER_FN,
 } from '@client/app/utils/reactArtifactDeps';
 import { IMPORT_SCANNER_FACTORY_SRC } from '@client/app/utils/importStatements';
+import { buildSandboxAssetOrigins } from '@server/artifacts/sandboxAssetOrigins';
 import { ARTIFACT_MODULE_RUNTIME_FACTORY_SRC } from '@client/app/utils/reactArtifactModules';
 
 /**
@@ -44,16 +45,18 @@ import { ARTIFACT_MODULE_RUNTIME_FACTORY_SRC } from '@client/app/utils/reactArti
  * from the header below - a route-internal change touching nothing else.
  */
 
-const REACT_SANDBOX_CSP = [
+function buildReactSandboxCsp(req: NextApiRequest): string {
+  const assets = buildSandboxAssetOrigins(req.headers ?? {});
+  return [
   "default-src 'none'",
   // 'unsafe-eval' lives HERE and only here - never on the app origin (proxy.ts).
   `script-src 'unsafe-inline' 'unsafe-eval' ${SANDBOX_SCRIPT_HOSTS.join(' ')} blob:`,
-  // Images and stylesheets come only from the frame itself or Google Fonts, never another host.
+  // Images and media load from the app host and CDN only; stylesheets from Google Fonts only.
   "style-src 'unsafe-inline' https://fonts.googleapis.com",
-  'img-src data: blob:',
+  `img-src data: blob: ${assets}`,
   'font-src data: https://fonts.gstatic.com https://fonts.googleapis.com',
   "connect-src 'none'",
-  'media-src blob: data:',
+  `media-src blob: data: ${assets}`,
   'worker-src blob:',
   "object-src 'none'",
   "frame-src 'none'",
@@ -61,6 +64,7 @@ const REACT_SANDBOX_CSP = [
   "base-uri 'none'",
   "form-action 'none'",
 ].join('; ');
+}
 
 const BASE_SCRIPT_TAGS = BASE_SANDBOX_SCRIPTS.map(src => `<script src="${src}"></script>`).join('\n  ');
 
@@ -432,7 +436,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Content-Security-Policy', REACT_SANDBOX_CSP);
+  res.setHeader('Content-Security-Policy', buildReactSandboxCsp(req));
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('X-Content-Type-Options', 'nosniff');
