@@ -3,12 +3,15 @@
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
+  callableFunctionDataBrowserReaderPolicy,
+  callableFunctionDataBrowserReaderTrustPolicy,
   callableFunctionDataBucketPolicy,
   callableFunctionDataEndpointPolicy,
   callableFunctionRolePolicy,
   DEDICATED_SUBNET_CIDRS,
   distinctZones,
   FUNCTION_DATA_BROWSER_LINK_WINDOW_MS,
+  FUNCTION_DATA_BROWSER_READER_ACTIONS,
   FUNCTION_DATA_DISPATCHER_ACTIONS,
   FUNCTION_DATA_ERASER_ACTIONS,
   FUNCTION_DATA_KEY_PREFIX,
@@ -392,8 +395,40 @@ describe('callableFunctionDataEndpointPolicy', () => {
   });
 });
 
+describe('the browser-link reader role', () => {
+  it("may only read the data bucket's data/ objects", () => {
+    expect(FUNCTION_DATA_BROWSER_READER_ACTIONS).toEqual(['s3:GetObject']);
+    expect(callableFunctionDataBrowserReaderPolicy(BUCKET_ARN)).toEqual({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Sid: 'FunctionDataBrowserReads',
+          Effect: 'Allow',
+          Action: ['s3:GetObject'],
+          Resource: `${BUCKET_ARN}/data/*`,
+        },
+      ],
+    });
+  });
+
+  it("is trusted by the web API function's role alone", () => {
+    expect(callableFunctionDataBrowserReaderTrustPolicy('web-server-role-arn')).toEqual({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Sid: 'WebApiFunctionOnly',
+          Effect: 'Allow',
+          Principal: { AWS: 'web-server-role-arn' },
+          Action: 'sts:AssumeRole',
+        },
+      ],
+    });
+  });
+});
+
 describe('callableFunctionDataBucketPolicy', () => {
   const DISPATCHER = 'dispatcher-role-arn';
+  const READER = 'browser-reader-role-arn';
   const OTHER = 'other-role-arn';
 
   const OBJECT = `${BUCKET_ARN}/data/t1/${'a'.repeat(64)}`;
@@ -429,7 +464,7 @@ describe('callableFunctionDataBucketPolicy', () => {
           's3:signatureAge': String(request.signatureAge ?? FUNCTION_DATA_BROWSER_LINK_WINDOW_MS + 1),
         }[key];
         const values = [value].flat();
-        if (test === 'Bool' || test === 'StringEquals') return values.some(one => actual === one);
+        if (['Bool', 'StringEquals', 'ArnEquals'].includes(test)) return values.some(one => actual === one);
         if (test === 'NumericGreaterThan') return values.some(one => Number(actual) > Number(one));
         if (test === 'ArnNotEquals' || test === 'StringNotEquals') return values.every(one => actual !== one);
         throw new Error(`untested condition ${test}`);
@@ -448,9 +483,14 @@ describe('callableFunctionDataBucketPolicy', () => {
   const withEndpoint = callableFunctionDataBucketPolicy({
     bucketArn: BUCKET_ARN,
     dispatcherRoleArn: DISPATCHER,
+    browserReaderRoleArn: READER,
     endpointId: 'vpce-0data',
   });
-  const withoutEndpoint = callableFunctionDataBucketPolicy({ bucketArn: BUCKET_ARN, dispatcherRoleArn: DISPATCHER });
+  const withoutEndpoint = callableFunctionDataBucketPolicy({
+    bucketArn: BUCKET_ARN,
+    dispatcherRoleArn: DISPATCHER,
+    browserReaderRoleArn: READER,
+  });
 
   const readsOn = (action: string) => (action.startsWith('s3:ListBucket') ? BUCKET_ARN : OBJECT);
 
@@ -494,15 +534,60 @@ describe('callableFunctionDataBucketPolicy', () => {
     expect(denied(withEndpoint, { ...link, principalArn: DISPATCHER, sourceVpce: 'vpce-0data' })).toBe(false);
   });
 
-  it("lets the dispatcher's signed link be read from anywhere only within the browser link's first minute", () => {
-    const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING', principalArn: DISPATCHER };
+  const AGES = [0, 1, FUNCTION_DATA_BROWSER_LINK_WINDOW_MS, FUNCTION_DATA_BROWSER_LINK_WINDOW_MS + 1, 3_600_000];
+
+  it("refuses the dispatcher's signed link from outside the endpoint at any age, a fresh one included", () => {
+    const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING' };
+    for (const signatureAge of AGES) {
+      for (const principalArn of [DISPATCHER, OTHER, undefined]) {
+        for (const sourceVpce of [undefined, 'vpce-0other']) {
+          expect(denied(withEndpoint, { ...link, principalArn, sourceVpce, signatureAge })).toBe(true);
+          expect(denied(withoutEndpoint, { ...link, principalArn, sourceVpce, signatureAge })).toBe(true);
+        }
+      }
+      expect(denied(withEndpoint, { ...link, principalArn: DISPATCHER, sourceVpce: 'vpce-0data', signatureAge })).toBe(
+        false
+      );
+    }
+  });
+
+  it("allows the browser reader's signed link from anywhere for its first minute and refuses it after", () => {
+    const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING', principalArn: READER };
     for (const policy of [withEndpoint, withoutEndpoint]) {
-      expect(denied(policy, { ...link, signatureAge: 1 })).toBe(false);
-      expect(denied(policy, { ...link, signatureAge: FUNCTION_DATA_BROWSER_LINK_WINDOW_MS })).toBe(false);
-      expect(denied(policy, { ...link, signatureAge: FUNCTION_DATA_BROWSER_LINK_WINDOW_MS + 1 })).toBe(true);
-      expect(denied(policy, { ...link, principalArn: OTHER, signatureAge: 1 })).toBe(true);
+      for (const sourceVpce of [undefined, 'vpce-0other', 'vpce-0data']) {
+        expect(denied(policy, { ...link, sourceVpce, signatureAge: 1 })).toBe(false);
+        expect(denied(policy, { ...link, sourceVpce, signatureAge: FUNCTION_DATA_BROWSER_LINK_WINDOW_MS })).toBe(false);
+        expect(denied(policy, { ...link, sourceVpce, signatureAge: FUNCTION_DATA_BROWSER_LINK_WINDOW_MS + 1 })).toBe(
+          true
+        );
+        expect(denied(policy, { ...link, action: 's3:GetObjectVersion', sourceVpce, signatureAge: 3_600_000 })).toBe(
+          true
+        );
+      }
     }
     expect(FUNCTION_DATA_BROWSER_LINK_WINDOW_MS).toBe(60_000);
+  });
+
+  it('refuses the browser reader every write, list, and delete, wherever it comes from and however it signs', () => {
+    const actions = [
+      's3:PutObject',
+      's3:PutObjectAcl',
+      's3:ReplicateObject',
+      's3:DeleteObject',
+      's3:DeleteObjectVersion',
+      's3:ListBucket',
+      's3:ListBucketVersions',
+    ];
+    for (const policy of [withEndpoint, withoutEndpoint]) {
+      for (const action of actions) {
+        for (const authType of ['REST-HEADER', 'REST-QUERY-STRING']) {
+          for (const sourceVpce of [undefined, 'vpce-0data']) {
+            const request = { action, resource: readsOn(action), principalArn: READER, authType, sourceVpce };
+            expect(denied(policy, { ...request, signatureAge: 1 })).toBe(true);
+          }
+        }
+      }
+    }
   });
 
   it('keeps header-signed reads, writes, and deletes by the dispatcher from outside the endpoint', () => {
@@ -532,6 +617,7 @@ describe('callableFunctionDataBucketPolicy', () => {
     const withEraser = callableFunctionDataBucketPolicy({
       bucketArn: BUCKET_ARN,
       dispatcherRoleArn: DISPATCHER,
+      browserReaderRoleArn: READER,
       eraserRoleArns: [ERASER, SWEEP],
       endpointId: 'vpce-0data',
     });
@@ -561,6 +647,7 @@ describe('callableFunctionDataBucketPolicy', () => {
     const noSweep = callableFunctionDataBucketPolicy({
       bucketArn: BUCKET_ARN,
       dispatcherRoleArn: DISPATCHER,
+      browserReaderRoleArn: READER,
       eraserRoleArns: ['eraser-role-arn', ''],
       endpointId: 'vpce-0data',
     });

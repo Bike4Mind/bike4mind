@@ -312,30 +312,67 @@ export const FUNCTION_DATA_LIST_ACTIONS = ['s3:ListBucket*'];
 export const FUNCTION_DATA_WRITE_ACTIONS = ['s3:PutObject*', 's3:Replicate*'];
 export const FUNCTION_DATA_DELETE_ACTIONS = ['s3:DeleteObject*'];
 
+/** What the browser-link reader role may do: read the function-data bucket's `data/` objects, nothing else. */
+export const FUNCTION_DATA_BROWSER_READER_ACTIONS = ['s3:GetObject'];
+
 /**
- * How long after signing a link works from outside the data endpoint: the owner's browser reads its own pinned file
- * at once (CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS in packages/server-utils dataPins.ts). In ms.
+ * How long a browser-link reader's signed link works: the owner's browser reads its own pinned file at once
+ * (CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS in packages/server-utils dataPins.ts). In ms.
  */
 export const FUNCTION_DATA_BROWSER_LINK_WINDOW_MS = 60_000;
 
+/** The browser-link reader role's only policy. */
+export function callableFunctionDataBrowserReaderPolicy(bucketArn: string) {
+  return {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Sid: 'FunctionDataBrowserReads',
+        Effect: 'Allow',
+        Action: FUNCTION_DATA_BROWSER_READER_ACTIONS,
+        Resource: `${bucketArn}/${FUNCTION_DATA_KEY_PREFIX}*`,
+      },
+    ],
+  };
+}
+
+/** Who may assume the browser-link reader role: the web API function's role, which serves the owner's read route. */
+export function callableFunctionDataBrowserReaderTrustPolicy(serverRoleArn: string) {
+  return {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Sid: 'WebApiFunctionOnly',
+        Effect: 'Allow',
+        Principal: { AWS: serverRoleArn },
+        Action: 'sts:AssumeRole',
+      },
+    ],
+  };
+}
+
 /**
- * The function-data bucket's policy: HTTPS only; reads and object writes by the dispatcher's role only, from
- * anywhere when signed in the header; listing and deletes by it and the eraser roles (account erasure and the
- * deletion sweep). Its signed links work through `endpointId` and, for the browser link's first minute, from anywhere.
+ * The function-data bucket's policy: HTTPS only; reads by the dispatcher's role and the browser-link reader's;
+ * object writes by the dispatcher's role only; listing and deletes by it and the eraser roles (account erasure and
+ * the deletion sweep). Signed links work only through `endpointId`, but the browser-link reader's, which work from
+ * anywhere for their first minute.
  */
 export function callableFunctionDataBucketPolicy({
   bucketArn,
   dispatcherRoleArn,
+  browserReaderRoleArn,
   eraserRoleArns = [],
   endpointId,
 }: {
   bucketArn: string;
   dispatcherRoleArn: string;
+  browserReaderRoleArn: string;
   eraserRoleArns?: string[];
   endpointId?: string;
 }) {
   const erasers = eraserRoleArns.filter(Boolean);
   const notDispatcher = { ArnNotEquals: { 'aws:PrincipalArn': dispatcherRoleArn } };
+  const notDispatcherOrReader = { ArnNotEquals: { 'aws:PrincipalArn': [dispatcherRoleArn, browserReaderRoleArn] } };
   // A prefix delete lists the keys first, so erasers pass the list and delete denies, never the read or write ones.
   const notDispatcherOrEraser = {
     ArnNotEquals: { 'aws:PrincipalArn': erasers.length ? [dispatcherRoleArn, ...erasers] : dispatcherRoleArn },
@@ -355,12 +392,12 @@ export function callableFunctionDataBucketPolicy({
         Condition: { Bool: { 'aws:SecureTransport': 'false' } },
       },
       {
-        Sid: 'ReadsByDispatcher',
+        Sid: 'ReadsByDispatcherAndBrowserReader',
         Effect: 'Deny',
         Principal: '*',
         Action: FUNCTION_DATA_READ_ACTIONS,
         Resource: `${bucketArn}/*`,
-        Condition: notDispatcher,
+        Condition: notDispatcherOrReader,
       },
       {
         Sid: 'ListByDispatcherAndErasers',
@@ -376,7 +413,19 @@ export function callableFunctionDataBucketPolicy({
         Principal: '*',
         Action: 's3:GetObject*',
         Resource: `${bucketArn}/*`,
-        Condition: { ...signedLink, ...notThroughEndpoint, ...pastBrowserWindow },
+        Condition: {
+          ...signedLink,
+          ...notThroughEndpoint,
+          ArnNotEquals: { 'aws:PrincipalArn': browserReaderRoleArn },
+        },
+      },
+      {
+        Sid: 'BrowserReaderLinksForOneMinute',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: 's3:GetObject*',
+        Resource: `${bucketArn}/*`,
+        Condition: { ArnEquals: { 'aws:PrincipalArn': browserReaderRoleArn }, ...pastBrowserWindow },
       },
       {
         Sid: 'WritesByDispatcher',

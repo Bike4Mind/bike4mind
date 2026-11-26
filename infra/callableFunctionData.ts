@@ -62,16 +62,35 @@ const listDataKeys = (bucket: aws.s3.Bucket) => ({
   conditions: [{ test: 'StringLike', variable: 's3:prefix', values: [`${FUNCTION_DATA_KEY_PREFIX}*`] }],
 });
 
-/** The web API function's bucket variable and object grant; neither on a stage without function data. */
+// Named, so the web API function can be granted the role before the role exists: its trust names that function's role
+// (infra/callableFunctionDataPolicy.ts). `sst dev` has no server role to trust, so no browser role and the browser
+// reads through the read route's bytes there.
+export const callableFunctionDataBrowserReaderRoleName = `${$app.name}-${$app.stage}-fn-data-browser`;
+const browserReaderRoleArn = $interpolate`arn:${aws.getPartitionOutput().partition}:iam::${aws.getCallerIdentityOutput().accountId}:role/${callableFunctionDataBrowserReaderRoleName}`;
+const browserReaderForWeb: DataGrant = $dev
+  ? { environment: {}, permissions: [] }
+  : {
+      environment: { CALLABLE_FUNCTION_DATA_BROWSER_ROLE_ARN: browserReaderRoleArn },
+      permissions: [{ actions: ['sts:AssumeRole'], resources: [browserReaderRoleArn] }],
+    };
+
+/**
+ * The web API function's bucket variable and object grant, and its grant to assume the browser-link reader role;
+ * none on a stage without function data.
+ */
 export const callableFunctionDataForWeb: DataGrant = callableFunctionDataBucket
   ? {
-      environment: { CALLABLE_FUNCTION_DATA_BUCKET: callableFunctionDataBucket.bucket },
+      environment: {
+        CALLABLE_FUNCTION_DATA_BUCKET: callableFunctionDataBucket.bucket,
+        ...browserReaderForWeb.environment,
+      },
       permissions: [
         {
           actions: FUNCTION_DATA_DISPATCHER_ACTIONS,
           resources: [$interpolate`${callableFunctionDataBucket.arn}/${FUNCTION_DATA_KEY_PREFIX}*`],
         },
         listDataKeys(callableFunctionDataBucket),
+        ...browserReaderForWeb.permissions,
       ],
     }
   : { environment: {}, permissions: [] };
