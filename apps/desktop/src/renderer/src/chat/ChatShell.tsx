@@ -164,6 +164,8 @@ import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orc
 import { inTavernDialogue } from './orchestrator/tavern/dialogue';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
+import { agentsSurfaceAvailable as isAgentsSurfaceAvailable } from './orchestrator/agentsSurface';
+import { archivedAgentsOf } from '@shared/spawnTree';
 import {
   readAmbientHintSeen,
   readIntroSeen,
@@ -914,7 +916,16 @@ export function ChatShell({
     modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
   const delegating = orchestrationSession?.orchestrate === true;
   const hasAgents = spawnedStates.length > 0;
-  const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
+  const hasArchivedAgents = useMemo(
+    () => activeId !== null && archivedAgentsOf(sessions, activeId).length > 0,
+    [sessions, activeId]
+  );
+  const agentsSurfaceAvailable = isAgentsSurfaceAvailable({
+    session: orchestrationSession,
+    hasAgents,
+    hasArchivedAgents,
+    orchestrateCapable,
+  });
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
   // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
   // "Orchestrator" without its project line, and the trays above the composer, which quote agents' questions
@@ -2062,7 +2073,7 @@ export function ChatShell({
                 </Box>
                 <OrchestrateToggle
                   states={spawnedStates}
-                  enabled={delegating && orchestrateCapable}
+                  enabled={agentsSurfaceAvailable}
                   parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
                   surface={orchestrating ? 'orchestrate' : 'chat'}
                   onSurfaceChange={orchestratorPrefs.setSurface}

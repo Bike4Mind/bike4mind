@@ -22,6 +22,7 @@ export * from './deviceLinkAccounts';
 export * from './SignupTraceModel';
 export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
+export * from './OAuthClientSignInModel';
 export * from './oauthClientAdmin';
 export * from './OAuthClientRoleAssignmentModel';
 export * from './OAuthGrantModel';

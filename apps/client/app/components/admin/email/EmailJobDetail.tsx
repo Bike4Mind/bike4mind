@@ -527,10 +527,13 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
     <Box sx={{ pb: 4 }}>
       {/* Header */}
       <Box
+        data-testid="email-job-detail-header"
         sx={{
           display: 'flex',
+          flexWrap: 'wrap',
           justifyContent: 'space-between',
           alignItems: 'center',
+          gap: 1,
           p: 2,
           borderBottom: '1px solid',
           borderColor: 'divider',
@@ -541,8 +544,25 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
           Back to Campaigns
         </Button>
 
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography level="h4">{isEditing ? job?.name || 'Edit Campaign' : 'Create Campaign'}</Typography>
+        {/* Below sm the title gets its own row under Back and Save, so neither squeezes the other */}
+        <Stack
+          data-testid="email-job-detail-title"
+          direction="row"
+          alignItems="center"
+          useFlexGap
+          sx={{
+            flexWrap: 'wrap',
+            gap: 1,
+            minWidth: 0,
+            flex: { xs: '1 1 100%', sm: '1 1 0%' },
+            order: { xs: 1, sm: 0 },
+            justifyContent: { xs: 'flex-start', sm: 'center' },
+            '& .MuiChip-root': { flexShrink: 0 },
+          }}
+        >
+          <Typography level="h4" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+            {isEditing ? job?.name || 'Edit Campaign' : 'Create Campaign'}
+          </Typography>
           {job?.overallStatus && job.overallStatus !== EmailJobOverallStatus.DRAFT && (
             <Chip
               size="sm"
@@ -572,9 +592,10 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
           )}
         </Stack>
 
-        <Stack direction="row" spacing={1}>
+        <Stack data-testid="email-job-detail-actions" direction="row" spacing={1} sx={{ flexShrink: 0 }}>
           {canEdit && (
             <Button
+              data-testid="email-job-detail-save-btn"
               variant="solid"
               color="primary"
               startDecorator={<SaveIcon />}

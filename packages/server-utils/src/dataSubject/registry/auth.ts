@@ -154,6 +154,10 @@ export const authHolders = {
       { path: 'assignedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
+  OAuthClientSignIn: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   OAuthGrant: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
