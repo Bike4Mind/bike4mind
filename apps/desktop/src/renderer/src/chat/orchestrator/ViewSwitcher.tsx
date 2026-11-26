@@ -55,7 +55,7 @@ export interface SceneStageInfo {
   /** The host's portrait on the finale banner; the Innkeeper if unset. */
   hostArt?: FinaleHostArt;
   /** The scene's lines for the settled Needs-you card, the quiet header, the talk button and the empty stage. */
-  copy: { host: string; quiet: string; talk: string; empty: string };
+  copy: SceneDefinition['copy']['stage'];
 }
 
 /** A scene on the framework (scene/SceneStage) has every feature, so its info is read off its definition. */

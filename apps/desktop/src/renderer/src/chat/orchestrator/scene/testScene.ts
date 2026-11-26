@@ -98,6 +98,7 @@ export const TEST_SCENE: SceneDefinition = parseSceneDefinition({
       quiet: 'The yard is quiet',
       talk: 'Type to talk to the Warden',
       empty: 'No jobs yet. Describe the work and the Warden will split it across agents.',
+      finale: { complete: 'Jobs complete', ended: 'Jobs ended' },
     },
   },
 });

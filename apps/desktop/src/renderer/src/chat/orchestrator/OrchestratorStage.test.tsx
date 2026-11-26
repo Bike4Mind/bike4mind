@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { MANAGER_ART } from './office/officeArt';
+import { KEEPER_ART } from './aquarium/aquariumArt';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
@@ -723,6 +724,27 @@ describe('OrchestratorStage', () => {
       expect(query('office-scene')).toBeNull();
       expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('inline');
       expect(query('orchestrator-focus-panel')).not.toBeNull();
+    });
+
+    it("titles the Aquarium's finale from its own copy and shows the Keeper", async () => {
+      await themed.render(
+        <OrchestratorStage
+          agents={finished}
+          rootId="root"
+          report={REPORT}
+          layout={singlePaneLayout('aquarium')}
+          onLayoutChange={onLayoutChange}
+          actions={actions}
+          introPlaying={false}
+          renderView={(_id, props) => <div data-testid="aquarium-scene">{props.sceneOverlay}</div>}
+        />
+      );
+      await settle();
+      expect(el('aquarium-scene').contains(el('orchestrator-finale'))).toBe(true);
+      expect(el('orchestrator-finale').getAttribute('aria-label')).toBe(AQUARIUM_SCENE.copy.stage.finale.ended);
+      expect(el('orchestrator-finale').textContent).not.toContain('Quest');
+      const portrait = el('orchestrator-finale').querySelector('img')?.getAttribute('src');
+      expect([KEEPER_ART.idle, KEEPER_ART.cheering]).toContain(portrait);
     });
 
     it('waits for the parent to write its summary', async () => {

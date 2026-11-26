@@ -175,6 +175,8 @@ export const sceneDefinitionSchema = z
         talk: text,
         /** Under the empty scene, before any agent has started. */
         empty: text,
+        /** The finale card's title when every agent finished done, and otherwise. */
+        finale: z.object({ complete: text, ended: text }),
       }),
     }),
   })

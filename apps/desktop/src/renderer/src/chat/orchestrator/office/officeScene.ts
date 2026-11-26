@@ -139,6 +139,7 @@ export const OFFICE_SCENE: SceneDefinition = {
       quiet: 'The office is quiet',
       talk: 'Type to talk to the Manager',
       empty: 'No tasks yet. Describe the work and the Manager will split it across the team.',
+      finale: { complete: 'Shift complete', ended: 'Shift ended' },
     },
   },
 };
