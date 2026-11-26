@@ -1,4 +1,5 @@
 import { z, type ZodType } from 'zod';
+import { sessionPageRequestSchema } from '../sessionPage';
 import { eventCursorSchema } from './cursor';
 import { hostProtocolVersionSchema, hostCapabilitiesSchema } from './version';
 import {
@@ -86,6 +87,16 @@ export const hostMethods = {
   },
   'host/auth/status': { params: noParams, result: z.object({ account: hostAccountSchema.nullable() }) },
   'session/list': { params: noParams, result: z.object({ sessions: z.array(chatSessionSummaryPayloadSchema) }) },
+  // The sidebar's paged view of session/list; see shared/sessionPage.
+  'session/page': {
+    params: sessionPageRequestSchema,
+    result: z.object({
+      sessions: z.array(chatSessionSummaryPayloadSchema),
+      related: z.array(chatSessionSummaryPayloadSchema),
+      nextCursor: z.string().nullable(),
+      total: z.number().int().nonnegative(),
+    }),
+  },
   'session/get': {
     params: z.object({ sessionId: z.string(), viewed: z.boolean().optional() }),
     result: z.object({ session: chatSessionPayloadSchema.nullable(), cursor: eventCursorSchema }),

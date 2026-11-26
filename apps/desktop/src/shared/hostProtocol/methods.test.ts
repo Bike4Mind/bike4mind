@@ -32,6 +32,11 @@ const methodSamples: Record<HostMethod, { params: unknown; badParams: unknown; r
   },
   'host/auth/status': { params: {}, badParams: 'nope', result: { account: null } },
   'session/list': { params: {}, badParams: 'nope', result: { sessions: [summary] } },
+  'session/page': {
+    params: { limit: 100, cursor: null, include: ['s1'] },
+    badParams: { limit: -1 },
+    result: { sessions: [summary], related: [], nextCursor: null, total: 1 },
+  },
   'session/get': {
     params: { sessionId: 's1', viewed: true },
     badParams: { viewed: true },
