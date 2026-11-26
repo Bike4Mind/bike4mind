@@ -92,16 +92,20 @@ function call(options: {
   subscriptionId?: string;
   adminId?: string;
   impersonatedBy?: string;
+  adminPermissions?: string[];
 }) {
   const { req, res } = createMocks({
     method: 'PUT',
     query: { userId: options.userId ?? 'u1', subscriptionId: options.subscriptionId ?? 'sub_123' },
     body: options.body ?? { creditsPerCycle: 5000, reason: 'Billing correction' },
   });
-  (req as unknown as { user: { isAdmin: boolean; id: string; impersonatedBy?: string } }).user = {
+  (
+    req as unknown as { user: { isAdmin: boolean; id: string; impersonatedBy?: string; adminPermissions?: string[] } }
+  ).user = {
     isAdmin: options.isAdmin ?? true,
     id: options.adminId ?? 'admin-1',
     impersonatedBy: options.impersonatedBy,
+    adminPermissions: options.adminPermissions,
   };
   (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
@@ -176,6 +180,54 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
 
       await expect(call({}).run()).rejects.toMatchObject({ statusCode: 403 });
       expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+    });
+
+    describe('organization member who is not the billing owner', () => {
+      beforeEach(() => {
+        mockFindByStripeSubId.mockResolvedValue({
+          id: 'sub-1',
+          ownerType: 'Organization',
+          ownerId: 'org-1',
+          quantity: 3,
+          customCreditsPerCycle: 7000,
+        });
+        mockOrgFindById.mockResolvedValue({
+          id: 'org-1',
+          name: 'Acme',
+          userId: 'owner-1',
+          adminUserIds: ['admin-1'],
+          users: [],
+        });
+      });
+
+      it('403s when raising the override', async () => {
+        await expect(
+          call({ body: { creditsPerCycle: 9000, reason: 'Billing correction' } }).run()
+        ).rejects.toMatchObject({
+          statusCode: 403,
+        });
+        expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+      });
+
+      it('403s when clearing the override', async () => {
+        await expect(call({ body: { creditsPerCycle: null, reason: 'Undo the edit' } }).run()).rejects.toMatchObject({
+          statusCode: 403,
+        });
+        expect(mockClearCustomCredits).not.toHaveBeenCalled();
+      });
+
+      it('allows lowering an existing override', async () => {
+        await call({ body: { creditsPerCycle: 5000, reason: 'Billing correction' } }).run();
+        expect(mockUpdateByStripeSubId).toHaveBeenCalledWith('sub_123', { customCreditsPerCycle: 5000 });
+      });
+
+      it('allows raising the override when the admin holds credits:self_grant', async () => {
+        await call({
+          adminPermissions: ['credits:self_grant'],
+          body: { creditsPerCycle: 9000, reason: 'Billing correction' },
+        }).run();
+        expect(mockUpdateByStripeSubId).toHaveBeenCalledWith('sub_123', { customCreditsPerCycle: 9000 });
+      });
     });
   });
 
