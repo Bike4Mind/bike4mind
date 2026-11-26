@@ -7,7 +7,8 @@ import {
   workItemRepository,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { DEFAULT_LOOP_STAGES, ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
+import { DEFAULT_LOOP_STAGES, ILoop, ILoopWithUsage, LOOPS_PER_USER_MAX, startOfUtcDay } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgMembership } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionCrud';
@@ -58,6 +59,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .post(async (req, res) => {
     await assertLoopsEnabled();
     const body = req.body as Partial<ILoop>;
+
+    if ((await loopRepository.listForUser(req.user!.id)).length >= LOOPS_PER_USER_MAX) {
+      throw new BadRequestError(`At most ${LOOPS_PER_USER_MAX} loops per user; delete one to create another`);
+    }
 
     const name = validateLoopName(body.name);
     const goal = validateLoopGoal(body.goal);

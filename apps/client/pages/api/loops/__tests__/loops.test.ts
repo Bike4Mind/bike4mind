@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks, type RequestMethod, type RequestOptions } from 'node-mocks-http';
-import { startOfUtcDay } from '@bike4mind/common';
+import { LOOPS_PER_USER_MAX, startOfUtcDay } from '@bike4mind/common';
 
 /**
  * Route-level tests for /api/loops. The repository is mocked - its own behaviour
@@ -187,6 +187,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   settings.EnableLoops = true;
   executions.sumCreditsByLoop.mockResolvedValue({});
+  repo.listForUser.mockResolvedValue([]);
   directives.listForLoop.mockResolvedValue([]);
   tickets.countBlockedByLoop.mockResolvedValue({});
   getOrCreateSession.mockResolvedValue({ sessionId: 's-new' });
@@ -281,6 +282,16 @@ describe('POST /api/loops', () => {
         tools: ['mcp__srv__do_thing'],
       })
     );
+  });
+
+  it('refuses a new loop once the caller has the per-user maximum', async () => {
+    repo.listForUser.mockResolvedValue(Array.from({ length: LOOPS_PER_USER_MAX }, () => loop()));
+    const { res, result } = call('collection', 'post', { body: validBody });
+    await expect(result).rejects.toThrow(`At most ${LOOPS_PER_USER_MAX} loops per user`);
+
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).not.toBe(201);
   });
 
   it('refuses fewer than two stages', async () => {
