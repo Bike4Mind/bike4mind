@@ -603,7 +603,7 @@ describe('GrantPackageFormModal expiry error', () => {
 
   it('outlines a past expiry as errored on a new package, and clears it for a future one', () => {
     renderModal(null);
-    const expiryRoot = () => screen.getByTestId('grant-package-expires-input').closest('.MuiInput-root');
+    const expiryRoot = () => screen.getByTestId('grant-package-expires-input-root');
     fireEvent.click(screen.getByTestId('grant-package-expires-input-set-btn'));
     type('grant-package-expires-input', '2025-01-01');
     expect(expiryRoot()).toHaveClass('MuiInput-colorDanger');

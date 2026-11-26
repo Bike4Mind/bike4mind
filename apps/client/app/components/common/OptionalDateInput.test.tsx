@@ -115,9 +115,9 @@ describe('OptionalDateInput', () => {
 
   it('marks the input as errored only when error is set', () => {
     const { rerender } = render(<Harness initial="2031-02-03" />);
-    expect(screen.getByTestId('expiry').closest('.MuiInput-root')).not.toHaveClass('Mui-error');
+    expect(screen.getByTestId('expiry-root')).not.toHaveClass('Mui-error');
     rerender(<Harness initial="2031-02-03" error />);
-    expect(screen.getByTestId('expiry').closest('.MuiInput-root')).toHaveClass('Mui-error');
+    expect(screen.getByTestId('expiry-root')).toHaveClass('Mui-error');
   });
 
   describe('inside a FormControl', () => {
@@ -145,7 +145,7 @@ describe('OptionalDateInput', () => {
         </FormControl>
       </CssVarsProvider>
     );
-    const rootOf = (testId: string) => screen.getByTestId(testId).closest('.MuiInput-root');
+    const rootOf = (testId: string) => screen.getByTestId(`${testId}-root`);
 
     it("takes the FormControl's error and disabled when it sets none of its own", () => {
       render(<InControl initial="2031-02-03" control={{ error: true, disabled: true }} />);

@@ -132,7 +132,10 @@ export const OptionalDateInput: FC<OptionalDateInputProps> = ({
             <CloseIcon />
           </IconButton>
         }
-        slotProps={{ input: { ref: inputRef, min, max, 'aria-label': ariaLabel, 'data-testid': testId } }}
+        slotProps={{
+          root: { 'data-testid': `${testId}-root` },
+          input: { ref: inputRef, min, max, 'aria-label': ariaLabel, 'data-testid': testId },
+        }}
       />
     </Box>
   );
