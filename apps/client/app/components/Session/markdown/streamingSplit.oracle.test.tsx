@@ -1,31 +1,10 @@
-import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { renderToStaticMarkup } from 'react-dom/server';
-import ReactMarkdown, { type Options } from 'react-markdown';
-import rehypeKatex from 'rehype-katex';
-import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
-import { splitStreamingMarkdown } from './streamingSplitTestUtils';
+import { promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
+import { createMd, normalizeHtml, splitStreamingMarkdown } from './streamingSplitTestUtils';
 
-const remarkPlugins: Options['remarkPlugins'] = [...assistantReplyRemarkPlugins];
-const rehypePlugins: Options['rehypePlugins'] = [rehypeKatex];
-const remarkRehypeOptions: Options['remarkRehypeOptions'] = { clobberPrefix: 'fn-r-' };
+const renderMd = createMd({ clobberPrefix: 'fn-r-' });
 
-const normalize = (html: string) => html.replace(/>\s+</g, '><');
-
-const md = (text: string) =>
-  text
-    ? normalize(
-        renderToStaticMarkup(
-          <ReactMarkdown
-            remarkPlugins={remarkPlugins}
-            rehypePlugins={rehypePlugins}
-            remarkRehypeOptions={remarkRehypeOptions}
-          >
-            {text}
-          </ReactMarkdown>
-        )
-      )
-    : '';
+const md = (text: string) => normalizeHtml(renderMd(text));
 
 const splitRender = (text: string) => {
   const { committed, tail } = splitStreamingMarkdown(text);

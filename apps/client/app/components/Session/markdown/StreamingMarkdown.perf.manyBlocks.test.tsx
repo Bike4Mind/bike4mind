@@ -55,22 +55,13 @@ const lastFrames = (text: string, el: (t: string) => React.ReactElement, frames 
   return perFrame;
 };
 
-const offsetsCost = (text: string) => {
-  const { blocks, tail } = splitStreamingBlocks(text, replyParser);
-  const parts = [...blocks, tail];
-  const countLines = (t: string) => t.split('\n').length - 1;
-  const start = performance.now();
-  parts.map((_, i) => parts.slice(0, i).reduce((lines, part) => lines + countLines(part), 0));
-  return { blocks: parts.length, ms: performance.now() - start };
-};
-
 describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown per-frame cost on long many-block replies', () => {
   it('a streamed frame of a 2000-block reply costs no more than one full parse (base)', () => {
     let streaming2000 = 0;
     let full2000 = 0;
     for (const n of [200, 1000, 2000, 4000]) {
       const text = reply(n);
-      const off = offsetsCost(text);
+      const { blocks } = splitStreamingBlocks(text, replyParser);
       const s = lastFrames(text, t => <Streaming text={t} />);
       const f = n <= 2000 ? lastFrames(text, t => <Full text={t} />, 3) : NaN;
       if (n === 2000) {
@@ -78,7 +69,7 @@ describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown per-frame cost on long
         full2000 = f;
       }
       report(
-        `paragraphs ${n} bytes ${text.length} blocks ${off.blocks} offsets-only ms ${off.ms.toFixed(1)} ` +
+        `paragraphs ${n} bytes ${text.length} blocks ${blocks.length + 1} ` +
           `streaming per-frame ms ${s.toFixed(1)} full-parse per-frame ms ${f.toFixed(1)}`
       );
     }

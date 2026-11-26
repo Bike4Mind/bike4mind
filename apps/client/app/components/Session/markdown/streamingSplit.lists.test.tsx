@@ -1,57 +1,16 @@
-import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { renderToStaticMarkup } from 'react-dom/server';
-import ReactMarkdown, { type Options } from 'react-markdown';
-import rehypeKatex from 'rehype-katex';
-import { assistantReplyRemarkPlugins } from '@client/app/utils/remarkPlugins';
-import { countSettleCandidates, createBlockParser, splitStreamingBlocks, type StreamingBlocks } from './streamingSplit';
-
-const remarkPlugins: Options['remarkPlugins'] = [...assistantReplyRemarkPlugins];
-const rehypePlugins: Options['rehypePlugins'] = [rehypeKatex];
-const parse = createBlockParser(remarkPlugins);
-
-const md = (text: string) =>
-  text
-    ? renderToStaticMarkup(
-        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
-          {text}
-        </ReactMarkdown>
-      )
-    : '';
-
-const chunkedPrefixes = (text: string, chunks: number[]) => {
-  const out: string[] = [];
-  let i = 0;
-  let k = 0;
-  while (i < text.length) {
-    i = Math.min(text.length, i + chunks[k % chunks.length]);
-    k++;
-    out.push(text.slice(0, i));
-  }
-  return out;
-};
-
-const compareWithAlwaysParse = (prefixes: string[]) => {
-  let skip: StreamingBlocks | undefined;
-  let always: StreamingBlocks | undefined;
-  let lagFrames = 0;
-  for (const prefix of prefixes) {
-    skip = splitStreamingBlocks(prefix, parse, skip);
-    always = splitStreamingBlocks(prefix, parse, always, true);
-    if (always.blocks.join('').length > skip.blocks.join('').length) lagFrames++;
-  }
-  return { lagFrames, frames: prefixes.length, skip: skip!.blocks.length, always: always!.blocks.length };
-};
+import { splitStreamingBlocks, type StreamingBlocks } from './streamingSplit';
+import { chunkedPrefixes, compareWithAlwaysParse, md, perBlockHtml, replyParser } from './streamingSplitTestUtils';
 
 const CHUNKINGS = [[1], [2], [3], [9, 13, 7, 21], [5, 11]];
 
 const worst = (text: string) =>
-  CHUNKINGS.map(chunks => ({ chunks: chunks.join(','), ...compareWithAlwaysParse(chunkedPrefixes(text, chunks)) }));
+  CHUNKINGS.map(chunks => {
+    const { lagFrames, frames } = compareWithAlwaysParse(chunkedPrefixes(text, chunks));
+    return { chunks: chunks.join(','), lagFrames, frames };
+  });
 
-// Copy of the shipped counter, used only as an oracle for the monotonicity property.
-const count = (text: string, prev: StreamingBlocks) => countSettleCandidates(text, prev.tailList);
-
-describe('settle candidates: monotonicity and pendingLineAt under fuzz', () => {
+describe('settle candidates: pendingLineAt under fuzz', () => {
   const pieces = [
     '- a',
     '-',
@@ -91,31 +50,13 @@ describe('settle candidates: monotonicity and pendingLineAt under fuzz', () => {
     texts.push(text);
   }
 
-  it('never recounts fewer candidates than the stored count on a frame that skipped the parse', () => {
-    const drops: string[] = [];
-    for (const text of texts) {
-      for (const chunks of CHUNKINGS) {
-        let prev: StreamingBlocks | undefined;
-        for (const prefix of chunkedPrefixes(text, chunks)) {
-          let parsed = false;
-          const next = splitStreamingBlocks(prefix, s => ((parsed = true), parse(s)), prev);
-          if (prev && !parsed && count(next.tail, prev) < prev.settleCandidates) {
-            drops.push(JSON.stringify(prefix));
-          }
-          prev = next;
-        }
-      }
-    }
-    expect(drops).toEqual([]);
-  });
-
   it('keeps pendingLineAt at the start of the unterminated last line of the tail, also after a cut', () => {
     const bad: string[] = [];
     for (const text of [...texts, 'para\n\n- a\n- b\n\nnext line', 'p1\n\np2\n\n- a\n\n  # x']) {
       for (const chunks of CHUNKINGS) {
         let prev: StreamingBlocks | undefined;
         for (const prefix of chunkedPrefixes(text, chunks)) {
-          prev = splitStreamingBlocks(prefix, parse, prev);
+          prev = splitStreamingBlocks(prefix, replyParser, prev);
           const at = prev.pendingLineAt;
           if (at === null) continue;
           const lineStart = prev.tail.lastIndexOf('\n', at - 1) + 1;
@@ -178,10 +119,10 @@ describe('deferred shapes still render like the single parse at completion', () 
     for (const text of texts) {
       for (const chunks of CHUNKINGS) {
         let prev: StreamingBlocks | undefined;
-        for (const prefix of chunkedPrefixes(text, chunks)) prev = splitStreamingBlocks(prefix, parse, prev);
-        const done = splitStreamingBlocks(text, parse, prev, true);
+        for (const prefix of chunkedPrefixes(text, chunks)) prev = splitStreamingBlocks(prefix, replyParser, prev);
+        const done = splitStreamingBlocks(text, replyParser, prev, true);
         expect(done.blocks.join('') + done.tail).toBe(text);
-        expect([...done.blocks, done.tail].filter(Boolean).map(md).join('\n')).toBe(md(text));
+        expect(perBlockHtml(done)).toBe(md(text));
       }
     }
   });

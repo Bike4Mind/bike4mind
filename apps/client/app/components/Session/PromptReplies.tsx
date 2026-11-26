@@ -1385,16 +1385,33 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
   const [approvedImageSources] = useState(() => new Set<string>());
+  // A new attempt at the same quest rewrites the reply rather than extending it; its images need their own approval.
+  const previousReplyRef = useRef(reply ?? '');
+  // eslint-disable-next-line react-hooks/refs -- an effect would clear after this render's images mounted approved
+  if (!(reply ?? '').startsWith(previousReplyRef.current)) approvedImageSources.clear();
+  useEffect(() => {
+    previousReplyRef.current = reply ?? '';
+  }, [reply]);
+  // Callers may pass a fresh onSendMessage each render; a stable wrapper keeps markdownImage, and with it
+  // replyComponents, from changing every frame and re-rendering every settled block.
+  const onSendMessageRef = useRef(onSendMessage);
+  useEffect(() => {
+    onSendMessageRef.current = onSendMessage;
+  }, [onSendMessage]);
+  const sendFromImage = useCallback<typeof onSendMessage>(
+    (message, options) => onSendMessageRef.current(message, options),
+    []
+  );
   const markdownImage = useCallback(
     ({ alt, src }: ComponentProps<'img'>) => (
       <ReplyMarkdownImage
         src={typeof src === 'string' ? src : ''}
         alt={alt}
-        onSendMessage={onSendMessage}
+        onSendMessage={sendFromImage}
         approvedSources={approvedImageSources}
       />
     ),
-    [onSendMessage, approvedImageSources]
+    [sendFromImage, approvedImageSources]
   );
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
   // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search

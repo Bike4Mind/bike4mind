@@ -1,23 +1,8 @@
-import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { renderToStaticMarkup } from 'react-dom/server';
-import ReactMarkdown, { type Options } from 'react-markdown';
-import rehypeKatex from 'rehype-katex';
-import { assistantReplyRemarkPlugins } from '@client/app/utils/remarkPlugins';
 import { splitStreamingBlocks } from './streamingSplit';
-import { replyParser } from './streamingSplitTestUtils';
+import { md as renderMd, normalizeHtml, replyParser } from './streamingSplitTestUtils';
 
-const remarkPlugins: Options['remarkPlugins'] = [...assistantReplyRemarkPlugins];
-const rehypePlugins: Options['rehypePlugins'] = [rehypeKatex];
-
-const md = (text: string) =>
-  text
-    ? renderToStaticMarkup(
-        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
-          {text}
-        </ReactMarkdown>
-      ).replace(/>\s+</g, '><')
-    : '';
+const md = (text: string) => normalizeHtml(renderMd(text));
 
 const splitRender = (text: string) => {
   const { blocks, tail } = splitStreamingBlocks(text, replyParser);

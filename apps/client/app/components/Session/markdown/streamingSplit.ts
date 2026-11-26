@@ -100,7 +100,7 @@ export const countSettleCandidates = (text: string, list: StreamingBlocks['tailL
  * next node, at which point later text can no longer change it; a list also waits for the next
  * node's first line to end, since a partial line could still turn into one of its items.
  * `prev` keeps the blocks already settled (so only the tail is parsed) while `text` still starts
- * with them, and the tail is only re-parsed once a new boundary has appeared in it or the line
+ * with them and the tail they left (text that rewrites that tail is parsed afresh), and the tail is only re-parsed once a new boundary has appeared in it or the line
  * a list waits on has ended; `final` always parses, so `crossBlock` covers the whole reply.
  */
 export const splitStreamingBlocks = (
@@ -109,7 +109,7 @@ export const splitStreamingBlocks = (
   prev?: StreamingBlocks,
   final = false
 ): StreamingBlocks => {
-  const kept = prev && text.startsWith(prev.committed) ? prev : undefined;
+  const kept = prev && text.startsWith(prev.committed + prev.tail) ? prev : undefined;
   const tailStart = kept ? kept.committed.length : 0;
   const tail = text.slice(tailStart);
   if (

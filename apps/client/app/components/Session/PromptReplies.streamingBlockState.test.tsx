@@ -9,9 +9,16 @@ import PromptReplies from './PromptReplies';
 // jsdom has no Element.scrollTo, and the reply's auto-scroll timer can fire after a test ends.
 Element.prototype.scrollTo = vi.fn();
 
-vi.mock('./ImageContainer', () => ({
-  default: ({ src }: { src: string }) => <img data-testid="reply-image-loaded" src={src} alt="" />,
-}));
+const { imageMounted } = vi.hoisted(() => ({ imageMounted: vi.fn() }));
+
+vi.mock('./ImageContainer', async () => {
+  const { useEffect } = await import('react');
+  const ImageContainerMock = ({ src }: { src: string }) => {
+    useEffect(() => imageMounted(), []);
+    return <img data-testid="reply-image-loaded" src={src} alt="" />;
+  };
+  return { default: ImageContainerMock };
+});
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
@@ -71,5 +78,29 @@ describe('PromptReplies keeps per-block component state when the reply completes
     fireEvent.click(screen.getByTestId('reply-image-load-btn'));
     rerender(<Reply text={text} status="done" />);
     expect(screen.getByTestId('reply-image-loaded')).toBeTruthy();
+  });
+});
+
+describe('PromptReplies keeps its markdown components stable while streaming', () => {
+  it('a settled image is not remounted when the caller passes a fresh onSendMessage each frame', () => {
+    const Frame = ({ text }: { text: string }) => (
+      <QueryClientProvider client={queryClient}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{ id: 'quest-r2', sessionId: 'session-1', replies: [text], status: 'running' } as never}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    imageMounted.mockClear();
+    const { rerender } = render(<Frame text={REPLY} />);
+    fireEvent.click(screen.getByTestId('reply-image-load-btn'));
+    const image = screen.getByTestId('reply-image-loaded');
+    expect(imageMounted).toHaveBeenCalledTimes(1);
+    rerender(<Frame text={`${REPLY} More`} />);
+    rerender(<Frame text={`${REPLY} More text`} />);
+    expect(screen.getByTestId('reply-image-loaded')).toBe(image);
+    expect(imageMounted).toHaveBeenCalledTimes(1);
   });
 });

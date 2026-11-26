@@ -1,56 +1,6 @@
-import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { renderToStaticMarkup } from 'react-dom/server';
-import ReactMarkdown, { type Options } from 'react-markdown';
-import rehypeKatex from 'rehype-katex';
-import { assistantReplyRemarkPlugins } from '@client/app/utils/remarkPlugins';
-import { countSettleCandidates, createBlockParser, splitStreamingBlocks, type StreamingBlocks } from './streamingSplit';
-
-const remarkPlugins: Options['remarkPlugins'] = [...assistantReplyRemarkPlugins];
-const rehypePlugins: Options['rehypePlugins'] = [rehypeKatex];
-const parse = createBlockParser(remarkPlugins);
-
-const md = (text: string) =>
-  text
-    ? renderToStaticMarkup(
-        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
-          {text}
-        </ReactMarkdown>
-      )
-    : '';
-
-const perBlockHtml = (split: StreamingBlocks) => [...split.blocks, split.tail].filter(Boolean).map(md).join('\n');
-
-const chunkedPrefixes = (text: string, chunks: number[]) => {
-  const out: string[] = [];
-  let i = 0;
-  let k = 0;
-  while (i < text.length) {
-    i = Math.min(text.length, i + chunks[k % chunks.length]);
-    k++;
-    out.push(text.slice(0, i));
-  }
-  return out;
-};
-
-// Same chain twice: as shipped (skip allowed) and with every frame forced to parse.
-const compareWithAlwaysParse = (prefixes: string[]) => {
-  let skip: StreamingBlocks | undefined;
-  let always: StreamingBlocks | undefined;
-  let lagFrames = 0;
-  let maxLagBytes = 0;
-  for (const prefix of prefixes) {
-    skip = splitStreamingBlocks(prefix, parse, skip);
-    always = splitStreamingBlocks(prefix, parse, always, true);
-    const settledSkip = skip.blocks.join('').length;
-    const settledAlways = always.blocks.join('').length;
-    if (settledAlways > settledSkip) {
-      lagFrames++;
-      maxLagBytes = Math.max(maxLagBytes, settledAlways - settledSkip);
-    }
-  }
-  return { skip: skip!, always: always!, lagFrames, frames: prefixes.length, maxLagBytes };
-};
+import { countSettleCandidates, splitStreamingBlocks, type StreamingBlocks } from './streamingSplit';
+import { chunkedPrefixes, compareWithAlwaysParse, md, perBlockHtml, replyParser } from './streamingSplitTestUtils';
 
 const charByChar = (text: string) => chunkedPrefixes(text, [1]);
 
@@ -153,17 +103,29 @@ describe('skip rule: candidate count monotonicity', () => {
   it('never sees the candidate count drop below the stored one on a skip frame', () => {
     const pieces = [
       '- a',
+      '-',
+      '--',
+      '---',
+      '- - -',
+      '* * *',
+      '*',
+      '**b**',
+      '* e',
       '1',
       '12',
+      '1.',
       '1. b',
+      '1)',
       '1) c',
       '+ d',
-      '* e',
       'para',
-      '- - -',
       '> q',
       '```\nx\n```',
       '  - nested',
+      '  two-space body',
+      '   three-space body',
+      ' one-space',
+      '# h',
     ];
     const seps = ['\n\n', '\n'];
     const drops: string[] = [];
@@ -175,12 +137,12 @@ describe('skip rule: candidate count monotonicity', () => {
     for (let t = 0; t < 400; t++) {
       let text = pieces[rnd(pieces.length)];
       for (let k = 0; k < 2 + rnd(5); k++) text += seps[rnd(2)] + pieces[rnd(pieces.length)];
-      for (const chunks of [[1], [2], [3], [4, 1]]) {
+      for (const chunks of [[1], [2], [3], [4, 1], [9, 13, 7, 21], [5, 11]]) {
         let prev: StreamingBlocks | undefined;
         let parsed = false;
         const spy = (s: string) => {
           parsed = true;
-          return parse(s);
+          return replyParser(s);
         };
         for (const prefix of chunkedPrefixes(text, chunks)) {
           parsed = false;
@@ -206,8 +168,9 @@ describe('final parse catches up whatever the skip rule deferred', () => {
     ];
     for (const text of texts) {
       let prev: StreamingBlocks | undefined;
-      for (const prefix of chunkedPrefixes(text, [9, 13, 7, 21])) prev = splitStreamingBlocks(prefix, parse, prev);
-      const done = splitStreamingBlocks(text, parse, prev, true);
+      for (const prefix of chunkedPrefixes(text, [9, 13, 7, 21]))
+        prev = splitStreamingBlocks(prefix, replyParser, prev);
+      const done = splitStreamingBlocks(text, replyParser, prev, true);
       expect(done.blocks.join('') + done.tail).toBe(text);
       expect(perBlockHtml(done)).toBe(md(text));
     }
@@ -228,12 +191,12 @@ describe('cut at line start', () => {
       let prev: StreamingBlocks | undefined;
       const prefixes = charByChar(text);
       for (const prefix of prefixes) {
-        const next = splitStreamingBlocks(prefix, parse, prev);
+        const next = splitStreamingBlocks(prefix, replyParser, prev);
         expect(next.blocks.join('') + next.tail).toBe(prefix);
         prev = next;
       }
-      const done = splitStreamingBlocks(text, parse, prev, true);
-      const nodeStarts = (parse(text).children ?? []).map(n => n.position!.start.offset);
+      const done = splitStreamingBlocks(text, replyParser, prev, true);
+      const nodeStarts = (replyParser(text).children ?? []).map(n => n.position!.start.offset);
       let at = 0;
       for (const block of done.blocks) {
         at += block.length;
@@ -252,7 +215,7 @@ describe('crossBlock on skip frames', () => {
     const flips: number[] = [];
     let seen = false;
     for (const prefix of charByChar(text)) {
-      prev = splitStreamingBlocks(prefix, parse, prev);
+      prev = splitStreamingBlocks(prefix, replyParser, prev);
       if (prev.crossBlock) seen = true;
       else if (seen) flips.push(prefix.length);
     }
@@ -262,8 +225,8 @@ describe('crossBlock on skip frames', () => {
   it('sees a definition nested in a list item that settled mid-stream', () => {
     const text = '- item\n\n  [r]: https://example.com\n\n- more\n\nPara with [r].\n\nend';
     let prev: StreamingBlocks | undefined;
-    for (const prefix of chunkedPrefixes(text, [4, 7])) prev = splitStreamingBlocks(prefix, parse, prev);
+    for (const prefix of chunkedPrefixes(text, [4, 7])) prev = splitStreamingBlocks(prefix, replyParser, prev);
     expect(prev!.settledCrossBlock).toBe(true);
-    expect(splitStreamingBlocks(text, parse, prev, true).crossBlock).toBe(true);
+    expect(splitStreamingBlocks(text, replyParser, prev, true).crossBlock).toBe(true);
   });
 });

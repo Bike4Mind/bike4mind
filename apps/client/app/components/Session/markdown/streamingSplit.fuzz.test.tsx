@@ -1,23 +1,6 @@
-import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { renderToStaticMarkup } from 'react-dom/server';
-import ReactMarkdown, { type Options } from 'react-markdown';
-import rehypeKatex from 'rehype-katex';
-import { assistantReplyRemarkPlugins } from '@client/app/utils/remarkPlugins';
-import { createBlockParser, splitStreamingBlocks, type StreamingBlocks } from './streamingSplit';
-
-const remarkPlugins: Options['remarkPlugins'] = [...assistantReplyRemarkPlugins];
-const rehypePlugins: Options['rehypePlugins'] = [rehypeKatex];
-const parse = createBlockParser(remarkPlugins);
-
-const md = (text: string) =>
-  text
-    ? renderToStaticMarkup(
-        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
-          {text}
-        </ReactMarkdown>
-      )
-    : '';
+import { splitStreamingBlocks, type StreamingBlocks } from './streamingSplit';
+import { md, perBlockHtml, replyParser } from './streamingSplitTestUtils';
 
 const streamChained = (text: string, step: (i: number) => number = () => 1) => {
   let prev: StreamingBlocks | undefined;
@@ -25,7 +8,7 @@ const streamChained = (text: string, step: (i: number) => number = () => 1) => {
   for (let i = 0; i < text.length;) {
     i = Math.min(text.length, i + step(i));
     const prefix = text.slice(0, i);
-    const next = splitStreamingBlocks(prefix, parse, prev);
+    const next = splitStreamingBlocks(prefix, replyParser, prev);
     if (next.blocks.join('') + next.tail !== prefix) violations.push(`reassembly at ${i}`);
     if (prev && prev.blocks.some((b, k) => next.blocks[k] !== b)) violations.push(`block rewritten at ${i}`);
     prev = next;
@@ -33,14 +16,12 @@ const streamChained = (text: string, step: (i: number) => number = () => 1) => {
   return { split: prev!, violations };
 };
 
-const perBlockHtml = (split: StreamingBlocks) => [...split.blocks, split.tail].filter(Boolean).map(md).join('\n');
-
 const streamedRender = (text: string) => {
   const { split } = streamChained(text);
   return split.crossBlock ? md(text) : perBlockHtml(split);
 };
 
-const topLevelStarts = (text: string) => new Set((parse(text).children ?? []).map(n => n.position!.start.offset));
+const topLevelStarts = (text: string) => new Set((replyParser(text).children ?? []).map(n => n.position!.start.offset));
 
 const FRAGMENTS = [
   'Plain *em* and **strong** with `code` and [1].',

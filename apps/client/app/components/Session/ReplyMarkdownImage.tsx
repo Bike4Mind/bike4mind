@@ -3,8 +3,8 @@ import { useState, type ComponentProps } from 'react';
 import ImageContainer from './ImageContainer';
 
 type Props = Pick<ComponentProps<typeof ImageContainer>, 'src' | 'alt' | 'onSendMessage'> & {
-  // The reply's approvals, so one survives this image remounting (e.g. StreamingMarkdown dropping its
-  // block split when a reply with a footnote or reference definition completes).
+  // The reply's approvals, so one survives this image remounting (StreamingMarkdown drops its block split
+  // once a footnote or reference definition streams in).
   approvedSources?: Set<string>;
 };
 

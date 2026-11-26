@@ -89,7 +89,7 @@ describe('PromptReplies keeps an approved image through completion when the repl
     fireEvent.click(screen.getByTestId('reply-image-load-btn'));
     rerender(<Reply text={first} status="stopped" />);
     rerender(<Reply text="Again." status="running" />);
-    rerender(<Reply text={'Again.\n\n![new](https://example.com/new.png)\n\nend'} status="running" />);
+    rerender(<Reply text={'Again.\n\n![old](https://example.com/old.png)\n\nend'} status="running" />);
     expect(screen.getByTestId('reply-image-load-btn')).toBeTruthy();
     expect(screen.queryByTestId('reply-image-loaded')).toBeNull();
   });
