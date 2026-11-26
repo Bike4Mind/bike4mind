@@ -56,11 +56,11 @@ export const CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS =
   CONSUMER_MARGIN_MS;
 
 /**
- * A run's time limit once its data files took `downloadMs` to download. The download counts against the ceiling,
- * so the two together never pass it and the Lambda timeout below still holds.
+ * A run's time limit once its data files took `downloadMs` to download. The download counts against the call's own
+ * limit, the budget the dispatcher's wait is sized from, so a cold download never outlasts the caller's wait.
  */
-export function runTimeoutAfterDownload(timeoutMs: number, ceilingMs: number, downloadMs: number): number {
-  return Math.max(0, Math.min(timeoutMs, ceilingMs - downloadMs));
+export function runTimeoutAfterDownload(timeoutMs: number, downloadMs: number): number {
+  return Math.max(0, timeoutMs - downloadMs);
 }
 
 /** The runtime Lambda's configured timeout, in seconds; Lambda allows at most 900. */

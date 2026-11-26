@@ -585,17 +585,19 @@ export async function runCallableFunctionInChild(
   }
 
   const downloadStarted = Date.now();
+  const downloadBudgetMs = Math.min(CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS, limits.timeoutMs);
   const data = await prepareRunData(payload.op === 'call' ? payload.data : undefined, {
     cacheDir: options.dataCacheDir,
     fetchData: options.fetchData,
-    budgetMs: Math.min(CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS, ceilings.timeoutMs),
+    budgetMs: downloadBudgetMs,
   });
   if (!data.ok) {
-    return data.reason === 'data_hash_mismatch'
-      ? finish({ outcome: 'data_mismatch', reason: data.reason })
-      : finish({ outcome: 'error', reason: data.reason });
+    if (data.reason === 'data_hash_mismatch') return finish({ outcome: 'data_mismatch', reason: data.reason });
+    // The call's own time ran out while downloading: a timeout, ended inside the caller's wait.
+    if (Date.now() - downloadStarted >= limits.timeoutMs) return finish({ outcome: 'timeout' });
+    return finish({ outcome: 'error', reason: data.reason });
   }
-  const timeoutMs = runTimeoutAfterDownload(limits.timeoutMs, ceilings.timeoutMs, Date.now() - downloadStarted);
+  const timeoutMs = runTimeoutAfterDownload(limits.timeoutMs, Date.now() - downloadStarted);
   if (timeoutMs === 0) {
     await data.release();
     return finish({ outcome: 'timeout' });

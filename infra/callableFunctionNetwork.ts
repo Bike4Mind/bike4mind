@@ -307,14 +307,21 @@ export const FUNCTION_DATA_DISPATCHER_ACTIONS = ['s3:PutObject', 's3:GetObject',
 /** What the account-erasure worker's and the account-deletion sweep's roles may do, beside listing the keys. */
 export const FUNCTION_DATA_ERASER_ACTIONS = ['s3:DeleteObject'];
 
-export const FUNCTION_DATA_READ_ACTIONS = ['s3:GetObject*', 's3:ListBucket*'];
-export const FUNCTION_DATA_WRITE_ACTIONS = ['s3:PutObject*', 's3:DeleteObject*', 's3:Replicate*'];
+export const FUNCTION_DATA_READ_ACTIONS = ['s3:GetObject*'];
+export const FUNCTION_DATA_LIST_ACTIONS = ['s3:ListBucket*'];
+export const FUNCTION_DATA_WRITE_ACTIONS = ['s3:PutObject*', 's3:Replicate*'];
+export const FUNCTION_DATA_DELETE_ACTIONS = ['s3:DeleteObject*'];
 
 /**
- * The function-data bucket's policy: HTTPS only; reads, object writes, and deletes by the dispatcher's role only,
- * from anywhere when signed in the header; its signed links only through `endpointId`, and none without one. The
- * eraser roles (account erasure and the deletion sweep) are exempt beside it; their own grant lets them only list
- * and delete.
+ * How long after signing a link works from outside the data endpoint: the owner's browser reads its own pinned file
+ * at once (CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS in packages/server-utils dataPins.ts). In ms.
+ */
+export const FUNCTION_DATA_BROWSER_LINK_WINDOW_MS = 60_000;
+
+/**
+ * The function-data bucket's policy: HTTPS only; reads and object writes by the dispatcher's role only, from
+ * anywhere when signed in the header; listing and deletes by it and the eraser roles (account erasure and the
+ * deletion sweep). Its signed links work through `endpointId` and, for the browser link's first minute, from anywhere.
  */
 export function callableFunctionDataBucketPolicy({
   bucketArn,
@@ -328,12 +335,14 @@ export function callableFunctionDataBucketPolicy({
   endpointId?: string;
 }) {
   const erasers = eraserRoleArns.filter(Boolean);
-  // Erasers stay outside the read deny because a prefix delete lists the keys first (s3:ListBucket).
-  const notDispatcher = {
+  const notDispatcher = { ArnNotEquals: { 'aws:PrincipalArn': dispatcherRoleArn } };
+  // A prefix delete lists the keys first, so erasers pass the list and delete denies, never the read or write ones.
+  const notDispatcherOrEraser = {
     ArnNotEquals: { 'aws:PrincipalArn': erasers.length ? [dispatcherRoleArn, ...erasers] : dispatcherRoleArn },
   };
   const notThroughEndpoint = endpointId ? { StringNotEquals: { 'aws:SourceVpce': endpointId } } : {};
   const signedLink = { StringEquals: { 's3:authType': 'REST-QUERY-STRING' } };
+  const pastBrowserWindow = { NumericGreaterThan: { 's3:signatureAge': String(FUNCTION_DATA_BROWSER_LINK_WINDOW_MS) } };
   return {
     Version: '2012-10-17',
     Statement: [
@@ -350,8 +359,16 @@ export function callableFunctionDataBucketPolicy({
         Effect: 'Deny',
         Principal: '*',
         Action: FUNCTION_DATA_READ_ACTIONS,
-        Resource: [bucketArn, `${bucketArn}/*`],
+        Resource: `${bucketArn}/*`,
         Condition: notDispatcher,
+      },
+      {
+        Sid: 'ListByDispatcherAndErasers',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: FUNCTION_DATA_LIST_ACTIONS,
+        Resource: bucketArn,
+        Condition: notDispatcherOrEraser,
       },
       {
         Sid: 'SignedLinksThroughDataEndpoint',
@@ -359,7 +376,7 @@ export function callableFunctionDataBucketPolicy({
         Principal: '*',
         Action: 's3:GetObject*',
         Resource: `${bucketArn}/*`,
-        Condition: { ...signedLink, ...notThroughEndpoint },
+        Condition: { ...signedLink, ...notThroughEndpoint, ...pastBrowserWindow },
       },
       {
         Sid: 'WritesByDispatcher',
@@ -368,6 +385,14 @@ export function callableFunctionDataBucketPolicy({
         Action: FUNCTION_DATA_WRITE_ACTIONS,
         Resource: `${bucketArn}/*`,
         Condition: notDispatcher,
+      },
+      {
+        Sid: 'DeletesByDispatcherAndErasers',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: FUNCTION_DATA_DELETE_ACTIONS,
+        Resource: `${bucketArn}/*`,
+        Condition: notDispatcherOrEraser,
       },
     ],
   };

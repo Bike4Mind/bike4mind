@@ -103,6 +103,129 @@ describe('prepareRunData', () => {
     expect(await prepareRunData([entry()], { cacheDir, fetchData })).toEqual({ ok: false, reason: 'data_unavailable' });
     expect(readdirSync(path.join(cacheDir, 'cache', 'fn1'))).toEqual([]);
   });
+
+  it('cancels the response body once a download passes the pinned size', async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(CSV));
+      },
+      cancel,
+    });
+    const result = await prepareRunData([entry()], { cacheDir, fetchData: vi.fn(async () => new Response(body)) });
+    expect(result).toEqual({ ok: false, reason: 'data_hash_mismatch' });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts a stalled download at the budget', async () => {
+    const fetchData = vi.fn(
+      async (_url: string, { signal }: { signal: AbortSignal }) =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal.addEventListener('abort', () => controller.error(signal.reason));
+            },
+          })
+        )
+    );
+    const started = Date.now();
+    expect(await prepareRunData([entry()], { cacheDir, fetchData, budgetMs: 50 })).toEqual({
+      ok: false,
+      reason: 'data_unavailable',
+    });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(readdirSync(path.join(cacheDir, 'cache', 'fn1'))).toEqual([]);
+  });
+
+  describe('eviction under capBytes', () => {
+    const files = { a: Buffer.from('aaaaaaaa'), b: Buffer.from('bbbbbbbb'), c: Buffer.from('cccccccc') };
+    const pinOf = (key: keyof typeof files) =>
+      entry({ name: `${key}.bin`, sha256: sha(files[key]), bytes: files[key].length });
+    const fetchData = vi.fn(async (url: string) => new Response(new Uint8Array(files[url.slice(-1) as 'a'])));
+    const withUrl = (key: keyof typeof files) => ({ ...pinOf(key), url: `https://data.example.com/${key}` });
+    const cached = () => readdirSync(path.join(cacheDir, 'cache', 'fn1')).sort();
+    let clock = 0;
+    const now = () => clock;
+    const capBytes = 16;
+    const prepare = async (keys: (keyof typeof files)[]) => {
+      const result = await prepareRunData(keys.map(withUrl), { cacheDir, fetchData, capBytes, now });
+      if (!result.ok) throw new Error(result.reason);
+      await result.release();
+    };
+
+    beforeEach(() => {
+      clock = 0;
+      fetchData.mockClear();
+    });
+
+    it('evicts the least recently used file first', async () => {
+      clock = 1;
+      await prepare(['a']);
+      clock = 2;
+      await prepare(['b']);
+      clock = 3;
+      await prepare(['a']);
+      clock = 4;
+      await prepare(['c']);
+      expect(cached()).toEqual([sha(files.a), sha(files.c)].sort());
+      expect(fetchData).toHaveBeenCalledTimes(3);
+    });
+
+    it('never evicts a file the current call uses, even when it is the oldest', async () => {
+      clock = 1;
+      await prepare(['a']);
+      clock = 2;
+      await prepare(['b']);
+      clock = 3;
+      // c is placed while a is still the oldest entry; a stays because this call reads it too.
+      await prepare(['c', 'a']);
+      expect(cached()).toEqual([sha(files.a), sha(files.c)].sort());
+      expect(fetchData).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it('clears what a killed process left and counts its cache files toward the cap', async () => {
+    const { chmodSync, mkdirSync } = await import('node:fs');
+    const old = Buffer.from('oldoldol');
+    const callDir = path.join(cacheDir, 'calls', 'left-over');
+    mkdirSync(callDir, { recursive: true });
+    writeFileSync(path.join(callDir, 'points.csv'), CSV);
+    chmodSync(callDir, 0o555);
+    const fnDir = path.join(cacheDir, 'cache', 'fn1');
+    mkdirSync(fnDir, { recursive: true });
+    writeFileSync(path.join(fnDir, `${sha(old)}`), old);
+    writeFileSync(path.join(fnDir, `${sha(CSV)}.partial-download.part`), CSV.subarray(0, 3));
+
+    const result = await prepareRunData([entry()], { cacheDir, fetchData: serving(CSV), capBytes: CSV.length + 4 });
+    expect(result.ok).toBe(true);
+    if (result.ok) await result.release();
+    expect(readdirSync(path.join(cacheDir, 'calls'))).toEqual([]);
+    expect(readdirSync(fnDir)).toEqual([sha(CSV)]);
+  });
+
+  it('hashes a cache file found on disk before serving it', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const fnDir = path.join(cacheDir, 'cache', 'fn1');
+    mkdirSync(fnDir, { recursive: true });
+    writeFileSync(path.join(fnDir, sha(CSV)), 'x,y\n7,7\n');
+    const fetchData = serving(CSV);
+    const result = await prepareRunData([entry()], { cacheDir, fetchData });
+    expect(result.ok && result.dir && readFileSync(path.join(result.dir, 'points.csv'))).toEqual(CSV);
+    expect(fetchData).toHaveBeenCalledTimes(1);
+    if (result.ok) await result.release();
+  });
+
+  it('downloads a file once when two calls in one process need it at the same time', async () => {
+    const fetchData = serving(CSV);
+    const [first, second] = await Promise.all([
+      prepareRunData([entry()], { cacheDir, fetchData }),
+      prepareRunData([entry()], { cacheDir, fetchData }),
+    ]);
+    expect(first.ok && second.ok).toBe(true);
+    expect(fetchData).toHaveBeenCalledTimes(1);
+    if (first.ok) await first.release();
+    if (second.ok) await second.release();
+  });
 });
 
 describe('CALLABLE_FUNCTION_DATA_CACHE_BYTES', () => {

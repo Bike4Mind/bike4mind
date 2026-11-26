@@ -8,6 +8,7 @@ import {
   callableFunctionRolePolicy,
   DEDICATED_SUBNET_CIDRS,
   distinctZones,
+  FUNCTION_DATA_BROWSER_LINK_WINDOW_MS,
   FUNCTION_DATA_DISPATCHER_ACTIONS,
   FUNCTION_DATA_ERASER_ACTIONS,
   FUNCTION_DATA_KEY_PREFIX,
@@ -406,6 +407,8 @@ describe('callableFunctionDataBucketPolicy', () => {
     secure?: boolean;
     /** `REST-QUERY-STRING` for a signed link; a request signed in its header otherwise. */
     authType?: string;
+    /** Milliseconds since the request or link was signed; past the browser window unless given. */
+    signatureAge?: number;
   }
 
   const wildcard = (patterns: string | string[], value: string) =>
@@ -423,9 +426,11 @@ describe('callableFunctionDataBucketPolicy', () => {
           'aws:SourceVpce': request.sourceVpce,
           'aws:SecureTransport': String(request.secure ?? true),
           's3:authType': request.authType ?? 'REST-HEADER',
+          's3:signatureAge': String(request.signatureAge ?? FUNCTION_DATA_BROWSER_LINK_WINDOW_MS + 1),
         }[key];
         const values = [value].flat();
         if (test === 'Bool' || test === 'StringEquals') return values.some(one => actual === one);
+        if (test === 'NumericGreaterThan') return values.some(one => Number(actual) > Number(one));
         if (test === 'ArnNotEquals' || test === 'StringNotEquals') return values.every(one => actual !== one);
         throw new Error(`untested condition ${test}`);
       })
@@ -489,6 +494,17 @@ describe('callableFunctionDataBucketPolicy', () => {
     expect(denied(withEndpoint, { ...link, principalArn: DISPATCHER, sourceVpce: 'vpce-0data' })).toBe(false);
   });
 
+  it("lets the dispatcher's signed link be read from anywhere only within the browser link's first minute", () => {
+    const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING', principalArn: DISPATCHER };
+    for (const policy of [withEndpoint, withoutEndpoint]) {
+      expect(denied(policy, { ...link, signatureAge: 1 })).toBe(false);
+      expect(denied(policy, { ...link, signatureAge: FUNCTION_DATA_BROWSER_LINK_WINDOW_MS })).toBe(false);
+      expect(denied(policy, { ...link, signatureAge: FUNCTION_DATA_BROWSER_LINK_WINDOW_MS + 1 })).toBe(true);
+      expect(denied(policy, { ...link, principalArn: OTHER, signatureAge: 1 })).toBe(true);
+    }
+    expect(FUNCTION_DATA_BROWSER_LINK_WINDOW_MS).toBe(60_000);
+  });
+
   it('keeps header-signed reads, writes, and deletes by the dispatcher from outside the endpoint', () => {
     for (const policy of [withEndpoint, withoutEndpoint]) {
       for (const action of FUNCTION_DATA_DISPATCHER_ACTIONS) {
@@ -510,7 +526,7 @@ describe('callableFunctionDataBucketPolicy', () => {
     }
   });
 
-  it("exempts the account-erasure worker's and the deletion sweep's roles from the header-signed write and delete refusals, and no one else", () => {
+  it("exempts the account-erasure worker's and the deletion sweep's roles from the list and delete refusals only, and no one else", () => {
     const ERASER = 'eraser-role-arn';
     const SWEEP = 'deletion-sweep-role-arn';
     const withEraser = callableFunctionDataBucketPolicy({
@@ -526,6 +542,15 @@ describe('callableFunctionDataBucketPolicy', () => {
     }
     expect(denied(withEraser, { action: 's3:DeleteObject', resource: OBJECT, principalArn: OTHER })).toBe(true);
     for (const principalArn of [ERASER, SWEEP]) {
+      for (const action of [
+        's3:GetObject',
+        's3:GetObjectVersion',
+        's3:PutObject',
+        's3:PutObjectAcl',
+        's3:ReplicateObject',
+      ]) {
+        expect(denied(withEraser, { action, resource: OBJECT, principalArn })).toBe(true);
+      }
       expect(denied(withEndpoint, { action: 's3:DeleteObject', resource: OBJECT, principalArn })).toBe(true);
       const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING', principalArn };
       expect(denied(withEraser, link)).toBe(true);

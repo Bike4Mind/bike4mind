@@ -1,3 +1,4 @@
+import { getAllowedOrigins } from './allowedOrigins';
 import { BLOCK_ALL_PUBLIC_ACCESS } from './bucketSecurity';
 import {
   FUNCTION_DATA_DISPATCHER_ACTIONS,
@@ -6,6 +7,7 @@ import {
   namedSubnetIdsOf,
 } from './callableFunctionNetwork';
 import { PRODUCTION_STAGES } from './constants';
+import { domain } from './router';
 
 // Data files for callable functions, keyed by callableFunctionDataKey (packages/server-utils). A raw bucket because
 // sst.aws.Bucket resolves its name only after its own policy, which here names a role that needs that name first.
@@ -31,6 +33,11 @@ function secureDataBucket(bucket: aws.s3.Bucket) {
   new aws.s3.BucketServerSideEncryptionConfiguration('CallableFunctionDataEncryption', {
     bucket: bucket.bucket,
     rules: [{ applyServerSideEncryptionByDefault: { sseAlgorithm: 'AES256' } }],
+  });
+  // The owner's browser fetches its pinned files from a signed link (linkCallableFunctionDataForBrowser).
+  new aws.s3.BucketCorsConfiguration('CallableFunctionDataCors', {
+    bucket: bucket.bucket,
+    corsRules: [{ allowedOrigins: getAllowedOrigins(domain, $app.stage), allowedMethods: ['GET'], maxAgeSeconds: 600 }],
   });
   return publicAccessBlock;
 }

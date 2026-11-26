@@ -330,7 +330,11 @@ describe('callable function data bucket', () => {
     const encryption = balanced(data, data.indexOf("'CallableFunctionDataEncryption',"), '{', '}');
     expect(encryption).toMatch(/bucket: bucket\.bucket,/);
     expect(encryption).toMatch(/sseAlgorithm: 'AES256'/);
-    expect(data).not.toMatch(/\bpolicy\b|website|acl|cors/i);
+    expect(data).not.toMatch(/\bpolicy\b|website|acl/i);
+    // CORS for the owner's browser reads only: GET, from the app's own origins.
+    const cors = balanced(data, data.indexOf("'CallableFunctionDataCors',"), '{', '}');
+    expect(cors).toMatch(/allowedOrigins: getAllowedOrigins\(domain, \$app\.stage\), allowedMethods: \['GET'\]/);
+    expect(data.match(/allowedMethods/g)).toHaveLength(1);
     expect(functionBody('secureDataBucket', data)).toMatch(
       /'CallableFunctionDataPublicAccessBlock'[^]*'CallableFunctionDataEncryption'/
     );

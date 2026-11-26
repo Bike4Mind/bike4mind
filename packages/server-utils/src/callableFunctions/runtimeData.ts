@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { chmod, link, mkdir, open, rename, rmdir, stat, unlink } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, open, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { CALLABLE_FUNCTION_DATA_LIMITS, CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN } from '@bike4mind/common';
 
@@ -50,7 +50,7 @@ export function validRunData(raw: unknown): raw is CallableFunctionRunData[] {
 // tracer glob the app directory into the build (see apps/client/server/utils/spoolRequestToFile.ts).
 export const defaultCallableFunctionDataDir = () => `${tmpdir()}/callable-function-data`;
 
-/** Download time at most; the parent counts what it takes against the call's ceiling (`runTimeoutAfterDownload`). */
+/** Download time at most; the parent counts what it takes against the call's own limit (`runTimeoutAfterDownload`). */
 export const CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS = 120_000;
 
 /** The cache's share of the ephemeral storage; the rest is the runtime's own. */
@@ -59,10 +59,65 @@ export const CALLABLE_FUNCTION_DATA_CACHE_BYTES = CALLABLE_FUNCTION_DATA_LIMITS.
 interface CacheEntry {
   bytes: number;
   usedAt: number;
+  /** False for a file found on disk at start: counted toward the cap, but hashed before it is served. */
+  verified: boolean;
 }
 
-/** Size and hash recorded at download, by cache path: a file that no longer matches is downloaded again. */
+/** Every cache file by path, with its size: a file that no longer matches is downloaded again. */
 const manifest = new Map<string, CacheEntry>();
+/** Cache roots this process has already reconciled with the disk. */
+const reconciled = new Set<string>();
+/** Serializes the cache work of concurrent calls in one process (the self-host runner), so eviction and downloads never race. */
+let cacheLock: Promise<unknown> = Promise.resolve();
+
+function withCacheLock<T>(work: () => Promise<T>): Promise<T> {
+  const run = cacheLock.then(work, work);
+  cacheLock = run.catch(() => {});
+  return run;
+}
+
+async function listDir(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch {
+    return [];
+  }
+}
+
+/** Removes a tree without following a symlink, making each directory writable first (call directories are 0555). */
+async function removeTree(target: string): Promise<void> {
+  const info = await lstat(target).catch(() => null);
+  if (!info) return;
+  if (!info.isDirectory()) {
+    await unlink(target).catch(() => {});
+    return;
+  }
+  await chmod(target, 0o700).catch(() => {});
+  for (const name of await listDir(target)) await removeTree(`${target}/${name}`);
+  await rmdir(target).catch(() => {});
+}
+
+/**
+ * First use of a root in this process: a previous process killed mid-call may have left call directories, partial
+ * downloads, and cache files it never accounted for. The first two go; the cache files are counted, unverified.
+ */
+async function reconcile(root: string): Promise<void> {
+  if (reconciled.has(root)) return;
+  reconciled.add(root);
+  for (const name of await listDir(`${root}/calls`)) await removeTree(`${root}/calls/${name}`);
+  for (const prefix of await listDir(`${root}/cache`)) {
+    for (const name of await listDir(`${root}/cache/${prefix}`)) {
+      const file = `${root}/cache/${prefix}/${name}`;
+      const info = await lstat(file).catch(() => null);
+      if (!info) continue;
+      if (!info.isFile() || !SHA256.test(name)) {
+        await removeTree(file);
+        continue;
+      }
+      if (!manifest.has(file)) manifest.set(file, { bytes: info.size, usedAt: info.mtimeMs, verified: false });
+    }
+  }
+}
 
 export type DataFetch = (url: string, init: { signal: AbortSignal }) => Promise<Response>;
 
@@ -108,16 +163,23 @@ async function download(entry: CallableFunctionRunData, target: string, fetchDat
   const partial = `${target}.${randomUUID()}.part`;
   const hash = createHash('sha256');
   let written = 0;
+  const reader = response.body.getReader();
   const handle = await open(partial, 'w', 0o600);
   try {
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-      written += chunk.length;
-      // Past the pinned size the bytes cannot match, so stop reading.
-      if (written > entry.bytes) break;
-      hash.update(chunk);
-      await handle.write(chunk);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      written += value.length;
+      // Past the pinned size the bytes cannot match, so stop reading and close the connection.
+      if (written > entry.bytes) {
+        await reader.cancel().catch(() => {});
+        break;
+      }
+      hash.update(value);
+      await handle.write(value);
     }
   } catch (error) {
+    await reader.cancel().catch(() => {});
     await handle.close();
     await unlink(partial).catch(() => {});
     throw error;
@@ -157,58 +219,63 @@ export async function prepareRunData(
   const cachePath = (entry: CallableFunctionRunData) => `${cacheDir(entry)}/${entry.sha256}`;
   const keep = new Set(data.map(cachePath));
 
-  for (const entry of data) {
-    const file = cachePath(entry);
-    const known = manifest.get(file);
-    const size = await sizeOf(file);
-    if (known && size === entry.bytes && known.bytes === entry.bytes) {
-      known.usedAt = now();
-      continue;
-    }
-    // On disk but not in this process's manifest (or changed since): trusted only after a fresh hash.
-    if (size !== null) {
-      if (size === entry.bytes && (await hashFile(file)) === entry.sha256) {
-        manifest.set(file, { bytes: entry.bytes, usedAt: now() });
+  // Linking happens under the lock too, so no other call evicts a file this one verified before it is linked.
+  return withCacheLock(async (): Promise<PreparedRunData> => {
+    await reconcile(root);
+    for (const entry of data) {
+      const file = cachePath(entry);
+      const known = manifest.get(file);
+      const size = await sizeOf(file);
+      if (known?.verified && size === entry.bytes && known.bytes === entry.bytes) {
+        known.usedAt = now();
         continue;
       }
-      await forget(file);
+      // On disk but not verified by this process (or changed since): trusted only after a fresh hash.
+      if (size !== null) {
+        if (size === entry.bytes && (await hashFile(file)) === entry.sha256) {
+          manifest.set(file, { bytes: entry.bytes, usedAt: now(), verified: true });
+          continue;
+        }
+        await forget(file);
+      }
+      await makeRoom(entry.bytes, keep, capBytes);
+      await mkdir(cacheDir(entry), { recursive: true, mode: 0o700 });
+      let matched: boolean;
+      try {
+        matched = await download(entry, file, fetchData, signal);
+      } catch {
+        return { ok: false, reason: 'data_unavailable' };
+      }
+      if (!matched) return { ok: false, reason: 'data_hash_mismatch' };
+      manifest.set(file, { bytes: entry.bytes, usedAt: now(), verified: true });
     }
-    await makeRoom(entry.bytes, keep, capBytes);
-    await mkdir(cacheDir(entry), { recursive: true, mode: 0o700 });
-    let matched: boolean;
+
+    // A fresh directory per call, holding only this call's files, read-only once linked.
+    const dir = `${root}/calls/${randomUUID()}`;
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const linked: string[] = [];
+    const release = async () => {
+      await chmod(dir, 0o700).catch(() => {});
+      for (const file of linked) await unlink(file).catch(() => {});
+      await rmdir(dir).catch(() => {});
+    };
     try {
-      matched = await download(entry, file, fetchData, signal);
+      for (const entry of data) {
+        const target = `${dir}/${entry.name}`;
+        await link(cachePath(entry), target);
+        linked.push(target);
+      }
+      await chmod(dir, 0o555);
     } catch {
+      await release();
       return { ok: false, reason: 'data_unavailable' };
     }
-    if (!matched) return { ok: false, reason: 'data_hash_mismatch' };
-    manifest.set(file, { bytes: entry.bytes, usedAt: now() });
-  }
-
-  // A fresh directory per call, holding only this call's files, read-only once linked.
-  const dir = `${root}/calls/${randomUUID()}`;
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  const linked: string[] = [];
-  const release = async () => {
-    await chmod(dir, 0o700).catch(() => {});
-    for (const file of linked) await unlink(file).catch(() => {});
-    await rmdir(dir).catch(() => {});
-  };
-  try {
-    for (const entry of data) {
-      const target = `${dir}/${entry.name}`;
-      await link(cachePath(entry), target);
-      linked.push(target);
-    }
-    await chmod(dir, 0o555);
-  } catch {
-    await release();
-    return { ok: false, reason: 'data_unavailable' };
-  }
-  return { ok: true, dir, release };
+    return { ok: true, dir, release };
+  });
 }
 
 /** Test hook: forgets the in-memory manifest, as a new runtime environment would. */
 export function resetRunDataManifest(): void {
   manifest.clear();
+  reconciled.clear();
 }
