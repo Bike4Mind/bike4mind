@@ -11,6 +11,7 @@ import type {
   FunctionContract,
   FunctionContractChange,
   FunctionContractProblem,
+  ICallableFunctionDetail,
   ICallableFunctionPublic,
   ICallableFunctionShared,
   ICallableFunctionSource,
@@ -202,6 +203,16 @@ export function useCallableFunctionList(enabled: boolean) {
     queryKey: [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'all'],
     queryFn: async () => (await api.get<ICallableFunctionPublic[]>(COLLECTION)).data,
     enabled: hasAccessToken && enabled,
+  });
+}
+
+/** One of the owner's own tools with its contract; null `id` waits. Another person's tool answers 404. */
+export function useCallableFunctionDetail(id: string | null) {
+  const hasAccessToken = useAccessToken(s => !!s.accessToken);
+  return useQuery({
+    queryKey: [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, id, 'detail'],
+    queryFn: async () => (await api.get<ICallableFunctionDetail>(`${COLLECTION}/${encodeURIComponent(id ?? '')}`)).data,
+    enabled: hasAccessToken && !!id,
   });
 }
 

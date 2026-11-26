@@ -12,6 +12,7 @@ import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import WidgetsOutlinedIcon from '@mui/icons-material/WidgetsOutlined';
+import FunctionsIcon from '@mui/icons-material/Functions';
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
@@ -29,6 +30,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { userIsDeveloper } from '@client/app/utils/user';
 import { useOptiVisible } from '@client/app/hooks/data/opti';
 import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
+import { useCallableFunctionsEnabled } from '@client/app/hooks/data/callableFunctions';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
@@ -128,6 +130,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // /meetings is a codegen-mounted premium route. The hook folds the route-exists check in
   // with product access, so an open-core build has no row and no dead-end.
   const isMeetingsEnabled = useMeetingsAccess();
+  const callableFunctionsEnabled = useCallableFunctionsEnabled();
   // /tavern is a codegen-mounted premium route; builds without the overlay
   // (open core) have no such route, so the entry must hide or it dead-ends.
   const tavernRouteExists = premiumRoutes.some(route => route.path.startsWith('/tavern'));
@@ -389,6 +392,26 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         navigate({ to: '/artifacts' });
       },
     },
+    ...(callableFunctionsEnabled
+      ? [
+          {
+            // The user's own callable functions and those shared with them.
+            key: 'functions',
+            priority: 4,
+            label: t('sidenav.functions', 'Functions'),
+            icon: (
+              <NavIcon>
+                <FunctionsIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
+            isActive: location.pathname === '/functions' || location.pathname.startsWith('/functions/'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/functions' });
+            },
+          },
+        ]
+      : []),
     {
       // Live Artifacts (published shares) are the product's lead-gen surface -
       // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).
