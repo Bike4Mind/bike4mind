@@ -27,6 +27,7 @@ import type { NotebookContentFilter, NotebookOriginFilter } from './Sidenav/side
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { edgeToEdgePaths, isEdgeToEdgePath } from '@client/app/utils/premiumEdgeToEdge';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
+import { COOKIE_BANNER_SPACE, VIEWPORT_ABOVE_COOKIE_BANNER } from '@client/app/utils/cookieBannerSpace';
 import { routeHeading } from './routeHeading';
 import { useSignupGrantHeartbeat } from '@client/app/hooks/useSignupGrantHeartbeat';
 
@@ -136,7 +137,7 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
       container
       sx={{
         width: '100%',
-        height: '100dvh',
+        height: VIEWPORT_ABOVE_COOKIE_BANNER,
         overflow: 'hidden',
         border: isImpersonating ? '3px solid #d32f2f' : 'none',
         animation: isImpersonating ? `${pulseBorder} 2s infinite` : 'none',
@@ -171,7 +172,7 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
           container
           sx={{
             width: '100%',
-            height: '100dvh',
+            height: VIEWPORT_ABOVE_COOKIE_BANNER,
             position: 'relative',
             paddingTop: { xs: 'var(--notebook-header-height)', sm: 0 },
           }}
@@ -243,7 +244,7 @@ const SideNavWrapper: FC<{ children: ReactNode }> = ({ children }) => {
               isTablet && {
                 top: 0,
                 left: 0,
-                height: '100dvh',
+                height: VIEWPORT_ABOVE_COOKIE_BANNER,
                 zIndex: 'var(--joy-zIndex-drawer, 1200)',
               }),
           })}
@@ -265,7 +266,7 @@ const SideNavWrapper: FC<{ children: ReactNode }> = ({ children }) => {
                     left: 0,
                     top: 0,
                     width: '24px',
-                    height: '100dvh',
+                    height: VIEWPORT_ABOVE_COOKIE_BANNER,
                     cursor: 'pointer',
                     zIndex: 500,
                     borderRight: `1px solid ${theme.palette.mode === 'dark' ? gray[800] : gray[200]}`,
@@ -294,6 +295,7 @@ const SideNavWrapper: FC<{ children: ReactNode }> = ({ children }) => {
                   root: {
                     sx: {
                       zIndex: 600,
+                      bottom: COOKIE_BANNER_SPACE,
                     },
                   },
                   content: {

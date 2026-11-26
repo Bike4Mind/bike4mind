@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { COOKIE_BANNER_HEIGHT_VAR } from '@client/app/utils/cookieBannerSpace';
 
 const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
   mockLoadRedditPixel: vi.fn(),
@@ -176,6 +177,32 @@ describe('CookieConsentBanner', () => {
     expect(localStorageMock.getItem('cookie_consent')).toBe('granted');
     expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'granted' });
     expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
+  });
+
+  it('publishes its height while it shows, so the layout can make room, and clears it once answered', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(94);
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+    const rootStyle = document.documentElement.style;
+    expect(rootStyle.getPropertyValue(COOKIE_BANNER_HEIGHT_VAR)).toBe('94px');
+
+    fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+    expect(rootStyle.getPropertyValue(COOKIE_BANNER_HEIGHT_VAR)).toBe('');
+    vi.restoreAllMocks();
+  });
+
+  it('publishes no height while a tutorial walk holds the ask back', () => {
+    useTutorialPicker.setState({ walkOnScreen: true });
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+    expect(document.documentElement.style.getPropertyValue(COOKIE_BANNER_HEIGHT_VAR)).toBe('');
   });
 
   it('denies consent and hides banner on Decline click', () => {
