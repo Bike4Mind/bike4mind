@@ -342,6 +342,33 @@ describe('EmailJobDetail', () => {
       );
     });
 
+    it('closes the Send At form and clears the error once a retried schedule succeeds', async () => {
+      m.schedule.mockRejectedValueOnce(badRequest('Can only schedule jobs in draft status')).mockResolvedValue({});
+      renderDetail('job1');
+
+      fireEvent.click(scheduleButton()!);
+      fireEvent.change(screen.getByLabelText('Send At'), { target: { value: '2099-01-01T10:00' } });
+      fireEvent.click(screen.getAllByRole('button', { name: 'Schedule' })[1]);
+      await screen.findByTestId('email-job-schedule-error');
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Schedule' })[1]);
+
+      await waitFor(() => expect(screen.queryByLabelText('Send At')).toBeNull());
+      expect(screen.queryByTestId('email-job-schedule-error')).toBeNull();
+      expect(m.schedule).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows a failed save as an action error', async () => {
+      m.update.mockRejectedValueOnce(badRequest('Template not found'));
+      renderDetail('job1');
+      await screen.findByRole('button', { name: 'View All 30 Recipients' });
+
+      fireEvent.change(screen.getByDisplayValue('Draft job'), { target: { value: 'Renamed' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+      expect(await screen.findByTestId('email-job-action-error')).toHaveTextContent('Template not found');
+    });
+
     it('shows a failed auto-save before sending as an action error', async () => {
       m.update.mockRejectedValueOnce(badRequest('Template not found'));
       renderDetail('job1');

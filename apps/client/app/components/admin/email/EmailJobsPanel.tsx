@@ -59,6 +59,7 @@ export default function EmailJobsPanel() {
   const hasFilters = excludeTest || Boolean(dateRange.start) || Boolean(dateRange.end);
 
   const handleOpenCreate = () => {
+    setActionError(null);
     setIsCreating(true);
     setSelectedJobId(null);
   };
@@ -70,6 +71,7 @@ export default function EmailJobsPanel() {
   };
 
   const handleOpenEdit = (job: IEmailJobDocument) => {
+    setActionError(null);
     setSelectedJobId(job.id);
     setIsCreating(false);
   };

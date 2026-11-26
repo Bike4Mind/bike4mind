@@ -213,13 +213,28 @@ describe('EmailJobsPanel', () => {
     expect(mocks.lastParams).toMatchObject({ page: 1, startDate: '2026-01-01' });
   });
 
-  it('shows a failed row clone inline instead of rejecting unhandled', async () => {
+  it.each([
+    ['clone', 'draft', 'clone-job-j1', () => mocks.clone],
+    ['cancel', 'scheduled', 'cancel-scheduled-job-j1', () => mocks.cancel],
+  ])('shows a failed row %s inline instead of rejecting unhandled', async (_name, status, testId, mutation) => {
+    mocks.jobs.data = pageOf([{ ...job, status }]);
+    mutation().mockRejectedValue(new Error('Network Error'));
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId(testId));
+
+    expect(await screen.findByTestId('email-campaigns-action-error')).toHaveTextContent('Network Error');
+  });
+
+  it('drops a row action error when a campaign is opened', async () => {
     mocks.jobs.data = pageOf([job]);
     mocks.clone.mockRejectedValue(new Error('Network Error'));
     renderPanel();
-
     fireEvent.click(screen.getByTestId('clone-job-j1'));
+    await screen.findByTestId('email-campaigns-action-error');
 
-    expect(await screen.findByTestId('email-campaigns-action-error')).toHaveTextContent('Network Error');
+    fireEvent.click(screen.getByTestId('edit-job-j1'));
+
+    expect(screen.queryByTestId('email-campaigns-action-error')).toBeNull();
   });
 });

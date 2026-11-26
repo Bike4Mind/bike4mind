@@ -344,6 +344,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
       setHasUnsavedChanges(false);
     } catch (error) {
       console.error('Failed to save campaign:', error);
+      setActionError(getErrorMessage(error));
     }
   };
 
