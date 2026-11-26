@@ -273,6 +273,38 @@ describe('the Studio place', () => {
       expect(prompt()?.value).toBe('');
     });
 
+    it('keeps the form up after a successful generate', async () => {
+      const value = placeController();
+      vi.mocked(value.prepareCreation).mockResolvedValue({ id: 'review', preparedPrompt: 'p' } as never);
+      vi.mocked(value.create).mockResolvedValue(undefined as never);
+      mount(<Place value={value} />);
+      await type('A cat');
+      await click('studio-generate-btn');
+      expect(value.create).toHaveBeenCalled();
+      expect(byTestId('studio-creation-form')).not.toBeNull();
+    });
+
+    it('shows only the current medium takes and closes an open preview on a medium change', async () => {
+      const value = controller({
+        capabilities: { image: { status: 'available' }, video: { status: 'available' } },
+        state: {
+          status: 'ready',
+          assets: [asset, { ...asset, id: 'clip', kind: 'video' as const, title: 'Clip' }],
+          jobs: [],
+        },
+      });
+      mount(<Place value={value} />);
+      expect(byTestId('studio-asset-saved-btn')).not.toBeNull();
+      expect(byTestId('studio-asset-clip-btn')).toBeNull();
+      await click('studio-asset-saved-btn');
+      expect(byTestId('studio-asset-preview')).not.toBeNull();
+      await click('studio-rail-video');
+      expect(byTestId('studio-asset-preview')).toBeNull();
+      expect(byTestId('studio-creation-form')).not.toBeNull();
+      expect(byTestId('studio-asset-clip-btn')).not.toBeNull();
+      expect(byTestId('studio-asset-saved-btn')).toBeNull();
+    });
+
     it('keeps an unsent prompt while a take preview is open', async () => {
       mount(<Place value={placeController()} />);
       await type('Unsent draft');

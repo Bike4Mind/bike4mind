@@ -703,6 +703,9 @@ export function StudioContent({
   useEffect(() => {
     if (layout === 'place' && initial && initial.kind !== kind) setInitial(undefined);
   }, [layout, kind, initial]);
+  useEffect(() => {
+    if (layout === 'place') setSelected(null);
+  }, [layout, kind]);
   const asset =
     controller?.state.status === 'ready' ? controller.state.assets.find(item => item.id === selected) : undefined;
   const preview = controller && asset && (
