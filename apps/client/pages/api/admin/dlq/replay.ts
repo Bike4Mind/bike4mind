@@ -23,7 +23,7 @@ import { z } from 'zod';
 
 const MAX_REPLAY_ATTEMPTS = DLQ_MAX_REPLAY_ATTEMPTS;
 const MAX_BATCH_SIZE = 100;
-// Short polling samples a subset of SQS servers, so a receive can miss messages the queue holds (including the fallback match).
+// Short polling samples a subset of SQS servers, so a receive can miss messages the queue holds.
 const RECEIVE_WAIT_SECONDS = 2;
 // Upper bound on receives while searching the DLQ for specific message IDs.
 const TARGETED_MAX_RECEIVES = 20;
@@ -82,7 +82,13 @@ const handler = adminApi({
 }).post(async (req, res) => {
   const result = BodySchema.safeParse(req.body);
   if (!result.success) {
-    throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
+    const issue = result.error.issues[0];
+    if (issue?.code === 'unrecognized_keys') {
+      throw new BadRequestError(
+        `Unsupported field(s): ${issue.keys.join(', ')}. Accepted fields: ${Object.keys(BodySchema.shape).join(', ')}`
+      );
+    }
+    throw new BadRequestError(issue?.message || 'Invalid request body');
   }
 
   const { queueLabel, batchSize, messageIds, reason } = result.data;

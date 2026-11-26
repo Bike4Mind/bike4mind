@@ -59,6 +59,7 @@ vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestio
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import { Logger } from '@bike4mind/observability';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import handler from '../replay';
 
 beforeEach(() => {
@@ -268,7 +269,14 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
     });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
 
-    await expect((handler as unknown as Route)(req, res)).rejects.toThrow();
+    const error = await (handler as unknown as Route)(req, res).then(
+      () => null,
+      (rejected: unknown) => rejected
+    );
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as Error).message).toBe(
+      'Unsupported field(s): messages. Accepted fields: queueLabel, aiSuggestionId, batchSize, messageIds, reason'
+    );
     for (const operation of [h.receiveFromQueue, h.sendToQueue, h.deleteFromQueue, h.logReplay, h.audit]) {
       expect(operation).not.toHaveBeenCalled();
     }
@@ -282,7 +290,7 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
     });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
 
-    await expect((handler as unknown as Route)(req, res)).rejects.toThrow();
+    await expect((handler as unknown as Route)(req, res)).rejects.toBeInstanceOf(BadRequestError);
     expect(h.sendToQueue).not.toHaveBeenCalled();
 
     const ok = createMocks({ method: 'POST', body: { queueLabel: 'quest', messageIds: ['m1'] } });
