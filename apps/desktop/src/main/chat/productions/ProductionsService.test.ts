@@ -279,6 +279,7 @@ describe('ProductionsService', () => {
   it('drops its downloads and the bucket when the account changes', async () => {
     const { service, files, media, account } = setup();
     await service.media({ fileId: FILE });
+    media.clearReusableBucket.mockClear();
     account.scope = 'other';
     await service.media({ fileId: FILE });
     expect(files.getFile).toHaveBeenCalledTimes(2);
