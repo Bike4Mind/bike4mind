@@ -87,6 +87,7 @@ Atlassian tokens (Jira/Confluence) are automatically refreshed before expiration
 | Webhook disabled | Check status in external service | Re-enable the webhook |
 | Events not selected | Check subscribed events in external service | Add missing events |
 | Network/firewall | Check if external service can reach your URL | Verify URL is publicly accessible |
+| Jira deliveries show `filtered` for one subscriber | Their Atlassian connection is missing, expired, on another site, or cannot see the issue | The subscriber reconnects Atlassian to the same site; check their Jira access to the project |
 
 ### Invalid Signature
 
