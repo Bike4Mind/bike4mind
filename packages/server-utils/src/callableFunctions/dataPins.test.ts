@@ -360,11 +360,17 @@ describe('pinCallableFunctionData', () => {
     h.fn!.sources = [{ name: 'rates.csv', url: 'https://data.example.com/rates.csv', mode: 'live' }];
     const { storage } = memoryStorage();
     const limits = { fileBytes: 100 * MIB, totalBytes: 6 * MIB };
-    h.access.mockResolvedValue({ id: 'file1', filePath: 'files/u/points.csv', fileSize: 1 * MIB });
+    h.access.mockResolvedValue({
+      id: 'file1',
+      userId: OWNER.id,
+      filePath: 'files/u/points.csv',
+      fileSize: 1 * MIB,
+      moderationStatus: 'clean',
+    });
     await expect(
       pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits })
     ).rejects.toMatchObject({ statusCode: 400, additionalInfo: { code: 'data_total_too_large' } });
-    expect(storage.upload).not.toHaveBeenCalled();
+    expect(storage.uploadStream).not.toHaveBeenCalled();
   });
 });
 

@@ -362,7 +362,12 @@ describe('dispatchFunctionCall outcomes', () => {
     }));
     const stored = new Map<string, Buffer>();
     const storage = {
-      upload: vi.fn(async (body: Buffer, key: string) => void stored.set(key, body)),
+      uploadStream: vi.fn(async (body: AsyncIterable<Buffer>, key: string) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of body) chunks.push(chunk);
+        stored.set(key, Buffer.concat(chunks));
+        return key;
+      }),
       getSignedUrl: vi.fn(async (key: string) => `${ORIGIN}/${key}?signed`),
     };
     const frozen = { name: 'pinned.csv', sha256: sha('frozen'), bytes: 6, fetchedAt: new Date(0) };
@@ -387,7 +392,7 @@ describe('dispatchFunctionCall outcomes', () => {
       withSources();
       origin = 'a,b\n1,2\n';
       const runner = runnerOf(ok());
-      const result = await dispatchFunctionCall(call(), { runner, sources: deps() });
+      const result = await dispatchFunctionCall(call(), { runner, sources: deps(), dataReachable: true });
 
       expect(result.stamp?.data).toEqual([
         { name: 'live.csv', mode: 'live', sha256: sha(origin), bytes: 8, fetched_at: expect.any(String) },
@@ -406,9 +411,17 @@ describe('dispatchFunctionCall outcomes', () => {
     it('gives a live source two hashes across a data change and keeps the pinned hash', async () => {
       withSources();
       origin = 'a,b\n1,2\n';
-      const first = await dispatchFunctionCall(call(), { runner: runnerOf(ok()), sources: deps() });
+      const first = await dispatchFunctionCall(call(), {
+        runner: runnerOf(ok()),
+        sources: deps(),
+        dataReachable: true,
+      });
       origin = 'a,b\n1,3\n';
-      const second = await dispatchFunctionCall(call(), { runner: runnerOf(ok()), sources: deps() });
+      const second = await dispatchFunctionCall(call(), {
+        runner: runnerOf(ok()),
+        sources: deps(),
+        dataReachable: true,
+      });
 
       const hashOf = (stamp: typeof first.stamp, name: string) => stamp?.data.find(e => e.name === name)?.sha256;
       expect(hashOf(first.stamp, 'live.csv')).toBe(sha('a,b\n1,2\n'));
@@ -430,10 +443,42 @@ describe('dispatchFunctionCall outcomes', () => {
         waitMs: 20_000,
         timeoutMs: 600_000,
         sources: { ...deps(), fetcher: slow },
+        dataReachable: true,
       });
       await vi.advanceTimersByTimeAsync(20_000);
       expect(runner.mock.calls[0][0]).toMatchObject({ limits: { timeoutMs: 12_000 } });
       await expect(pending).resolves.toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
+    });
+
+    it("charges the source fetch to the call's own time limit and ends a stall there as a timeout", async () => {
+      withSources();
+      vi.useFakeTimers();
+      const stalled = vi.fn(async (request: { timeoutMs: number }) => {
+        await new Promise(resolve => setTimeout(resolve, request.timeoutMs));
+        throw new CallableFunctionSourceError('source_timeout', 'stalled');
+      });
+      const runner = runnerOf(ok());
+      const pending = dispatchFunctionCall(call(), {
+        runner,
+        waitMs: 20_000,
+        timeoutMs: 5_000,
+        sources: { ...deps(), fetcher: stalled },
+        dataReachable: true,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toMatchObject({ outcome: 'timeout' });
+      expect(stalled).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5_000 }));
+      expect(runner).not.toHaveBeenCalled();
+      expect(onlyRow()).toMatchObject({ outcome: 'timeout' });
+    });
+
+    it('refuses a call with sources where this process was not given the data bucket, before fetching', async () => {
+      withSources();
+      const runner = runnerOf(ok());
+      const result = await dispatchFunctionCall(call(), { runner, sources: deps(), dataReachable: false });
+      expect(result).toMatchObject({ outcome: 'error', reason: 'data_unavailable' });
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(runner).not.toHaveBeenCalled();
     });
 
     it('answers source_unavailable without running when a source is refused', async () => {
@@ -442,7 +487,11 @@ describe('dispatchFunctionCall outcomes', () => {
       const refusing = vi.fn(async () => {
         throw new CallableFunctionSourceError('source_redirect_blocked', 'refused');
       });
-      const result = await dispatchFunctionCall(call(), { runner, sources: { ...deps(), fetcher: refusing } });
+      const result = await dispatchFunctionCall(call(), {
+        runner,
+        sources: { ...deps(), fetcher: refusing },
+        dataReachable: true,
+      });
 
       expect(result).toMatchObject({ outcome: 'error', reason: 'source_unavailable' });
       expect(runner).not.toHaveBeenCalled();

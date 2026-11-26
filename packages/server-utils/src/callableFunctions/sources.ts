@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import {
   BadGatewayError,
   BadRequestError,
@@ -24,6 +25,8 @@ import {
   getCallableFunctionDataStorage,
   megabytes,
   resolveCallableFunctionDataLimits,
+  signCallableFunctionDataBrowserLink,
+  type CallableFunctionDataDeps,
   type CallableFunctionDataLimits,
   type CallableFunctionDataStorage,
 } from './dataPins';
@@ -151,11 +154,10 @@ export async function setCallableFunctionSources(
 
 type SourceOwner = Pick<ICallableFunctionDocument, 'id' | 'userId' | 'sources' | 'pin'>;
 
-/** What one source resolved to for a call, the key its bytes are stored under, and the bytes when fetched for it. */
+/** What one source resolved to for a call and the key its bytes are stored under. */
 interface CallableFunctionSourceRead {
   entry: CallableFunctionStampData;
   key: string;
-  body?: Buffer;
 }
 
 interface Resolved {
@@ -174,27 +176,31 @@ async function resolveDeps(fn: SourceOwner, deps: CallableFunctionSourceDeps): P
   };
 }
 
-/** Fetches through the guarded fetch, capped at what each source holds of the total, in process or not. */
-const fetchSource = (source: ICallableFunctionSource, deps: Resolved) =>
+/**
+ * Fetches through the guarded fetch, capped at what each source holds of the total and at `timeoutMs` when the
+ * fetch spends a call's own time limit, in process or not.
+ */
+const fetchSource = (source: ICallableFunctionSource, deps: Resolved, timeoutMs?: number) =>
   deps.fetcher({
     url: source.url,
     origins: deps.origins,
     maxBodyBytes: callableFunctionSourceMaxBytes(deps.limits),
-    timeoutMs: CALLABLE_FUNCTION_SOURCE_TIMEOUT_MS,
+    timeoutMs: Math.max(1, Math.min(CALLABLE_FUNCTION_SOURCE_TIMEOUT_MS, timeoutMs ?? Infinity)),
   });
 
+// One pass with the fetched length; the body is already in memory and capped, so there is no size to look up.
 const store = (deps: Resolved, body: Buffer, key: string) =>
-  deps.storage.upload(body, key, { ContentType: 'application/octet-stream' });
+  deps.storage.uploadStream(Readable.from([body]), key, body.length, { ContentType: 'application/octet-stream' });
 
 /**
  * Each source as one call reads it: a `pinned` source promotion froze is read from its stored copy; every other
- * source is fetched now and stamped `live` with the time it was fetched, and stored for the call's link unless
- * `store` is false. Throws `CallableFunctionSourceError`.
+ * source is fetched now, within `timeoutMs` when given, stamped `live` with the time it was fetched, and stored for
+ * the call's link. Throws `CallableFunctionSourceError`.
  */
 export async function resolveCallableFunctionSources(
   fn: SourceOwner,
   deps: CallableFunctionSourceDeps = {},
-  { only, store: storeLive = true }: { only?: string; store?: boolean } = {}
+  { only, timeoutMs }: { only?: string; timeoutMs?: number } = {}
 ): Promise<CallableFunctionSourceRead[]> {
   const sources = (fn.sources ?? []).filter(source => only === undefined || source.name === only);
   if (sources.length === 0) return [];
@@ -209,9 +215,9 @@ export async function resolveCallableFunctionSources(
           key: callableFunctionDataKey(fn.id, pin.sha256),
         };
       }
-      const fetched = await fetchSource(source, resolved);
+      const fetched = await fetchSource(source, resolved, timeoutMs);
       const key = callableFunctionLiveSourceKey(fn.id, fetched.sha256);
-      if (storeLive) await store(resolved, fetched.body, key);
+      await store(resolved, fetched.body, key);
       return {
         key,
         entry: {
@@ -221,7 +227,6 @@ export async function resolveCallableFunctionSources(
           bytes: fetched.bytes,
           fetched_at: fetched.fetchedAt,
         },
-        body: fetched.body,
       };
     })
   );
@@ -249,27 +254,56 @@ export async function fetchPinnedCallableFunctionSources(
   );
 }
 
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 /**
- * One source's bytes and stamp entry for the owner's browser at `/data/<name>`, read as a call would read it. A live
- * source's bytes go straight back to the browser and are not stored.
+ * One source's stamp entry for the owner's browser at `/data/<name>`, read as a call would read it, with where the
+ * browser reads its bytes: the one-minute link a pinned file gets, or the read route's bytes where none can be signed.
  */
-export async function readCallableFunctionSource(
+export async function linkCallableFunctionSourceForBrowser(
   actor: { id: string },
   functionId: string,
   name: string,
-  deps: CallableFunctionSourceDeps = {}
-): Promise<{ entry: CallableFunctionStampData; bytes: Buffer }> {
+  deps: CallableFunctionSourceDeps & Pick<CallableFunctionDataDeps, 'sts'> = {}
+): Promise<{ entry: CallableFunctionStampData; url: string }> {
   const fn = await callableFunctionRepository.findByIdForOwner(functionId, userOwner(actor));
   if (!fn) throw notFound();
   if (!fn.sources?.some(source => source.name === name)) throw new NotFoundError('Source not found');
   let read: CallableFunctionSourceRead | undefined;
   try {
-    [read] = await resolveCallableFunctionSources(fn, deps, { only: name, store: false });
+    [read] = await resolveCallableFunctionSources(fn, deps, { only: name });
   } catch (error) {
     if (error instanceof CallableFunctionSourceError) throw new BadGatewayError(error.message, { code: error.code });
     throw error;
   }
   if (!read) throw new NotFoundError('Source not found');
-  const bytes = read.body ?? (await (deps.storage ?? getCallableFunctionDataStorage()).download(read.key));
-  return { entry: read.entry, bytes };
+  const bytesRoute =
+    `/api/callable-functions/${encodeURIComponent(fn.id)}/sources/${encodeURIComponent(name)}` +
+    `?bytes=1&sha256=${read.entry.sha256}`;
+  const url = await signCallableFunctionDataBrowserLink(fn.id, read.key, bytesRoute, deps);
+  return { entry: read.entry, url };
+}
+
+/**
+ * The stored bytes one browser link named, served by the read route where no browser link can be signed: the frozen
+ * copy of a pinned source, or a live fetch of the owner's function by its hash.
+ */
+export async function readCallableFunctionSourceBytes(
+  actor: { id: string },
+  functionId: string,
+  name: string,
+  sha256: string,
+  deps: Pick<CallableFunctionSourceDeps, 'storage'> = {}
+): Promise<Buffer> {
+  const fn = await callableFunctionRepository.findByIdForOwner(functionId, userOwner(actor));
+  if (!fn) throw notFound();
+  const source = fn.sources?.find(entry => entry.name === name);
+  if (!source || !SHA256_HEX.test(sha256)) throw new NotFoundError('Source not found');
+  const frozen = source.mode === 'pinned' && fn.pin.sourcePins?.some(pin => pin.name === name && pin.sha256 === sha256);
+  const key = frozen ? callableFunctionDataKey(fn.id, sha256) : callableFunctionLiveSourceKey(fn.id, sha256);
+  try {
+    return await (deps.storage ?? getCallableFunctionDataStorage()).download(key);
+  } catch {
+    throw new NotFoundError('Source not found');
+  }
 }

@@ -477,33 +477,74 @@ describe('fetchCallableFunctionSources', () => {
     { name: 'base.csv', url: 'https://data.example.com/base.csv', mode: 'pinned' as const },
   ];
 
-  it('stamps each source in the shape a server call writes', async () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    resetCallableFunctionDataCache();
+    h.get.mockReset();
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('stamps each source in the shape a server call writes and reads its bytes from the signed link', async () => {
     const live = await sha256('x,y\n1,2\n');
     const pinned = await sha256('x,y\n0,0\n');
-    h.get.mockImplementation(async (url: string) =>
-      url.endsWith('/rates.csv')
-        ? {
-            data: bytesOf('x,y\n1,2\n'),
-            headers: { 'x-data-sha256': live, 'x-data-mode': 'live', 'x-data-fetched-at': '2026-11-24T00:00:00.000Z' },
-          }
-        : { data: bytesOf('x,y\n0,0\n'), headers: { 'x-data-sha256': pinned, 'x-data-mode': 'pinned' } }
+    const liveEntry = {
+      name: 'rates.csv',
+      mode: 'live',
+      sha256: live,
+      bytes: 8,
+      fetched_at: '2026-11-24T00:00:00.000Z',
+    };
+    const pinnedEntry = { name: 'base.csv', mode: 'pinned', sha256: pinned, bytes: 8 };
+    h.get.mockImplementation(async (url: string) => ({
+      data: url.endsWith('/rates.csv')
+        ? { entry: liveEntry, url: 'https://data.example.com/live-signed' }
+        : { entry: pinnedEntry, url: 'https://data.example.com/pinned-signed' },
+    }));
+    fetchMock.mockImplementation(
+      async (url: string) => new Response(bytesOf(url.endsWith('/live-signed') ? 'x,y\n1,2\n' : 'x,y\n0,0\n'))
     );
 
     const read = await fetchCallableFunctionSources('fn-1', sources);
 
-    expect(h.get).toHaveBeenCalledWith('/api/callable-functions/fn-1/sources/rates.csv', {
-      responseType: 'arraybuffer',
+    expect(h.get).toHaveBeenCalledWith('/api/callable-functions/fn-1/sources/rates.csv');
+    expect(fetchMock).toHaveBeenCalledWith('https://data.example.com/live-signed', {
+      credentials: 'omit',
+      cache: 'no-store',
     });
-    expect(read.map(entry => entry.entry)).toEqual([
-      { name: 'rates.csv', mode: 'live', sha256: live, bytes: 8, fetched_at: '2026-11-24T00:00:00.000Z' },
-      { name: 'base.csv', mode: 'pinned', sha256: pinned, bytes: 8 },
-    ]);
+    expect(read.map(entry => entry.entry)).toEqual([liveEntry, pinnedEntry]);
+    expect(new TextDecoder().decode(read[0]!.bytes)).toBe('x,y\n1,2\n');
+  });
+
+  it('downloads bytes it already holds by hash only once, and hands back fresh copies', async () => {
+    const live = await sha256('x,y\n1,2\n');
+    h.get.mockResolvedValue({
+      data: { entry: { name: 'rates.csv', mode: 'live', sha256: live, bytes: 8 }, url: 'https://data.example.com/s' },
+    });
+    fetchMock.mockImplementation(async () => new Response(bytesOf('x,y\n1,2\n')));
+
+    const first = await fetchCallableFunctionSources('fn-1', sources.slice(0, 1));
+    const second = await fetchCallableFunctionSources('fn-1', sources.slice(0, 1));
+
+    expect(h.get).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second[0]!.bytes).not.toBe(first[0]!.bytes);
   });
 
   it('refuses bytes that do not match the hash they were read with', async () => {
-    h.get.mockResolvedValue({ data: bytesOf('changed'), headers: { 'x-data-sha256': '0'.repeat(64) } });
+    h.get.mockResolvedValue({
+      data: {
+        entry: { name: 'rates.csv', mode: 'live', sha256: '0'.repeat(64), bytes: 7 },
+        url: 'https://data.example.com/s',
+      },
+    });
+    fetchMock.mockImplementation(async () => new Response(bytesOf('changed')));
     await expect(fetchCallableFunctionSources('fn-1', sources.slice(0, 1))).rejects.toThrow(
-      'does not match the hash it was read with'
+      'The source rates.csv does not match the hash it was read with.'
     );
   });
 });

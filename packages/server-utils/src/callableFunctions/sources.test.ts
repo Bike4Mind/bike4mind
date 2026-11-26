@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { Readable } from 'node:stream';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ICallableFunctionSource, ICallableFunctionSourcePin } from '@bike4mind/common';
 
@@ -23,7 +24,8 @@ vi.mock('@bike4mind/database', () => ({
 
 import {
   fetchPinnedCallableFunctionSources,
-  readCallableFunctionSource,
+  linkCallableFunctionSourceForBrowser,
+  readCallableFunctionSourceBytes,
   resolveCallableFunctionSources,
   setCallableFunctionSources,
 } from './sources';
@@ -44,8 +46,17 @@ const fetcher = vi.fn(async () => ({
 }));
 const objects = new Map<string, Buffer>();
 const storage = {
-  upload: vi.fn(async (body: Buffer, key: string) => void objects.set(key, body)),
+  uploadStream: vi.fn(async (body: Readable, key: string, bytes: number) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of body) chunks.push(Buffer.from(chunk as Buffer));
+    const stored = Buffer.concat(chunks);
+    if (stored.length !== bytes) throw new Error('length mismatch');
+    objects.set(key, stored);
+    return key;
+  }),
   download: vi.fn(async (key: string) => objects.get(key) ?? Promise.reject(new Error('NoSuchKey'))),
+  browserSigningOrigin: vi.fn(async () => 'https://data.example.com'),
+  getSignedUrl: vi.fn(async (key: string) => `https://data.example.com/${key}?signed`),
 } as unknown as CallableFunctionDataStorage;
 const deps = { fetcher, storage, origins: [ORIGIN], limits: { fileBytes: 1024, totalBytes: 4096 } };
 
@@ -172,33 +183,66 @@ describe('pinned sources', () => {
   });
 });
 
-describe('readCallableFunctionSource', () => {
-  it("gives the owner's browser the bytes and the same stamp entry a server call writes", async () => {
-    const pins = [{ name: 'base.csv', sha256: sha('frozen'), bytes: 6, fetchedAt: new Date(0) }];
+describe('linkCallableFunctionSourceForBrowser', () => {
+  const frozen = () => {
     objects.set(`data/${FN_ID}/${sha('frozen')}`, Buffer.from('frozen'));
-    withFunction([{ name: 'base.csv', url: `${ORIGIN}/base.csv`, mode: 'pinned' }, live()], pins);
+    withFunction(
+      [{ name: 'base.csv', url: `${ORIGIN}/base.csv`, mode: 'pinned' }, live()],
+      [{ name: 'base.csv', sha256: sha('frozen'), bytes: 6, fetchedAt: new Date(0) }]
+    );
+  };
+
+  it("gives the owner's browser the same stamp entry a server call writes and a one-minute link to its bytes", async () => {
+    frozen();
     const server = await resolveCallableFunctionSources(h.fn as never, deps);
     for (const read of server) {
-      const browser = await readCallableFunctionSource(OWNER, FN_ID, read.entry.name, deps);
-      expect(Object.keys(browser.entry).sort()).toEqual(Object.keys(read.entry).sort());
+      const browser = await linkCallableFunctionSourceForBrowser(OWNER, FN_ID, read.entry.name, deps);
       expect(browser.entry).toEqual(read.entry);
-      expect(sha(browser.bytes.toString())).toBe(read.entry.sha256);
+      expect(browser.url).toBe(`https://data.example.com/${read.key}?signed`);
+      expect(storage.getSignedUrl).toHaveBeenCalledWith(read.key, 'get', expect.objectContaining({ expiresIn: 60 }));
+      expect(sha(objects.get(read.key)!.toString())).toBe(read.entry.sha256);
     }
   });
 
-  it('answers a live source with the bytes it fetched and stores nothing', async () => {
+  it('stores a live fetch under the expiring prefix for the link, never beside the pinned copies', async () => {
     withFunction([live()]);
-    const read = await readCallableFunctionSource(OWNER, FN_ID, 'rates.csv', deps);
-    expect(read.bytes.toString()).toBe(originData);
-    expect(storage.upload).not.toHaveBeenCalled();
-    expect(storage.download).not.toHaveBeenCalled();
+    const { entry } = await linkCallableFunctionSourceForBrowser(OWNER, FN_ID, 'rates.csv', deps);
+    expect(objects.get(`data/.live/${FN_ID}/${entry.sha256}`)?.toString()).toBe(originData);
+    expect(objects.has(`data/${FN_ID}/${entry.sha256}`)).toBe(false);
   });
 
-  it('is not found for another owner and for a name that is not a source', async () => {
+  it('points at the read route where storage cannot sign a browser link, which serves the bytes it named', async () => {
+    frozen();
+    vi.mocked(storage.browserSigningOrigin).mockResolvedValueOnce('').mockResolvedValueOnce('');
+    for (const name of ['base.csv', 'rates.csv']) {
+      const { entry, url } = await linkCallableFunctionSourceForBrowser(OWNER, FN_ID, name, deps);
+      expect(url).toBe(`/api/callable-functions/${FN_ID}/sources/${name}?bytes=1&sha256=${entry.sha256}`);
+      const bytes = await readCallableFunctionSourceBytes(OWNER, FN_ID, name, entry.sha256, deps);
+      expect(sha(bytes.toString())).toBe(entry.sha256);
+    }
+  });
+
+  it('is not found for another owner, a name that is not a source, and a hash nothing stored', async () => {
     h.fn = null;
-    await expect(readCallableFunctionSource(OWNER, FN_ID, 'rates.csv', deps)).rejects.toThrow('Tool not found');
+    await expect(linkCallableFunctionSourceForBrowser(OWNER, FN_ID, 'rates.csv', deps)).rejects.toThrow(
+      'Tool not found'
+    );
     withFunction([live()]);
-    await expect(readCallableFunctionSource(OWNER, FN_ID, 'other.csv', deps)).rejects.toThrow('Source not found');
+    await expect(linkCallableFunctionSourceForBrowser(OWNER, FN_ID, 'other.csv', deps)).rejects.toThrow(
+      'Source not found'
+    );
+    await expect(readCallableFunctionSourceBytes(OWNER, FN_ID, 'rates.csv', 'f'.repeat(64), deps)).rejects.toThrow(
+      'Source not found'
+    );
+    await expect(readCallableFunctionSourceBytes(OWNER, FN_ID, 'rates.csv', '../x', deps)).rejects.toThrow(
+      'Source not found'
+    );
+  });
+
+  it('caps a fetch that spends a call at what is left of its time limit', async () => {
+    withFunction([live()]);
+    await resolveCallableFunctionSources(h.fn as never, deps, { timeoutMs: 2_000 });
+    expect(fetcher).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 2_000 }));
   });
 });
 

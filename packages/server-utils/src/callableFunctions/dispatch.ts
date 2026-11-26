@@ -38,6 +38,7 @@ import {
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_PARENT_MARGIN_MS,
   CALLABLE_FUNCTION_START_BUDGET_MS,
+  runTimeoutAfterDownload,
   type CallableFunctionReason,
   type CallableFunctionRunPayload,
   type CallableFunctionRunResult,
@@ -533,24 +534,31 @@ export async function dispatchFunctionCall(
     // Fetched outside the sandbox before the run, so the runtime keeps its closed network and reads them as files.
     let sources: CallableFunctionStampData[] = [];
     let sourceKeys: string[] = [];
+    const fetchStarted = Date.now();
     if (fn.sources?.length) {
       try {
-        const reads = await resolveCallableFunctionSources(fn, options.sources);
+        const reads = await resolveCallableFunctionSources(fn, options.sources, {
+          timeoutMs: Math.min(requestedMs, budgetMs),
+        });
         sources = reads.map(read => read.entry);
         sourceKeys = reads.map(read => read.key);
       } catch (error) {
+        // The call's own time ran out while fetching: a timeout, as a stalled data download is.
+        if (Date.now() - fetchStarted >= requestedMs) return finish({ outcome: 'timeout' });
         Logger.error('[CALLABLE_FUNCTION_SOURCE_FAILED]', describeRunnerError(error));
         const errorClass = error instanceof CallableFunctionSourceError ? error.code : undefined;
         return finish({ outcome: 'error', reason: 'source_unavailable', ...(errorClass ? { errorClass } : {}) });
       }
       row.dataHashes = [...row.dataHashes, ...sources.map(entry => entry.sha256)];
     }
-    // The source fetch spends the same wait as the run.
+    // The source fetch spends the call's own time limit and the same wait as the run.
+    const runMs = runTimeoutAfterDownload(requestedMs, Date.now() - fetchStarted);
+    if (runMs === 0) return finish({ outcome: 'timeout' });
     const waitMs = Math.max(0, budgetMs - (Date.now() - budgetStarted));
     if (options.minWaitMs !== undefined && waitMs < options.minWaitMs) {
       return finish({ outcome: 'refused', reason: 'budget_exhausted' });
     }
-    const timeoutMs = limitWithin(requestedMs, waitMs);
+    const timeoutMs = limitWithin(runMs, waitMs);
     let data: CallableFunctionRunData[] | undefined;
     if (pins.length > 0 || sources.length > 0) {
       // Links for exactly this function's files, valid for minutes; the runtime gets links, never the bytes.

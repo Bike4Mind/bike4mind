@@ -358,6 +358,25 @@ export async function linkCallableFunctionDataForBrowser(
   if (!fn) throw notFound();
   const pin = fn.pin.dataPins?.find(entry => entry.name === name);
   if (!pin) throw new NotFoundError('Data file not found');
+  const url = await signCallableFunctionDataBrowserLink(
+    fn.id,
+    callableFunctionDataKey(fn.id, pin.sha256),
+    `/api/callable-functions/${encodeURIComponent(fn.id)}/data/${encodeURIComponent(pin.name)}?bytes=1`,
+    deps
+  );
+  return { name: pin.name, sha256: pin.sha256, bytes: pin.bytes, url };
+}
+
+/**
+ * A one-minute browser link to one stored object of a function, signed only by the browser reader role, or by
+ * storage that can sign for the browser where there is no data bucket; `bytesRoute` where neither can.
+ */
+export async function signCallableFunctionDataBrowserLink(
+  functionId: string,
+  key: string,
+  bytesRoute: string,
+  deps: CallableFunctionDataDeps = {}
+): Promise<string> {
   const bucket = process.env[CALLABLE_FUNCTION_DATA_BUCKET_ENV];
   const roleArn = process.env[CALLABLE_FUNCTION_DATA_BROWSER_ROLE_ENV];
   const storage = deps.storage ?? getCallableFunctionDataStorage();
@@ -369,7 +388,7 @@ export async function linkCallableFunctionDataForBrowser(
         : undefined;
   const sign = async (by: Pick<S3Storage, 'getSignedUrl'>) => {
     try {
-      return await by.getSignedUrl(callableFunctionDataKey(fn.id, pin.sha256), 'get', {
+      return await by.getSignedUrl(key, 'get', {
         audience: 'browser',
         expiresIn: CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS,
         ResponseContentType: 'application/octet-stream',
@@ -378,16 +397,13 @@ export async function linkCallableFunctionDataForBrowser(
       });
     } catch (error) {
       // No other signer is tried: a missing browser role or a refused assume leaves the browser with no link.
-      Logger.error('[CALLABLE_FUNCTION_DATA_BROWSER_LINK_FAILED]', { functionId: fn.id, error: String(error) });
+      Logger.error('[CALLABLE_FUNCTION_DATA_BROWSER_LINK_FAILED]', { functionId, error: String(error) });
       throw new ServiceUnavailableError('Pinned data files cannot be read in the browser right now.', {
         code: 'data_link_unavailable',
       });
     }
   };
-  const url = signer
-    ? await sign(signer)
-    : `/api/callable-functions/${encodeURIComponent(fn.id)}/data/${encodeURIComponent(pin.name)}?bytes=1`;
-  return { name: pin.name, sha256: pin.sha256, bytes: pin.bytes, url };
+  return signer ? sign(signer) : bytesRoute;
 }
 
 /** The pinned bytes of one of the owner's functions, served by the read route where no browser link can be signed. */

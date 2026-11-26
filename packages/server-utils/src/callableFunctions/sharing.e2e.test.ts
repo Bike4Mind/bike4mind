@@ -285,6 +285,7 @@ describe('the access matrix, through the dispatcher', () => {
         lastServerRun: { at: new Date(), passed: 0, failed: 0, results: [] },
         trustLabel: 'unverified',
         contract: CONTRACT,
+        sourcePins: [],
       }
     );
     expect(promoted).toMatchObject({ state: 'live', grants: { visibility: 'organization', userIds: [PERSON.id] } });
