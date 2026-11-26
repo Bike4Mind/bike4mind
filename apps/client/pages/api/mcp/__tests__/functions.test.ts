@@ -482,7 +482,12 @@ describe('tools/call', () => {
     );
     expect(result).toEqual({
       isError: true,
-      content: [{ type: 'text', text: 'The function returned outputs that do not fit its output schema.' }],
+      content: [
+        {
+          type: 'text',
+          text: 'The function returned outputs that do not fit its output schema. Output deflection must be a number.',
+        },
+      ],
       _meta: { stamp: expect.objectContaining({ slug: 'beam_midspan_deflection', surface: 'mcp' }) },
     });
     await client.close();

@@ -8,11 +8,11 @@ import {
 } from './functionCallGlue';
 
 describe('functionCallGluePy', () => {
-  it('keeps the browser glue at 256 KB', () => {
-    expect(FUNCTION_CALL_GLUE_PY).toBe(functionCallGluePy(256 * 1024));
-    expect(FUNCTION_CALL_GLUE_PY).toContain('_MAX_RESULT_BYTES = 262144\n');
+  it('keeps the browser glue at 5 MB, the server runtime ceiling', () => {
+    expect(FUNCTION_CALL_GLUE_PY).toBe(functionCallGluePy(5 * 1024 * 1024));
+    expect(FUNCTION_CALL_GLUE_PY).toContain('_MAX_RESULT_BYTES = 5242880\n');
     expect(FUNCTION_CALL_GLUE_PY).toContain(`raise _FunctionCallError('${FUNCTION_RESULT_TOO_LARGE_MESSAGE}')`);
-    expect(FUNCTION_RESULT_TOO_LARGE_MESSAGE).toBe('The function returned a result larger than 256 KB.');
+    expect(FUNCTION_RESULT_TOO_LARGE_MESSAGE).toBe('The function returned a result larger than 5 MB.');
   });
 
   it('writes another cap into the glue and its refusal', () => {

@@ -27,6 +27,7 @@ import {
 } from '@client/app/workers/pyodide/types';
 import {
   FUNCTION_CONTRACT_LIMITS,
+  FUNCTION_RESULT_TOO_LARGE_MESSAGE,
   capFunctionProblems,
   functionJsonBytes,
   type FunctionContractProblem,
@@ -131,7 +132,7 @@ export const PYTHON_SCRIPT_BUSY = 'Another Python script is already running';
 // The sandbox wrapper in sandboxWorkerBody.ts applies the same caps before posting; these checks stay the authority.
 const MAX_FUNCTION_OUTPUT_CHARS = 100_000;
 const FUNCTION_CONTRACT_TOO_LARGE = `The function contract is larger than ${FUNCTION_CONTRACT_LIMITS.maxContractBytes / 1024} KB.`;
-export const FUNCTION_RESULT_TOO_LARGE = `The function returned a result larger than ${FUNCTION_CONTRACT_LIMITS.maxResultBytes / 1024} KB.`;
+export const FUNCTION_RESULT_TOO_LARGE = FUNCTION_RESULT_TOO_LARGE_MESSAGE;
 export const FUNCTION_RESULT_UNREADABLE = 'The function returned a result that could not be read.';
 
 /**

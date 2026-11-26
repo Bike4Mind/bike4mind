@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
+  FUNCTION_CONTRACT_LIMITS,
   PYODIDE_VERSION,
   canonicalJson,
   parseFunctionContract,
@@ -900,6 +901,11 @@ describe('readServerContract', () => {
 describe('surface caps', () => {
   it('never wait past 45 s, inside the web function', () => {
     for (const caps of Object.values(CALLABLE_FUNCTION_SURFACE_CAPS)) expect(caps.waitMs).toBeLessThanOrEqual(45_000);
+  });
+
+  it('give a server test run and the REST surface the output limit the browser enforces', () => {
+    expect(CALLABLE_FUNCTION_SURFACE_CAPS.test.outputBytes).toBe(FUNCTION_CONTRACT_LIMITS.maxResultBytes);
+    expect(CALLABLE_FUNCTION_SURFACE_CAPS.rest.outputBytes).toBe(FUNCTION_CONTRACT_LIMITS.maxResultBytes);
   });
 });
 

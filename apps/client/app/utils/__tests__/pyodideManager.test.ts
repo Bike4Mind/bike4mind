@@ -642,13 +642,22 @@ describe('function calls', () => {
     }
   );
 
+  it('returns a result between 256 KB and 5 MB, as the server runtime does', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+
+    fromSandbox(callResult({ contractJson: '{}', valueJson: `{"text": "${'x'.repeat(1024 * 1024)}"}` }));
+    await expect(call).resolves.toMatchObject({ success: true });
+  });
+
   it('refuses an oversized result before parsing it', async () => {
     const { pyodideManager, fromSandbox, FUNCTION_RESULT_TOO_LARGE } = await readySandbox();
     const call = pyodideManager.callFunction('code', [], {});
     await Promise.resolve();
     const parse = vi.spyOn(JSON, 'parse');
 
-    const oversized = `{"text": "${'x'.repeat(256 * 1024)}"}`;
+    const oversized = `{"text": "${'x'.repeat(5 * 1024 * 1024)}"}`;
     fromSandbox(callResult({ contractJson: '{}', valueJson: oversized }));
 
     const result = await call;

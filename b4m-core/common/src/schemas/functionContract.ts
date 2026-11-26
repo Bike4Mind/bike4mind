@@ -34,7 +34,8 @@ export const FUNCTION_CONTRACT_LIMITS = {
   maxDescriptionLength: 500,
   maxStringLength: 2000,
   maxContractBytes: 32 * 1024,
-  maxResultBytes: 256 * 1024,
+  /** A call's result, as the server runtime's REST and test surfaces allow it; chat and MCP cap lower per surface. */
+  maxResultBytes: 5 * 1024 * 1024,
   maxProblems: 50,
   maxTests: 20,
 } as const;
@@ -587,7 +588,9 @@ function checkValue(field: FunctionField, value: unknown, path: string, problems
     case 'string': {
       if (typeof value !== 'string') return report(problems, path, 'must be text');
       const maxLength = field.maxLength ?? FUNCTION_CONTRACT_LIMITS.maxStringLength;
-      if (value.length > maxLength) report(problems, path, `must be at most ${maxLength} characters`);
+      if (value.length > maxLength) {
+        report(problems, path, `must be at most ${maxLength} characters (it has ${value.length})`);
+      }
       if (field.enum && !field.enum.includes(value)) report(problems, path, enumMessage(field.enum));
       return;
     }

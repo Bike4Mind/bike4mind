@@ -109,7 +109,7 @@ describe('pyodideSandboxWorkerBody serialization', () => {
   it('refuses an oversized result before posting it', () => {
     expect(source).toContain(`_MAX_RESULT_BYTES = ${FUNCTION_CONTRACT_LIMITS.maxResultBytes}`);
     expect(source).toContain('if len(value_text) > _MAX_RESULT_BYTES:');
-    expect(source).toContain("_FunctionCallError('The function returned a result larger than 256 KB.')");
+    expect(source).toContain("_FunctionCallError('The function returned a result larger than 5 MB.')");
   });
 
   it('never contains a closing script tag', () => {

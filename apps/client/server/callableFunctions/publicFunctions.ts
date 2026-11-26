@@ -40,9 +40,14 @@ export const FUNCTION_INVOKE_RUN_TIMEOUT_MS = Math.min(CALLABLE_FUNCTION_DEFAULT
 export const FUNCTION_SYNC_STOP_MESSAGE =
   'A synchronous call stops at 45 s. Send "mode": "async" to run to your time limit, then poll the call for its result.';
 
+/** Said instead on an install without async, where a limit past a synchronous call's wait cannot be reached. */
+export const FUNCTION_SYNC_STOP_SELF_HOST_MESSAGE =
+  'A synchronous call stops at 45 s, and asynchronous calls are not available on self-hosted installs, so a time limit above 45 s cannot be used here.';
+
 /** The 504 for a synchronous call: it names async mode only when async mode would have let the call run longer. */
 export function syncTimeoutError(limitMs: number): string {
-  return limitMs > FUNCTION_INVOKE_BUDGET_MS ? FUNCTION_SYNC_STOP_MESSAGE : TIMEOUT_MESSAGE;
+  if (limitMs <= FUNCTION_INVOKE_BUDGET_MS) return TIMEOUT_MESSAGE;
+  return process.env.B4M_SELF_HOST === 'true' ? FUNCTION_SYNC_STOP_SELF_HOST_MESSAGE : FUNCTION_SYNC_STOP_MESSAGE;
 }
 
 export const FUNCTION_CALL_NOT_FOUND_MESSAGE = 'Call not found';
@@ -109,6 +114,17 @@ export function describeInputProblems(problems: FunctionContractProblem[]): stri
   return `${field} ${first.message}${more}.`;
 }
 
+const OUTPUT_INVALID_MESSAGE = 'The function returned outputs that do not fit its output schema.';
+
+/** The output schema refusal, then the first output field that does not fit and how many more do not. */
+export function describeOutputProblems(problems: FunctionContractProblem[]): string {
+  const [first] = problems;
+  if (!first) return OUTPUT_INVALID_MESSAGE;
+  const field = first.path ? `Output ${first.path}` : 'The output';
+  const more = problems.length > 1 ? ` (and ${problems.length - 1} more)` : '';
+  return `${OUTPUT_INVALID_MESSAGE} ${field} ${first.message}${more}.`;
+}
+
 export interface InvokeAnswer {
   status: number;
   body: Record<string, unknown>;
@@ -127,7 +143,6 @@ export const OUTPUT_TOO_LARGE_MESSAGE = 'The function returned more than a call 
 
 const FAILURE_MESSAGES: Record<string, string> = {
   memory: 'The function ran out of memory.',
-  output_invalid: 'The function returned outputs that do not fit its output schema.',
   output_too_large: OUTPUT_TOO_LARGE_MESSAGE,
 };
 
@@ -173,6 +188,16 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
         return { status: 503, body: { error: FUNCTION_RUNTIME_FAULT_MESSAGE } };
       }
       return { status: 502, body: { error: errorMessage(call.errorClass), outcome: call.outcome, ...stamp } };
+    case 'output_invalid':
+      return {
+        status: 502,
+        // A reason means the contract or the result was unreadable, so its problems are not about output fields.
+        body: {
+          error: describeOutputProblems(call.reason ? [] : (call.problems ?? [])),
+          outcome: call.outcome,
+          ...stamp,
+        },
+      };
     default:
       return {
         status: 502,

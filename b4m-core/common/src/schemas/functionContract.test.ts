@@ -376,9 +376,11 @@ describe('validateFunctionValue', () => {
   });
 
   it('refuses text over the declared or default length limit', () => {
-    expect(check({ span: 1, label: 'abcdef' })).toEqual([{ path: 'label', message: 'must be at most 5 characters' }]);
+    expect(check({ span: 1, label: 'abcdef' })).toEqual([
+      { path: 'label', message: 'must be at most 5 characters (it has 6)' },
+    ]);
     expect(check({ span: 1, note: 'x'.repeat(FUNCTION_CONTRACT_LIMITS.maxStringLength + 1) })).toEqual([
-      { path: 'note', message: 'must be at most 2000 characters' },
+      { path: 'note', message: 'must be at most 2000 characters (it has 2001)' },
     ]);
   });
 
@@ -571,7 +573,7 @@ describe('problem cap', () => {
   });
 
   it('stops a result flood at 50 problems plus a closing entry, each message short', () => {
-    // The largest list a 256 KB result can hold: '"", ' is four bytes per item.
+    // The largest list a result at the limit can hold: '"", ' is four bytes per item.
     const items = Math.floor((FUNCTION_CONTRACT_LIMITS.maxResultBytes - 10) / 4);
     const problems = validateFunctionValue(listOf({ type: 'string', enum: longEnum }), {
       xs: new Array(items).fill(''),
