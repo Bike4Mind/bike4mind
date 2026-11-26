@@ -296,6 +296,7 @@ public actor CaptureEngine {
           persist(job)
           return
         }
+        guard !discarded.contains(job.id) else { return }
         switch job.destination {
         case .lake(let lakeID, _):
           if let note = job.note { try await api.setNotes(fileID: fileID, notes: note) }
