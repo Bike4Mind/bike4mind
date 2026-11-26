@@ -399,6 +399,47 @@ describe('tools check', () => {
     expect(statusOf({}, 'tools')).toBe('unknown');
   });
 
+  describe('a turn where only the knowledge base tools ran', () => {
+    const kbRetrieval = (surfaces: string[]): PromptMeta['retrieval'] => ({
+      attempted: true,
+      outcome: 'ok',
+      surfaces,
+      dataLakeTags: [],
+      injected: { chunks: 2, chars: 800 },
+    });
+
+    it('reports the knowledge tools from retrieval when functionCalls is empty', () => {
+      const meta: PromptMeta = {
+        functionCalls: [],
+        retrieval: kbRetrieval(['knowledgeBaseSearch', 'knowledgeBaseRetrieve']),
+        citables: [{ id: 'f1', type: 'document', title: 'notes.md' }],
+      };
+      expect(statusOf(meta, 'tools')).toBe('ok');
+      expect(detailOf(meta, 'tools')).toBe(
+        'The knowledge base search tool and the knowledge base retrieve tool ran this turn; no per-call detail was recorded.'
+      );
+    });
+
+    it('reports them when functionCalls was never recorded at all', () => {
+      const meta: PromptMeta = { retrieval: kbRetrieval(['knowledgeBaseSearch']) };
+      expect(statusOf(meta, 'tools')).toBe('ok');
+      expect(detailOf(meta, 'tools')).toContain('The knowledge base search tool ran this turn');
+    });
+
+    it('still says no tools ran when only non-tool surfaces retrieved', () => {
+      const meta: PromptMeta = { functionCalls: [], retrieval: kbRetrieval(['forced-retrieval', 'lake-memory']) };
+      expect(detailOf(meta, 'tools')).toBe('No tools ran this turn.');
+    });
+
+    it('prefers recorded calls over the retrieval surfaces', () => {
+      const meta: PromptMeta = {
+        functionCalls: [{ name: 'search_knowledge_base', success: false }],
+        retrieval: kbRetrieval(['knowledgeBaseSearch']),
+      };
+      expect(statusOf(meta, 'tools')).toBe('fail');
+    });
+  });
+
   it('warns on a partial failure, names the tool, and notes the model replied with what it got', () => {
     const meta: PromptMeta = {
       functionCalls: [

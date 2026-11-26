@@ -318,6 +318,19 @@ const SURFACE_LABEL: Record<string, string> = {
 
 const surfaceLabel = (surface: string): string => SURFACE_LABEL[surface] ?? surface;
 
+/**
+ * Retrieval surfaces that are model-called tools. Each knowledge tool stamps its own surface onto
+ * `retrieval`, while `functionCalls` depends on the turn's writer recording it: the agent run path
+ * (persistRunAsQuest.ts) writes `retrieval` and never `functionCalls`, which then reads back as
+ * Mongoose's empty-array default. The Tools row reads these so such a turn is not reported as having run no tools.
+ */
+const KNOWLEDGE_TOOL_SURFACES: ReadonlySet<string> = new Set(['knowledgeBaseSearch', 'knowledgeBaseRetrieve']);
+
+const knowledgeToolSurfaces = (promptMeta: PromptMeta): string[] =>
+  (promptMeta.retrieval?.surfaces ?? []).filter(s => KNOWLEDGE_TOOL_SURFACES.has(s));
+
+const capitalize = (text: string): string => (text ? `${text[0].toUpperCase()}${text.slice(1)}` : text);
+
 const joinLabels = (labels: string[]): string =>
   labels.length <= 1 ? (labels[0] ?? '') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
 
@@ -499,6 +512,18 @@ function timeoutMessage(call: FunctionCall): string | undefined {
 function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
   const label = 'Tools';
   const calls = promptMeta.functionCalls;
+
+  if (!calls?.length) {
+    const toolSurfaces = knowledgeToolSurfaces(promptMeta);
+    if (toolSurfaces.length > 0) {
+      return {
+        id: 'tools',
+        label,
+        status: 'ok',
+        detail: `${capitalize(joinLabels(toolSurfaces.map(surfaceLabel)))} ran this turn; no per-call detail was recorded.`,
+      };
+    }
+  }
 
   if (!calls) {
     return { id: 'tools', label, status: 'unknown', detail: 'No tool-call detail was recorded for this turn.' };
