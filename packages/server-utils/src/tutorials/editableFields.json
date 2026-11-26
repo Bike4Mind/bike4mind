@@ -22,8 +22,7 @@
     ],
     "grounded-answers-ask": [
       "title",
-      "body",
-      "prompt"
+      "body"
     ],
     "grounded-answers-check": [
       "title",
