@@ -15,13 +15,9 @@ import {
   Alert,
   Box,
   Button,
-  Card,
   Checkbox,
   Chip,
   CircularProgress,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   Divider,
   FormControl,
   FormHelperText,
@@ -29,8 +25,6 @@ import {
   IconButton,
   Input,
   Link,
-  Modal,
-  ModalDialog,
   Option,
   Select,
   Sheet,
@@ -39,7 +33,6 @@ import {
   Tab,
   TabList,
   TabPanel,
-  Table,
   Tabs,
   Textarea,
   Typography,
@@ -74,7 +67,10 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { TrackingDetailContent, STATUS_COLORS, formatDate } from './TrackingDetailDrawer';
 import {
+  ActionDialog,
   AdminPageHeader,
+  type DataColumn,
+  DataTable,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -84,6 +80,7 @@ import {
   StatTile,
 } from './shared';
 import { ADMIN_REGION_GAP, adminSurface } from './shared/adminStyles';
+import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
 import type { ISreErrorTracking } from '@bike4mind/database/infra';
 
@@ -1277,7 +1274,6 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
   const isRerunable = doc.status === 'dismissed';
 
   const [dismissOpen, setDismissOpen] = useState(false);
-  const [dismissReason, setDismissReason] = useState('');
 
   const retryMutation = useMutation({
     mutationFn: async () => {
@@ -1305,7 +1301,6 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
     onSuccess: () => {
       toast.success('Tracking doc dismissed');
       setDismissOpen(false);
-      setDismissReason('');
       queryClient.invalidateQueries({ queryKey: ['sre-tracking-recent'] });
       queryClient.invalidateQueries({ queryKey: ['sre-tracking-detail', docId] });
     },
@@ -1346,7 +1341,7 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
   });
 
   return (
-    <Card variant="outlined" data-testid={`sre-tracking-card-${docId}`}>
+    <Sheet variant="outlined" sx={{ ...adminSurface, borderRadius: 'lg' }} data-testid={`sre-tracking-card-${docId}`}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', p: 1 }}>
         <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
           Status:
@@ -1463,63 +1458,25 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
         </JoyAccordionDetails>
       </JoyAccordion>
 
-      <Modal
+      <ActionDialog
         open={dismissOpen}
         onClose={() => {
-          if (!dismissMutation.isPending) {
-            setDismissOpen(false);
-            setDismissReason('');
-          }
+          if (!dismissMutation.isPending) setDismissOpen(false);
         }}
-      >
-        <ModalDialog>
-          <DialogTitle>Dismiss tracking doc</DialogTitle>
-          <DialogContent>
-            <Typography level="body-sm" sx={{ mb: 2 }}>
-              Dismiss marks this doc as reviewed and removes it from the circuit breaker&apos;s failure count. It will
-              not be retried. Use this for failures caused by known bugs, testing, or issues already fixed outside the
-              SRE pipeline.
-            </Typography>
-            <FormControl>
-              <FormLabel>Reason (required, 3-500 chars)</FormLabel>
-              <Textarea
-                size="sm"
-                minRows={2}
-                value={dismissReason}
-                onChange={e => setDismissReason(e.target.value)}
-                placeholder="e.g. Superseded by PR #7854"
-                slotProps={{ textarea: { maxLength: 500 } }}
-                data-testid={`sre-dismiss-reason-${docId}`}
-              />
-              <FormHelperText>{dismissReason.length}/500 characters</FormHelperText>
-            </FormControl>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => {
-                setDismissOpen(false);
-                setDismissReason('');
-              }}
-              disabled={dismissMutation.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="solid"
-              color="danger"
-              onClick={() => dismissMutation.mutate(dismissReason.trim())}
-              disabled={dismissReason.trim().length < 3 || dismissMutation.isPending}
-              loading={dismissMutation.isPending}
-              data-testid={`sre-dismiss-confirm-${docId}`}
-            >
-              Dismiss
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
-    </Card>
+        title="Dismiss tracking doc"
+        description="Dismiss marks this doc as reviewed and removes it from the circuit breaker's failure count. It will not be retried. Use this for failures caused by known bugs, testing, or issues already fixed outside the SRE pipeline."
+        reasonPresets={ADMIN_REASON_PRESETS.sreTrackingDismiss}
+        reasonMinLength={3}
+        confirmLabel="Dismiss"
+        tone="danger"
+        pending={dismissMutation.isPending}
+        onConfirm={async reason => {
+          await dismissMutation.mutateAsync(reason).catch(() => undefined);
+        }}
+        data-testid={`sre-dismiss-${docId}`}
+        testIds={{ reason: `sre-dismiss-reason-${docId}`, confirm: `sre-dismiss-confirm-${docId}` }}
+      />
+    </Sheet>
   );
 }
 
@@ -2215,13 +2172,10 @@ interface PatternSummary {
   lastMatchedAt?: string;
 }
 
-function PatternRow({ p, onPatched }: { p: PatternSummary; onPatched: () => void }) {
-  const [editIssue, setEditIssue] = useState(false);
-  const [issueNum, setIssueNum] = useState(String(p.rootCauseTrackingIssue ?? ''));
-
-  const patchMutation = useMutation({
+function usePatternPatch(id: string, onPatched: () => void) {
+  return useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
-      const { data } = await api.patch(`/api/sre/patterns/${p.id}`, body);
+      const { data } = await api.patch(`/api/sre/patterns/${id}`, body);
       return data;
     },
     onSuccess: () => {
@@ -2233,94 +2187,74 @@ function PatternRow({ p, onPatched }: { p: PatternSummary; onPatched: () => void
       toast.error(msg || 'Failed to update pattern');
     },
   });
+}
 
-  const total = p.successCount + p.failureCount;
-  const rate = total > 0 ? Math.round((p.successCount / total) * 100) : null;
-
+function PatternActiveCell({ p, onPatched }: { p: PatternSummary; onPatched: () => void }) {
+  const patchMutation = usePatternPatch(p.id, onPatched);
   return (
-    <tr key={p.id}>
-      <td>
-        <Stack spacing={0.5}>
-          <Typography level="body-xs" noWrap sx={{ maxWidth: 300 }}>
-            {p.name}
-          </Typography>
-          {p.workaroundIneffective && (
-            <Chip size="sm" variant="soft" color="danger">
-              Workaround Ineffective
-            </Chip>
-          )}
-        </Stack>
-      </td>
-      <td>
-        <Chip
-          size="sm"
-          variant="soft"
-          color={p.isActive ? 'success' : 'neutral'}
-          sx={{ cursor: 'pointer' }}
-          onClick={() => {
-            if (p.workaroundIneffective && !p.isActive) {
-              patchMutation.mutate({ isActive: true, workaroundIneffective: false, confirmReactivate: true });
-            } else {
-              patchMutation.mutate({ isActive: !p.isActive });
-            }
-          }}
-          data-testid={`sre-pattern-toggle-${p.id}`}
-        >
-          {p.isActive ? 'Active' : 'Inactive'}
-        </Chip>
-      </td>
-      <td>
-        <Typography level="body-xs">{p.diagnosis.confidence}%</Typography>
-      </td>
-      <td>
-        <Typography level="body-xs">{p.matchCount}</Typography>
-      </td>
-      <td>
-        <Typography level="body-xs">{rate != null ? `${rate}% (${total})` : '-'}</Typography>
-      </td>
-      <td>
-        {editIssue ? (
-          <Stack direction="row" spacing={0.5} alignItems="center">
-            <Input
-              size="sm"
-              type="number"
-              placeholder="#"
-              value={issueNum}
-              onChange={e => setIssueNum(e.target.value)}
-              sx={{ width: 80 }}
-              slotProps={{ input: { min: 1 } }}
-            />
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="success"
-              onClick={() => {
-                const val = issueNum ? Number(issueNum) : null;
-                patchMutation.mutate({ rootCauseTrackingIssue: val });
-                setEditIssue(false);
-              }}
-            >
-              <CheckCircleIcon fontSize="small" />
-            </IconButton>
-          </Stack>
-        ) : (
-          <Typography
-            level="body-xs"
-            sx={{ cursor: 'pointer', textDecoration: 'underline dotted', color: 'admin.inkMuted' }}
-            onClick={() => setEditIssue(true)}
-            data-testid={`sre-pattern-issue-${p.id}`}
-          >
-            {p.rootCauseTrackingIssue ? `#${p.rootCauseTrackingIssue}` : 'Link issue'}
-          </Typography>
-        )}
-      </td>
-      <td>
-        <Typography level="body-xs">
-          {p.lastMatchedAt ? new Date(p.lastMatchedAt).toLocaleDateString() : 'Never'}
-        </Typography>
-      </td>
-    </tr>
+    <Chip
+      size="sm"
+      variant="soft"
+      color={p.isActive ? 'success' : 'neutral'}
+      sx={{ cursor: 'pointer' }}
+      onClick={() => {
+        if (p.workaroundIneffective && !p.isActive) {
+          patchMutation.mutate({ isActive: true, workaroundIneffective: false, confirmReactivate: true });
+        } else {
+          patchMutation.mutate({ isActive: !p.isActive });
+        }
+      }}
+      data-testid={`sre-pattern-toggle-${p.id}`}
+    >
+      {p.isActive ? 'Active' : 'Inactive'}
+    </Chip>
   );
+}
+
+function PatternRootCauseCell({ p, onPatched }: { p: PatternSummary; onPatched: () => void }) {
+  const [editIssue, setEditIssue] = useState(false);
+  const [issueNum, setIssueNum] = useState(String(p.rootCauseTrackingIssue ?? ''));
+  const patchMutation = usePatternPatch(p.id, onPatched);
+
+  return editIssue ? (
+    <Stack direction="row" spacing={0.5} alignItems="center">
+      <Input
+        size="sm"
+        type="number"
+        placeholder="#"
+        value={issueNum}
+        onChange={e => setIssueNum(e.target.value)}
+        sx={{ width: 80 }}
+        slotProps={{ input: { min: 1 } }}
+      />
+      <IconButton
+        size="sm"
+        variant="plain"
+        color="success"
+        onClick={() => {
+          const val = issueNum ? Number(issueNum) : null;
+          patchMutation.mutate({ rootCauseTrackingIssue: val });
+          setEditIssue(false);
+        }}
+      >
+        <CheckCircleIcon fontSize="small" />
+      </IconButton>
+    </Stack>
+  ) : (
+    <Typography
+      level="body-xs"
+      sx={{ cursor: 'pointer', textDecoration: 'underline dotted', color: 'admin.inkMuted' }}
+      onClick={() => setEditIssue(true)}
+      data-testid={`sre-pattern-issue-${p.id}`}
+    >
+      {p.rootCauseTrackingIssue ? `#${p.rootCauseTrackingIssue}` : 'Link issue'}
+    </Typography>
+  );
+}
+
+function patternSuccessRate(p: PatternSummary): { rate: number | null; total: number } {
+  const total = p.successCount + p.failureCount;
+  return { rate: total > 0 ? Math.round((p.successCount / total) * 100) : null, total };
 }
 
 function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
@@ -2331,7 +2265,6 @@ function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
     isLoading,
     isError,
     refetch,
-    isRefetching,
   } = useQuery({
     queryKey: ['sre-patterns', selectedRepo],
     queryFn: async () => {
@@ -2341,6 +2274,78 @@ function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
     },
     staleTime: 60_000,
   });
+
+  const patternColumns = useMemo<DataColumn<PatternSummary>[]>(() => {
+    const onPatched = () => queryClient.invalidateQueries({ queryKey: ['sre-patterns', selectedRepo] });
+    return [
+      {
+        id: 'name',
+        label: 'Pattern',
+        sortValue: p => p.name,
+        render: p => (
+          <Stack spacing={0.5} alignItems="flex-start">
+            <Typography level="body-xs" noWrap sx={{ maxWidth: 300 }}>
+              {p.name}
+            </Typography>
+            {p.workaroundIneffective && (
+              <Chip size="sm" variant="soft" color="danger">
+                Workaround Ineffective
+              </Chip>
+            )}
+          </Stack>
+        ),
+      },
+      {
+        id: 'active',
+        label: 'Active',
+        width: '6rem',
+        sortValue: p => (p.isActive ? 1 : 0),
+        render: p => <PatternActiveCell p={p} onPatched={onPatched} />,
+      },
+      {
+        id: 'confidence',
+        label: 'Confidence',
+        width: '7rem',
+        numeric: true,
+        sortValue: p => p.diagnosis.confidence,
+        render: p => `${p.diagnosis.confidence}%`,
+      },
+      {
+        id: 'matches',
+        label: 'Matches',
+        width: '6rem',
+        numeric: true,
+        sortValue: p => p.matchCount,
+        render: p => p.matchCount,
+      },
+      {
+        id: 'successRate',
+        label: 'Success rate',
+        width: '8rem',
+        numeric: true,
+        sortValue: p => patternSuccessRate(p).rate ?? -1,
+        render: p => {
+          const { rate, total } = patternSuccessRate(p);
+          return rate != null ? `${rate}% (${total})` : '-';
+        },
+      },
+      {
+        id: 'rootCause',
+        label: 'Root cause',
+        width: '8rem',
+        render: p => (
+          <PatternRootCauseCell key={`${p.id}:${p.rootCauseTrackingIssue ?? ''}`} p={p} onPatched={onPatched} />
+        ),
+      },
+      {
+        id: 'lastMatch',
+        label: 'Last match',
+        width: '8rem',
+        sortValue: p => (p.lastMatchedAt ? new Date(p.lastMatchedAt).getTime() : 0),
+        render: p => (p.lastMatchedAt ? new Date(p.lastMatchedAt).toLocaleDateString() : 'Never'),
+      },
+    ];
+  }, [queryClient, selectedRepo]);
 
   return (
     <Stack gap={ADMIN_REGION_GAP}>
@@ -2362,42 +2367,25 @@ function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
           </Select>
         </FormControl>
       )}
-      {isLoading ? (
-        <LoadingState label="Loading patterns" />
-      ) : isError ? (
-        <ErrorState message="Patterns failed to load." onRetry={() => void refetch()} retrying={isRefetching} />
-      ) : !patterns?.length ? (
-        <EmptyState
-          title="No patterns yet"
-          description="A pattern is created when an SRE fix is merged."
-          action={null}
-        />
-      ) : (
-        <Sheet variant="outlined" sx={{ ...adminSurface, borderRadius: 'lg', overflow: 'auto' }}>
-          <Table size="sm" stickyHeader>
-            <thead>
-              <tr>
-                <th>Pattern</th>
-                <th style={{ width: 80 }}>Active</th>
-                <th style={{ width: 80 }}>Confidence</th>
-                <th style={{ width: 80 }}>Matches</th>
-                <th style={{ width: 100 }}>Success rate</th>
-                <th style={{ width: 120 }}>Root cause</th>
-                <th style={{ width: 140 }}>Last match</th>
-              </tr>
-            </thead>
-            <tbody>
-              {patterns.map(p => (
-                <PatternRow
-                  key={p.id}
-                  p={p}
-                  onPatched={() => queryClient.invalidateQueries({ queryKey: ['sre-patterns', selectedRepo] })}
-                />
-              ))}
-            </tbody>
-          </Table>
-        </Sheet>
-      )}
+      <DataTable
+        rows={patterns ?? []}
+        columns={patternColumns}
+        getRowId={p => p.id}
+        label="Patterns"
+        testId="sre-patterns-table"
+        loading={isLoading}
+        error={isError ? 'Patterns failed to load.' : undefined}
+        onRetry={() => void refetch()}
+        pageResetKey={selectedRepo}
+        minWidth="52rem"
+        empty={
+          <EmptyState
+            title="No patterns yet"
+            description="A pattern is created when an SRE fix is merged."
+            action={null}
+          />
+        }
+      />
     </Stack>
   );
 }
