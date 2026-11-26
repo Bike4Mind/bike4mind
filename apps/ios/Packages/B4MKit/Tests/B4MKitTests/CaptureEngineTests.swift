@@ -218,6 +218,23 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertEqual(listed, [])
   }
 
+  func testAnUploadFinishingAfterTheSessionEndedIsNotRegisteredUntilItsAccountReturns() async throws {
+    let signedIn = OSAllocatedUnfairLock<CaptureOwner?>(initialState: alice)
+    let rig = ownedRig(signedIn)
+    let job = try only(try await rig.engine.submit([photo()], to: lake, note: nil))
+    XCTAssertEqual(job.stage, .uploading)
+
+    await rig.engine.releaseOwner()
+    signedIn.withLock { $0 = nil }
+    rig.uploader.finish(job.id)
+    try await eventually("the PUT outcome is recorded") { (try? rig.store.load(id: job.id))?.stage == .registering }
+    try await Task.sleep(for: .milliseconds(50))
+
+    XCTAssertEqual(try rig.store.load(id: job.id)?.stage, .registering)
+    let calls = await rig.api.calls
+    XCTAssertEqual(calls.count, 1, "only the ticket was minted: \(calls)")
+  }
+
   func testCapturesWithNoRecordedOwnerAreDroppedAtSignIn() async throws {
     let store = FileUploadJobStore(directory: temp.url)
     let legacy = UploadJob(destination: lake, payload: .message("from before owners"), note: nil, now: clock.now)

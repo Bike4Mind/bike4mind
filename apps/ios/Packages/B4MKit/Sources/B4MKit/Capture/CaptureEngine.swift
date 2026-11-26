@@ -179,7 +179,7 @@ public actor CaptureEngine {
   }
 
   public func retry(jobID: UUID) async {
-    guard var job = try? store.load(id: jobID), job.stage == .failed else { return }
+    guard var job = try? store.load(id: jobID), job.stage == .failed, isOwnedByClaimedAccount(job) else { return }
     job.stage = .queued
     job.ticket = nil
     job.uploadSession = nil
@@ -214,6 +214,10 @@ public actor CaptureEngine {
   public func releaseOwner() {
     claimedOwner = nil
     notify()
+  }
+
+  private func isOwnedByClaimedAccount(_ job: UploadJob) -> Bool {
+    currentOwner == nil || (claimedOwner != nil && job.owner == claimedOwner)
   }
 
   /// Makes the signed-in account this engine's owner and discards every job it did not queue, unowned ones
@@ -281,7 +285,7 @@ public actor CaptureEngine {
     guard inFlight.insert(id).inserted else { return }
     defer { inFlight.remove(id) }
     for _ in 0..<4 {
-      guard let job = try? store.load(id: id) else { return }
+      guard let job = try? store.load(id: id), isOwnedByClaimedAccount(job) else { return }
       switch job.stage {
       case .queued:
         guard await startUpload(job) else { return }
