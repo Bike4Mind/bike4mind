@@ -8,6 +8,7 @@ import {
   previewSleepTargets,
   type PreviewSleepLabel,
 } from './previewSleepConfig';
+import { isServiceHealthMonitoredStage } from './serviceHealthAlarms';
 import { subscriberFanout } from './subscriberFanout';
 
 const services: Record<PreviewSleepLabel, { id: string; service: sst.aws.Service }> = {
@@ -15,7 +16,9 @@ const services: Record<PreviewSleepLabel, { id: string; service: sst.aws.Service
   'subscriber-fanout': { id: 'SubscriberFanout', service: subscriberFanout },
 };
 
-const previewSleepEnabled = isPreviewStage && !$dev;
+// The no-tasks alarms in serviceHealthAlarms.ts read zero tasks as an outage, so a preview that
+// opts into monitoring (ENABLE_MONITORING) never sleeps.
+const previewSleepEnabled = isPreviewStage && !isServiceHealthMonitoredStage && !$dev;
 
 // Scheduled min/max changes are not drift Pulumi reverts, so a deploy during the sleep window
 // leaves the services asleep until the wake schedule (or the in-app wake) runs.

@@ -52,7 +52,7 @@ describe('preview sleep wiring', () => {
   const source = readInfra('previewSleep.ts');
 
   it('creates every scheduled action inside the preview-only, non-dev block', () => {
-    expect(source).toContain('const previewSleepEnabled = isPreviewStage && !$dev;');
+    expect(source).toContain('const previewSleepEnabled = isPreviewStage && !isServiceHealthMonitoredStage && !$dev;');
     const gate = source.indexOf('if (previewSleepEnabled) {');
     expect(gate).toBeGreaterThanOrEqual(0);
     const actions = [...source.matchAll(/new aws\.appautoscaling\.ScheduledAction\(/g)].map(m => m.index ?? -1);
@@ -80,6 +80,13 @@ describe('preview sleep wiring', () => {
     const webTs = readInfra('web.ts');
     expect(webTs).toContain('...previewSleepForWeb.permissions,');
     expect(webTs).toContain('...previewSleepForWeb.environment,');
+  });
+
+  it('stands down on any stage the no-tasks alarms watch', () => {
+    expect(source).toContain("import { isServiceHealthMonitoredStage } from './serviceHealthAlarms';");
+    const alarms = readInfra('serviceHealthAlarms.ts');
+    expect(alarms).toContain('export const isServiceHealthMonitoredStage = _isMonitoredStage(');
+    expect(alarms).toContain('const isMonitoredStage = isServiceHealthMonitoredStage;');
   });
 
   it('is exported after both services it schedules', () => {
