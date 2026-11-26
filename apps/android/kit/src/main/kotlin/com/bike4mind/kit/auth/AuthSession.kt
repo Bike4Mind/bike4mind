@@ -1,6 +1,7 @@
 package com.bike4mind.kit.auth
 
 import com.bike4mind.kit.networking.BearerTokens
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +30,7 @@ class AuthSession(private val api: AuthApi, private val store: TokenStore) : Bea
     private val tokens = MutableStateFlow<Tokens?>(null)
     private val refreshLock = Mutex()
     private val revocationLock = Mutex()
+    private val retrying = AtomicBoolean(false)
     private val signedIn = MutableStateFlow(false)
 
     val isSignedIn: StateFlow<Boolean> = signedIn.asStateFlow()
@@ -81,11 +83,19 @@ class AuthSession(private val api: AuthApi, private val store: TokenStore) : Bea
     }
 
     /** Finishes revocations an earlier sign-out on this server could not complete. Call at launch and on foreground. */
-    suspend fun retryPendingRevocations() = revocationLock.withLock {
-        val mine = store.loadPendingRevocations().filter { it.baseUrl == api.baseUrl }
-        if (mine.isEmpty()) return@withLock
-        val stillPending = mine.mapNotNull { revoke(it) }
-        store.savePendingRevocations(store.loadPendingRevocations().filterNot { it in mine } + stillPending)
+    suspend fun retryPendingRevocations() {
+        if (!retrying.compareAndSet(false, true)) return
+        try {
+            val mine = revocationLock.withLock { store.loadPendingRevocations() }.filter { it.baseUrl == api.baseUrl }
+            if (mine.isEmpty()) return
+            // The network calls run outside the lock so a sign-out never waits on a slow retry.
+            val stillPending = mine.mapNotNull { revoke(it) }
+            revocationLock.withLock {
+                store.savePendingRevocations(store.loadPendingRevocations().filterNot { it in mine } + stillPending)
+            }
+        } finally {
+            retrying.set(false)
+        }
     }
 
     /** Null once the server no longer holds the session; otherwise what to retry with next time. */

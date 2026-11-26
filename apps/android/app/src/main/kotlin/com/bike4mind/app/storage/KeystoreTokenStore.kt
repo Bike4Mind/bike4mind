@@ -27,8 +27,8 @@ class KeystoreTokenStore(context: Context) : TokenStore {
     private val prefs = context.getSharedPreferences("b4m.tokens", Context.MODE_PRIVATE)
 
     override suspend fun load(): Tokens? = withContext(Dispatchers.IO) {
-        val json = open(BLOB)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return@withContext null
-        runCatching { Tokens(json.getString(ACCESS), json.getString(REFRESH)) }.getOrElse {
+        val plain = open(BLOB) ?: return@withContext null
+        runCatching { JSONObject(plain).let { Tokens(it.getString(ACCESS), it.getString(REFRESH)) } }.getOrElse {
             prefs.edit { remove(BLOB) }
             null
         }
