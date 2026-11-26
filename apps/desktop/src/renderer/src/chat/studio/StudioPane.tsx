@@ -700,6 +700,9 @@ export function StudioContent({
   // `reuse` counts Reuse clicks, so reusing a second take of the same medium still refills the form.
   const [initial, setInitial] = useState<{ kind: StudioMediaKind; creation: StudioAsset['creation']; reuse: number }>();
   const [selected, setSelected] = useState<string | null>(null);
+  useEffect(() => {
+    if (layout === 'place' && initial && initial.kind !== kind) setInitial(undefined);
+  }, [layout, kind, initial]);
   const asset =
     controller?.state.status === 'ready' ? controller.state.assets.find(item => item.id === selected) : undefined;
   const preview = controller && asset && (
@@ -720,26 +723,28 @@ export function StudioContent({
   );
 
   if (layout === 'place') {
-    if (preview) return preview;
     return (
-      <Stack spacing={2.5}>
-        {controller && kind && (
-          <CreationForm
-            key={`${controller.sessionId}:${controller.workspaceId}:${kind}:${initial?.reuse ?? 0}`}
+      <>
+        {preview}
+        <Stack spacing={2.5} sx={preview ? { display: 'none' } : undefined}>
+          {controller && kind && (
+            <CreationForm
+              key={`${controller.sessionId}:${controller.workspaceId}:${kind}:${initial?.reuse ?? 0}`}
+              controller={controller}
+              kind={kind}
+              initial={initial?.kind === kind ? initial.creation : undefined}
+              onBack={() => setKind(null)}
+              layout="place"
+            />
+          )}
+          <StudioTakesSection
             controller={controller}
-            kind={kind}
-            initial={initial?.kind === kind ? initial.creation : undefined}
-            onBack={() => setKind(null)}
-            layout="place"
+            kind={kind ?? undefined}
+            unavailableReason={unavailableReason}
+            onOpen={setSelected}
           />
-        )}
-        <StudioTakesSection
-          controller={controller}
-          kind={kind ?? undefined}
-          unavailableReason={unavailableReason}
-          onOpen={setSelected}
-        />
-      </Stack>
+        </Stack>
+      </>
     );
   }
 

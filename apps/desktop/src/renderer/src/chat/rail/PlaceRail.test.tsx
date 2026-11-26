@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { StudioMediaKind } from '@shared/studio';
@@ -203,6 +203,85 @@ describe('the Studio place', () => {
     mount(<Main ready={false} unavailableReason="Getting Studio ready..." />);
     expect(byTestId('studio-create-empty')?.textContent).toContain('Getting Studio ready...');
     expect(byTestId('studio-creation-form')).toBeNull();
+  });
+
+  describe('reusing a take', () => {
+    const asset = {
+      id: 'saved',
+      kind: 'image' as const,
+      title: 'Saved',
+      originatingSessionId: 's1',
+      createdAt: '2026-11-01',
+      updatedAt: '2026-11-01',
+      url: 'https://example.com/image.png',
+      creation: { prompt: 'Prepared saved prompt', settings: { count: 2 }, selection: { mode: 'current-session' } },
+    } as const;
+
+    function Place({ value }: { value: StudioController }) {
+      const [kind, setKind] = useState<StudioMediaKind | null>('image');
+      return (
+        <StudioMain
+          area="create"
+          onAreaChange={() => {}}
+          kind={kind}
+          onKindChange={setKind}
+          controller={value}
+          ready
+          productions={undefined}
+          library={undefined}
+        />
+      );
+    }
+
+    const placeController = () =>
+      controller({
+        capabilities: { image: { status: 'available' }, video: { status: 'available' } },
+        state: { status: 'ready', assets: [{ ...asset, creation: { ...asset.creation } }], jobs: [] },
+      });
+
+    const click = (id: string) => act(async () => byTestId(id)?.click());
+    const prompt = () => byTestId('studio-prompt-input') as HTMLTextAreaElement | null;
+    const type = (value: string) =>
+      act(async () => {
+        const node = prompt();
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(node, value);
+        node?.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    const reuse = async () => {
+      await click('studio-asset-saved-btn');
+      await click('studio-asset-actions-btn');
+      await click('studio-asset-reuse-btn');
+    };
+
+    it('submits no session context, whatever the reused take saved', async () => {
+      const value = placeController();
+      mount(<Place value={value} />);
+      await reuse();
+      expect(prompt()?.value).toBe('Prepared saved prompt');
+      await click('studio-generate-btn');
+      expect(value.prepareCreation).toHaveBeenCalledWith(
+        expect.objectContaining({ selection: { mode: 'none' }, settings: { count: 2 } })
+      );
+    });
+
+    it('drops the reused take once the medium changes and comes back', async () => {
+      mount(<Place value={placeController()} />);
+      await reuse();
+      expect(prompt()?.value).toBe('Prepared saved prompt');
+      await click('studio-rail-video');
+      await click('studio-rail-image');
+      expect(prompt()?.value).toBe('');
+    });
+
+    it('keeps an unsent prompt while a take preview is open', async () => {
+      mount(<Place value={placeController()} />);
+      await type('Unsent draft');
+      await click('studio-asset-saved-btn');
+      expect(byTestId('studio-asset-preview')).not.toBeNull();
+      await click('studio-preview-back-btn');
+      expect(byTestId('studio-asset-preview')).toBeNull();
+      expect(prompt()?.value).toBe('Unsent draft');
+    });
   });
 
   it('mounts the Productions and Library bodies it is handed, or a quiet state without one', () => {
