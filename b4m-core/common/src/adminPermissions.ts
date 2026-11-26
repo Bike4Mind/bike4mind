@@ -23,9 +23,8 @@ export const AdminPermissionsSchema = z
 export type AdminPermissionId = z.infer<typeof AdminPermissionSchema>;
 
 /**
- * Permissions the full-admin flag does not imply: each places its holder outside a check every admin is
- * otherwise held to, so it is only ever held by an explicit grant, and only a holder can grant or revoke it
- * (assertCanChangeExplicitOnlyPermissions). Holding one alone grants no admin access.
+ * Permissions the full-admin flag does not imply; only a holder can grant or revoke one
+ * (assertCanChangeExplicitOnlyPermissions), and holding one alone grants no admin access.
  */
 export const EXPLICIT_ONLY_ADMIN_PERMISSIONS = [
   'credits:self_grant',
