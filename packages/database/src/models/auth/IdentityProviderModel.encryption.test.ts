@@ -115,6 +115,29 @@ describe('IdentityProviderRepository secrets at rest', () => {
     expect(forLogin?.oktaConfig?.clientSecret).toBe('ROTATED-SECRET');
   });
 
+  it('drops the stored secret when an edit points the audience at another host without a new one', async () => {
+    const created = await identityProviderRepository.createIDP(oktaIdp('moved.example'));
+
+    await identityProviderRepository.updateIDP(created.id, {
+      oktaConfig: { audience: 'https://elsewhere.example', clientId: 'client-1' },
+    } as never);
+
+    const forLogin = await identityProviderRepository.findByIdWithSecrets(created.id);
+    expect(forLogin?.oktaConfig?.audience).toBe('https://elsewhere.example');
+    expect(forLogin?.oktaConfig?.clientSecret).toBe('');
+  });
+
+  it('keeps the stored secret when the audience differs only by case or a trailing slash', async () => {
+    const created = await identityProviderRepository.createIDP(oktaIdp('same-host.example'));
+
+    await identityProviderRepository.updateIDP(created.id, {
+      oktaConfig: { audience: 'https://ACME.okta.com/', clientId: 'client-1' },
+    } as never);
+
+    const forLogin = await identityProviderRepository.findByIdWithSecrets(created.id);
+    expect(forLogin?.oktaConfig?.clientSecret).toBe('OKTA-CLIENT-SECRET');
+  });
+
   it('preserves the stored secret when the configured key cannot read it', async () => {
     const created = await identityProviderRepository.createIDP(oktaIdp('badkey.example'));
     const before = await IdentityProviderModel.findById(created.id).select('+oktaConfig.clientSecret').lean();
