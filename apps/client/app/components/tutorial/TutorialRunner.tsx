@@ -66,7 +66,8 @@ export function stepProgress(script: TutorialScript, stepId: string) {
 /** Heads the bridge card, which closes the module, where a step shows its count. */
 export const bridgeHeading = (script: TutorialScript) => {
   const count = script.steps.filter(s => s.type !== 'bridge').length;
-  return count > 0 ? `Quest chain complete: all ${count} steps` : 'Quest chain complete';
+  if (count === 0) return 'All done';
+  return `All done: ${count} ${count === 1 ? 'step' : 'steps'} complete`;
 };
 
 export interface TutorialRunnerProps {

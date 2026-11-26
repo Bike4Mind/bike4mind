@@ -8,7 +8,7 @@ import groundedAnswersTranscript from './modules/grounded-answers/transcript.jso
 
 // Server-only, like the registry: the page gets a tutorial's content only from the run route, overrides applied.
 export const CORE_TUTORIAL_CONTENT: readonly RepoTutorial[] = [
-  { intro: firstStepsModule, version: 1, enabled: true, steps: FIRST_STEPS_STEPS, transcript: firstStepsTranscript },
+  { intro: firstStepsModule, version: 2, enabled: true, steps: FIRST_STEPS_STEPS, transcript: firstStepsTranscript },
   {
     intro: groundedAnswersModule,
     version: 1,

@@ -24,6 +24,7 @@ import { CONSENT_VENDORS } from '../utils/consentVendors';
 import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
 import { beaconVisit } from '../utils/visitBeacon';
 import { startPageBeacon } from '../utils/pageBeacon';
+import { useTutorialPicker } from './tutorial/core/tutorialPickerStore';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
 
@@ -68,6 +69,7 @@ describe('CookieConsentBanner', () => {
     mockLoadMetaPixel.mockClear();
     clearCookies();
     useCookieSettings.setState({ isOpen: false });
+    useTutorialPicker.setState({ walkOnScreen: false });
     // The grant loads only configured vendors, so configure the pixels the mocks stand in for.
     vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
     vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
@@ -406,6 +408,33 @@ describe('CookieConsentBanner', () => {
       expect(mockGtag).not.toHaveBeenCalled();
       expect(mockLoadRedditPixel).not.toHaveBeenCalled();
       expect(mockLoadMetaPixel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('while a tutorial walk is on screen', () => {
+    const renderBanner = () =>
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+    it('holds the unprompted ask back, then shows it once the walk ends', () => {
+      setRegion('eu');
+      useTutorialPicker.setState({ walkOnScreen: true });
+      renderBanner();
+      expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+
+      act(() => useTutorialPicker.setState({ walkOnScreen: false }));
+      expect(screen.getByTestId('cookie-consent-banner')).toBeInTheDocument();
+    });
+
+    it('still shows when reopened from Cookie settings', () => {
+      setRegion('eu');
+      useTutorialPicker.setState({ walkOnScreen: true });
+      renderBanner();
+      act(() => useCookieSettings.getState().open());
+      expect(screen.getByTestId('cookie-consent-banner')).toBeInTheDocument();
     });
   });
 

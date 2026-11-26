@@ -55,6 +55,15 @@ const firstSteps: TutorialRunModule = {
   ],
 } as unknown as TutorialRunModule;
 
+const promptModule: TutorialRunModule = {
+  ...firstSteps,
+  id: 'prompt-module',
+  steps: [
+    { id: 'p', type: 'prompt', turn: 0, prompt: 'Hello?' },
+    { id: 'a', type: 'point', title: 'A', body: '' },
+  ],
+} as unknown as TutorialRunModule;
+
 const inProgressOnS1: TutorialProgressEntry = {
   status: 'in_progress',
   sessionId: 's1',
@@ -76,7 +85,7 @@ afterEach(() => {
   runData.failed = false;
   runData.session = 's1';
   vi.clearAllMocks();
-  useTutorialPicker.setState({ open: false, requestedTrack: null });
+  useTutorialPicker.setState({ open: false, requestedTrack: null, walkOnScreen: false, walkPrompt: null });
 });
 
 describe('CoreTutorialHost', () => {
@@ -181,5 +190,28 @@ describe('CoreTutorialHost', () => {
     act(() => store.getState().end());
 
     expect(store.getState().active?.sessionId).toBe('s2');
+  });
+
+  describe('the recorded prompt it publishes', () => {
+    const walkAt = (stepId: string) => {
+      enabled.current = true;
+      runData.modules = [promptModule];
+      runData.progress = {
+        'prompt-module': { ...inProgressOnS1, stepId },
+      };
+      renderHost();
+    };
+
+    it('publishes the prompt of a prompt step', () => {
+      walkAt('p');
+      expect(useTutorialPicker.getState().walkOnScreen).toBe(true);
+      expect(useTutorialPicker.getState().walkPrompt).toBe('Hello?');
+    });
+
+    it('publishes none on any other step', () => {
+      walkAt('a');
+      expect(useTutorialPicker.getState().walkOnScreen).toBe(true);
+      expect(useTutorialPicker.getState().walkPrompt).toBeNull();
+    });
   });
 });
