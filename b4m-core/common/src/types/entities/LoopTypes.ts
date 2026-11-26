@@ -40,6 +40,9 @@ export type LoopWakeMode = (typeof LOOP_WAKE_MODES)[number];
 /** Upper bound of a loop's `triggers`; the API, the form and LoopModel share it. */
 export const LOOP_TRIGGERS_MAX = 10;
 
+/** Most loops one user may own; the create API and LoopRepository.listForUser share it. */
+export const LOOPS_PER_USER_MAX = 100;
+
 /**
  * Stored on the woken loop: when a ticket of `fromLoopId` reaches `stage`, a linked copy is filed into this loop
  * in `toStage` (default its first stage). See `fireStageTriggers` (apps/client/server/utils/loopHandoff.ts).
