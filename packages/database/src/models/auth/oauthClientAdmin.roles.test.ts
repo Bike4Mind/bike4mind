@@ -8,7 +8,7 @@ import {
   OAUTH_CLIENT_MAX_ROLES,
   OAUTH_CLIENT_ROLE_HOLDERS_SHOWN,
 } from '@bike4mind/common';
-import { createMongoServer } from '../../__test__/createMongoServer';
+import { createMongoReplSet, settleAutoIndexBuilds } from '../../__test__/createMongoServer';
 import { OAuthClientModel, type IOAuthClientDocument } from './OAuthClientModel';
 import { OAuthClientRoleAssignmentModel, oauthClientRoleAssignmentRepository } from './OAuthClientRoleAssignmentModel';
 import { User } from './UserModel';
@@ -23,11 +23,14 @@ import {
   unassignOAuthClientRole,
 } from './oauthClientAdmin';
 
-let server: Awaited<ReturnType<typeof createMongoServer>>;
+let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 
 beforeAll(async () => {
-  server = await createMongoServer();
-  await mongoose.connect(server.getUri());
+  server = await createMongoReplSet();
+  await mongoose.connect(server.getUri(), { autoIndex: false, monitorCommands: true });
+  await settleAutoIndexBuilds(mongoose);
+  await OAuthClientModel.createIndexes();
+  await OAuthClientRoleAssignmentModel.createIndexes();
 }, 60000);
 
 afterAll(async () => {
@@ -315,5 +318,211 @@ describe('listUserOAuthClientRoles', () => {
 
   it('404s for an unknown user', async () => {
     await expect(listUserOAuthClientRoles(missingId())).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+
+const isParentFence = (event: { commandName: string; command: Record<string, unknown> }) => {
+  if (event.commandName !== 'findAndModify' || event.command.findAndModify !== OAuthClientModel.collection.name)
+    return false;
+  const update = event.command.update;
+  if (typeof update !== 'object' || update === null || !('$inc' in update)) return false;
+  const increment = update.$inc;
+  return typeof increment === 'object' && increment !== null && 'roleMutationVersion' in increment;
+};
+
+const trackParentWrites = () => {
+  const writes: Record<string, unknown>[] = [];
+  const client = mongoose.connection.getClient();
+  const listener = (event: { commandName: string; command: Record<string, unknown> }) => {
+    if (isParentFence(event)) writes.push(event.command);
+  };
+  client.on('commandStarted', listener);
+  return { writes, stop: () => client.off('commandStarted', listener) };
+};
+
+const nextParentWrite = () => {
+  const entered = deferred();
+  const client = mongoose.connection.getClient();
+  const listener = (event: { commandName: string; command: Record<string, unknown> }) => {
+    if (isParentFence(event)) entered.resolve();
+  };
+  client.on('commandStarted', listener);
+  let timer: ReturnType<typeof setTimeout>;
+  const promise = Promise.race([
+    entered.promise,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Expected competing role-client write')), 10000);
+    }),
+  ]).finally(() => {
+    clearTimeout(timer);
+    client.off('commandStarted', listener);
+  });
+  return promise;
+};
+
+describe('role reset transaction ordering', () => {
+  it('orders a validated assignment before removal and clears it before re-add', async () => {
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'Old' });
+    const userId = await makeUser();
+    const entered = deferred();
+    const release = deferred();
+    const tracked = trackParentWrites();
+    const assign = oauthClientRoleAssignmentRepository.assign.bind(oauthClientRoleAssignmentRepository);
+    vi.spyOn(oauthClientRoleAssignmentRepository, 'assign').mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return assign(...args);
+    });
+    const pending = assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'a' });
+    let removal: ReturnType<typeof removeOAuthClientRole> | undefined;
+    try {
+      await entered.promise;
+      expect(tracked.writes).toHaveLength(1);
+      const attempted = nextParentWrite();
+      removal = removeOAuthClientRole(client.id, 'admin');
+      await attempted;
+    } finally {
+      release.resolve();
+      tracked.stop();
+      await pending;
+      await removal;
+    }
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'New' });
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(0);
+    expect(await oauthClientRoleAssignmentRepository.listRolesForUserAndClient(userId, client.clientId)).toEqual([]);
+    expect((await listOAuthClientRoles(client.id)).holders).toEqual([]);
+    expect((await listUserOAuthClientRoles(userId))[0]?.assigned).toEqual([]);
+  });
+
+  it('commits old removal cleanup before re-add and preserves the fresh grant', async () => {
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'Old' });
+    const userId = await makeUser();
+    const entered = deferred();
+    const release = deferred();
+    const tracked = trackParentWrites();
+    const cleanup = oauthClientRoleAssignmentRepository.deleteAllForClient.bind(oauthClientRoleAssignmentRepository);
+    vi.spyOn(oauthClientRoleAssignmentRepository, 'deleteAllForClient').mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return cleanup(...args);
+    });
+    const pending = removeOAuthClientRole(client.id, 'admin');
+    let addition: ReturnType<typeof addOAuthClientRole> | undefined;
+    try {
+      await entered.promise;
+      expect(tracked.writes).toHaveLength(1);
+      const attempted = nextParentWrite();
+      addition = addOAuthClientRole(client.id, { key: 'admin', label: 'New' });
+      await attempted;
+    } finally {
+      release.resolve();
+      tracked.stop();
+      await pending;
+      await addition;
+    }
+    await assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'a' });
+    expect(await oauthClientRoleAssignmentRepository.listRolesForUserAndClient(userId, client.clientId)).toEqual([
+      'admin',
+    ]);
+    expect((await listOAuthClientRoles(client.id)).holders).toHaveLength(1);
+    expect((await listUserOAuthClientRoles(userId))[0]?.assigned[0]?.label).toBe('New');
+  });
+
+  it('rolls back the definition and cleanup when removal fails after deleting assignments', async () => {
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'Admin' });
+    const userId = await makeUser();
+    await assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'a' });
+    const cleanup = oauthClientRoleAssignmentRepository.deleteAllForClient.bind(oauthClientRoleAssignmentRepository);
+    const stub = vi
+      .spyOn(oauthClientRoleAssignmentRepository, 'deleteAllForClient')
+      .mockImplementationOnce(async (...args) => {
+        await cleanup(...args);
+        throw new Error('cleanup failed');
+      });
+    await expect(removeOAuthClientRole(client.id, 'admin')).rejects.toThrow('cleanup failed');
+    stub.mockRestore();
+    expect((await OAuthClientModel.findById(client.id))?.roles.map(role => role.key)).toEqual(['admin']);
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(1);
+    await removeOAuthClientRole(client.id, 'admin');
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(0);
+  });
+
+  it('rolls back a failed addition and clears future-dated residual assignments on retry', async () => {
+    const client = await makeClient();
+    await OAuthClientRoleAssignmentModel.create({
+      userId: 'stale',
+      clientId: client.clientId,
+      role: 'admin',
+      assignedBy: 'a',
+      assignedAt: new Date('2100-01-01'),
+    });
+    const cleanup = oauthClientRoleAssignmentRepository.deleteAllForClient.bind(oauthClientRoleAssignmentRepository);
+    const stub = vi
+      .spyOn(oauthClientRoleAssignmentRepository, 'deleteAllForClient')
+      .mockImplementationOnce(async (...args) => {
+        await cleanup(...args);
+        throw new Error('cleanup failed');
+      });
+    await expect(addOAuthClientRole(client.id, { key: 'admin', label: 'New' })).rejects.toThrow('cleanup failed');
+    stub.mockRestore();
+    expect((await OAuthClientModel.findById(client.id))?.roles).toHaveLength(0);
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(1);
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'New' });
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(0);
+  });
+
+  it('rolls back an inserted assignment and preserves public timestamps on grant and revoke', async () => {
+    const client = await makeClient();
+    const added = await addOAuthClientRole(client.id, { key: 'admin', label: 'Admin' });
+    const userId = await makeUser();
+    const assign = oauthClientRoleAssignmentRepository.assign.bind(oauthClientRoleAssignmentRepository);
+    const stub = vi.spyOn(oauthClientRoleAssignmentRepository, 'assign').mockImplementationOnce(async (...args) => {
+      await assign(...args);
+      throw new Error('assignment failed');
+    });
+    await expect(
+      assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'a' })
+    ).rejects.toThrow('assignment failed');
+    stub.mockRestore();
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(0);
+    const granted = await assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'a' });
+    const revoked = await unassignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin' });
+    expect(granted.client.updatedAt).toBe(added.client.updatedAt);
+    expect(revoked.client.updatedAt).toBe(added.client.updatedAt);
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored).not.toHaveProperty('roleMutationVersion');
+    expect(granted.client).not.toHaveProperty('roleMutationVersion');
+    expect(
+      (await OAuthClientModel.collection.findOne({ clientId: client.clientId }))?.roleMutationVersion
+    ).toBeGreaterThan(0);
+  });
+
+  it('serializes concurrent idempotent grants without replacing the first actor or time', async () => {
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'Admin' });
+    const userId = await makeUser();
+    const results = await Promise.all(
+      ['a', 'b'].map(assignedBy =>
+        assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy })
+      )
+    );
+    expect(results.filter(result => result.created)).toHaveLength(1);
+    const row = await OAuthClientRoleAssignmentModel.findOne({ clientId: client.clientId }).lean();
+    await assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'later' });
+    const same = await OAuthClientRoleAssignmentModel.findOne({ clientId: client.clientId }).lean();
+    expect(same?.assignedBy).toBe(row?.assignedBy);
+    expect(same?.assignedAt).toEqual(row?.assignedAt);
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(1);
   });
 });

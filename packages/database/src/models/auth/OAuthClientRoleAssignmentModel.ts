@@ -21,14 +21,17 @@ export interface IOAuthClientRoleAssignmentDocument extends IMongoDocument {
 
 export interface IOAuthClientRoleAssignmentRepository extends IBaseRepository<IOAuthClientRoleAssignmentDocument> {
   /** Idempotent: an existing (user, client, role) row is returned unchanged. */
-  assign(params: {
-    userId: string;
-    clientId: string;
-    role: string;
-    assignedBy: string;
-  }): Promise<{ assignment: IOAuthClientRoleAssignmentDocument; created: boolean }>;
+  assign(
+    params: {
+      userId: string;
+      clientId: string;
+      role: string;
+      assignedBy: string;
+    },
+    session?: mongoose.mongo.ClientSession
+  ): Promise<{ assignment: IOAuthClientRoleAssignmentDocument; created: boolean }>;
   /** True when a row was deleted. */
-  unassign(userId: string, clientId: string, role: string): Promise<boolean>;
+  unassign(userId: string, clientId: string, role: string, session?: mongoose.mongo.ClientSession): Promise<boolean>;
   /** Per role: how many hold it and the earliest `limit` assignments. */
   listHoldersByClient(
     clientId: string,
@@ -37,7 +40,12 @@ export interface IOAuthClientRoleAssignmentRepository extends IBaseRepository<IO
   ): Promise<Array<{ role: string; count: number; rows: IOAuthClientRoleAssignmentDocument[] }>>;
   listByUser(userId: string): Promise<IOAuthClientRoleAssignmentDocument[]>;
   /** Every assignment on the client, or only those of `role`; `assignedBefore` keeps later ones. */
-  deleteAllForClient(clientId: string, role?: string, assignedBefore?: Date): Promise<number>;
+  deleteAllForClient(
+    clientId: string,
+    role?: string,
+    assignedBefore?: Date,
+    session?: mongoose.mongo.ClientSession
+  ): Promise<number>;
   deleteAllForUser(userId: string): Promise<number>;
   /**
    * The role keys a client may read for a user: [] when the user is deleted, banned, suspended or in
@@ -71,14 +79,17 @@ class OAuthClientRoleAssignmentRepository
     super(m);
   }
 
-  async assign(params: { userId: string; clientId: string; role: string; assignedBy: string }) {
+  async assign(
+    params: { userId: string; clientId: string; role: string; assignedBy: string },
+    session?: mongoose.mongo.ClientSession
+  ) {
     const filter = { userId: params.userId, clientId: params.clientId, role: params.role };
     const upsert = () =>
       this.model
         .findOneAndUpdate(
           filter,
           { $setOnInsert: { assignedBy: params.assignedBy, assignedAt: new Date() } },
-          { upsert: true, new: true, runValidators: true, includeResultMetadata: true }
+          { upsert: true, new: true, runValidators: true, includeResultMetadata: true, session }
         )
         .exec();
     let result;
@@ -86,7 +97,7 @@ class OAuthClientRoleAssignmentRepository
       result = await upsert();
     } catch (error) {
       // Two concurrent first assigns race the unique index; the loser finds the winner's row.
-      if (!isDuplicateKey(error)) throw error;
+      if (session || !isDuplicateKey(error)) throw error;
       result = await upsert();
     }
     return {
@@ -95,8 +106,8 @@ class OAuthClientRoleAssignmentRepository
     };
   }
 
-  async unassign(userId: string, clientId: string, role: string) {
-    const result = await this.model.deleteOne({ userId, clientId, role }).exec();
+  async unassign(userId: string, clientId: string, role: string, session?: mongoose.mongo.ClientSession) {
+    const result = await this.model.deleteOne({ userId, clientId, role }, { session }).exec();
     return result.deletedCount > 0;
   }
 
@@ -114,13 +125,21 @@ class OAuthClientRoleAssignmentRepository
     return this.model.find({ userId }).sort({ clientId: 1, role: 1 }).exec();
   }
 
-  async deleteAllForClient(clientId: string, role?: string, assignedBefore?: Date) {
+  async deleteAllForClient(
+    clientId: string,
+    role?: string,
+    assignedBefore?: Date,
+    session?: mongoose.mongo.ClientSession
+  ) {
     const result = await this.model
-      .deleteMany({
-        clientId,
-        ...(role === undefined ? {} : { role }),
-        ...(assignedBefore ? { assignedAt: { $lt: assignedBefore } } : {}),
-      })
+      .deleteMany(
+        {
+          clientId,
+          ...(role === undefined ? {} : { role }),
+          ...(assignedBefore ? { assignedAt: { $lt: assignedBefore } } : {}),
+        },
+        { session }
+      )
       .exec();
     return result.deletedCount;
   }

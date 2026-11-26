@@ -97,6 +97,7 @@ export interface IOAuthClientDocument extends IMongoDocument {
   overwatchProductId?: string;
   /** The roles this app offers its users; who holds each is OAuthClientRoleAssignmentModel. */
   roles: OAuthClientRole[];
+  roleMutationVersion?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -170,6 +171,7 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
       ],
       default: [],
     },
+    roleMutationVersion: { type: Number, select: false },
     unpaidAccountsAllowed: { type: Boolean, required: false },
     rateLimit: {
       type: new Schema<IUserApiKeyRateLimit>(
