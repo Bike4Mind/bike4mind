@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import { promoteInlineLatexDollars } from './remarkPlugins';
+import { promoteInlineLatexDollars, replaceInlineSpans, unescapedDelimiter } from './remarkPlugins';
 
 describe('promoteInlineLatexDollars', () => {
   describe('math spans get promoted to $$...$$', () => {
@@ -207,6 +207,29 @@ describe('promoteInlineLatexDollars', () => {
       ['bracket span inside a paren span', '\\( a \\[ x^2 \\] b \\)', '\\( a $$x^2$$ b \\)'],
     ])('pairs delimiters: %s', (_label, input, expected) => {
       expect(promoteInlineLatexDollars(input)).toBe(expected);
+    });
+
+    // The pairing must equal the lazy regexp it replaced, which is the reference here.
+    it('pairs delimiters exactly like the lazy regexp over random delimiter strings', () => {
+      const pieces = ['\\(', '\\)', '\\[', '\\]', '\\', '\\\\', '\n', '\r', 'a', ' ', '(', ')'];
+      let seed = 12345;
+      const next = () => (seed = (seed * 1664525 + 1013904223) >>> 0);
+      const tag = (match: string, inner: string, offset: number, whole: string) =>
+        `<${match}|${inner}|${offset}|${whole.length}>`;
+      for (const [open, close] of [
+        ['(', ')'],
+        ['[', ']'],
+      ]) {
+        const reference = new RegExp(
+          `${unescapedDelimiter('\\' + open)}([^\\n]*?)${unescapedDelimiter('\\' + close)}`,
+          'g'
+        );
+        for (let i = 0; i < 3000; i++) {
+          let text = '';
+          for (let n = next() % 14; n > 0; n--) text += pieces[next() % pieces.length];
+          expect(replaceInlineSpans(text, open, close, tag), JSON.stringify(text)).toBe(text.replace(reference, tag));
+        }
+      }
     });
 
     it('stays linear on a long line of unclosed openers', () => {

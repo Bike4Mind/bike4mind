@@ -54,7 +54,7 @@ type SpanReplacer = (match: string, inner: string, offset: number, whole: string
 // `open([^\n]*?)close` would match. That regexp rescans to the end of the line from every unclosed
 // opener, quadratic on a line of them, so this walks the text once in escape pairs instead. Pairing
 // backslashes left to right means every `\(`-style pair it meets is unescaped.
-function replaceInlineSpans(text: string, open: string, close: string, replace: SpanReplacer): string {
+export function replaceInlineSpans(text: string, open: string, close: string, replace: SpanReplacer): string {
   let out = '';
   let copiedTo = 0;
   let openAt = -1;
