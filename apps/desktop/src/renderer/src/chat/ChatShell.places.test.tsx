@@ -120,6 +120,8 @@ beforeEach(() => {
         },
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
+      auth: quietBridge({ getState: async () => null }),
+      productions: quietBridge({ list: async () => ({ ok: true, value: { items: [], nextSkip: null } }) }),
       // No Studio bridge: the place frame must still draw, with the pane saying it is not connected.
       studio: undefined,
       getAppInfo: () => new Promise(() => {}),

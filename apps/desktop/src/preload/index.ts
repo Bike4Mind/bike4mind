@@ -84,6 +84,15 @@ const api: DesktopApi = {
     media: ref => ipcRenderer.invoke(IPC_CHANNELS.libraryMedia, ref),
     locate: ref => ipcRenderer.invoke(IPC_CHANNELS.libraryLocate, ref),
   },
+  productions: {
+    list: request => ipcRenderer.invoke(IPC_CHANNELS.productionsList, request),
+    get: ref => ipcRenderer.invoke(IPC_CHANNELS.productionsGet, ref),
+    rename: request => ipcRenderer.invoke(IPC_CHANNELS.productionsRename, request),
+    reorder: request => ipcRenderer.invoke(IPC_CHANNELS.productionsReorder, request),
+    renders: ref => ipcRenderer.invoke(IPC_CHANNELS.productionsRenders, ref),
+    render: request => ipcRenderer.invoke(IPC_CHANNELS.productionsRender, request),
+    media: ref => ipcRenderer.invoke(IPC_CHANNELS.productionsMedia, ref),
+  },
   studio: {
     get: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioGet, sessionId),
     page: request => ipcRenderer.invoke(IPC_CHANNELS.studioPage, request),

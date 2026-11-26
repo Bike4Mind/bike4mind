@@ -78,6 +78,7 @@ import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
 import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
 import { StudioPane } from './studio/StudioPane';
+import { StudioProductions } from './studio/productions/StudioProductions';
 import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
@@ -1988,6 +1989,7 @@ export function ChatShell({
           controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
           ready={!!studioSession.sessionId}
           unavailableReason={studioPlaceReason}
+          productions={<StudioProductions />}
           library={
             <LibraryMain
               filter="all"
