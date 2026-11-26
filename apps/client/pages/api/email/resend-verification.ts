@@ -12,7 +12,7 @@ import {
   escapeHtml,
 } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { logAuditEvent, EmailAuditEvents } from '@bike4mind/server-utils/utils/auditLog';
-import { getMailConfigStatus } from '@bike4mind/server-utils/utils/mailer/configStatus';
+import { loadMailConfigStatus } from '@bike4mind/server-utils/utils/mailer/sender';
 
 // Requires authentication - users resend verification to themselves
 const handler = baseApi({ auth: true })
@@ -24,7 +24,7 @@ const handler = baseApi({ auth: true })
   )
   .post(
     asyncHandler(async (req, res) => {
-      const emailConfig = getMailConfigStatus();
+      const emailConfig = await loadMailConfigStatus();
 
       if (!emailConfig.configured) {
         // Return different error messages based on user role

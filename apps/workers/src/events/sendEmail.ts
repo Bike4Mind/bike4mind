@@ -1,5 +1,7 @@
 import type { EventBridgeEvent } from 'aws-lambda';
+import { connectDB } from '@bike4mind/database';
 import { withEventContext } from '@workers/utils/eventContext';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import mailer from '@bike4mind/server-utils/utils/mailer/index';
 import { getMailBody, type StoredMailBody } from '@bike4mind/server-utils/utils/mailer/mailBodyStore';
@@ -113,6 +115,8 @@ async function runMailTest({ mailTest: { to } }: MailTestRequest): Promise<LiveT
   if (sinkDomain) {
     return { success: false, error: `Mail to ${sinkDomain} is not delivered on this stage.`, transport };
   }
+  // A direct invoke skips withEventContext, and the sender is read from the mailFrom admin setting.
+  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE));
   return { ...(await mailer.sendTestEmail(to)), transport };
 }
 

@@ -30,6 +30,7 @@ import {
   capFunctionProblems,
   functionJsonBytes,
   type FunctionContractProblem,
+  randomUuid,
 } from '@bike4mind/common';
 import {
   SUPPORTED_PYTHON_PACKAGES,
@@ -598,7 +599,7 @@ class PyodideManager {
     if (this.network !== 'none') throw new Error(PYTHON_SCRIPT_BUSY);
 
     const paramsJson = params === null ? null : toPythonJson(params);
-    const nonce = globalThis.crypto.randomUUID();
+    const nonce = randomUuid();
     return new Promise<PythonFunctionCall>((resolve, reject) => {
       this.callResolver = resolve;
       this.callRejecter = reject;

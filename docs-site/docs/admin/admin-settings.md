@@ -69,6 +69,9 @@ Within each tab, settings are grouped by service. Each service group card displa
 | Service Group | Settings | Description |
 |--------------|----------|-------------|
 | Feedback System | Email/Slack feedback toggles, webhook URLs, feedback email addresses | Feedback routing configuration |
+| Server Administration | Server status, admin email, system email sender | Server status and administrative settings |
+
+The **System Email Sender** (`mailFrom`) is the sender of every system email, as an address or as `Name <address>`. Leave it empty to send from the `MAIL_FROM` secret. A save is refused unless the value is one sender on one line; on Amazon SES the address must also be on the domain of the `MAIL_FROM` secret. Changes apply to the next email. Only a full administrator can change it.
 
 ## Special Components
 

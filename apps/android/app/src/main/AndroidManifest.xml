@@ -64,6 +64,10 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Long-press launcher shortcuts (Ask, Capture note, Start quest), routed by kit AppShortcut. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
 
             <!-- Non-production OAuth redirect (OAuthConfiguration.nonProduction). The production App Link
                  (https, autoVerify) is added once the server registers an Android OAuth client. -->

@@ -27,6 +27,7 @@ import com.bike4mind.kit.links.IncomingUri
 import com.bike4mind.kit.links.PendingRoute
 import com.bike4mind.kit.links.Route
 import com.bike4mind.kit.push.PushRoute
+import com.bike4mind.kit.shortcuts.AppShortcut
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -84,6 +85,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        // A launcher shortcut (res/xml/shortcuts.xml) waits through sign-in like a link.
+        AppShortcut.fromAction(intent?.action)?.let { return open(it.route) }
         val uri = intent?.data?.toString() ?: return handlePushTap(intent)
         val graph = (application as B4MApplication).graph.value ?: return
         when (val incoming = IncomingUri.classify(uri, graph.oauth, graph.environment.baseUrl)) {

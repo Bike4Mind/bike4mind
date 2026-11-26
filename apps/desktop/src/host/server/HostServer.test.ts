@@ -132,15 +132,8 @@ const errorOf = (response: HostResponse) => {
 };
 
 describe('HostServer', () => {
-  it('leaves exactly the methods with no runtime backing pending', () => {
-    expect([...pendingHostMethods].sort()).toEqual(
-      ['host/auth/start', 'host/auth/status', 'host/info', 'host/initialize'].sort()
-    );
-  });
-
-  it.each([...pendingHostMethods])('answers pending %s with method not found', async method => {
-    const response = await serve().client().call(method, {});
-    expect(errorOf(response).code).toBe(HOST_ERROR_CODES.methodNotFound);
+  it('serves every protocol method, leaving none pending', () => {
+    expect(pendingHostMethods).toEqual([]);
   });
 
   it('answers an unknown method with method not found', async () => {
@@ -175,6 +168,10 @@ describe('HostServer', () => {
     ['draft/defaults', []],
     ['project/forgetRecent', {}],
     ['project/inspect', { directory: 3 }],
+    ['host/initialize', { clientId: 'c1' }],
+    ['host/info', 'now'],
+    ['host/auth/start', 3],
+    ['host/auth/status', []],
   ];
   it.each(invalidParams)('rejects invalid params for %s without calling the runtime', async (method, params) => {
     const { client, runtime } = serve();
