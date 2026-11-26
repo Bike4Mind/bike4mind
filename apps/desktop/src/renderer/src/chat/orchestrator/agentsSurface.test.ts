@@ -1,8 +1,10 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import { isOrchestratorSession, type ChatSessionSummary } from '@shared/chat';
 import { archivedAgentsOf } from '@shared/spawnTree';
 import { agentStates } from './roster';
 import { agentsSurfaceAvailable } from './agentsSurface';
+import { readSurface } from './orchestratorPrefs';
 
 const NOW = '2026-11-26T00:00:00.000Z';
 
@@ -28,6 +30,7 @@ function surfaceFor(sessions: ChatSessionSummary[], rootId: string, orchestrateC
   return agentsSurfaceAvailable({
     session: sessions.find(candidate => candidate.id === rootId),
     hasAgents: agentStates(sessions, new Map(), rootId).length > 0,
+    hasArchivedAgents: archivedAgentsOf(sessions, rootId).length > 0,
     orchestrateCapable,
   });
 }
@@ -54,9 +57,31 @@ describe('agentsSurfaceAvailable', () => {
     expect(surfaceFor(sessions, 'root')).toBe(true);
   });
 
-  it('does not give it to an ordinary session whose spawned agents were archived', () => {
+  it('keeps it for a session whose agents were started without Orchestrate and then archived', () => {
     const sessions = [session('root'), child('a', 'root', { archived: true })];
-    expect(surfaceFor(sessions, 'root')).toBe(false);
+    expect(surfaceFor(sessions, 'root')).toBe(true);
+    expect(surfaceFor(sessions, 'root', false), 'archived agents need no spawn capability').toBe(true);
+  });
+
+  it('still opens such a session on chat: availability does not pick the view', () => {
+    window.localStorage.clear();
+    expect(surfaceFor([session('root'), child('a', 'root', { archived: true })], 'root')).toBe(true);
+    expect(readSurface('root')).toBe('chat');
+  });
+
+  it('does not give it to a session that never started an agent', () => {
+    expect(
+      surfaceFor(
+        [
+          session('root'),
+          child('side', 'root', {
+            origin: { parentSessionId: 'root', depth: 1, seedPrompt: 'q', kind: 'side-chat' },
+            archived: true,
+          }),
+        ],
+        'root'
+      )
+    ).toBe(false);
   });
 
   it('still shows live agents of any session', () => {
@@ -68,7 +93,14 @@ describe('agentsSurfaceAvailable', () => {
   });
 
   it('is false with no session', () => {
-    expect(agentsSurfaceAvailable({ session: undefined, hasAgents: false, orchestrateCapable: true })).toBe(false);
+    expect(
+      agentsSurfaceAvailable({
+        session: undefined,
+        hasAgents: false,
+        hasArchivedAgents: false,
+        orchestrateCapable: true,
+      })
+    ).toBe(false);
   });
 });
 

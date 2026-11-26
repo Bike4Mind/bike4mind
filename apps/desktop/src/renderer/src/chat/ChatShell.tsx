@@ -165,6 +165,7 @@ import { inTavernDialogue } from './orchestrator/tavern/dialogue';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import { agentsSurfaceAvailable as isAgentsSurfaceAvailable } from './orchestrator/agentsSurface';
+import { archivedAgentsOf } from '@shared/spawnTree';
 import {
   readAmbientHintSeen,
   readIntroSeen,
@@ -915,9 +916,14 @@ export function ChatShell({
     modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
   const delegating = orchestrationSession?.orchestrate === true;
   const hasAgents = spawnedStates.length > 0;
+  const hasArchivedAgents = useMemo(
+    () => activeId !== null && archivedAgentsOf(sessions, activeId).length > 0,
+    [sessions, activeId]
+  );
   const agentsSurfaceAvailable = isAgentsSurfaceAvailable({
     session: orchestrationSession,
     hasAgents,
+    hasArchivedAgents,
     orchestrateCapable,
   });
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
