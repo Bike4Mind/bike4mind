@@ -17,6 +17,7 @@ import {
   LOOP_STATUSES,
   LOOP_TRIGGERS_MAX,
   LOOP_WAKE_MODES,
+  LOOPS_PER_USER_MAX,
   LoopAlarmKind,
   LoopAutoResume,
   LoopCapacityLimit,
@@ -78,7 +79,7 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   }
 
   async listForUser(userId: string): Promise<ILoop[]> {
-    const results = await this.loopModel.find({ userId }).sort({ updatedAt: -1 });
+    const results = await this.loopModel.find({ userId }).sort({ updatedAt: -1 }).limit(LOOPS_PER_USER_MAX);
     return results.map(doc => doc.toJSON());
   }
 

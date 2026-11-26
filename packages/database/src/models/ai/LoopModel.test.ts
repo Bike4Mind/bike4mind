@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
+import { LOOPS_PER_USER_MAX } from '@bike4mind/common';
 import { Loop, loopRepository } from './LoopModel';
 
 const USER = 'user-1';
@@ -74,6 +75,20 @@ describe('LoopRepository', () => {
     await expect(create({ budgetCreditsPerDay: 0 })).rejects.toThrow(/budgetCreditsPerDay/);
     await expect(create({ budgetCreditsPerDay: -1 })).rejects.toThrow(/budgetCreditsPerDay/);
     expect((await create({ budgetCreditsPerDay: 0.5 })).budgetCreditsPerDay).toBe(0.5);
+  });
+
+  it('lists at most LOOPS_PER_USER_MAX loops for a user, newest first', async () => {
+    const base = Date.parse('2026-10-30T00:00:00Z');
+    await Loop.collection.insertMany(
+      Array.from({ length: LOOPS_PER_USER_MAX + 1 }, (_, i) => ({
+        userId: USER,
+        name: `Loop ${i}`,
+        updatedAt: new Date(base + i * 1000),
+      }))
+    );
+    const listed = await loopRepository.listForUser(USER);
+    expect(listed).toHaveLength(LOOPS_PER_USER_MAX);
+    expect(listed[0].name).toBe(`Loop ${LOOPS_PER_USER_MAX}`);
   });
 
   describe('auto-paused loops', () => {
