@@ -1,5 +1,59 @@
 # @bike4mind/services
 
+## 31.1.0
+
+### Minor Changes
+
+- [#8537](https://github.com/Bike4Mind/bike4mind/pull/8537) [`a11c0cf`](https://github.com/Bike4Mind/bike4mind/commit/a11c0cf401247443a6376e5b79d6900a0f86a213) Thanks [@maconard](https://github.com/maconard)! - pin data files to a saved function
+
+- [#8569](https://github.com/Bike4Mind/bike4mind/pull/8569) [`3f00e93`](https://github.com/Bike4Mind/bike4mind/commit/3f00e934992a3492dbb8f47505bd8b067a5bfe27) Thanks [@angelolao](https://github.com/angelolao)! - meter diagnostic calls and isolate recovery failures
+
+- [#8585](https://github.com/Bike4Mind/bike4mind/pull/8585) [`1ce2b37`](https://github.com/Bike4Mind/bike4mind/commit/1ce2b37223ba6af00dfa5de308984cf559947045) Thanks [@jjmarfa](https://github.com/jjmarfa)! - load the at-rest key from one process-wide keyring
+
+- [#8643](https://github.com/Bike4Mind/bike4mind/pull/8643) [`2c94804`](https://github.com/Bike4Mind/bike4mind/commit/2c9480498cd3d2a6b24d23540b628815196f92ab) Thanks [@jebie](https://github.com/jebie)! - record the OAuth client a new account signed up through
+
+- [#8664](https://github.com/Bike4Mind/bike4mind/pull/8664) [`5e541b9`](https://github.com/Bike4Mind/bike4mind/commit/5e541b9abc6595f00af26afc8af83a7a633ba44e) Thanks [@onoya](https://github.com/onoya)! - score email-subdomain signup bursts and instant API keys in the signup risk score
+
+### Patch Changes
+
+- [#8632](https://github.com/Bike4Mind/bike4mind/pull/8632) [`ba9375c`](https://github.com/Bike4Mind/bike4mind/commit/ba9375cba036cb49875994f90f48015561036d55) Thanks [@onoya](https://github.com/onoya)! - stop a quest with no readable message before it reaches the model
+
+- Updated dependencies [[`6afd4ea`](https://github.com/Bike4Mind/bike4mind/commit/6afd4eab8bb90acbfeec78b4eed9058a60198bc2), [`8623a01`](https://github.com/Bike4Mind/bike4mind/commit/8623a0113b7909e3ce148e9396bf6d97c09ab7b4), [`a11c0cf`](https://github.com/Bike4Mind/bike4mind/commit/a11c0cf401247443a6376e5b79d6900a0f86a213), [`3f00e93`](https://github.com/Bike4Mind/bike4mind/commit/3f00e934992a3492dbb8f47505bd8b067a5bfe27), [`1ce2b37`](https://github.com/Bike4Mind/bike4mind/commit/1ce2b37223ba6af00dfa5de308984cf559947045), [`12b358b`](https://github.com/Bike4Mind/bike4mind/commit/12b358bacecc2013f9e2bd1374ed58168b36c658), [`17ce359`](https://github.com/Bike4Mind/bike4mind/commit/17ce35993635ab936e44104c60a6a91d1ba2f76a), [`3e0c195`](https://github.com/Bike4Mind/bike4mind/commit/3e0c195286f2ec591f5c33721019a9d424cc25bb), [`ba9375c`](https://github.com/Bike4Mind/bike4mind/commit/ba9375cba036cb49875994f90f48015561036d55), [`8c8733d`](https://github.com/Bike4Mind/bike4mind/commit/8c8733d96c49ee975bc6ae8a9c180315823300a5), [`2c94804`](https://github.com/Bike4Mind/bike4mind/commit/2c9480498cd3d2a6b24d23540b628815196f92ab), [`4d0b544`](https://github.com/Bike4Mind/bike4mind/commit/4d0b544ae129a8a9a822f5e66b40686ad6196983), [`5e541b9`](https://github.com/Bike4Mind/bike4mind/commit/5e541b9abc6595f00af26afc8af83a7a633ba44e)]:
+  - @bike4mind/common@31.1.0
+  - @bike4mind/fab-pipeline@3.3.0
+  - @bike4mind/llm-adapters@2.9.0
+  - @bike4mind/utils@13.1.0
+  - @bike4mind/agents@1.8.7
+  - @bike4mind/auth@1.5.3
+  - @bike4mind/db-core@0.9.6
+  - @bike4mind/mcp@2.2.10
+
+## 31.0.0
+
+### Major Changes
+
+- [#8557](https://github.com/Bike4Mind/bike4mind/pull/8557) [`862fa66`](https://github.com/Bike4Mind/bike4mind/commit/862fa66be1993684c7d6610daef38970456b04fe) Thanks [@wescarda](https://github.com/wescarda)! - remove the v4 QuestMaster chat-plan path and its questmasterplans readers
+
+### Minor Changes
+
+- [#8514](https://github.com/Bike4Mind/bike4mind/pull/8514) [`2e0e2c5`](https://github.com/Bike4Mind/bike4mind/commit/2e0e2c565b9c8e716b3aa56b6455eaa8ccfcda09) Thanks [@choyno](https://github.com/choyno)! - email owners to confirm a payment and when a subscription is unpaid
+
+- [#8539](https://github.com/Bike4Mind/bike4mind/pull/8539) [`ad578f3`](https://github.com/Bike4Mind/bike4mind/commit/ad578f3419df2cccd8152884ab108655aeed9b79) Thanks [@angelolao](https://github.com/angelolao)! - add platform usage accounting prerequisites
+
+### Patch Changes
+
+- [#8527](https://github.com/Bike4Mind/bike4mind/pull/8527) [`c9da20b`](https://github.com/Bike4Mind/bike4mind/commit/c9da20bd0903e95df4333dd797c20c7c8e7397ef) Thanks [@maconard](https://github.com/maconard)! - replace six dependencies and align desktop versions
+
+- Updated dependencies [[`c95cf18`](https://github.com/Bike4Mind/bike4mind/commit/c95cf18807f9f81a93fd018314fb6189e72226b1), [`aac27dd`](https://github.com/Bike4Mind/bike4mind/commit/aac27ddd6b392a7464e18a1d986bb818c69788dc), [`47f5337`](https://github.com/Bike4Mind/bike4mind/commit/47f53374181e4612f0c166ca428c85ce44059c8d), [`c9da20b`](https://github.com/Bike4Mind/bike4mind/commit/c9da20bd0903e95df4333dd797c20c7c8e7397ef), [`ad578f3`](https://github.com/Bike4Mind/bike4mind/commit/ad578f3419df2cccd8152884ab108655aeed9b79), [`862fa66`](https://github.com/Bike4Mind/bike4mind/commit/862fa66be1993684c7d6610daef38970456b04fe), [`10bc07d`](https://github.com/Bike4Mind/bike4mind/commit/10bc07dddc658343591617b2dd912b482e65412c)]:
+  - @bike4mind/mcp@2.2.9
+  - @bike4mind/common@31.0.0
+  - @bike4mind/auth@1.5.2
+  - @bike4mind/utils@13.0.0
+  - @bike4mind/agents@1.8.6
+  - @bike4mind/db-core@0.9.5
+  - @bike4mind/fab-pipeline@3.2.5
+  - @bike4mind/llm-adapters@2.8.1
+
 ## 30.1.0
 
 ### Minor Changes

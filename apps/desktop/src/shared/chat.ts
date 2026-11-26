@@ -1053,6 +1053,15 @@ export function orchestratesAgents(session: Pick<ChatSessionMeta, 'orchestrate' 
   return session.orchestrate === true && canSpawnDeeper(session);
 }
 
+/**
+ * Whether this session is an orchestrator, for surfaces that present it as one (Agent View, the
+ * sidebar). Unlike `orchestrate`, which expires with the launch, and the live roster, which empties
+ * as agents are archived, `orchestrator` lasts until the user turns Orchestrate off.
+ */
+export function isOrchestratorSession(session: Pick<ChatSessionMeta, 'orchestrate' | 'orchestrator'>): boolean {
+  return session.orchestrate === true || session.orchestrator === true;
+}
+
 /** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */
 export function isLocalModel(id: string): boolean {
   return id.startsWith('local:');
@@ -1520,6 +1529,11 @@ interface ChatSessionMeta {
    * a session it spawns, and like 'full' approval it lasts one run of the app (SessionStore).
    */
   orchestrate?: boolean;
+  /**
+   * The user made this session an orchestrator: set with `orchestrate` and cleared only when they
+   * turn it off, so it outlives both the launch and the agents. Read it through isOrchestratorSession.
+   */
+  orchestrator?: boolean;
   /** Set when the agent spawned this session rather than the user starting it. */
   origin?: ChatSessionOrigin;
   /** Set on a session imported from Claude; see ChatImportOrigin. */

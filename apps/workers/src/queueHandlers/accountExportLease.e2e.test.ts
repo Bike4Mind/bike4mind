@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   deleteImportPrefix: vi.fn(),
   erase: vi.fn(),
   prefix: vi.fn(),
+  // Callable-function data falls back to the files bucket when no function-data bucket is set.
+  dataPrefix: vi.fn(async () => 0),
   content: vi.fn(),
 }));
 vi.mock('@bike4mind/fab-pipeline', async importActual => ({
@@ -25,7 +27,11 @@ vi.mock('@bike4mind/fab-pipeline', async importActual => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getFilesStorage: () => ({ deletePermanently: h.erase, deletePrefixPermanently: h.prefix }),
+  getFilesStorage: () => ({
+    deletePermanently: h.erase,
+    deletePrefixPermanently: h.prefix,
+    deletePrefix: h.dataPrefix,
+  }),
 }));
 vi.mock('@bike4mind/server-utils/users/purgeAccountContent', () => ({ purgeAccountContent: h.content }));
 vi.mock('@bike4mind/server-utils/users/accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: vi.fn() }));

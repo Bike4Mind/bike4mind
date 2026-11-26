@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } f
 import Box from '@mui/joy/Box';
 import type { ChatApprovalAnswer } from '@shared/chat';
 import type { PendingDecision } from '@shared/pendingDecisions';
+import { hostChat } from '../../../host/hostChat';
 import { DecisionBody } from '../DecisionCard';
 import type { AgentView } from '../roster';
 import { useTreeDecisions } from '../useTreeDecisions';
@@ -447,6 +448,7 @@ function FrontBody({
   if (command) {
     return (
       <CommandAsk
+        sessionId={decision.sessionId}
         command={command}
         colors={colors}
         onOpen={() => onOpenDetails(decision.sessionId)}
@@ -483,12 +485,14 @@ function FrontBody({
 const COLLAPSED_CODE_EM = 7.5;
 
 function CommandAsk({
+  sessionId,
   command,
   colors,
   onOpen,
   onSettled,
   commandKeys,
 }: {
+  sessionId: string;
   command: CommandApproval;
   colors: Look;
   onOpen(): void;
@@ -514,7 +518,7 @@ function CommandAsk({
     setSending(true);
     setError(null);
     try {
-      await window.b4m.chat.respondToApproval(command.approvalId, answer);
+      await hostChat.respondToApproval(sessionId, command.approvalId, answer);
       onSettled();
     } catch (caught) {
       setError(errorText(caught));

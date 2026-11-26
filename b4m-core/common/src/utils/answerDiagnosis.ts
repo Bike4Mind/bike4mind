@@ -318,6 +318,19 @@ const SURFACE_LABEL: Record<string, string> = {
 
 const surfaceLabel = (surface: string): string => SURFACE_LABEL[surface] ?? surface;
 
+/**
+ * Retrieval surfaces that are model-called tools. Each knowledge tool stamps its own surface onto
+ * `retrieval`, while `functionCalls` depends on the turn's writer recording it: the agent run path
+ * (persistRunAsQuest.ts) writes `retrieval` and never `functionCalls`, which then reads back as
+ * Mongoose's empty-array default. The Tools row reads these so such a turn is not reported as having run no tools.
+ */
+const KNOWLEDGE_TOOL_SURFACES: ReadonlySet<string> = new Set(['knowledgeBaseSearch', 'knowledgeBaseRetrieve']);
+
+const knowledgeToolSurfaces = (promptMeta: PromptMeta): string[] =>
+  (promptMeta.retrieval?.surfaces ?? []).filter(s => KNOWLEDGE_TOOL_SURFACES.has(s));
+
+const capitalize = (text: string): string => (text ? `${text[0].toUpperCase()}${text.slice(1)}` : text);
+
 const joinLabels = (labels: string[]): string =>
   labels.length <= 1 ? (labels[0] ?? '') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
 
@@ -500,6 +513,18 @@ function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
   const label = 'Tools';
   const calls = promptMeta.functionCalls;
 
+  if (!calls?.length) {
+    const toolSurfaces = knowledgeToolSurfaces(promptMeta);
+    if (toolSurfaces.length > 0) {
+      return {
+        id: 'tools',
+        label,
+        status: 'ok',
+        detail: `${capitalize(joinLabels(toolSurfaces.map(surfaceLabel)))} ran this turn; no per-call detail was recorded.`,
+      };
+    }
+  }
+
   if (!calls) {
     return { id: 'tools', label, status: 'unknown', detail: 'No tool-call detail was recorded for this turn.' };
   }
@@ -533,7 +558,7 @@ function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
         status: allFailed ? 'fail' : 'warn',
         detail: allFailed
           ? `${failed.length === 1 ? 'The only tool call' : `All ${failed.length} tool calls`} failed${named}: ${sentence}`
-          : `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} failed${named}: ${sentence} ${successPhrase[0].toUpperCase()}${successPhrase.slice(1)} and the model replied with what it got.`,
+          : `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} failed${named}: ${sentence} ${capitalize(successPhrase)} and the model replied with what it got.`,
         remedy: allFailed
           ? 'The service behind the tool did not respond in time; this is usually transient, so retry the question.'
           : 'Retry if the answer seems incomplete; a timeout is usually transient.',

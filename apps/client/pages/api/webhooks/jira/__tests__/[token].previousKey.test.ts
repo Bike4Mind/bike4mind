@@ -2,7 +2,7 @@
 import crypto from 'crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
+import { encryptSecret, generateEncryptionKey, configureSecretsAtRest } from '@bike4mind/utils/security';
 
 const h = vi.hoisted(() => ({
   config: {} as { SECRET_ENCRYPTION_KEY?: string; SECRET_ENCRYPTION_KEY_PREVIOUS?: string },
@@ -66,6 +66,7 @@ describe('POST /api/webhooks/jira/[token] with a rotated encryption key', () => 
     previousKey = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY = currentKey;
     h.config.SECRET_ENCRYPTION_KEY_PREVIOUS = previousKey;
+    configureSecretsAtRest(h.config.SECRET_ENCRYPTION_KEY, h.config.SECRET_ENCRYPTION_KEY_PREVIOUS);
     h.body = JSON.stringify({ webhookEvent: 'jira:issue_updated' });
     h.findSubscriptions.mockResolvedValue([]);
   });
@@ -112,6 +113,7 @@ describe('POST /api/webhooks/jira/[token] with a rotated encryption key', () => 
 
   it('returns a configuration error when no previous key is configured', async () => {
     h.config.SECRET_ENCRYPTION_KEY_PREVIOUS = undefined;
+    configureSecretsAtRest(h.config.SECRET_ENCRYPTION_KEY, h.config.SECRET_ENCRYPTION_KEY_PREVIOUS);
     h.findConfig.mockResolvedValue({
       id: 'cfg-no-previous-key',
       enabled: true,

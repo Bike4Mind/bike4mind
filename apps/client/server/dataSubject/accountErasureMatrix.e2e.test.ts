@@ -504,6 +504,8 @@ describe.each([
 
     expect(await erasureRegistry.audit(subject)).toEqual(EMPTY_AUDIT);
     await expectSeededOutcomes(subject, seeded);
+    expect(seeded.some(row => row.model === 'OAuthClientSignIn' && row.outcome === 'deleted')).toBe(true);
+    expect(await raw('OAuthClientSignIn').countDocuments({ userId: subject.userId })).toBe(0);
     expect(await raw('User').countDocuments({ _id: new ObjectId(subject.userId) })).toBe(0);
 
     const records = await raw('ErasureRecord')

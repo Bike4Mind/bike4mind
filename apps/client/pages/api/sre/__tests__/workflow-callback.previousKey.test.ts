@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
+import { encryptSecret, generateEncryptionKey, configureSecretsAtRest } from '@bike4mind/utils/security';
 
 const REPO = 'acme/app';
 const TOKEN = 'callback-token-fixture';
@@ -91,6 +91,7 @@ describe('POST /api/sre/workflow-callback with a token stored under the previous
     previousKey = generateEncryptionKey();
     mocks.config.SECRET_ENCRYPTION_KEY = generateEncryptionKey();
     mocks.config.SECRET_ENCRYPTION_KEY_PREVIOUS = previousKey;
+    configureSecretsAtRest(mocks.config.SECRET_ENCRYPTION_KEY, mocks.config.SECRET_ENCRYPTION_KEY_PREVIOUS);
     mocks.storedToken = encryptSecret(TOKEN, previousKey);
     mocks.getSettingsValue.mockResolvedValue({});
     mocks.findFullById.mockResolvedValue({ repoSlug: REPO, affectedUserIds: ['user-1'] });

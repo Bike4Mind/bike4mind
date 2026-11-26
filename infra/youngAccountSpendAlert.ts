@@ -1,6 +1,7 @@
 /**
  * Young-account spend alert: an hourly job that names the accounts behind young-account spend and
- * applies the admin-setting threshold overrides to the page and warn alarms from infra/llmSpend.ts.
+ * applies the admin-setting threshold overrides to the page and warn alarms from infra/llmSpend.ts and
+ * the hourly provider-reported spend alarms from infra/providerSpend.ts.
  *
  * Lives beside the alarms rather than in infra/cron.ts because it depends on them: llmSpend.ts
  * reaches infra/web.ts (through dlqAlarms.ts and llmSpendLogGroups.ts), and web.ts imports
@@ -13,6 +14,7 @@ import { lambdaVpc } from './vpc';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 import { youngAccountSpendAlarms } from './llmSpend';
+import { providerReportedSpendAlarms } from './providerSpend';
 
 const youngAccountSpendAlertMention = alarmSlackMentionFunctionArgs();
 // The job rewrites these two alarms' thresholds from admin settings (youngAccountSpendAlarmThresholds.ts).
@@ -32,6 +34,23 @@ const youngAccountSpendAlarmArgs =
         ],
       }
     : { environment: { YOUNG_ACCOUNT_SPEND_ALARM_NAME: '', YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: '' }, permissions: [] };
+// And these from admin settings too (providerSpendAlarmThresholds.ts); the poller that feeds them has no Mongo access.
+const providerSpendAlarmList = Object.values(providerReportedSpendAlarms);
+const providerSpendAlarmArgs = {
+  environment: {
+    PROVIDER_SPEND_ALARM_NAME_OPENAI: providerReportedSpendAlarms.openai?.name ?? '',
+    PROVIDER_SPEND_ALARM_NAME_ANTHROPIC: providerReportedSpendAlarms.anthropic?.name ?? '',
+  },
+  permissions:
+    providerSpendAlarmList.length > 0
+      ? [
+          {
+            actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm'],
+            resources: providerSpendAlarmList.map(alarm => alarm.arn),
+          },
+        ]
+      : [],
+};
 const youngAccountSpendAlert =
   runsScheduledJobs && youngAccountSpendAlertDeadLetter
     ? new sst.aws.Cron('youngAccountSpendAlert', {
@@ -48,12 +67,14 @@ const youngAccountSpendAlert =
             YOUNG_ACCOUNT_SPEND_ALERT_CREDITS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_CREDITS || '',
             YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS || '',
             ...youngAccountSpendAlarmArgs.environment,
+            ...providerSpendAlarmArgs.environment,
             ...youngAccountSpendAlertMention.environment,
           },
           permissions: [
             youngAccountSpendAlertDeadLetter.sendPermission,
             ...youngAccountSpendAlertMention.permissions,
             ...youngAccountSpendAlarmArgs.permissions,
+            ...providerSpendAlarmArgs.permissions,
           ],
           transform: youngAccountSpendAlertDeadLetter.functionTarget,
           logging: {

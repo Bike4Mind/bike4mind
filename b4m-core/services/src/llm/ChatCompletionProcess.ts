@@ -6,6 +6,9 @@ import {
 } from '@bike4mind/utils/embeddingProviders';
 import {
   AiAccessRefusedError,
+  EmptyConversationError,
+  hasReadableConversationMessage,
+  isEmptyConversationError,
   type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
@@ -166,6 +169,7 @@ import {
   isLlmTimeoutError,
   isKeepaliveStreamTimeout,
   isOutputBudgetExhaustedError,
+  isHiddenReasoningOnlyEmptyError,
   isStreamEndedWithoutFinishError,
   type OutputBudgetExhaustedError,
   type ICompletionOptionTools,
@@ -408,6 +412,9 @@ export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Pl
 // The fault is ours, not the user's credits, so it must not read like their balance ran out.
 export const PROVIDER_SPEND_LIMIT_REPLY =
   'This model is temporarily unavailable on our side. Please choose a different model or try again later.';
+/** Final reply when the turn has no user or assistant message a model can read (e.g. a blank prompt). */
+export const EMPTY_CONVERSATION_REPLY =
+  'This message has no content the model can read. Type a message or attach a file, then send it again.';
 
 /** Final reply when every allowlisted model failed a substituted turn; the provider's own wording would name the substitute. */
 export const MODEL_UNAVAILABLE_ERROR_REPLY =
@@ -419,6 +426,10 @@ export const MODEL_UNAVAILABLE_ERROR_REPLY =
  */
 export const OUTPUT_BUDGET_EXHAUSTED_REPLY =
   'The model used its whole output budget reasoning before it could answer. Raise the max tokens setting (max_tokens in the API), or use the model default.';
+
+/** Final reply when the model ended its turn after hidden reasoning only, through its retry and any fallback. */
+export const HIDDEN_REASONING_ONLY_EMPTY_REPLY =
+  'The model finished thinking but returned no answer. Please try sending your message again.';
 
 /** Same failure when the server chose the budget (voice, or an API call that sent no `max_tokens`): nothing for the user to raise. */
 export const OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY =
@@ -4963,6 +4974,12 @@ export class ChatCompletionProcess {
         quest.promptMeta!.context!.tokensBySource = tokensBySource;
       }
 
+      // Every backend refuses a conversation with nothing readable in it (a blank prompt with no
+      // history or attachments). Refuse here, before any credit is reserved, instead of as a provider error.
+      if (!hasReadableConversationMessage(messages)) {
+        throw new EmptyConversationError();
+      }
+
       // Detect and handle context overflow with detailed breakdown.
       // Measured counts only: the estimator assumes 3.5 chars/token against prose that really runs
       // ~6, so it over-counts prose by up to ~1.7x. Rejecting a turn on that figure would fail
@@ -5732,6 +5749,7 @@ export class ChatCompletionProcess {
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
       let streamEndedWithoutFinishRetried = false;
+      let hiddenReasoningOnlyRetried = false;
       // A timed-out stream rejects before reporting usage and the next attempt resets
       // actualTokenUsage, so the usage the provider billed for it is recorded here as COGS only:
       // when the loop moves on, and when the timeout ends the turn (nothing else settles it then).
@@ -6247,13 +6265,15 @@ export class ChatCompletionProcess {
             if (lastError instanceof UserApiKeyRejectedError) {
               // The user's own saved key, not ours: an expected user-side outcome, logged once here.
               logger.warn('[User API Key] Provider rejected the user-supplied API key', lastError.logFields);
-            } else if (isExpectedCompletionError(lastError)) {
-              // Already warned by the backend or the attempt summary below.
+            } else if (isExpectedCompletionError(lastError) || isEmptyConversationError(lastError)) {
+              // Already warned by the backend or the attempt summary below; an empty conversation is
+              // settled at warn by the outer catch.
             } else if (
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
               lastError instanceof ResponsesStreamTruncatedError ||
-              isOutputBudgetExhaustedError(lastError)
+              isOutputBudgetExhaustedError(lastError) ||
+              isHiddenReasoningOnlyEmptyError(lastError)
             ) {
               logger.warn(lastError);
             } else if (isProviderSpendLimitError(lastError)) {
@@ -6452,6 +6472,32 @@ export class ChatCompletionProcess {
 
               turnTiming.recordRetry(lastError, EMPTY_STREAM_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, EMPTY_STREAM_RETRY_DELAY_MS + jitter));
+
+              resetStreamStateForRetry();
+
+              continue;
+            }
+
+            // A turn that ended normally after hidden reasoning only: usually a one-off sampling
+            // outcome, so one same-model retry, then the fallback chain. The discarded attempt is not
+            // settled, so the retry is not billed twice.
+            if (isHiddenReasoningOnlyEmptyError(lastError) && !hiddenReasoningOnlyRetried) {
+              hiddenReasoningOnlyRetried = true;
+              const HIDDEN_REASONING_RETRY_DELAY_MS = 1000;
+              const jitter = Math.floor(Math.random() * 500);
+
+              logger.info(
+                `[Hidden Reasoning Retry] ${currentModel.id} returned only hidden reasoning, retrying once in ${HIDDEN_REASONING_RETRY_DELAY_MS + jitter}ms`
+              );
+
+              this.sendStatusUpdate(quest, 'The model returned no answer, retrying...', { statusAt: new Date() });
+
+              turnTiming.recordRetry(
+                lastError,
+                HIDDEN_REASONING_RETRY_DELAY_MS + jitter,
+                this.ledgerModel(currentModel).id
+              );
+              await new Promise(resolve => setTimeout(resolve, HIDDEN_REASONING_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
 
@@ -8108,6 +8154,15 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
+      } else if (isHiddenReasoningOnlyEmptyError(err)) {
+        // Error, not warn: this survived a same-model retry and the fallback chain. Each earlier
+        // occurrence was warned in the attempt loop.
+        logger.error(`[Hidden Reasoning Only] Quest ${questId}: ${err.message}`);
+        setErrorReply(HIDDEN_REASONING_ONLY_EMPTY_REPLY);
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
       } else if (err instanceof Error && isToolPairingError(err)) {
         // User-friendly error message instead of stuck spinner
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
@@ -8135,6 +8190,15 @@ export class ChatCompletionProcess {
         // Expected user-side outcome, already warned once in the attempt loop. Settled rather than
         // rethrown, so /process logs no processing failure and emits no ProcessingFailed metric.
         setErrorReply(userApiKeyRejectedReply(err.provider));
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (isEmptyConversationError(err)) {
+        // Caller input (nothing readable to send), so warn, not error: it must not page. Thrown by the
+        // pre-flight guard, or by a backend sanitizer as a backstop. Content-free by construction.
+        logger.warn('[Empty Conversation] Request refused: no readable user or assistant message', { questId });
+        setErrorReply(EMPTY_CONVERSATION_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

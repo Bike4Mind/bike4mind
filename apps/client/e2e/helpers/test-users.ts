@@ -35,7 +35,7 @@ interface TestUsers {
   inviteCode?: TestInviteCode;
 }
 
-const AUTH_DIR = path.resolve(__dirname, '../.auth');
+export const AUTH_DIR = path.resolve(__dirname, '../.auth');
 const CORE_DATA_PATH = path.resolve(AUTH_DIR, 'core-data.json');
 const TEST_RUN_ID_PATH = path.resolve(AUTH_DIR, 'test-run-id');
 

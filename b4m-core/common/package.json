@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/common",
-  "version": "30.0.0",
+  "version": "31.1.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -67,6 +67,16 @@
       "require": {
         "types": "./dist/modelHub/index.d.cts",
         "default": "./dist/modelHub/index.cjs"
+      }
+    },
+    "./status": {
+      "import": {
+        "types": "./dist/status/index.d.mts",
+        "default": "./dist/status/index.mjs"
+      },
+      "require": {
+        "types": "./dist/status/index.d.cts",
+        "default": "./dist/status/index.cjs"
       }
     },
     "./types/entities/RapidReplyTypes": {

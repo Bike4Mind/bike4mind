@@ -1,23 +1,12 @@
 import { FC, useCallback, useRef, useState } from 'react';
-import {
-  Box,
-  Button,
-  Card,
-  Chip,
-  CircularProgress,
-  FormControl,
-  FormHelperText,
-  Input,
-  Stack,
-  Switch,
-  Typography,
-} from '@mui/joy';
+import { Box, Button, Card, Chip, FormControl, FormHelperText, Input, Stack, Switch, Typography } from '@mui/joy';
 import {
   useSetTutorialModule,
   useTutorialAnchorChoices,
   useTutorialModules,
 } from '@client/app/hooks/tutorials/useTutorialModules';
 import type { TutorialStepRegistry } from '../types';
+import { EmptyState, ErrorState, LoadingState } from '@client/app/components/admin/shared';
 import TutorialOverrideEditor from './TutorialOverrideEditor';
 
 const REASON_MAX = 500;
@@ -68,15 +57,20 @@ const TutorialModulesCard: FC<Props> = ({ apiBase, owner, steps }) => {
         <FormHelperText>Required before a switch moves. It is kept with the change.</FormHelperText>
       </FormControl>
       {modules.isLoading ? (
-        <CircularProgress size="sm" />
+        <LoadingState label="Loading tutorial modules" />
       ) : modules.isError ? (
-        <Typography level="body-sm" color="danger">
-          Could not read the tutorial modules.
-        </Typography>
+        <ErrorState
+          message="Could not read the tutorial modules."
+          onRetry={() => void modules.refetch()}
+          retrying={modules.isFetching}
+        />
       ) : (modules.data ?? []).length === 0 ? (
-        <Typography level="body-sm" sx={{ color: 'text.tertiary' }} data-testid="tutorial-modules-empty">
-          No tutorials are registered here yet.
-        </Typography>
+        // Modules are registered in code, so there is no next step to offer here.
+        <EmptyState
+          title="No tutorials are registered here yet"
+          description="A tutorial module shows up here once the code registers it."
+          action={null}
+        />
       ) : (
         <Stack gap={1}>
           {(modules.data ?? []).map(row => (

@@ -25,11 +25,16 @@ export { getClientConfigContract, getPublicClientConfigContract } from './contra
 export { approvePendingActionContract, denyPendingActionContract } from './contracts/pendingActions.contract';
 export {
   composeBriefContract,
+  composeFollowUpBriefContract,
   listBriefsContract,
   getBriefContract,
   getBriefScheduleContract,
   putBriefScheduleContract,
+  getBusyBlocksContract,
+  putBusyBlocksContract,
   replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './contracts/briefs.contract';
 export { createDelegationContract, getDelegationContract } from './contracts/delegations.contract';

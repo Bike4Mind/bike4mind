@@ -1,5 +1,25 @@
 # @bike4mind/mcp
 
+## 2.2.10
+
+### Patch Changes
+
+- Updated dependencies [[`6afd4ea`](https://github.com/Bike4Mind/bike4mind/commit/6afd4eab8bb90acbfeec78b4eed9058a60198bc2), [`8623a01`](https://github.com/Bike4Mind/bike4mind/commit/8623a0113b7909e3ce148e9396bf6d97c09ab7b4), [`a11c0cf`](https://github.com/Bike4Mind/bike4mind/commit/a11c0cf401247443a6376e5b79d6900a0f86a213), [`3f00e93`](https://github.com/Bike4Mind/bike4mind/commit/3f00e934992a3492dbb8f47505bd8b067a5bfe27), [`12b358b`](https://github.com/Bike4Mind/bike4mind/commit/12b358bacecc2013f9e2bd1374ed58168b36c658), [`17ce359`](https://github.com/Bike4Mind/bike4mind/commit/17ce35993635ab936e44104c60a6a91d1ba2f76a), [`3e0c195`](https://github.com/Bike4Mind/bike4mind/commit/3e0c195286f2ec591f5c33721019a9d424cc25bb), [`ba9375c`](https://github.com/Bike4Mind/bike4mind/commit/ba9375cba036cb49875994f90f48015561036d55), [`8c8733d`](https://github.com/Bike4Mind/bike4mind/commit/8c8733d96c49ee975bc6ae8a9c180315823300a5), [`2c94804`](https://github.com/Bike4Mind/bike4mind/commit/2c9480498cd3d2a6b24d23540b628815196f92ab), [`4d0b544`](https://github.com/Bike4Mind/bike4mind/commit/4d0b544ae129a8a9a822f5e66b40686ad6196983), [`5e541b9`](https://github.com/Bike4Mind/bike4mind/commit/5e541b9abc6595f00af26afc8af83a7a633ba44e)]:
+  - @bike4mind/common@31.1.0
+  - @bike4mind/fab-pipeline@3.3.0
+
+## 2.2.9
+
+### Patch Changes
+
+- [#8451](https://github.com/Bike4Mind/bike4mind/pull/8451) [`c95cf18`](https://github.com/Bike4Mind/bike4mind/commit/c95cf18807f9f81a93fd018314fb6189e72226b1) Thanks [@jjmarfa](https://github.com/jjmarfa)! - log the stdio MCP servers through the stderr sink
+
+- [#8527](https://github.com/Bike4Mind/bike4mind/pull/8527) [`c9da20b`](https://github.com/Bike4Mind/bike4mind/commit/c9da20bd0903e95df4333dd797c20c7c8e7397ef) Thanks [@maconard](https://github.com/maconard)! - replace six dependencies and align desktop versions
+
+- Updated dependencies [[`aac27dd`](https://github.com/Bike4Mind/bike4mind/commit/aac27ddd6b392a7464e18a1d986bb818c69788dc), [`47f5337`](https://github.com/Bike4Mind/bike4mind/commit/47f53374181e4612f0c166ca428c85ce44059c8d), [`c9da20b`](https://github.com/Bike4Mind/bike4mind/commit/c9da20bd0903e95df4333dd797c20c7c8e7397ef), [`ad578f3`](https://github.com/Bike4Mind/bike4mind/commit/ad578f3419df2cccd8152884ab108655aeed9b79), [`862fa66`](https://github.com/Bike4Mind/bike4mind/commit/862fa66be1993684c7d6610daef38970456b04fe), [`10bc07d`](https://github.com/Bike4Mind/bike4mind/commit/10bc07dddc658343591617b2dd912b482e65412c)]:
+  - @bike4mind/common@31.0.0
+  - @bike4mind/fab-pipeline@3.2.5
+
 ## 2.2.8
 
 ### Patch Changes

@@ -1,4 +1,4 @@
-import { KeepCommandResponseAction } from '@bike4mind/common';
+import { KeepCommandResponseAction, receivesUserFanout } from '@bike4mind/common';
 import { Connection } from '@bike4mind/database/social';
 import { withWebSocketContext, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
@@ -37,6 +37,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const connection = await Connection.findOne({ connectionId });
   if (!connection) {
     logger.error(`[KEEP_CMD_RESP] Unknown connectionId: ${connectionId}`);
+    return { statusCode: 200 };
+  }
+  // Only a socket that receives keep_command (see sendToClient) may answer one.
+  if (!receivesUserFanout(connection)) {
+    logger.warn(`[KEEP_CMD_RESP] Dropping relay for request ${requestId}: sender key lacks the scope`);
     return { statusCode: 200 };
   }
 

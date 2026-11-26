@@ -126,6 +126,10 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
     shape: 'aws.appautoscaling.Policy',
     reason: 'Desired-count rule for an inventoried service, no compute of its own.',
   },
+  {
+    shape: 'aws.appautoscaling.ScheduledAction',
+    reason: 'Timed task-count bounds for an inventoried preview service, no compute of its own.',
+  },
   { shape: 'aws.cloudwatch.Dashboard', reason: 'Observability view, no compute.' },
   { shape: 'aws.cloudwatch.LogMetricFilter', reason: 'Metric extraction feeding alarms, no compute.' },
   {
@@ -164,6 +168,7 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   },
   { shape: 'aws.s3.Bucket', reason: 'Storage only, no compute trigger.' },
   { shape: 'aws.s3.BucketPublicAccessBlock', reason: 'Storage access setting for the aws.s3.Bucket, no compute.' },
+  { shape: 'aws.s3.BucketCorsConfiguration', reason: 'Browser access setting for the aws.s3.Bucket, no compute.' },
   { shape: 'aws.s3.BucketPolicy', reason: 'IAM grant for the aws.s3.Bucket, no compute.' },
   { shape: 'sst.aws.Vpc', reason: 'Network plumbing.' },
   { shape: 'sst.aws.Cluster', reason: 'Container host for inventoried sst.aws.Service declarations.' },
@@ -179,6 +184,8 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   },
   { shape: 'aws.acm.Certificate', reason: 'TLS certificate for a hosted load balancer listener, no compute.' },
   { shape: 'aws.acm.CertificateValidation', reason: 'Waits for the certificate above to be issued, no compute.' },
+  { shape: 'aws.lb.TargetGroup', reason: 'Load balancer target for an inventoried sst.aws.Service, no compute.' },
+  { shape: 'aws.lb.ListenerRule', reason: 'Load balancer routing to an inventoried sst.aws.Service, no compute.' },
   { shape: 'aws.servicediscovery.Service', reason: 'Service discovery plumbing.' },
   { shape: 'aws.servicediscovery.PrivateDnsNamespace', reason: 'Service discovery plumbing.' },
   { shape: 'aws.wafv2.WebAcl', reason: 'Hosted edge protection, no compute.' },

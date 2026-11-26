@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -19,6 +19,8 @@ import {
   useSharedCallableFunctions,
   useShareCallableFunction,
   useStopSharingCallableFunction,
+  fetchCallableFunctionDataFiles,
+  resetCallableFunctionDataCache,
 } from './callableFunctions';
 import { CALLABLE_FUNCTIONS_LIST_QUERY_KEY, CALLABLE_FUNCTIONS_STATUS_QUERY_KEY } from './queryKeys';
 
@@ -373,5 +375,92 @@ describe('callable function error helpers', () => {
     expect(callableFunctionContractUnreadable(axiosError(409, { code: 'contract_unreadable' }))).toBe(true);
     expect(callableFunctionContractUnreadable(axiosError(409, { code: 'breaking_change', changes: [] }))).toBe(false);
     expect(callableFunctionContractUnreadable(new Error('Network Error'))).toBe(false);
+  });
+});
+
+describe('fetchCallableFunctionDataFiles', () => {
+  const bytesOf = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
+  const sha256Of = async (buffer: ArrayBuffer) =>
+    [...new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', buffer))]
+      .map(byte => byte.toString(16).padStart(2, '0'))
+      .join('');
+  const pinOf = async (name: string, text: string) => ({
+    name,
+    sha256: await sha256Of(bytesOf(text)),
+    bytes: text.length,
+  });
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    resetCallableFunctionDataCache();
+    h.get.mockReset();
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reads each file from its signed link, checks its hash, and URL-encodes the name in the link request', async () => {
+    const pin = await pinOf('a b#1.csv', 'x,y\n1,2\n');
+    h.get.mockResolvedValue({ data: { url: 'https://data.example.com/signed' } });
+    fetchMock.mockResolvedValue(new Response(bytesOf('x,y\n1,2\n')));
+
+    const files = await fetchCallableFunctionDataFiles('fn/1', [pin]);
+
+    expect(h.get).toHaveBeenCalledWith('/api/callable-functions/fn%2F1/data/a%20b%231.csv');
+    expect(fetchMock).toHaveBeenCalledWith('https://data.example.com/signed', {
+      credentials: 'omit',
+      cache: 'no-store',
+    });
+    expect(new TextDecoder().decode(files[0]!.bytes)).toBe('x,y\n1,2\n');
+    expect(files[0]!.name).toBe('a b#1.csv');
+  });
+
+  it('refuses bytes that do not match the pinned hash, and does not cache them', async () => {
+    const pin = await pinOf('points.csv', 'x,y\n1,2\n');
+    h.get.mockResolvedValue({ data: { url: 'https://data.example.com/signed' } });
+    fetchMock.mockImplementation(async () => new Response(bytesOf('x,y\n9,9\n')));
+
+    await expect(fetchCallableFunctionDataFiles('fn1', [pin])).rejects.toThrow(
+      'The data file points.csv does not match its pinned hash.'
+    );
+    await expect(fetchCallableFunctionDataFiles('fn1', [pin])).rejects.toThrow('does not match');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('fetches nothing on a repeat run and hands back fresh copies each time', async () => {
+    const pin = await pinOf('points.csv', 'x,y\n1,2\n');
+    h.get.mockResolvedValue({ data: { url: 'https://data.example.com/signed' } });
+    fetchMock.mockImplementation(async () => new Response(bytesOf('x,y\n1,2\n')));
+
+    const first = await fetchCallableFunctionDataFiles('fn1', [pin]);
+    const second = await fetchCallableFunctionDataFiles('fn1', [{ ...pin, name: 'renamed.csv' }]);
+
+    expect(h.get).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second[0]!.bytes).not.toBe(first[0]!.bytes);
+    expect(second[0]!.name).toBe('renamed.csv');
+  });
+
+  it('reads through the app with credentials when the link is same-origin', async () => {
+    const pin = await pinOf('points.csv', 'x,y\n1,2\n');
+    h.get
+      .mockResolvedValueOnce({ data: { url: '/api/callable-functions/fn1/data/points.csv?bytes=1' } })
+      .mockResolvedValueOnce({ data: bytesOf('x,y\n1,2\n') });
+
+    await fetchCallableFunctionDataFiles('fn1', [pin]);
+
+    expect(h.get).toHaveBeenLastCalledWith('/api/callable-functions/fn1/data/points.csv?bytes=1', {
+      responseType: 'arraybuffer',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a refused link read', async () => {
+    const pin = await pinOf('points.csv', 'x,y\n1,2\n');
+    h.get.mockResolvedValue({ data: { url: 'https://data.example.com/signed' } });
+    fetchMock.mockResolvedValue(new Response('denied', { status: 403 }));
+    await expect(fetchCallableFunctionDataFiles('fn1', [pin])).rejects.toThrow('could not be read (403)');
   });
 });

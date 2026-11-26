@@ -5,13 +5,19 @@ import { HOST_ERROR_CODES } from '@shared/hostProtocol';
 import {
   HostServer,
   createInProcessTransport,
+  type HostControl,
   type HostEventSource,
   type HostServerLogger,
   type HostServerRuntime,
 } from '../../host/server';
 import { ConnectionManager, LOCAL_HOST_ID, type HostClientEndpoint } from './ConnectionManager';
 
-export type LocalHost = { runtime: HostServerRuntime; events: HostEventSource; logger: HostServerLogger };
+export type LocalHost = {
+  runtime: HostServerRuntime;
+  events: HostEventSource;
+  logger: HostServerLogger;
+  control?: HostControl;
+};
 
 function endpointFor(contents: WebContents): HostClientEndpoint {
   return {
@@ -26,7 +32,7 @@ function endpointFor(contents: WebContents): HostClientEndpoint {
 /** Registers this machine's runtime as the local host and serves the renderer's host bridge. */
 export function registerHostConnections(local: LocalHost): ConnectionManager {
   const { logger } = local;
-  const server = new HostServer(local.runtime, local.events, logger);
+  const server = new HostServer(local.runtime, local.events, logger, local.control);
   const manager = new ConnectionManager();
   manager.register(LOCAL_HOST_ID, {
     connect: () =>

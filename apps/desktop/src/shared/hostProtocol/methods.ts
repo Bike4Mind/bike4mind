@@ -1,4 +1,5 @@
 import { z, type ZodType } from 'zod';
+import { sessionPageRequestSchema } from '../sessionPage';
 import { eventCursorSchema } from './cursor';
 import { hostProtocolVersionSchema, hostCapabilitiesSchema } from './version';
 import {
@@ -43,7 +44,7 @@ const sessionIdParams = z.object({ sessionId: z.string() });
 const recentFoldersResult = z.object({ folders: z.array(z.object({ path: z.string(), name: z.string() })) });
 
 /** The facts a client shows before archiving a parent; `status` stays a string so a newer host may add one. */
-const archiveConfirmationSchema = z.object({
+export const archiveConfirmationSchema = z.object({
   parentTitle: z.string(),
   finished: z.array(z.object({ id: z.string(), title: z.string() })),
   kept: z.array(z.object({ id: z.string(), title: z.string(), status: z.string() })),
@@ -57,6 +58,7 @@ export const hostErrorData = {
   pathUnavailable: z.object({ path: z.string(), reason: z.string() }),
   processNotFound: z.object({ sessionId: z.string(), processId: z.string() }),
 } as const satisfies Record<string, ZodType>;
+export type HostErrorData<K extends keyof typeof hostErrorData> = z.infer<(typeof hostErrorData)[K]>;
 
 /** Mirrors answerTaskDecision's arguments; an approval's `requestId` is the id respondToApproval takes. */
 const requestRespondParams = z.discriminatedUnion('kind', [
@@ -86,6 +88,16 @@ export const hostMethods = {
   },
   'host/auth/status': { params: noParams, result: z.object({ account: hostAccountSchema.nullable() }) },
   'session/list': { params: noParams, result: z.object({ sessions: z.array(chatSessionSummaryPayloadSchema) }) },
+  // The sidebar's paged view of session/list; see shared/sessionPage.
+  'session/page': {
+    params: sessionPageRequestSchema,
+    result: z.object({
+      sessions: z.array(chatSessionSummaryPayloadSchema),
+      related: z.array(chatSessionSummaryPayloadSchema),
+      nextCursor: z.string().nullable(),
+      total: z.number().int().nonnegative(),
+    }),
+  },
   'session/get': {
     params: z.object({ sessionId: z.string(), viewed: z.boolean().optional() }),
     result: z.object({ session: chatSessionPayloadSchema.nullable(), cursor: eventCursorSchema }),
@@ -116,9 +128,29 @@ export const hostMethods = {
       confirmationRequired: archiveConfirmationSchema.optional(),
     }),
   },
+  // `allowDiscard` lets worktree cleanup discard uncommitted or unpushed work, keeping the branch;
+  // send it only after showing the user what that loses (since 1.2).
   'session/delete': {
-    params: z.object({ sessionId: z.string(), removeWorktree: z.boolean().optional() }),
+    params: z.object({
+      sessionId: z.string(),
+      removeWorktree: z.boolean().optional(),
+      allowDiscard: z.boolean().optional(),
+    }),
     result: emptyResult,
+  },
+  // Deletes `nestedIds` deepest first, then the session; `removeWorktree` is the session's own
+  // worktree and `nestedWorktreeIds` the nested sessions whose worktrees go too; cleanup may discard
+  // work in each, so send it only after showing what that loses. `error` names the first failure,
+  // after which nothing more is deleted (since 1.2).
+  'session/deleteTree': {
+    params: z.object({
+      sessionId: z.string(),
+      nestedIds: z.array(z.string()),
+      removeWorktree: z.boolean().optional(),
+      nestedWorktreeIds: z.array(z.string()).optional(),
+      allowDiscard: z.boolean().optional(),
+    }),
+    result: z.object({ deleted: z.array(z.string()), error: z.string().nullable() }),
   },
   // The host replays events after `after`, then streams live; when it cannot it fails with snapshotRequired.
   'session/subscribe': {
@@ -144,8 +176,9 @@ export const hostMethods = {
   // Directories only, never file contents; an absent path means the host's home directory, and
   // `~` or a relative path is taken from it. A path that is missing, not a directory or not
   // readable fails with pathUnavailable. `truncated` says the entry cap cut the list.
+  // Params are optional since 1.2.
   'fs/browse': {
-    params: z.object({ path: z.string().optional() }),
+    params: z.object({ path: z.string().optional() }).optional(),
     result: z.object({
       path: z.string(),
       parent: z.string().nullable(),

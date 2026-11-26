@@ -10,7 +10,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
     # changes, while still reporting the required CI Complete/Run Tests checks (a
@@ -42,21 +42,14 @@ jobs:
   # Cheap, always runs, so the required checks always have a status to
   # report. Logic + the default exclude list live in the local composite
   # action. Fails open on all three.
-  #
-  # A draft PR reports `deployable` and `docs-changed` as 'false', so it takes the
-  # same skip path as a non-deployable change: the build, test and docs legs skip
-  # (published-dts too, through its `needs: core-build`), and Run Tests / CI
-  # Complete still report green. Marking it ready fires `ready_for_review`, which
-  # re-runs the whole workflow on the real signals. The secret and leak-shape scans
-  # are ungated and still run on drafts.
   changes:
     # Root of the whole DAG.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     outputs:
-      deployable: ${{ github.event.pull_request.draft == true && 'false' || contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || steps.filter.outputs.deployable }}
-      docs-changed: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.docs-changed }}
+      deployable: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || steps.filter.outputs.deployable }}
+      docs-changed: ${{ steps.filter.outputs.docs-changed }}
       published-changed: ${{ steps.filter.outputs.published-changed }}
       changed-files: ${{ steps.changed-files.outputs.files }}
       related-safe: ${{ steps.changed-files.outputs.related-safe }}
@@ -73,11 +66,11 @@ jobs:
       # the range does not resolve, or past 3000 files (job outputs are capped at 1 MB).
       - name: List the PR's changed files
         id: changed-files
-        if: github.event_name == 'pull_request'
+        # An empty list output takes the selector's full-run fallback.
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full')
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          FORCE_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: node scripts/ci-related-tests.mjs diff
 
   # Build the core packages once and publish their dist/ as an artifact. The
@@ -1176,9 +1169,9 @@ jobs:
   # would still claim a runner for a full install + core build + vitest on a superseded SHA -
   # costly where runner slots are the queue bottleneck (see the concurrency note at the top).
   # `needs.core-build.result != 'failure'` rather than an allowlist of success/skipped: a
-  # core-build that ends `cancelled` (runner loss) is not a build failure, and the allowlist
-  # form skipped this job on it while ci-complete only reddens on the literal `failure` - so
-  # the help guards could go missing on a green docs PR. The fallback build covers that case.
+  # core-build that ends `cancelled` (runner loss or timeout) is not a build failure, and the
+  # allowlist form skipped this job on it, so the help guards never ran on that docs change.
+  # The fallback build covers that case; ci-complete reddens on the cancelled core-build itself.
   # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator, not text.
   help-docs:
     name: Help Docs Guards
@@ -1379,7 +1372,7 @@ jobs:
   #
   # Red when ANY CI leg (changes/core-build/repo-guards/secret-scan/lint/test-shards/cli-e2e/help-docs/
   # verify-docs-build/docs-scan-gate/published-dts)
-  # genuinely FAILED. Green when everything succeeded OR was legitimately
+  # failed or timed out. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e and repo-guards, and a skipped
   # required check counts as passing). This surfaces lint/cli-e2e failures, and the
   # typecheck that runs inside the cli-workers shard (none of which are
@@ -1387,13 +1380,17 @@ jobs:
   # required "CI Complete" check instead of letting them pass silently.
   #
   # `!cancelled()` rather than `always()`: in a run cancelled by cancel-in-progress the unfinished
-  # legs end `cancelled`, not the literal `failure`, so `always()` reported a false green on the
-  # required check with nothing tested. Gated this way the job itself ends `cancelled`.
+  # legs end `cancelled`, and `always()` still ran this job there and reported on a run with
+  # nothing tested (a false green back when only `failure` reddened it). Gated this way the job
+  # itself ends `cancelled`.
   #
   # Needs `test-shards` directly, not the `test` aggregator, so the two fan-in
   # jobs wait for a runner side by side instead of in series: under runner
   # contention each serial hop costs ~10-15 min of queue wait for ~5 s of work.
   # The shard assertion below must stay equivalent to the one in `test`.
+  #
+  # The `changes` result check is a guard in case `changes` is ever given an `if:`: aggregating
+  # without selection having run must not report a pass.
   #
   # NOTE: this job name IS the required-check context. Renaming it must happen
   # in lockstep with editing both rulesets, or a required check with no matching
@@ -1415,7 +1412,7 @@ jobs:
       - verify-docs-build
       - docs-scan-gate
       - published-dts
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
@@ -1443,11 +1440,13 @@ jobs:
             echo "::error::Test shards did not all pass; failing the required check."
             exit 1
           fi
-          # A CI leg that genuinely failed flips the check red. Skipped
-          # (non-deployable change, or a PR-only job on a push run) is treated as passing.
+          # Only success or skipped (non-deployable change, or a PR-only job on a push run) passes.
+          # A leg that hits its timeout-minutes or loses its runner ends `cancelled`, not `failure`.
+          # This job is gated on !cancelled(), so the run itself was not cancelled and a `cancelled`
+          # leg here did not finish its work.
           for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$SECRET_SCAN" "$LEAK_SHAPES" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
-            if [ "$r" = "failure" ]; then
-              echo "::error::A CI gate failed; failing the required check."
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "::error::A CI gate ended '$r'; failing the required check."
               exit 1
             fi
           done

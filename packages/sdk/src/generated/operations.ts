@@ -53,6 +53,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/briefs',
   },
+  composeFollowUpBrief: {
+    method: 'POST',
+    path: '/api/v1/briefs/follow-ups',
+  },
   createAgent: {
     method: 'POST',
     path: '/api/v1/agents',
@@ -193,6 +197,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/pending-actions/{questId}/deny',
   },
+  editBriefDecision: {
+    method: 'PATCH',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}',
+  },
   editImage: {
     method: 'POST',
     path: '/api/v1/image-edits',
@@ -260,6 +268,10 @@ export const operations = {
   getBriefSchedule: {
     method: 'GET',
     path: '/api/v1/briefs/schedule',
+  },
+  getBusyBlocks: {
+    method: 'GET',
+    path: '/api/v1/briefs/busy-blocks',
   },
   getClaudeBundleZip: {
     method: 'GET',
@@ -589,6 +601,10 @@ export const operations = {
     method: 'PUT',
     path: '/api/v1/briefs/schedule',
   },
+  putBusyBlocks: {
+    method: 'PUT',
+    path: '/api/v1/briefs/busy-blocks',
+  },
   raiseCompletionRunBudget: {
     method: 'POST',
     path: '/api/v1/completion-runs/{runId}/budget',
@@ -628,6 +644,10 @@ export const operations = {
   rescanSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/rescan',
+  },
+  resolveBriefDecision: {
+    method: 'POST',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}/resolve',
   },
   reviewSkillMarketVersion: {
     method: 'POST',

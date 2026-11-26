@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge, chatStubs } from '../../__fixtures__/chatBackedHostBridge';
+import type { ChatSession } from '@shared/chat';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
@@ -9,6 +11,9 @@ import { TavernView } from './tavern/TavernView';
 import { Aquarium } from './aquarium/Aquarium';
 import { snapshotView } from './snapshotView';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
+
+const sessionReads = () =>
+  chatStubs().getSession as (sessionId: string, viewed?: boolean) => Promise<ChatSession | null>;
 
 const FIXTURE = [
   agentFixture('n', 'needs-you', { credits: 10 }),
@@ -45,6 +50,7 @@ const pressEscape = (init: KeyboardEventInit = {}) =>
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       getHeldRelays: vi.fn().mockResolvedValue([]),
@@ -75,10 +81,15 @@ describe('OrchestratorStage', () => {
   });
 
   describe('empty stage', () => {
-    const renderEmpty = (view: 'tavern' | 'office') =>
+    const renderEmpty = (
+      view: 'tavern' | 'office',
+      extra: { archivedAgents?: Array<{ id: string; title: string }>; presenting?: boolean } = {}
+    ) =>
       themed.render(
         <OrchestratorStage
           agents={[]}
+          archivedAgents={extra.archivedAgents}
+          presenter={extra.presenting ? { on: true, onToggle: vi.fn() } : undefined}
           layout={singlePaneLayout(view)}
           onLayoutChange={onLayoutChange}
           actions={actions}
@@ -97,6 +108,29 @@ describe('OrchestratorStage', () => {
       expect(empty.textContent).toContain(
         'No quests yet. Describe the work and the Innkeeper will split it across agents.'
       );
+    });
+
+    it('keeps the Tavern once every agent is archived, with a way back to each one', async () => {
+      await renderEmpty('tavern', {
+        archivedAgents: [
+          { id: 'a2', title: 'Fix the parser' },
+          { id: 'a1', title: 'Write the docs' },
+        ],
+      });
+      const empty = el('orchestrator-empty-state');
+      expect(empty.querySelector('[data-testid="orchestrator-tavern"]')).not.toBeNull();
+      expect(empty.textContent).toContain('Every quest is done and its agent archived.');
+      expect(el('orchestrator-archived-agents').textContent).toContain('2 archived agents');
+      const buttons = empty.querySelectorAll<HTMLButtonElement>('[data-testid="orchestrator-archived-agent-open-btn"]');
+      expect([...buttons].map(button => button.textContent)).toEqual(['Fix the parser', 'Write the docs']);
+      act(() => buttons[1].click());
+      expect(actions.open).toHaveBeenCalledWith('a1');
+    });
+
+    it('lists no archived agent titles while presenting', async () => {
+      await renderEmpty('tavern', { archivedAgents: [{ id: 'a1', title: 'Secret task' }], presenting: true });
+      expect(el('orchestrator-archived-agents').textContent).toBe('1 archived agent');
+      expect(el('orchestrator-empty-state').textContent).not.toContain('Secret task');
     });
 
     it('renders the Office scene with zero agents and the plain empty line', async () => {
@@ -330,11 +364,11 @@ describe('OrchestratorStage', () => {
 
   it('opens the agent conversation when a table row is clicked, with a fresh reply box per agent', async () => {
     // By id: the Needs-you strip reads the waiting agents' sessions too.
-    vi.mocked(window.b4m.chat.getSession).mockImplementation(async id =>
+    vi.mocked(sessionReads()).mockImplementation(async id =>
       id === 'w2'
         ? ({
             messages: [{ id: 'reply-w2', role: 'assistant', content: 'Working on the second task.' }],
-          } as Awaited<ReturnType<typeof window.b4m.chat.getSession>>)
+          } as ChatSession)
         : null
     );
     await renderStage(FIXTURE);
@@ -344,7 +378,7 @@ describe('OrchestratorStage', () => {
     expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
     expect(el('orchestrator-peek-conversation').contains(el('chat-message-assistant'))).toBe(true);
     expect(el('chat-message-assistant').textContent).toContain('Working on the second task.');
-    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2', false);
+    expect(sessionReads()).toHaveBeenCalledWith('w2');
     expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value, 'draft is per agent').toBe('');
   });
 
@@ -445,7 +479,7 @@ describe('OrchestratorStage', () => {
         onStreamEvent: vi.fn(() => () => undefined),
         onQueueChanged: vi.fn(() => () => undefined),
       };
-      (window as unknown as { b4m: unknown }).b4m = { chat };
+      (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
       await renderSettled([agentFixture('n', 'needs-you'), agentFixture('w', 'working')]);
       const card = el('orchestrator-needs-you-card');
       expect(card.hasAttribute('data-ambient-quiet')).toBe(true);

@@ -8,7 +8,7 @@
  */
 
 import { agentExecutionRepository, sessionRepository, type AgentExecutionStatus } from '@bike4mind/database';
-import type { IAgentStep } from '@bike4mind/common';
+import { planStepProgress, type IAgentStep, type PlanStepProgress } from '@bike4mind/common';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 import { toUserFacingFailureMessage } from '@bike4mind/server-utils/utils/agentFailureMessage';
 
@@ -24,6 +24,8 @@ export type AgentExecutionTrace = {
   error: string | null;
   steps: IAgentStep[];
   totalIterations: number | null;
+  /** Null unless the run is working through a captured plan; see `AgentExecutionStepProgressSchema`. */
+  stepProgress: PlanStepProgress | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -88,6 +90,7 @@ export async function loadAgentExecutionTrace(id: string, userId: string): Promi
     error: toCallerSafeError(execution.error),
     steps: result?.steps ?? checkpoint?.steps ?? [],
     totalIterations: result?.totalIterations ?? checkpoint?.iteration ?? null,
+    stepProgress: planStepProgress(execution.optiPlanState),
     createdAt: execution.createdAt,
     updatedAt: execution.updatedAt,
   };

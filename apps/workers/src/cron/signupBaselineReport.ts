@@ -4,6 +4,7 @@ import { baselineWindowSchema, DAY_MS } from '@bike4mind/server-utils/analytics/
 import { toUtcDay } from '@bike4mind/server-utils/analytics/externalActiveUsers';
 import { runSignupBaselineReport } from '@bike4mind/server-utils/analytics/signupBaselineReport';
 import { connectDB } from '@bike4mind/db-core';
+import { loadKeyringInBackground } from '@bike4mind/database';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 
@@ -17,6 +18,7 @@ export async function handler() {
     autoIndex: false,
     autoCreate: false,
   });
+  loadKeyringInBackground();
   const { census, ...summary } = await runSignupBaselineReport({
     ...window,
     staffDomains: process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS,

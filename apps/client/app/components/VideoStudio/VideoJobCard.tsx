@@ -7,7 +7,8 @@ import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generat
 import StudioTrailButton from '@client/app/components/Studio/trail/StudioTrailButton';
 import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
 import { isTerminalVideoState } from '@client/app/hooks/data/videoGenerationCache';
-import { useCancelVideoGeneration, useVideoGeneration } from '@client/app/hooks/data/videoGenerations';
+import { useGenerationJob } from '@client/app/hooks/data/generationJobs';
+import { useCancelVideoGeneration } from '@client/app/hooks/data/videoGenerations';
 import { downloadData, downloadUrl } from '@client/app/utils/download';
 
 const STATE_LABELS: Record<GenerationJobState, string> = {
@@ -34,7 +35,7 @@ const videoFileName = (jobId: string, contentType: string | undefined): string =
   `video-${jobId}.${contentType === 'video/webm' ? 'webm' : 'mp4'}`;
 
 const VideoJobCard = ({ jobId, onRestore }: { jobId: string; onRestore?: StudioTrailRestore }) => {
-  const { data: job, isPending, refetch } = useVideoGeneration(jobId);
+  const { data: job, isPending, refetch } = useGenerationJob('video', jobId);
   const cancel = useCancelVideoGeneration();
   const openFiles = useFileBrowser(state => state.setOpen);
   const refresh = useCallback(() => void refetch(), [refetch]);

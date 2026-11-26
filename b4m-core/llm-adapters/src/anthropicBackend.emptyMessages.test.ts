@@ -1,4 +1,4 @@
-import { BadRequestError, ChatModels, type IMessage } from '@bike4mind/common';
+import { ChatModels, EmptyConversationError, type IMessage } from '@bike4mind/common';
 import { describe, expect, it, vi } from 'vitest';
 import { AnthropicBackend } from './anthropicBackend';
 
@@ -33,7 +33,7 @@ describe('AnthropicBackend empty effective messages', () => {
     const { backend, create, logger } = buildBackend();
 
     await expect(complete(backend, messages)).rejects.toMatchObject({
-      constructor: BadRequestError,
+      constructor: EmptyConversationError,
       statusCode: 400,
       message: ERROR_MESSAGE,
     });

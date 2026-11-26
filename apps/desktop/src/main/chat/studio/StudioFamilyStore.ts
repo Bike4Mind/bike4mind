@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { studioIdSchema, studioWorkspaceIdentitySchema, type StudioWorkspaceIdentity } from '@shared/studio';
 import type { ChatSession } from '@shared/chat';
 
+/** Kept beside the conversation files, so a scan of a scope directory must skip it. */
+export const STUDIO_BINDINGS_DIRECTORY = '.studio-bindings';
+
 export class StudioFamilyStore {
   async resolve(
     directory: string,
@@ -53,7 +56,7 @@ export class StudioFamilyStore {
   private async readBinding(directory: string, id: string): Promise<StudioWorkspaceIdentity | null> {
     try {
       return studioWorkspaceIdentitySchema.parse(
-        JSON.parse(await readFile(join(directory, '.studio-bindings', id), 'utf8'))
+        JSON.parse(await readFile(join(directory, STUDIO_BINDINGS_DIRECTORY, id), 'utf8'))
       );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -66,7 +69,7 @@ export class StudioFamilyStore {
     id: string,
     identity: StudioWorkspaceIdentity
   ): Promise<StudioWorkspaceIdentity> {
-    const bindings = join(directory, '.studio-bindings');
+    const bindings = join(directory, STUDIO_BINDINGS_DIRECTORY);
     await mkdir(bindings, { recursive: true });
     const temporary = join(bindings, `${id}.${randomUUID()}.tmp`);
     await writeFile(temporary, JSON.stringify(identity), 'utf8');

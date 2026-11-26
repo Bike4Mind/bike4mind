@@ -8,7 +8,8 @@ import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generat
 import { formatSecondsClock, stripLyricTimestamps } from '@client/app/components/Media/generationFormat';
 import { MediaPlayer, type MediaPlayerFile } from '@client/app/components/Media/MediaPlayer';
 import { isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
-import { useCancelMusicGeneration, useMusicGeneration } from '@client/app/hooks/data/musicGenerations';
+import { useGenerationJob } from '@client/app/hooks/data/generationJobs';
+import { useCancelMusicGeneration } from '@client/app/hooks/data/musicGenerations';
 import { formatCredits } from '@client/app/utils/formatUsd';
 
 const STATE_LABELS: Record<GenerationJobState, string> = {
@@ -57,7 +58,7 @@ const CANCELLABLE_STATES: readonly GenerationJobState[] = ['pending'];
 
 // `onRestore` (Studio Create v2 only) adds the take's trail; chat and legacy Studio cards go without it.
 const MusicJobCard = ({ jobId, onRestore }: { jobId: string; onRestore?: StudioTrailRestore }) => {
-  const { data: job, isPending, refetch } = useMusicGeneration(jobId);
+  const { data: job, isPending, refetch } = useGenerationJob('music', jobId);
   const cancel = useCancelMusicGeneration();
   const openFiles = useFileBrowser(state => state.setOpen);
   const [lyricsOpen, setLyricsOpen] = useState(false);

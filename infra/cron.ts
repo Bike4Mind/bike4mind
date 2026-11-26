@@ -23,6 +23,7 @@ import {
   secopsTriageQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
+import { callableFunctionDataForEraser } from './callableFunctionData';
 import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
 import { appUrlForLambdaEnv, router, routerDistributionId } from './router';
 import {
@@ -272,6 +273,7 @@ const accountDeletionSweep =
           ],
           environment: {
             ...DEFAULT_LAMBDA_ENVIRONMENT,
+            ...callableFunctionDataForEraser.environment,
           },
           permissions: [
             accountDeletionSweepDeadLetter.sendPermission,
@@ -295,6 +297,7 @@ const accountDeletionSweep =
               actions: ['cloudfront:CreateInvalidation'],
               resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
             },
+            ...callableFunctionDataForEraser.permissions,
           ],
           transform: accountDeletionSweepDeadLetter.functionTarget,
           logging: {

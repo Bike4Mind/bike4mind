@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1304 routes: 141 contracted, 11 aliases of another route, 365 with no static caller in `apps/client/app`.
+1311 routes: 145 contracted, 11 aliases of another route, 370 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -59,7 +59,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | business-links | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
-| callable-functions | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
+| callable-functions | 13 | 0 | 0 | 13 | 0 | 0 | 0 |
 | cc-bridge | 6 | 0 | 5 | 0 | 0 | 1 | 4 |
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -118,6 +118,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | personas | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | ping | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | preference-arena | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| preview-sleep | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | projects | 9 | 0 | 9 | 0 | 0 | 0 | 0 |
 | prompts | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | publish | 21 | 0 | 11 | 1 | 6 | 3 | 10 |
@@ -152,7 +153,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 27 | 9 | 0 | 0 | 5 |
-| v1 | 139 | 135 | 120 | 12 | 0 | 7 | 125 |
+| v1 | 143 | 139 | 120 | 16 | 0 | 7 | 130 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -756,6 +757,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/callable-functions` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/calls` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/data` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/data/[name]` | GET, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/examples` | PUT | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/grants` | GET, PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/pin` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
@@ -1067,7 +1070,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/image-jobs` | POST | jwt | - | - | no | - | 1: `components/Session/chatImageSend.ts` |
-| `/api/image-jobs/[id]` | GET | jwt | - | - | no | - | 1: `hooks/data/imageJobs.ts` |
+| `/api/image-jobs/[id]` | GET | jwt | - | - | no | - | 1: `hooks/data/generationJobs.ts` |
 
 ### image-templates
 
@@ -1415,6 +1418,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/preference-arena/next` | GET | jwt | - | - | no | - | 1: `hooks/data/preferenceArena.ts` |
 | `/api/preference-arena/vote` | POST | jwt | - | - | no | - | 1: `hooks/data/preferenceArena.ts` |
 
+### preview-sleep
+
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/preview-sleep` | GET, POST | jwt | - | - | no | - | 1: `components/PreviewSleepBanner.tsx` |
+
 ### projects
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
@@ -1715,7 +1724,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/studio/compositions/[id]/renders` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioRenders.ts` |
 | `/api/studio/files/[id]/lineage` | GET | jwt | - | - | no | - | 1: `hooks/data/fileLineage.ts` |
 | `/api/studio/files/[id]/speech-script` | GET | jwt | - | - | no | - | 1: `hooks/data/speechScript.ts` |
-| `/api/studio/image-jobs` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
+| `/api/studio/image-jobs` | GET, POST | jwt | - | - | no | - | 2: `hooks/data/generationJobs.ts`, `hooks/data/studioImageJobs.ts` |
 | `/api/studio/image-jobs/cutouts` | POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
 
 ### subscribers
@@ -1888,7 +1897,11 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/assistant/instructions/[id]` | DELETE | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs` | GET, POST | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs/[id]` | GET | jwt | - | - | yes | - | 0 |
+| `/api/v1/briefs/[id]/decisions/[decisionId]` | PATCH | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs/[id]/decisions/[decisionId]/reply` | POST | jwt | - | - | yes | - | 0 |
+| `/api/v1/briefs/[id]/decisions/[decisionId]/resolve` | POST | jwt | - | - | yes | - | 0 |
+| `/api/v1/briefs/busy-blocks` | GET, PUT | jwt | - | - | yes | - | 0 |
+| `/api/v1/briefs/follow-ups` | POST | jwt | - | - | yes | - | 0 |
 | `/api/v1/briefs/schedule` | GET, PUT | jwt | - | - | yes | - | 0 |
 | `/api/v1/client-config` | GET | jwt+key | `ai:chat`, `ai:generate`, `me:read` | - | yes | - | 0 |
 | `/api/v1/client-config/public` | GET | handler | - | - | yes | - | 0 |
@@ -1937,7 +1950,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/image-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/studioImageJobs.ts` |
 | `/api/v1/me` | GET | jwt+key | `me:read` | - | yes | - | 0 |
 | `/api/v1/models` | GET | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
-| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
+| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 2: `hooks/data/generationJobs.ts`, `hooks/data/musicGenerations.ts` |
 | `/api/v1/music-generations/[id]` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
 | `/api/v1/music-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/music-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
@@ -1995,8 +2008,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/tools/web-search` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/transcriptions` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/transcriptions/uploads` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
-| `/api/v1/video-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
-| `/api/v1/video-generations/[id]` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
+| `/api/v1/video-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 2: `hooks/data/generationJobs.ts`, `hooks/data/videoGenerations.ts` |
+| `/api/v1/video-generations/[id]` | GET | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/video-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
 | `/api/v1/video-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
 | `/api/v1/voice/sessions` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |

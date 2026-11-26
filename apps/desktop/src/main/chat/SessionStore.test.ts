@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { ChatMessage, ChatProject, ChatReplyStats, ChatSpawnSuggestion } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentMayRetitle, deriveTitle, SessionStore } from './SessionStore';
+import { STUDIO_BINDINGS_DIRECTORY } from './studio/StudioFamilyStore';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { inheritancePolicy } from '@shared/orchestration';
@@ -47,6 +48,13 @@ describe('SessionStore', () => {
     const loaded = await store.get(created.id);
     expect(loaded?.messages).toEqual([]);
     expect(loaded?.historyEnabled).toBeUndefined();
+  });
+
+  it('scans workspace owners past the Studio bindings folder a nested session writes', async () => {
+    const parent = await store.create();
+    await store.create(undefined, { origin: { parentSessionId: parent.id, depth: 1, seedPrompt: 'child' } });
+    expect((await readdir(directory)).filter(name => name.startsWith('.'))).toContain(STUDIO_BINDINGS_DIRECTORY);
+    await expect(store.workspaceOwnersExcept(parent.id)).resolves.toEqual(expect.any(Array));
   });
 
   it('persists per-session local history consent', async () => {
@@ -324,6 +332,31 @@ describe('SessionStore', () => {
       const relaunched = new SessionStore(directory, MODEL);
       expect(await relaunched.get(id)).not.toHaveProperty('orchestrate');
       expect((await relaunched.list())[0]).not.toHaveProperty('orchestrate');
+    });
+
+    it('keeps the orchestrator mark across a relaunch, and clears it only when Orchestrate is turned off', async () => {
+      const { id } = await store.create();
+      expect(await store.setOrchestrate(id, true)).toMatchObject({ orchestrate: true, orchestrator: true });
+      await store.list();
+
+      const relaunched = new SessionStore(directory, MODEL, 'next-launch');
+      expect(await relaunched.get(id)).toMatchObject({ orchestrator: true });
+      expect(await relaunched.get(id)).not.toHaveProperty('orchestrate');
+      expect((await relaunched.list())[0]).toMatchObject({ orchestrator: true });
+
+      expect(await relaunched.setOrchestrate(id, false)).not.toHaveProperty('orchestrator');
+      expect(JSON.parse(await readFile(join(directory, `${id}.json`), 'utf8'))).not.toHaveProperty('orchestrator');
+    });
+
+    it('marks a session saved by an earlier launch with Orchestrate on, before the mark existed', async () => {
+      const { id } = await store.create();
+      const path = join(directory, `${id}.json`);
+      const legacy = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+      await writeFile(path, JSON.stringify({ ...legacy, orchestrate: true, orchestrateLaunch: 'old-launch' }), 'utf8');
+
+      const relaunched = new SessionStore(directory, MODEL, 'next-launch');
+      expect(await relaunched.get(id)).toMatchObject({ orchestrator: true });
+      expect(await relaunched.get(id)).not.toHaveProperty('orchestrate');
     });
 
     it('returns null for a session that does not exist', async () => {

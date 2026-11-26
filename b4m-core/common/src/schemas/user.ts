@@ -217,6 +217,7 @@ export const SELF_VIEW_PASSTHROUGH_FIELDS = {
   referredViaLinkAt: true,
   referralCode: true,
   signupInvite: true,
+  signupClientId: true,
   organizationId: true,
   lastActiveAt: true,
   isOnline: true,
@@ -249,6 +250,10 @@ export const SELF_VIEW_PASSTHROUGH_FIELDS = {
   deletion: true,
   nextBriefAt: true,
   lastBriefStartedAt: true,
+  busyBlocks: true,
+  busyBlocksSyncedAt: true,
+  nextBlockBriefAt: true,
+  lastBlockBriefEnd: true,
   suspensionReasonCategory: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 

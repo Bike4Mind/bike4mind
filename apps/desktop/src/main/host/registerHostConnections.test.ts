@@ -4,7 +4,7 @@ import type { ChatSessionSummary } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { HostEventRelay } from '../../host/server';
 import type { HostEventSink } from '../../host';
-import type { HostServerRuntime } from '../../host/server';
+import type { HostControl, HostServerRuntime } from '../../host/server';
 import { LOCAL_HOST_ID } from './ConnectionManager';
 import { registerHostConnections } from './registerHostConnections';
 
@@ -40,7 +40,7 @@ const silentSink: HostEventSink = {
   loopChanged: () => undefined,
 };
 
-function setUp() {
+function setUp(control?: HostControl) {
   const relay = new HostEventRelay(error => {
     throw error;
   });
@@ -49,7 +49,7 @@ function setUp() {
     service: { eventsSince: () => ({ ok: true as const, events: [] }) },
     eventLog: { cursor: () => ({ epoch: 'e', seq: 0 }) },
   } as unknown as HostServerRuntime;
-  registerHostConnections({ runtime, events: relay, logger: { warn: vi.fn() } });
+  registerHostConnections({ runtime, events: relay, logger: { warn: vi.fn() }, control });
   const request = handlers.get(IPC_CHANNELS.hostRequest);
   if (!request) throw new Error('host:request was not registered');
   return {
@@ -60,6 +60,27 @@ function setUp() {
 
 describe('registerHostConnections', () => {
   beforeEach(() => handlers.clear());
+
+  it('serves host/info from the control it was given', async () => {
+    const control: HostControl = {
+      facts: async () => ({
+        hostId: 'host-from-control',
+        hostName: 'dev-machine',
+        hostVersion: '1.2.3',
+        capabilities: [],
+        platform: 'darwin',
+        homeDirectory: '/Users/dev',
+      }),
+      account: () => null,
+      onAccountChanged: () => () => undefined,
+    };
+    const { request } = setUp(control);
+
+    await expect(request(new FakeWebContents(1), LOCAL_HOST_ID, 'host/info', undefined)).resolves.toMatchObject({
+      ok: true,
+      result: { hostId: 'host-from-control' },
+    });
+  });
 
   it('serves the local host to a window and pushes its notifications to that window', async () => {
     const { request, sink } = setUp();

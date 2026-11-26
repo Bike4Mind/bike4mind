@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Dictation records a short voice note and sends it for transcription. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
 
     <!-- Lets MainActivity find a browser for pages with no native screen (package visibility, Android 11+). -->
     <queries>
@@ -64,6 +65,10 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Long-press launcher shortcuts (Ask, Capture note, Start quest), routed by kit AppShortcut. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
 
             <!-- Non-production OAuth redirect (OAuthConfiguration.nonProduction). The production App Link
                  (https, autoVerify) is added once the server registers an Android OAuth client. -->

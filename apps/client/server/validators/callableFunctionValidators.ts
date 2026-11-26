@@ -36,6 +36,11 @@ export const callableFunctionPatchBodySchema = z.union([
   z.object({ approval: z.enum(MCP_TOOL_APPROVAL_MODES) }).strict(),
 ]);
 
+/** Shape only: the registry checks the name pattern, the owner's access to the file, and the limits. */
+export const callableFunctionDataPinBodySchema = z
+  .object({ fileId: z.string().trim().min(1).max(200), name: z.string().min(1).max(64) })
+  .strict();
+
 /**
  * At most the names of the declared tests to run (the ones a budget left not run); the tests themselves and the
  * contract come from the server's own read of the pinned code.
