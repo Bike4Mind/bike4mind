@@ -735,6 +735,8 @@ export interface ISessionOrigin {
    * client (see redactSessionForClient), so a viewer the session is shared with cannot see it.
    */
   apiKeyId?: string;
+  /** Created by a Slack workflow step; only such notebooks can be named by a later workflow step. */
+  slackWorkflow?: boolean;
 }
 
 /** List filters on top of the existing search/surface/pagination params (see searchOwnSessions). */
