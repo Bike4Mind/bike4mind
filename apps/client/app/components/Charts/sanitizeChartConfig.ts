@@ -44,27 +44,26 @@ export interface SafeChartConfig {
   };
 }
 
-// recharts copies row fields onto SVG elements, so a row key that React or the DOM treats
-// specially must never get through, whatever its value.
-const RESERVED_ROW_KEYS = new Set([
-  '__proto__',
-  'constructor',
-  'prototype',
-  'dangerouslysetinnerhtml',
-  'ref',
-  'key',
-  'style',
-  'classname',
-  'class',
-  'href',
-  'xlinkhref',
-  'xlink:href',
-  'src',
-  'srcset',
-  'action',
-  'formaction',
-  'is',
-]);
+// recharts copies row fields onto SVG elements. Values are already primitives, so only names that
+// make React throw for a primitive, or that touch the prototype, are dropped.
+const RESERVED_ROW_KEYS = new Set(['__proto__', 'constructor', 'prototype', 'dangerouslysetinnerhtml', 'ref', 'style']);
+
+// A React event prop holding a primitive throws when the event fires. Columns that only look
+// like one (onTime, onHand) are kept.
+const isDomEventKey = (key: string): boolean => {
+  if (!/^on[A-Z]/.test(key)) return false;
+  const name = key.replace(/Capture$/, '').toLowerCase();
+  return (
+    name === 'ondoubleclick' || typeof window === 'undefined' || name in window.HTMLElement.prototype || name in window
+  );
+};
+
+const warnedKeys = new Set<string>();
+const warnDroppedKey = (key: string) => {
+  if (warnedKeys.has(key)) return;
+  warnedKeys.add(key);
+  console.warn(`Chart data column "${key}" is not rendered: the name is reserved.`);
+};
 
 const MAX_NESTING = 4;
 const COLOR = /^(?:#[0-9a-f]{3,8}|[a-z]+|(?:rgba?|hsla?)\([\d\s.,%/+-]+\))$/i;
@@ -75,7 +74,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isAllowedRowKey = (key: string): boolean => {
-  return !RESERVED_ROW_KEYS.has(key.toLowerCase()) && !/^on[A-Z]/.test(key);
+  if (!RESERVED_ROW_KEYS.has(key.toLowerCase()) && !isDomEventKey(key)) return true;
+  warnDroppedKey(key);
+  return false;
 };
 
 const finiteNumber = (value: unknown): number | undefined =>

@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { sanitizeChartConfig } from './sanitizeChartConfig';
 
 describe('sanitizeChartConfig', () => {
-  it('drops reserved React and DOM keys from data rows', () => {
+  it('drops keys React rejects with a primitive value and warns once per key', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { data } = sanitizeChartConfig({
       chartType: 'BarChart',
       data: [
@@ -11,13 +12,33 @@ describe('sanitizeChartConfig', () => {
           sales: 10,
           dangerouslySetInnerHTML: { __html: '<img src=x onerror=alert(1)>' },
           onClick: 'alert(1)',
+          onMouseEnterCapture: 'x',
           style: 'background:red',
-          href: 'javascript:alert(1)',
           ref: 'x',
         },
+        { month: 'Feb', sales: 20, style: 'x' },
       ],
     });
-    expect(data).toEqual([{ month: 'Jan', sales: 10 }]);
+    expect(data).toEqual([
+      { month: 'Jan', sales: 10 },
+      { month: 'Feb', sales: 20 },
+    ]);
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('"style"'))).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it('keeps ordinary columns whose names overlap DOM attributes', () => {
+    const row = {
+      class: 'A',
+      key: 'k1',
+      src: 'web',
+      href: 'docs',
+      onTime: 0.9,
+      onHand: 4,
+      action: 'buy',
+      label: 'getUrl()',
+    };
+    expect(sanitizeChartConfig({ chartType: 'BarChart', data: [row] }).data).toEqual([row]);
   });
 
   it('keeps only primitive values, plus nested Treemap children', () => {

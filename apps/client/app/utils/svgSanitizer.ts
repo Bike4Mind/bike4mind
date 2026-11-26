@@ -32,28 +32,48 @@ const SVG_ARTIFACT_TAGS = [
   'image',
   'title',
   'desc',
-  // SMIL animation tags (animate/animateTransform/animateMotion/set) are deliberately
-  // NOT allowed: they can rewrite an <a href> to javascript: at runtime.
+  // SMIL `animate` and `set` are deliberately left out: they can rewrite an <a href> to
+  // javascript: at runtime.
 ];
 
 const URL_ATTRIBUTES = new Set(['href', 'xlink:href', 'src', 'srcset', 'background', 'poster', 'action', 'formaction']);
 
-// Every CSS construct that can make the browser fetch something.
-const CSS_FETCH = /(?:-webkit-image-set|image-set|url)\s*\(([^)]*)\)?|@import/gi;
+// Every CSS construct that can make the browser fetch something. The lookbehind keeps
+// identifiers that merely end in "url" (getUrl(), toDataUrl()) out.
+const CSS_FETCH = /(?<![\w-])(?:-webkit-image-set|image-set|url)\s*\(([^)]*)\)?|@import/gi;
 
 const decodeCssEscapes = (css: string): string =>
   css.replace(/\\([0-9a-f]{1,6})\s?|\\([\s\S])/gi, (_match, hex: string | undefined, char: string | undefined) => {
     if (hex === undefined) return char ?? '';
     const codePoint = parseInt(hex, 16);
-    return codePoint > 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : '�';
+    return codePoint > 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : '\uFFFD';
   });
 
-const isInDocumentOrInline = (target: string): boolean => /^['"]?\s*(?:#|data:)/i.test(target.trim());
+const unquote = (target: string): string => target.trim().replace(/^['"]/, '');
+
+const isInDocumentOrInline = (target: string): boolean => /^(?:#|data:)/i.test(unquote(target));
+
+/**
+ * True for a URL that leaves the current origin. The URL parser drops tab and newline and reads
+ * a leading backslash as a slash, so both are normalised before the check.
+ */
+export const isCrossOriginUrl = (value: string): boolean => {
+  const url = unquote(value).replace(/[\t\n\r]/g, '');
+  return /^[\\/]{2}/.test(url) || (/^[a-z][a-z\d+.-]*:/i.test(url) && !/^data:/i.test(url));
+};
 
 /** True when CSS text would fetch anything other than an in-document (#id) or data: resource. */
-export function cssHasRemoteReference(css: string, { allowImport = false } = {}): boolean {
+export function cssHasRemoteReference(css: string): boolean {
   for (const match of decodeCssEscapes(css).matchAll(CSS_FETCH)) {
-    if (match[0].startsWith('@') ? !allowImport : !isInDocumentOrInline(match[1] ?? '')) return true;
+    if (match[0].startsWith('@') || !isInDocumentOrInline(match[1] ?? '')) return true;
+  }
+  return false;
+}
+
+/** True when CSS text has a url()/image-set() pointing at another origin. */
+export function cssHasCrossOriginReference(css: string): boolean {
+  for (const match of decodeCssEscapes(css).matchAll(CSS_FETCH)) {
+    if (!match[0].startsWith('@') && isCrossOriginUrl(match[1] ?? '')) return true;
   }
   return false;
 }
@@ -122,38 +142,4 @@ export function toSvgImageSource(raw: string): SvgImageSource | null {
     src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`,
     hasIntrinsicWidth: /\swidth="\s*[\d.]+(?:px)?\s*"/i.test(rootTag),
   };
-}
-
-/**
- * mermaid.initialize options that keep diagram labels and directives from adding resource
- * loads. mermaid mounts its output into the page to measure it before render() returns, so
- * this has to apply inside mermaid, ahead of stripRemoteSvgReferences on the result.
- * `secure` replaces mermaid's default list, so the defaults are repeated here.
- */
-export const MERMAID_RESOURCE_CONFIG = {
-  secure: [
-    'secure',
-    'securityLevel',
-    'startOnLoad',
-    'maxTextSize',
-    'suppressErrorRendering',
-    'maxEdges',
-    'dompurifyConfig',
-    'themeCSS',
-    'themeVariables',
-    'fontFamily',
-  ],
-  dompurifyConfig: {
-    FORBID_TAGS: ['img', 'image', 'picture', 'source', 'video', 'audio', 'style', 'link', 'object', 'embed', 'iframe'],
-    FORBID_ATTR: ['style', 'src', 'srcset', 'background', 'poster'],
-  },
-};
-
-/** Throws when a diagram definition would make the rendered SVG fetch an external resource. */
-export function assertNoRemoteDiagramResources(definition: string): void {
-  // Diagram CSS only reaches a rule body (classDef, style), where @import is inert, and themeCSS is
-  // locked by MERMAID_RESOURCE_CONFIG, so "@import" here is label text.
-  if (cssHasRemoteReference(definition, { allowImport: true })) {
-    throw new Error('Diagrams cannot load external images or stylesheets');
-  }
 }

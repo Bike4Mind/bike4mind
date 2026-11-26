@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  assertNoRemoteDiagramResources,
+  cssHasCrossOriginReference,
   cssHasRemoteReference,
+  isCrossOriginUrl,
   sanitizeArtifactSvg,
   toSvgImageSource,
 } from './svgSanitizer';
@@ -97,7 +98,7 @@ describe('cssHasRemoteReference', () => {
     expect(cssHasRemoteReference(css)).toBe(true);
   });
 
-  it.each(['url(#marker)', "url('data:image/png;base64,AA')", 'fill: red', 'Load the src (main) file'])(
+  it.each(['url(#marker)', "url('data:image/png;base64,AA')", 'fill: red', 'Load the src (main) file', 'getUrl()'])(
     'allows %s',
     css => {
       expect(cssHasRemoteReference(css)).toBe(false);
@@ -105,16 +106,37 @@ describe('cssHasRemoteReference', () => {
   );
 });
 
-describe('assertNoRemoteDiagramResources', () => {
-  it('throws for a diagram style that loads a remote image', () => {
-    expect(() => assertNoRemoteDiagramResources('graph TD\n A\n style A fill:url(https://example.com/x)')).toThrow();
+describe('cssHasCrossOriginReference', () => {
+  it.each([
+    'fill:url(https://example.com/x)',
+    'url(//example.com/x)',
+    'url("ht\\\ntps://example.com")',
+    'url(\\\\\\\\example.com/x)',
+    'url(\\/\\/example.com/x)',
+  ])('flags %s', css => {
+    expect(cssHasCrossOriginReference(css)).toBe(true);
   });
 
-  it('accepts @import as label text', () => {
-    expect(() => assertNoRemoteDiagramResources('graph TD\n A["@import rules"]-->B')).not.toThrow();
+  it.each(['A->>B: getUrl()', 'n["new URL(path)"]', 'toDataUrl(canvas)', 'url(#marker)', '@import "a.css"'])(
+    'allows %s',
+    css => {
+      expect(cssHasCrossOriginReference(css)).toBe(false);
+    }
+  );
+});
+
+describe('isCrossOriginUrl', () => {
+  it.each([
+    'https://example.com',
+    '//example.com',
+    '\\\\example.com',
+    'ht\ttps://example.com',
+    ' "HTTP://example.com"',
+  ])('flags %s', url => {
+    expect(isCrossOriginUrl(url)).toBe(true);
   });
 
-  it('accepts a diagram that mentions a URL as label text', () => {
-    expect(() => assertNoRemoteDiagramResources('graph TD\n A["https://example.com/docs"]-->B')).not.toThrow();
+  it.each(['#a', 'data:image/png;base64,AA', 'path/to.png', '/static/a.png'])('allows %s', url => {
+    expect(isCrossOriginUrl(url)).toBe(false);
   });
 });

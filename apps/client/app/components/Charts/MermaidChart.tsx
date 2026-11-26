@@ -8,11 +8,8 @@ import ContentCopy from '@mui/icons-material/ContentCopy';
 import ErrorIcon from '@mui/icons-material/Error';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
 import { artifactFileName } from '@client/app/utils/artifactFileName';
-import {
-  assertNoRemoteDiagramResources,
-  MERMAID_RESOURCE_CONFIG,
-  stripRemoteSvgReferences,
-} from '@client/app/utils/svgSanitizer';
+import { stripRemoteSvgReferences } from '@client/app/utils/svgSanitizer';
+import { assertNoRemoteDiagramResources, mermaidOptions } from '@client/app/utils/mermaidSecurity';
 
 interface MermaidChartProps {
   chartDefinition: string;
@@ -165,19 +162,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
   const [localDefinition, setLocalDefinition] = useState(chartDefinition);
 
   useEffect(() => {
-    mermaid.initialize({
-      startOnLoad: true,
-      theme: theme.palette.mode === 'dark' ? 'dark' : 'default',
-      // 'strict' sanitizes labels and disables click-handler/javascript: link injection.
-      // PNG export serializes the inline <svg> that render() returns (see handleExportPNG),
-      // which 'strict' leaves in place - only 'sandbox' (iframe-wrapped output) would break it.
-      securityLevel: 'strict',
-      // Without this, a parse failure draws mermaid's error diagram into the temporary
-      // container it appends to <body> and throws before its own cleanup runs. The
-      // component renders its own error state below, so the built-in one is pure litter.
-      suppressErrorRendering: true,
-      ...MERMAID_RESOURCE_CONFIG,
-    });
+    mermaid.initialize(mermaidOptions(theme.palette.mode === 'dark'));
   }, [theme.palette.mode]);
 
   // Render chart when definition changes, tab changes, or container becomes visible

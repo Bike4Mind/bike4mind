@@ -5,11 +5,8 @@ import { useTheme } from '@mui/joy';
 import type { HeartbeatLogEntry } from '@client/app/types/heartbeatTypes';
 import MermaidChart from '../Charts/MermaidChart';
 import RechartsChart from '../Charts/RechartsChart';
-import {
-  assertNoRemoteDiagramResources,
-  MERMAID_RESOURCE_CONFIG,
-  stripRemoteSvgReferences,
-} from '@client/app/utils/svgSanitizer';
+import { stripRemoteSvgReferences } from '@client/app/utils/svgSanitizer';
+import { assertNoRemoteDiagramResources, mermaidOptions } from '@client/app/utils/mermaidSecurity';
 
 interface TavernArtifactRendererProps {
   artifact: NonNullable<HeartbeatLogEntry['artifact']>;
@@ -22,13 +19,7 @@ const CompactMermaidPreview: React.FC<{ definition: string; title?: string }> = 
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: theme.palette.mode === 'dark' ? 'dark' : 'default',
-      // 'strict' sanitizes labels and disables click-handler/javascript: link injection.
-      securityLevel: 'strict',
-      ...MERMAID_RESOURCE_CONFIG,
-    });
+    mermaid.initialize(mermaidOptions(theme.palette.mode === 'dark'));
   }, [theme.palette.mode]);
 
   useEffect(() => {
@@ -56,8 +47,9 @@ const CompactMermaidPreview: React.FC<{ definition: string; title?: string }> = 
           svgEl.style.display = 'block';
           el.appendChild(svgEl);
         }
-      } catch {
-        // silently fail in compact preview; full modal will show the error
+      } catch (err) {
+        // The compact preview stays empty; the full MermaidChart view shows the error.
+        console.warn('Mermaid preview not rendered:', err instanceof Error ? err.message : err);
       }
     };
 

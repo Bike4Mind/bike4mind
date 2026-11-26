@@ -40,6 +40,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import MermaidChart, { clampExportScale, computeSvgExportSize, prepareExportSvg } from './MermaidChart';
 import mermaid from 'mermaid';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
+import { MERMAID_RESOURCE_CONFIG } from '@client/app/utils/mermaidSecurity';
 
 const createSvg = (attrs: Record<string, string> = {}): SVGSVGElement => {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -303,8 +304,8 @@ describe('MermaidChart', () => {
       render(<MermaidChart chartDefinition={mockChartDefinition} />);
 
       const options = vi.mocked(mermaid.initialize).mock.calls[0][0];
-      expect(options.secure).toEqual(expect.arrayContaining(['securityLevel', 'dompurifyConfig', 'themeCSS']));
-      expect(options.dompurifyConfig?.FORBID_TAGS).toEqual(expect.arrayContaining(['img', 'image', 'style']));
+      expect(options.secure).toEqual(MERMAID_RESOURCE_CONFIG.secure);
+      expect(options.dompurifyConfig).toEqual(MERMAID_RESOURCE_CONFIG.dompurifyConfig);
     });
 
     it('strips remote image and stylesheet references from the rendered svg', async () => {
@@ -321,6 +322,20 @@ describe('MermaidChart', () => {
       await waitFor(() => expect(container.querySelector('rect')).not.toBeNull());
       expect(container.innerHTML).not.toContain('example.com');
       expect(container.querySelector('rect')?.getAttribute('marker-end')).toBe('url(#arrow)');
+    });
+
+    it('renders a diagram whose labels contain url-like calls', async () => {
+      render(<MermaidChart chartDefinition={'sequenceDiagram\n  A->>B: getUrl()\n  B->>A: new URL(path)'} />);
+
+      await waitFor(() => expect(mermaid.render).toHaveBeenCalled());
+      expect(screen.queryByTestId('mermaid-error-display')).not.toBeInTheDocument();
+    });
+
+    it('refuses an image shape with a remote URL without rendering it', async () => {
+      render(<MermaidChart chartDefinition={'flowchart TD\n  A@{ img: "https://example.com/p.png" }'} />);
+
+      await waitFor(() => expect(screen.getByTestId('mermaid-error-display')).toBeInTheDocument());
+      expect(mermaid.render).not.toHaveBeenCalled();
     });
 
     it('refuses a definition that references an external resource without rendering it', async () => {
