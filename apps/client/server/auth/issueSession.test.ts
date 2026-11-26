@@ -46,59 +46,6 @@ describe('issueSessionForRequest', () => {
     expect(guardedWrite).toHaveBeenCalledWith('u1', expect.any(Function));
   });
 
-  describe('alsoWithinGuard', () => {
-    it('runs inside the purge guard after the session is issued', async () => {
-      const order: string[] = [];
-      issueSession.mockImplementation(async () => {
-        order.push('issue');
-        return { accessToken: 'a', refreshToken: 'r', sid: 's' };
-      });
-      guardedWrite.mockImplementationOnce(async (_id, write) => {
-        order.push('guard-start');
-        const out = await write();
-        order.push('guard-end');
-        return out;
-      });
-      const hook = vi.fn(async () => {
-        order.push('hook');
-      });
-
-      const out = await issueSessionForRequest(req, 'u1', {
-        createdVia: 'oauth-token',
-        tokenVersion: 0,
-        alsoWithinGuard: hook,
-      });
-
-      expect(order).toEqual(['guard-start', 'issue', 'hook', 'guard-end']);
-      expect(out).toEqual({ accessToken: 'a', refreshToken: 'r', sid: 's' });
-    });
-
-    it('is a no-op when omitted', async () => {
-      const out = await issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0 });
-      expect(out.sid).toBe('s');
-    });
-
-    it('is blocked together with the session when the guard refuses', async () => {
-      guardedWrite.mockRejectedValueOnce(new Error('purging'));
-      const hook = vi.fn();
-
-      await expect(
-        issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0, alsoWithinGuard: hook })
-      ).rejects.toThrow('purging');
-
-      expect(issueSession).not.toHaveBeenCalled();
-      expect(hook).not.toHaveBeenCalled();
-    });
-
-    it('propagates a hook failure so the session is not returned', async () => {
-      const hook = vi.fn().mockRejectedValue(new Error('write failed'));
-      await expect(
-        issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0, alsoWithinGuard: hook })
-      ).rejects.toThrow('write failed');
-      expect(recordLoginEvent).not.toHaveBeenCalled();
-    });
-  });
-
   it('leaves clientId unset when the caller passes none', async () => {
     await issueSessionForRequest(req, 'u1', { createdVia: 'device', tokenVersion: 0 });
     expect(issueSession.mock.calls[0][1].clientId).toBeUndefined();

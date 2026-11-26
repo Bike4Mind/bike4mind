@@ -457,16 +457,44 @@ describe('POST /api/oauth/token client sign-in record', () => {
     seedValidCode(authCode('challenge'));
   });
 
-  it('hands a first-party exchange a hook that records on the stored client id', async () => {
+  it('records a first-party exchange on the stored client id after the session issues, outside the session call', async () => {
     (h.validateClient as Mock).mockResolvedValue(pub);
 
-    await exchange();
+    const res = await exchange();
 
-    const params = h.issueSessionForRequest.mock.calls[0][2] as { alsoWithinGuard: () => Promise<unknown> };
-    expect(h.recordSignIn).not.toHaveBeenCalled();
-    await params.alsoWithinGuard();
+    expect(res.statusCode).toBe(200);
+    expect(h.issueSessionForRequest.mock.calls[0][2]).not.toHaveProperty('alsoWithinGuard');
+    expect(h.withAccountNotPurging).toHaveBeenCalledWith('u1', expect.any(Function));
     expect(h.recordSignIn).toHaveBeenCalledWith({ userId: 'u1', clientId: 'stored-client', at: expect.any(Date) });
-    expect(h.withAccountNotPurging).not.toHaveBeenCalled();
+    expect(h.issueSessionForRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      h.recordSignIn.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('still answers 200 with the tokens and warns when recording a first-party sign-in fails', async () => {
+    (h.validateClient as Mock).mockResolvedValue(pub);
+    const error = new Error('db down');
+    h.recordSignIn.mockRejectedValue(error);
+
+    const res = await exchange();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.access_token).toBeDefined();
+    expect(res.body?.refresh_token).toBeDefined();
+    expect(h.lastLogger?.warn).toHaveBeenCalledWith('Failed to record OAuth client sign-in', {
+      clientId: 'stored-client',
+      error,
+    });
+  });
+
+  it('answers a first-party 200 without a warning when the account is being purged', async () => {
+    (h.validateClient as Mock).mockResolvedValue(pub);
+    h.withAccountNotPurging.mockRejectedValue(new ForbiddenError('purging'));
+
+    const res = await exchange();
+
+    expect(res.statusCode).toBe(200);
+    expect(h.lastLogger?.warn).not.toHaveBeenCalled();
   });
 
   it('records a relying-party exchange inside the purge guard once tokens are minted', async () => {

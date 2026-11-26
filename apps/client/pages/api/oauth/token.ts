@@ -221,8 +221,17 @@ const handler = baseApi({ auth: false })
         nonce: authCode.nonce,
       });
 
-      const recordSignIn = () =>
-        oauthClientSignInRepository.recordSignIn({ userId: user.id, clientId: client.clientId, at: new Date() });
+      const recordSignInBestEffort = async () => {
+        try {
+          await withAccountNotPurging(user.id, () =>
+            oauthClientSignInRepository.recordSignIn({ userId: user.id, clientId: client.clientId, at: new Date() })
+          );
+        } catch (error) {
+          if (!(error instanceof ForbiddenError)) {
+            req.logger.warn('Failed to record OAuth client sign-in', { clientId: client.clientId, error });
+          }
+        }
+      };
 
       // Relying-party clients get a scope/audience-bound OAuth access token, NOT a full first-party
       // session: no first-party refresh token, and the route gate (oauthRouteGate) default-denies it
@@ -255,13 +264,7 @@ const handler = baseApi({ auth: false })
             })
           : undefined;
 
-        try {
-          await withAccountNotPurging(user.id, () => recordSignIn());
-        } catch (error) {
-          if (!(error instanceof ForbiddenError)) {
-            req.logger.warn('Failed to record OAuth client sign-in', { clientId: client.clientId, error });
-          }
-        }
+        await recordSignInBestEffort();
 
         return res.json({
           access_token: accessToken,
@@ -279,9 +282,10 @@ const handler = baseApi({ auth: false })
         createdVia: CREATED_VIA_BY_CLIENT_ID[client_id] ?? 'oauth-token',
         tokenVersion: user.tokenVersion ?? 0,
         clientId: client_id,
-        alsoWithinGuard: recordSignIn,
         ...(deviceName ? { device: { ...buildSessionDevice(req), displayName: deviceName } } : {}),
       });
+
+      await recordSignInBestEffort();
 
       return res.json({
         access_token: accessToken,
