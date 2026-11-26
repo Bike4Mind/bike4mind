@@ -6,8 +6,7 @@ export type CastSubject = { id: string; createdAt: string; epithet?: Epithet };
  * Gives every agent a sheet index (0-based) into a scene's cast, a pure function of the roster so it survives
  * reloads. Oldest first, each agent takes a sheet nobody has yet, preferring one whose craft matches its
  * epithet and otherwise walking the cast from a point picked by its id hash. Only once every sheet is in
- * use does one repeat, and then a fresh round starts so repeats spread evenly. Same rule as the Tavern's
- * assignCharacters (tavern/scene.ts), which keeps 1-based character ids until it is ported.
+ * use does one repeat, and then a fresh round starts so repeats spread evenly.
  */
 export function assignSheets(
   agents: readonly CastSubject[],

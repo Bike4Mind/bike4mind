@@ -645,7 +645,7 @@ export type SceneStageProps = OrchestratorViewProps & {
  * bubble, needs-you bubbles that answer in place or the dialogue box, lighting and the settled room,
  * the intro walk from the door, the finale's cheering, pause, reduced motion, and a live region. A
  * definition supplies the map, art, copy and look; it cannot switch a feature off. Test ids are
- * `orchestrator-<scene id>-...`.
+ * `orchestrator-<scene id>-...`, except the dialogue box's `scene-dialogue-*`.
  */
 export function SceneStage({
   scene,

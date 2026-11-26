@@ -32,9 +32,6 @@ export function placementMap(scene: SceneDefinition): PlacementMap {
  * overflow stack in roster order. A needs-you agent is never stacked while any seat could hold it: it
  * borrows a free seat elsewhere (`borrowOrder`), and failing that takes the seat of the last calm agent
  * in the roster, who goes to its own zone's stack instead.
- *
- * Generalised from the Tavern's allocator (tavern/scene.ts placeAgents), which gives the same answer
- * for the Tavern's map; placement.test.ts holds the two together until the Tavern is ported.
  */
 export function placeAgents(
   agents: readonly PlacedAgent[],
