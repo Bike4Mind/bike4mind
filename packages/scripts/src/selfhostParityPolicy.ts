@@ -291,7 +291,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'eventRule:infra/serviceHealthAlarms.ts:EcsTaskFailedToStartRule',
-    '01f62b8ab1bf553612fc628bc26d6241b1c4eafcb75c213306a47abc62679d7e'
+    '2b68b75cf6843e937ae8e8686a3eb7d2a5b68a5f3ff785b117d5cab8364b0a2f'
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyChangeRule',
@@ -880,7 +880,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/serviceHealthAlarms.ts:ServiceHealthAlarmHandlerDlq',
-    '6b4dee3c8d196df99d5167e3b8e68c215c9cd5ec5a1d2b482027edb7ab444870'
+    'e4bb21872791c985702b536156f97761b31bd8076566645850b9e6d87646ab6f'
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
@@ -1350,7 +1350,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
-    'b9684de008b3f96066f602e384ac8ca09caa3e766eec7e143d645e0581223a02',
+    '236d9e12c4b910de67db48aac7c6cd3b3d208f78b378c167a33f48c9f90c63d0',
     ['ssm:GetParameter']
   ),
   gap(
