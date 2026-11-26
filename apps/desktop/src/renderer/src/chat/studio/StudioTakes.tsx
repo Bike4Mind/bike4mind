@@ -5,7 +5,7 @@ import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Typography from '@mui/joy/Typography';
-import type { StudioAsset, StudioJob } from '@shared/studio';
+import type { StudioAsset, StudioJob, StudioMediaKind } from '@shared/studio';
 import { studioAssetTitle } from '@shared/studioAssetTitle';
 import { MediumGlyph } from './design/MediumGlyph';
 import {
@@ -262,7 +262,7 @@ export function JobTake({
 }
 
 /** Web's framed empty state; the sentence keeps its `studio-empty` id. */
-export function TakesEmpty() {
+export function TakesEmpty({ kind = 'image' }: { kind?: StudioMediaKind }) {
   return (
     <Box
       sx={{
@@ -289,7 +289,7 @@ export function TakesEmpty() {
           color: studioColor('text-muted'),
         }}
       >
-        <MediumGlyph kind="image" size={20} />
+        <MediumGlyph kind={kind} size={20} />
       </Box>
       <Typography level="body-sm" data-testid="studio-empty" sx={{ color: studioColor('text-secondary') }}>
         Your creations will appear here.
@@ -298,11 +298,11 @@ export function TakesEmpty() {
   );
 }
 
-export function TakesHeading({ count }: { count: number }) {
+export function TakesHeading({ count, title = 'Takes' }: { count: number; title?: string }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }} data-testid="studio-gallery-title">
       <Typography level="title-sm" sx={{ color: studioColor('text-strong'), fontWeight: 600 }}>
-        Takes
+        {title}
       </Typography>
       {count > 0 && (
         <Typography component="span" sx={{ ...studioMicroLabelSx, letterSpacing: '0.04em' }}>
