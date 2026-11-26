@@ -579,6 +579,15 @@ describe('invoke', () => {
       { outcome: 'ok', outputs: { deflection: 'x' }, durationMs: 3 },
       'The function returned outputs that do not fit its output schema. Output deflection must be a number.',
     ],
+    [
+      'output_invalid',
+      {
+        outcome: 'output_invalid',
+        problems: [{ path: 'report', message: 'must be at most 2000 characters (it has 4000000)' }],
+        durationMs: 3,
+      },
+      'The function returned outputs that do not fit its output schema. Output report must be at most 2000 characters (it has 4000000).',
+    ],
   ] as const)('answers a run that ends in %s with 502, its outcome, and its stamp', async (outcome, run, error) => {
     h.runner.mockResolvedValue(run);
     const res = await invoke(LIVE_ID, { input: { load: 1, span: 2 } });
@@ -894,6 +903,24 @@ describe('async invoke and poll', () => {
       errorClass: 'ValueError',
     } as Parameters<typeof functionCallAnswer>[0]);
     expect(answer.error).toBe('The function raised an error (ValueError).');
+  });
+
+  it('polls an over-long output text with the field, the limit, and the length', () => {
+    const problems = [{ path: 'report', message: 'must be at most 2000 characters (it has 4000000)' }];
+    const answer = functionCallAnswer({
+      callId: 'c1',
+      state: 'finished',
+      outcome: 'output_invalid',
+      problems,
+    } as Parameters<typeof functionCallAnswer>[0]);
+    expect(answer).toEqual({
+      call_id: 'c1',
+      status: 'finished',
+      outcome: 'output_invalid',
+      error:
+        'The function returned outputs that do not fit its output schema. Output report must be at most 2000 characters (it has 4000000).',
+      problems,
+    });
   });
 
   it("answers another person's call id exactly as a made-up or malformed one", async () => {

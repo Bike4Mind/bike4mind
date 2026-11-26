@@ -4,6 +4,7 @@ import {
   parseFunctionContract,
   projectFunctionSchema,
   reviewHash,
+  validateFunctionValue,
   type CallableFunctionCallOutcome,
   type CallableFunctionStamp,
   type FunctionContract,
@@ -242,6 +243,27 @@ describe('calling', () => {
     const { result } = await call(createFunctionToolHost('chat', { dispatch }));
     expect(result).toEqual({
       content: [{ type: 'text', text: JSON.stringify({ outcome: 'input_invalid', problems }) }],
+      isError: true,
+    });
+  });
+
+  it('names the field, the limit, and the length of an over-long output text', async () => {
+    const problems = validateFunctionValue(
+      { type: 'object', additionalProperties: false, required: [], properties: { report: { type: 'string' } } },
+      { report: 'x'.repeat(4000) }
+    );
+    const dispatch = vi.fn(async () => dispatched({ outcome: 'output_invalid', outputs: undefined, problems }));
+    const { result } = await call(createFunctionToolHost('chat', { dispatch }));
+    expect(result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            outcome: 'output_invalid',
+            problems: [{ path: 'report', message: 'must be at most 2000 characters (it has 4000)' }],
+          }),
+        },
+      ],
       isError: true,
     });
   });

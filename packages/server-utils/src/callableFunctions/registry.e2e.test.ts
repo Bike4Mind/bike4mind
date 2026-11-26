@@ -676,6 +676,9 @@ describe('repinning a promoted function', () => {
       repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: next })
     ).rejects.toMatchObject({
       statusCode: 409,
+      message: expect.stringMatching(
+        /^Output deflection was removed since promotion 1, which could break callers of the tool, .* save this version as a new tool, give the function a new name in FUNCTION, save the artifact, and select Make this a tool\.$/
+      ),
       additionalInfo: {
         code: 'breaking_change',
         promotedSeq: 1,
@@ -692,6 +695,11 @@ describe('repinning a promoted function', () => {
       } as Parameters<typeof repinCallableFunction>[2])
     ).rejects.toMatchObject({ statusCode: 409, additionalInfo: { code: 'breaking_change' } });
     expect(await stored(view.id)).toMatchObject({ state: 'live', pin: { version: 1 } });
+
+    const compatible = contract();
+    Object.assign(compatible.inputs.properties, { depth: { type: 'number', unit: 'm' } });
+    const repinned = await repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: compatible });
+    expect(repinned.pin).toMatchObject({ version });
   });
 });
 

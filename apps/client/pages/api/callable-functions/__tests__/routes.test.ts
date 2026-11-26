@@ -420,7 +420,10 @@ describe('forwarding to the registry', () => {
     const refused = await fire(PIN);
     expect(refused._getStatusCode()).toBe(409);
     expect(refused._getJSONData()).toMatchObject({
-      error: 'This version changes the contract in a way that could break callers of the tool.',
+      error:
+        'Input load changed unit from N to kN; output deflection was removed, which could break callers of the tool, ' +
+        'so it stays on its current version. To keep it as it is and save this version as a new tool, give the ' +
+        'function a new name in FUNCTION, save the artifact, and select Make this a tool.',
       code: 'breaking_change',
       changes,
     });

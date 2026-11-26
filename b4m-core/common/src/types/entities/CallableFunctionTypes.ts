@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { ConflictError } from '../../errors';
 import { VisibilitySchema } from '../../schemas/artifacts';
-import type { FunctionContract, FunctionContractChange, FunctionTestTolerance } from '../../schemas/functionContract';
+import {
+  FUNCTION_CONTRACT_GLOBAL,
+  describeFunctionContractChange,
+  type FunctionContract,
+  type FunctionContractChange,
+  type FunctionTestTolerance,
+} from '../../schemas/functionContract';
 import { IBaseRepository } from './BaseTypes';
 import type { CallableFunctionCallOutcome, CallableFunctionStamp } from './CallableFunctionCallTypes';
 import type { ICallableFunctionReview, ICallableFunctionReviewView } from './CallableFunctionReviewTypes';
@@ -498,6 +504,22 @@ export class CallableFunctionSlugConflictError extends ConflictError {
   }
 }
 
+function breakingChangeMessage(changes: FunctionContractChange[], promotedSeq?: number): string {
+  const what = changes
+    .map(change => {
+      const { subject, field, words } = describeFunctionContractChange(change);
+      return [subject, field, words].filter(Boolean).join(' ');
+    })
+    .join('; ');
+  const lead = what ? what.charAt(0).toUpperCase() + what.slice(1) : 'This version changes the contract';
+  const since = promotedSeq !== undefined ? ` since promotion ${promotedSeq}` : '';
+  return (
+    `${lead}${since}, which could break callers of the tool, so it stays on its current version. To keep it as it ` +
+    `is and save this version as a new tool, give the function a new name in ${FUNCTION_CONTRACT_GLOBAL}, save the ` +
+    'artifact, and select Make this a tool.'
+  );
+}
+
 /**
  * A repin refused because the new contract could break callers of the pinned one, or of the promoted one when
  * `promotedSeq` is set; `changes` names each change.
@@ -507,7 +529,7 @@ export class CallableFunctionBreakingChangeError extends ConflictError {
     readonly changes: FunctionContractChange[],
     readonly promotedSeq?: number
   ) {
-    super('This version changes the contract in a way that could break callers of the tool.', {
+    super(breakingChangeMessage(changes, promotedSeq), {
       code: 'breaking_change',
       changes,
       ...(promotedSeq !== undefined ? { promotedSeq } : {}),

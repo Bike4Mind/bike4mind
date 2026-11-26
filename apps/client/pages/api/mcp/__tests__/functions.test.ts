@@ -493,6 +493,25 @@ describe('tools/call', () => {
     await client.close();
   });
 
+  it('names the field, the limit, and the length of an over-long output text', async () => {
+    h.runner.mockResolvedValue({
+      outcome: 'output_invalid',
+      problems: [{ path: 'report', message: 'must be at most 2000 characters (it has 4000000)' }],
+      durationMs: 3,
+    });
+    const client = await connect();
+    const result = callResult(
+      await client.callTool({ name: 'beam_midspan_deflection', arguments: { load: 2, span: 4 } })
+    );
+    expect(result.content).toEqual([
+      {
+        type: 'text',
+        text: 'The function returned outputs that do not fit its output schema. Output report must be at most 2000 characters (it has 4000000).',
+      },
+    ]);
+    await client.close();
+  });
+
   it.each([
     ['throws', () => h.runner.mockRejectedValue(new Error('spawn failed')), 'runtime_unavailable'],
     [
