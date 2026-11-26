@@ -164,7 +164,7 @@ describe('session actions through the local host', () => {
   it('archives at once when the host asks for no confirmation', async () => {
     const confirmArchive = vi.fn();
     const { host } = stubHost(
-      { 'session/list': { sessions: [summary('s1')] }, 'session/setArchived': { summary: archived('s1') } },
+      { 'session/page': page([summary('s1')]), 'session/setArchived': { summary: archived('s1') } },
       { confirmArchive }
     );
     const sessions = await render<SessionsController>(useSessions);
@@ -183,7 +183,7 @@ describe('session actions through the local host', () => {
     const confirmArchive = vi.fn(async () => ({ confirmed: true as const, archiveChildIds: ['c1'] }));
     const { host } = stubHost(
       {
-        'session/list': { sessions: [summary('s1')] },
+        'session/page': page([summary('s1')]),
         'session/setArchived': (params: { confirmed?: boolean }) =>
           params.confirmed ? { summary: archived('s1') } : { summary: null, confirmationRequired: question },
       },
@@ -207,7 +207,7 @@ describe('session actions through the local host', () => {
     const confirmArchive = vi.fn(async () => null);
     const { host } = stubHost(
       {
-        'session/list': { sessions: [summary('s1')] },
+        'session/page': page([summary('s1')]),
         'session/setArchived': { summary: null, confirmationRequired: question },
       },
       { confirmArchive }
@@ -222,7 +222,7 @@ describe('session actions through the local host', () => {
   });
 
   it('deletes from the sidebar with discard allowed, since the user saw the worktree dialog', async () => {
-    const { host } = stubHost({ 'session/list': { sessions: [summary('s1')] }, 'session/delete': {} });
+    const { host } = stubHost({ 'session/page': page([summary('s1')]), 'session/delete': {} });
     const sessions = await render<SessionsController>(useSessions);
 
     await act(async () => void (await sessions().remove('s1', true)));
