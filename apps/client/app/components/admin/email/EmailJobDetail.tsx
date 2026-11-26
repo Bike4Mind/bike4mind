@@ -587,14 +587,26 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
         </Stack>
       </Box>
 
-      {/* Main Content - Two Column Layout */}
-      <Box sx={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid', borderColor: 'divider' }}>
+      {/* Main Content - two columns from md up, stacked below so the editor never scrolls sideways */}
+      <Box
+        data-testid="email-job-detail-columns"
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', md: 'row' },
+          alignItems: 'stretch',
+          borderBottom: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
         {/* Left Column - Form */}
         <Box
+          data-testid="email-job-detail-form-column"
           sx={{
-            width: '50%',
-            p: 3,
-            borderRight: '1px solid',
+            width: { xs: '100%', md: '50%' },
+            minWidth: 0,
+            p: { xs: 2, md: 3 },
+            borderRight: { xs: 'none', md: '1px solid' },
+            borderBottom: { xs: '1px solid', md: 'none' },
             borderColor: 'divider',
           }}
         >
@@ -1092,10 +1104,21 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
         </Box>
 
         {/* Right Column - Preview */}
-        <Box sx={{ width: '50%', display: 'flex', flexDirection: 'column', bgcolor: 'background.level1' }}>
+        <Box
+          data-testid="email-job-detail-preview-column"
+          sx={{
+            width: { xs: '100%', md: '50%' },
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            bgcolor: 'background.level1',
+          }}
+        >
           <Box
+            data-testid="email-job-detail-preview-header"
             sx={{
               display: 'flex',
+              flexWrap: 'wrap',
               justifyContent: 'space-between',
               alignItems: 'center',
               p: 2,
@@ -1111,6 +1134,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
 
             {/* Recipient Selection for Variable Testing */}
             <Select
+              data-testid="email-job-detail-recipient-select"
               size="sm"
               placeholder={
                 recipientPreviewData
@@ -1123,7 +1147,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                 const recipient = recipientPreviewData?.recipients.find(r => r.email === value);
                 setSelectedPreviewRecipient(recipient || null);
               }}
-              sx={{ minWidth: 250, flex: 1, maxWidth: 350 }}
+              sx={{ minWidth: { xs: '100%', sm: 250 }, flex: 1, maxWidth: 350 }}
             >
               {recipientPreviewData?.recipients.map(recipient => (
                 <Option key={recipient.email} value={recipient.email}>
