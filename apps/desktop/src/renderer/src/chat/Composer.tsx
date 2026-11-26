@@ -892,7 +892,9 @@ export function Composer({
                under a test that thought it was asserting presence; `data-composer-action` is
                what says which control this is. */
             <Tooltip
-              title={buttonAction === 'stop' ? 'Stop generating (Esc)' : COMPOSER_BUTTON_LABELS[buttonAction]}
+              title={
+                buttonAction === 'stop' ? 'Stop generating (Esc)' : (notReady ?? COMPOSER_BUTTON_LABELS[buttonAction])
+              }
               size="sm"
               variant="soft"
               placement="top"
@@ -906,7 +908,7 @@ export function Composer({
                   color={buttonAction === 'stop' ? 'neutral' : 'primary'}
                   onClick={buttonAction === 'stop' ? onStop : submit}
                   disabled={buttonAction !== 'stop' && !canSubmit && !commandDraft}
-                  aria-label={COMPOSER_BUTTON_LABELS[buttonAction]}
+                  aria-label={buttonAction !== 'stop' && notReady ? notReady : COMPOSER_BUTTON_LABELS[buttonAction]}
                   data-composer-action={buttonAction}
                   data-testid="chat-send-btn"
                 >

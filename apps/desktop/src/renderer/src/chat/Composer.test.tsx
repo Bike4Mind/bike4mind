@@ -669,6 +669,16 @@ describe('a composer that cannot send yet', () => {
     expect(send).not.toHaveBeenCalled();
     expect(input().value).toBe('written while signed out');
   });
+
+  it('names why on the disabled button instead of offering an action it will refuse', () => {
+    mount({ notReady: 'Replying' });
+
+    type('next question');
+
+    const button = document.querySelector<HTMLButtonElement>('[data-testid="chat-send-btn"]');
+    expect(button?.disabled).toBe(true);
+    expect(button?.getAttribute('aria-label')).toBe('Replying');
+  });
 });
 
 describe('the attach shortcut', () => {
