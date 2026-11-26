@@ -5,7 +5,6 @@ import { findUsableAttachedAgents } from './attachedAgents';
 const agent = (id: string) => ({ id }) as IAgentDocument;
 
 const repo = (readable: Record<string, string[]>) => ({
-  findById: vi.fn(async (id: string) => agent(id)),
   shareable: {
     findAllAccessibleByIds: vi.fn(async (user: { id: string }, ids: string[]) =>
       ids.filter(id => (readable[user.id] ?? []).includes(id)).map(agent)
@@ -36,9 +35,11 @@ describe('findUsableAttachedAgents', () => {
     expect(agents.shareable.findAllAccessibleByIds).not.toHaveBeenCalled();
   });
 
-  it('returns the plain findById shape, not the access query result', async () => {
-    const agents = repo({ u: ['a'] });
-    agents.findById.mockResolvedValue({ id: 'a', plain: true } as never);
+  it('returns plain objects when the access query hydrates documents', async () => {
+    const agents = repo({});
+    agents.shareable.findAllAccessibleByIds.mockResolvedValue([
+      { id: 'a', toJSON: () => ({ id: 'a', plain: true }) },
+    ] as never);
     expect(await findUsableAttachedAgents(['a'], [{ id: 'u' }], agents as never)).toEqual([{ id: 'a', plain: true }]);
   });
 });

@@ -22,12 +22,10 @@ const handler = baseApi()
         throw new BadRequestError('Invalid session ID');
       }
 
-      await assertSessionAccess(sessionId, req.user!.id);
+      const session = await assertSessionAccess(sessionId, req.user!.id);
 
       const agentIds = await sessionRepository.getAttachedAgents(sessionId);
-      const session = await sessionRepository.findById(sessionId);
-      const sessionOwner =
-        session && session.userId !== req.user!.id ? await userRepository.findById(session.userId) : null;
+      const sessionOwner = session.userId !== req.user!.id ? await userRepository.findById(session.userId) : null;
       const validAgents = await findUsableAttachedAgents(agentIds, [req.user!, sessionOwner], agentRepository);
 
       res.json({ agents: await presentAgentsForViewer(validAgents, req.user!.id) });
