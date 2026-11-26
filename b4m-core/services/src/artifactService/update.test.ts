@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { update } from './update';
+import { Logger } from '@bike4mind/observability';
 import { UnauthorizedError } from '@bike4mind/utils';
 
 /**
@@ -44,9 +45,8 @@ describe('artifactService - update (permission/visibility escalation guard)', ()
         },
         artifactVersions: {
           findByArtifactId: vi.fn().mockResolvedValue([]),
-          create: vi.fn().mockResolvedValue({ _id: 'version-new', isActive: true }),
+          create: vi.fn().mockResolvedValue({ _id: 'version-new', isActive: false }),
           updateMany: vi.fn(),
-          count: vi.fn().mockResolvedValue(0),
           update: vi.fn(),
           delete: vi.fn(),
         },
@@ -99,6 +99,10 @@ describe('artifactService - update (write-time re-check)', () => {
   let adapters: any;
   let artifact: any;
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     artifact = {
       id: 'artifact-1',
@@ -113,7 +117,11 @@ describe('artifactService - update (write-time re-check)', () => {
     adapters = {
       db: {
         artifacts: {
-          findOne: vi.fn().mockResolvedValue(artifact),
+          // first read loads the artifact; later reads see the pointer the gated write set
+          findOne: vi
+            .fn()
+            .mockResolvedValueOnce(artifact)
+            .mockResolvedValue({ ...artifact, currentVersionId: 'version-new' }),
           updateWithWriteAccess: vi
             .fn()
             .mockImplementation(async (_u: string, data: any) => ({ ...artifact, ...data })),
@@ -127,9 +135,8 @@ describe('artifactService - update (write-time re-check)', () => {
         },
         artifactVersions: {
           findByArtifactId: vi.fn().mockResolvedValue([]),
-          create: vi.fn().mockResolvedValue({ _id: 'version-new', isActive: true }),
+          create: vi.fn().mockResolvedValue({ _id: 'version-new', isActive: false }),
           updateMany: vi.fn(),
-          count: vi.fn().mockResolvedValue(0),
           update: vi.fn(),
           delete: vi.fn(),
         },
@@ -175,24 +182,64 @@ describe('artifactService - update (write-time re-check)', () => {
     expect(gate()).not.toHaveBeenCalled();
   });
 
-  it('deactivates lower versions and keeps the new row active when it is the highest', async () => {
-    await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+  it('inserts the version row inactive, then activates the row the pointer names', async () => {
+    const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
 
+    expect(adapters.db.artifactVersions.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: false }));
     expect(adapters.db.artifactVersions.updateMany).toHaveBeenCalledWith(
-      { artifactId: 'artifact-1', version: { $lt: 2 }, isActive: true },
+      { artifactId: 'artifact-1', isActive: true, _id: { $ne: 'version-new' } },
       { isActive: false },
       { runValidators: true }
     );
-    expect(adapters.db.artifactVersions.update).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.update).toHaveBeenCalledWith({ id: 'version-new', isActive: true });
+    expect(result.version?.isActive).toBe(true);
   });
 
-  it('deactivates its own row when a higher version is already active', async () => {
-    adapters.db.artifactVersions.count.mockResolvedValueOnce(1);
+  it('reconciles again on the new pointer when a higher save moved it meanwhile', async () => {
+    adapters.db.artifacts.findOne.mockReset();
+    adapters.db.artifacts.findOne
+      .mockResolvedValueOnce(artifact)
+      .mockResolvedValueOnce({ ...artifact, currentVersionId: 'version-9' })
+      .mockResolvedValue({ ...artifact, currentVersionId: 'version-9' });
 
     const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
 
-    expect(adapters.db.artifactVersions.update).toHaveBeenCalledWith({ id: 'version-new', isActive: false });
+    const { updateMany, update: activate } = adapters.db.artifactVersions;
+    expect(updateMany).toHaveBeenCalledTimes(2);
+    expect(updateMany.mock.calls[1][0]).toEqual({
+      artifactId: 'artifact-1',
+      isActive: true,
+      _id: { $ne: 'version-9' },
+    });
+    expect(activate).toHaveBeenLastCalledWith({ id: 'version-9', isActive: true });
     expect(result.version?.isActive).toBe(false);
+  });
+
+  it('stops reconciling after a bounded number of attempts and still returns', async () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+    let moves = 0;
+    adapters.db.artifacts.findOne.mockReset();
+    adapters.db.artifacts.findOne
+      .mockResolvedValueOnce(artifact)
+      .mockImplementation(async () => ({ ...artifact, currentVersionId: `version-moved-${moves++}` }));
+
+    const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    expect(adapters.db.artifactVersions.updateMany).toHaveBeenCalledTimes(5);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(result.version?.isActive).toBe(false);
+  });
+
+  it('logs, rather than throws, when reconciling fails after the pointer write committed', async () => {
+    const error = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => {});
+    adapters.db.artifactVersions.updateMany.mockRejectedValueOnce(new Error('reconcile failed'));
+
+    const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(result.version?._id).toBe('version-new');
+    expect(result.version?.isActive).toBe(false);
+    expect(adapters.db.artifactVersions.delete).not.toHaveBeenCalled();
   });
 
   it('keeps its row but leaves the pointer alone when a higher version already moved it', async () => {
@@ -201,6 +248,9 @@ describe('artifactService - update (write-time re-check)', () => {
     const result = await update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters);
 
     expect(result.version?._id).toBe('version-new');
+    expect(result.version?.isActive).toBe(false);
+    expect(adapters.db.artifactVersions.updateMany).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.update).not.toHaveBeenCalled();
     expect(adapters.db.artifactVersions.delete).not.toHaveBeenCalled();
     expect(adapters.db.artifactContents.delete).not.toHaveBeenCalled();
     expect(gate()).toHaveBeenCalledTimes(2);
@@ -297,9 +347,8 @@ describe('artifactService - update (write-time re-check)', () => {
     expect(adapters.db.artifactVersions.create).not.toHaveBeenCalled();
   });
 
-  it('rolls the new rows back and reactivates the highest remaining version when both final writes are refused', async () => {
+  it('deletes only the refused save rows when both final writes are refused', async () => {
     gate().mockResolvedValue(null);
-    adapters.db.artifactVersions.findByArtifactId.mockResolvedValue([{ _id: 'version-prev', version: 1 }]);
 
     await expect(
       update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters)
@@ -307,19 +356,8 @@ describe('artifactService - update (write-time re-check)', () => {
 
     expect(adapters.db.artifactVersions.delete).toHaveBeenCalledWith('version-new');
     expect(adapters.db.artifactContents.delete).toHaveBeenCalledWith('content-new');
-    expect(adapters.db.artifactVersions.update).toHaveBeenLastCalledWith({ id: 'version-prev', isActive: true });
-  });
-
-  it('does not reactivate a version when another row is already active', async () => {
-    gate().mockResolvedValue(null);
-    adapters.db.artifactVersions.count.mockResolvedValue(1);
-
-    await expect(update(writerId, { id: 'artifact-1', content: 'new body' }, adapters)).rejects.toThrow(
-      UnauthorizedError
-    );
-
-    expect(adapters.db.artifactVersions.delete).toHaveBeenCalledWith('version-new');
-    expect(adapters.db.artifactVersions.update).not.toHaveBeenCalledWith({ id: 'version-prev', isActive: true });
+    expect(adapters.db.artifactVersions.update).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.updateMany).not.toHaveBeenCalled();
   });
 
   it('still refuses, and runs the remaining steps, when a rollback step throws', async () => {

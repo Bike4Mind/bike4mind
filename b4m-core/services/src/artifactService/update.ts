@@ -49,7 +49,7 @@ interface UpdateArtifactAdapters {
     artifactContents: Pick<IArtifactContentRepository, 'create' | 'delete' | 'findLatestContent'>;
     artifactVersions: Pick<
       IArtifactVersionRepository,
-      'create' | 'delete' | 'findByArtifactId' | 'update' | 'updateMany' | 'count'
+      'create' | 'delete' | 'findByArtifactId' | 'update' | 'updateMany'
     >;
   };
 }
@@ -148,7 +148,7 @@ export const update = async (
     return claimed;
   };
 
-  // Inserts the content and version rows for `versionNumber`, leaving only the highest-numbered row active.
+  // Inserts the content and version rows for `versionNumber`; the row stays inactive until the pointer picks it.
   const writeVersionRows = async (
     versionNumber: number,
     contentFields: Pick<IArtifactContentDocument, 'content' | 'contentHash' | 'contentSize' | 'mimeType' | 'encoding'>,
@@ -169,23 +169,8 @@ export const update = async (
       changeDescription: changeDescription || versionMessage || defaults.changeDescription,
       ...(versionTag !== undefined && { versionTag }),
       createdBy: userId,
-      isActive: true,
+      isActive: false,
     } satisfies CreateInput<IArtifactVersionDocument> as Parameters<IArtifactVersionRepository['create']>[0]);
-
-    await db.artifactVersions.updateMany(
-      { artifactId: artifact.id, version: { $lt: versionNumber }, isActive: true },
-      { isActive: false },
-      { runValidators: true }
-    );
-    // A higher-numbered save inserted its row first: it keeps the active flag.
-    if (
-      (await db.artifactVersions.count({ artifactId: artifact.id, version: { $gt: versionNumber }, isActive: true })) >
-      0
-    ) {
-      // any: `id` is not a known key of Partial<IArtifactVersionDocument>
-      await db.artifactVersions.update({ id: newVersion._id, isActive: false } as any);
-      newVersion.isActive = false;
-    }
 
     return { newContent, newVersion };
   };
@@ -234,18 +219,24 @@ export const update = async (
   else if (newVersion && createNewVersion) versionUpdate.versionTag = null;
 
   // One gated write for metadata and the version pointer together. The pointer only moves forward:
-  // a save that lost the race to a higher version keeps its row but leaves the pointer alone.
-  let updatedArtifact = await db.artifacts.updateWithWriteAccess(
+  // a save that lost the race to a higher version keeps its row inactive and leaves the pointer alone.
+  const pointerWrite = await db.artifacts.updateWithWriteAccess(
     userId,
     { ...updateData, ...versionUpdate },
     newVersion ? { version: { $lt: versionNumber } } : undefined
   );
+  let updatedArtifact = pointerWrite;
   if (!updatedArtifact && newVersion) {
     updatedArtifact = await db.artifacts.updateWithWriteAccess(userId, updateData);
   }
   if (!updatedArtifact) {
     if (newVersion) await rollbackVersionRows(adapters, artifact.id, newVersion._id, newContent?._id);
     throw new UnauthorizedError('Write access denied');
+  }
+
+  if (newVersion && pointerWrite) {
+    newVersion.isActive =
+      (await reconcileActiveVersion(adapters, artifact.id, newVersion._id)) === String(newVersion._id);
   }
 
   const result: {
@@ -262,10 +253,7 @@ export const update = async (
   return result;
 };
 
-/**
- * Undoes a refused save's rows, then reactivates the highest remaining version if none is active.
- * Best-effort, not transactional; each step is independent.
- */
+/** Deletes a refused save's version and content rows. Best-effort, not transactional; each step is independent. */
 async function rollbackVersionRows(
   { db }: UpdateArtifactAdapters,
   artifactId: string,
@@ -282,14 +270,41 @@ async function rollbackVersionRows(
 
   await step('delete version', () => db.artifactVersions.delete(String(versionId)));
   if (contentId) await step('delete content', () => db.artifactContents.delete(String(contentId)));
-  await step('reactivate highest version', async () => {
-    if ((await db.artifactVersions.count({ artifactId, isActive: true })) > 0) return;
-    const rows = await db.artifactVersions.findByArtifactId(artifactId);
-    // findByArtifactId sorts by version descending
-    const [highest] = rows;
-    // any: `id` is not a known key of Partial<IArtifactVersionDocument>
-    if (highest) await db.artifactVersions.update({ id: highest._id, isActive: true } as any);
-  });
+}
+
+const MAX_RECONCILE_ATTEMPTS = 5;
+
+/** Makes the row the artifact pointer names the only active one and returns its id; undefined when it did not settle. Never throws. */
+async function reconcileActiveVersion(
+  { db }: UpdateArtifactAdapters,
+  artifactId: string,
+  pointerId: string
+): Promise<string | undefined> {
+  try {
+    // The pointer only moves forward and its final writer reconciles after writing it, so a reconciler on a
+    // stale pointer either sees the move on re-read and redoes, or finished before that write.
+    let pointer = String(pointerId);
+    for (let attempt = 0; attempt < MAX_RECONCILE_ATTEMPTS; attempt++) {
+      await db.artifactVersions.updateMany(
+        { artifactId, isActive: true, _id: { $ne: pointer } },
+        { isActive: false },
+        { runValidators: true }
+      );
+      // any: `id` is not a known key of Partial<IArtifactVersionDocument>
+      await db.artifactVersions.update({ id: pointer, isActive: true } as any);
+
+      const latest = (await db.artifacts.findOne({ id: artifactId }))?.currentVersionId;
+      if (!latest || String(latest) === String(pointer)) return pointer;
+      pointer = String(latest);
+    }
+    Logger.globalInstance.warn(`artifact update: active version of artifact ${artifactId} did not settle`);
+  } catch (error) {
+    Logger.globalInstance.error(
+      `artifact update: reconciling active version failed for artifact ${artifactId}:`,
+      error
+    );
+  }
+  return undefined;
 }
 
 /**

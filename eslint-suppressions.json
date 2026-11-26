@@ -3794,7 +3794,7 @@
   },
   "b4m-core/services/src/artifactService/update.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 5
+      "count": 4
     }
   },
   "b4m-core/services/src/briefcaseService/briefcaseService.test.ts": {

@@ -112,7 +112,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
           // If content is provided, use it; otherwise keep existing content
           ...(validatedData.content && { content: validatedData.content }),
           createNewVersion: true,
-          versionMessage: validatedData.changeDescription || `Version ${artifact.artifact.version + 1}`,
+          ...(validatedData.changeDescription && { versionMessage: validatedData.changeDescription }),
         },
         { db: ARTIFACT_DB }
       );
