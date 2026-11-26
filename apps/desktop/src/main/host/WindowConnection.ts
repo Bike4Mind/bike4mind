@@ -9,6 +9,8 @@ import {
   type HostTransport,
 } from '@shared/hostProtocol';
 
+const superseded = (detail: string) => new HostConnectError({ kind: 'lost', detail, stderrTail: '' });
+
 /**
  * Where a window is in one session's events. `seq` is the last event delivered to it, or for a
  * subscribe without `after`, the log head the host answered with; null until either is known.
@@ -21,9 +23,7 @@ export type WindowConnectionOptions = {
   /** Opens and handshakes a connection; rejects with HostConnectError. */
   open(): Promise<HostTransport>;
   deliver(delivery: HostNotificationDelivery): void;
-  /** Whether the host is connected now, so a cut connection may be reopened at once. */
-  hostConnected(): boolean;
-  /** Opening failed though the host looked reachable: the link should check itself. */
+  /** Opening failed, or the host cut this connection: the link treats it as its own loss. */
   reportBroken(detail: string): void;
 };
 
@@ -34,9 +34,11 @@ const sessionEventParams = hostNotifications['session/event'].params;
 
 /**
  * One window's protocol connection to one host. It survives the connection under it: when that
- * is cut it reopens (at once, or when the host is connected again), resubscribes each session
- * from the last event the window saw, and drops any event the window already has. A session it
- * cannot resume gets `session/resyncRequired`, after which it is the window's to read again.
+ * is cut or suspended, it reopens once the host is connected again (or on the window's next
+ * request), resubscribes each session from the last event the window saw, and drops any event
+ * the window already has. A session it cannot resume gets `session/resyncRequired`, after which
+ * it is the window's to read again. A cut is reported to the host's link, so reopening is paced
+ * by the link's backoff rather than retried here.
  */
 export class WindowConnection {
   private transport: HostTransport | null = null;
@@ -44,6 +46,8 @@ export class WindowConnection {
   private detach: Array<() => void> = [];
   private readonly sessions = new Map<string, SessionTrack>();
   private closed = false;
+  /** Bumped by every suspend, cut and close, so an open that finishes after one is discarded. */
+  private generation = 0;
 
   constructor(private readonly options: WindowConnectionOptions) {}
 
@@ -80,36 +84,42 @@ export class WindowConnection {
   }
 
   private ensureOpen(): Promise<HostTransport> {
-    if (this.closed) {
-      return Promise.reject(new HostConnectError({ kind: 'lost', detail: 'The window is gone', stderrTail: '' }));
-    }
+    if (this.closed) return Promise.reject(superseded('The window is gone'));
     if (this.transport) return Promise.resolve(this.transport);
-    this.opening ??= this.openAndResume()
+    if (this.opening) return this.opening;
+    const generation = this.generation;
+    const opening = this.openAndResume(generation)
       .catch((error: unknown) => {
-        if (!this.closed) this.options.reportBroken(error instanceof Error ? error.message : String(error));
+        // Only a failure of the current open says anything about the host.
+        if (generation === this.generation) {
+          this.options.reportBroken(error instanceof Error ? error.message : String(error));
+        }
         throw error;
       })
       .finally(() => {
-        this.opening = null;
+        if (this.opening === opening) this.opening = null;
       });
-    return this.opening;
+    this.opening = opening;
+    return opening;
   }
 
-  private async openAndResume(): Promise<HostTransport> {
+  private async openAndResume(generation: number): Promise<HostTransport> {
     const transport = await this.options.open();
-    if (this.closed) {
+    if (generation !== this.generation) {
       transport.close();
-      throw new HostConnectError({ kind: 'lost', detail: 'The window is gone', stderrTail: '' });
+      throw superseded('The connection was closed while it opened');
     }
     this.transport = transport;
     this.detach = [
       transport.onNotification(notification => {
         if (this.transport === transport) this.receive(notification);
       }),
+      // Not reopened here: the link counts the cut as its own loss, so the reopen waits out its
+      // backoff and comes with every other window's when the host is connected again.
       transport.onClose(reason => {
         if (this.transport !== transport || reason.initiator !== 'host') return;
         this.drop();
-        if (this.options.hostConnected()) void this.resume();
+        this.options.reportBroken(`a window connection closed: ${reason.failure.detail}`);
       }),
     ];
     await Promise.all(
@@ -120,14 +130,22 @@ export class WindowConnection {
     return transport;
   }
 
+  /** Replays from the last delivered event; `seq` moves as the replay arrives, as for any event. */
   private async resubscribe(transport: HostTransport, sessionId: string, track: SessionTrack): Promise<void> {
     if (track.epoch === null || track.seq === null) {
       this.resync(sessionId);
       return;
     }
     try {
-      await this.subscribe(transport, { sessionId, after: { epoch: track.epoch, seq: track.seq } });
+      const answer = await transport.request('session/subscribe', {
+        sessionId,
+        after: { epoch: track.epoch, seq: track.seq },
+      });
+      const parsed = subscribeResult.safeParse(answer);
+      if (parsed.success && this.sessions.get(sessionId) === track) track.epoch = parsed.data.cursor.epoch;
     } catch {
+      // Cut again before the host answered: the session waits for the next resume as it is.
+      if (this.transport !== transport || this.sessions.get(sessionId) !== track) return;
       // snapshotRequired, or anything else that stops a resume: the window starts over from session/get.
       this.resync(sessionId);
     }
@@ -151,13 +169,18 @@ export class WindowConnection {
     params: { sessionId: string; after?: EventCursor | undefined }
   ): Promise<unknown> {
     const { sessionId, after } = params;
+    const previous = this.sessions.get(sessionId);
     const track: SessionTrack = { epoch: after?.epoch ?? null, seq: after?.seq ?? null, active: false };
     this.sessions.set(sessionId, track);
     let result: unknown;
     try {
       result = await transport.request('session/subscribe', params);
     } catch (error) {
-      if (this.sessions.get(sessionId) === track) this.sessions.delete(sessionId);
+      // A failed subscribe leaves the window where it was, still subscribed if it had been.
+      if (this.sessions.get(sessionId) === track) {
+        if (previous) this.sessions.set(sessionId, previous);
+        else this.sessions.delete(sessionId);
+      }
       throw error;
     }
     const parsed = subscribeResult.safeParse(result);
@@ -182,6 +205,8 @@ export class WindowConnection {
   }
 
   private drop(): void {
+    this.generation += 1;
+    this.opening = null;
     for (const detach of this.detach) detach();
     this.detach = [];
     const transport = this.transport;

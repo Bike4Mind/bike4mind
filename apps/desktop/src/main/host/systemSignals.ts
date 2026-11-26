@@ -8,17 +8,23 @@ const ONLINE_POLL_MS = 5_000;
 export function electronSystemSignals(): SystemSignals {
   const onlineListeners = new Set<() => void>();
   let timer: ReturnType<typeof setInterval> | undefined;
-  let online = net.isOnline();
+  // Read when first needed, not at creation: electron's net is only usable once the app is ready.
+  let online: boolean | undefined;
 
   const poll = () => {
     const now = net.isOnline();
-    const cameBack = now && !online;
+    const cameBack = now && online === false;
     online = now;
     if (cameBack) for (const listener of onlineListeners) listener();
   };
 
   return {
-    isOnline: () => net.isOnline(),
+    // A drop seen here is remembered, so the poll reports its end even if it lasts under a poll.
+    isOnline: () => {
+      const now = net.isOnline();
+      if (!now) online = false;
+      return now;
+    },
     onWake: listener => {
       powerMonitor.on('resume', listener);
       powerMonitor.on('unlock-screen', listener);

@@ -131,6 +131,8 @@ export class FakeHost {
   epoch = 'epoch-1';
   /** When set, host/info never answers. */
   silent = false;
+  /** How long connect() takes, in ms; it opens after this even when no one waits any more. */
+  connectDelayMs = 0;
   /** When set, subscribe answers before it replays (a transport that reorders the two). */
   answerBeforeReplay = false;
   /** Answers methods the fake does not serve itself. */
@@ -141,6 +143,7 @@ export class FakeHost {
     connect: async () => {
       const failure = this.connectFailures.shift();
       if (failure) throw new HostConnectError(failure);
+      if (this.connectDelayMs > 0) await new Promise(resolve => setTimeout(resolve, this.connectDelayMs));
       const connection = new FakeConnection(this);
       this.connections.push(connection);
       return connection;

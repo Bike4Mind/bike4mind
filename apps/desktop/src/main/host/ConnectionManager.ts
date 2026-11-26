@@ -260,7 +260,6 @@ export class ConnectionManager {
       hostId,
       open: () => host.link.openClient(),
       deliver: delivery => client.deliver(delivery),
-      hostConnected: () => host.link.state.status === 'connected',
       reportBroken: detail => host.link.reportBroken(detail),
     });
     host.windows.set(client.id, created);

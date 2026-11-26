@@ -20,6 +20,7 @@ const TUNING: HostLinkTuning = {
   stableAfterMs: 30_000,
   heartbeatMs: 30_000,
   requestTimeoutMs: 5_000,
+  connectTimeoutMs: 10_000,
 };
 
 const failure = (kind: HostConnectFailureKind): HostConnectFailure => ({
@@ -232,16 +233,59 @@ describe('ConnectionManager: connection states', () => {
     expect(state()).toMatchObject({ status: 'connected' });
   });
 
-  it('waits for the network instead of retrying while offline, then retries when it is back', async () => {
-    const { state, host, setOnline } = setUp({ online: false, failures: [failure('sshFailed')] });
+  it('shows a remote host offline for want of network, keeps its backoff, and retries at once when it is back', async () => {
+    const { state, host, setOnline } = setUp({
+      online: false,
+      failures: [failure('sshFailed'), failure('sshFailed'), failure('sshFailed')],
+    });
     await settle();
     expect(state()).toEqual({ status: 'offline', reason: 'noNetwork', lastSeenAt: null });
 
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(host.connections).toHaveLength(0);
+    // A drop too short for the online poll to see still ends: the backoff keeps retrying.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(host.connectFailures).toHaveLength(1);
+    expect(state()).toEqual({ status: 'offline', reason: 'noNetwork', lastSeenAt: null });
 
+    host.connectFailures.length = 0;
     setOnline(true);
     await settle();
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
+  it('never shows the local host offline for want of network', async () => {
+    const { state } = setUp({ kind: 'local', online: false, failures: [failure('lost')] });
+    await settle();
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 1 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(state()).toMatchObject({ status: 'connected' });
+  });
+
+  it('starts the attempt count again on a disconnect and on a connect', async () => {
+    const { state, host, manager } = setUp({
+      failures: Array.from({ length: 4 }, () => failure('sshFailed')),
+    });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 3 });
+
+    manager.disconnect('devbox');
+    manager.connect('devbox');
+    await settle();
+    expect(host.connectFailures).toHaveLength(0);
+    expect(state()).toEqual({ status: 'reconnecting', attempt: 1, nextRetryAt: Date.now() + 1_000 });
+  });
+
+  it('counts a connector that does not answer in time as a failed attempt, and closes what it opens late', async () => {
+    const { state, host, manager } = setUp({ connect: false, tuning: { connectTimeoutMs: 10_000 } });
+    host.connectDelayMs = 15_000;
+    manager.connect('devbox');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 1 });
+
+    host.connectDelayMs = 0;
+    await vi.advanceTimersByTimeAsync(5_000);
+    // The retry opened at once; the connection the timed-out attempt asked for opens later and is closed.
+    expect(host.connections).toHaveLength(2);
+    expect(host.connections[1]?.closedBy).toBe('client');
     expect(state()).toMatchObject({ status: 'connected' });
   });
 
@@ -469,6 +513,8 @@ describe('ConnectionManager: requests', () => {
     host.connections[1].cut();
     await expect(cutOff).resolves.toMatchObject({ ok: false, error: { code: HOST_ERROR_CODES.capabilityUnavailable } });
 
+    // The cut counts against the link, so the host is back after its backoff.
+    await vi.advanceTimersByTimeAsync(1_000);
     await expect(manager.request(window, 'devbox', 'session/list', undefined)).resolves.toEqual({
       ok: true,
       result: {},
@@ -538,16 +584,19 @@ describe('ConnectionManager: resuming across a cut', () => {
     cut.cut();
     host.emit('s1');
     host.emit('s1');
-    await settle();
+    // The cut counts against the link, so the window reopens after its backoff.
+    await vi.advanceTimersByTimeAsync(1_000);
 
     expect(host.open[1].requests.at(-1)).toEqual({
       method: 'session/subscribe',
       params: { sessionId: 's1', after: { epoch: 'epoch-1', seq: 2 } },
     });
     host.emit('s1');
-    // A notification the old connection had buffered, delivered after its close, changes nothing.
-    cut.pushLate(sessionEvent('s1', 3));
+    // A notification the old connection had buffered, delivered after its close, is not delivered.
+    cut.pushLate(sessionEvent('s1', 6));
     expect(window.seqs('s1')).toEqual([1, 2, 3, 4, 5]);
+    host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2, 3, 4, 5, 6]);
     expect([...manager.subscriptions(1, 'devbox')]).toEqual(['s1']);
   });
 
@@ -556,7 +605,8 @@ describe('ConnectionManager: resuming across a cut', () => {
     host.answerBeforeReplay = true;
     host.open[1].cut();
     host.emit('s1');
-    await settle();
+    // Past the backoff, and the replay the answer overtook.
+    await vi.advanceTimersByTimeAsync(1_010);
     host.emit('s1');
     await settle();
     expect(window.seqs('s1')).toEqual([1, 2, 3, 4]);
@@ -606,12 +656,52 @@ describe('ConnectionManager: resuming across a cut', () => {
     expect(window.seqs('s1')).toEqual([1, 2]);
   });
 
-  it('treats a window connection that cannot reopen as a lost link, with backoff', async () => {
-    const { host, state } = await subscribedWindow();
-    host.connectFailures.push(failure('sshFailed'));
+  it('treats a window connection the host cuts as a lost link, reopening only after the backoff', async () => {
+    const { host, state, window } = await subscribedWindow();
     host.open[1].cut();
     await settle();
     expect(state()).toMatchObject({ status: 'reconnecting', attempt: 1 });
     expect(host.open).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(host.open).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(host.open).toHaveLength(2);
+    host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2, 3]);
+  });
+
+  it('treats a window connection that cannot reopen as a lost link', async () => {
+    const { host, state, window, manager } = await subscribedWindow();
+    manager.disconnect('devbox');
+    manager.connect('devbox');
+    host.connectFailures.push(failure('sshFailed'));
+    // The control connection has already opened, so the failure is the window's reopen.
+    await settle();
+    expect(state()).toMatchObject({ status: 'reconnecting', attempt: 1 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(state()).toMatchObject({ status: 'connected' });
+    host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2, 3]);
+  });
+
+  it('keeps its subscriptions when it is suspended while it reopens', async () => {
+    const { host, window, manager } = await subscribedWindow();
+    manager.disconnect('devbox');
+    manager.connect('devbox');
+    host.connectDelayMs = 100;
+    await vi.advanceTimersByTimeAsync(100);
+    // The control connection is up and the window's reopen is under way; cut everything now.
+    manager.disconnect('devbox');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(host.open).toHaveLength(0);
+    expect(window.resyncs()).toEqual([]);
+
+    host.connectDelayMs = 0;
+    manager.connect('devbox');
+    await settle();
+    host.emit('s1');
+    expect(window.seqs('s1')).toEqual([1, 2, 3]);
+    expect([...manager.subscriptions(1, 'devbox')]).toEqual(['s1']);
   });
 });

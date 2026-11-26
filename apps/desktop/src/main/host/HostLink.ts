@@ -16,6 +16,8 @@ export type HostLinkTuning = {
   heartbeatMs: number;
   /** How long `host/initialize` and `host/info` may take before the link counts as lost, in ms. */
   requestTimeoutMs: number;
+  /** How long the connector may take to open a connection before the attempt counts as failed, in ms. */
+  connectTimeoutMs: number;
 };
 
 export const DEFAULT_HOST_LINK_TUNING: HostLinkTuning = {
@@ -24,6 +26,7 @@ export const DEFAULT_HOST_LINK_TUNING: HostLinkTuning = {
   stableAfterMs: 30_000,
   heartbeatMs: 30_000,
   requestTimeoutMs: 20_000,
+  connectTimeoutMs: 60_000,
 };
 
 export type HostLinkOptions = {
@@ -98,6 +101,7 @@ export class HostLink {
     if (this.disposed) return;
     this.wanted = true;
     if (this.attempting || this.control) return;
+    this.attempt = 0;
     this.clearRetry();
     this.setState({ status: 'connecting' });
     void this.run();
@@ -108,6 +112,7 @@ export class HostLink {
     if (reason === 'disconnected') this.wanted = false;
     this.generation += 1;
     this.attempting = false;
+    this.attempt = 0;
     this.clearRetry();
     this.dropControl();
     this.setState({ status: 'offline', reason, lastSeenAt: this.lastSeenAt });
@@ -158,7 +163,7 @@ export class HostLink {
 
   /** Opens a further connection for a window and checks its protocol; rejects with HostConnectError. */
   async openClient(): Promise<HostTransport> {
-    const transport = await this.options.connector.connect();
+    const transport = await this.openTransport();
     const handshake = await initializeHost(transport, this.options.client, this.options.tuning.requestTimeoutMs);
     if (handshake.ok) return transport;
     transport.close();
@@ -177,7 +182,7 @@ export class HostLink {
     this.attempting = true;
     let transport: HostTransport;
     try {
-      transport = await this.options.connector.connect();
+      transport = await this.openTransport();
     } catch (error) {
       if (stale()) return;
       this.attempting = false;
@@ -202,6 +207,30 @@ export class HostLink {
     this.adopt(transport);
     this.evaluate(greeting.info, greeting.latencyMs);
     this.scheduleHeartbeat();
+  }
+
+  /** The connector's connect, bounded by connectTimeoutMs; a connection that opens after that is closed. */
+  private openTransport(): Promise<HostTransport> {
+    const { connectTimeoutMs } = this.options.tuning;
+    return new Promise((resolve, reject) => {
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        const detail = `Opening a connection took longer than ${connectTimeoutMs} ms`;
+        reject(new HostConnectError({ kind: 'lost', detail, stderrTail: '' }));
+      }, connectTimeoutMs);
+      this.options.connector.connect().then(
+        transport => {
+          clearTimeout(timer);
+          if (timedOut) transport.close();
+          else resolve(transport);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
   }
 
   /**
@@ -288,17 +317,19 @@ export class HostLink {
       return;
     }
     this.attempt += 1;
-    if (!this.options.isOnline()) {
-      this.setState({ status: 'offline', reason: 'noNetwork', lastSeenAt: this.lastSeenAt });
-      return;
-    }
     const { tuning } = this.options;
     const delay = backoffDelay(this.attempt, tuning.backoff, this.options.random);
+    // Armed even with no network: a short drop the online poll never saw must not strand the host.
     this.clearRetry();
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
       void this.run();
     }, delay);
+    // The local host needs no network, so only a remote one reports its absence.
+    if (this.options.kind === 'remote' && !this.options.isOnline()) {
+      this.setState({ status: 'offline', reason: 'noNetwork', lastSeenAt: this.lastSeenAt });
+      return;
+    }
     this.setState(
       this.attempt > tuning.offlineAfterAttempts
         ? { status: 'offline', reason: 'unreachable', lastSeenAt: this.lastSeenAt }
