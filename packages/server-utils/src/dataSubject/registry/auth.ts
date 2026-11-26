@@ -146,6 +146,10 @@ export const authHolders = {
     kind: 'noUserData',
     note: 'Registered OAuth client applications; no person is recorded on them.',
   },
+  OAuthClientSignIn: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   OAuthGrant: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],

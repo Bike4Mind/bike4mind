@@ -15,6 +15,8 @@ const {
   removeFromWatchesMock,
   removeFromEvalSetsMock,
   deleteLimitEventsMock,
+  deleteSignInsMock,
+  findUserMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
@@ -30,10 +32,12 @@ const {
   removeFromWatchesMock: vi.fn(),
   removeFromEvalSetsMock: vi.fn(),
   deleteLimitEventsMock: vi.fn(),
+  deleteSignInsMock: vi.fn(),
+  findUserMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  User: {},
+  User: { findById: findUserMock },
   authEventRepository: { deleteAllForUser: deleteAuthEventsMock },
   embedConversationRepository: { deleteAllForUser: deleteEmbedMock },
   integrationRequestRepository: { deleteAllForUser: deleteRequestsMock },
@@ -42,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   campaignWatchRepository: { removeUser: removeFromWatchesMock },
   abuseEvalSetRepository: { removeUser: removeFromEvalSetsMock },
   userLimitEventRepository: { deleteAllForUser: deleteLimitEventsMock },
+  oauthClientSignInRepository: { deleteAllForUser: deleteSignInsMock },
 }));
 vi.mock('../auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
 vi.mock('./publish/purgeUserPublishedArtifacts', () => ({
@@ -59,7 +64,7 @@ vi.mock('../integrations/jira/revokeAtlassianGrant', () => ({
   revokeAtlassianGrant: revokeAtlassianMock,
 }));
 
-import { purgeDeletedUserData } from './purgeDeletedUserData';
+import { purgeDeletedUserData, readUserIntegrationGrants } from './purgeDeletedUserData';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -70,6 +75,7 @@ beforeEach(() => {
   hideAnnotationsMock.mockReset().mockResolvedValue(0);
   withdrawListingsMock.mockReset().mockResolvedValue(0);
   deleteAuthEventsMock.mockReset().mockResolvedValue(0);
+  deleteSignInsMock.mockReset().mockResolvedValue(0);
   removeFromDetectionsMock.mockReset().mockResolvedValue(0);
   removeFromWatchesMock.mockReset().mockResolvedValue(undefined);
   removeFromEvalSetsMock.mockReset().mockResolvedValue(0);
@@ -94,7 +100,41 @@ describe('purgeDeletedUserData', () => {
     expect(removeFromWatchesMock).toHaveBeenCalledWith('u1');
     expect(removeFromEvalSetsMock).toHaveBeenCalledWith('u1');
     expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
+    expect(deleteSignInsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs instead of throwing when deleting app sign-in records fails, and still runs the later steps', async () => {
+    deleteSignInsMock.mockRejectedValue(new Error('sign-ins down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('app sign-in records'));
+    expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
+  });
+
+  it('logs instead of throwing when deleting limit events or leaving campaign watches fails', async () => {
+    deleteLimitEventsMock.mockRejectedValue(new Error('limit events down'));
+    removeFromWatchesMock.mockRejectedValue(new Error('watches down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('limit events'));
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('campaign watches'));
+    expect(removeFromEvalSetsMock).toHaveBeenCalledWith('u1');
+  });
+
+  it('reads only the integration credentials from the stored user row', async () => {
+    const grants = { googleDrive: null, atlassianConnect: null };
+    const lean = vi.fn().mockResolvedValue(grants);
+    findUserMock.mockReturnValue({ lean });
+
+    await expect(readUserIntegrationGrants('u1')).resolves.toBe(grants);
+    expect(findUserMock).toHaveBeenCalledWith('u1', 'googleDrive atlassianConnect');
   });
 
   it('logs instead of throwing when removing the user from shadow detections fails', async () => {

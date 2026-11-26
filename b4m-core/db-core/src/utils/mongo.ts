@@ -5,6 +5,12 @@ import {
   isDocumentDBConnection,
   addCertificateToUri,
 } from '../certs/documentdb-cert-manager';
+import { USE_DOCUMENTDB } from './documentdb-compat';
+
+export const DOCUMENTDB_DEPRECATION_WARNING =
+  'AWS DocumentDB support is deprecated and will be removed in a future release. ' +
+  'Migrate to MongoDB Atlas or MongoDB Community 7 or later.';
+let documentDBDeprecationWarned = false;
 
 /**
  * Sleep utility for retry delays
@@ -153,6 +159,11 @@ const ensureConnection = async (url: string, logger?: Logger, overrides?: Connec
       await checkWarmConnection(logger);
     }
     return true;
+  }
+
+  if (!documentDBDeprecationWarned && (isDocumentDBConnection(url) || USE_DOCUMENTDB())) {
+    documentDBDeprecationWarned = true;
+    logger.warn(DOCUMENTDB_DEPRECATION_WARNING);
   }
 
   // Check if this is a DocumentDB connection and handle certificate

@@ -490,6 +490,18 @@ describe('EmailJobDetail', () => {
     expect(declared('email-job-detail-form-column', '900px')['border-right']).toBe('1px solid');
   });
 
+  it('moves the campaign title to its own row below sm so Save and the chips keep their full size', () => {
+    m.job = { ...draftJob(EmailJobOverallStatus.COMPLETE), isTestMode: true };
+    renderDetail('job1');
+
+    expect(getComputedStyle(screen.getByTestId('email-job-detail-header')).flexWrap).toBe('wrap');
+    expect(declared('email-job-detail-title', '0px')).toMatchObject({ order: '1', 'flex-basis': '100%' });
+    const wide = declared('email-job-detail-title', '600px');
+    expect(wide.order).toBe('0');
+    expect(wide['flex-basis']).toMatch(/^0(px|%)?$/);
+    expect(getComputedStyle(screen.getByTestId('email-job-detail-actions')).flexShrink).toBe('0');
+  });
+
   it('lets the preview header wrap so the recipient select cannot force a sideways scroll', () => {
     renderDetail('job1');
 

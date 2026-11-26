@@ -180,6 +180,8 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   },
   { shape: 'aws.acm.Certificate', reason: 'TLS certificate for a hosted load balancer listener, no compute.' },
   { shape: 'aws.acm.CertificateValidation', reason: 'Waits for the certificate above to be issued, no compute.' },
+  { shape: 'aws.lb.TargetGroup', reason: 'Load balancer target for an inventoried sst.aws.Service, no compute.' },
+  { shape: 'aws.lb.ListenerRule', reason: 'Load balancer routing to an inventoried sst.aws.Service, no compute.' },
   { shape: 'aws.servicediscovery.Service', reason: 'Service discovery plumbing.' },
   { shape: 'aws.servicediscovery.PrivateDnsNamespace', reason: 'Service discovery plumbing.' },
   { shape: 'aws.wafv2.WebAcl', reason: 'Hosted edge protection, no compute.' },
