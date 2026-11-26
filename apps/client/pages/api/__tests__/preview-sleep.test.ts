@@ -37,6 +37,14 @@ vi.mock('@aws-sdk/client-ecs', () => ({
     constructor(public input: unknown) {}
   },
 }));
+vi.mock('@aws-sdk/client-elastic-load-balancing-v2', () => ({
+  ElasticLoadBalancingV2Client: class {
+    send = send;
+  },
+  DescribeTargetHealthCommand: class {
+    constructor(public input: unknown) {}
+  },
+}));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
@@ -169,6 +177,59 @@ describe('/api/preview-sleep', () => {
         : { services: [{ runningCount: 0, desiredCount: 1 }] }
     );
     expect((await call('GET'))._getJSONData()).toMatchObject({ asleep: false, waking: true });
+  });
+
+  describe('once every task is running', () => {
+    const respond = (service: Record<string, unknown>, health: string[]) =>
+      send.mockImplementation(async (c: { constructor: { name: string } }) => {
+        if (c.constructor.name === 'DescribeScalableTargetsCommand')
+          return { ScalableTargets: TARGETS.map(t => ({ ResourceId: t.resourceId, MinCapacity: 1, MaxCapacity: 1 })) };
+        if (c.constructor.name === 'DescribeTargetHealthCommand')
+          return { TargetHealthDescriptions: health.map(State => ({ TargetHealth: { State } })) };
+        return { services: [{ runningCount: 1, desiredCount: 1, ...service }] };
+      });
+    const loadBalancers = [{ targetGroupArn: 'target-group-placeholder' }];
+    const deployments = (rolloutState: string) => [
+      { status: 'ACTIVE', rolloutState: 'IN_PROGRESS' },
+      { status: 'PRIMARY', rolloutState },
+    ];
+
+    it('stays waking while the primary rollout is in progress', async () => {
+      respond({ deployments: deployments('IN_PROGRESS'), loadBalancers }, ['healthy']);
+      expect((await call('GET'))._getJSONData()).toMatchObject({ asleep: false, waking: true });
+    });
+
+    it('stays waking while the target is not yet healthy, though the rollout reads completed', async () => {
+      respond({ deployments: deployments('COMPLETED'), loadBalancers }, ['initial']);
+      const body = (await call('GET'))._getJSONData();
+      expect(body).toMatchObject({ asleep: false, waking: true });
+      expect(body.services[0]).toEqual({ label: 'chat-completion', running: 1, desired: 1 });
+    });
+
+    it('reads awake once the rollout completed and the targets are healthy', async () => {
+      respond({ deployments: deployments('COMPLETED'), loadBalancers }, ['healthy']);
+      expect((await call('GET'))._getJSONData()).toMatchObject({ asleep: false, waking: false });
+      expect(commandsOf('DescribeTargetHealthCommand')).toContainEqual({ TargetGroupArn: 'target-group-placeholder' });
+    });
+
+    it('reads awake with no deployments array and no load balancer', async () => {
+      respond({}, []);
+      expect((await call('GET'))._getJSONData()).toMatchObject({ asleep: false, waking: false });
+      expect(commandsOf('DescribeTargetHealthCommand')).toEqual([]);
+    });
+
+    it('stays asleep, not waking, at desired 0 even with an unhealthy target group', async () => {
+      send.mockImplementation(async (c: { constructor: { name: string } }) => {
+        if (c.constructor.name === 'DescribeScalableTargetsCommand')
+          return { ScalableTargets: TARGETS.map(t => ({ ResourceId: t.resourceId, MinCapacity: 0, MaxCapacity: 0 })) };
+        if (c.constructor.name === 'DescribeTargetHealthCommand') return { TargetHealthDescriptions: [] };
+        return {
+          services: [{ runningCount: 0, desiredCount: 0, deployments: deployments('COMPLETED'), loadBalancers }],
+        };
+      });
+      expect((await call('GET'))._getJSONData()).toMatchObject({ asleep: true, waking: false });
+      expect(commandsOf('DescribeTargetHealthCommand')).toEqual([]);
+    });
   });
 
   it('GET treats a missing service or target as asleep, and no targets as awake', async () => {

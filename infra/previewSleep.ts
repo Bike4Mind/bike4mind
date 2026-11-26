@@ -82,6 +82,8 @@ export const previewSleepForWeb = previewSleepEnabled
           },
           // Read-only, and AWS supports no resource scope for it.
           { actions: ['application-autoscaling:DescribeScalableTargets'], resources: ['*'] },
+          // Same: read-only with no resource scope. The status route reads it to see a woken task serve.
+          { actions: ['elasticloadbalancing:DescribeTargetHealth'], resources: ['*'] },
           // RegisterScalableTarget on an ECS target also checks these against the service.
           {
             actions: ['ecs:DescribeServices', 'ecs:UpdateService'],

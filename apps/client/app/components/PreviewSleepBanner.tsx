@@ -64,7 +64,7 @@ const PreviewSleepBanner = ({ placement }: { placement: 'sidenav' | 'floating' }
       <Box>
         <Typography level="body-sm">
           {data.waking
-            ? `This preview is waking up (${progress}). Chat works once every service is running.`
+            ? `This preview is waking up (${progress}). Chat works once every service is up and serving.`
             : 'This preview is asleep to save cost. Wake it to use chat.'}
         </Typography>
         {wake.isError && (
