@@ -40,6 +40,8 @@ public final class BusyBlockSyncer {
   /// The sync or user save holding the lock; every `sync` caller and `save` take it, so a sync that read the opt-in
   /// before a toggle-off cannot write it back on afterwards.
   private var current: Task<BusyBlockSyncOutcome, Never>?
+  /// A user save already sent; outlives `sessionDidStart` so the next session's sync cannot read before it lands.
+  private var sentSave: Task<BusyBlockSyncOutcome, Never>?
   /// Bumped by `sessionDidStart`: work begun under an earlier session must not write to or throttle the new one.
   private var session = 0
   /// The latest outcome that says something about the account or device; `inFlight` and `throttled` leave it alone.
@@ -68,7 +70,10 @@ public final class BusyBlockSyncer {
     guard reader.access() != .notDetermined else { return record(.skipped(.neverAsked)) }
     if !force, let lastSync, now().timeIntervalSince(lastSync) < Self.minInterval { return .skipped(.throttled) }
     let startedIn = session
-    let task = Task { await perform(in: startedIn) }
+    let task = Task { [sentSave] in
+      _ = await sentSave?.value
+      return await perform(in: startedIn)
+    }
     current = task
     defer { release(task) }
     let outcome = await withTaskCancellationHandler {
@@ -99,7 +104,11 @@ public final class BusyBlockSyncer {
     let save = Task { try await api.save(enabled: enabled, blocks: enabled ? currentBlocks() : []) }
     let task = Task<BusyBlockSyncOutcome, Never> { Self.outcome(of: await save.result) }
     current = task
-    defer { release(task) }
+    sentSave = task
+    defer {
+      release(task)
+      if sentSave == task { sentSave = nil }
+    }
     let state = try await save.value
     // No suspension between the check and the write, so a session started meanwhile never gets this outcome.
     if session == startedIn { lastOutcome = Self.outcome(of: .success(state)) }

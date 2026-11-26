@@ -458,6 +458,25 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(saves.count, 1)
   }
 
+  func testNewSessionSyncWaitsForAToggleOffAlreadySent() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized))
+    await api.holdSave()
+
+    let save = Task { try await syncer.save(enabled: false) }
+    while await api.saveAttempts == 0 { await Task.yield() }
+    syncer.sessionDidStart()
+    let sync = Task { await syncer.sync() }
+    for _ in 0..<10 { await Task.yield() }
+    await api.release()
+    _ = try? await save.value
+    let outcome = await sync.value
+
+    XCTAssertEqual(outcome, .skipped(.disabled))
+    let saves = await api.saves.map(\.enabled)
+    XCTAssertEqual(saves, [false])
+  }
+
   func testEnablingWithDeniedAccessRevertsTheToggleAndWritesNothing() async {
     let api = FakeBusyBlocksAPI(enabled: false)
     let reader = FakeReader(access: .notDetermined, grants: false)
