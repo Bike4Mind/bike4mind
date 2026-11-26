@@ -28,10 +28,29 @@ export function isAdminAssistantToolName(name: string): name is AdminAssistantTo
   return ADMIN_ASSISTANT_TOOL_NAME_SET.has(name);
 }
 
-/** Open only for the exact surface id and a strictly-true `isAdmin`. */
+/**
+ * Built-in tools that reach the web or another integration. Admin tool results carry
+ * customer-written text, so these are never offered on a turn where the gate is open.
+ */
+export const ADMIN_ASSISTANT_WITHHELD_TOOL_NAMES = [
+  'web_search',
+  'web_fetch',
+  'deep_research',
+  'delegate_to_agent',
+  'blog_publish',
+  'blog_edit',
+  'blog_draft',
+] as const;
+
+/**
+ * Open only for the exact surface id, a strictly-true `isAdmin`, and an acting user who owns
+ * the session: admin lookups are stored in the session, so they must not land in anyone else's.
+ */
 export function isAdminAssistantGateOpen(
-  session: { surface?: string | null },
-  user: { isAdmin?: boolean | null }
+  session: { surface?: string | null; userId?: unknown },
+  user: { isAdmin?: boolean | null; id?: unknown }
 ): boolean {
-  return session.surface === ADMIN_ASSISTANT_SURFACE && user.isAdmin === true;
+  if (session.surface !== ADMIN_ASSISTANT_SURFACE || user.isAdmin !== true) return false;
+  if (session.userId == null || user.id == null) return false;
+  return String(session.userId) === String(user.id);
 }

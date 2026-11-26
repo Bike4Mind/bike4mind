@@ -374,6 +374,37 @@ describe('ChatCompletionProcess admin assistant gate', () => {
     carriesNoAdminPrompt(turn);
   });
 
+  it('admin-assistant session owned by another user, turn run by an admin: none offered, no admin prompt', async () => {
+    const turn = await runTurn({
+      isAdmin: true,
+      surface: 'admin-assistant',
+      session: { userId: 'other-owner', systemPromptText: 'OWNER PROMPT', enabledTools: [...ADMIN_NAMES] },
+      requestTools: [...ADMIN_NAMES],
+      externalTools: allAdminExternalTools(),
+    });
+
+    offersNoAdminTool(turn);
+    carriesNoAdminPrompt(turn);
+  });
+
+  it('admin-assistant session, admin: web and integration tools are withheld alongside the admin tools', async () => {
+    const withheld = ['web_search', 'web_fetch'];
+    // web_search needs a provider key this harness does not supply, so web_fetch is the probe.
+    const control = await runTurn({ isAdmin: true, surface: null, requestTools: withheld });
+    expect(control.offeredToolNames).toContain('web_fetch');
+
+    const turn = await runTurn({
+      isAdmin: true,
+      surface: 'admin-assistant',
+      session: { enabledTools: withheld },
+      requestTools: withheld,
+      externalTools: allAdminExternalTools(),
+    });
+
+    expect(turn.offeredToolNames).toEqual(expect.arrayContaining(ADMIN_NAMES));
+    expect(turn.offeredToolNames.filter(name => withheld.includes(name))).toEqual([]);
+  });
+
   it('admin-assistant session, admin, no externalTools: offers navigate_view only, does not throw', async () => {
     const turn = await runTurn({ isAdmin: true, surface: 'admin-assistant' });
 
