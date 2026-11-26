@@ -308,25 +308,26 @@ public final class AuthController: AccessTokenProviding {
       logger.notice("Server-side logout failed; will retry: \(error, privacy: .public)")
       guard let latestRefreshToken else { return }
       updatePendingRevocations(
-        removing: [], adding: [PendingRevocation(baseURL: baseURL, refreshToken: latestRefreshToken)])
+        removing: [],
+        adding: [PendingRevocation(baseURL: baseURL, refreshToken: latestRefreshToken, createdAt: now())])
     }
   }
 
-  /// Finishes revocations an earlier sign-out could not complete. Call at launch and on foreground.
+  /// Finishes revocations an earlier sign-out on this server could not complete. Call at launch and on foreground.
   public func retryPendingRevocations() async {
     guard !isRetryingRevocations else { return }
     isRetryingRevocations = true
     defer { isRetryingRevocations = false }
     let pending: [PendingRevocation]
     do {
-      pending = try tokenStore.pendingRevocations()
+      pending = try tokenStore.pendingRevocations().filter { $0.baseURL == environment.baseURL }
     } catch {
       logger.notice("Pending revocations not readable yet: \(error, privacy: .public)")
       return
     }
     guard !pending.isEmpty else { return }
     var stillPending: [PendingRevocation] = []
-    for revocation in pending {
+    for revocation in PendingRevocation.bounded(pending, now: now()) {
       if let retry = await revoke(revocation) { stillPending.append(retry) }
     }
     updatePendingRevocations(removing: pending, adding: stillPending)
@@ -339,7 +340,8 @@ public final class AuthController: AccessTokenProviding {
     do {
       let refreshed = try await api.refresh(refreshToken: revocation.refreshToken)
       if let rotated = refreshed.refreshToken {
-        current = PendingRevocation(baseURL: revocation.baseURL, refreshToken: rotated)
+        current = PendingRevocation(
+          baseURL: revocation.baseURL, refreshToken: rotated, createdAt: revocation.createdAt)
       }
       try await api.logout(accessToken: refreshed.accessToken)
       return nil
@@ -354,7 +356,8 @@ public final class AuthController: AccessTokenProviding {
   private func updatePendingRevocations(removing: [PendingRevocation], adding: [PendingRevocation]) {
     do {
       let latest = try tokenStore.pendingRevocations()
-      try tokenStore.setPendingRevocations(latest.filter { !removing.contains($0) } + adding)
+      try tokenStore.setPendingRevocations(
+        PendingRevocation.bounded(latest.filter { !removing.contains($0) } + adding, now: now()))
     } catch {
       logger.error("Saving pending revocations failed: \(error, privacy: .public)")
     }

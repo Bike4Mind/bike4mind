@@ -10,7 +10,17 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /** A signed-out session the server has not confirmed revoked yet, kept only to finish that revocation. */
-data class PendingRevocation(val baseUrl: String, val refreshToken: String)
+data class PendingRevocation(val baseUrl: String, val refreshToken: String, val createdAtMillis: Long) {
+    companion object {
+        /** The server's refresh-session lifetime (`DEFAULT_REFRESH_TTL_MS` in b4m-core/services authSessionService). */
+        const val MAX_AGE_MILLIS = 30L * 24 * 60 * 60 * 1000
+        const val MAX_COUNT = 10
+
+        /** Drops entries past the refresh lifetime and keeps only the newest [MAX_COUNT]. */
+        fun bounded(revocations: List<PendingRevocation>, nowMillis: Long): List<PendingRevocation> =
+            revocations.filter { nowMillis - it.createdAtMillis < MAX_AGE_MILLIS }.takeLast(MAX_COUNT)
+    }
+}
 
 /** Persists the token pair. The app's implementation encrypts it with an Android Keystore key. */
 interface TokenStore {
@@ -26,7 +36,11 @@ interface TokenStore {
  * The signed-in state and the one place tokens change. Concurrent 401s share a single refresh: callers that
  * arrive while one runs wait for it and reuse its result instead of spending the refresh token twice.
  */
-class AuthSession(private val api: AuthApi, private val store: TokenStore) : BearerTokens {
+class AuthSession(
+    private val api: AuthApi,
+    private val store: TokenStore,
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+) : BearerTokens {
     private val tokens = MutableStateFlow<Tokens?>(null)
     private val refreshLock = Mutex()
     private val revocationLock = Mutex()
@@ -75,7 +89,11 @@ class AuthSession(private val api: AuthApi, private val store: TokenStore) : Bea
         if (current != null && !tryLogout(current.accessToken)) {
             revocationLock.withLock {
                 store.savePendingRevocations(
-                    store.loadPendingRevocations() + PendingRevocation(api.baseUrl, current.refreshToken),
+                    PendingRevocation.bounded(
+                        store.loadPendingRevocations() +
+                            PendingRevocation(api.baseUrl, current.refreshToken, nowMillis()),
+                        nowMillis(),
+                    ),
                 )
             }
         }
@@ -89,9 +107,14 @@ class AuthSession(private val api: AuthApi, private val store: TokenStore) : Bea
             val mine = revocationLock.withLock { store.loadPendingRevocations() }.filter { it.baseUrl == api.baseUrl }
             if (mine.isEmpty()) return
             // The network calls run outside the lock so a sign-out never waits on a slow retry.
-            val stillPending = mine.mapNotNull { revoke(it) }
+            val stillPending = PendingRevocation.bounded(mine, nowMillis()).mapNotNull { revoke(it) }
             revocationLock.withLock {
-                store.savePendingRevocations(store.loadPendingRevocations().filterNot { it in mine } + stillPending)
+                store.savePendingRevocations(
+                    PendingRevocation.bounded(
+                        store.loadPendingRevocations().filterNot { it in mine } + stillPending,
+                        nowMillis(),
+                    ),
+                )
             }
         } finally {
             retrying.set(false)

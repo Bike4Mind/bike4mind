@@ -48,7 +48,7 @@ class KeystoreTokenStore(context: Context) : TokenStore {
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val baseUrl = item.optString(BASE_URL).ifEmpty { return@mapNotNull null }
             val refresh = item.optString(REFRESH).ifEmpty { return@mapNotNull null }
-            PendingRevocation(baseUrl, refresh)
+            PendingRevocation(baseUrl, refresh, item.optLong(CREATED_AT))
         }
     }
 
@@ -58,7 +58,11 @@ class KeystoreTokenStore(context: Context) : TokenStore {
             return@withContext
         }
         val array = JSONArray()
-        revocations.forEach { array.put(JSONObject().put(BASE_URL, it.baseUrl).put(REFRESH, it.refreshToken)) }
+        revocations.forEach {
+            array.put(
+                JSONObject().put(BASE_URL, it.baseUrl).put(REFRESH, it.refreshToken).put(CREATED_AT, it.createdAtMillis),
+            )
+        }
         seal(PENDING, array.toString())
     }
 
@@ -109,6 +113,7 @@ class KeystoreTokenStore(context: Context) : TokenStore {
         const val BLOB = "blob"
         const val PENDING = "pendingRevocations"
         const val BASE_URL = "baseUrl"
+        const val CREATED_AT = "createdAt"
         const val ACCESS = "access"
         const val REFRESH = "refresh"
     }
