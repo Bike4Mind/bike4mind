@@ -1550,6 +1550,36 @@ export class SessionStore implements SessionWritesStore {
     return this.serialize(id, async () => (await this.appendNow(id, message)) || null);
   }
 
+  /**
+   * Write a message of a turn the web session ran (ChatService.sendLinkedTurn), under the id the
+   * importer gives that quest: replaced in place when a sync already brought it in, appended
+   * otherwise. The ids are imported ones, so the session stays synced; `settled` also clears the
+   * import's running mark, which the next sync would otherwise only clear on its own schedule.
+   */
+  async putLinkedMessage(
+    id: string,
+    message: ChatMessage,
+    options: { settled?: boolean } = {}
+  ): Promise<ChatSession | null> {
+    if (!isImportedMessageId(message.id)) throw new Error(`Not an imported message id: ${message.id}`);
+    return this.serialize(id, async () => {
+      const directory = await this.directoryFor(false);
+      if (!directory) return null;
+      const session = await this.read(directory, id);
+      if (!session) return null;
+      const at = session.messages.findIndex(existing => existing.id === message.id);
+      if (at >= 0) session.messages[at] = message;
+      else session.messages.push(message);
+      session.updatedAt = new Date().toISOString();
+      if (options.settled && session.importOrigin?.running) {
+        const { running: _running, ...origin } = session.importOrigin;
+        session.importOrigin = origin;
+      }
+      await this.write(directory, session);
+      return session;
+    });
+  }
+
   /** appendMessage, but `false` and nothing written when `admit` rejects the session as stored. */
   async appendMessageIf(
     id: string,

@@ -29,6 +29,8 @@ export interface ChatImportOrigin {
   gitBranch?: string;
   /** A subagent transcript's parent Claude session. */
   parentSourceId?: string;
+  /** Bike4Mind web only: a reply in the notebook was still being written at the last sync. */
+  running?: boolean;
 }
 
 /**
@@ -40,6 +42,15 @@ export const IMPORTED_MESSAGE_PREFIX: Readonly<Record<ClaudeImportKind, string>>
   'claude-chat': 'cl-',
   'b4m-web': 'bw-',
 };
+
+/**
+ * The ids a Bike4Mind web quest's prompt (`p`) and reply (`r`) take in the desktop copy. Must stay
+ * in sync with mapQuests (main/claudeImport/webSessionMapper.ts): a desktop send through the web
+ * session writes these same ids, so the next sync replaces its messages rather than adding to them.
+ */
+export function webQuestMessageId(questId: string, part: 'p' | 'r'): string {
+  return `${IMPORTED_MESSAGE_PREFIX['b4m-web']}${questId}-${part}`;
+}
 
 export function isImportedMessageId(id: string): boolean {
   return IMPORT_KINDS.some(kind => id.startsWith(IMPORTED_MESSAGE_PREFIX[kind]));
@@ -65,6 +76,7 @@ export function normalizeImportOrigin(value: unknown): ChatImportOrigin | null {
     ...text('cwd'),
     ...text('gitBranch'),
     ...text('parentSourceId'),
+    ...(raw.running === true ? { running: true } : {}),
   };
 }
 
