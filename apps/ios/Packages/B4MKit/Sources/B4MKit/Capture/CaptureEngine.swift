@@ -39,6 +39,8 @@ public actor CaptureEngine {
   private var uploaders: [String: any BackgroundUploading] = [:]
   private var eventTasks: [String: Task<Void, Never>] = [:]
   private var inFlight: Set<UUID> = []
+  /// Jobs wiped by `discardAll()`; a pass still awaiting the network must not write them back.
+  private var discarded: Set<UUID> = []
   private var observers: [UUID: AsyncStream<[UploadJob]>.Continuation] = [:]
 
   /// - Parameters:
@@ -174,6 +176,19 @@ public actor CaptureEngine {
 
   public func discard(jobID: UUID) {
     try? store.remove(id: jobID)
+    notify()
+  }
+
+  /// Session end: every job, staged file and note belongs to the account that queued it, so none may be
+  /// sent or listed under the next one.
+  public func discardAll() {
+    discarded.formUnion(jobs().map(\.id))
+    discarded.formUnion(inFlight)
+    do {
+      try store.removeAll()
+    } catch {
+      logger.error("Clearing capture jobs failed: \(error, privacy: .public)")
+    }
     notify()
   }
 
@@ -468,6 +483,7 @@ public actor CaptureEngine {
   /// Returns whether the job was recorded; callers that move a job forward stop when it was not.
   @discardableResult
   private func persist(_ job: UploadJob) -> Bool {
+    guard !discarded.contains(job.id) else { return false }
     var job = job
     job.updatedAt = now()
     defer { notify() }

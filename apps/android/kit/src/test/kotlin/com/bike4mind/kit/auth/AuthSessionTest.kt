@@ -22,9 +22,12 @@ class AuthSessionTest {
     private val environment = ServerEnvironment.Custom("https://staging.example.test")
 
     private class MemoryStore(var tokens: Tokens? = null) : TokenStore {
+        var pending: List<PendingRevocation> = emptyList()
         override suspend fun load() = tokens
         override suspend fun save(tokens: Tokens) { this.tokens = tokens }
         override suspend fun clear() { tokens = null }
+        override suspend fun loadPendingRevocations() = pending
+        override suspend fun savePendingRevocations(revocations: List<PendingRevocation>) { pending = revocations }
     }
 
     @Test
@@ -76,6 +79,64 @@ class AuthSessionTest {
 
         assertNull(session.refreshAfterUnauthorized("a1"))
         assertFalse(session.isSignedIn.value)
+        assertNull(store.tokens)
+    }
+
+    @Test
+    fun anOfflineSignOutIsKeptAndFinishedOnceTheServerAnswers() = runTest {
+        var online = false
+        val logouts = mutableListOf<String?>()
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/logout" -> {
+                    if (!online) throw java.io.IOException("offline")
+                    logouts += request.headers[HttpHeaders.Authorization]
+                    respond("", HttpStatusCode.OK)
+                }
+                "/api/auth/refreshToken" -> respond("""{"accessToken":"a2","refreshToken":"r2"}""", HttpStatusCode.OK, json)
+                else -> error("unexpected ${request.url}")
+            }
+        }
+        val store = MemoryStore(Tokens("a1", "r1"))
+        val session = AuthSession(AuthApi(environment, HttpClient(engine)), store).apply { restore() }
+
+        session.signOut()
+
+        assertFalse(session.isSignedIn.value)
+        assertNull(store.tokens)
+        assertEquals(listOf(PendingRevocation(environment.baseUrl, "r1")), store.pending)
+
+        session.retryPendingRevocations()
+        assertEquals(listOf(PendingRevocation(environment.baseUrl, "r2")), store.pending)
+
+        online = true
+        session.retryPendingRevocations()
+
+        assertEquals(emptyList(), store.pending)
+        assertEquals(listOf<String?>("Bearer a2"), logouts)
+        assertFalse(session.isSignedIn.value)
+    }
+
+    @Test
+    fun aPendingRevocationTheServerAlreadyEndedIsDropped() = runTest {
+        val engine = MockEngine { respond("""{"error":"invalid"}""", HttpStatusCode.Unauthorized, json) }
+        val store = MemoryStore().apply { pending = listOf(PendingRevocation(environment.baseUrl, "r9")) }
+        val session = AuthSession(AuthApi(environment, HttpClient(engine)), store)
+
+        session.retryPendingRevocations()
+
+        assertEquals(emptyList(), store.pending)
+    }
+
+    @Test
+    fun anOnlineSignOutLeavesNothingPending() = runTest {
+        val engine = MockEngine { respond("", HttpStatusCode.OK) }
+        val store = MemoryStore(Tokens("a1", "r1"))
+        val session = AuthSession(AuthApi(environment, HttpClient(engine)), store).apply { restore() }
+
+        session.signOut()
+
+        assertEquals(emptyList(), store.pending)
         assertNull(store.tokens)
     }
 }

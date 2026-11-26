@@ -1,17 +1,24 @@
 package com.bike4mind.kit.auth
 
 import com.bike4mind.kit.networking.BearerTokens
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+/** A signed-out session the server has not confirmed revoked yet, kept only to finish that revocation. */
+data class PendingRevocation(val baseUrl: String, val refreshToken: String)
+
 /** Persists the token pair. The app's implementation encrypts it with an Android Keystore key. */
 interface TokenStore {
     suspend fun load(): Tokens?
     suspend fun save(tokens: Tokens)
     suspend fun clear()
+    suspend fun loadPendingRevocations(): List<PendingRevocation>
+    /** An empty list deletes the stored item. */
+    suspend fun savePendingRevocations(revocations: List<PendingRevocation>)
 }
 
 /**
@@ -21,6 +28,7 @@ interface TokenStore {
 class AuthSession(private val api: AuthApi, private val store: TokenStore) : BearerTokens {
     private val tokens = MutableStateFlow<Tokens?>(null)
     private val refreshLock = Mutex()
+    private val revocationLock = Mutex()
     private val signedIn = MutableStateFlow(false)
 
     val isSignedIn: StateFlow<Boolean> = signedIn.asStateFlow()
@@ -55,9 +63,55 @@ class AuthSession(private val api: AuthApi, private val store: TokenStore) : Bea
         }
     }
 
+    /**
+     * Ends the session locally whatever the server answers. A revocation that fails (offline, server error) is
+     * kept and finished by [retryPendingRevocations], so the server ends the session, and the push tokens bound to
+     * it, once it is reachable again.
+     */
     suspend fun signOut() {
-        tokens.value?.accessToken?.let { api.logout(it) }
+        val current = tokens.value
+        if (current != null && !tryLogout(current.accessToken)) {
+            revocationLock.withLock {
+                store.savePendingRevocations(
+                    store.loadPendingRevocations() + PendingRevocation(api.baseUrl, current.refreshToken),
+                )
+            }
+        }
         signOutLocally()
+    }
+
+    /** Finishes revocations an earlier sign-out on this server could not complete. Call at launch and on foreground. */
+    suspend fun retryPendingRevocations() = revocationLock.withLock {
+        val mine = store.loadPendingRevocations().filter { it.baseUrl == api.baseUrl }
+        if (mine.isEmpty()) return@withLock
+        val stillPending = mine.mapNotNull { revoke(it) }
+        store.savePendingRevocations(store.loadPendingRevocations().filterNot { it in mine } + stillPending)
+    }
+
+    /** Null once the server no longer holds the session; otherwise what to retry with next time. */
+    private suspend fun revoke(pending: PendingRevocation): PendingRevocation? {
+        var current = pending
+        return try {
+            val refreshed = api.refresh(pending.refreshToken)
+            current = pending.copy(refreshToken = refreshed.refreshToken)
+            api.logout(refreshed.accessToken)
+            null
+        } catch (ended: AuthException.Rejected) {
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failed: Exception) {
+            current
+        }
+    }
+
+    private suspend fun tryLogout(accessToken: String): Boolean = try {
+        api.logout(accessToken)
+        true
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failed: Exception) {
+        false
     }
 
     private suspend fun signOutLocally() {

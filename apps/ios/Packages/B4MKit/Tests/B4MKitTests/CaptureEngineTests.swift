@@ -108,6 +108,48 @@ final class CaptureEngineTests: XCTestCase {
 
   // MARK: - Happy paths
 
+  func testDiscardAllLeavesNothingForTheNextAccountToSendOrList() async throws {
+    let rig = rig()
+    let queued = try only(try await rig.engine.enqueue([photo("queued.jpg")], to: lake, note: "private note"))
+    let payload = rig.store.payloadURL(jobID: queued.id, fileName: "queued.jpg")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: payload.path(percentEncoded: false)))
+
+    await rig.engine.discardAll()
+    await rig.engine.resume()
+
+    let remaining = await rig.engine.jobs()
+    let calls = await rig.api.calls
+    XCTAssertEqual(remaining, [])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: payload.path(percentEncoded: false)))
+    XCTAssertEqual(calls, [])
+    XCTAssertTrue(rig.uploader.started.isEmpty)
+  }
+
+  func testAnUploadFinishingAfterDiscardAllDoesNotBringItsJobBack() async throws {
+    let rig = rig()
+    let job = try only(try await rig.engine.submit([photo()], to: lake, note: nil))
+    XCTAssertEqual(job.stage, .uploading)
+
+    await rig.engine.discardAll()
+    rig.uploader.finish(job.id)
+    try await Task.sleep(for: .milliseconds(50))
+
+    XCTAssertNil(try rig.store.load(id: job.id))
+    let remaining = await rig.engine.jobs()
+    XCTAssertEqual(remaining, [])
+  }
+
+  func testCaptureStackSignOutForgetsTheRememberedDestination() async throws {
+    let destinations = InMemoryDestinationStore(lake)
+    let stack = CaptureStack(
+      engine: rig().engine, destinations: CaptureFixtures.destinationSource, submitter: CaptureFixtures.submitter,
+      transcription: CaptureFixtures.transcription, destinationStore: destinations, jobs: CaptureFixtures.jobs)
+
+    await stack.signOut()
+
+    XCTAssertNil(destinations.lastDestination())
+  }
+
   func testALakeCaptureRunsQueuedUploadingRegisteringDone() async throws {
     let rig = rig()
     let jobs = try await rig.engine.submit([photo()], to: lake, note: "from the trail")

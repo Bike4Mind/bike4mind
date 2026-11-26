@@ -10,6 +10,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.B4MApplication
@@ -63,6 +65,11 @@ fun AppRoot(
         graph.session.restore()
         restored = true
     }
+
+    // A sign-out made while offline is finished on the server once the app is back in front.
+    var resumes by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumes++ }
+    LaunchedEffect(graph, resumes) { graph.session.retryPendingRevocations() }
 
     // A session that ends (a refresh refused, a sign-out elsewhere) drops what belonged to the account. Checked only
     // once restore has settled, so a signed-in cold start keeps the gallery's stale-first cache.

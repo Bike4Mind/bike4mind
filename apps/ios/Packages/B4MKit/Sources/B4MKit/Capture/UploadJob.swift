@@ -90,6 +90,14 @@ public protocol UploadJobStore: Sendable {
   func stagePayload(copying source: URL, jobID: UUID, fileName: String) throws -> URL
   func writePayload(_ data: Data, jobID: UUID, fileName: String) throws -> URL
   func discardPayload(jobID: UUID)
+  /// Removes every job and every staged payload, including ones whose record no longer decodes.
+  func removeAll() throws
+}
+
+extension UploadJobStore {
+  public func removeAll() throws {
+    for job in try loadAll() { try remove(id: job.id) }
+  }
 }
 
 /// One JSON file per job, so the app and the extension (separate processes) never rewrite each other's
@@ -161,6 +169,14 @@ public struct FileUploadJobStore: UploadJobStore {
 
   public func discardPayload(jobID: UUID) {
     try? FileManager.default.removeItem(at: payloadDirectory(jobID))
+  }
+
+  public func removeAll() throws {
+    do {
+      try FileManager.default.removeItem(at: root)
+    } catch CocoaError.fileNoSuchFile {
+      return
+    }
   }
 
   private static var encoder: JSONEncoder {
