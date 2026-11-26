@@ -170,7 +170,7 @@ final class AppServices {
     busyBlockSyncer = syncer
     busyBlockRefresh = BusyBlockBackgroundRefresh(
       identifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, scheduler: SystemBackgroundRefreshScheduler()
-    ) { await syncer.sync(force: true) }
+    ) { await syncer.syncJoiningInFlight() }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG
@@ -278,7 +278,6 @@ final class AppServices {
     await agentRunMonitor.stopAll()
     await push.unregisterBeforeSignOut()
     await auth.signOut(reason: reason)
-    busyBlockSyncer.reset()
   }
 
   var sessionListCache: any SessionListCache { current.cache }

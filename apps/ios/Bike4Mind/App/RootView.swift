@@ -63,7 +63,9 @@ struct RootView: View {
     .onChange(of: scenePhase, initial: true) { _, phase in
       // Lock on the way out so the app-switcher snapshot never shows content.
       if phase == .background {
-        if auth.state == .signedIn || auth.state == .locked { services.busyBlockRefresh.scheduleNext() }
+        if auth.state == .signedIn || auth.state == .locked {
+          services.busyBlockRefresh.scheduleNext(after: services.busyBlockSyncer.lastOutcome)
+        }
         auth.lockIfNeeded()
       }
       guard phase == .active else { return }
@@ -136,6 +138,7 @@ struct RootView: View {
       // First sign-in (or a restored launch) is the moment to ask for quiet push authorization.
       Task { await services.push.sessionDidStart() }
       services.questActivities.sessionDidStart()
+      services.busyBlockSyncer.sessionDidStart()
     }
     if plan.releasesPendingRoute {
       services.navigator.releasePendingRoute()
@@ -169,7 +172,6 @@ struct RootView: View {
     Task { await mediaFirstPages.invalidate() }
     services.push.sessionDidEnd()
     services.voiceCatalog.reset()
-    services.busyBlockSyncer.reset()
     // A session that ended on its own cannot unregister tokens; the activities still must not linger.
     services.questActivities.sessionDidEnd()
     let monitor = services.agentRunMonitor

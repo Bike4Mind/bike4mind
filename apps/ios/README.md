@@ -140,7 +140,9 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
   `Config/Local.xcconfig.example` to `Config/Local.xcconfig` and set `DEVELOPMENT_TEAM`, `B4M_APP_BUNDLE_ID` and the personal
   entitlements (`Config/Entitlements/*.personal.entitlements`, empty because a free team signs none of these capabilities); see
   [DEVICE_TESTING.md](DEVICE_TESTING.md). `Tools/check-entitlements-parity.sh` checks the team entitlements against `B4MKit`, requires the
-  personal variants to declare nothing, and checks the xcconfig defaults point at the committed files. CI's `fastlane` passes
+  personal variants to declare nothing, checks the xcconfig defaults point at the committed files, and checks the
+  `AppSupport/Info.plist` `BGTaskSchedulerPermittedIdentifiers` entry against `BusyBlockBackgroundRefresh.identifierSuffix` and
+  that every app config's `INFOPLIST_KEY_UIBackgroundModes` includes `fetch`. CI's `fastlane` passes
   `DEVELOPMENT_TEAM` on the command line, which overrides the xcconfig.
 - Authorization: provisional (silent) on first signed-in moment; the system prompt appears once, when the user first
   opens a conversation (`PushRegistrationCoordinator.userDidReachValueMoment`).
