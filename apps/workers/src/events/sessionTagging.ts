@@ -199,16 +199,21 @@ export const handler = withEventContext(async (event, logger) => {
     if (completionInfo) lastCompletionInfo = completionInfo;
   });
 
-  await recordSessionOperationalUsage({
-    operation: 'notebook_tagging',
-    user: payer,
-    sessionId,
-    modelId,
-    modelInfo,
-    completionInfo: lastCompletionInfo,
-    startTime: completionStartTime,
-    logger,
-  });
+  const completionEndTime = Date.now();
+  // Billed after the session write, not before: a write that throws retries the event with a fresh
+  // model call, which would otherwise bill twice.
+  const recordUsage = () =>
+    recordSessionOperationalUsage({
+      operation: 'notebook_tagging',
+      user: payer,
+      sessionId,
+      modelId,
+      modelInfo,
+      completionInfo: lastCompletionInfo,
+      startTime: completionStartTime,
+      endTime: completionEndTime,
+      logger,
+    });
 
   const tagsText = completionBuffers
     .map(text => text?.trim())
@@ -238,10 +243,11 @@ export const handler = withEventContext(async (event, logger) => {
       },
       writeOpts
     );
+    await recordUsage();
     if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping tag write`);
   } else {
     // Records that a completion was spent and yielded nothing - NOT that the notebook is tagged.
-    // `recordSessionOperationalUsage` above has already billed, so writing nothing here is what
+    // the attempt is billed right after this write, so writing nothing here is what
     // made a notebook the model can never tag cost a call on every run. `taggedAt` and `tags` stay
     // untouched: a stamp would turn one bad completion into a permanent "already tagged" and a
     // wipe would destroy tags a clone or an import carried in. The backoff bounds the spend and
@@ -255,6 +261,7 @@ export const handler = withEventContext(async (event, logger) => {
       },
       writeOpts
     );
+    await recordUsage();
     if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping attempt stamp`);
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
     logger.debug('Tagging response could not be parsed', { responseLength: tagsText?.length ?? 0 });

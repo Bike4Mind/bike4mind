@@ -127,6 +127,28 @@ describe('sessionTagging', () => {
     expect(written.tagLastAttemptAt).toBeNull();
   });
 
+  it('bills once when a failed tag write is replayed', async () => {
+    h.session = { ...h.session, tags: [] };
+    h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+    h.sessionUpdate.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(run()).rejects.toThrow('write failed');
+    expect(h.recordUsage).not.toHaveBeenCalled();
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(h.llmComplete).toHaveBeenCalledTimes(2);
+    expect(h.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('still bills a tag result dropped because the writer lost access', async () => {
+    h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+    h.sessionUpdate.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
   it('spends nothing and writes nothing when the payer cannot fund the operation', async () => {
     h.payerCanFund.mockResolvedValue(false);
 
