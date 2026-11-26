@@ -34,6 +34,7 @@ vi.mock('@bike4mind/database', () => ({
     findByEmailDomain: (...a: unknown[]) => mockFindByEmailDomain(...a),
     updateIDP: (...a: unknown[]) => mockUpdateIDP(...a),
   },
+  isSameOktaAudience: (a?: string, b?: string) => (a ?? '').replace(/\/+$/, '') === (b ?? '').replace(/\/+$/, ''),
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn() } }));
 vi.mock('@server/auth/oktaOidcClient', () => ({ clearConfigurationCache: vi.fn() }));
@@ -45,6 +46,7 @@ import handler from '../[id]';
 const call = async (method: string, body?: unknown, user: object = { id: 'a1', isAdmin: true }) => {
   const { req, res } = createMocks({ method: method as 'GET', query: { id: 'idp1' }, body: body as object });
   (req as unknown as Record<string, unknown>).user = user;
+  (req as unknown as Record<string, unknown>).logger = { error: vi.fn() };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return res;
 };
@@ -96,5 +98,37 @@ describe('/api/admin/identity-providers/[id] response schema', () => {
     );
     expect(mockFindById).not.toHaveBeenCalled();
     expect(mockUpdateIDP).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/admin/identity-providers/[id] - Okta audience changes', () => {
+  beforeEach(() => {
+    mockFindById.mockResolvedValue(leakyProvider);
+    mockFindByEmailDomain.mockResolvedValue(null);
+    mockUpdateIDP.mockResolvedValue(leakyProvider);
+  });
+
+  it('refuses a new audience that would keep the stored client secret', async () => {
+    const res = await call('PUT', { oktaConfig: { audience: 'https://elsewhere.example', clientId: 'cid' } });
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toMatch(/re-enter the client secret/i);
+    expect(mockUpdateIDP).not.toHaveBeenCalled();
+  });
+
+  it('accepts a new audience that comes with its own client secret', async () => {
+    const res = await call('PUT', {
+      oktaConfig: { audience: 'https://elsewhere.example', clientId: 'cid', clientSecret: 'NEW-SECRET' },
+    });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateIDP).toHaveBeenCalled();
+  });
+
+  it('keeps the stored secret on an edit that leaves the audience alone', async () => {
+    const res = await call('PUT', { name: 'Renamed', oktaConfig: { audience: 'api://x', clientId: 'cid' } });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateIDP).toHaveBeenCalled();
   });
 });
