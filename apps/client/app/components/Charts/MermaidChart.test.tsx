@@ -298,6 +298,39 @@ describe('MermaidChart', () => {
     });
   });
 
+  describe('External resources', () => {
+    it('locks mermaid label sanitizing and theme CSS against directive overrides', () => {
+      render(<MermaidChart chartDefinition={mockChartDefinition} />);
+
+      const options = vi.mocked(mermaid.initialize).mock.calls[0][0];
+      expect(options.secure).toEqual(expect.arrayContaining(['securityLevel', 'dompurifyConfig', 'themeCSS']));
+      expect(options.dompurifyConfig?.FORBID_TAGS).toEqual(expect.arrayContaining(['img', 'image', 'style']));
+    });
+
+    it('strips remote image and stylesheet references from the rendered svg', async () => {
+      vi.mocked(mermaid.render).mockResolvedValueOnce({
+        svg:
+          '<svg viewBox="0 0 10 10"><style>@import "https://example.com/a.css";</style>' +
+          '<image href="https://example.com/i.png" /><foreignObject><div><img src="https://example.com/p.png"></div>' +
+          '</foreignObject><rect style="fill: url(https://example.com/f)" marker-end="url(#arrow)" /></svg>',
+      } as Awaited<ReturnType<typeof mermaid.render>>);
+
+      render(<MermaidChart chartDefinition={mockChartDefinition} />);
+
+      const container = screen.getByTestId('mermaid-chart-container');
+      await waitFor(() => expect(container.querySelector('rect')).not.toBeNull());
+      expect(container.innerHTML).not.toContain('example.com');
+      expect(container.querySelector('rect')?.getAttribute('marker-end')).toBe('url(#arrow)');
+    });
+
+    it('refuses a definition that references an external resource without rendering it', async () => {
+      render(<MermaidChart chartDefinition={'graph TD\n  A-->B\n  style A fill:url(https://example.com/x)'} />);
+
+      await waitFor(() => expect(screen.getByTestId('mermaid-error-display')).toBeInTheDocument());
+      expect(mermaid.render).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Error Handling', () => {
     it('should display error message when chart rendering fails', async () => {
       const mermaid = await import('mermaid');

@@ -48,8 +48,9 @@ const REACT_SANDBOX_CSP = [
   "default-src 'none'",
   // 'unsafe-eval' lives HERE and only here - never on the app origin (proxy.ts).
   `script-src 'unsafe-inline' 'unsafe-eval' ${SANDBOX_SCRIPT_HOSTS.join(' ')} blob:`,
-  "style-src 'unsafe-inline' https:",
-  'img-src data: blob: https:',
+  // Images and stylesheets come only from the frame itself or Google Fonts, never another host.
+  "style-src 'unsafe-inline' https://fonts.googleapis.com",
+  'img-src data: blob:',
   'font-src data: https://fonts.gstatic.com https://fonts.googleapis.com',
   "connect-src 'none'",
   'media-src blob: data:',

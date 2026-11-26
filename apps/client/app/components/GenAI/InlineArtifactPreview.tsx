@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/joy';
 import { type ReactArtifact, type HtmlArtifact, type SvgArtifact } from '@bike4mind/common';
-import DOMPurify from 'dompurify';
 import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
+import SafeSvgImage from '@client/app/components/common/SafeSvgImage';
 import { sanitizeHtmlForIframe, absolutizeBlessedScripts } from '@client/app/utils/htmlSanitizer';
 import { useReactArtifactSandbox } from '@client/app/hooks/useReactArtifactSandbox';
 
@@ -43,65 +43,6 @@ const generateSanitizedHTML = (htmlContent: string) => {
 </head>
 <body>${cleanHtml}</body>
 </html>`;
-};
-
-const generateSanitizedSVG = (svgContent: string) => {
-  return DOMPurify.sanitize(svgContent, {
-    USE_PROFILES: { svg: true, svgFilters: true },
-    ALLOWED_TAGS: [
-      'svg',
-      'path',
-      'circle',
-      'rect',
-      'line',
-      'ellipse',
-      'polygon',
-      'polyline',
-      'g',
-      'defs',
-      'use',
-      'text',
-      'tspan',
-      'clipPath',
-      'mask',
-      'filter',
-      'linearGradient',
-      'radialGradient',
-      'stop',
-      'animate',
-      'animateTransform',
-    ],
-    ALLOWED_ATTR: [
-      'viewBox',
-      'xmlns',
-      'width',
-      'height',
-      'fill',
-      'stroke',
-      'stroke-width',
-      'stroke-linecap',
-      'stroke-linejoin',
-      'd',
-      'cx',
-      'cy',
-      'r',
-      'rx',
-      'ry',
-      'x',
-      'y',
-      'x1',
-      'y1',
-      'x2',
-      'y2',
-      'points',
-      'transform',
-      'opacity',
-      'id',
-      'class',
-      'style',
-    ],
-    FORBID_ATTR: ['onclick', 'onload', 'onerror', 'onmouseover', 'xlink:href'],
-  });
 };
 
 /** Ceiling for a self-sized React preview - generous, so it only catches runaways. */
@@ -145,8 +86,7 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({
         const htmlArtifact = artifact as HtmlArtifact;
         return { content: generateSanitizedHTML(htmlArtifact.content), generationError: null };
       } else if (type === 'svg') {
-        const svgArtifact = artifact as SvgArtifact;
-        return { content: generateSanitizedSVG(svgArtifact.content), generationError: null };
+        return { content: (artifact as SvgArtifact).content, generationError: null };
       }
       return { content: null, generationError: null };
     } catch (err) {
@@ -279,9 +219,10 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({
           justifyContent: 'center',
           p: 1,
         }}
-        dangerouslySetInnerHTML={{ __html: renderedContent }}
         data-testid="inline-svg-preview"
-      />
+      >
+        <SafeSvgImage svg={renderedContent} alt={artifact.title || 'SVG preview'} sx={{ maxHeight: '100%' }} />
+      </Box>
     );
   }
 

@@ -1,0 +1,90 @@
+import { describe, it, expect } from 'vitest';
+import { sanitizeChartConfig } from './sanitizeChartConfig';
+
+describe('sanitizeChartConfig', () => {
+  it('drops reserved React and DOM keys from data rows', () => {
+    const { data } = sanitizeChartConfig({
+      chartType: 'BarChart',
+      data: [
+        {
+          month: 'Jan',
+          sales: 10,
+          dangerouslySetInnerHTML: { __html: '<img src=x onerror=alert(1)>' },
+          onClick: 'alert(1)',
+          style: 'background:red',
+          href: 'javascript:alert(1)',
+          ref: 'x',
+        },
+      ],
+    });
+    expect(data).toEqual([{ month: 'Jan', sales: 10 }]);
+  });
+
+  it('keeps only primitive values, plus nested Treemap children', () => {
+    const { data } = sanitizeChartConfig({
+      chartType: 'Treemap',
+      data: [
+        {
+          name: 'root',
+          one: 1,
+          online: true,
+          missing: null,
+          meta: { __html: 'x' },
+          list: ['a'],
+          children: [{ name: 'leaf', size: 3, nested: { a: 1 } }],
+        },
+      ],
+    });
+    expect(data).toEqual([
+      { name: 'root', one: 1, online: true, missing: null, children: [{ name: 'leaf', size: 3 }] },
+    ]);
+  });
+
+  it('drops string values that would load a remote resource', () => {
+    const { data } = sanitizeChartConfig({
+      chartType: 'PieChart',
+      data: [
+        { name: 'a', value: 1, fill: 'url(https://example.com/x)' },
+        { name: 'b', value: 2, fill: '#ff0000' },
+      ],
+    });
+    expect(data).toEqual([
+      { name: 'a', value: 1 },
+      { name: 'b', value: 2, fill: '#ff0000' },
+    ]);
+  });
+
+  it('drops non-object rows and non-array data', () => {
+    expect(sanitizeChartConfig({ chartType: 'BarChart', data: [1, 'x', null, { a: 1 }] }).data).toEqual([{ a: 1 }]);
+    expect(sanitizeChartConfig({ chartType: 'BarChart', data: 'nope' }).data).toEqual([]);
+  });
+
+  it('allow-lists series props and colors', () => {
+    const { config } = sanitizeChartConfig({
+      chartType: 'ComposedChart',
+      data: [{ a: 1 }],
+      config: {
+        colors: ['#8884d8', 'url(https://example.com/x)', 'rgb(1, 2, 3)', { toString: 'x' }],
+        axes: { x: { dataKey: 'a', label: { value: 'x' } }, y: [{ dataKey: 'a', orientation: 'top' }] },
+        children: [
+          {
+            type: 'Bar',
+            dataKey: 'a',
+            fill: 'url(https://example.com/x)',
+            stroke: 'blue',
+            barSize: 12,
+            dangerouslySetInnerHTML: { __html: 'x' },
+            label: { children: 'x' },
+          },
+          { type: 'Script', dataKey: 'a' },
+        ],
+      },
+    });
+    expect(config.colors).toEqual(['#8884d8', 'rgb(1, 2, 3)']);
+    expect(config.axes).toEqual({
+      x: { dataKey: 'a', label: undefined },
+      y: [{ dataKey: 'a', label: undefined, orientation: undefined }],
+    });
+    expect(config.children).toEqual([{ type: 'Bar', dataKey: 'a', stroke: 'blue', barSize: 12 }]);
+  });
+});

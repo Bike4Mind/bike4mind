@@ -8,6 +8,11 @@ import ContentCopy from '@mui/icons-material/ContentCopy';
 import ErrorIcon from '@mui/icons-material/Error';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
 import { artifactFileName } from '@client/app/utils/artifactFileName';
+import {
+  assertNoRemoteDiagramResources,
+  MERMAID_RESOURCE_CONFIG,
+  stripRemoteSvgReferences,
+} from '@client/app/utils/svgSanitizer';
 
 interface MermaidChartProps {
   chartDefinition: string;
@@ -171,6 +176,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       // container it appends to <body> and throws before its own cleanup runs. The
       // component renders its own error state below, so the built-in one is pure litter.
       suppressErrorRendering: true,
+      ...MERMAID_RESOURCE_CONFIG,
     });
   }, [theme.palette.mode]);
 
@@ -219,6 +225,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       const renderId = 'mermaid-chart-' + Math.random().toString(36).slice(2);
       try {
         setError(null);
+        assertNoRemoteDiagramResources(localDefinition);
         const { svg } = await mermaid.render(renderId, localDefinition);
         if (cancelled || !elementRef.current) return;
 
@@ -230,6 +237,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
         // as HTML and pull the <svg> out of it.
         const svgElement = new DOMParser().parseFromString(svg, 'text/html').body.querySelector('svg');
         if (!svgElement) throw new Error('SVG element not found');
+        stripRemoteSvgReferences(svgElement);
 
         const originalWidth = svgElement.getAttribute('width');
         const originalHeight = svgElement.getAttribute('height');

@@ -1,55 +1,12 @@
 import React, { useMemo } from 'react';
 import { Box } from '@mui/joy';
-import DOMPurify from 'dompurify';
 import type { SvgArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
 import { artifactFileName } from '@client/app/utils/artifactFileName';
+import SafeSvgImage from '@client/app/components/common/SafeSvgImage';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
-export const sanitizeSvg = (raw: string): string =>
-  DOMPurify.sanitize(raw, {
-    USE_PROFILES: { svg: true, svgFilters: true },
-    ADD_TAGS: [
-      'svg',
-      'g',
-      'path',
-      'circle',
-      'ellipse',
-      'line',
-      'rect',
-      'polyline',
-      'polygon',
-      'text',
-      'tspan',
-      'textPath',
-      'defs',
-      'clipPath',
-      'mask',
-      'pattern',
-      'use',
-      'symbol',
-      'linearGradient',
-      'radialGradient',
-      'stop',
-      'filter',
-      'feOffset',
-      'feFlood',
-      'feComposite',
-      'feColorMatrix',
-      'feGaussianBlur',
-      'marker',
-      'image',
-      'title',
-      'desc',
-      // SMIL animation tags (animate/animateTransform/animateMotion/set) are deliberately
-      // NOT allowed: they can rewrite an <a href> to javascript: at runtime (stored XSS).
-    ],
-    ALLOW_DATA_ATTR: false,
-    ALLOW_UNKNOWN_PROTOCOLS: false,
-  });
-
 const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }) => {
-  const sanitized = useMemo(() => sanitizeSvg(artifact.content), [artifact.content]);
   const svgTitle = artifact.title || 'SVG Graphic';
 
   const svgArtifact: SvgArtifact = useMemo(
@@ -100,13 +57,10 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
               backgroundColor: '#FFFFFF',
               borderRadius: '6px',
               p: 1,
-              '& svg': {
-                maxWidth: '100%',
-                height: 'auto',
-              },
             }}
-            dangerouslySetInnerHTML={{ __html: sanitized }}
-          />
+          >
+            <SafeSvgImage svg={artifact.content} alt={svgTitle} testId={`svg-preview-image-${artifactId}`} />
+          </Box>
         )}
       />
     </Box>

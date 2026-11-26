@@ -30,42 +30,17 @@ import {
   Cell,
 } from 'recharts';
 import { Box, Typography, Alert } from '@mui/joy';
+import { sanitizeChartConfig } from './sanitizeChartConfig';
 
 interface RechartsChartProps {
-  config: {
-    chartType: string;
-    data: Array<Record<string, any>>;
-    config: {
-      xAxis?: string;
-      yAxis?: string | string[]; // Support both single value and array
-      width?: number;
-      height?: number;
-      colors?: string[];
-      legend?: boolean;
-      grid?: boolean;
-      tooltip?: boolean;
-      responsive?: boolean;
-      // ComposedChart specific configuration
-      axes?: {
-        x?: { dataKey: string; label?: string };
-        y?: Array<{ dataKey: string; label?: string; orientation?: 'left' | 'right' }>;
-      };
-      children?: Array<{
-        type: 'Bar' | 'Line' | 'Area';
-        dataKey: string;
-        fill?: string;
-        stroke?: string;
-        name?: string;
-        [key: string]: any;
-      }>;
-    };
-  };
+  /** Untrusted chart configuration; reduced by sanitizeChartConfig before anything reaches recharts. */
+  config: unknown;
   title?: string;
   description?: string;
 }
 
 const RechartsChart: React.FC<RechartsChartProps> = ({ config, title, description }) => {
-  const { chartType, data, config: chartConfig = {} } = config;
+  const { chartType, data, config: chartConfig } = useMemo(() => sanitizeChartConfig(config), [config]);
   const {
     xAxis,
     yAxis,
@@ -220,7 +195,7 @@ const RechartsChart: React.FC<RechartsChartProps> = ({ config, title, descriptio
           // Transform data for RadialBarChart - ensure each item has 'name' and 'fill' field
           const radialData = data.map((item, index) => ({
             ...item,
-            name: item[radialNameKey] || item.name || `Item ${index + 1}`,
+            name: String(item[radialNameKey] || item.name || `Item ${index + 1}`),
             fill: colors[index % colors.length],
           }));
 

@@ -121,6 +121,19 @@ describe('GET /api/react-artifact-sandbox', () => {
     expect(headers['Content-Security-Policy']).toContain("connect-src 'none'");
   });
 
+  it('limits images to data: and blob: and stylesheets to Google Fonts', () => {
+    const { res, headers } = makeRes();
+    handler(makeReq('GET'), res);
+    const directives = Object.fromEntries(
+      headers['Content-Security-Policy'].split(';').map((directive: string) => {
+        const [name, ...sources] = directive.trim().split(/\s+/);
+        return [name, sources];
+      })
+    );
+    expect(directives['img-src']).toEqual(['data:', 'blob:']);
+    expect(directives['style-src']).toEqual(["'unsafe-inline'", 'https://fonts.googleapis.com']);
+  });
+
   it('sets object-src none and frame-src none', () => {
     const { res, headers } = makeRes();
     handler(makeReq('GET'), res);
