@@ -2073,7 +2073,7 @@ export function ChatShell({
                 </Box>
                 <OrchestrateToggle
                   states={spawnedStates}
-                  enabled={delegating && orchestrateCapable}
+                  enabled={agentsSurfaceAvailable}
                   parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
                   surface={orchestrating ? 'orchestrate' : 'chat'}
                   onSurfaceChange={orchestratorPrefs.setSurface}
