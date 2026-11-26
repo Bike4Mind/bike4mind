@@ -5,7 +5,7 @@ import Typography from '@mui/joy/Typography';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import { AGENT_STATE_LABEL, countAgentStates, type AgentState } from '@shared/agentState';
 import type { ViewAction, ViewAgent, ViewApproval, ViewSnapshot } from '@shared/viewSnapshot';
-import { oneClickOptions, type BubbleOption } from './tavern/bubbleAnswer';
+import { oneClickOptions, type BubbleOption } from './scene/bubbleAnswer';
 import { AgentPrIndicator } from './AgentPrIndicator';
 
 /** Shown as a card: the user has to act on it, or should know it went wrong. */

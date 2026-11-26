@@ -9,7 +9,18 @@ const SHA256 = /^[0-9a-f]{64}$/;
  * (FUNCTION_DATA_KEY_PREFIX in infra/callableFunctionNetwork.ts), which leaves other top-level segments free.
  */
 export function callableFunctionDataKey(prefix: string, sha256: string): string {
-  if (!PREFIX.test(prefix)) throw new Error('A function-data prefix is 1 to 128 letters, digits, "_", or "-".');
   if (!SHA256.test(sha256)) throw new Error('A function-data hash is 64 lowercase hex characters.');
-  return `data/${prefix}/${sha256}`;
+  return `${callableFunctionDataPrefix(prefix)}${sha256}`;
+}
+
+/** `data/<prefix>/staging/<id>`: one pin's upload before its hash is known; inside the prefix, so a prefix delete takes it. */
+export function callableFunctionDataStagingKey(prefix: string, id: string): string {
+  if (!PREFIX.test(id)) throw new Error('A staging id is 1 to 128 letters, digits, "_", or "-".');
+  return `${callableFunctionDataPrefix(prefix)}staging/${id}`;
+}
+
+/** `data/<prefix>/`: every object of one tenant or function, for a delete by prefix. */
+export function callableFunctionDataPrefix(prefix: string): string {
+  if (!PREFIX.test(prefix)) throw new Error('A function-data prefix is 1 to 128 letters, digits, "_", or "-".');
+  return `data/${prefix}/`;
 }

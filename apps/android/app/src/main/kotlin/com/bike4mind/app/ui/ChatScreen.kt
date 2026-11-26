@@ -31,8 +31,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -60,15 +64,25 @@ class ChatViewModel(graph: AppGraph, sessionId: String?) : ViewModel() {
     }
 }
 
+/** [composeDraft] non-null (a launcher shortcut) fills the composer and focuses it; nothing is sent until send. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
+fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit, composeDraft: String? = null) {
     // Scoped by AppRoot's ScreenScope: cleared (and the controller stopped) when this chat closes.
     val model = viewModel { ChatViewModel(graph, sessionId) }
     val state by model.controller.state.collectAsStateWithLifecycle()
     val attachments by model.attachments.state.collectAsStateWithLifecycle()
     val dictation by model.dictation.state.collectAsStateWithLifecycle()
-    var draft by rememberSaveable { mutableStateOf("") }
+    var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(caretAtEnd(composeDraft.orEmpty())) }
+    // Saved so a rotation does not pull the keyboard back up after the user dismissed it.
+    var focusComposer by rememberSaveable { mutableStateOf(composeDraft != null) }
+    val composer = remember { FocusRequester() }
+    LaunchedEffect(focusComposer) {
+        if (focusComposer) {
+            composer.requestFocus()
+            focusComposer = false
+        }
+    }
     var problem by remember { mutableStateOf<String?>(null) }
     var offeredScan by remember { mutableStateOf<Pair<PickedFile, String>?>(null) }
     var handoff by remember { mutableStateOf<Pair<PickedFile, String>?>(null) }
@@ -83,7 +97,7 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
 
     DictationDialog(
         state = dictation,
-        onDone = { model.dictation.finish { text -> draft = if (draft.isBlank()) text else "$draft $text" } },
+        onDone = { model.dictation.finish { text -> draft = caretAtEnd(if (draft.text.isBlank()) text else "${draft.text} $text") } },
         onCancel = model.dictation::cancel,
         onDismissFailure = model.dictation::dismissFailure,
     )
@@ -166,16 +180,16 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
-                    modifier = Modifier.weight(1f).testTag("chat-composer-field"),
+                    modifier = Modifier.weight(1f).focusRequester(composer).testTag("chat-composer-field"),
                     placeholder = { Text(stringResource(if (state.sendsAsAgentRun) R.string.chat_agent_placeholder else R.string.chat_message_placeholder)) },
                 )
-                val canSend = !state.sending && !agentRunWithFiles && fileIds != null && (draft.isNotBlank() || attachments.isNotEmpty())
+                val canSend = !state.sending && !agentRunWithFiles && fileIds != null && (draft.text.isNotBlank() || attachments.isNotEmpty())
                 Button(modifier = Modifier.testTag("chat-composer-send"), enabled = canSend, onClick = {
                     // A turn needs words; files sent on their own go out named.
-                    val message = draft.ifBlank { attachedMessage }
+                    val message = draft.text.ifBlank { attachedMessage }
                     val sentFileIds = fileIds.orEmpty()
                     model.controller.send(message, sentFileIds) { model.attachments.clear(sentFileIds) }
-                    draft = ""
+                    draft = TextFieldValue()
                 }) {
                     Text(stringResource(R.string.chat_send))
                 }
@@ -212,6 +226,8 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
         ObligationConfirmSheet(controller, picked.file, text, onClose = { handoff = null })
     }
 }
+
+private fun caretAtEnd(text: String) = TextFieldValue(text, TextRange(text.length))
 
 @Composable
 private fun FailedSendRow(failed: FailedSend, retryEnabled: Boolean, onRetry: () -> Unit) {

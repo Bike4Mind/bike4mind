@@ -58,6 +58,8 @@ final class AppServices {
   let busyBlockSyncer: BusyBlockSyncer
   /// Which run updates stay quiet after a busy block.
   let interruptionFeedback: any InterruptionFeedbackAPI
+  /// Re-syncs busy blocks from a system background refresh while the app is not opened.
+  let busyBlockRefresh: BusyBlockBackgroundRefresh
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
   /// How many decisions wait on the user, for the lock-screen widget.
@@ -166,13 +168,17 @@ final class AppServices {
     }
     busyBlocks = busyBlocksAPI
     busyBlockReader = EventKitBusyBlockReader()
-    busyBlockSyncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
+    let syncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
+    busyBlockSyncer = syncer
     interruptionFeedback = ForwardingInterruptionFeedbackAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.interruptionFeedback }
       #endif
       return InterruptionFeedbackClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
+    busyBlockRefresh = BusyBlockBackgroundRefresh(
+      identifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, scheduler: SystemBackgroundRefreshScheduler()
+    ) { await syncer.syncJoiningInFlight() }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG

@@ -53,7 +53,8 @@ export function registerClaudeImport(ipcMain: Pick<IpcMain, 'handle'>, deps: Pic
   );
   ipcMain.handle(IPC_CHANNELS.claudeImportSetWebSettings, (_event, patch: unknown) => service.setWebSettings(patch));
   ipcMain.handle(IPC_CHANNELS.claudeImportSyncWeb, async () => {
-    await service.syncWeb();
+    // Sync now is the user asking for everything to be right, so it reconciles with a full list.
+    await service.syncWeb({ reconcile: true });
     return service.state();
   });
   ipcMain.handle(IPC_CHANNELS.claudeImportDismissHint, (_event, id: unknown) => service.dismissHint(id));

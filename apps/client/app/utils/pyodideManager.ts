@@ -30,6 +30,7 @@ import {
   capFunctionProblems,
   functionJsonBytes,
   type FunctionContractProblem,
+  randomUuid,
 } from '@bike4mind/common';
 import {
   SUPPORTED_PYTHON_PACKAGES,
@@ -372,8 +373,8 @@ class PyodideManager {
     }
   }
 
-  private postToSandbox(message: PyodideWorkerMessage): void {
-    this.frame?.contentWindow?.postMessage(message, '*');
+  private postToSandbox(message: PyodideWorkerMessage, transfer: Transferable[] = []): void {
+    this.frame?.contentWindow?.postMessage(message, '*', transfer);
   }
 
   private handleWorkerMessage(msg: PyodideWorkerResponse): void {
@@ -590,7 +591,8 @@ class PyodideManager {
     code: string,
     packages: string[] = [],
     params: Record<string, unknown> | null = null,
-    timeoutMs = params === null ? FUNCTION_READ_TIMEOUT_MS : EXECUTION_TIMEOUT_MS
+    timeoutMs = params === null ? FUNCTION_READ_TIMEOUT_MS : EXECUTION_TIMEOUT_MS,
+    files: { name: string; bytes: ArrayBuffer }[] = []
   ): Promise<PythonFunctionCall> {
     await this.prepareSandbox('none');
     this.refuseIfBusy();
@@ -598,14 +600,18 @@ class PyodideManager {
     if (this.network !== 'none') throw new Error(PYTHON_SCRIPT_BUSY);
 
     const paramsJson = params === null ? null : toPythonJson(params);
-    const nonce = globalThis.crypto.randomUUID();
+    const nonce = randomUuid();
     return new Promise<PythonFunctionCall>((resolve, reject) => {
       this.callResolver = resolve;
       this.callRejecter = reject;
       this.callNonce = nonce;
       this.runLimitMs = timeoutMs;
       this.updateState({ isExecuting: true, streamingOutput: '' });
-      this.postToSandbox({ type: 'call', code, packages, paramsJson, timeoutMs, nonce });
+      // Transferred, not cloned: the buffers move to the frame and are unusable here afterwards.
+      this.postToSandbox(
+        { type: 'call', code, packages, paramsJson, timeoutMs, nonce, files },
+        files.map(file => file.bytes)
+      );
     });
   }
 

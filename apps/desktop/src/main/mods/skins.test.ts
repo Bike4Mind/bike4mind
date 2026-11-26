@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadSkin, loadSkins, loadSoundPack, loadSoundPacks, type SkinLoadResult, type LoadedSkin } from './skinFolder';
-import { OGG_BYTES, PNG_BYTES, installSamplePack, installSampleSkin } from './testSkins';
+import { OGG_BYTES, PNG_BYTES, SAMPLE_SKIN_SPRITES, installSamplePack, installSampleSkin } from './testSkins';
 import { serveSkinAsset } from './skinProtocol';
 
 vi.mock('electron', () => ({ protocol: {} }));
@@ -41,11 +41,15 @@ describe('skin folders', () => {
       if (result === 'not-a-skin' || !result.ok) throw new Error(JSON.stringify(result));
       expect(result.skin.manifest.name).toBe('Nightglass');
       expect(result.skin.tokens.states?.working).toBe('#3cc8ff');
-      expect([...result.skin.assets.keys()].sort()).toEqual([
-        'sounds/finale.ogg',
-        'sprites/tank.png',
-        'sprites/tavern.png',
-      ]);
+      expect([...result.skin.assets.keys()].sort()).toEqual(['sounds/finale.ogg', ...SAMPLE_SKIN_SPRITES].sort());
+      expect(SAMPLE_SKIN_SPRITES).toEqual(
+        expect.arrayContaining([
+          'sprites/tavern.png',
+          'sprites/office.png',
+          'sprites/tank.png',
+          'sprites/office-night-work.png',
+        ])
+      );
       expect(result.skin.assets.get('sprites/tank.png')).toMatchObject({ type: 'png', size: PNG_BYTES.length });
     });
 
@@ -140,8 +144,47 @@ describe('skin folders', () => {
 
     it('rejects a token path that leaves the skin folder', async () => {
       const folder = await installSampleSkin(modsRoot);
-      await writeJson(join(folder, 'tokens.json'), { sprites: { tavernBackdrop: '../other/sprites/a.png' } });
-      expectRejected(await loadSkin(modsRoot, 'nightglass'), /tokens\.json: sprites\.tavernBackdrop/);
+      await writeJson(join(folder, 'tokens.json'), { scenes: { tavern: { backdrop: '../other/sprites/a.png' } } });
+      expectRejected(await loadSkin(modsRoot, 'nightglass'), /tokens\.json: scenes\.tavern\.backdrop/);
+    });
+
+    it('rejects a missing sheet sprite in any scene block', async () => {
+      const folder = await installSampleSkin(modsRoot);
+      await rm(join(folder, 'sprites/office-night-call.png'));
+      expectRejected(await loadSkin(modsRoot, 'nightglass'), /sprites\/office-night-call\.png is missing/);
+    });
+
+    it('rejects a host sprite symlinked out of the skin', async () => {
+      const folder = await installSampleSkin(modsRoot);
+      await writeFile(join(outside, 'secret.png'), PNG_BYTES);
+      await rm(join(folder, 'sprites/tavern-host-idle.png'));
+      await symlink(join(outside, 'secret.png'), join(folder, 'sprites/tavern-host-idle.png'));
+      expectRejected(await loadSkin(modsRoot, 'nightglass'), /sprites\/tavern-host-idle\.png is a symbolic link/);
+    });
+
+    it('loads a contract 1 skin with its backdrops moved into their scenes', async () => {
+      const folder = await installSampleSkin(modsRoot);
+      await writeJson(join(folder, 'mod.json'), {
+        manifest: 1,
+        id: 'nightglass',
+        name: 'Nightglass',
+        version: '1.0.0',
+        kind: 'skin',
+        contract: 1,
+      });
+      await writeJson(join(folder, 'tokens.json'), {
+        states: { working: '#3cc8ff' },
+        sprites: { tavernBackdrop: 'sprites/tavern.png', aquariumBackdrop: 'sprites/tank.png' },
+      });
+
+      const result = await loadSkin(modsRoot, 'nightglass');
+
+      if (result === 'not-a-skin' || !result.ok) throw new Error(JSON.stringify(result));
+      expect(result.skin.tokens.scenes).toEqual({
+        tavern: { backdrop: 'sprites/tavern.png' },
+        aquarium: { backdrop: 'sprites/tank.png' },
+      });
+      expect([...result.skin.assets.keys()].sort()).toEqual(['sprites/tank.png', 'sprites/tavern.png']);
     });
 
     it('ignores the needs-you sound, so a missing file for it does not reject the skin', async () => {
@@ -197,11 +240,11 @@ describe('skin folders', () => {
         manifest: 1,
         id: 'nightglass',
         name: 'Nightglass',
-        version: '2.0.0',
+        version: '3.0.0',
         kind: 'skin',
-        contract: 2,
+        contract: 3,
       });
-      expectRejected(await loadSkin(modsRoot, 'nightglass'), /skin contract 2; this app reads contract 1/);
+      expectRejected(await loadSkin(modsRoot, 'nightglass'), /skin contract 3; this app reads contract 1 or 2/);
     });
 
     it('rejects a folder without mod.json or tokens.json', async () => {
@@ -371,6 +414,12 @@ describe('skin protocol', () => {
       expect(response.headers.get('cache-control')).toBe('no-store');
       expect(response.headers.get('content-security-policy')).toBe("default-src 'none'");
       expect(Buffer.from(await response.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
+    });
+
+    it('serves a cast sheet sprite from a scene block', async () => {
+      const response = await serveSkinAsset(skins, 'b4m-skin://nightglass/sprites/office-night-work.png');
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('image/png');
     });
 
     it('serves a referenced sound as audio', async () => {

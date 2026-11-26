@@ -155,6 +155,17 @@ describe('toDlqMessageRow', () => {
     expect(row.failure).toEqual({ errorMessage: 'recorded', category: 'timeout', source: 'recorded' });
   });
 
+  it('withholds a restricted body unless the caller may see it', () => {
+    const restricted = { ...entry, restrictedBody: true } as typeof entry;
+    const msg = { MessageId: 'm1', Body: '{"secret":"x"}' };
+    expect(toDlqMessageRow(restricted, msg, ctx)).toMatchObject({ body: '', bodyWithheld: true });
+    expect(toDlqMessageRow(restricted, msg, { ...ctx, revealRestrictedBody: false }).body).toBe('');
+    const revealed = toDlqMessageRow(restricted, msg, { ...ctx, revealRestrictedBody: true });
+    expect(revealed.body).toBe('{"secret":"x"}');
+    expect(revealed).not.toHaveProperty('bodyWithheld');
+    expect(toDlqMessageRow(entry, msg, ctx).body).toBe('{"secret":"x"}');
+  });
+
   it('leaves the failure absent when there is neither', () => {
     expect(toDlqMessageRow(entry, { MessageId: 'm1' }, ctx).failure).toBeUndefined();
   });

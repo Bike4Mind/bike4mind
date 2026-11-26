@@ -237,7 +237,7 @@ export const handler = withEventContext(async (event, logger) => {
   session.summaryModelId = modelId as ChatModelName;
   session.summaryTrigger = trigger;
 
-  logger.info(`Summary: ${summaryText}`);
+  logger.info('Summary generated', { sessionId: session.id, summaryLength: summaryText.length });
 
   // Create a FabFile for the summary so we can chunk and vectorize it to be
   // used for RAG prompting

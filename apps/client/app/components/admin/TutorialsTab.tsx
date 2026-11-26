@@ -4,6 +4,7 @@ import type { TutorialOwner } from '@bike4mind/common';
 import { CORE_TUTORIALS_API_BASE } from '@client/app/components/tutorial/TutorialHostContext';
 import TutorialDraftsCard from '@client/app/components/tutorial/admin/TutorialDraftsCard';
 import TutorialModulesCard from '@client/app/components/tutorial/admin/TutorialModulesCard';
+import { CORE_TUTORIAL_STEPS } from '@client/app/components/tutorial/core/coreTutorialSteps';
 import TutorialsSwitchCard from '@client/app/components/tutorial/admin/TutorialsSwitchCard';
 import { AdminPageHeader, EmptyState, ErrorState, LoadingState, SectionCard } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
@@ -70,7 +71,7 @@ export const TutorialsTab: React.FC = () => {
       <Stack gap={1.5} data-testid="tutorials-core-section">
         <Typography level="title-lg">Core</Typography>
         <TutorialsSwitchCard apiBase={CORE_TUTORIALS_API_BASE} />
-        <TutorialModulesCard apiBase={CORE_TUTORIALS_API_BASE} owner={CORE_OWNER} />
+        <TutorialModulesCard apiBase={CORE_TUTORIALS_API_BASE} owner={CORE_OWNER} steps={CORE_TUTORIAL_STEPS} />
         <TutorialDraftsCard apiBase={CORE_TUTORIALS_API_BASE} owner={CORE_OWNER} />
       </Stack>
       {owners.isLoading ? (

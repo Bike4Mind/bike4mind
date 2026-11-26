@@ -8,6 +8,7 @@ import Select from '@mui/joy/Select';
 import Option from '@mui/joy/Option';
 import type { TaskAction } from '@shared/orchestration';
 import type { ChatModelOption } from '@shared/chat';
+import { hostChat } from '../../host/hostChat';
 import type { AgentView } from './roster';
 
 function TaskDetails({ compact, children }: { compact: boolean; children: ReactNode }) {
@@ -50,7 +51,7 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
     let current = true;
     async function load() {
       try {
-        const catalog = await window.b4m.chat.listModels();
+        const catalog = await hostChat.listModels();
         if (current) setModels(catalog.models);
       } catch (failure) {
         if (current) setError(`Could not load model names: ${String(failure)}`);

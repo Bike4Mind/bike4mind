@@ -1,6 +1,9 @@
 import { createContext, useContext } from 'react';
 import type { TutorialStepRegistry, TutorialTransport } from './types';
 
+/** Core's own tutorials live under this base; a premium host passes its own. */
+export const CORE_TUTORIALS_API_BASE = '/api/tutorials';
+
 export interface TutorialHostValue {
   apiBase: string;
   steps: TutorialStepRegistry;

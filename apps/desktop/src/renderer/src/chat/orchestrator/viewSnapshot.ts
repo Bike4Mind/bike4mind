@@ -5,9 +5,10 @@ import {
   type ViewApproval,
   type ViewSnapshot,
 } from '@shared/viewSnapshot';
+import { hostChat } from '../../host/hostChat';
 import { agentNowText } from './activity';
 import type { AgentView, ParentView } from './roster';
-import { isOneClickDecision } from './tavern/bubbleAnswer';
+import { isOneClickDecision } from './scene/bubbleAnswer';
 
 function rootState(parent: ParentView): ViewSnapshot['root']['state'] {
   if (parent.status === 'needs-action') return 'needs-you';
@@ -86,6 +87,8 @@ export interface ViewActionHost {
   openRoot(): void;
   /** The stage's own Stop (AgentActions.stop); absent where the host has none, and the action rejects. */
   stop?(agentId: string): void | Promise<void>;
+  /** The session a listed quick approval belongs to, which picks the host that answers it; absent where the host lists none. */
+  sessionOfApproval?(approvalId: string): string | undefined;
 }
 
 /**
@@ -102,9 +105,12 @@ export async function runViewAction(action: ViewAction, host: ViewActionHost): P
     case 'open-root':
       return host.openRoot();
     case 'answer':
-      return window.b4m.chat.answerTaskDecision(action.agentId, action.decisionId, action.answer);
-    case 'approve':
-      return window.b4m.chat.respondToApproval(action.approvalId, { decision: action.mode });
+      return hostChat.answerTaskDecision(action.agentId, action.decisionId, action.answer);
+    case 'approve': {
+      const sessionId = host.sessionOfApproval?.(action.approvalId);
+      if (!sessionId) throw new Error('Approvals are not available here');
+      return hostChat.respondToApproval(sessionId, action.approvalId, { decision: action.mode });
+    }
     case 'stop':
       if (!host.stop) throw new Error('Stop is not available here');
       return host.stop(action.agentId);

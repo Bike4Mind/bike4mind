@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   sendTestEmail: vi.fn(),
   getMailBody: vi.fn(),
   recordOutcome: vi.fn(),
+  connectDB: vi.fn(),
   logger: { updateMetadata: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 // Adapts an EventBridge-shaped event into the (event, logger) call the wrapped callback receives.
@@ -18,6 +19,10 @@ vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({
   default: { sendEmail: mocks.send, sendTestEmail: mocks.sendTestEmail, transport: { kind: 'ses' } },
+}));
+vi.mock('@bike4mind/database', () => ({ connectDB: mocks.connectDB }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://db.example/%STAGE%', STAGE: 'qa' },
 }));
 vi.mock('@bike4mind/server-utils/utils/mailer/mailBodyStore', () => ({ getMailBody: mocks.getMailBody }));
 vi.mock('@bike4mind/server-utils/utils/mailer/deliveryOutcome', () => ({
@@ -198,6 +203,15 @@ it('answers a mail test request with the transport result and the transport name
   expect(mocks.send).not.toHaveBeenCalled();
 });
 
+it('connects the database before a mail test, so the sender setting can be read', async () => {
+  mocks.sendTestEmail.mockImplementation(async () => {
+    expect(mocks.connectDB).toHaveBeenCalledWith('mongodb://db.example/qa');
+    return { success: true, messageId: 'test-id' };
+  });
+  await handler({ mailTest: { to: 'qa@example.org' } });
+  expect(mocks.sendTestEmail).toHaveBeenCalledOnce();
+});
+
 it('returns a failed test send as the result, with the transport name', async () => {
   mocks.sendTestEmail.mockResolvedValue({ success: false, error: 'relay refused the sender' });
   await expect(handler({ mailTest: { to: 'qa@example.org' } })).resolves.toEqual({
@@ -216,6 +230,7 @@ it('refuses a mail test to a sink domain without sending it', async () => {
   });
   expect(mocks.sendTestEmail).not.toHaveBeenCalled();
   expect(mocks.send).not.toHaveBeenCalled();
+  expect(mocks.connectDB).not.toHaveBeenCalled();
 });
 
 it('does not let an email.send event ask for the test path', async () => {

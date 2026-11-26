@@ -16,7 +16,7 @@
  * construction - this function is non-background by query, not by post-filter.
  */
 import { agentExecutionRepository } from '@bike4mind/database';
-import type { IAgentStep, ChildExecutionSnapshotSchema } from '@bike4mind/common';
+import { redactAgentStepsForViewer, type IAgentStep, type ChildExecutionSnapshotSchema } from '@bike4mind/common';
 import type { z } from 'zod';
 
 /**
@@ -38,8 +38,10 @@ export type ChildExecutionSnapshot = z.infer<typeof ChildExecutionSnapshotSchema
 type PersistedResult = { answer?: string; steps?: IAgentStep[]; totalIterations?: number };
 type PersistedCheckpoint = { steps?: IAgentStep[]; iteration?: number };
 
+/** `isOwner` false (a session share holder) blanks tool output in every nested step, see redactAgentStepsForViewer. */
 export async function buildChildExecutionSnapshots(
   parentExecutionId: string,
+  { isOwner }: { isOwner: boolean },
   _visited: Set<string> = new Set()
 ): Promise<ChildExecutionSnapshot[]> {
   // Guard against corrupted DB docs where a descendant points back to an ancestor,
@@ -68,7 +70,7 @@ export async function buildChildExecutionSnapshots(
       // Recurse into this child's own children (grandchildren of the original
       // parent) so the replay path shows the full nesting tree, not just the
       // first level.
-      const grandchildren = await buildChildExecutionSnapshots(child.id, visited);
+      const grandchildren = await buildChildExecutionSnapshots(child.id, { isOwner }, visited);
       return {
         executionId: child.id,
         // `subagentConfig.agentName` is persisted at creation time for every
@@ -77,7 +79,7 @@ export async function buildChildExecutionSnapshots(
         agentName: subagentConfig?.agentName ?? 'Subagent',
         model: child.model,
         status: child.status,
-        steps: result?.steps ?? checkpoint?.steps ?? [],
+        steps: redactAgentStepsForViewer(result?.steps ?? checkpoint?.steps ?? [], isOwner),
         totalCredits: child.totalCreditsUsed,
         finalAnswer: result?.answer,
         // Surface a generic error string only - raw `Error.message` may carry

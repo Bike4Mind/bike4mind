@@ -233,7 +233,8 @@ export const useScheduleEmailJob = () => {
       });
       return response.data;
     },
-    onSuccess: (_, { id }) => {
+    // Also on error: a 400 usually means another tab already moved the job out of draft.
+    onSettled: (_data, _error, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['email-jobs'] });
       queryClient.invalidateQueries({ queryKey: ['email-job', id] });
     },

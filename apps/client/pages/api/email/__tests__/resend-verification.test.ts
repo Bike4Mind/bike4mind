@@ -27,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next?: () => void) => next?.(),
 }));
-vi.mock('@bike4mind/server-utils/utils/mailer/configStatus', () => ({ getMailConfigStatus: mockStatus }));
+vi.mock('@bike4mind/server-utils/utils/mailer/sender', () => ({ loadMailConfigStatus: mockStatus }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
 vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({
   logAuditEvent: vi.fn(),

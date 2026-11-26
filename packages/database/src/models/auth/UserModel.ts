@@ -1598,6 +1598,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     ]);
   }
 
+  // The createdAt range rides the createdAt index, so the unindexed email regex only scans that window.
+  async countSignupsOnEmailHost(host: string, from: Date, to: Date): Promise<{ total: number; banned: number }> {
+    const normalized = host.trim().toLowerCase();
+    if (!normalized) return { total: 0, banned: 0 };
+    const filter = {
+      createdAt: { $gte: from, $lte: to },
+      email: { $regex: `@${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
+      isSystem: { $ne: true },
+    };
+    const [total, banned] = await Promise.all([
+      this.model.countDocuments(filter),
+      this.model.countDocuments({ ...filter, isBanned: true }),
+    ]);
+    return { total, banned };
+  }
+
   async findRiskScoringCandidateIds(since: Date, options: { afterId?: string; limit: number }): Promise<string[]> {
     const rows = await this.model
       .find(
@@ -2476,6 +2492,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
       ),
       default: undefined,
     },
+    // Immutable so no update path can rewrite it; see IUser.signupClientId.
+    signupClientId: { type: String, default: null, immutable: true },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
     loginRecords: [LoginRecordSchema],
     // reset password
@@ -2679,6 +2697,16 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Email Integration (Email-to-Platform Ingestion)
     platformEmailAddress: { type: String, unique: true, sparse: true },
     authorizedEmailAddresses: { type: [String], default: [] },
+    // Addresses this user held before; never reassigned to anyone else.
+    releasedPlatformEmailAddresses: {
+      type: [
+        new Schema(
+          { address: { type: String, required: true }, releasedAt: { type: Date, required: true } },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     preferredVoice: { type: String, default: null },
     voiceOverrideId: { type: String, default: null },
     voiceSystemPromptOverride: { type: String, default: null },
@@ -2982,6 +3010,10 @@ UserSchema.index(
   { partialFilterExpression: { nextBlockBriefAt: { $type: 'date' } }, name: 'user_nextBlockBriefAt' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
+UserSchema.index(
+  { 'releasedPlatformEmailAddresses.address': 1 },
+  { sparse: true, name: 'user_releasedPlatformEmailAddresses_address' }
+);
 
 // Add text index for fast user search in admin panel
 UserSchema.index(

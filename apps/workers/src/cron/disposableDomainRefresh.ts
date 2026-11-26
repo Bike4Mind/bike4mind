@@ -2,6 +2,7 @@ import { Resource } from 'sst';
 import type { DisposableListSource } from '@bike4mind/common';
 import { connectDB } from '@bike4mind/db-core';
 import {
+  loadKeyringInBackground,
   disposableDomainRepository,
   DisposableDomainModel,
   DisposableDomainSourceModel,
@@ -88,6 +89,7 @@ export async function handler() {
   const dimensions = { Stage: Resource.App.stage };
   try {
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), undefined, { autoIndex: false });
+    loadKeyringInBackground();
     // The unique domain indexes must exist before the first concurrent upserts, so build them here.
     await Promise.all([
       DisposableDomainModel.createIndexes(),

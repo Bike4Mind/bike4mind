@@ -170,7 +170,8 @@ export async function sendMessageToNotebookAndGetResponse(
     messageTs: string;
   },
   returnEarly: boolean = false, // If true, don't wait for AI - Quest Processor will handle response
-  additionalTools: string[] = [] // Extra tools to enable (e.g., confirm/cancel pending action)
+  additionalTools: string[] = [], // Extra tools to enable (e.g., confirm/cancel pending action)
+  untrustedHistory: string = ''
 ): Promise<{ text: string | null; citables?: CitableSource[] }> {
   // Update status: Saving to notebook
   if (statusCallback) await statusCallback(`${createLoadingBar(10)} Saving to notebook...`);
@@ -235,7 +236,8 @@ export async function sendMessageToNotebookAndGetResponse(
       fabFileIds,
       createdQuest.id,
       false, // Don't wait for completion - Quest Processor handles the rest
-      additionalTools
+      additionalTools,
+      untrustedHistory
     );
     logger.debug('🔔 [ASYNC-NOTIFY] AI triggered successfully, returning early', {
       questId: createdQuest.id,
@@ -256,7 +258,8 @@ export async function sendMessageToNotebookAndGetResponse(
     fabFileIds,
     createdQuest.id, // Pass the quest ID to use the existing quest instead of creating a new one
     true, // waitForCompletion
-    additionalTools
+    additionalTools,
+    untrustedHistory
   );
 
   // The map fence (if any) refers to places by id only, resolved against the citables the

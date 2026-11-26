@@ -16,7 +16,11 @@ describe('AnthropicBedrockBackend empty effective messages', () => {
     ['blank text block', [{ role: 'assistant', content: [{ type: 'text', text: '\t' }] }] as IMessage[]],
   ])('rejects %s before building a provider payload', (_label, messages) => {
     expect(() => payload(messages)).toThrow(
-      expect.objectContaining<Partial<BadRequestError>>({ statusCode: 400, message: ERROR_MESSAGE })
+      expect.objectContaining<Partial<BadRequestError>>({
+        name: 'EmptyConversationError',
+        statusCode: 400,
+        message: ERROR_MESSAGE,
+      })
     );
   });
 

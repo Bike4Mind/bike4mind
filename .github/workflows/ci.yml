@@ -1169,9 +1169,9 @@ jobs:
   # would still claim a runner for a full install + core build + vitest on a superseded SHA -
   # costly where runner slots are the queue bottleneck (see the concurrency note at the top).
   # `needs.core-build.result != 'failure'` rather than an allowlist of success/skipped: a
-  # core-build that ends `cancelled` (runner loss) is not a build failure, and the allowlist
-  # form skipped this job on it while ci-complete only reddens on the literal `failure` - so
-  # the help guards could go missing on a green docs PR. The fallback build covers that case.
+  # core-build that ends `cancelled` (runner loss or timeout) is not a build failure, and the
+  # allowlist form skipped this job on it, so the help guards never ran on that docs change.
+  # The fallback build covers that case; ci-complete reddens on the cancelled core-build itself.
   # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator, not text.
   help-docs:
     name: Help Docs Guards
@@ -1372,7 +1372,7 @@ jobs:
   #
   # Red when ANY CI leg (changes/core-build/repo-guards/secret-scan/lint/test-shards/cli-e2e/help-docs/
   # verify-docs-build/docs-scan-gate/published-dts)
-  # genuinely FAILED. Green when everything succeeded OR was legitimately
+  # failed or timed out. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e and repo-guards, and a skipped
   # required check counts as passing). This surfaces lint/cli-e2e failures, and the
   # typecheck that runs inside the cli-workers shard (none of which are
@@ -1380,8 +1380,9 @@ jobs:
   # required "CI Complete" check instead of letting them pass silently.
   #
   # `!cancelled()` rather than `always()`: in a run cancelled by cancel-in-progress the unfinished
-  # legs end `cancelled`, not the literal `failure`, so `always()` reported a false green on the
-  # required check with nothing tested. Gated this way the job itself ends `cancelled`.
+  # legs end `cancelled`, and `always()` still ran this job there and reported on a run with
+  # nothing tested (a false green back when only `failure` reddened it). Gated this way the job
+  # itself ends `cancelled`.
   #
   # Needs `test-shards` directly, not the `test` aggregator, so the two fan-in
   # jobs wait for a runner side by side instead of in series: under runner
@@ -1439,11 +1440,13 @@ jobs:
             echo "::error::Test shards did not all pass; failing the required check."
             exit 1
           fi
-          # A CI leg that genuinely failed flips the check red. Skipped
-          # (non-deployable change, or a PR-only job on a push run) is treated as passing.
+          # Only success or skipped (non-deployable change, or a PR-only job on a push run) passes.
+          # A leg that hits its timeout-minutes or loses its runner ends `cancelled`, not `failure`.
+          # This job is gated on !cancelled(), so the run itself was not cancelled and a `cancelled`
+          # leg here did not finish its work.
           for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$SECRET_SCAN" "$LEAK_SHAPES" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
-            if [ "$r" = "failure" ]; then
-              echo "::error::A CI gate failed; failing the required check."
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "::error::A CI gate ended '$r'; failing the required check."
               exit 1
             fi
           done

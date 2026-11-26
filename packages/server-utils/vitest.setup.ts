@@ -8,3 +8,8 @@ process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ??= 'price_test_professional';
 process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ??= 'price_prod_professional';
 process.env.NEXT_PUBLIC_STRIPE_PRICE_LIBONC_TEST ??= 'price_test_libonc_pro';
 process.env.NEXT_PUBLIC_STRIPE_PRICE_LIBONC_PROD ??= 'price_prod_libonc_pro';
+
+// Real-Mongo suites mint and store secrets without going through connectDB, so nothing loads the
+// at-rest keyring. Load "no key" (plaintext) so they run as they did before the keyring throws.
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+configureSecretsAtRest(undefined);

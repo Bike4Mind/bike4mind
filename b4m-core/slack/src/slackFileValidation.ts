@@ -1,6 +1,7 @@
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { getFileExtension, resolveSupportedMimeType } from '@bike4mind/utils';
 import type { SlackEventData } from './SlackEvent';
+import { isSlackFileUrl } from './slackFileUrl';
 
 export type SlackAttachment = NonNullable<SlackEventData['files']>[number];
 
@@ -63,7 +64,12 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
   // `file.mimetype` is not checked here - nothing below reads it, type resolution is fully
   // extension-based (see resolvedMimeType). Requiring it would silently drop a well-formed
   // attachment whose client-reported mimetype happens to be empty.
-  if (!file.name || !file.url_private_download || file.size === undefined) {
+  if (
+    !file.name ||
+    !file.url_private_download ||
+    !isSlackFileUrl(file.url_private_download) ||
+    file.size === undefined
+  ) {
     return {
       ok: false,
       reason: 'incomplete',

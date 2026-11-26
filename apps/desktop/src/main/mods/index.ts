@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { app, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import {
+  mapSceneSkinAssets,
   skinAssetUrl,
   type SkinSummary,
   type SkinTokens,
@@ -160,11 +161,20 @@ function withAssetUrls(id: string, tokens: SkinTokens): SkinTokens {
     (Object.fromEntries(
       Object.entries(paths).map(([key, path]) => [key, path === undefined ? undefined : skinAssetUrl(id, path)])
     ) as T);
-  const { sprites, sounds, ...rest } = tokens;
+  const { scenes, sounds, ...rest } = tokens;
   const { 'needs-you': _locked, ...servedSounds } = sounds ?? {};
   return {
     ...rest,
-    ...(sprites ? { sprites: toUrls(sprites) } : {}),
+    ...(scenes
+      ? {
+          scenes: Object.fromEntries(
+            Object.entries(scenes).map(([scene, block]) => [
+              scene,
+              mapSceneSkinAssets(block, path => skinAssetUrl(id, path)),
+            ])
+          ),
+        }
+      : {}),
     ...(sounds ? { sounds: toUrls(servedSounds) } : {}),
   };
 }

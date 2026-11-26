@@ -53,6 +53,18 @@ export class ToolCatalog {
     this.registered.set(toolName, descriptor);
   }
 
+  /**
+   * Record that a tool came from an MCP server (the tool object's `_isMcpTool`), whatever its
+   * name. The MCP descriptor replaces any earlier registration of that name.
+   */
+  markMcpTool(toolName: string): void {
+    if (CORE_TOOL_DESCRIPTORS.has(toolName)) {
+      throw new Error(`Tool "${toolName}" is a core tool and already has a descriptor`);
+    }
+    const server = toolName.includes('__') ? toolName.slice(0, toolName.indexOf('__')) : toolName;
+    this.registered.set(toolName, { source: { kind: 'mcp', server }, effect: 'execute', approval: 'prompt_always' });
+  }
+
   resolve(toolName: string): ToolDescriptor | undefined {
     return this.registered.get(toolName) ?? resolveStaticToolDescriptor(toolName);
   }

@@ -32,6 +32,8 @@ import {
   summarizeCallableFunctionCalls,
 } from './registry';
 import { buildCallableFunctionStamp } from './dispatch';
+import { callableFunctionDataPrefix } from './dataKeys';
+import type { CallableFunctionDataStorage } from './dataPins';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -109,6 +111,10 @@ const save = (artifactId = 'artifact-1', overrides: Record<string, unknown> = {}
   createCallableFunction(OWNER, { artifactId, expectedVersion: 1, contract: contract(), ...overrides });
 
 const stored = (id: string) => CallableFunction.findById(id).lean<ICallableFunctionDocument>();
+const noData = () => {
+  const deletePrefix = vi.fn(async () => 0);
+  return Object.assign({ deletePrefix } as unknown as CallableFunctionDataStorage, { deletePrefix });
+};
 
 let mongoServer: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -290,7 +296,7 @@ describe('createCallableFunction', () => {
     await setCallableFunctionEnabled(OWNER, holder.id, false);
     await expect(save('copy')).rejects.toMatchObject({ statusCode: 409, additionalInfo: orphaned });
 
-    await deleteCallableFunction(OWNER, holder.id);
+    await deleteCallableFunction(OWNER, holder.id, noData());
     expect(await save('copy')).toMatchObject({ slug: 'beam_midspan_deflection', pin: { artifactId: 'copy' } });
   });
 
@@ -542,10 +548,25 @@ describe('ownership', () => {
 
   it('delete removes the record and leaves the artifact; a second delete is 404', async () => {
     const view = await save();
-    await deleteCallableFunction(OWNER, view.id);
+    const storage = noData();
+    await deleteCallableFunction(OWNER, view.id, storage);
+    // Even with no pins: a lost pin race or a failed unpin delete leaves objects no pin names.
+    expect(storage.deletePrefix).toHaveBeenCalledWith(callableFunctionDataPrefix(view.id));
     expect(await CallableFunction.countDocuments({})).toBe(0);
     expect(await artifactRepository.findOne({ id: 'artifact-1' })).toMatchObject({ version: 1 });
     await expect(deleteCallableFunction(OWNER, view.id)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("delete removes the function's data files with the record", async () => {
+    const view = await save();
+    const owner = { ownerType: 'user' as const, ownerKey: OWNER.id };
+    const fn = await callableFunctionRepository.findByIdForOwner(view.id, owner);
+    const pin = { name: 'points.csv', sha256: 'a'.repeat(64), bytes: 8, sourceFileId: 'file-1', pinnedAt: new Date() };
+    await callableFunctionRepository.setDataPins(view.id, owner, { updatedAt: fn!.updatedAt }, [pin]);
+    const deletePrefix = vi.fn(async () => 1);
+    await deleteCallableFunction(OWNER, view.id, { deletePrefix } as unknown as CallableFunctionDataStorage);
+    expect(deletePrefix).toHaveBeenCalledWith(callableFunctionDataPrefix(view.id));
+    expect(await CallableFunction.countDocuments({})).toBe(0);
   });
 });
 

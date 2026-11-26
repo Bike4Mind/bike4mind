@@ -90,6 +90,8 @@ export const FULL_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   'allowTrustedDevices',
   // Sets how large a signup grant may be while the signup assessment policy is off (checkSignupGrantSave).
   'signupGrantUnprotectedMaxCredits',
+  // The From line of every system email, sign-in codes and password resets included.
+  'mailFrom',
 ]);
 
 type AdminIdentity = {
@@ -132,6 +134,11 @@ export function canAccessAdmin(user: AdminIdentity | null | undefined): boolean 
 /** Full admin is exactly the legacy `isAdmin` flag; holding every explicit permission is still delegated access. */
 export function isFullAdmin(user: AdminIdentity | null | undefined): boolean {
   return user?.isAdmin === true;
+}
+
+/** For actions no delegated permission covers. `action` completes "Only full administrators can <action>". */
+export function assertFullAdmin(actor: AdminIdentity | null | undefined, action: string): void {
+  if (!isFullAdmin(actor)) throw new ForbiddenError(`Only full administrators can ${action}`);
 }
 
 export function missingAdminPermissionMessage(requirement: AdminPermissionRequirement): string {

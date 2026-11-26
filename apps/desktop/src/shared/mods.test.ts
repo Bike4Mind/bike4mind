@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest';
 import manifestFixture from './__fixtures__/skins/nightglass/mod.json';
 import tokensFixture from './__fixtures__/skins/nightglass/tokens.json';
 import packFixture from './__fixtures__/sound-packs/chimes/mod.json';
-import { SOUND_PACK_EVENTS, modManifestSchema, skinAssetUrl, skinTokensSchema } from './mods';
+import {
+  SOUND_PACK_EVENTS,
+  mapSceneSkinAssets,
+  modManifestSchema,
+  sceneSkinAssetPaths,
+  skinAssetUrl,
+  skinTokensSchema,
+  skinTokensSchemaFor,
+  skinTokensV1Schema,
+} from './mods';
 
 describe('modManifestSchema', () => {
   it('accepts the sample skin', () => {
@@ -69,7 +78,8 @@ describe('skinTokensSchema', () => {
     'sprites/a.png.js',
     'sounds/a.mp3',
   ])('rejects the sprite path %j for a disallowed type or folder', path => {
-    expect(skinTokensSchema.safeParse({ sprites: { tavernBackdrop: path } }).success).toBe(false);
+    expect(skinTokensSchema.safeParse({ scenes: { tavern: { backdrop: path } } }).success).toBe(false);
+    expect(skinTokensV1Schema.safeParse({ sprites: { tavernBackdrop: path } }).success).toBe(false);
   });
 
   it.each(['sounds/a.wav', 'sounds/a.html', 'sprites/a.ogg'])('rejects the sound path %j', path => {
@@ -88,7 +98,81 @@ describe('skinTokensSchema', () => {
     'file:///etc/a.png',
     'https://example.com/a.png',
   ])('rejects the path %j that could leave the skin folder', path => {
-    expect(skinTokensSchema.safeParse({ sprites: { tavernBackdrop: path } }).success).toBe(false);
+    expect(skinTokensSchema.safeParse({ scenes: { tavern: { backdrop: path } } }).success).toBe(false);
+    expect(
+      skinTokensSchema.safeParse({ scenes: { office: { cast: { host: { sprites: { idle: path } } } } } }).success
+    ).toBe(false);
+    expect(skinTokensV1Schema.safeParse({ sprites: { tavernBackdrop: path } }).success).toBe(false);
+  });
+
+  it.each([
+    ['the contract 1 sprites key', { sprites: { tavernBackdrop: 'sprites/a.png' } }],
+    ['a scene id that is not a kebab name', { scenes: { Tavern: {} } }],
+    ['an unknown key in a scene block', { scenes: { tavern: { script: 'a.js' } } }],
+    ['an unknown map key', { scenes: { tavern: { map: { states: {} } } } }],
+    ['a slot off the scene', { scenes: { tavern: { map: { zones: { bar: { slots: [{ x: 101, y: 4 }] } } } } } }],
+    ['an empty slot list', { scenes: { tavern: { map: { zones: { bar: { slots: [] } } } } } }],
+    ['a reply with no side', { scenes: { tavern: { map: { reply: { top: 3 } } } } }],
+    ['an empty sheet list', { scenes: { tavern: { cast: { sheets: [] } } } }],
+    ['sprites too small to see', { scenes: { tavern: { cast: { spriteHeight: 0.01 } } } }],
+    ['an unknown host pose', { scenes: { tavern: { cast: { host: { sprites: { dancing: 'sprites/a.png' } } } } } }],
+    ['an empty copy line', { scenes: { tavern: { copy: { hostName: '' } } } }],
+    ['copy that tries to change the needs-you look', { scenes: { tavern: { copy: { needsYou: 'x' } } } }],
+    [
+      'more than 16 scenes',
+      { scenes: Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`scene-${index}`, {}])) },
+    ],
+  ])('rejects %s', (_label, tokens) => {
+    expect(skinTokensSchema.safeParse(tokens).success).toBe(false);
+  });
+
+  it('accepts a block for a scene this app does not have yet', () => {
+    expect(skinTokensSchema.safeParse({ scenes: { lighthouse: { backdrop: 'sprites/lighthouse.png' } } }).success).toBe(
+      true
+    );
+  });
+});
+
+describe('skinTokensSchemaFor', () => {
+  it("moves a contract 1 skin's backdrops into their scenes", () => {
+    const tokens = skinTokensSchemaFor(1).parse({
+      states: { working: '#3cc8ff' },
+      sprites: { tavernBackdrop: 'sprites/tavern.png', aquariumBackdrop: 'sprites/tank.png' },
+    });
+    expect(tokens).toEqual({
+      states: { working: '#3cc8ff' },
+      scenes: { tavern: { backdrop: 'sprites/tavern.png' }, aquarium: { backdrop: 'sprites/tank.png' } },
+    });
+  });
+
+  it('leaves a contract 1 skin with no backdrops without a scenes block', () => {
+    expect(skinTokensSchemaFor(1).parse({ type: { family: 'mono' } })).toEqual({ type: { family: 'mono' } });
+  });
+
+  it('refuses contract 2 scene data in a contract 1 skin, and contract 1 sprites in a contract 2 one', () => {
+    expect(skinTokensSchemaFor(1).safeParse({ scenes: {} }).success).toBe(false);
+    expect(skinTokensSchemaFor(2).safeParse({ sprites: {} }).success).toBe(false);
+  });
+});
+
+describe('scene skin assets', () => {
+  const block = skinTokensSchema.parse(tokensFixture).scenes?.office ?? {};
+
+  it('lists the backdrop, every sheet sprite and every host sprite', () => {
+    expect(sceneSkinAssetPaths(block)).toEqual([
+      'sprites/office.png',
+      'sprites/office-night-work.png',
+      'sprites/office-night-call.png',
+      'sprites/office-night-rest.png',
+      'sprites/office-night-idle.png',
+    ]);
+  });
+
+  it('maps every image path and leaves positions and copy alone', () => {
+    const mapped = mapSceneSkinAssets(block, path => `x://${path}`);
+    expect(sceneSkinAssetPaths(mapped).every(path => path.startsWith('x://sprites/'))).toBe(true);
+    expect(mapped.map).toEqual(block.map);
+    expect(mapped.copy).toEqual(block.copy);
   });
 });
 

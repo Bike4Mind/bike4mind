@@ -19,7 +19,7 @@ type StudioGalleryProps<TItem extends { id: string }> = {
   testId: string;
   // Plural, lower case: "videos", "songs".
   noun: string;
-  // A modality's infinite list query (useVideoGenerations, useMusicGenerations, useRecentGeneratedAudio).
+  // A modality's infinite list query (useGenerationJobs, useRecentGeneratedAudio).
   query: GalleryQuery<TItem>;
   // A job card reads its own job by id, so websocket patches to one job re-render only its card.
   renderCard: (item: TItem) => ReactNode;

@@ -1,7 +1,12 @@
 package com.bike4mind.app.ui
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +43,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -56,6 +62,7 @@ import kotlinx.coroutines.launch
 class SettingsViewModel(graph: AppGraph) : ViewModel() {
     val controller = graph.settings(viewModelScope).also { it.load() }
     val credits = graph.credits(viewModelScope).also { it.load() }
+    val busyBlocks = graph.busyBlockBrief(viewModelScope).also { it.load() }
 }
 
 /** The profile header, a switch per push category, sign out and the way to account deletion. Twin of apps/ios SettingsView. */
@@ -68,6 +75,20 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onDeleteAccount: () -> U
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var systemAllows by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
+    val busyBlocks by model.busyBlocks.state.collectAsStateWithLifecycle()
+    val calendarPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        model.busyBlocks.setEnabled(true, accessGranted = granted)
+    }
+    val toggleBusyBlocks: (Boolean) -> Unit = { on ->
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+        if (!on || granted) {
+            model.busyBlocks.setEnabled(on, accessGranted = granted)
+        } else {
+            // Read by CalendarBusyBlockReader.access(): once asked, a missing grant means denied, not undecided.
+            graph.busyBlockPermissions.markRequested()
+            calendarPermission.launch(Manifest.permission.READ_CALENDAR)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -120,6 +141,19 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onDeleteAccount: () -> U
                                     .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
                             )
                         }.testTag("settings-notifications-system-btn"),
+                    )
+                }
+            }
+            if (showsBusyBlockBrief(systemAllows, busyBlocks)) {
+                item {
+                    BusyBlockBriefSection(
+                        state = busyBlocks,
+                        onToggle = toggleBusyBlocks,
+                        onOpenSettings = {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                            )
+                        },
                     )
                 }
             }

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('sst', () => ({ Resource: mocks.resource }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://example/%STAGE%' } }));
+vi.mock('@bike4mind/database', () => ({ loadKeyringInBackground: vi.fn() }));
 vi.mock('@bike4mind/db-core', () => ({ connectDB: mocks.connect }));
 vi.mock('@bike4mind/server-utils/analytics/signupBaselineReport', () => ({ runSignupBaselineReport: mocks.report }));
 import { handler } from './signupBaselineReport';

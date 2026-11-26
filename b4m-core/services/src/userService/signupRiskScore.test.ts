@@ -176,4 +176,82 @@ describe('scoreSignupRisk', () => {
     expect(typical.needsReview).toBe(false);
     expect(typical.score).toBeLessThan(10);
   });
+
+  describe('email subdomain and instant key signals', () => {
+    it('applies the subdomain burst at the configured account count, not one below', () => {
+      const min = scoring().emailSubdomainBurstAccounts;
+
+      expect(scoreSignupRisk({ ...plain, emailSubdomainSignups: min }, scoring()).signals).toEqual([
+        {
+          signal: 'emailSubdomainBurst',
+          points: WEIGHTS.emailSubdomainBurst,
+          reason: `${min} accounts signed up on this email subdomain within 24 hours`,
+        },
+      ]);
+      expect(scoreSignupRisk({ ...plain, emailSubdomainSignups: min - 1 }, scoring()).score).toBe(0);
+      expect(scoreSignupRisk({ ...plain, emailSubdomainSignups: null }, scoring()).score).toBe(0);
+    });
+
+    it('adds the banned-sibling signal once any account on the subdomain is banned', () => {
+      expect(scoreSignupRisk({ ...plain, bannedEmailSubdomainSignups: 2 }, scoring()).score).toBe(
+        WEIGHTS.bannedEmailSubdomainSibling
+      );
+      expect(scoreSignupRisk({ ...plain, bannedEmailSubdomainSignups: 0 }, scoring()).score).toBe(0);
+    });
+
+    it('counts a key minted within the instant limit as both instant and quick', () => {
+      const seconds = scoring().instantApiKeySeconds;
+
+      expect(
+        scoreSignupRisk({ ...plain, minutesToFirstApiKey: seconds / 60 }, scoring()).signals.map(s => s.signal)
+      ).toEqual(['instantApiKey', 'quickApiKey']);
+      expect(
+        scoreSignupRisk({ ...plain, minutesToFirstApiKey: (seconds + 1) / 60 }, scoring()).signals.map(s => s.signal)
+      ).toEqual(['quickApiKey']);
+    });
+
+    it('applies the instant key even when the quick-key limit is shorter', () => {
+      const result = scoreSignupRisk(
+        { ...plain, minutesToFirstApiKey: 1.5 },
+        scoring({ quickApiKeyMinutes: 1, instantApiKeySeconds: 120 })
+      );
+
+      expect(result.signals.map(s => s.signal)).toEqual(['instantApiKey']);
+    });
+
+    it('sends a scripted burst on one email subdomain to review, even on a clean domain and network', () => {
+      // Several accounts on one subdomain within hours, each minting a key seconds after signup.
+      const result = scoreSignupRisk(
+        { email: 'qzxkvwplt@box.example.net', emailSubdomainSignups: 10, minutesToFirstApiKey: 0.15 },
+        scoring()
+      );
+
+      expect(result.signals.map(s => s.signal)).toEqual(['emailSubdomainBurst', 'instantApiKey', 'quickApiKey']);
+      expect(result.needsReview).toBe(true);
+    });
+
+    it('leaves an ordinary signup that mints a key the same hour out of review', () => {
+      const result = scoreSignupRisk(
+        {
+          email: 'jane.doe@example.com',
+          emailSubdomainSignups: null,
+          bannedEmailSubdomainSignups: null,
+          minutesToFirstApiKey: 25,
+        },
+        scoring()
+      );
+
+      expect(result.signals.map(s => s.signal)).toEqual(['quickApiKey']);
+      expect(result.needsReview).toBe(false);
+    });
+
+    it('leaves a few colleagues on a shared work subdomain out of review', () => {
+      const result = scoreSignupRisk(
+        { email: 'jane.doe@dept.example.edu', emailSubdomainSignups: 4, minutesToFirstApiKey: 30 },
+        scoring()
+      );
+
+      expect(result.needsReview).toBe(false);
+    });
+  });
 });

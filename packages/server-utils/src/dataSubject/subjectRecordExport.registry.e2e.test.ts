@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   accountDeletionNoticeRepository,
   mongoose,
+  oauthClientSignInRepository,
   PlatformAttempt,
   platformAttemptRepository,
   UsageEvent,
@@ -193,6 +194,24 @@ describe('SubjectRecordExport over the real registry', () => {
       unrelated.push(record);
     }
     expect(unrelated).toEqual([]);
+  });
+
+  it('exports the apps the subject signed in to, and not another user rows', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    const other = new mongoose.Types.ObjectId().toString();
+    const first = new Date('2026-01-01T00:00:00Z');
+    const last = new Date('2026-02-01T00:00:00Z');
+    await oauthClientSignInRepository.recordSignIn({ userId, clientId: 'export-app', at: first });
+    await oauthClientSignInRepository.recordSignIn({ userId, clientId: 'export-app', at: last });
+    await oauthClientSignInRepository.recordSignIn({ userId: other, clientId: 'other-app', at: last });
+
+    const exporter = new SubjectRecordExport({ userId, email: 'signin-export@example.com' });
+    expect(exporter.models).toContain('OAuthClientSignIn');
+    const records: Record<string, unknown>[] = [];
+    for await (const record of exporter.records('OAuthClientSignIn')) records.push(record);
+    expect(records).toEqual([
+      expect.objectContaining({ userId, clientId: 'export-app', firstSignInAt: first, lastSignInAt: last }),
+    ]);
   });
 
   // `strictQuery: 'throw'` makes any registry path a schema does not declare fail here, and every
@@ -442,5 +461,20 @@ describe('SubjectErasurePlan over the real registry', () => {
   it('walks every classified model without error', async () => {
     const userId = new mongoose.Types.ObjectId().toString();
     await expect(new SubjectErasurePlan({ userId, email: 'subject@example.com' }).collections()).resolves.toEqual([]);
+  });
+
+  it('lists the apps the subject signed in to for deletion, counting only their rows', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    const at = new Date();
+    await oauthClientSignInRepository.recordSignIn({ userId, clientId: 'plan-app-a', at });
+    await oauthClientSignInRepository.recordSignIn({ userId, clientId: 'plan-app-b', at });
+    await oauthClientSignInRepository.recordSignIn({ userId: 'someone-else', clientId: 'plan-app-a', at });
+
+    const collections = await new SubjectErasurePlan({ userId, email: 'plan@example.com' }).collections();
+    expect(collections.find(({ model }) => model === 'OAuthClientSignIn')).toMatchObject({
+      deleted: 2,
+      anonymized: 0,
+      retained: 0,
+    });
   });
 });

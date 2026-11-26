@@ -1,3 +1,4 @@
+/** @deprecated AWS DocumentDB support is deprecated and will be removed in a future release. */
 export const awsGlobalBundle = `
 LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUQvakNDQXVhZ0F3SUJBZ0lRZE9DU3VBOXBz
 QnBRZDhFSTM2OC8wREFOQmdrcWhraUc5dzBCQVFzRkFEQ0IKbHpFTE1Ba0dBMVVFQmhNQ1ZWTXhJ

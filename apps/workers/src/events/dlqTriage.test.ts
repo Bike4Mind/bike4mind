@@ -28,6 +28,7 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 }));
 vi.mock('@bike4mind/db-core', () => ({ connectDB: h.connect }));
 vi.mock('@bike4mind/database', () => ({
+  loadKeyringInBackground: vi.fn(),
   dlqTriageDeliveryRepository: { claim: h.claim, delivered: h.delivered, release: h.release },
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({

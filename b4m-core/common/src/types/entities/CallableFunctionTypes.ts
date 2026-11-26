@@ -94,6 +94,8 @@ export interface CallableFunctionCaseResults {
   contentHash: string;
   runtimeVersion: string;
   lockHash: string | null;
+  /** The pinned data files the cases read; absent when there were none. */
+  dataHash?: string;
   cases: CallableFunctionCaseResult[];
 }
 
@@ -156,7 +158,31 @@ export interface ICallableFunctionPin {
   /** Set when this pin is promoted: 1 for the function's first promotion, then one more for each. */
   seq?: number;
   runtime?: CallableFunctionRuntimePin;
+  /** Kept across repins; changed only through `setDataPins`, which returns the function to draft. */
+  dataPins?: ICallableFunctionDataPin[];
 }
+
+/** A file's bytes copied once into the function-data store, read by every call at `/data/<name>`. */
+export interface ICallableFunctionDataPin {
+  name: string;
+  sha256: string;
+  bytes: number;
+  /** The FabFile the bytes were copied from; later changes to it never reach the copy. */
+  sourceFileId: string;
+  pinnedAt: Date;
+}
+
+/** A safe file name: no path separator, no leading dot, at most 64 characters. */
+export const CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+export const CALLABLE_FUNCTION_DATA_LIMITS = {
+  maxPins: 10,
+  /** Defaults of the `CallableFunctionDataFileMaxMb` and `CallableFunctionDataTotalMaxMb` settings. */
+  defaultFileMb: 100,
+  defaultTotalMb: 1024,
+  /** The runtime's data cache, and so the most `CallableFunctionDataTotalMaxMb` can allow. */
+  cacheMb: 9216,
+} as const;
 
 export interface ICallableFunction {
   ownerType: CallableFunctionOwnerType;
@@ -217,6 +243,7 @@ export interface ICallableFunctionPublic {
   enabled: boolean;
   approval: McpToolApprovalMode;
   pin: Pick<ICallableFunctionPin, 'artifactId' | 'version' | 'contentHash' | 'pinnedAt' | 'seq'>;
+  dataPins: Pick<ICallableFunctionDataPin, 'name' | 'sha256' | 'bytes' | 'pinnedAt'>[];
   latestVersion: number | null;
   /** The artifact has a newer version than the pinned one. */
   updateAvailable: boolean;
@@ -260,7 +287,7 @@ export interface ICallableFunctionShared {
   /** The live pin's interface hash; a review names it, so an interface changed since is not approved unseen. */
   reviewHash: string;
   review: ICallableFunctionReviewView | null;
-  /** Names of the data files and sources the live pin reads; the record carries none yet. */
+  /** Names only of the data files and sources the live pin reads: never their bytes or a link to them. */
   dataPins: string[];
   sources: string[];
   updatedAt: Date;
@@ -303,6 +330,7 @@ export function toCallableFunctionPublic(
       pinnedAt: doc.pin.pinnedAt,
       ...(doc.pin.seq !== undefined ? { seq: doc.pin.seq } : {}),
     },
+    dataPins: (doc.pin.dataPins ?? []).map(({ name, sha256, bytes, pinnedAt }) => ({ name, sha256, bytes, pinnedAt })),
     latestVersion: head?.version ?? null,
     updateAvailable: live !== null && live.version > doc.pin.version,
     trustLabel: doc.state === 'live' ? (doc.trustLabel ?? null) : null,
@@ -319,9 +347,6 @@ export function toCallableFunctionPublic(
     updatedAt: doc.updatedAt,
   };
 }
-
-// Fails typecheck once the record gains `dataPins`: read those and its sources from it instead.
-const NO_DATA_PINS: 'dataPins' extends keyof ICallableFunction ? never : readonly string[] = [];
 
 /** An allowlist, like {@link toCallableFunctionPublic}, for a caller who is not the owner. */
 export function toCallableFunctionShared(
@@ -348,7 +373,7 @@ export function toCallableFunctionShared(
           current: review.reviewHash === reviewHash,
         }
       : null,
-    dataPins: [...NO_DATA_PINS],
+    dataPins: (doc.pin.dataPins ?? []).map(({ name }) => name),
     sources: [],
     pin: {
       version: doc.pin.version,
@@ -564,5 +589,15 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
     projectIds: string[];
     organizationIds: string[];
   }): Promise<ICallableFunctionSharedSource[]>;
+  /**
+   * Replaces `pin.dataPins` only if the record is unchanged since `expected.updatedAt`, and returns the function to
+   * draft as a repin does, since the files it promoted with changed; null when it changed or is not the owner's.
+   */
+  setDataPins(
+    id: string,
+    owner: CallableFunctionOwner,
+    expected: { updatedAt: Date },
+    dataPins: ICallableFunctionDataPin[]
+  ): Promise<ICallableFunctionDocument | null>;
   deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean>;
 }

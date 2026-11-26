@@ -30,7 +30,7 @@ import {
   studioRadius,
   studioTransitionSx,
 } from './design/studioTokens';
-import { mediaLabel, STUDIO_MEDIA } from './media';
+import { mediaLabel, STUDIO_MEDIA, studioMedium } from './media';
 import { AssetTake, JobTake, TakesEmpty, TakesGrid, TakesHeading } from './StudioTakes';
 import { StudioSettings, defaultStudioSettings } from './StudioSettings';
 
@@ -53,19 +53,27 @@ function CreationForm({
   kind,
   onBack,
   initial,
+  layout,
 }: {
   controller: StudioController;
   kind: StudioMediaKind;
   onBack: () => void;
   initial?: StudioAsset['creation'];
+  layout: StudioLayout;
 }) {
+  // The rail's Studio place has no conversation, so it never offers the session-context toggle.
+  const inPlace = layout === 'place';
   const [storedDraft, setDraft] = useState<StudioCreationDraft>(() => ({
     sessionId: controller.sessionId,
     workspaceId: controller.workspaceId,
     revision: controller.revision,
     kind,
     prompt: initial?.prompt ?? '',
-    selection: initial ? (initial.selection ?? { mode: 'none' }) : { mode: 'current-session' },
+    selection: inPlace
+      ? { mode: 'none' }
+      : initial
+        ? (initial.selection ?? { mode: 'none' })
+        : { mode: 'current-session' },
     settings: initial?.settings ?? defaultStudioSettings(kind, controller),
   }));
   const draft = { ...storedDraft, revision: controller.revision };
@@ -126,14 +134,16 @@ function CreationForm({
       stage = 'creating';
       setPhase('creating');
       await controller.create({ draft: snapshot, reviewId: result.id, preparedPrompt: result.preparedPrompt });
-      if (current()) onBack();
-      else if (mounted.current && operation.current === request)
+      // The place keeps the form up, as web Create does: the new take lands in the gallery below it.
+      if (current()) {
+        if (!inPlace) onBack();
+      } else if (mounted.current && operation.current === request)
         setContextNotice('Your draft is kept; check Your creations for the request status before starting another.');
     } catch (cause) {
       if (mounted.current && operation.current === request && (stage === 'creating' || current()))
         setError(
           stage === 'preparing'
-            ? `Studio could not prepare the prompt using this conversation's chat model. ${errorText(cause)}`
+            ? `Studio could not prepare the prompt${inPlace ? '' : " using this conversation's chat model"}. ${errorText(cause)}`
             : errorText(cause)
         );
     } finally {
@@ -143,44 +153,37 @@ function CreationForm({
       }
     }
   };
-  return (
-    <Stack
-      component="form"
-      ref={form}
-      onSubmit={event => event.preventDefault()}
-      spacing={2}
-      data-testid="studio-creation-form"
-      sx={{
-        ...studioPanelSx,
-        p: 2,
-        // StudioSettings draws its own fields; this gives them web Studio's label and control styling.
-        '& .MuiFormLabel-root': studioMicroLabelSx,
-        '& select': {
-          minHeight: 34,
-          fontSize: '13px',
-          bgcolor: studioColor('raised'),
-          borderColor: studioColor('border'),
-          borderRadius: studioRadius('md'),
-          color: studioColor('text'),
-        },
-      }}
-    >
-      {contextNotice && (
-        <Alert size="sm" color="neutral" data-testid="studio-context-changed">
-          {contextNotice}
-        </Alert>
-      )}
-      <StudioSettings controller={controller} draft={draft} disabled={locked} edit={edit} />
-      <FormControl disabled={locked}>
-        <FormLabel>{kind === 'speech' ? 'Script or instructions' : 'What would you like to create?'}</FormLabel>
-        <Textarea
-          minRows={5}
-          sx={{ bgcolor: studioColor('sunken'), borderColor: studioColor('border'), borderRadius: studioRadius('md') }}
-          value={draft.prompt}
-          onChange={event => edit({ ...draft, prompt: event.target.value })}
-          slotProps={{ textarea: { 'data-testid': 'studio-prompt-input' } }}
-        />
-      </FormControl>
+  const formSx = {
+    // StudioSettings draws its own fields; this gives them web Studio's label and control styling.
+    '& .MuiFormLabel-root': studioMicroLabelSx,
+    '& select': {
+      minHeight: 34,
+      fontSize: '13px',
+      bgcolor: studioColor('raised'),
+      borderColor: studioColor('border'),
+      borderRadius: studioRadius('md'),
+      color: studioColor('text'),
+    },
+  } as const;
+  const contextChanged = contextNotice && (
+    <Alert size="sm" color="neutral" data-testid="studio-context-changed">
+      {contextNotice}
+    </Alert>
+  );
+  const prompt = (
+    <FormControl disabled={locked}>
+      <FormLabel>{kind === 'speech' ? 'Script or instructions' : 'What would you like to create?'}</FormLabel>
+      <Textarea
+        minRows={5}
+        sx={{ bgcolor: studioColor('sunken'), borderColor: studioColor('border'), borderRadius: studioRadius('md') }}
+        value={draft.prompt}
+        onChange={event => edit({ ...draft, prompt: event.target.value })}
+        slotProps={{ textarea: { 'data-testid': 'studio-prompt-input' } }}
+      />
+    </FormControl>
+  );
+  const sessionContext = (
+    <>
       <Checkbox
         size="sm"
         label="Use current session context"
@@ -192,64 +195,69 @@ function CreationForm({
       <Typography level="body-xs" sx={{ color: studioColor('text-muted'), mt: '4px !important' }}>
         Studio prepares prompts using this conversation's chat model, even when session context is off.
       </Typography>
-      {!controller.catalog &&
-        capability?.status === 'available' &&
-        capability.fields?.map(field => {
-          if (!field) return null;
-          const value = draft.settings[field.key as keyof typeof draft.settings];
-          const change = (next: string | number | boolean | undefined) =>
-            edit({ ...draft, settings: { ...draft.settings, [field.key]: next } } as StudioCreationDraft);
-          return (
-            <FormControl key={field.key} disabled={locked}>
-              {field.type !== 'boolean' && <FormLabel>{field.label}</FormLabel>}
-              {field.type === 'boolean' ? (
-                <Checkbox
-                  label={field.label}
-                  disabled={locked}
-                  checked={Boolean(value)}
-                  onChange={event => change(event.target.checked)}
-                  slotProps={{ input: { 'data-testid': `studio-setting-${field.key}` } }}
-                />
-              ) : field.type === 'choice' ? (
-                <Box
-                  component="select"
-                  aria-label={field.label}
-                  disabled={locked}
-                  sx={selectSx}
-                  value={String(value ?? '')}
-                  data-testid={`studio-setting-${field.key}`}
-                  onChange={event => change(event.target.value || undefined)}
-                >
-                  <option value="">Default</option>
-                  {field.options.map(option => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </Box>
-              ) : (
-                <Input
-                  type="number"
-                  value={typeof value === 'number' || typeof value === 'string' ? value : ''}
-                  onChange={event => change(event.target.value === '' ? undefined : Number(event.target.value))}
-                  slotProps={{
-                    input: {
-                      min: field.min,
-                      max: field.max,
-                      step: field.step ?? 1,
-                      'data-testid': `studio-setting-${field.key}`,
-                    },
-                  }}
-                />
-              )}
-            </FormControl>
-          );
-        })}
-      {capability?.status !== 'available' && (
-        <Alert size="sm" color="neutral">
-          {capability?.reason ?? 'This media type is not supported.'}
-        </Alert>
-      )}
+    </>
+  );
+  const legacyFields =
+    !controller.catalog &&
+    capability?.status === 'available' &&
+    capability.fields?.map(field => {
+      if (!field) return null;
+      const value = draft.settings[field.key as keyof typeof draft.settings];
+      const change = (next: string | number | boolean | undefined) =>
+        edit({ ...draft, settings: { ...draft.settings, [field.key]: next } } as StudioCreationDraft);
+      return (
+        <FormControl key={field.key} disabled={locked}>
+          {field.type !== 'boolean' && <FormLabel>{field.label}</FormLabel>}
+          {field.type === 'boolean' ? (
+            <Checkbox
+              label={field.label}
+              disabled={locked}
+              checked={Boolean(value)}
+              onChange={event => change(event.target.checked)}
+              slotProps={{ input: { 'data-testid': `studio-setting-${field.key}` } }}
+            />
+          ) : field.type === 'choice' ? (
+            <Box
+              component="select"
+              aria-label={field.label}
+              disabled={locked}
+              sx={selectSx}
+              value={String(value ?? '')}
+              data-testid={`studio-setting-${field.key}`}
+              onChange={event => change(event.target.value || undefined)}
+            >
+              <option value="">Default</option>
+              {field.options.map(option => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Box>
+          ) : (
+            <Input
+              type="number"
+              value={typeof value === 'number' || typeof value === 'string' ? value : ''}
+              onChange={event => change(event.target.value === '' ? undefined : Number(event.target.value))}
+              slotProps={{
+                input: {
+                  min: field.min,
+                  max: field.max,
+                  step: field.step ?? 1,
+                  'data-testid': `studio-setting-${field.key}`,
+                },
+              }}
+            />
+          )}
+        </FormControl>
+      );
+    });
+  const unsupported = capability?.status !== 'available' && (
+    <Alert size="sm" color="neutral">
+      {capability?.reason ?? 'This media type is not supported.'}
+    </Alert>
+  );
+  const action = (
+    <>
       <Button
         variant="solid"
         color="primary"
@@ -271,6 +279,56 @@ function CreationForm({
           {error}
         </Alert>
       )}
+    </>
+  );
+
+  if (inPlace)
+    // Web Create's split: the prompt and options in the main panel, the model and the action in a side panel.
+    return (
+      <Box
+        component="form"
+        ref={form}
+        onSubmit={event => event.preventDefault()}
+        data-testid="studio-creation-form"
+        sx={{
+          ...formSx,
+          display: 'grid',
+          gap: 2,
+          alignItems: 'start',
+          gridTemplateColumns: 'minmax(0, 1fr)',
+          '@container studio-main (min-width: 720px)': { gridTemplateColumns: 'minmax(0, 1fr) 300px' },
+        }}
+      >
+        <Stack spacing={2} sx={{ ...studioPanelSx, p: 2, minWidth: 0 }} data-testid="studio-creation-main-panel">
+          {contextChanged}
+          {prompt}
+          <StudioSettings controller={controller} draft={draft} disabled={locked} edit={edit} part="options" />
+          {legacyFields}
+          {unsupported}
+        </Stack>
+        <Stack spacing={2} sx={{ ...studioPanelSx, p: 2, minWidth: 0 }} data-testid="studio-creation-side-panel">
+          <StudioSettings controller={controller} draft={draft} disabled={locked} edit={edit} part="model" />
+          {action}
+        </Stack>
+      </Box>
+    );
+
+  return (
+    <Stack
+      component="form"
+      ref={form}
+      onSubmit={event => event.preventDefault()}
+      spacing={2}
+      data-testid="studio-creation-form"
+      sx={{ ...studioPanelSx, p: 2, ...formSx }}
+    >
+      {contextChanged}
+      <StudioSettings controller={controller} draft={draft} disabled={locked} edit={edit} />
+      {prompt}
+      {sessionContext}
+      {legacyFields}
+      {unsupported}
+      {action}
     </Stack>
   );
 }
@@ -506,51 +564,205 @@ export function tileUnavailableReason(
   return controller.busy ? 'Studio is busy.' : null;
 }
 
-/** The pane's body - the medium tiles, a creation form, or an asset preview - with the medium owned by the caller. */
+export type StudioLayout = 'pane' | 'place';
+
+/**
+ * The takes under the tiles or the form: the saved assets and the jobs still worth showing, newest first, with
+ * paging and load states. `kind` narrows them to one medium, as web Create's gallery does under its form.
+ */
+function StudioTakesSection({
+  controller,
+  kind,
+  unavailableReason,
+  onOpen,
+}: {
+  controller?: StudioController;
+  kind?: StudioMediaKind;
+  unavailableReason?: string;
+  onOpen: (assetId: string) => void;
+}) {
+  const [pagingError, setPagingError] = useState<string | null>(null);
+  const [paging, setPaging] = useState(false);
+  const medium = kind ? studioMedium(kind) : undefined;
+  return (
+    <>
+      {(controller?.hasMoreAssets || controller?.hasMoreJobs) && (
+        <Typography level="body-xs">Partial history loaded. Load remaining pages to browse all records.</Typography>
+      )}
+      {(['assets', 'jobs'] as const).map(
+        collection =>
+          (collection === 'assets' ? controller?.hasMoreAssets : controller?.hasMoreJobs) && (
+            <Button
+              key={collection}
+              size="sm"
+              disabled={paging}
+              data-testid={`studio-load-more-${collection}-btn`}
+              onClick={() => {
+                setPaging(true);
+                setPagingError(null);
+                void controller
+                  ?.loadMore?.(collection)
+                  .catch(cause => setPagingError(errorText(cause)))
+                  .finally(() => setPaging(false));
+              }}
+            >
+              Load more {collection}
+            </Button>
+          )
+      )}
+      {pagingError && <Alert color="danger">{pagingError}</Alert>}
+      {!controller && (
+        <Typography level="body-sm" data-testid="studio-unavailable">
+          {unavailableReason ??
+            'Studio workspace services are not connected. Creation and saved assets will appear here when available.'}
+        </Typography>
+      )}
+      {controller?.state.status === 'loading' && (
+        <Typography role="status" level="body-sm" data-testid="studio-loading">
+          Loading Studio...
+        </Typography>
+      )}
+      {controller?.state.status === 'error' && (
+        <Alert size="sm" color="danger" data-testid="studio-load-error">
+          {controller.state.error}
+        </Alert>
+      )}
+      {controller?.state.status === 'ready' &&
+        (() => {
+          const assets = controller.state.assets;
+          const assetIds = new Set(assets.map(asset => asset.id));
+          const deliveredJobIds = new Set(assets.flatMap(asset => (asset.jobId ? [asset.jobId] : [])));
+          const rows = [
+            ...assets.map(item => ({ type: 'asset' as const, item })),
+            ...controller.state.jobs
+              .filter(
+                job =>
+                  job.state !== 'completed' ||
+                  !!job.error ||
+                  (!deliveredJobIds.has(job.id) && !job.assetIds.some(id => assetIds.has(id)))
+              )
+              .map(item => ({ type: 'job' as const, item })),
+          ]
+            .filter(row => !kind || row.item.kind === kind)
+            .sort((a, b) => b.item.createdAt.localeCompare(a.item.createdAt));
+          return (
+            <Stack spacing={1.25} data-testid="studio-takes">
+              <TakesHeading count={rows.length} title={medium?.galleryTitle} />
+              {rows.length === 0 ? (
+                <TakesEmpty kind={kind} />
+              ) : (
+                <TakesGrid>
+                  {rows.map(row =>
+                    row.type === 'asset' ? (
+                      <AssetTake key={`asset-${row.item.id}`} asset={row.item} onOpen={() => onOpen(row.item.id)} />
+                    ) : (
+                      <JobTake
+                        key={`job-${row.item.id}`}
+                        job={row.item}
+                        onAction={
+                          controller.jobAction
+                            ? action =>
+                                void controller.jobAction!(row.item.id, action).catch(cause =>
+                                  setPagingError(errorText(cause))
+                                )
+                            : undefined
+                        }
+                      />
+                    )
+                  )}
+                </TakesGrid>
+              )}
+            </Stack>
+          );
+        })()}
+    </>
+  );
+}
+
+/**
+ * Studio's body with the medium owned by the caller. In the per-conversation pane: the medium tiles over the takes,
+ * a creation form, or an asset preview. In the rail's Studio place (`layout="place"`), web Create's shape: the
+ * medium's form with that medium's takes under it, or an asset preview.
+ */
 export function StudioContent({
   controller,
   kind,
   setKind,
   unavailableReason,
+  layout = 'pane',
 }: {
   controller?: StudioController;
   kind: StudioMediaKind | null;
   setKind: (kind: StudioMediaKind | null) => void;
   unavailableReason?: string;
+  layout?: StudioLayout;
 }) {
-  const [initial, setInitial] = useState<StudioAsset['creation']>();
-  const [pagingError, setPagingError] = useState<string | null>(null);
-  const [paging, setPaging] = useState(false);
+  // `reuse` counts Reuse clicks, so reusing a second take of the same medium still refills the form.
+  const [initial, setInitial] = useState<{ kind: StudioMediaKind; creation: StudioAsset['creation']; reuse: number }>();
   const [selected, setSelected] = useState<string | null>(null);
+  useEffect(() => {
+    if (layout === 'place' && initial && initial.kind !== kind) setInitial(undefined);
+  }, [layout, kind, initial]);
+  useEffect(() => {
+    if (layout === 'place') setSelected(null);
+  }, [layout, kind]);
   const asset =
     controller?.state.status === 'ready' ? controller.state.assets.find(item => item.id === selected) : undefined;
+  const preview = controller && asset && (
+    <AssetPreview
+      key={asset.id}
+      asset={asset}
+      controller={{
+        ...controller,
+        reuseAsset: async item => {
+          if (!item.creation) throw new Error('Saved settings are unavailable for this legacy asset.');
+          setInitial(current => ({ kind: item.kind, creation: item.creation, reuse: (current?.reuse ?? 0) + 1 }));
+          setKind(item.kind);
+          setSelected(null);
+        },
+      }}
+      onBack={() => setSelected(null)}
+    />
+  );
+
+  if (layout === 'place') {
+    return (
+      <>
+        {preview}
+        <Stack spacing={2.5} sx={preview ? { display: 'none' } : undefined}>
+          {controller && kind && (
+            <CreationForm
+              key={`${controller.sessionId}:${controller.workspaceId}:${kind}:${initial?.reuse ?? 0}`}
+              controller={controller}
+              kind={kind}
+              initial={initial?.kind === kind ? initial.creation : undefined}
+              onBack={() => setKind(null)}
+              layout="place"
+            />
+          )}
+          <StudioTakesSection
+            controller={controller}
+            kind={kind ?? undefined}
+            unavailableReason={unavailableReason}
+            onOpen={setSelected}
+          />
+        </Stack>
+      </>
+    );
+  }
+
   if (controller && kind)
     return (
       <CreationForm
         key={`${controller.sessionId}:${controller.workspaceId}:${kind}`}
         controller={controller}
         kind={kind}
-        initial={initial}
+        initial={initial?.creation}
         onBack={() => setKind(null)}
+        layout="pane"
       />
     );
-  if (controller && asset)
-    return (
-      <AssetPreview
-        key={asset.id}
-        asset={asset}
-        controller={{
-          ...controller,
-          reuseAsset: async item => {
-            if (!item.creation) throw new Error('Saved settings are unavailable for this legacy asset.');
-            setInitial(item.creation);
-            setKind(item.kind);
-            setSelected(null);
-          },
-        }}
-        onBack={() => setSelected(null)}
-      />
-    );
+  if (preview) return preview;
   return (
     <Stack spacing={2}>
       <Box
@@ -637,97 +849,7 @@ export function StudioContent({
           );
         })}
       </Box>
-      {(controller?.hasMoreAssets || controller?.hasMoreJobs) && (
-        <Typography level="body-xs">Partial history loaded. Load remaining pages to browse all records.</Typography>
-      )}
-      {(['assets', 'jobs'] as const).map(
-        collection =>
-          (collection === 'assets' ? controller?.hasMoreAssets : controller?.hasMoreJobs) && (
-            <Button
-              key={collection}
-              size="sm"
-              disabled={paging}
-              data-testid={`studio-load-more-${collection}-btn`}
-              onClick={() => {
-                setPaging(true);
-                setPagingError(null);
-                void controller
-                  ?.loadMore?.(collection)
-                  .catch(cause => setPagingError(errorText(cause)))
-                  .finally(() => setPaging(false));
-              }}
-            >
-              Load more {collection}
-            </Button>
-          )
-      )}
-      {pagingError && <Alert color="danger">{pagingError}</Alert>}
-      {!controller && (
-        <Typography level="body-sm" data-testid="studio-unavailable">
-          {unavailableReason ??
-            'Studio workspace services are not connected. Creation and saved assets will appear here when available.'}
-        </Typography>
-      )}
-      {controller?.state.status === 'loading' && (
-        <Typography role="status" level="body-sm" data-testid="studio-loading">
-          Loading Studio...
-        </Typography>
-      )}
-      {controller?.state.status === 'error' && (
-        <Alert size="sm" color="danger" data-testid="studio-load-error">
-          {controller.state.error}
-        </Alert>
-      )}
-      {controller?.state.status === 'ready' &&
-        (() => {
-          const assets = controller.state.assets;
-          const assetIds = new Set(assets.map(asset => asset.id));
-          const deliveredJobIds = new Set(assets.flatMap(asset => (asset.jobId ? [asset.jobId] : [])));
-          const rows = [
-            ...assets.map(item => ({ type: 'asset' as const, item })),
-            ...controller.state.jobs
-              .filter(
-                job =>
-                  job.state !== 'completed' ||
-                  !!job.error ||
-                  (!deliveredJobIds.has(job.id) && !job.assetIds.some(id => assetIds.has(id)))
-              )
-              .map(item => ({ type: 'job' as const, item })),
-          ].sort((a, b) => b.item.createdAt.localeCompare(a.item.createdAt));
-          return (
-            <Stack spacing={1.25}>
-              <TakesHeading count={rows.length} />
-              {rows.length === 0 ? (
-                <TakesEmpty />
-              ) : (
-                <TakesGrid>
-                  {rows.map(row =>
-                    row.type === 'asset' ? (
-                      <AssetTake
-                        key={`asset-${row.item.id}`}
-                        asset={row.item}
-                        onOpen={() => setSelected(row.item.id)}
-                      />
-                    ) : (
-                      <JobTake
-                        key={`job-${row.item.id}`}
-                        job={row.item}
-                        onAction={
-                          controller.jobAction
-                            ? action =>
-                                void controller.jobAction!(row.item.id, action).catch(cause =>
-                                  setPagingError(errorText(cause))
-                                )
-                            : undefined
-                        }
-                      />
-                    )
-                  )}
-                </TakesGrid>
-              )}
-            </Stack>
-          );
-        })()}
+      <StudioTakesSection controller={controller} unavailableReason={unavailableReason} onOpen={setSelected} />
     </Stack>
   );
 }

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parseHashParams, parseQueryParams, parseAuthParams } from '../authParams';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { parseHashParams, parseQueryParams, parseAuthParams, authFragmentCaptureScript } from '../authParams';
 
 describe('authParams', () => {
   describe('parseHashParams', () => {
@@ -347,6 +347,44 @@ describe('authParams', () => {
         userId: 'user',
         error: undefined,
       });
+    });
+  });
+
+  describe('authFragmentCaptureScript', () => {
+    const runCapture = () => new Function(authFragmentCaptureScript())();
+
+    afterEach(() => {
+      delete window.__b4mAuthFragment;
+      window.history.replaceState(null, '', '/');
+    });
+
+    it('takes the token fragment out of the URL before anything else reads the location', () => {
+      window.history.replaceState(null, '', '/auth/success?redirectTo=%2Fnotebooks#token=abc&userId=user-1');
+
+      runCapture();
+
+      expect(window.location.hash).toBe('');
+      expect(window.location.href).not.toContain('abc');
+      expect(window.location.search).toBe('?redirectTo=%2Fnotebooks');
+      expect(window.__b4mAuthFragment).toBe('#token=abc&userId=user-1');
+    });
+
+    it('hands the captured fragment to parseAuthParams exactly once', () => {
+      window.history.replaceState(null, '', '/auth/success#token=abc&userId=user-1');
+      runCapture();
+
+      expect(parseAuthParams({})).toEqual({ token: 'abc', userId: 'user-1', error: undefined });
+      expect(window.__b4mAuthFragment).toBeUndefined();
+      expect(parseAuthParams({})).toEqual({});
+    });
+
+    it('leaves fragments on other routes alone', () => {
+      window.history.replaceState(null, '', '/notebooks#section');
+
+      runCapture();
+
+      expect(window.location.hash).toBe('#section');
+      expect(window.__b4mAuthFragment).toBeUndefined();
     });
   });
 });

@@ -14,6 +14,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import {
+  DATETIME_COLUMN_WIDTH,
   DataTable,
   ErrorState,
   InlineBar,
@@ -80,7 +81,12 @@ type RecentErrorRow = { err: IntegrationDashboardEntry['recentErrors'][number]; 
 const noRetry = () => undefined;
 
 const recentErrorColumns: DataColumn<RecentErrorRow>[] = [
-  { id: 'time', label: 'Time', width: '11rem', render: ({ err }) => new Date(err.occurredAt).toLocaleString() },
+  {
+    id: 'time',
+    label: 'Time',
+    width: DATETIME_COLUMN_WIDTH,
+    render: ({ err }) => new Date(err.occurredAt).toLocaleString(),
+  },
   {
     id: 'source',
     label: 'Source',
@@ -283,7 +289,7 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
             testId="integration-recent-errors-table"
             pagination={false}
             maxHeight="none"
-            minWidth="51rem"
+            minWidth="53.5rem"
           />
         ) : (
           <MutedNote>No recent errors.</MutedNote>

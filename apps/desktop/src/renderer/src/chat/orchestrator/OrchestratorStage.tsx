@@ -26,7 +26,7 @@ import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
-import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher } from './ViewSwitcher';
+import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher, useSceneStageCopy, useSceneStageInfo } from './ViewSwitcher';
 import { useApplySkin, useSkinTheme } from './skins';
 import { SKIN_STAGE_VARIABLE } from './statePalette';
 import { useQuickApprovals } from './quickApprovals';
@@ -111,8 +111,16 @@ export interface StageAmbient {
   onToggle(on: boolean): void;
 }
 
+/** An agent archived out of the run; the empty stage lists these so they stay one click away. */
+export interface ArchivedAgent {
+  id: string;
+  title: string;
+}
+
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
+  /** Agents archived out of this run, newest first (archivedAgentsOf). Shown only on the empty stage. */
+  archivedAgents?: readonly ArchivedAgent[];
   selection?: { id: string | null; onChange(id: string | null): void };
   parent?: ParentView;
   /** Bring the parent's own conversation forward for an attention action. */
@@ -181,6 +189,7 @@ const pulse = keyframes`
 
 export function OrchestratorStage({
   agents: rosterAgents,
+  archivedAgents = NO_ARCHIVED,
   selection,
   parent: rosterParent = NO_PARENT,
   onParentFocus,
@@ -333,14 +342,18 @@ export function OrchestratorStage({
   }, [finale.shown]);
   useAgentSoundEvents(agents, parentNeedsYou);
 
-  const parentScene = !split && (view === 'tavern' || view === 'office');
+  const sceneInfo = useSceneStageInfo(view);
+  const stageCopy = useSceneStageCopy(view);
+  const parentScene = !split && sceneInfo?.host === true;
   const bannerInScene = parentScene && renderView !== undefined && agents.length > 0 && !focused;
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
       spend={presenting ? undefined : spend}
       placement={bannerInScene ? 'scene' : 'inline'}
-      look={view === 'office' ? 'office' : 'tavern'}
+      look={sceneInfo?.finale}
+      hostArt={sceneInfo?.hostArt}
+      title={stageCopy.finale}
       onRead={() => {
         finale.dismiss();
         onReadReport?.(report.id);
@@ -349,13 +362,17 @@ export function OrchestratorStage({
     />
   );
 
-  // The Tavern asks its requests in a dialogue box of its own (tavern/TavernDialogue.tsx). Presenter mode keeps
-  // the strip off and the bubbles' Open-only answers, since the box would show the real requests.
+  // A scene that answers in place asks its requests in a dialogue box of its own (scene/SceneDialogue.tsx).
+  // Presenter mode keeps the strip off and the bubbles' Open-only answers, since the box would show the real requests.
   const inSceneDecisions =
-    !split && view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused && !presenting;
+    !split &&
+    sceneInfo?.inSceneDecisions === true &&
+    renderView !== undefined &&
+    agents.length > 0 &&
+    !focused &&
+    !presenting;
 
-  const detailsInScene =
-    (parentScene || (!split && view === 'aquarium')) && renderView !== undefined && agents.length > 0 && !focused;
+  const detailsInScene = !split && sceneInfo !== undefined && renderView !== undefined && agents.length > 0 && !focused;
   const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
   const detailsOverlay = selected && (
     // Stay mounted while settled so waking restores the draft and selection.
@@ -464,23 +481,18 @@ export function OrchestratorStage({
       openPr,
       openRoot: () => onParentFocus?.(),
       stop: actions.stop,
+      sessionOfApproval: approvalId => snapshot?.approvals?.find(entry => entry.id === approvalId)?.sessionId,
     });
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
-  // An agent's request is the Tavern dialogue box's to show; the card keeps the parent's.
+  // An agent's request is the scene dialogue box's to show; the card keeps the parent's.
   const askingAgent = parentNeedsYou || inSceneDecisions ? undefined : firstNeedsYou;
   const needsYouCard = settled && (parentNeedsYou || askingAgent) && (
     <NeedsYouCard
       key={askingAgent?.id ?? 'parent'}
       agent={askingAgent}
-      name={
-        askingAgent
-          ? (personas.get(askingAgent.id)?.label ?? askingAgent.title)
-          : view === 'office'
-            ? 'The orchestrator'
-            : 'The Innkeeper'
-      }
+      name={askingAgent ? (personas.get(askingAgent.id)?.label ?? askingAgent.title) : stageCopy.host}
       onOpen={() => {
         ambient?.wake();
         if (askingAgent) setSelectedId(askingAgent.id);
@@ -519,7 +531,7 @@ export function OrchestratorStage({
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5, minWidth: 0 }}>
           {presenting && <PresentingBadge />}
           <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="orchestrator-ambient-status">
-            {summary || (view === 'office' ? 'The office is quiet' : 'The tavern is quiet')}
+            {summary || stageCopy.quiet}
           </Typography>
         </Box>
       ) : (
@@ -639,7 +651,10 @@ export function OrchestratorStage({
           {agents.length === 0 ? (
             <EmptyStage
               scene={parentScene && renderView ? renderView(view, viewProps) : null}
-              office={view === 'office'}
+              prompt={archivedAgents.length > 0 ? stageCopy.emptyArchived : stageCopy.empty}
+              archived={archivedAgents}
+              presenting={presenting}
+              onOpen={actions.open}
             />
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
@@ -689,7 +704,28 @@ function PresentingBadge() {
   );
 }
 
-function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
+const NO_ARCHIVED: readonly ArchivedAgent[] = [];
+
+interface EmptyStageProps {
+  scene: ReactNode;
+  /** The scene's own line under it (its copy.stage.empty, or emptyArchived once agents were archived). */
+  prompt: string;
+  archived: readonly ArchivedAgent[];
+  presenting: boolean;
+  onOpen(id: string): void;
+}
+
+/** The wording for a stage with no scene, which has no host to name. */
+function plainEmptyHint(archivedCount: number): string {
+  return archivedCount > 0
+    ? 'Every agent has finished and been archived. Describe more work to start new ones.'
+    : 'No agents yet. Describe the work and it will be split across agents.';
+}
+
+function EmptyStage({ scene, prompt, archived, presenting, onOpen }: EmptyStageProps) {
+  const archivedList = archived.length > 0 && (
+    <ArchivedAgentList archived={archived} presenting={presenting} onOpen={onOpen} />
+  );
   if (scene) {
     return (
       <Box
@@ -699,10 +735,9 @@ function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
         {scene}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            {office
-              ? 'No agents yet. Describe the work and it will be split across agents.'
-              : 'No quests yet. Describe the work and the Innkeeper will split it across agents.'}
+            {prompt}
           </Typography>
+          {archivedList}
         </Box>
       </Box>
     );
@@ -721,8 +756,51 @@ function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
       }}
     >
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
-        No agents yet. Describe the work and it will be split across agents.
+        {plainEmptyHint(archived.length)}
       </Typography>
+      {archivedList}
+    </Box>
+  );
+}
+
+/** Presenter mode hides titles, so it shows the count alone. */
+function ArchivedAgentList({
+  archived,
+  presenting,
+  onOpen,
+}: Pick<EmptyStageProps, 'archived' | 'presenting' | 'onOpen'>) {
+  const label = archived.length === 1 ? '1 archived agent' : `${archived.length} archived agents`;
+  if (presenting) {
+    return (
+      <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-archived-agents">
+        {label}
+      </Typography>
+    );
+  }
+  return (
+    <Box
+      data-testid="orchestrator-archived-agents"
+      sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 0.75 }}
+    >
+      <Typography level="body-xs" textColor="text.tertiary">
+        {label}:
+      </Typography>
+      {archived.map(agent => (
+        <Button
+          key={agent.id}
+          size="sm"
+          variant="soft"
+          color="neutral"
+          data-testid="orchestrator-archived-agent-open-btn"
+          title={`Open ${agent.title}`}
+          onClick={() => onOpen(agent.id)}
+          sx={{ maxWidth: 240, minWidth: 0 }}
+        >
+          <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {agent.title}
+          </Box>
+        </Button>
+      ))}
     </Box>
   );
 }

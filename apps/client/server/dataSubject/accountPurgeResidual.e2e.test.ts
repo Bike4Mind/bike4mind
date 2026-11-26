@@ -8,6 +8,7 @@ import {
   FabFile,
   AssistantInstructionModel,
   assistantInstructionRepository,
+  oauthClientSignInRepository,
   mongoose,
 } from '@bike4mind/database';
 import { inboxRepository } from '@bike4mind/database/social';
@@ -247,6 +248,24 @@ describe('admin erasure against the real data holder registry', () => {
     expect(await inboxRepository.findByReceiverId(other)).toEqual([]);
     expect(await mongoose.model('Inbox').collection.countDocuments({ receiverId: other })).toBe(0);
   });
+
+  it.each(['self', 'admin'] as const)(
+    'deletes the apps the person signed in to and keeps another user rows (%s deletion)',
+    async source => {
+      const { userId, other } = await seedAccount(source);
+      const at = new Date();
+      await oauthClientSignInRepository.recordSignIn({ userId, clientId: 'app-a', at });
+      await oauthClientSignInRepository.recordSignIn({ userId, clientId: 'app-b', at });
+      await oauthClientSignInRepository.recordSignIn({ userId: other, clientId: 'app-a', at });
+
+      await expect(completeAccountDeletion(userId, { logger: logger as never, erasureRegistry })).resolves.toEqual({
+        deleted: true,
+      });
+
+      expect(await oauthClientSignInRepository.listByUser(userId)).toEqual([]);
+      expect((await oauthClientSignInRepository.listByUser(other)).map(row => row.clientId)).toEqual(['app-a']);
+    }
+  );
 
   it('erases a personal file with its chunks and leaves a team file and its chunks in place', async () => {
     const { userId, shared } = await seedAccount();

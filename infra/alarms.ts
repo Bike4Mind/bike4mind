@@ -1174,6 +1174,38 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: a provider call fell back from a federated token to a static key
+   *
+   * Requests still succeed on the fallback, so nobody notices federation broke
+   * unless this fires; any single fallback is worth a look. Notify, do not page.
+   *
+   * Metric emitted by: b4m-core/llm-adapters/src/providerCredentialMetrics.ts.
+   * Alarms match one exact dimension set, so this uses the Stage-only fallback
+   * metric; the per-provider split is on ProviderCredentialUse.
+   */
+  new aws.cloudwatch.MetricAlarm('providerCredentialFallback', {
+    name: `${$app.name}-${$app.stage}-provider-credential-fallback`,
+    alarmDescription:
+      'An Anthropic or OpenAI call fell back from a federated token to the static key - check the token exchange',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ProviderCredentialFallback',
+    namespace: 'Lumina5/ProviderCredential',
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      Stage: $app.stage,
+    },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'ProviderCredential',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
    * Alarm: the REPL sandbox could not be constructed
    *
    * Both callers fail closed when `isolated-vm` will not load: the agent wake

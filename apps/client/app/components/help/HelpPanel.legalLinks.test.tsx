@@ -27,6 +27,7 @@ const { panelState, helpIndexResult, analytics, adminSettings } = vi.hoisted(() 
   adminSettings: { isFeatureEnabled: () => false },
 }));
 
+vi.mock('@client/app/hooks/data/tutorials', () => ({ useTutorialsEnabled: () => false }));
 vi.mock('@client/app/hooks/useHelpPanel', () => ({
   useHelpPanel: Object.assign(() => panelState, { getState: () => panelState }),
 }));

@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import { assignPersonas } from '@shared/agentPersona';
 import type { WatchOrchestration } from '@shared/watch';
 import { buildRoster } from '../chat/orchestrator/roster';
-import { TavernView } from '../chat/orchestrator/tavern/TavernView';
+import { SceneStage } from '../chat/orchestrator/scene/SceneStage';
+import { TAVERN_SCENE } from '../chat/orchestrator/tavern/tavernScene';
 
 const NO_PR_SUMMARIES = new Map();
 
@@ -41,7 +42,8 @@ export function MiniRoom({
   );
 
   return (
-    <TavernView
+    <SceneStage
+      scene={TAVERN_SCENE}
       agents={agents}
       personas={personas}
       parent={parent}
