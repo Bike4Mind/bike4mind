@@ -170,6 +170,64 @@ describe('subscription usage observations', () => {
     expect(matchesUsageCohort(row, usage, 'payingNoRecorded')).toBe(false);
   });
 
+  it('does not infer user-ledger coverage from actorless platform operations', async () => {
+    const owner = await user();
+    const row = await subscription(String(owner._id));
+    await AnalyticsDaily.collection.insertMany(
+      Array.from({ length: 28 }, (_, index) => ({
+        day: new Date(NOW.getTime() - (index + 1) * DAY).toISOString().slice(0, 10),
+        computedAt: NOW,
+      }))
+    );
+    await UsageEvent.collection.insertMany(
+      [new Date(NOW.getTime() - 50 * DAY), new Date(NOW.getTime() - DAY / 2)].map((createdAt, index) => ({
+        requestId: `platform-execution-${index}`,
+        providerCallId: `platform-call-${index}`,
+        attribution: {
+          kind: 'platform_operation',
+          operation: 'sre_diagnosis',
+          environment: 'test',
+          logicalJobId: `platform-job-${index}`,
+          executionId: `platform-execution-${index}`,
+        },
+        feature: 'operations',
+        source: 'system',
+        provider: 'example',
+        model: 'example',
+        costUsd: 1,
+        creditsCharged: 0,
+        keySource: 'platform',
+        settledBasis: 'provider',
+        status: 'ok',
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        providerInputTokens: 100,
+        providerOutputTokens: 0,
+        priceSource: 'literal',
+        rates: { tierKey: 0, input: 0.01, output: 0 },
+        timestampSource: 'dispatch',
+        usageOccurredAt: createdAt,
+        dispatchedAt: createdAt,
+        completedAt: createdAt,
+        recordedAt: createdAt,
+        createdAt,
+        updatedAt: createdAt,
+      }))
+    );
+
+    const usage = (await loadSubscriptionUsage([row], NOW)).get(String(row._id))!;
+    expect(usage).toMatchObject({
+      coverage: 'unknown',
+      recordedSince: null,
+      latestRecordedAt: null,
+      firstPartyRequests: null,
+      creditsConsumed: null,
+    });
+    expect(matchesUsageCohort(row, usage, 'payingNoRecorded')).toBe(false);
+  });
+
   it('requires every historical daily marker even when the store spans the window', async () => {
     await coverage();
     const owner = await user();

@@ -121,13 +121,15 @@ export type SessionProps = {
  * thrown quest error is classified for billing reasons, never for the
  * provider-configuration reasons the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
  * than a second vocabulary - a code added here that is not in `API_ERROR_CODES`
- * fails the build.
+ * fails the build. `run_budget_exhausted` lands on an image generation quest whose `run` budget
+ * could not cover the render's credit hold (ImageGeneration.process).
  */
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
   'spend_frozen',
   'free_quest_limit_reached',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 
@@ -314,6 +316,9 @@ export interface IChatHistoryItem {
 
   /** Agent-mode sound effects this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentSoundEffectsClaimed?: number;
+
+  /** save_content_to_data_lake saves this turn has claimed; the per-turn cap's counter (QuestRepository.claimLakeSaveSlot). */
+  lakeSaveCount?: number;
 
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
@@ -730,6 +735,8 @@ export interface ISessionOrigin {
    * client (see redactSessionForClient), so a viewer the session is shared with cannot see it.
    */
   apiKeyId?: string;
+  /** Created by a Slack workflow step; only such notebooks can be named by a later workflow step. */
+  slackWorkflow?: boolean;
 }
 
 /** List filters on top of the existing search/surface/pagination params (see searchOwnSessions). */
@@ -741,6 +748,28 @@ export interface SessionListFilters {
   /** true: only sessions with generated images; false: only sessions without. */
   hasImages?: boolean;
 }
+
+/** Largest page GET /api/sessions serves; a larger `pagination[limit]` is clamped, not rejected. */
+export const MAX_SESSION_LIST_LIMIT = 100;
+
+/** Orders searchByUserId can resume by keyset. Any other `orderBy.field` pages by offset only. */
+export const SESSION_LIST_KEYSET_FIELDS = ['lastUpdated', '_id'] as const;
+export type SessionListKeysetField = (typeof SESSION_LIST_KEYSET_FIELDS)[number];
+
+export function isSessionListKeysetField(field: string): field is SessionListKeysetField {
+  return (SESSION_LIST_KEYSET_FIELDS as readonly string[]).includes(field);
+}
+
+/** The last row a searchByUserId page served. `at` is its sort value when ordered by lastUpdated. */
+export type SessionListKeyset = { id: string; at?: Date };
+
+export interface SessionListPageOptions {
+  /** Resume after this row (keyset) instead of skipping to `pagination.page`. */
+  after?: SessionListKeyset;
+}
+
+/** `last` is set when another page exists and the order supports keyset paging. */
+export type SessionListPage = { data: ISessionDocument[]; hasMore: boolean; last?: SessionListKeyset };
 
 /** Keyset page of a user's own sessions, newest first by id (GET /api/v1/sessions). */
 export type ListSessionsByUserQuery = {
@@ -804,6 +833,13 @@ export interface ISession {
    * names. Mirrors how `systemPromptText` scopes a session without a project.
    */
   enabledTools?: string[];
+  /**
+   * The Studio production this notebook directs, set by the agent start of a Direct launch after the server
+   * checks the caller owns the composition and has Productions open. While set, every turn runs in agent mode
+   * with the director tools and system context (client: useSendMessage; executor: agentExecutor.directedSession).
+   * Not copied by clone/fork/snip.
+   */
+  productionCompositionId?: string;
   /**
    * Tools that must NOT be offered to the model for this session, even if the
    * request or global auto-adds include them. Applied as a denylist after all
@@ -1209,8 +1245,9 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     userId: string,
     options: SearchOptions<ISessionDocument>,
     surface?: string,
-    filters?: SessionListFilters
-  ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+    filters?: SessionListFilters,
+    page?: SessionListPageOptions
+  ) => Promise<SessionListPage>;
 
   /**
    * Cursor-paginated twin of searchByUserId: ordered by `_id` descending and bounded by `limit`,

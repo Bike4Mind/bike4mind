@@ -36,7 +36,6 @@ import type {
 import { parseNotebookImportKey } from '../utils/notebookImportKeys';
 import { Resource } from 'sst';
 import { getFilesStorage } from '../utils/storage/index';
-import { v4 as uuidv4 } from 'uuid';
 import { updateImportProgress, markImportComplete, markImportFailed } from '../utils/importHistoryProgress';
 
 const { NotebookImportService } = notebookImportService;
@@ -304,7 +303,7 @@ const processNotebookImport = async (
           },
         },
         logger,
-        generateId: () => uuidv4(),
+        generateId: () => crypto.randomUUID(),
         onProgress: async (progress: number, currentStep: string, processed: number, total: number) => {
           await updateImportProgress(importHistoryJobId, userId, {
             progress,

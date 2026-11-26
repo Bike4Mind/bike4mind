@@ -71,7 +71,9 @@ export function groupSessions(
   mode: ChatSessionMode,
   userSections: SidebarSectionsState = EMPTY_SIDEBAR_SECTIONS,
   importedInline = false,
-  nested = false
+  nested = false,
+  /** Lower first, ahead of activity within every group; omitted, the order is activity alone. */
+  attentionRank?: (session: ChatSessionSummary) => number
 ): SidebarSections {
   const inMode = sessions.filter(session => session.mode === mode);
   // Archiving outranks pinning: a pinned session that is then archived has been put away, and
@@ -80,7 +82,7 @@ export function groupSessions(
   const visible = inMode.filter(session => !session.archived);
   const children = nested ? nestSpawned(visible, userSections) : NO_CHILDREN;
   const attached = new Set([...children.values()].flat().map(session => session.id));
-  const byGroupActivity = activityOrder(children);
+  const byGroupActivity = withRank(activityOrder(children), attentionRank);
   const pinned = visible.filter(session => session.pinned).sort(byGroupActivity);
   const rest = visible.filter(session => !session.pinned && !attached.has(session.id)).sort(byGroupActivity);
 
@@ -189,6 +191,14 @@ function activityOrder(children: ReadonlyMap<string, readonly ChatSessionSummary
     groupActivity(children, b).localeCompare(groupActivity(children, a));
 }
 
+type SessionOrder = (a: ChatSessionSummary, b: ChatSessionSummary) => number;
+
+/** `order`, untouched when there is no rank, so the default sidebar sorts exactly as before. */
+function withRank(order: SessionOrder, rank?: (session: ChatSessionSummary) => number): SessionOrder {
+  if (!rank) return order;
+  return (a, b) => rank(a) - rank(b) || order(a, b);
+}
+
 /**
  * The title of the parent a spawned session is drawn away from, for its small "from X" label: its
  * parent is archived or in another mode, the user pinned or filed it, or a search flattened the
@@ -209,6 +219,28 @@ export function parentHints(
     hints.set(session.id, parent.title);
   }
   return hints;
+}
+
+/**
+ * Every live session started from `sessionId`, at any depth, by origin rather than by sidebar
+ * placement: deleting a parent offers these whether or not they are drawn under it.
+ */
+export function nestedSessionsOf(sessions: readonly ChatSessionSummary[], sessionId: string): ChatSessionSummary[] {
+  const found: ChatSessionSummary[] = [];
+  const seen = new Set([sessionId]);
+  for (let frontier = [sessionId]; frontier.length > 0;) {
+    const next = sessions.filter(
+      session =>
+        !seen.has(session.id) &&
+        !session.archived &&
+        session.origin !== undefined &&
+        frontier.includes(session.origin.parentSessionId)
+    );
+    for (const session of next) seen.add(session.id);
+    found.push(...next);
+    frontier = next.map(session => session.id);
+  }
+  return found;
 }
 
 /** Every session nested under `sessionId`, at any depth, in drawn order. */

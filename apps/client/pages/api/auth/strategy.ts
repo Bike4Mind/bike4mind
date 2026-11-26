@@ -151,7 +151,7 @@ const handler = baseApi({ auth: false })
         requiresRedirect: false,
       });
     } catch (error) {
-      console.error('Auth strategy lookup error:', error);
+      req.logger.error('Auth strategy lookup error', { error });
       return res.status(500).json({ error: 'Internal server error' });
     }
   });

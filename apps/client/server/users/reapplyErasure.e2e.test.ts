@@ -50,7 +50,11 @@ vi.mock('@bike4mind/fab-pipeline', async importActual => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getGeneratedImageStorage: () => ({ delete: effects.storage, deletePermanently: effects.storage }),
+  getGeneratedImageStorage: () => ({
+    delete: effects.storage,
+    deletePermanently: effects.storage,
+    deletePrefixPermanently: effects.storage,
+  }),
   getPublishedArtifactsStorage: () => ({ deletePrefix: effects.storage, deletePrefixPermanently: effects.storage }),
   getFilesStorage: () => ({
     delete: effects.storage,
@@ -75,8 +79,8 @@ vi.mock('@bike4mind/server-utils/services/purgeDeletedUserData', async importOri
   effects.purge.mockImplementation(actual.purgeDeletedUserData);
   return { ...actual, purgeDeletedUserData: effects.purge };
 });
-vi.mock('../dataSubject/registry', async importOriginal => {
-  const actual = await importOriginal<typeof import('../dataSubject/registry')>();
+vi.mock('@bike4mind/server-utils/dataSubject/registry/index', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/dataSubject/registry/index')>();
   effects.assertRegistry.mockImplementation(actual.assertContributedRegistryValid);
   return { ...actual, assertContributedRegistryValid: effects.assertRegistry };
 });

@@ -5,7 +5,8 @@ import UniformTypeIdentifiers
 import os
 
 /// The capture affordance for lake-oriented surfaces: take a photo, pick photos, or record a voice note, then
-/// choose where to save it. The share extension reaches the same composer from other apps.
+/// choose where to save it. The share extension reaches the same composer from other apps. A dictated follow-up
+/// memo instead becomes a brief of proposed action items, a draft email and reminders.
 struct CaptureMenu: View {
   @Environment(AppServices.self) private var services
 
@@ -13,14 +14,20 @@ struct CaptureMenu: View {
     case camera(ask: Bool)
     case scanner
     case voice
+    case followUp
+    case followUpBrief(String)
     case composer([ShareItem], ask: Bool = false)
+    case handoff(ObligationHandoffModel)
 
     var id: String {
       switch self {
       case .camera: "camera"
       case .scanner: "scanner"
       case .voice: "voice"
+      case .followUp: "followUp"
+      case .followUpBrief(let id): "followUpBrief-\(id)"
       case .composer: "composer"
+      case .handoff: "handoff"
       }
     }
   }
@@ -30,8 +37,12 @@ struct CaptureMenu: View {
   @State private var pickedPhotos: [PhotosPickerItem] = []
   @State private var problem: String?
   @State private var pendingCapture: (url: URL, ask: Bool)?
+  @State private var pendingScan: ScannedPages?
+  /// A finished scan waiting on the choice between the normal composer and handing it to the assistant.
+  @State private var offeredScan: ScannedPages?
   /// Items that did load when some did not: the composer opens once the notice about the rest is dismissed.
   @State private var afterProblem: [ShareItem]?
+  @State private var isSendingFollowUp = false
 
   var body: some View {
     Menu {
@@ -48,6 +59,9 @@ struct CaptureMenu: View {
         .accessibilityIdentifier("capture-photos-btn")
       Button("Voice Note", systemImage: "mic") { flow = .voice }
         .accessibilityIdentifier("capture-voice-btn")
+      Button("Follow-up", systemImage: "mic.badge.plus") { flow = .followUp }
+        .disabled(isSendingFollowUp)
+        .accessibilityIdentifier("capture-followup-btn")
     } label: {
       Label("Capture", systemImage: "plus.viewfinder")
     }
@@ -65,7 +79,7 @@ struct CaptureMenu: View {
           DocumentScanner { result in
             flow = nil
             switch result {
-            case .success(let url): pendingCapture = (url, false)
+            case .success(let scan): pendingScan = scan
             case .failure: problem = "The scan couldn't be saved. Please try again."
             case nil: break
             }
@@ -85,13 +99,40 @@ struct CaptureMenu: View {
         VoiceRecorderPanel(
           onTranscript: { text in flow = .composer([.text(text)]) },
           onCancel: { flow = nil })
+      case .followUp:
+        VoiceRecorderPanel(onTranscript: sendFollowUp, onCancel: { flow = nil })
+      case .followUpBrief(let id):
+        NavigationStack {
+          BriefView(briefID: id)
+            .toolbar {
+              ToolbarItem(placement: .cancellationAction) {
+                Button("Done") { flow = nil }
+                  .accessibilityIdentifier("capture-followup-done-btn")
+              }
+            }
+        }
       case .composer(let items, let ask):
         ShareComposerView(
           model: services.capture.composerModel(items: items), onFinish: { flow = nil }, onCancel: { flow = nil },
           asksQuestion: ask)
+      case .handoff(let model):
+        ObligationConfirmSheet(model: model, onClose: { flow = nil })
       case .camera, .scanner:
         EmptyView()
       }
+    }
+    .confirmationDialog(
+      "Use this scan", isPresented: Binding(get: { offeredScan != nil }, set: { if !$0 { offeredScan = nil } }),
+      presenting: offeredScan
+    ) { scan in
+      Button("Hand to assistant") {
+        flow = .handoff(services.obligationHandoffModel(file: scan.url, text: scan.text))
+      }
+      .accessibilityIdentifier("capture-handoff-btn")
+      Button("Save or send") { Task { await present(files: [scan.url]) } }
+        .accessibilityIdentifier("capture-scan-compose-btn")
+    } message: { _ in
+      Text("Hand a bill or letter to the assistant to track what's owed and when.")
     }
     .alert(
       afterProblem == nil ? "Couldn't use that" : "Some photos were skipped",
@@ -127,7 +168,38 @@ struct CaptureMenu: View {
       }, set: { if $0 == nil { flow = nil } })
   }
 
+  private func sendFollowUp(_ transcript: String) {
+    let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    flow = nil
+    guard !trimmed.isEmpty else {
+      problem = "Nothing was heard. Please try again."
+      return
+    }
+    isSendingFollowUp = true
+    Task {
+      defer { isSendingFollowUp = false }
+      do {
+        let brief = try await services.briefFollowUps.followUp(
+          transcript: String(trimmed.prefix(Self.maxFollowUpTranscript)), timeZone: TimeZone.current.identifier)
+        // A sheet opened while the memo was sending keeps what the user typed; the brief_ready push still opens it.
+        if case .none = flow { flow = .followUpBrief(brief.id) }
+      } catch {
+        Self.logger.error("Follow-up memo was not accepted: \(String(describing: error), privacy: .public)")
+        afterProblem = nil
+        problem = "The follow-up couldn't be sent. Please try again."
+      }
+    }
+  }
+
+  // Must match BRIEF_LIMITS.followUpTranscript in b4m-core/common/src/schemas/brief.ts.
+  private static let maxFollowUpTranscript = 6000
+
   private func completeCapture() {
+    if let scan = pendingScan {
+      pendingScan = nil
+      offeredScan = scan
+      return
+    }
     guard let capture = pendingCapture else { return }
     pendingCapture = nil
     Task { await present(files: [capture.url], ask: capture.ask) }

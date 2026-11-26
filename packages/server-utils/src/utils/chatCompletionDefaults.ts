@@ -19,7 +19,6 @@ import {
   spendFreezeRepository,
   projectRepository,
   promptRepository,
-  questMasterPlanRepository,
   questRepository,
   rapidReplyMappingRepository,
   rapidReplyResultRepository,
@@ -64,7 +63,6 @@ import { recallLakeMemoryForSession } from '../memory/lakeMemoryRecall';
 import { loadSystemPromptById } from './sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '../managers/sessionManager';
 import { getUserEntitlements } from '../entitlements/index';
-import { admitQuestStart, releaseQuestStart } from '../entitlements/questStartAllowance';
 import { resolveThinkingVisibility } from './thinkingVisibility';
 import { Config } from './config';
 import { getFilesStorage, getGeneratedImageStorage } from './storage/index';
@@ -73,7 +71,7 @@ import { premiumWorkspaceDeniedTools } from '../premium-generated/premiumWorkspa
 import { coreTutorialTurns } from '../tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '../premium-generated/premiumWorkspaceSessionSettings.generated';
 import { buildMcpEnvVariables } from './mcpEnv';
-import { LLMEvents, TelemetryEvents } from './eventBus';
+import { LLMEvents, ModerationEvents, TelemetryEvents } from './eventBus';
 import { imageModerationIncidents } from '../moderation/imageModerationIncidents';
 
 /**
@@ -94,6 +92,13 @@ export const publishTelemetryAlertCallback = async (args: {
     alertConfig: args.alertConfig,
     requestId: args.requestId,
   });
+};
+
+/** Hands a moderation escalation to the liveops alert handler; shared by every chat host. */
+export const publishModerationEscalation: NonNullable<
+  IChatCompletionServiceOptions['notifyModerationEscalation']
+> = async alert => {
+  await ModerationEvents.Escalation.publish(alert);
 };
 
 // Create an adapter for sessionService.autoName to publish event to EventBridge
@@ -146,7 +151,6 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     db: {
       sessions: sessionRepository,
       quests: questRepository,
-      questMasterPlans: questMasterPlanRepository,
       users: userRepository,
       apiKeys: apiKeyRepository,
       adminSettings: adminSettingsRepository,
@@ -223,10 +227,9 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     // comp-tag holder already gets here, closing the Q3b asymmetry on the generic surfaces
     // (not just the libonc Tutor). Pure fn ref; per-request resolution is memoized in core.
     getEntitlements: getUserEntitlements,
-    admitQuestStart,
-    releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
+    notifyModerationEscalation: publishModerationEscalation,
     invokeCreateMemento: async (questId, sessionId, userId, prompt, model, flags): Promise<void> => {
       await LLMEvents.CompletionCompleted.publish({
         questId,

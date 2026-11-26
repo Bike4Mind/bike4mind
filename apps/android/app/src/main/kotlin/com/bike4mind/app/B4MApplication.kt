@@ -1,12 +1,16 @@
 package com.bike4mind.app
 
 import android.app.Application
+import android.util.Log
+import com.bike4mind.app.calendar.BusyBlockSyncWorker
 import com.bike4mind.app.capture.CaptureWorker
+import com.bike4mind.app.push.AgentRunNotifications
 import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.push.PushNotifications
 import com.bike4mind.app.storage.EnvironmentStore
 import com.bike4mind.app.storage.OnboardingStore
 import com.bike4mind.kit.capture.CaptureStage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,6 +39,7 @@ class B4MApplication : Application() {
         environments = EnvironmentStore(this)
         onboarding = OnboardingStore(this)
         PushNotifications.createChannel(this)
+        AgentRunNotifications.createChannel(this)
         FcmClient.initialize(this)
         mutableGraph.value = AppGraph(this, environments.current())
         // A share the system stopped (an update, a reboot) carries on once the app runs again.
@@ -43,6 +48,19 @@ class B4MApplication : Application() {
             val capture = graph?.capture ?: return@launch
             capture.load()
             if (capture.jobs.value.any { it.stage == CaptureStage.PENDING }) CaptureWorker.schedule(this@B4MApplication)
+        }
+        // A revoked calendar permission kills the process without restarting it, so the next launch is where the
+        // blocks get cleared; it also re-arms a trigger the worker gave up on.
+        scope.launch {
+            val current = graph ?: return@launch
+            try {
+                current.session.restore()
+                BusyBlockSyncWorker.syncInForeground(this@B4MApplication, current)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failed: Exception) {
+                Log.w("B4MBusyBlocks", "Busy-block sync at launch failed", failed)
+            }
         }
     }
 

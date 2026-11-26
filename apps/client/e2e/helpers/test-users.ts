@@ -35,7 +35,7 @@ interface TestUsers {
   inviteCode?: TestInviteCode;
 }
 
-const AUTH_DIR = path.resolve(__dirname, '../.auth');
+export const AUTH_DIR = path.resolve(__dirname, '../.auth');
 const CORE_DATA_PATH = path.resolve(AUTH_DIR, 'core-data.json');
 const TEST_RUN_ID_PATH = path.resolve(AUTH_DIR, 'test-run-id');
 
@@ -101,14 +101,20 @@ export function getTestRunId(): string {
   return fs.readFileSync(TEST_RUN_ID_PATH, 'utf-8').trim();
 }
 
-export function saveCoreData(data: CoreData): void {
+// Write-then-rename so parallel projects reading these files never see a truncated file.
+function writeJsonAtomic(filePath: string, data: unknown): void {
   ensureAuthDir();
-  fs.writeFileSync(CORE_DATA_PATH, JSON.stringify(data, null, 2));
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tmpPath, filePath);
+}
+
+export function saveCoreData(data: CoreData): void {
+  writeJsonAtomic(CORE_DATA_PATH, data);
 }
 
 export function saveSpecUser(key: string, user: TestUser): void {
-  ensureAuthDir();
-  fs.writeFileSync(path.resolve(AUTH_DIR, `${key}-data.json`), JSON.stringify(user, null, 2));
+  writeJsonAtomic(path.resolve(AUTH_DIR, `${key}-data.json`), user);
 }
 
 export function getTestUsers(): TestUsers {

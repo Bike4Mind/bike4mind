@@ -46,7 +46,9 @@ import { appReservedHosts } from '@server/utils/pythonArtifactDataOrigins';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { AdminAiConfigSchema } from '@bike4mind/common';
-import { validateAdminAiConfigPromotion } from '@server/admin/ai/readiness';
+import { validateAdminAiConfigPromotion } from '@bike4mind/server-utils/admin/ai/readiness';
+import { statusTransportKind } from '@bike4mind/server-utils/utils/mailer/configStatus';
+import { mailSenderSettingProblem } from '@bike4mind/server-utils/utils/mailer/sender';
 
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
@@ -150,6 +152,16 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
         throw new BadRequestError(`At most ${PYTHON_ARTIFACT_DATA_ORIGINS_MAX} data origins can be listed.`);
       }
       value = valid;
+    }
+
+    if (key === 'mailFrom') {
+      const sender = String(value).trim();
+      value = sender;
+      const problem = mailSenderSettingProblem(sender, {
+        transport: statusTransportKind(),
+        secretFrom: Config.MAIL_FROM,
+      });
+      if (problem) throw new BadRequestError(problem);
     }
 
     if (isSignupGrantGuardedSaveKey(key)) {

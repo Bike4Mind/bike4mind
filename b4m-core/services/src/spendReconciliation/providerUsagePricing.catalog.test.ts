@@ -44,6 +44,7 @@ describe('provider usage pricing covers the declared catalog', () => {
           outputTokens: 1,
           cacheReadTokens: 0,
           cacheWriteTokens: 0,
+          inScope: true,
         },
       ]);
       if (result.unpricedOutputTokens !== 0) unpriced.push(`${provider}:${id}`);

@@ -4,6 +4,8 @@ import { adminSurface } from './adminStyles';
 
 type SectionCardProps = {
   title: string;
+  /** Inline help (e.g. an icon tooltip) shown right after the title. */
+  help?: ReactNode;
   /** A ghost button (or meta text) on the right of the title bar. */
   action?: ReactNode;
   children: ReactNode;
@@ -13,7 +15,14 @@ type SectionCardProps = {
 };
 
 /** A titled group of facts (DESIGN_GUIDE.md section 5). Facts are `<Fact>`s; no form inputs inside. */
-export function SectionCard({ title, action, children, body = 'facts', 'data-testid': testId }: SectionCardProps) {
+export function SectionCard({
+  title,
+  help,
+  action,
+  children,
+  body = 'facts',
+  'data-testid': testId,
+}: SectionCardProps) {
   return (
     <Sheet
       component="section"
@@ -28,9 +37,15 @@ export function SectionCard({ title, action, children, body = 'facts', 'data-tes
         alignItems="center"
         sx={{ px: 2, minHeight: 50, py: 1, borderBottom: '1px solid', borderColor: 'admin.border' }}
       >
-        <Typography level="title-md" component="h3" sx={{ color: 'admin.ink', mr: 'auto' }}>
+        <Typography
+          level="title-md"
+          component="h3"
+          sx={{ color: 'admin.ink', mr: help ? 0 : 'auto', minWidth: 0, overflowWrap: 'anywhere' }}
+        >
           {title}
         </Typography>
+        {/* The guide caps a heading's help icon at 16 px. */}
+        {help && <Box sx={{ display: 'flex', mr: 'auto', ml: -0.5, '& svg': { fontSize: 16 } }}>{help}</Box>}
         {action}
       </Stack>
       {body === 'facts' ? (

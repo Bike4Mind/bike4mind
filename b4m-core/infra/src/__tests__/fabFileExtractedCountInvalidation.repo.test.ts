@@ -59,7 +59,7 @@ const NOT_A_REWRITE = new Set([
   // Only uploads while the row is still `pending` (a first write); the S3 event charges it.
   'apps/client/pages/api/files/[id]/upload.ts',
   // Each creates a NEW row (or presigns the first write for one); the S3 event charges it.
-  'apps/client/pages/api/files/copy-generated-image.ts',
+  'apps/client/server/files/copyGeneratedImage.ts',
   'apps/client/pages/api/files/createFabFile.ts',
   'apps/client/pages/api/files/createFabFileURL.ts',
   'apps/client/pages/api/files/generate-presigned-urls-batch.ts',
@@ -95,6 +95,8 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/publishThumbnail.ts',
   // Parks an outbound mail body under queued-mail/ for the email-send worker; it writes no FabFile bytes.
   'packages/server-utils/src/utils/mailer/mailBodyStore.ts',
+  // Copies a file's bytes into the function-data store under a hash key; the source FabFile is never rewritten.
+  'packages/server-utils/src/callableFunctions/dataPins.ts',
 ]);
 
 /**

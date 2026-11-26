@@ -1,14 +1,18 @@
-import { Card, Grid, Stack, Typography, Box } from '@mui/joy';
+import { Box, Stack, Typography } from '@mui/joy';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useGetRecentActivities } from '@client/app/hooks/data/user';
+import { DATETIME_COLUMN_WIDTH, DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
+import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
+import { getErrorMessage } from '@client/app/utils/error';
 
 interface RecentActivityViewProps {
   limit?: number;
 }
 
 interface IActivityLog {
+  id: string;
   userId: string;
   clientIp: string;
   path: string;
@@ -20,200 +24,143 @@ interface IActivityMetadata {
   path?: string;
 }
 
-const RecentActivityCard: React.FC<{ activity: IActivityLog; index: number }> = ({ activity, index }) => {
-  const [mobileExpanded, setMobileExpanded] = useState(false);
+const formatTime = (datetime: Date) => new Date(datetime).toLocaleString();
+
+const Mono = ({ children }: { children: string }) => (
+  <Typography level="body-sm" sx={{ fontFamily: 'code', color: 'inherit' }}>
+    {children}
+  </Typography>
+);
+
+const COLUMNS: DataColumn<IActivityLog>[] = [
+  {
+    id: 'userId',
+    label: 'User ID',
+    render: row => <Mono>{row.userId}</Mono>,
+  },
+  {
+    id: 'clientIp',
+    label: 'IP Address',
+    width: '10rem',
+    wrap: true,
+    render: row => <Mono>{row.clientIp}</Mono>,
+  },
+  {
+    id: 'path',
+    label: 'Endpoint',
+    render: row => <Mono>{row.path}</Mono>,
+  },
+  { id: 'datetime', label: 'Time', width: DATETIME_COLUMN_WIDTH, render: row => formatTime(row.datetime) },
+];
+
+const getRowId = (row: IActivityLog) => row.id;
+
+const DETAIL_FIELDS: { label: string; value: (activity: IActivityLog) => string; mono?: boolean }[] = [
+  { label: 'User ID', value: a => a.userId, mono: true },
+  { label: 'IP', value: a => a.clientIp, mono: true },
+  { label: 'Endpoint', value: a => a.path, mono: true },
+  { label: 'Time', value: a => formatTime(a.datetime) },
+];
+
+const RecentActivityRow: React.FC<{ activity: IActivityLog; index: number }> = ({ activity, index }) => {
+  const [expanded, setExpanded] = useState(false);
+  const toggle = () => setExpanded(prev => !prev);
 
   return (
-    <Card
-      variant="outlined"
-      sx={{
-        mb: 1,
-        width: '100%',
-        bgcolor: index % 2 ? 'background.level1' : 'background.level2',
-        p: { xs: 0.5, sm: 1 },
-      }}
-    >
-      {/* Mobile compact summary */}
+    <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
       <Box
         data-testid={`recent-activity-mobile-summary-${index}`}
         role="button"
         tabIndex={0}
-        aria-expanded={mobileExpanded}
-        onClick={() => setMobileExpanded(prev => !prev)}
-        sx={{
-          display: { xs: 'flex', sm: 'none' },
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          p: 0.5,
-          cursor: 'pointer',
+        aria-expanded={expanded}
+        onClick={toggle}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggle();
+          }
         }}
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 1, cursor: 'pointer' }}
       >
         <Stack direction="column" sx={{ flex: 1, minWidth: 0 }}>
-          <Typography level="body-sm" fontWeight={600} noWrap sx={{ fontFamily: 'monospace' }}>
+          <Typography level="body-sm" fontWeight={600} noWrap sx={{ fontFamily: 'code' }}>
             {activity.path}
           </Typography>
           <Typography level="body-xs" color="neutral" noWrap>
-            {new Date(activity.datetime).toLocaleString()}
+            {formatTime(activity.datetime)}
           </Typography>
         </Stack>
         <Box sx={{ flexShrink: 0, display: 'flex', alignItems: 'center', color: 'text.tertiary' }}>
-          {mobileExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+          {expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
         </Box>
       </Box>
 
-      {/* Mobile expanded details */}
-      {mobileExpanded && (
-        <Box sx={{ display: { xs: 'block', sm: 'none' }, p: 1 }}>
-          <Stack spacing={1}>
-            <Stack direction="row" spacing={1} alignItems="center">
+      {expanded && (
+        <Stack spacing={1} sx={{ px: 1, pb: 1 }}>
+          {DETAIL_FIELDS.map(field => (
+            <Stack key={field.label} direction="row" spacing={1} alignItems="baseline" sx={{ minWidth: 0 }}>
               <Typography level="body-xs" fontWeight={600} sx={{ minWidth: 60 }}>
-                User ID:
+                {field.label}:
               </Typography>
-              <Typography level="body-xs" noWrap sx={{ fontFamily: 'monospace' }}>
-                {activity.userId}
+              <Typography
+                level="body-xs"
+                sx={{ minWidth: 0, overflowWrap: 'anywhere', ...(field.mono && { fontFamily: 'code' }) }}
+              >
+                {field.value(activity)}
               </Typography>
             </Stack>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography level="body-xs" fontWeight={600} sx={{ minWidth: 60 }}>
-                IP:
-              </Typography>
-              <Typography level="body-xs" sx={{ fontFamily: 'monospace' }}>
-                {activity.clientIp}
-              </Typography>
-            </Stack>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography level="body-xs" fontWeight={600} sx={{ minWidth: 60 }}>
-                Endpoint:
-              </Typography>
-              <Typography level="body-xs" noWrap sx={{ fontFamily: 'monospace' }}>
-                {activity.path}
-              </Typography>
-            </Stack>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography level="body-xs" fontWeight={600} sx={{ minWidth: 60 }}>
-                Time:
-              </Typography>
-              <Typography level="body-xs">{new Date(activity.datetime).toLocaleString()}</Typography>
-            </Stack>
-          </Stack>
-        </Box>
+          ))}
+        </Stack>
       )}
-
-      {/* Desktop grid row - hidden on mobile */}
-      <Box sx={{ display: { xs: 'none', sm: 'block' } }}>
-        <Grid container spacing={2} alignItems="center">
-          <Grid xs={3}>
-            <Typography
-              level="body-md"
-              sx={{
-                fontFamily: 'monospace',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {activity.userId}
-            </Typography>
-          </Grid>
-          <Grid xs={2}>
-            <Typography level="body-md" sx={{ fontFamily: 'monospace' }}>
-              {activity.clientIp}
-            </Typography>
-          </Grid>
-          <Grid xs={4}>
-            <Typography
-              level="body-md"
-              sx={{
-                fontFamily: 'monospace',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {activity.path}
-            </Typography>
-          </Grid>
-          <Grid xs={3}>
-            <Typography level="body-md">{new Date(activity.datetime).toLocaleString()}</Typography>
-          </Grid>
-        </Grid>
-      </Box>
-    </Card>
-  );
-};
-
-const RecentActivityHeader: React.FC = () => {
-  return (
-    <Card
-      variant="outlined"
-      sx={{
-        mb: 1,
-        width: '100%',
-        bgcolor: 'background.surface',
-        p: { xs: 0.5, sm: 1 },
-        position: 'sticky',
-        top: 0,
-        zIndex: 1,
-        borderBottom: 2,
-        borderColor: 'divider',
-        display: { xs: 'none', sm: 'block' },
-      }}
-    >
-      <Grid container spacing={2} alignItems="center">
-        <Grid xs={3}>
-          <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-            User ID
-          </Typography>
-        </Grid>
-        <Grid xs={2}>
-          <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-            IP Address
-          </Typography>
-        </Grid>
-        <Grid xs={4}>
-          <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-            Endpoint
-          </Typography>
-        </Grid>
-        <Grid xs={3}>
-          <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-            Time
-          </Typography>
-        </Grid>
-      </Grid>
-    </Card>
+    </Box>
   );
 };
 
 const RecentActivityView: React.FC<RecentActivityViewProps> = ({ limit = 10 }) => {
-  const recentActivities = useGetRecentActivities({
-    coverage: 'all',
-    userId: undefined, // This will fetch all users' activities
-  });
+  const { data, isLoading, isError, error, refetch } = useGetRecentActivities({ coverage: 'all' });
 
-  const activities: IActivityLog[] =
-    recentActivities.data?.map(activity => {
-      const metadata = activity.metadata as IActivityMetadata | undefined;
-      return {
-        userId: activity.userId,
-        clientIp: metadata?.clientIp || 'Unknown',
-        path: metadata?.path || 'Unknown',
-        datetime: activity.datetime,
-      };
-    }) || [];
+  const activities = useMemo<IActivityLog[]>(
+    () =>
+      (data ?? []).slice(0, limit).map((activity, index) => {
+        const metadata = activity.metadata as IActivityMetadata | undefined;
+        return {
+          id: String(index),
+          userId: activity.userId,
+          clientIp: metadata?.clientIp || 'Unknown',
+          path: metadata?.path || 'Unknown',
+          datetime: activity.datetime,
+        };
+      }),
+    [data, limit]
+  );
+
+  const table = (
+    <DataTable
+      testId="recent-activity-table"
+      label="Recent activity"
+      rows={activities}
+      columns={COLUMNS}
+      getRowId={getRowId}
+      minWidth="41.5rem"
+      pagination={false}
+      loading={isLoading}
+      error={isError ? getErrorMessage(error) : undefined}
+      onRetry={() => void refetch()}
+      empty={<EmptyState title="No recent activities found" action={null} />}
+    />
+  );
+
+  // DataTable owns the loading, error and empty states at every width; the stacked list only replaces it on xs.
+  if (isLoading || isError || activities.length === 0) return <Box sx={{ width: '100%' }}>{table}</Box>;
 
   return (
     <Box sx={{ width: '100%' }}>
-      {recentActivities.isLoading ? (
-        <Typography sx={{ textAlign: 'center', py: 4 }}>Loading activities...</Typography>
-      ) : activities.length === 0 ? (
-        <Typography sx={{ textAlign: 'center', py: 4 }}>No recent activities found</Typography>
-      ) : (
-        <>
-          <RecentActivityHeader />
-          {activities.slice(0, limit).map((activity, index) => (
-            <RecentActivityCard key={index} activity={activity} index={index} />
-          ))}
-        </>
-      )}
+      <Box sx={{ display: { xs: 'none', sm: 'block' } }}>{table}</Box>
+      <Box sx={{ display: { xs: 'block', sm: 'none' } }} data-testid="recent-activity-mobile-list">
+        {activities.map((activity, index) => (
+          <RecentActivityRow key={activity.id} activity={activity} index={index} />
+        ))}
+      </Box>
     </Box>
   );
 };

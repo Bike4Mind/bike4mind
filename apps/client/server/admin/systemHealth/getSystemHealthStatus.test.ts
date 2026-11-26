@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const configValues = vi.hoisted(() => ({}) as Record<string, string | undefined>);
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: configValues }));
+const findSetting = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: { findOne: findSetting } }));
 vi.mock('@server/auth/oktaOidcClient', () => ({
   getOktaConfigStatus: vi.fn(async () => ({
     sstConfigured: false,
@@ -17,7 +19,13 @@ vi.mock('@server/security/tier1SecretValidators', () => ({
 
 import { getSystemHealthStatus } from './getSystemHealthStatus';
 
-const ENV_KEYS = ['MAIL_STATUS_TRANSPORT', 'MAIL_TRANSPORT', 'B4M_SELF_HOST'] as const;
+const ENV_KEYS = [
+  'MAIL_STATUS_TRANSPORT',
+  'MAIL_TRANSPORT',
+  'B4M_SELF_HOST',
+  'B4M_ALLOW_PLAINTEXT_SECRETS',
+  'SECRET_ENCRYPTION_KEY',
+] as const;
 
 describe('getSystemHealthStatus email', () => {
   const saved: Record<string, string | undefined> = {};
@@ -28,6 +36,7 @@ describe('getSystemHealthStatus email', () => {
       delete process.env[key];
     }
     for (const key of Object.keys(configValues)) delete configValues[key];
+    findSetting.mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -35,6 +44,16 @@ describe('getSystemHealthStatus email', () => {
       if (saved[key] === undefined) delete process.env[key];
       else process.env[key] = saved[key];
     }
+  });
+
+  it('flags the plaintext opt-out only when it is set and no valid key exists', async () => {
+    expect((await getSystemHealthStatus()).plaintextSecretsOptOut).toBe(false);
+
+    process.env.B4M_ALLOW_PLAINTEXT_SECRETS = 'true';
+    expect((await getSystemHealthStatus()).plaintextSecretsOptOut).toBe(true);
+
+    process.env.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+    expect((await getSystemHealthStatus()).plaintextSecretsOptOut).toBe(false);
   });
 
   it('reports an SES stage as configured with only MAIL_FROM when the SMTP secrets are placeholders', async () => {
@@ -55,7 +74,19 @@ describe('getSystemHealthStatus email', () => {
       missingSecrets: [],
       optionalSecrets: [],
       secrets: { MAIL_FROM: true },
+      senderSource: 'secret',
     });
+  });
+
+  it('counts the mailFrom admin setting as the sender when the MAIL_FROM secret is unset', async () => {
+    process.env.MAIL_STATUS_TRANSPORT = 'ses';
+    configValues.MAIL_FROM = 'not-configured';
+    findSetting.mockResolvedValue({ settingName: 'mailFrom', settingValue: 'Ops <ops@example.com>' });
+
+    const { email } = await getSystemHealthStatus();
+
+    expect(email).toMatchObject({ configured: true, missingSecrets: [], senderSource: 'setting' });
+    expect(JSON.stringify(email)).not.toContain('@');
   });
 
   it('names the SMTP settings on a self-host deploy even when the status transport says ses', async () => {

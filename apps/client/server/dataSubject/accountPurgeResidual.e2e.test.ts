@@ -8,13 +8,11 @@ import {
   FabFile,
   AssistantInstructionModel,
   assistantInstructionRepository,
+  oauthClientSignInRepository,
   mongoose,
 } from '@bike4mind/database';
 import { inboxRepository } from '@bike4mind/database/social';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-// Registered outside the `@bike4mind/database` barrel, so they register only when imported.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -48,6 +46,10 @@ vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async import
   ...(await importOriginal<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   createCdnInvalidationBatch: () => ({ add: vi.fn(), flush: vi.fn() }),
 }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/storage/index')>()),
+  getGeneratedImageStorage: () => ({ deletePermanently: vi.fn(), deletePrefixPermanently: vi.fn() }),
+}));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return { ...actual, authSessionService: { ...actual.authSessionService, endRealtimeConnections: vi.fn() } };
@@ -57,13 +59,13 @@ import { completeAccountDeletion, type ErasureRegistry } from '@bike4mind/server
 import { PlatformEndUser, platformEndUserRepository } from '@bike4mind/database/ai';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import { reapplyErasure } from '../users/reapplyErasure';
-import { erasureRegistry } from './erasureRegistry';
-import { DELETED_USER_ID } from './placeholder';
-import { SubjectErasurePlan } from './subjectErasurePlan';
-import { SubjectErasureExecutor } from './subjectErasureExecutor';
-import { SubjectRecordExport } from './subjectRecordExport';
-import { aiHolders } from './registry/ai';
-import { DATA_HOLDER_REGISTRY } from './registry';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
+import { DELETED_USER_ID } from '@bike4mind/server-utils/dataSubject/placeholder';
+import { SubjectErasurePlan } from '@bike4mind/server-utils/dataSubject/subjectErasurePlan';
+import { SubjectErasureExecutor } from '@bike4mind/server-utils/dataSubject/subjectErasureExecutor';
+import { SubjectRecordExport } from '@bike4mind/server-utils/dataSubject/subjectRecordExport';
+import { aiHolders } from '@bike4mind/server-utils/dataSubject/registry/ai';
+import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry/index';
 import { purgePersonalLakeById } from '@bike4mind/server-utils/users/purgeAccountContent';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -178,6 +180,9 @@ async function seedAccount(source: 'self' | 'admin' = 'admin') {
   await insert('FeedbackNote', { userId, body: 'private account note' });
   await insert('Friendship', { requester: userId, recipient: String(other) });
   await insert('McpConnection', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
+  await insert('CallableFunction', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
+  await insert('CallableFunctionCall', { functionId: 'f1', callerUserId: userId, ownerUserId: userId, outcome: 'ok' });
+  await insert('CallableFunctionResult', { callId: 'c1', functionId: 'f1', callerUserId: userId, state: 'finished' });
   await insert('GenerationJob', { ownerType: 'User', ownerId: userId });
   await insert('Activity', { ownerType: 'User', ownerId: userId });
   await insert('TaskSchedule', { payload: { userId } });
@@ -243,6 +248,24 @@ describe('admin erasure against the real data holder registry', () => {
     expect(await inboxRepository.findByReceiverId(other)).toEqual([]);
     expect(await mongoose.model('Inbox').collection.countDocuments({ receiverId: other })).toBe(0);
   });
+
+  it.each(['self', 'admin'] as const)(
+    'deletes the apps the person signed in to and keeps another user rows (%s deletion)',
+    async source => {
+      const { userId, other } = await seedAccount(source);
+      const at = new Date();
+      await oauthClientSignInRepository.recordSignIn({ userId, clientId: 'app-a', at });
+      await oauthClientSignInRepository.recordSignIn({ userId, clientId: 'app-b', at });
+      await oauthClientSignInRepository.recordSignIn({ userId: other, clientId: 'app-a', at });
+
+      await expect(completeAccountDeletion(userId, { logger: logger as never, erasureRegistry })).resolves.toEqual({
+        deleted: true,
+      });
+
+      expect(await oauthClientSignInRepository.listByUser(userId)).toEqual([]);
+      expect((await oauthClientSignInRepository.listByUser(other)).map(row => row.clientId)).toEqual(['app-a']);
+    }
+  );
 
   it('erases a personal file with its chunks and leaves a team file and its chunks in place', async () => {
     const { userId, shared } = await seedAccount();

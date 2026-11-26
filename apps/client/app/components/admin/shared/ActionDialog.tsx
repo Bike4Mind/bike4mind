@@ -54,7 +54,12 @@ export type ActionDialogProps = {
    * A second commit beside the primary one, gated the same way, e.g. "Save and next" in a review queue.
    * Its button id is `<id>-secondary-btn`; the reason draft is kept for the caller's next item.
    */
-  secondaryAction?: { label: string; onConfirm: (reason: string) => void | Promise<void> };
+  secondaryAction?: {
+    label: string;
+    onConfirm: (reason: string) => void | Promise<void>;
+    /** For a commit that does not use the caller's inputs, so `blockedReason` must not disable it. */
+    ignoreBlockedReason?: boolean;
+  };
   /**
    * Keeps Cancel enabled while the write is in flight, for a caller whose `onConfirm` stops at
    * `onClose` (a run of writes that checks between them and leaves the rest unsent).
@@ -74,6 +79,9 @@ export type ActionDialogProps = {
  * The one dialog for audited admin writes (DESIGN_GUIDE.md section 4), built on the AdminDialog
  * shell, which supplies the focus trap, Esc to close and focus return to the opener.
  */
+// The expected value renders as inline code, which collapses whitespace runs, so match what the admin sees.
+const collapseWhitespace = (value: string) => value.replace(/\s+/g, ' ').trim();
+
 export const ActionDialog: React.FC<ActionDialogProps> = props =>
   props.open ? <ActionDialogForm key={props.formKey} {...props} /> : null;
 
@@ -106,15 +114,19 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
 
-  const typedMatches = !typedConfirm || typedValue.trim() === typedConfirm.expected;
-  const hint =
-    blockedReason ??
+  const typedMatches = !typedConfirm || collapseWhitespace(typedValue) === collapseWhitespace(typedConfirm.expected);
+  const baseHint =
     (reasonRequired && !isAdminReasonComplete(reason, reasonMinLength) ? adminReasonHint(reasonMinLength) : null) ??
     (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
+  const hint = blockedReason ?? baseHint;
+  const secondaryHint = secondaryAction?.ignoreBlockedReason ? baseHint : hint;
   const busy = pending || submitting;
 
-  const handleConfirm = async (confirm: (reason: string) => void | Promise<void> = onConfirm) => {
-    if (hint || busy || submittingRef.current) return;
+  const handleConfirm = async (
+    confirm: (reason: string) => void | Promise<void> = onConfirm,
+    blocked: string | null = hint
+  ) => {
+    if (blocked || busy || submittingRef.current) return;
     submittingRef.current = true;
     setSubmitting(true);
     try {
@@ -193,7 +205,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
                     sx={{ display: 'inline' }}
                     data-testid={`${testId}-typed-expected`}
                   >
-                    {typedConfirm.expected}
+                    {collapseWhitespace(typedConfirm.expected)}
                   </Typography>{' '}
                   to confirm.
                   <Typography
@@ -240,9 +252,9 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
             <Button
               variant="outlined"
               color="neutral"
-              disabled={!!hint || busy}
-              aria-describedby={hint ? hintId : undefined}
-              onClick={() => void handleConfirm(secondaryAction.onConfirm)}
+              disabled={!!secondaryHint || busy}
+              aria-describedby={secondaryHint ? hintId : undefined}
+              onClick={() => void handleConfirm(secondaryAction.onConfirm, secondaryHint)}
               data-testid={`${testId}-secondary-btn`}
             >
               {secondaryAction.label}

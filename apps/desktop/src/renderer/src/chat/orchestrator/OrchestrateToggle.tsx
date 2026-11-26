@@ -11,6 +11,7 @@ import { describeAgentStates, type AgentState } from './roster';
 interface OrchestrateToggleProps {
   /** One entry per agent; states only, so the chat surface never subscribes to agent activity. */
   states: readonly AgentState[];
+  /** Agent View is available with no live agents (agentsSurfaceAvailable): Orchestrate on, an orchestrator, or archived agents. */
   enabled?: boolean;
   /** The orchestrating session itself waits on the user: counted as the Tavern counts it. */
   parentNeedsYou?: boolean;
@@ -75,7 +76,7 @@ function Segment({
 }
 
 /**
- * Header switch between the conversation and its agents' stage, sized like the sidebar's ModeSwitcher.
+ * Header switch between the conversation and its agents' stage, sized like the Studio area switcher.
  * View only: the Orchestrate behaviour is the composer's OrchestratePill, which is why this one draws
  * AgentStageIcon rather than its AgentsIcon. The conversation segment stays icon-only: "Chat" already
  * names the sidebar's Chat/Code mode and would misread in a Code session.

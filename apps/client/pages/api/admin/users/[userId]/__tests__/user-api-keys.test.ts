@@ -2,13 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const route = vi.hoisted(() => ({ guard: null as null | ((req: unknown, res: unknown, next: () => void) => void) }));
-const { mockUserFind, mockListKeys, mockGetUsage, mockCountRequests, mockDescribeAccess } = vi.hoisted(() => ({
-  mockUserFind: vi.fn(),
-  mockListKeys: vi.fn(),
-  mockGetUsage: vi.fn(),
-  mockCountRequests: vi.fn(),
-  mockDescribeAccess: vi.fn(),
-}));
+const { mockUserFind, mockListKeys, mockGetUsage, mockCountRequests, mockDescribeAccess, mockFindException } =
+  vi.hoisted(() => ({
+    mockFindException: vi.fn(),
+    mockUserFind: vi.fn(),
+    mockListKeys: vi.fn(),
+    mockGetUsage: vi.fn(),
+    mockCountRequests: vi.fn(),
+    mockDescribeAccess: vi.fn(),
+  }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -47,7 +49,10 @@ vi.mock('@bike4mind/database', () => ({
 // The repository is only handed through as the service's db adapter, so an
 // identity object is enough to pin the wiring.
 vi.mock('@bike4mind/database/auth', () => ({
-  userApiKeyRepository: { __marker: 'userApiKeyRepository' },
+  userApiKeyRepository: {
+    __marker: 'userApiKeyRepository',
+    findModerationException: (...a: unknown[]) => mockFindException(...a),
+  },
   apiKeyUsageLogRepository: { countRequestsByKeyWindows: (...a: unknown[]) => mockCountRequests(...a) },
 }));
 
@@ -89,6 +94,7 @@ beforeEach(() => {
   mockUserFind.mockReset();
   mockListKeys.mockReset();
   mockGetUsage.mockReset().mockResolvedValue({ minute: 0, day: 0 });
+  mockFindException.mockReset().mockResolvedValue(null);
   mockCountRequests.mockReset().mockResolvedValue({});
   mockDescribeAccess.mockReset().mockResolvedValue(ACCESS);
 });
@@ -147,7 +153,13 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
     const { res, promise } = run({ user: ADMIN });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ apiKeys: [], liveUsage: {}, requests: {}, access: ACCESS });
+    expect(res._getJSONData()).toEqual({
+      apiKeys: [],
+      liveUsage: {},
+      requests: {},
+      access: ACCESS,
+      moderationExceptions: {},
+    });
     expect(mockGetUsage).not.toHaveBeenCalled();
   });
 
@@ -160,6 +172,19 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
     mockListKeys.mockResolvedValue(keys.map(hydrate));
     mockGetUsage.mockResolvedValueOnce({ minute: 60, day: 300 }).mockResolvedValueOnce({ minute: 0, day: 0 });
     mockCountRequests.mockResolvedValue({ k1: { last24h: 4, last7d: 9 } });
+    mockFindException.mockImplementation(async (id: string) =>
+      id === 'k1'
+        ? {
+            userId: 'u1',
+            moderationException: {
+              categories: ['violence'],
+              reason: 'Security research',
+              setBy: 'admin-9',
+              setAt: new Date('2026-11-01T00:00:00Z'),
+            },
+          }
+        : null
+    );
 
     const { res, promise } = run({ user: ADMIN });
     await promise;
@@ -172,12 +197,15 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
       liveUsage: { k1: { minute: 60, day: 300 }, k2: { minute: 0, day: 0 } },
       requests: { k1: { last24h: 4, last7d: 9 } },
       access: ACCESS,
+      moderationExceptions: {
+        k1: { categories: ['violence'], reason: 'Security research', setAt: '2026-11-01T00:00:00.000Z' },
+      },
     });
     expect(mockCountRequests).toHaveBeenCalledExactlyOnceWith('u1', expect.any(Date));
     expect(mockDescribeAccess).toHaveBeenCalledExactlyOnceWith({ id: 'u1' });
     expect(mockListKeys).toHaveBeenCalledWith(
       'u1',
-      { db: { userApiKeys: { __marker: 'userApiKeyRepository' } } },
+      { db: { userApiKeys: expect.objectContaining({ __marker: 'userApiKeyRepository' }) } },
       { includeDisabled: true }
     );
     expect(mockGetUsage).toHaveBeenCalledWith('k1');

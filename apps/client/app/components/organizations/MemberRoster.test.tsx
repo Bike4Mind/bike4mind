@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -94,7 +94,6 @@ const renderRoster = (props: Props = {}) => {
       canRevokeMembers
       canRevokeMember={id => id !== 'mgr'}
       canManageCreditBudgets
-      canManageManagers={false}
       showEmails
       {...props}
     />,
@@ -104,6 +103,17 @@ const renderRoster = (props: Props = {}) => {
 };
 
 const shownIds = () => screen.queryAllByTestId('roster-row').map(el => el.getAttribute('data-user-id'));
+
+// Types into the search box and runs out its 300 ms debounce on fake time.
+const searchFor = async (value: string) => {
+  vi.useFakeTimers();
+  try {
+    fireEvent.change(screen.getByTestId('organization-members-search-input'), { target: { value } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+  } finally {
+    vi.useRealTimers();
+  }
+};
 
 const choose = async (selectTestId: string, option: string) => {
   await userEvent.click(screen.getByTestId(selectTestId));
@@ -143,8 +153,8 @@ describe('MemberRoster list states', () => {
   it('shows a no-match state whose Clear filters restores the full list', async () => {
     renderRoster();
     const search = screen.getByTestId('organization-members-search-input');
-    fireEvent.change(search, { target: { value: 'nobody' } });
-    await waitFor(() => expect(screen.getByTestId('organization-members-no-match')).toBeTruthy());
+    await searchFor('nobody');
+    expect(screen.getByTestId('organization-members-no-match')).toBeTruthy();
     expect(screen.queryByTestId('organization-members-page-range')).toBeNull();
     fireEvent.click(screen.getByTestId('organization-members-clear-filters-btn'));
     expect(search).toHaveValue('');
@@ -195,11 +205,10 @@ describe('MemberRoster header and controls', () => {
 describe('MemberRoster finding people', () => {
   it('searches by name and by email after the debounce', async () => {
     renderRoster();
-    const search = screen.getByTestId('organization-members-search-input');
-    fireEvent.change(search, { target: { value: 'bob' } });
-    await waitFor(() => expect(shownIds()).toEqual(['bob']));
-    fireEvent.change(search, { target: { value: 'MATH.TEST' } });
-    await waitFor(() => expect(shownIds()).toEqual(['ada']));
+    await searchFor('bob');
+    expect(shownIds()).toEqual(['bob']);
+    await searchFor('MATH.TEST');
+    expect(shownIds()).toEqual(['ada']);
   });
 
   it('filters by role', async () => {

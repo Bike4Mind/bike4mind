@@ -18,7 +18,6 @@ import { sessionRepository } from '@bike4mind/database/auth';
 import { Quest } from '@bike4mind/database/content';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -264,7 +263,7 @@ export async function processSession(
   eventPublisher?: RateLimitedEventPublisher
 ): Promise<SessionGroomingResult> {
   if (!session.id) {
-    deps.logger.error(`Session missing id field, skipping. Session name: ${session.name || 'Unknown'}`);
+    deps.logger.error('Session missing id field, skipping');
     return {
       sessionId: 'unknown',
       sessionName: session.name || 'Unknown',
@@ -299,7 +298,7 @@ export async function processSession(
 
     // 2. Curation - trigger if never curated
     if (operations.curation) {
-      const curationJobId = uuidv4();
+      const curationJobId = crypto.randomUUID();
       const payload = {
         sessionId: session.id,
         userId: config.userId,
@@ -317,7 +316,7 @@ export async function processSession(
         });
       } else {
         await deps.publishCuration(payload);
-        deps.logger.info(`Triggered curation for session ${session.id} (${session.name})`);
+        deps.logger.info(`Triggered curation for session ${session.id}`);
       }
     }
 
@@ -338,7 +337,7 @@ export async function processSession(
         });
       } else {
         await deps.publishSummarize(payload);
-        deps.logger.info(`Triggered summarization for session ${session.id} (${session.name})`);
+        deps.logger.info(`Triggered summarization for session ${session.id}`);
       }
     }
 
@@ -358,7 +357,7 @@ export async function processSession(
         });
       } else {
         await deps.publishTag(payload);
-        deps.logger.info(`Triggered tagging for session ${session.id} (${session.name})`);
+        deps.logger.info(`Triggered tagging for session ${session.id}`);
       }
     }
 
@@ -372,7 +371,7 @@ export async function processSession(
       );
       result.messagesEmbedded = embeddedCount;
       if (embeddedCount > 0) {
-        deps.logger.info(`Generated ${embeddedCount} embeddings for session ${session.id} (${session.name})`);
+        deps.logger.info(`Generated ${embeddedCount} embeddings for session ${session.id}`);
       }
     }
 
@@ -623,7 +622,7 @@ export const handler = withEventContext(async (event, logger) => {
         wouldEmbed: stats.messagesEmbedded,
         wouldSkip: stats.skipped,
         sampleResults: results.slice(0, 10).map(r => ({
-          name: r.sessionName,
+          sessionId: r.sessionId,
           operations: r.operations,
           skipped: r.skipped,
         })),

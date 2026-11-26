@@ -84,8 +84,7 @@ describe('LLMProvider default-model effect - the ceiling it writes for a model t
 
     await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
     expect(useLLM.getState().max_tokens).toBe(2048);
-    // The same branch resets the agent flags; that half is deliberate and unchanged by this fix.
-    expect(useLLM.getState().isQuestMasterEnabled).toBe(false);
+    // The same branch resets the agent flag; that half is deliberate and unchanged by this fix.
     expect(useLLM.getState().isAgentsEnabled).toBe(false);
   });
 
@@ -137,7 +136,6 @@ describe('LLMProvider default-model effect - the ceiling it writes for a model t
     // Also proves the branch records the transition as app-resolved: without that, the refit effect sees
     // a model change, sets allowRaise, and puts MINI's 100000 default back over the 2048.
     expect(useLLM.getState().max_tokens).toBe(2048);
-    expect(useLLM.getState().isQuestMasterEnabled).toBe(false);
     expect(useLLM.getState().isAgentsEnabled).toBe(false);
   });
 

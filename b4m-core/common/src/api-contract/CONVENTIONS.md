@@ -189,7 +189,6 @@ re-deciding per endpoint:
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
-| Free account already started its one QuestMaster quest | `403` | `free_quest_limit_reached` (subscribe to start another; deletion does not restore the allowance) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
 | The caller's organization policy does not allow the requested model | `403` | `org_model_not_allowed` (choose a model from `GET /api/v1/models`, which lists only allowed ones) |
 | The request names a built-in tool the caller's organization policy does not allow | `403` | `org_tool_not_allowed` (drop the tool from the request) |
@@ -211,12 +210,11 @@ failure used to be remapped to `404` by the error handler.
 
 This row describes the target, not the whole deployed surface. Roughly 27 files guard a malformed
 id with a `400` today and have **not** been converged - most inherit it from one of the three
-shared access helpers (`server/utils/orgAccess.ts`, `sessionAccess.ts`,
-`questMasterPlanAccess.ts`), the rest are their own guards, concentrated in
+shared access helpers (`server/utils/orgAccess.ts`, `sessionAccess.ts` and a since-removed
+plan access helper), the rest are their own guards, concentrated in
 `business-links/*`, `sre/*`, `users/[id]/slack-settings.ts`, `fabfiles/[id]/*`,
-`admin/liveops-triage-configs/*`, `[type]/[id]/index.ts` and
-`data-lakes/[id]/files/[fabFileId]/purge.ts`. Enumerate the current set rather than trusting this
-paragraph to stay current:
+`[type]/[id]/index.ts` and `data-lakes/[id]/files/[fabFileId]/purge.ts`. Enumerate the current
+set rather than trusting this paragraph to stay current:
 
 ```
 grep -rn --include='*.ts' -A3 'isValidObjectId\|isObjectIdOrHexString\|ObjectId.isValid' \

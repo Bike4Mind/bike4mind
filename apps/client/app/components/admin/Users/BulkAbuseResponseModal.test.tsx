@@ -548,6 +548,7 @@ describe('BulkAbuseResponseModal', () => {
     mutationState.executePending = true;
     const { onClose } = renderModal();
 
+    expect(screen.getByTestId('bulk-abuse-modal-close-btn')).toBeDisabled();
     fireEvent.keyDown(screen.getByTestId('bulk-abuse-modal'), { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
   });

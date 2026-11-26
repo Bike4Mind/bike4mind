@@ -315,11 +315,14 @@ export const getContentFromFabfile = async (file: IFabFileDocument): Promise<Res
   return response;
 };
 
+/** `created` is false when the caller already had a copy of the image, which is then the file returned. */
+export type CopiedGeneratedImage = IFabFileDocument & IShareableDocument & { created?: boolean };
+
 export const copyGeneratedImageToFabFile = async (
   imageS3Key: string,
   fileName?: string
-): Promise<IFabFileDocument & IShareableDocument> => {
-  const response = await api.post<IFabFileDocument & IShareableDocument>('/api/files/copy-generated-image', {
+): Promise<CopiedGeneratedImage> => {
+  const response = await api.post<CopiedGeneratedImage>('/api/files/copy-generated-image', {
     imageS3Key,
     fileName,
   });

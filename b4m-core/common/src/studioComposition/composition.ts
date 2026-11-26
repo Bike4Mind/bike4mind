@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  STUDIO_OUTPUT_ASPECT_RATIOS,
   STUDIO_OUTPUT_DEFAULT_SIZES,
   STUDIO_TIMELINE_VERSION,
   StudioFileIdSchema,
@@ -36,6 +37,8 @@ export const STUDIO_COMPOSITION_LIMITS = {
   briefFieldMaxLength: 500,
   brandColorsMax: 8,
   brandProductFilesMax: 20,
+  brandCharactersMax: 8,
+  characterNameMaxLength: 100,
   shotsMax: 100,
   shotTitleMaxLength: 200,
   shotDescriptionMaxLength: 4000,
@@ -54,10 +57,26 @@ export const StudioCompositionBriefSchema = z.object({
   summary: z.string().trim().max(limits.briefSummaryMaxLength).optional(),
   audience: z.string().trim().max(limits.briefFieldMaxLength).optional(),
   callToAction: z.string().trim().max(limits.briefFieldMaxLength).optional(),
+  // A short film's mood, e.g. "wistful" or "tense"; the director matches the music and narration to it.
+  tone: z.string().trim().max(limits.briefFieldMaxLength).optional(),
   // The product photo the ad is built around; an image.
   productFileId: StudioFileIdSchema.optional(),
 });
 export type StudioCompositionBrief = z.infer<typeof StudioCompositionBriefSchema>;
+
+const StudioItemIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/, 'Ids may contain only letters, digits, "_" and "-"');
+
+/** A recurring person or mascot: a Library image passed as a reference on the shots that feature it. */
+export const StudioCharacterSchema = z.object({
+  id: StudioItemIdSchema,
+  name: z.string().trim().min(1).max(limits.characterNameMaxLength),
+  fileId: StudioFileIdSchema,
+});
+export type StudioCharacter = z.infer<typeof StudioCharacterSchema>;
 
 /** A deliberately small first cut of a brand kit; it grows as templates need more. */
 export const StudioBrandKitSchema = z.object({
@@ -68,6 +87,7 @@ export const StudioBrandKitSchema = z.object({
     .default([]),
   fontFamily: z.string().trim().min(1).max(100).optional(),
   productFileIds: z.array(StudioFileIdSchema).max(limits.brandProductFilesMax).default([]),
+  characters: z.array(StudioCharacterSchema).max(limits.brandCharactersMax).default([]),
 });
 export type StudioBrandKit = z.infer<typeof StudioBrandKitSchema>;
 
@@ -77,11 +97,7 @@ export type StudioBrandKit = z.infer<typeof StudioBrandKitSchema>;
  * fields need no Mongoose change.
  */
 export const StudioShotSchema = z.object({
-  id: z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(/^[A-Za-z0-9_-]+$/, 'Ids may contain only letters, digits, "_" and "-"'),
+  id: StudioItemIdSchema,
   title: z.string().trim().min(1).max(limits.shotTitleMaxLength),
   description: z.string().trim().max(limits.shotDescriptionMaxLength).optional(),
   durationMs: z.number().int().positive().optional(),
@@ -96,6 +112,8 @@ export const StudioShotSchema = z.object({
   clipFileId: StudioFileIdSchema.optional(),
   // The voiceover or caption line spoken over this shot.
   voiceLine: z.string().trim().max(limits.shotVoiceLineMaxLength).optional(),
+  // Brand kit character ids, in the order their references are passed; an id no longer in the kit is ignored.
+  characterIds: z.array(StudioItemIdSchema).max(limits.brandCharactersMax).optional(),
 });
 export type StudioShot = z.infer<typeof StudioShotSchema>;
 
@@ -244,11 +262,16 @@ export const STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS: Record<
   },
   short_film: {
     label: 'Short film',
-    description: 'A 2 minute story in 16:9.',
-    durationMs: 120_000,
+    description: 'A 60s narrated story with a beginning, middle and end.',
+    durationMs: 60_000,
     aspects: ['16:9'],
-    trackKinds: ['video', 'voice', 'sfx', 'music'],
-    starterShots: [],
+    trackKinds: ['video', 'voice', 'sfx', 'music', 'captions'],
+    starterShots: [
+      { title: 'Opening', intent: 'opening' },
+      { title: 'Inciting moment', intent: 'inciting incident' },
+      { title: 'Climax', intent: 'climax' },
+      { title: 'Resolution', intent: 'resolution' },
+    ],
   },
   blank: {
     label: 'Blank',
@@ -260,9 +283,24 @@ export const STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS: Record<
   },
 };
 
-/** An empty timeline sized for the template: its default length, output shapes and empty lanes. */
-export const defaultStudioTimeline = (template: StudioCompositionTemplate): StudioTimeline => {
-  const { durationMs, aspects, trackKinds } = STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[template];
+/** The lengths and output shapes the Short film brief offers; the chosen ones size its starting timeline. */
+export const STUDIO_SHORT_FILM_LENGTHS_MS = [30_000, 60_000, 90_000, 120_000] as const;
+export const STUDIO_SHORT_FILM_ASPECTS: readonly StudioOutputAspectRatio[] = STUDIO_OUTPUT_ASPECT_RATIOS;
+
+export type StudioTimelineSizing = { durationMs?: number; aspects?: readonly StudioOutputAspectRatio[] };
+
+/**
+ * An empty timeline sized for the template: its default length, output shapes and empty lanes, or the given
+ * length and shapes instead.
+ */
+export const defaultStudioTimeline = (
+  template: StudioCompositionTemplate,
+  sizing: StudioTimelineSizing = {}
+): StudioTimeline => {
+  const definition = STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[template];
+  const { trackKinds } = definition;
+  const durationMs = sizing.durationMs ?? definition.durationMs;
+  const aspects = sizing.aspects ?? definition.aspects;
   return {
     version: STUDIO_TIMELINE_VERSION,
     durationMs,
@@ -300,6 +338,7 @@ export const studioCompositionFileIds = (content: StudioCompositionReferences): 
     ...(content.brief.productFileId ? [content.brief.productFileId] : []),
     ...(content.brandKit.logoFileId ? [content.brandKit.logoFileId] : []),
     ...content.brandKit.productFileIds,
+    ...content.brandKit.characters.map(character => character.fileId),
     ...content.shots.flatMap(shot => [
       ...shot.fileIds,
       ...(shot.chosenFileId ? [shot.chosenFileId] : []),

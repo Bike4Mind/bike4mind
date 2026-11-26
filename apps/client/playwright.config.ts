@@ -1,9 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
-import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import path from 'path';
 import { TIMEOUTS } from './e2e/constants';
+import { prEligibleConfigProjects } from './e2e/project-selection.mjs';
 
-dotenv.config({ path: path.resolve(__dirname, '.env.e2e') });
+const envFile = path.resolve(__dirname, '.env.e2e');
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const adminAuthFile = './e2e/.auth/admin.json';
 
@@ -85,6 +87,14 @@ const specProjects = [
     auth: './e2e/.auth/teams-user.json',
     skipWarmup: true,
   },
+  // Plays recorded replies only, so it makes no model call.
+  {
+    name: 'tutorial-basics',
+    setupMatch: /(?:^|\/)tutorial-basics\.setup\.ts$/,
+    testMatch: /(?:^|\/)tutorial-basics\.spec\.ts$/,
+    auth: './e2e/.auth/tutorial-basics-user.json',
+    skipWarmup: true,
+  },
   // Generates only cheap audio (one short speech clip, one sound effect); video and music stay at
   // form level. Makes no chat-model call, so it skips the AI warmup.
   {
@@ -147,7 +157,7 @@ const specProjects = [
     : []),
 ];
 
-export default defineConfig({
+const config = defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
@@ -250,6 +260,13 @@ export default defineConfig({
       testMatch: [/(?:^|\/)websocket-auth\.spec\.ts$/],
       dependencies: ['setup-core'],
     },
+    // Admin setup: signs the setup admin in again. Depending on `unauthenticated` keeps it in the
+    // last phase before `admin`, so the new token is minted right before the admin specs use it.
+    {
+      name: 'setup-admin',
+      testMatch: /(?:^|\/)admin\.setup\.ts$/,
+      dependencies: ['setup-core', 'unauthenticated'],
+    },
     // Admin specs
     {
       name: 'admin',
@@ -257,9 +274,10 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         storageState: adminAuthFile,
       },
-      dependencies: ['setup-core', 'unauthenticated'],
+      dependencies: ['setup-admin'],
       testMatch: [
         /(?:^|\/)admin\.spec\.ts$/,
+        /(?:^|\/)admin-access-review\.spec\.ts$/,
         /(?:^|\/)signup-grants\.spec\.ts$/,
         /(?:^|\/)admin-settings-secrets\.spec\.ts$/,
         /(?:^|\/)admin-approvals\.spec\.ts$/,
@@ -294,3 +312,9 @@ export default defineConfig({
       : []),
   ],
 });
+
+if (process.env.PR_E2E === 'true' && config.projects) {
+  config.projects = prEligibleConfigProjects(config.projects);
+}
+
+export default config;

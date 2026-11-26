@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import net from 'node:net';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { FUNCTION_CALL_GLUE_PY, PYODIDE_VERSION, type FunctionContract } from '@bike4mind/common';
@@ -86,6 +88,60 @@ const SERIES_CONTRACT: FunctionContract = {
 };
 
 const pythonLiteral = (contract: object): string => JSON.stringify(contract).replace(/\bfalse\b/g, 'False');
+
+const DATA_CONTRACT: FunctionContract = {
+  name: 'data_probe',
+  description: 'Reads a pinned file and tries to write beside it.',
+  inputs: { type: 'object', additionalProperties: false, properties: {} },
+  outputs: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['content', 'outcomes', 'file_mode', 'dir_mode'],
+    properties: {
+      content: { type: 'string' },
+      outcomes: { type: 'array', items: { type: 'string' } },
+      file_mode: { type: 'integer', unit: '1' },
+      dir_mode: { type: 'integer', unit: '1' },
+    },
+  },
+};
+
+const DATA_GUEST = `
+FUNCTION = ${pythonLiteral(DATA_CONTRACT)}
+
+
+def run():
+    import errno
+    import os
+
+    with open("/data/points.csv") as f:
+        content = f.read()
+    attempts = {
+        "overwrite": lambda: open("/data/points.csv", "w").close(),
+        "append": lambda: open("/data/points.csv", "a").close(),
+        "create": lambda: open("/data/added.csv", "w").close(),
+        "remove": lambda: os.remove("/data/points.csv"),
+        "rename": lambda: os.rename("/data/points.csv", "/data/moved.csv"),
+        "mkdir": lambda: os.mkdir("/data/sub"),
+        "chmod": lambda: os.chmod("/data/points.csv", 0o644),
+    }
+    outcomes = []
+    for name, attempt in sorted(attempts.items()):
+        try:
+            attempt()
+            outcome = "accepted"
+        except OSError as e:
+            outcome = type(e).__name__ + ":EACCES" if e.errno == errno.EACCES else "refused"
+        except BaseException:
+            outcome = "refused"
+        outcomes.append(name + "=" + outcome)
+    return {
+        "content": content,
+        "outcomes": outcomes,
+        "file_mode": os.stat("/data/points.csv").st_mode & 0o777,
+        "dir_mode": os.stat("/data").st_mode & 0o777,
+    }
+`;
 
 const probe = (attempt: string) => `
 FUNCTION = ${pythonLiteral(PROBE_CONTRACT)}
@@ -471,6 +527,8 @@ describe('callable function runtime with real Pyodide', () => {
     const result = await runner({ op: 'call', code: BEAM, contract, params });
     expect(result.outcome).toBe('ok');
     expect(result.outputs?.deflection).toBeCloseTo((5 * 1000 * 5 ** 4) / (384 * 200e9 * 8e-6), 12);
+    const lock = readFileSync(path.join(PYODIDE_DIR, 'pyodide-lock.json'));
+    expect(result.runtime).toEqual({ lockHash: createHash('sha256').update(lock).digest('hex'), packages: [] });
     expect(spawnedPids().slice(-2).every(pidGone)).toBe(true);
     expect(liveCallableFunctionChildren()).toEqual([]);
   }, 120_000);
@@ -612,8 +670,78 @@ def attempt(arg):
     );
   });
 
+  it('names the packages loaded before guest code ran, so a guest that edits the list changes nothing', async () => {
+    const child = spawn(process.execPath, [CHILD, PYODIDE_DIR, '--unsafe-no-isolation'], {
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    const exited = new Promise(resolve => child.once('exit', resolve));
+    const replied = new Promise<{ packages?: string[]; outputsJson?: string }>(resolve => {
+      createInterface({ input: child.stdout }).on('line', line => {
+        const message = JSON.parse(line) as { started?: boolean };
+        if (message.started !== true) resolve(message);
+      });
+    });
+    const code = probe(`
+def attempt(arg):
+    import pyodide_js
+    pyodide_js.loadedPackages.numpy = "forged"
+    return getattr(pyodide_js.loadedPackages, "numpy", None) == "forged", "wrote numpy into loadedPackages"
+`);
+    const request = {
+      op: 'call',
+      glue: FUNCTION_CALL_GLUE_PY,
+      code,
+      paramsJson: '{"arg": ""}',
+      pyodideVersion: PYODIDE_VERSION,
+    };
+    child.stdin.write(`${JSON.stringify(request)}\n`);
+    const reply = await replied;
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await exited;
+    expect(asAttempt(JSON.parse(reply.outputsJson ?? '{}')).reached).toBe(true);
+    expect(reply.packages).toEqual([]);
+  }, 120_000);
+
   // A sweep, not the live set: a run keeps its pid in the set when its group outlived the reap.
   it('leaves no child once the hostile attempts end', () => {
     expect(sweepCallableFunctionChildren()).toBe(0);
   });
+});
+
+describe('pinned data with real Pyodide', () => {
+  it('reads the pinned bytes under /data and refuses every guest write there, in the call directory too', async () => {
+    const csv = Buffer.from('x,y\n1,2\n3,5\n');
+    const sha256 = createHash('sha256').update(csv).digest('hex');
+    const dataCacheDir = mkdtempSync(path.join(tmpdir(), 'fn-data-e2e-'));
+    const withData = createInProcessCallableFunctionRunner({
+      childPath: CHILD,
+      pyodideDir: PYODIDE_DIR,
+      dataCacheDir,
+      fetchData: async () => new Response(new Uint8Array(csv)),
+    });
+    const data = [
+      { name: 'points.csv', prefix: 'fn1', sha256, bytes: csv.length, url: 'https://data.example.com/signed' },
+    ];
+    const result = await withData({ op: 'call', code: DATA_GUEST, contract: DATA_CONTRACT, params: {}, data });
+    expect(result.outcome).toBe('ok');
+    expect(result.outputs?.content).toBe(csv.toString('utf8'));
+    expect(result.outputs?.file_mode).toBe(0o444);
+    expect(result.outputs?.dir_mode).toBe(0o555);
+    // EACCES is Pyodide's own mode check. The host refuses the chmod, which Pyodide reports as success; the file
+    // still reads 0444 above because the mode is read after every attempt.
+    expect(result.outputs?.outcomes).toEqual([
+      'append=PermissionError:EACCES',
+      'chmod=accepted',
+      'create=PermissionError:EACCES',
+      'mkdir=PermissionError:EACCES',
+      'overwrite=PermissionError:EACCES',
+      'remove=PermissionError:EACCES',
+      'rename=PermissionError:EACCES',
+    ]);
+    const cached = readFileSync(path.join(dataCacheDir, 'cache', 'fn1', sha256));
+    expect(createHash('sha256').update(cached).digest('hex')).toBe(sha256);
+    expect(readdirSync(path.join(dataCacheDir, 'calls'))).toEqual([]);
+    expect(sweepCallableFunctionChildren()).toBe(0);
+  }, 120_000);
 });

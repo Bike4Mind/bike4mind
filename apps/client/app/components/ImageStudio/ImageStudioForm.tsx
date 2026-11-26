@@ -66,7 +66,7 @@ const PICKER_TITLES: Record<PickerRole, string> = {
 
 const submitLabelFor = ({ count, intent }: ImageFormState): string => {
   if (intent.mode === 'edit') return count === 1 ? 'Edit image' : `Make ${count} edits`;
-  return count === 1 ? 'Generate image' : `Generate ${count} images`;
+  return count === 1 ? 'Make 1 image' : `Make ${count} images`;
 };
 
 /**

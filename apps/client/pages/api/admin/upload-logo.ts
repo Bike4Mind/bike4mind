@@ -14,9 +14,11 @@ import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'adminUploadLogo' } });
 
 // Extended schema to support dark mode logo uploads
 const AdminLogoUploadInput = FileGeneratePresignedUrlRequestInput.extend({
@@ -33,7 +35,7 @@ async function getLogoSettings(session?: any): Promise<LogoSettings> {
     if (parsed.success) {
       return parsed.data;
     }
-    console.warn('Failed to parse logo settings, using defaults');
+    logger.warn('Failed to parse logo settings, using defaults');
   }
 
   return {
@@ -103,12 +105,12 @@ const handler = adminApi({
               : `admin/logos/${existingFileKey}`;
             await storage.delete(s3KeyToDelete);
           } catch (error) {
-            console.warn(`Failed to delete existing ${logoType} logo file:`, error);
+            logger.warn('Failed to delete existing logo file', { logoType, error });
           }
         }
 
         // Create new file key and AppFile record
-        const fileKey = `custom-${logoType}-logo-${uuidv4()}.${ext}`;
+        const fileKey = `custom-${logoType}-logo-${crypto.randomUUID()}.${ext}`;
         // Store the full S3 path for storage operations
         const s3Key = `admin/logos/${fileKey}`;
         // Store only the filename in the database for URL construction
@@ -165,7 +167,7 @@ const handler = adminApi({
 
       return res.json(result);
     } catch (error) {
-      console.error('Error in admin logo upload:', error);
+      req.logger.error('Error in admin logo upload', { error });
       throw error;
     }
   })
@@ -209,7 +211,7 @@ const handler = adminApi({
 
       return res.json(result);
     } catch (error) {
-      console.error('Error in admin logo delete:', error);
+      req.logger.error('Error in admin logo delete', { error });
       throw error;
     }
   });

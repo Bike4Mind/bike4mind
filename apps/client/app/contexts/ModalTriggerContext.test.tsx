@@ -9,6 +9,7 @@ import {
   wasWhatsNewShown,
   markGearsDiscoveryShown,
 } from '../components/modals/whatsNewSession';
+import { useTutorialPicker } from '@client/app/components/tutorial/core/tutorialPickerStore';
 import { ModalTriggerProvider, SETTLE_DELAY, useModalTrigger } from './ModalTriggerContext';
 
 const mocks = vi.hoisted(() => ({
@@ -106,6 +107,33 @@ describe('ModalTriggerContext whats-new trigger source', () => {
     });
     expect(mocks.refetch).toHaveBeenCalled();
     expect(screen.queryByTestId('whats-new-slider')).not.toBeInTheDocument();
+  });
+
+  it('skips the tab-return auto-trigger while the core tutorial offer is waiting', async () => {
+    vi.useFakeTimers();
+    useTutorialPicker.setState({ offerWaiting: true });
+    mocks.refetch.mockResolvedValue({
+      data: [
+        releaseNoteToModal({
+          id: 'n1',
+          release_tag: 'v1.0.0',
+          headline: 'Headline',
+          summary: 'Summary',
+          published_at: new Date('2026-01-01').toISOString(),
+          items: [],
+        } as never),
+      ],
+    });
+    localStorage.setItem('tab_last_hidden_at', String(Date.now() - 6 * 60 * 1000));
+    renderProvider();
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SETTLE_DELAY);
+    });
+    expect(mocks.refetch).toHaveBeenCalled();
+    expect(screen.queryByTestId('whats-new-slider')).not.toBeInTheDocument();
+    useTutorialPicker.setState({ offerWaiting: false });
   });
 
   it('renders the slider as auto-triggered for an auto call', () => {

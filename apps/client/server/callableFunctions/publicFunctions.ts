@@ -1,0 +1,208 @@
+import {
+  ForbiddenError,
+  NotFoundError,
+  REQUEST_TIMEOUT_ERROR_CODE,
+  projectFunctionSchema,
+  type FunctionContractProblem,
+  type ICallableFunctionDetail,
+  type ICallableFunctionResult,
+  type ICallableFunctionPublic,
+} from '@bike4mind/common';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
+import { getCallableFunction, listCallableFunctions } from '@bike4mind/server-utils/callableFunctions/registry';
+import {
+  CALLABLE_FUNCTION_SURFACE_CAPS,
+  type DispatchFunctionCallResult,
+} from '@bike4mind/server-utils/callableFunctions/dispatch';
+import { CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS } from '@bike4mind/server-utils/callableFunctions/runtimeParent';
+
+/*
+ * Pieces the public /api/v1/functions routes share. Only the key owner's live functions are reachable: a draft, a
+ * turned-off function, a deleted source, another person's function, and a missing one all throw the same 404.
+ */
+
+export const functionsRateLimit = (bucket: string) =>
+  rateLimit({
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
+    windowMs: 60 * 1000,
+    bucket,
+  });
+
+/** The whole call, from the request's arrival, ends within the rest surface's wait, inside the web function's 60 s. */
+export const FUNCTION_INVOKE_BUDGET_MS = CALLABLE_FUNCTION_SURFACE_CAPS.rest.waitMs;
+
+/** The guest's own run time; the runtime's start and its margin sit outside it. */
+export const FUNCTION_INVOKE_RUN_TIMEOUT_MS = Math.min(CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, FUNCTION_INVOKE_BUDGET_MS);
+
+/** Said only when the organization's limit is longer than a synchronous call can wait. */
+export const FUNCTION_SYNC_STOP_MESSAGE =
+  'A synchronous call stops at 45 s. Send "mode": "async" to run to your time limit, then poll the call for its result.';
+
+/** The 504 for a synchronous call: it names async mode only when async mode would have let the call run longer. */
+export function syncTimeoutError(limitMs: number): string {
+  return limitMs > FUNCTION_INVOKE_BUDGET_MS ? FUNCTION_SYNC_STOP_MESSAGE : TIMEOUT_MESSAGE;
+}
+
+export const FUNCTION_CALL_NOT_FOUND_MESSAGE = 'Call not found';
+
+export const FUNCTION_QUEUE_FAILED_MESSAGE = 'The call could not be queued. Try again later.';
+
+export const FUNCTION_ASYNC_UNAVAILABLE_MESSAGE = 'Asynchronous calls are not available on self-hosted installs.';
+
+export const FUNCTION_CALL_STOPPED_MESSAGE = 'The call stopped before it finished. Send it again.';
+
+/** The input cap plus room for the `{ "input": ... }` envelope and a pretty-printed body. */
+export const FUNCTION_INVOKE_MAX_BODY_BYTES = CALLABLE_FUNCTION_SURFACE_CAPS.rest.inputBytes + 64 * 1024;
+
+export const FUNCTION_NOT_FOUND_MESSAGE = 'Function not found';
+
+const notFound = () => new NotFoundError(FUNCTION_NOT_FOUND_MESSAGE);
+
+export async function assertFunctionsEnabled(user: { id: string }): Promise<void> {
+  if (!(await resolveCallableFunctionsEnabled(user))) {
+    throw new ForbiddenError('Callable functions are turned off for this account.');
+  }
+}
+
+/** The owner's live function, or the one 404 every other case shares. */
+export async function loadLiveFunction(user: { id: string }, id: string): Promise<ICallableFunctionDetail> {
+  let fn: ICallableFunctionDetail;
+  try {
+    fn = await getCallableFunction(user, id);
+  } catch (error) {
+    if (error instanceof NotFoundError) throw notFound();
+    throw error;
+  }
+  if (fn.status !== 'live') throw notFound();
+  return fn;
+}
+
+export async function listLiveFunctions(user: { id: string }): Promise<ICallableFunctionPublic[]> {
+  return (await listCallableFunctions(user)).filter(fn => fn.status === 'live');
+}
+
+export function toPublicFunction(fn: ICallableFunctionPublic) {
+  return {
+    id: fn.id,
+    slug: fn.slug,
+    description: fn.description,
+    trust_label: fn.trustLabel,
+    pin_version: fn.pin.version,
+    pin_seq: fn.pin.seq ?? null,
+    updated_at: new Date(fn.updatedAt).toISOString(),
+  };
+}
+
+export function toPublicFunctionDetail(fn: ICallableFunctionDetail) {
+  const rest = projectFunctionSchema(fn.contract, 'rest');
+  return { ...toPublicFunction(fn), input_schema: rest.inputs, output_schema: rest.outputs };
+}
+
+/** One sentence naming the first field that does not fit, and how many more do not. */
+export function describeInputProblems(problems: FunctionContractProblem[]): string {
+  const [first] = problems;
+  if (!first) return 'The input does not fit the input schema.';
+  const field = first.path ? `Input ${first.path}` : 'The input';
+  const more = problems.length > 1 ? ` (and ${problems.length - 1} more)` : '';
+  return `${field} ${first.message}${more}.`;
+}
+
+export interface InvokeAnswer {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+export const TIMEOUT_MESSAGE = 'The call ran past its time limit.';
+
+export const FUNCTION_RUNTIME_FAULT_MESSAGE = 'The function runtime did not answer. Try again later.';
+
+// Refusals about the function or its caller; any other refusal comes from the runtime.
+const FUNCTION_NOT_FOUND_REASONS = new Set(['not_found', 'not_caller', 'disabled', 'source_deleted']);
+
+const errorMessage = (errorClass?: string) => `The function raised an error${errorClass ? ` (${errorClass})` : ''}.`;
+
+export const OUTPUT_TOO_LARGE_MESSAGE = 'The function returned more than a call can carry.';
+
+const FAILURE_MESSAGES: Record<string, string> = {
+  memory: 'The function ran out of memory.',
+  output_invalid: 'The function returned outputs that do not fit its output schema.',
+  output_too_large: OUTPUT_TOO_LARGE_MESSAGE,
+};
+
+/** The HTTP answer for one dispatcher result. Refusals the route did not catch first still map to their status. */
+export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
+  const stamp = call.stamp ? { stamp: call.stamp } : {};
+  if (call.outcome === 'refused' && call.reason === 'budget_exhausted') {
+    return { status: 504, body: { error: TIMEOUT_MESSAGE, errorCode: REQUEST_TIMEOUT_ERROR_CODE } };
+  }
+  switch (call.outcome) {
+    case 'ok':
+      return { status: 200, body: { output: call.outputs ?? {}, stamp: call.stamp } };
+    case 'input_invalid':
+      if (call.reason === 'input_too_large') {
+        return { status: 413, body: { error: 'The input is larger than a call accepts.' } };
+      }
+      return {
+        status: 422,
+        body: { error: describeInputProblems(call.problems ?? []), problems: call.problems ?? [] },
+      };
+    case 'timeout':
+      return {
+        status: 504,
+        body: { error: TIMEOUT_MESSAGE, errorCode: REQUEST_TIMEOUT_ERROR_CODE, ...stamp },
+      };
+    case 'queued':
+      return { status: 202, body: { call_id: call.callId, status: 'queued' } };
+    case 'refused':
+      if (call.reason === 'setting_off') {
+        return { status: 403, body: { error: 'Callable functions are turned off for this account.' } };
+      }
+      if (call.reason === 'runtime_unavailable') {
+        return { status: 503, body: { error: 'No function runtime is available.' } };
+      }
+      if (call.reason && FUNCTION_NOT_FOUND_REASONS.has(call.reason)) {
+        return { status: 404, body: { error: FUNCTION_NOT_FOUND_MESSAGE } };
+      }
+      return { status: 503, body: { error: FUNCTION_RUNTIME_FAULT_MESSAGE } };
+    case 'error':
+      if (call.reason === 'queue_failed') return { status: 503, body: { error: FUNCTION_QUEUE_FAILED_MESSAGE } };
+      // A runner that threw, never replied, or was slow to start is a platform fault, not the function's own error.
+      if (call.reason === 'runtime_unavailable' || call.reason === 'no_reply' || call.reason === 'start_timeout') {
+        return { status: 503, body: { error: FUNCTION_RUNTIME_FAULT_MESSAGE } };
+      }
+      return { status: 502, body: { error: errorMessage(call.errorClass), outcome: call.outcome, ...stamp } };
+    default:
+      return {
+        status: 502,
+        body: { error: FAILURE_MESSAGES[call.outcome] ?? 'The function failed.', outcome: call.outcome, ...stamp },
+      };
+  }
+}
+
+/** A polled call: `queued` and `running` alone, a finished one with its outcome and what the invoke would answer. */
+export function functionCallAnswer(doc: ICallableFunctionResult): Record<string, unknown> {
+  if (doc.state !== 'finished' || !doc.outcome) return { call_id: doc.callId, status: doc.state };
+  const base = { call_id: doc.callId, status: 'finished', outcome: doc.outcome };
+  if (doc.outcome === 'ok') return { ...base, output: doc.outputs ?? {}, ...(doc.stamp ? { stamp: doc.stamp } : {}) };
+  // These two reasons are written only by the queue worker, so they are not dispatcher reasons.
+  if (doc.reason === 'worker_lost' || doc.reason === 'dispatch_failed') {
+    return { ...base, error: FUNCTION_CALL_STOPPED_MESSAGE, ...(doc.stamp ? { stamp: doc.stamp } : {}) };
+  }
+  const answer = invokeAnswer({
+    outcome: doc.outcome,
+    ...(doc.reason ? { reason: doc.reason as DispatchFunctionCallResult['reason'] } : {}),
+    ...(doc.errorClass ? { errorClass: doc.errorClass } : {}),
+    ...(doc.problems ? { problems: doc.problems } : {}),
+    ...(doc.stamp ? { stamp: doc.stamp } : {}),
+    durationMs: doc.stamp?.duration_ms ?? 0,
+    callId: doc.callId,
+  });
+  return {
+    ...base,
+    error: answer.body.error,
+    ...(doc.problems ? { problems: doc.problems } : {}),
+    ...(doc.stamp ? { stamp: doc.stamp } : {}),
+  };
+}

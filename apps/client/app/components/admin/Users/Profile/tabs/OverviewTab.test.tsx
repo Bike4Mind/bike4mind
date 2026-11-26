@@ -65,6 +65,12 @@ beforeEach(() => {
   mocks.currentUser = { id: 'admin1' };
 });
 
+// Covered by InterventionHolds.test.tsx; its own queries would shift this file's api mocks.
+vi.mock('../../../InterventionHolds', () => ({
+  InterventionDecisionsPanel: () => null,
+  InterventionHoldsCard: () => null,
+}));
+
 describe('OverviewTab internal account row', () => {
   it.each([
     [{ isInternal: false }, 'Customer'],

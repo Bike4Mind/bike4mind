@@ -15,6 +15,7 @@ vi.mock('@bike4mind/db-core', () => ({ connectDB: vi.fn() }));
 vi.mock('@bike4mind/database', () => {
   const model = { createIndexes: vi.fn() };
   return {
+    loadKeyringInBackground: vi.fn(),
     disposableDomainRepository: repo,
     DisposableDomainModel: model,
     DisposableDomainSourceModel: model,

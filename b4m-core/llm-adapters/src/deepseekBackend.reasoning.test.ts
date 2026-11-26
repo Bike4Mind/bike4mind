@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { Stream } from 'openai/streaming';
 import { DeepSeekBackend } from './deepseekBackend';
 import type { CompletionInfo } from './backend';
-import { isOutputBudgetExhaustedError, isStreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
+import {
+  isHiddenReasoningOnlyEmptyError,
+  isOutputBudgetExhaustedError,
+  isStreamEndedWithoutFinishError,
+} from './llmEmptyTurnErrors';
 
 /**
  * The non-streaming reasoning path. Every case here is silent when it breaks:
@@ -597,12 +601,72 @@ describe('DeepSeekBackend streaming reasoning', () => {
     expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
   });
 
+  it('types a finished stream of reasoning only as a hidden-reasoning empty turn', async () => {
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] },
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH).catch((e: unknown) => e);
+    expect(isHiddenReasoningOnlyEmptyError(err)).toBe(true);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+    expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
+  });
+
+  it('does not type the empty turn left by the max-tool-calls cap', async () => {
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] },
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH, {
+      _internal: { toolCallCount: 5, maxToolCalls: 5 },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(isHiddenReasoningOnlyEmptyError(err)).toBe(false);
+    expect((err as Error).message).toMatch(/returned no content/);
+  });
+
+  it('types a finished non-streaming turn of reasoning only as a hidden-reasoning empty turn', async () => {
+    const { backend } = backendReturning([
+      { index: 0, message: { content: '', reasoning_content: 'hm' }, finish_reason: 'stop' },
+    ]);
+
+    const err = await runTurn(backend, ChatModels.DEEPSEEK_FLASH).catch((e: unknown) => e);
+    expect(isHiddenReasoningOnlyEmptyError(err)).toBe(true);
+    expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
+  });
+
+  it('does not type the non-streaming empty turn left by the max-tool-calls cap', async () => {
+    const { backend } = backendReturning([
+      { index: 0, message: { content: '', reasoning_content: 'hm' }, finish_reason: 'stop' },
+    ]);
+
+    const err = await runTurn(backend, ChatModels.DEEPSEEK_FLASH, {
+      _internal: { toolCallCount: 5, maxToolCalls: 5 },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(isHiddenReasoningOnlyEmptyError(err)).toBe(false);
+    expect((err as Error).message).toMatch(/returned no content/);
+  });
+
   it('does not type an aborted stream as retryable', async () => {
     const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
     const abortSignal = AbortSignal.abort();
 
     const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH, { abortSignal }).catch((e: unknown) => e);
     expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+    expect(isHiddenReasoningOnlyEmptyError(err)).toBe(false);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/returned no content/);
   });

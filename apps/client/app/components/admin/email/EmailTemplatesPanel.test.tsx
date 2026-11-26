@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EmailCategory } from '@bike4mind/common';
@@ -11,12 +11,14 @@ const mocks = vi.hoisted(() => ({
     isError: false,
     refetch: vi.fn(),
   },
+  jobs: { data: { data: [] as unknown[] } },
+  deleteMutateAsync: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/emailMarketing', () => ({
   useEmailTemplates: () => mocks.templates,
-  useEmailJobs: () => ({ data: { data: [] } }),
-  useDeleteEmailTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useEmailJobs: () => mocks.jobs,
+  useDeleteEmailTemplate: () => ({ mutateAsync: mocks.deleteMutateAsync, isPending: false }),
   useCloneEmailTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('./EmailTemplateEditor', () => ({
@@ -48,6 +50,9 @@ describe('EmailTemplatesPanel', () => {
   beforeEach(() => {
     Object.assign(mocks.templates, { data: { data: [] }, isLoading: false, isError: false });
     mocks.templates.refetch.mockClear();
+    mocks.jobs.data = { data: [] };
+    mocks.deleteMutateAsync.mockReset();
+    mocks.deleteMutateAsync.mockResolvedValue(undefined);
   });
 
   it('starts with a toolbar row that holds only the new template button', () => {
@@ -104,5 +109,59 @@ describe('EmailTemplatesPanel', () => {
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('edit-template-t1'));
     expect(screen.getByTestId('email-template-editor-stub')).toHaveAttribute('data-template-id', 't1');
+  });
+
+  it('renders the templates inside the admin data table', () => {
+    mocks.templates.data = { data: [template] };
+    renderPanel();
+
+    expect(within(screen.getByTestId('email-templates-table')).getByText('Welcome')).toBeInTheDocument();
+  });
+
+  it('closes the delete confirmation on cancel without deleting', () => {
+    mocks.templates.data = { data: [template] };
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId('delete-template-t1'));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Delete template');
+    fireEvent.click(screen.getByTestId('delete-template-cancel-btn'));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mocks.deleteMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('deletes the template once the confirmation is accepted', async () => {
+    mocks.templates.data = { data: [template] };
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId('delete-template-t1'));
+    fireEvent.click(screen.getByTestId('delete-template-confirm-btn'));
+
+    expect(mocks.deleteMutateAsync).toHaveBeenCalledWith('t1');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+  });
+
+  it('keeps the confirmation open when the delete fails', async () => {
+    mocks.templates.data = { data: [template] };
+    mocks.deleteMutateAsync.mockRejectedValue(new Error('boom'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId('delete-template-t1'));
+    fireEvent.click(screen.getByTestId('delete-template-confirm-btn'));
+
+    await waitFor(() => expect(mocks.deleteMutateAsync).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+  });
+
+  it('shows an always-visible lock instead of delete for a template a campaign uses', () => {
+    mocks.templates.data = { data: [template] };
+    mocks.jobs.data = { data: [{ id: 'j1', name: 'Launch', templateId: 't1' }] };
+    renderPanel();
+
+    const lock = screen.getByTestId('template-in-use-t1');
+    expect(lock).toHaveTextContent('In use');
+    expect(within(screen.getByTestId('admin-table-row-actions')).queryByTestId('template-in-use-t1')).toBeNull();
+    expect(screen.queryByTestId('delete-template-t1')).not.toBeInTheDocument();
   });
 });

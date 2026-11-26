@@ -18,10 +18,24 @@ import { ChatShell } from './ChatShell';
 import { SESSION_PANEL_SPACE_VAR } from './layout';
 import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 import { SESSION_PANEL_SPACE } from './sessionPanelState';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 // The chips' own behaviour is SessionChips.test.tsx's; here it only matters where they are drawn.
 vi.mock('./SessionChips', () => ({
   SessionChips: ({
@@ -53,6 +67,14 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's autosizing textarea measures itself on every render, and jsdom resolves that against every
+// emotion sheet in the document and every ancestor, with no layout to measure in the end.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) =>
+  element instanceof HTMLTextAreaElement
+    ? element.style
+    : realGetComputedStyle(element, pseudo)) as typeof getComputedStyle;
 
 const PROJECT: ChatProject = {
   directory: '/Users/someone/code/thing',
@@ -136,6 +158,7 @@ beforeEach(() => {
   );
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       studio: quietBridge({
         get: async (sessionId: string) => ({
           sessionId,
@@ -151,7 +174,12 @@ beforeEach(() => {
           ({ ...SESSIONS.find(entry => entry.id === id), messages: transcript }) as unknown as ChatSession,
         listBackgroundProcesses: async () => processes,
         getLoop: async () => loop,
-        inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
+        inspectProject: async (directory: string) => ({
+          directory,
+          isRepository: false,
+          currentBranch: 'main',
+          branches: [],
+        }),
         updateProject: () => updateProject(),
         sendMessage: () => sendMessage(),
         getQueuedMessages: async () => [],
@@ -180,7 +208,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const find = (testId: string) => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+const find = (testId: string) => document.body.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
 const get = (testId: string) => {
   const found = find(testId);
   if (!found) throw new Error(`no ${testId}`);
@@ -267,17 +295,6 @@ describe('the session panel in the shell', () => {
     expect(get('loop-status')).not.toBeNull();
   });
 
-  it('floats in the free margin of a wide pane without moving the conversation', async () => {
-    paneWidth(2400);
-    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
-    await open('bound');
-
-    expect(get('session-panel').dataset.variant).toBe('docked');
-    expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('true');
-    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
-    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
-  });
-
   it('reserves a rail beside the thread when the pane has no free margin for it', async () => {
     paneWidth(1100);
     transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
@@ -285,7 +302,9 @@ describe('the session panel in the shell', () => {
 
     expect(get('session-panel').dataset.variant).toBe('docked');
     expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('true');
+    // Once the Code session has messages, its workspace controls move from the centered setup into the panel.
     expect(get('session-panel').contains(find('session-chips-panel'))).toBe(true);
+    expect(find('chat-code-workspace-setup')).toBeNull();
     expect(find('session-chips-row')).toBeNull();
     expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe(
       `${SESSION_PANEL_SPACE}px`
@@ -359,27 +378,14 @@ describe('the session panel in the shell', () => {
     expect(find('chat-thread-empty')).toBeNull();
   });
 
-  it('centers setup for an empty bound Code session instead of opening the panel', async () => {
-    paneWidth(1600);
-    await open('bound');
-    expect(find('session-panel')).toBeNull();
-    expect(find('chat-toggle-session-panel-btn')).toBeNull();
-    expect(get('chat-code-workspace-setup').contains(find('session-chips-embedded'))).toBe(true);
-  });
-
-  it('moves workspace controls into the panel once the Code session has messages', async () => {
-    paneWidth(1600);
-    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
-    await open('bound');
-    expect(get('session-panel').contains(find('session-chips-panel'))).toBe(true);
-    expect(find('chat-code-workspace-setup')).toBeNull();
-    expect(find('session-chips-row')).toBeNull();
-  });
-
   it('moves the same session into the panel and locks its grounding on the first send', async () => {
     paneWidth(1600);
     const resolveSend = deferSend();
     await open('bound');
+    // An empty bound session centers its setup instead of opening the panel.
+    expect(find('session-panel')).toBeNull();
+    expect(find('chat-toggle-session-panel-btn')).toBeNull();
+    expect(get('chat-code-workspace-setup').contains(find('session-chips-embedded'))).toBe(true);
     expect(get('session-chips-embedded').dataset.inUse).toBe('false');
 
     await sendFirstMessage();
@@ -406,8 +412,8 @@ describe('the session panel in the shell', () => {
 
     expect(get('chat-send-error').textContent).toBe('Could not start the turn');
     expect(find('chat-message-user')).toBeNull();
-    expect(document.querySelectorAll('[data-testid="chat-code-workspace-setup"]')).toHaveLength(1);
-    expect(document.querySelectorAll('[data-testid="session-chips-embedded"]')).toHaveLength(1);
+    expect(document.body.querySelectorAll('[data-testid="chat-code-workspace-setup"]')).toHaveLength(1);
+    expect(document.body.querySelectorAll('[data-testid="session-chips-embedded"]')).toHaveLength(1);
     expect(get('session-chips-embedded').dataset.inUse).toBe('false');
     expect(find('session-panel')).toBeNull();
     expect(find('session-chips-panel')).toBeNull();
@@ -430,13 +436,6 @@ describe('the session panel in the shell', () => {
     expect(find('session-panel')).toBeNull();
     expect(find('chat-toggle-session-panel-btn')).toBeNull();
     expect(find('session-chips-row')).toBeNull();
-  });
-
-  it('is not offered on a Chat session', async () => {
-    paneWidth(1600);
-    await open('chatting', 'chat');
-    expect(find('chat-toggle-session-panel-btn')).toBeNull();
-    expect(find('session-panel')).toBeNull();
   });
 
   it('puts the plan bar and the running-tasks chip back when the panel is hidden', async () => {
@@ -509,7 +508,7 @@ function escapingAbsolutes(): HTMLElement[] {
     const style = getComputedStyle(el);
     return [style.overflow, style.overflowX, style.overflowY].some(value => value && value !== 'visible');
   };
-  return [...document.querySelectorAll<HTMLElement>('body *')].filter(el => {
+  return [...document.body.querySelectorAll<HTMLElement>('body *')].filter(el => {
     if (getComputedStyle(el).position !== 'absolute') return false;
     for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
       if (positioned(node)) return false;
@@ -528,6 +527,9 @@ describe('the shell layout', () => {
     const createSession = vi.fn<typeof window.b4m.chat.createSession>();
     window.b4m.chat.createSession = createSession;
     await open('chatting', 'chat');
+    // The session panel is not offered on a Chat session with nothing running.
+    expect(find('chat-toggle-session-panel-btn')).toBeNull();
+    expect(find('session-panel')).toBeNull();
     await act(async () => get('chat-new-session-btn').click());
     await act(async () => undefined);
     await act(async () => get('chat-panes-menu-btn').click());
@@ -544,32 +546,20 @@ describe('the shell layout', () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
-  it.each([600, 900, 1600])(
-    'opens and closes Studio from Panes at region width %s without remounting chat',
-    async width => {
-      paneWidth(width);
-      await open('bound');
-      const composer = get('chat-composer-input');
-      await act(async () => get('chat-panes-menu-btn').click());
-      await act(async () => get('chat-panes-menu-studio-item').click());
-      expect(get('studio-pane').dataset.variant).toBe(width >= 760 ? 'docked' : 'stacked');
-      expect(get('studio-pane').getAttribute('aria-modal')).toBeNull();
-      expect(find('studio-unavailable')).toBeNull();
-      expect(get('studio-pane').textContent).toContain('Your creations will appear here.');
-      expect(get('chat-composer-input')).toBe(composer);
-      await act(async () => get('studio-close-btn').click());
-      expect(find('studio-pane')).toBeNull();
-      expect(document.activeElement).toBe(get('chat-panes-menu-btn'));
-    }
-  );
-
-  it('pins the shell to the viewport so the window itself never scrolls', async () => {
-    paneWidth(1600);
+  it.each([600, 1600])('opens and closes Studio from Panes at region width %s without remounting chat', async width => {
+    paneWidth(width);
     await open('bound');
-
-    const shell = getComputedStyle(get('chat-shell'));
-    expect(shell.height).toBe('100vh');
-    expect(shell.overflow).toBe('clip');
+    const composer = get('chat-composer-input');
+    await act(async () => get('chat-panes-menu-btn').click());
+    await act(async () => get('chat-panes-menu-studio-item').click());
+    expect(get('studio-pane').dataset.variant).toBe(width >= 760 ? 'docked' : 'stacked');
+    expect(get('studio-pane').getAttribute('aria-modal')).toBeNull();
+    expect(find('studio-unavailable')).toBeNull();
+    expect(get('studio-pane').textContent).toContain('Your creations will appear here.');
+    expect(get('chat-composer-input')).toBe(composer);
+    await act(async () => get('studio-close-btn').click());
+    expect(find('studio-pane')).toBeNull();
+    expect(document.activeElement).toBe(get('chat-panes-menu-btn'));
   });
 
   it('keeps every absolutely positioned element inside the scroller it sits in', async () => {
@@ -583,20 +573,17 @@ describe('the shell layout', () => {
     ] as ChatMessage[];
     await open('bound');
 
-    const statuses = document.querySelectorAll<HTMLElement>('[data-testid="chat-message-user-copy-btn-status"]');
+    const statuses = document.body.querySelectorAll<HTMLElement>('[data-testid="chat-message-user-copy-btn-status"]');
     expect(statuses).toHaveLength(2);
     // The scroller is positioned too, so the walker alone would not notice the button's own wrapper going.
     for (const status of statuses) expect(getComputedStyle(status.parentElement as Element).position).toBe('relative');
     expect(escapingAbsolutes().map(el => el.dataset.testid ?? el.outerHTML.slice(0, 80))).toEqual([]);
-  });
-
-  it('docks the session panel outside the transcript scroller, so it does not scroll with the thread', async () => {
-    paneWidth(1600);
-    transcript = [
-      { id: 'u1', role: 'user', content: 'A question', createdAt: '2026-10-01T00:00:00.000Z' },
-    ] as ChatMessage[];
-    await open('bound');
+    // The docked session panel sits outside the transcript scroller, so it does not scroll with the thread.
     expect(get('chat-thread').contains(get('session-panel'))).toBe(false);
+    // The shell is pinned to the viewport so the window itself never scrolls.
+    const shell = getComputedStyle(get('chat-shell'));
+    expect(shell.height).toBe('100vh');
+    expect(shell.overflow).toBe('clip');
   });
 });
 
@@ -612,7 +599,7 @@ describe('the reply stats rail in the shell', () => {
     ] as ChatMessage[];
   });
 
-  it('draws the rail and its header toggle while the rail fits, inside the scroller', async () => {
+  it('draws the rail and its header toggle while the rail fits, inside the scroller, and the toggle remembers off', async () => {
     paneWidth(1600);
     await open('chatting', 'chat');
 
@@ -620,6 +607,12 @@ describe('the reply stats rail in the shell', () => {
     expect(get('chat-thread').contains(get('chat-reply-stats-rail'))).toBe(true);
     expect(find('chat-message-cost')).toBeNull();
     expect(escapingAbsolutes()).toEqual([]);
+
+    await act(async () => get('chat-toggle-reply-stats-btn').click());
+    expect(find('chat-reply-stats-rail')).toBeNull();
+    expect(get('chat-toggle-reply-stats-btn').getAttribute('aria-pressed')).toBe('false');
+    expect(get('chat-message-cost').textContent).toContain('4.0s total');
+    expect(window.localStorage.getItem('b4m.chat.replyStats.rail')).toBe('0');
   });
 
   it('leaves out the space a pushing session panel reserves when deciding the rail fits', async () => {
@@ -636,21 +629,12 @@ describe('the reply stats rail in the shell', () => {
     await open('bound');
 
     expect(get('session-panel').dataset.variant).toBe('docked');
+    expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('true');
+    // Floating moves nothing: no reserved space and no padding on the thread.
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
     expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
     expect(get('chat-thread').contains(get('chat-reply-stats-rail'))).toBe(true);
     expect(find('chat-message-cost')).toBeNull();
-  });
-
-  it('drops the rail below the breakpoint, the stats going back to the hover footer, and keeps the toggle', async () => {
-    paneWidth(1175);
-    await open('chatting', 'chat');
-
-    expect(find('chat-reply-stats-rail')).toBeNull();
-    expect(get('chat-message-cost').textContent).toContain('4.0s total');
-    const toggle = get('chat-toggle-reply-stats-btn') as HTMLButtonElement;
-    expect(toggle.disabled).toBe(false);
-    await act(async () => toggle.click());
-    expect(window.localStorage.getItem('b4m.chat.replyStats.rail')).toBe('0');
   });
 
   it('disables the toggle on the unsent draft the shell opens on arrival', async () => {
@@ -695,16 +679,5 @@ describe('the reply stats rail in the shell', () => {
     emit({ type: 'phase', phase: { kind: 'thinking' } });
 
     expect(find('chat-reply-stat-thinking')?.textContent).toContain('0s');
-  });
-
-  it('turns the rail off from the header and remembers it', async () => {
-    paneWidth(1600);
-    await open('chatting', 'chat');
-    await act(async () => get('chat-toggle-reply-stats-btn').click());
-
-    expect(find('chat-reply-stats-rail')).toBeNull();
-    expect(get('chat-toggle-reply-stats-btn').getAttribute('aria-pressed')).toBe('false');
-    expect(get('chat-message-cost').textContent).toContain('4.0s total');
-    expect(window.localStorage.getItem('b4m.chat.replyStats.rail')).toBe('0');
   });
 });

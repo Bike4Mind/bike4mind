@@ -121,9 +121,11 @@ export function registerAttention({
     return saved;
   });
 
+  // Linux shows the count only on launchers that support it (Unity and kin) and ignores it elsewhere.
+  // Windows has no count API; a taskbar overlay icon would be its equivalent.
   const setBadge = (count: number) => {
-    if (process.platform !== 'darwin') return;
-    app.dock?.setBadge(count > 0 ? String(count) : '');
+    if (process.platform === 'darwin') app.dock?.setBadge(count > 0 ? String(count) : '');
+    else if (process.platform === 'linux') app.setBadgeCount(count);
   };
 
   ipcMain.handle(IPC_CHANNELS.attentionSetBadge, (_event, count: unknown) => {

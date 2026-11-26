@@ -721,6 +721,12 @@ describe('enabledModules', () => {
     ] as unknown as TutorialModule[]);
     expect(listed).toEqual([door]);
   });
+
+  it('passes the track through when the module has one', () => {
+    const door = { ...MODULE, track: 'basics' } as TutorialModule;
+    expect(enabledModules([door])[0].track).toBe('basics');
+    expect(enabledModules([MODULE as TutorialModule])[0]).not.toHaveProperty('track');
+  });
 });
 
 describe('the session marker', () => {

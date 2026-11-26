@@ -9,11 +9,14 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   bedrockClientConfig,
   estimateStreamedOutputTokens,
+  isEmptyConversationError,
+  isRetryableError,
   TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
   type TurnUsage,
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
+import { HiddenReasoningOnlyEmptyError, isHiddenReasoningOnlyEmptyError } from '../llmEmptyTurnErrors';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from '../executeToolsBatch';
 import { logToolRound, summarizeToolOutcomes } from '../toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
@@ -31,6 +34,7 @@ import { getCachingAdapter } from '../caching/adapters';
 import { describePayloadShape } from './payloadShape';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from '../toolStreamingHelper';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from '../responseFormatHelpers';
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from '../abortAwareRetry';
 import {
   BedrockRuntimeClient,
   InvokeModelCommand,
@@ -72,7 +76,8 @@ const MAX_LOGGED_ERROR_REASON_LENGTH = 300;
  * stream is deterministic (the max-tool-calls cap) and must match neither.
  *
  * `hiddenReasoningOnly` marks a stream whose only output was a thinking block with no displayed
- * text: the model was reached, so the misrouted-profile hint does not apply.
+ * text: the model was reached, so the misrouted-profile hint does not apply. The non-stalled variant
+ * is thrown as a HiddenReasoningOnlyEmptyError (retried once, then fallback) except on the capped round.
  */
 export function bedrockEmptyResponseMessage(
   model: string,
@@ -182,6 +187,29 @@ function isAbortError(err: unknown): boolean {
   return err.message.includes('aborted');
 }
 
+function isRetryableBedrockError(error: unknown): boolean {
+  if (!(error instanceof Error) || isAbortError(error)) return false;
+  const { $metadata, $retryable } = error as Error & {
+    $metadata?: { httpStatusCode?: number };
+    $retryable?: { throttling?: boolean };
+  };
+  const status = $metadata?.httpStatusCode;
+  return (
+    Boolean($retryable) ||
+    status === 408 ||
+    status === 429 ||
+    (typeof status === 'number' && status >= 500 && status < 600) ||
+    [
+      'ThrottlingException',
+      'ModelNotReadyException',
+      'ServiceUnavailableException',
+      'InternalServerException',
+      'TimeoutError',
+    ].includes(error.name) ||
+    isRetryableError(error)
+  );
+}
+
 export abstract class BaseBedrockBackend implements ICompletionBackend {
   private _options: BedrockOptions;
   protected _bedrockRuntime: BedrockRuntimeClient;
@@ -223,19 +251,21 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    */
   protected async invokeModel(
     input: { modelId: string; contentType: string; accept: string; body: string },
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    client = this._bedrockRuntime
   ): Promise<{ body?: Uint8Array }> {
     const command = new InvokeModelCommand(input);
-    return this._bedrockRuntime.send(command, { abortSignal });
+    return client.send(command, { abortSignal });
   }
 
   /** @see invokeModel */
   protected async invokeModelStream(
     input: { modelId: string; contentType: string; accept: string; body: string },
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    client = this._bedrockRuntime
   ): Promise<{ body?: AsyncIterable<{ chunk?: { bytes?: Uint8Array } }> }> {
     const command = new InvokeModelWithResponseStreamCommand(input);
-    return this._bedrockRuntime.send(command, { abortSignal });
+    return client.send(command, { abortSignal });
   }
 
   /**
@@ -289,6 +319,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     });
   }
 
+  protected createAbortAwareClient(model: string): BedrockRuntimeClient {
+    return new BedrockRuntimeClient({
+      region: this.getRegionForModel(model),
+      ...bedrockClientConfig(),
+      maxAttempts: 1,
+      retryMode: 'standard',
+      requestHandler: BEDROCK_REQUEST_HANDLER,
+    });
+  }
+
   async complete(
     model: string,
     messages: IMessage[],
@@ -296,9 +336,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
     this.currentModel = model;
     // Update client region if needed for this specific model
-    this.updateClientForModel(model);
+    if (!retrySignal) this.updateClientForModel(model);
 
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
@@ -532,6 +573,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       }
     }
 
+    const requestClient = retrySignal ? this.createAbortAwareClient(model) : this._bedrockRuntime;
     try {
       Logger.globalInstance.log(
         `[BaseBedrockBackend] Invoking model: ${model} with stream=${options.stream} in region: ${this._options.region}`
@@ -542,7 +584,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         const roundStart = Date.now();
         let firstChunkAt: number | null = null;
         try {
-          response = await this.invokeModelStream(input, options.abortSignal);
+          response = await this.invokeModelStream(input, options.abortSignal, requestClient);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
@@ -637,14 +679,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           !func.some(f => f.name) &&
           !options.abortSignal?.aborted
         ) {
-          throw new Error(
-            bedrockEmptyResponseMessage(
-              model,
-              this._options.region,
-              this.signalsStreamTermination && !sawTerminalEvent,
-              sawReasoning
-            )
-          );
+          const stalled = this.signalsStreamTermination && !sawTerminalEvent;
+          const message = bedrockEmptyResponseMessage(model, this._options.region, stalled, sawReasoning);
+          // The capped round (tools stripped at maxToolCalls) is deterministic: a retry would replay
+          // every tool round and land in the same place, so it keeps the plain, non-retried error.
+          if (sawReasoning && !stalled && toolCallCount < maxToolCalls) {
+            throw new HiddenReasoningOnlyEmptyError('Bedrock', model, message);
+          }
+          throw new Error(message);
         }
 
         // FAIL LOUD on a TRUNCATED completion. A transport stall mid-body closes the h2 stream
@@ -934,7 +976,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       } else {
         let response;
         try {
-          response = await this.invokeModel(input, options.abortSignal);
+          response = retrySignal
+            ? await retryAbortAware(() => this.invokeModel(input, retrySignal, requestClient), retrySignal, {
+                isRetryable: isRetryableBedrockError,
+              })
+            : await this.invokeModel(input, options.abortSignal, requestClient);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
@@ -950,13 +996,18 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           streamedText[choice.index] = (streamedText[choice.index] ?? '') + (choice.chunkText || '');
         });
 
-        inputTokens = chunk?.choices[0].usage?.input_tokens || 0;
-        outputTokens = chunk?.choices[0].usage?.output_tokens || 0;
-        cacheReadTokens = chunk?.choices[0].usage?.cache_read_input_tokens || 0;
-        cacheWriteTokens = chunk?.choices[0].usage?.cache_creation_input_tokens || 0;
+        inputTokens = chunk?.choices[0]?.usage?.input_tokens || 0;
+        outputTokens = chunk?.choices[0]?.usage?.output_tokens || 0;
+        cacheReadTokens = chunk?.choices[0]?.usage?.cache_read_input_tokens || 0;
+        cacheWriteTokens = chunk?.choices[0]?.usage?.cache_creation_input_tokens || 0;
+        if (retrySignal) {
+          const hasUsage = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens > 0;
+          await reportUsageOnAbort(retrySignal, callback, hasUsage ? buildCompletionInfo() : undefined);
+        }
 
         // Provider blocks go out at their place in the text, so a caller echoing them keeps the response order.
         const emitResponseText = async (text: string[]) => {
+          retrySignal?.throwIfAborted();
           if (providerBlocks.length === 0) {
             await callback(text, buildCompletionInfo());
             return;
@@ -964,10 +1015,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           const whole = text.join('');
           let from = 0;
           for (const { providerBlock, textOffset } of providerBlocks) {
+            retrySignal?.throwIfAborted();
             if (textOffset > from) await callback([whole.slice(from, textOffset)], buildCompletionInfo());
             from = Math.max(from, textOffset);
+            retrySignal?.throwIfAborted();
             await callback([], { ...buildCompletionInfo(), providerBlock });
           }
+          retrySignal?.throwIfAborted();
           await callback([whole.slice(from)], buildCompletionInfo());
         };
 
@@ -1117,11 +1171,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         }
 
         await emitResponseText(streamedText);
+        retrySignal?.throwIfAborted();
       }
     } catch (error) {
       // Log detailed error information
       if (error instanceof Error) {
-        if (error.message.includes('aborted')) {
+        if (error.message.includes('aborted') || (retrySignal && (retrySignal.aborted || isAbortError(error)))) {
           Logger.globalInstance.log('[BaseBedrockBackend] Request aborted, skipping error logging');
           throw error;
         }
@@ -1129,6 +1184,17 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // error logs reach a shared alert channel and must never include prompt text.
         if (loggedErrors.has(error)) throw error;
         loggedErrors.add(error);
+        // Thrown by getPayload before any provider call: caller input, not a provider fault, and the
+        // caller settles it (ChatCompletionProcess warns once), so it must not page here.
+        if (isEmptyConversationError(error)) {
+          Logger.globalInstance.warn(`[BaseBedrockBackend] Refused an empty conversation for ${model}`);
+          throw error;
+        }
+        // Retried, then fallen back, by the completion loop; it logs at error only if neither answers.
+        if (isHiddenReasoningOnlyEmptyError(error)) {
+          Logger.globalInstance.warn(`[BaseBedrockBackend] ${error.message}`);
+          throw error;
+        }
         const { $fault, $metadata, $retryable } = error as Error & {
           $fault?: unknown;
           $metadata?: unknown;
@@ -1156,6 +1222,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       }
 
       throw error;
+    } finally {
+      if (retrySignal) requestClient.destroy();
     }
   }
 

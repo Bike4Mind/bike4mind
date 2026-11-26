@@ -427,6 +427,52 @@ export function isZodError(err: unknown): err is ZodError {
   return Boolean(err && (err instanceof ZodError || (err as ZodError).name === 'ZodError'));
 }
 
+const ZOD_IDENTIFIER = /[$_\p{ID_Start}][$\u200c\u200d\p{ID_Continue}]*/u;
+
+function zodPathKey(key: PropertyKey): string {
+  return typeof key === 'symbol' ? (key.description ?? '') : String(key);
+}
+
+function formatZodPath(path: readonly PropertyKey[]): string {
+  if (path.length === 1) return zodPathKey(path[0]) || '""';
+  return path.reduce<string>((acc, key) => {
+    if (typeof key === 'number') return `${acc}[${key}]`;
+    const name = zodPathKey(key);
+    if (name.includes('"')) return `${acc}["${name.replace(/"/g, '\\"')}"]`;
+    if (!ZOD_IDENTIFIER.test(name)) return `${acc}["${name}"]`;
+    return acc.length === 0 ? name : `${acc}.${name}`;
+  }, '');
+}
+
+function formatZodIssue(issue: z.core.$ZodIssue): string {
+  if (issue.code === 'invalid_union' && issue.errors.length > 0) {
+    const branches = issue.errors.map(branch =>
+      branch.map(sub => formatZodIssue({ ...sub, path: issue.path.concat(sub.path) })).join('; ')
+    );
+    return Array.from(new Set(branches)).join(' or ');
+  }
+  let text = issue.message.charAt(0).toUpperCase() + issue.message.slice(1);
+  if (issue.path.length > 0) {
+    const first = issue.path[0];
+    text +=
+      issue.path.length === 1 && typeof first === 'number'
+        ? ` at index ${first}`
+        : ` at "${formatZodPath(issue.path)}"`;
+  }
+  return text;
+}
+
+/**
+ * A ZodError as one line: `Validation error: ` then each issue as `<Message> at "<path>"`, joined by `; `,
+ * at most `maxIssues` of them. A union issue lists each distinct branch, joined by ` or `. API callers and
+ * tests match on this text, so keep it stable.
+ */
+export function formatZodError(error: ZodError, { maxIssues = 99 }: { maxIssues?: number } = {}): string {
+  if (error.issues.length === 0) return error.message;
+  const message = error.issues.slice(0, maxIssues).map(formatZodIssue).join('; ');
+  return message.length > 0 ? `Validation error: ${message}` : 'Validation error';
+}
+
 /**
  * Thrown by `createFabFileByUrl` (`@bike4mind/services`) when the adapter-supplied `checkDuplicate`
  * finds a live match for the fetched content's hash, BEFORE any row is created - so a caller that

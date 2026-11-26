@@ -1,5 +1,6 @@
 /**
- * Provider-reported LLM spend: hourly alarms per provider on ProviderReportedUsd, which the
+ * Provider-reported LLM spend: hourly alarms per provider on ProviderReportedOrgUsd (the
+ * organization-wide figure, so a stage's spend scope never narrows the ceiling), which the
  * providerUsagePoll cron (infra/cron.ts) reads from each provider's own usage report, plus alarms
  * on the poller failing or skipping a provider, meeting output tokens it cannot price or reading an old
  * or missing model price snapshot, and a small
@@ -55,7 +56,10 @@ if (unpricedTokensSharePct > 100) {
   );
 }
 
-const providerSpendThresholds: Record<(typeof PROVIDER_SPEND_PROVIDERS)[number], number> = {
+type ProviderSpendProvider = (typeof PROVIDER_SPEND_PROVIDERS)[number];
+
+// Deploy-time starting values; admins override them hourly via apps/workers/src/cron/providerSpendAlarmThresholds.ts.
+const providerSpendThresholds: Record<ProviderSpendProvider, number> = {
   anthropic: parseAlarmThreshold(
     'PROVIDER_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC',
     process.env.PROVIDER_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC,
@@ -72,6 +76,8 @@ const providerSpendThresholds: Record<(typeof PROVIDER_SPEND_PROVIDERS)[number],
 const MODEL_PRICE_SNAPSHOT_ALARM_HOURS = 48;
 
 let providerSpendDashboard: aws.cloudwatch.Dashboard | undefined;
+/** Hourly provider-reported spend alarms; empty on unmonitored stages. Rewritten by infra/youngAccountSpendAlert.ts's job. */
+const providerReportedSpendAlarms: Partial<Record<ProviderSpendProvider, aws.cloudwatch.MetricAlarm>> = {};
 
 // Names the access policy and the access rules need, resolved to plain strings.
 function resolveAdminKeyStoreRefs(store: ProviderAdminKeyStore) {
@@ -119,12 +125,12 @@ if (isMonitoredStage) {
   const LLM_SPEND_NAMESPACE = `${$app.name}/${$app.stage}/LLMSpend`;
 
   for (const provider of PROVIDER_SPEND_PROVIDERS) {
-    new aws.cloudwatch.MetricAlarm(`providerReportedSpendHourly-${provider}`, {
+    providerReportedSpendAlarms[provider] = new aws.cloudwatch.MetricAlarm(`providerReportedSpendHourly-${provider}`, {
       name: `${prefix}-provider-reported-spend-hourly-${provider}`,
-      alarmDescription: `${provider} usage report for the last hour, priced with our model rates, at or above the configured USD ceiling`,
+      alarmDescription: `${provider} organization-wide usage report for the last hour, priced with our model rates, at or above the configured USD ceiling`,
       comparisonOperator: 'GreaterThanOrEqualToThreshold',
       evaluationPeriods: 1,
-      metricName: 'ProviderReportedUsd',
+      metricName: 'ProviderReportedOrgUsd',
       namespace: LLM_SPEND_NAMESPACE,
       dimensions: { Provider: provider },
       period: 3600,
@@ -436,13 +442,13 @@ if (isMonitoredStage) {
   }
 
   const dashboardBody = aws.getRegionOutput().name.apply(region => {
-    const byProvider = (metric: string) =>
+    const byProvider = (metric: string, labelSuffix = '') =>
       PROVIDER_SPEND_PROVIDERS.map(provider => [
         LLM_SPEND_NAMESPACE,
         metric,
         'Provider',
         provider,
-        { stat: 'Sum', label: provider },
+        { stat: 'Sum', label: `${provider}${labelSuffix}` },
       ]);
     return JSON.stringify({
       widgets: [
@@ -454,7 +460,7 @@ if (isMonitoredStage) {
           height: 6,
           properties: {
             title: 'Provider-reported USD per hour',
-            metrics: byProvider('ProviderReportedUsd'),
+            metrics: [...byProvider('ProviderReportedUsd'), ...byProvider('ProviderReportedOrgUsd', ' (org)')],
             view: 'timeSeries',
             region,
             period: 3600,
@@ -507,4 +513,4 @@ if (isMonitoredStage) {
   });
 }
 
-export { providerSpendDashboard };
+export { providerReportedSpendAlarms, providerSpendDashboard };

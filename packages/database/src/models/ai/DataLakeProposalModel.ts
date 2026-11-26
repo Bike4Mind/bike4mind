@@ -6,6 +6,7 @@ import type {
   IDataLakeProposalDocument,
   IDataLakeProposalRepository,
   RestoreDataLakeProposalResult,
+  UnapproveDataLakeProposalResult,
   ReviewDataLakeProposalInput,
 } from '@bike4mind/common';
 import { DATA_LAKE_PROPOSAL_STATUSES } from '@bike4mind/common';
@@ -210,6 +211,58 @@ class DataLakeProposalRepository
       if ((error as { code?: number }).code !== 11000) throw error;
       return { restored: false, reason: 'pending_exists' };
     }
+  }
+
+  async unapprove(id: string): Promise<UnapproveDataLakeProposalResult> {
+    try {
+      // update-validators-off: aggregation-pipeline update, which Mongoose cannot validate
+      const previous = await this.proposalModel.findOneAndUpdate(
+        { _id: id, status: 'approved' },
+        [
+          {
+            $set: {
+              status: 'pending',
+              priorDisposition: { $ifNull: ['$priorDisposition', 'approved'] },
+              reviewedByUserId: null,
+              reviewedAt: null,
+              declineReason: null,
+              admittedFabFileId: null,
+            },
+          },
+          { $unset: 'autoAdmission' },
+        ],
+        { new: false }
+      );
+      if (!previous) return { unapproved: false, reason: 'not_approved' };
+      const proposal = await this.proposalModel.findById(id);
+      return {
+        unapproved: true,
+        proposal: proposal!.toJSON() as IDataLakeProposalDocument,
+        previous: previous.toJSON() as IDataLakeProposalDocument,
+      };
+    } catch (error) {
+      // The pending-uniqueness index: a newer proposal for this source already holds the slot.
+      if ((error as { code?: number }).code !== 11000) throw error;
+      return { unapproved: false, reason: 'pending_exists' };
+    }
+  }
+
+  async rollbackUnapprove(previous: IDataLakeProposalDocument): Promise<void> {
+    await this.proposalModel.updateOne(
+      { _id: previous.id, status: 'pending' },
+      {
+        $set: {
+          status: 'approved',
+          priorDisposition: previous.priorDisposition ?? null,
+          reviewedByUserId: previous.reviewedByUserId ?? null,
+          reviewedAt: previous.reviewedAt ?? null,
+          declineReason: previous.declineReason ?? null,
+          admittedFabFileId: previous.admittedFabFileId ?? null,
+          ...(previous.autoAdmission ? { autoAdmission: previous.autoAdmission } : {}),
+        },
+      },
+      { runValidators: true }
+    );
   }
 
   async recordAdmission(id: string, fabFileId: string, trustedDomain?: string): Promise<void> {

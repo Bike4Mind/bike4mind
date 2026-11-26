@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const handlers = vi.hoisted(() => ({
   createMemento: vi.fn(),
   briefCompose: vi.fn(),
+  delegationProcess: vi.fn(),
   sessionAutoNaming: vi.fn(),
   sessionSummarization: vi.fn(),
   sessionContextSummarization: vi.fn(),
@@ -15,6 +16,7 @@ const handlers = vi.hoisted(() => ({
 
 vi.mock('@workers/events/createMemento', () => ({ handler: handlers.createMemento }));
 vi.mock('@workers/events/briefCompose', () => ({ handler: handlers.briefCompose }));
+vi.mock('@workers/events/delegationProcess', () => ({ handler: handlers.delegationProcess }));
 vi.mock('@workers/events/sessionAutoNaming', () => ({ handler: handlers.sessionAutoNaming }));
 vi.mock('@workers/events/sessionSummarization', () => ({ handler: handlers.sessionSummarization }));
 vi.mock('@workers/events/sessionContextSummarization', () => ({ handler: handlers.sessionContextSummarization }));
@@ -42,6 +44,7 @@ describe('dispatchSelfHostEvent', () => {
   it.each([
     ['completion.completed', 'createMemento'],
     ['brief.compose', 'briefCompose'],
+    ['delegation.process', 'delegationProcess'],
     ['session.auto_name', 'sessionAutoNaming'],
     ['session.summarize', 'sessionSummarization'],
     ['session.context_summarize', 'sessionContextSummarization'],

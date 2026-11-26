@@ -13,11 +13,11 @@
  */
 
 import mongoose from 'mongoose';
-import * as dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import { apiKeyUsageLogRepository } from '@bike4mind/database/auth';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 
-dotenv.config();
+if (existsSync('.env')) process.loadEnvFile('.env');
 
 async function testApiUsageLogging() {
   const apiKey = process.argv[2];

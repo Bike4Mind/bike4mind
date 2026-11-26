@@ -10,6 +10,7 @@ import { emptyOutcomeCounts, type OutcomeCounts, type StatusClass } from '@bike4
 import {
   type SideAppDailyCredits,
   type SideAppEndpointRequests,
+  type SideAppFailureCode,
   type SideAppRefusalSummary,
   type SideAppRow,
   type SideAppsResponse,
@@ -48,6 +49,7 @@ interface AppAccumulator {
     endpoints: Map<string, SideAppEndpointRequests>;
   };
   outcomes: OutcomeCounts;
+  failureCodes: Map<string, number>;
   refusals: SideAppRefusalSummary;
 }
 
@@ -57,8 +59,17 @@ const newAccumulator = (): AppAccumulator => ({
   users: new Set(),
   requests: { total: 0, byTier: emptyTierRequests(), endpoints: new Map() },
   outcomes: emptyOutcomeCounts(),
+  failureCodes: new Map(),
   refusals: emptyRefusals(),
 });
+
+const TOP_FAILURE_CODES = 5;
+
+const topFailureCodes = (codes: Map<string, number>): SideAppFailureCode[] =>
+  [...codes.entries()]
+    .map(([code, count]) => ({ code, count }))
+    .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code))
+    .slice(0, TOP_FAILURE_CODES);
 
 const dailySeries = (daily: Map<string, number>): SideAppDailyCredits[] =>
   [...daily.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, credits]) => ({ day, credits }));
@@ -87,6 +98,7 @@ export async function readSideApps(days: number, now: Date = new Date()): Promis
           endpoint: string;
           standing?: string;
           completionOutcome?: string;
+          completionFailureCode?: string;
           statusClass: StatusClass;
         }>
       >([
@@ -98,6 +110,7 @@ export async function readSideApps(days: number, now: Date = new Date()): Promis
               endpoint: '$endpoint',
               standing: '$payerStanding',
               completionOutcome: '$completionObservation.outcome',
+              completionFailureCode: '$completionObservation.failureCode',
               statusClass: statusClassExpression,
             },
             count: { $sum: 1 },
@@ -184,6 +197,10 @@ export async function readSideApps(days: number, now: Date = new Date()): Promis
     accumulator.requests.endpoints.set(folded.endpoint, endpoint);
     addOutcome(accumulator.outcomes, folded.outcome, folded.count);
     addOutcome(totalOutcomes, folded.outcome, folded.count);
+    if (row._id.completionOutcome === 'failed' && row._id.completionFailureCode) {
+      const codes = accumulator.failureCodes;
+      codes.set(row._id.completionFailureCode, (codes.get(row._id.completionFailureCode) ?? 0) + row.count);
+    }
   }
   for (const row of questRows) {
     const outcome = questOutcomeOf(row._id);
@@ -220,6 +237,7 @@ export async function readSideApps(days: number, now: Date = new Date()): Promis
         byEndpoint: [...accumulator.requests.endpoints.values()].sort((a, b) => b.total - a.total),
       },
       outcomes: summarizeOutcomes(accumulator.outcomes),
+      topFailureCodes: topFailureCodes(accumulator.failureCodes),
       refusals: sortRefusalReasons(accumulator.refusals),
     };
   });

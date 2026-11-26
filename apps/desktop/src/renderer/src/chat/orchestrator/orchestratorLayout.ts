@@ -11,6 +11,11 @@ export type LayoutSplit = 'row' | 'column';
 export interface OrchestratorPane {
   view: OrchestratorViewId;
   size: number;
+  /**
+   * The session whose roster this pane shows; absent means it follows the active session. Resolved at render
+   * time (panePins.ts), so an id that is no longer listed falls back to the active session rather than failing.
+   */
+  sessionId?: string;
 }
 
 export interface OrchestratorLayout {
@@ -24,14 +29,25 @@ export const MIN_PANE_FRACTION = 0.2;
 /** What an unknown or removed view id in a stored layout becomes. */
 export const FALLBACK_PANE_VIEW: OrchestratorViewId = 'board';
 
-/** The stored shape. A view is any string here: an id from a newer or older build falls back, not fails. */
+/**
+ * The stored shape. A view is any string here: an id from a newer or older build falls back, not fails. A bad
+ * session pin is dropped on its own, so the pane follows the active session instead of losing the layout.
+ */
 const storedLayoutSchema = z.object({
   split: z.enum(['row', 'column']),
   panes: z
-    .array(z.object({ view: z.string(), size: z.number().positive().finite() }))
+    .array(
+      z.object({
+        view: z.string(),
+        size: z.number().positive().finite(),
+        sessionId: z.string().min(1).optional().catch(undefined),
+      })
+    )
     .min(1)
     .max(MAX_PANES),
 });
+
+type UnsizedPane = Omit<OrchestratorPane, 'size'>;
 
 export function singlePaneLayout(view: OrchestratorViewId): OrchestratorLayout {
   return { split: 'row', panes: [{ view, size: 1 }] };
@@ -55,13 +71,13 @@ export function fitSizes(sizes: readonly number[]): number[] {
   }
 }
 
-function withSizes(
-  split: LayoutSplit,
-  views: readonly OrchestratorViewId[],
-  sizes: readonly number[]
-): OrchestratorLayout {
+function withSizes(split: LayoutSplit, panes: readonly UnsizedPane[], sizes: readonly number[]): OrchestratorLayout {
   const fitted = fitSizes(sizes);
-  return { split, panes: views.map((view, index) => ({ view, size: fitted[index] })) };
+  return { split, panes: panes.map((pane, index) => ({ ...pane, size: fitted[index] })) };
+}
+
+function paneOf(view: OrchestratorViewId, sessionId: string | undefined): UnsizedPane {
+  return sessionId === undefined ? { view } : { view, sessionId };
 }
 
 /**
@@ -74,7 +90,7 @@ export function parseLayout(value: unknown): OrchestratorLayout | undefined {
   const { split, panes } = parsed.data;
   return withSizes(
     split,
-    panes.map(pane => toViewId(pane.view) ?? FALLBACK_PANE_VIEW),
+    panes.map(pane => paneOf(toViewId(pane.view) ?? FALLBACK_PANE_VIEW, pane.sessionId)),
     panes.map(pane => pane.size)
   );
 }
@@ -116,23 +132,69 @@ export function presetOf(layout: OrchestratorLayout): LayoutPresetId | undefined
   });
 }
 
-/** Reshapes to a preset, keeping the panes it already has (in order) and filling new ones; sizes even out. */
+/**
+ * Reshapes to a preset, keeping the panes it already has (in order, with their pins) and filling new ones;
+ * sizes even out. A single pane always follows the active session, so going to one pane drops its pin.
+ */
 export function applyPreset(layout: OrchestratorLayout, presetId: LayoutPresetId): OrchestratorLayout {
   const preset = LAYOUT_PRESETS[presetId];
-  const views = layout.panes.slice(0, preset.panes).map(pane => pane.view);
-  while (views.length < preset.panes) {
-    views.push(NEW_PANE_VIEWS.find(view => !views.includes(view)) ?? FALLBACK_PANE_VIEW);
+  const panes: UnsizedPane[] = layout.panes
+    .slice(0, preset.panes)
+    .map(pane => paneOf(pane.view, preset.panes > 1 ? pane.sessionId : undefined));
+  while (panes.length < preset.panes) {
+    const used = panes.map(pane => pane.view);
+    panes.push({ view: NEW_PANE_VIEWS.find(view => !used.includes(view)) ?? FALLBACK_PANE_VIEW });
   }
   return withSizes(
     preset.split,
-    views,
-    views.map(() => 1)
+    panes,
+    panes.map(() => 1)
   );
 }
 
 export function setPaneView(layout: OrchestratorLayout, index: number, view: OrchestratorViewId): OrchestratorLayout {
   if (!layout.panes[index]) return layout;
   return { ...layout, panes: layout.panes.map((pane, at) => (at === index ? { ...pane, view } : pane)) };
+}
+
+/** Pins pane `index` to a session; undefined unpins it, so it follows the active session again. */
+export function setPaneSession(
+  layout: OrchestratorLayout,
+  index: number,
+  sessionId: string | undefined
+): OrchestratorLayout {
+  if (!layout.panes[index]) return layout;
+  return {
+    ...layout,
+    panes: layout.panes.map((pane, at) => (at === index ? { ...paneOf(pane.view, sessionId), size: pane.size } : pane)),
+  };
+}
+
+/**
+ * Adds a pane showing `sessionId` beside the others: a new last pane while there is room (sizes even out, as
+ * applyPreset does), else the last pane is re-pinned. `split` reshapes a single pane only; a split keeps its
+ * own, since the model has one split for every pane. A session already pinned in a pane changes nothing.
+ */
+export function addPinnedPane(
+  layout: OrchestratorLayout,
+  sessionId: string,
+  view: OrchestratorViewId = FALLBACK_PANE_VIEW,
+  split: LayoutSplit = layout.split
+): OrchestratorLayout {
+  if (layout.panes.some(pane => pane.sessionId === sessionId)) return layout;
+  if (layout.panes.length >= MAX_PANES) return setPaneSession(layout, layout.panes.length - 1, sessionId);
+  const panes: UnsizedPane[] = [...layout.panes.map(pane => paneOf(pane.view, pane.sessionId)), { view, sessionId }];
+  return withSizes(
+    layout.panes.length === 1 ? split : layout.split,
+    panes,
+    panes.map(() => 1)
+  );
+}
+
+/** The layout with every pin dropped: what a scope shared by other sessions remembers (orchestratorPrefs.ts). */
+export function withoutPins(layout: OrchestratorLayout): OrchestratorLayout {
+  if (layout.panes.every(pane => pane.sessionId === undefined)) return layout;
+  return { ...layout, panes: layout.panes.map(pane => ({ view: pane.view, size: pane.size })) };
 }
 
 /**
@@ -157,6 +219,11 @@ export function layoutsEqual(a: OrchestratorLayout, b: OrchestratorLayout): bool
   return (
     a.split === b.split &&
     a.panes.length === b.panes.length &&
-    a.panes.every((pane, index) => pane.view === b.panes[index].view && pane.size === b.panes[index].size)
+    a.panes.every(
+      (pane, index) =>
+        pane.view === b.panes[index].view &&
+        pane.size === b.panes[index].size &&
+        pane.sessionId === b.panes[index].sessionId
+    )
   );
 }

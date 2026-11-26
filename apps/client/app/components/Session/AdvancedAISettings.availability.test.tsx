@@ -20,7 +20,6 @@ const mocks = vi.hoisted(() => {
     tools: [] as string[],
     toolMode: 'smart',
     enabledMcpServers: null,
-    isQuestMasterEnabled: false,
     isAgentsEnabled: false,
     isLatticeEnabled: false,
     model: 'gpt-4o',

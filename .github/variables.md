@@ -54,6 +54,8 @@ For each variable, the system tries environment-specific variables first, then f
 
 - `PREVIEW_CHAT_ORIGIN_CERT_ARN`: Optional certificate that preview stages share for the ChatCompletion load balancer instead of requesting one each; see `infra/preview-shared-origin-certificate.md`
 
+- `PREVIEW_CHAT_SHARED_LISTENER_ARN`: Optional HTTPS listener of a load balancer that preview stages share for the ChatCompletion service instead of creating one each; see `infra/preview-shared-chat-origin-alb.md`
+
 ## Required Secrets
 
 These secrets are sensitive and should be configured in your repository settings under Settings → Secrets and variables → Actions → Secrets.

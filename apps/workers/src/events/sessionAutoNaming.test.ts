@@ -76,6 +76,13 @@ describe('session auto-naming AI access', () => {
     expect(mocks.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'actor-1' }));
   });
 
+  it('keeps the generated notebook name out of the logs', async () => {
+    await run();
+
+    expect(mocks.autoName).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify([logger.info.mock.calls, logger.warn.mock.calls])).not.toContain('Generated name');
+  });
+
   it('runs no model and records no usage when the payer cannot fund the operation', async () => {
     mocks.payerCanFund.mockResolvedValue(false);
     await run();

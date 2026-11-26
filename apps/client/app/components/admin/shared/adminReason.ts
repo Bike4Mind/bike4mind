@@ -35,6 +35,12 @@ export const ADMIN_REASON_PRESETS = {
   internalAccount: ['Team member', 'Contractor or partner', 'Marked in error'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
+  sreTrackingDismiss: ['Known bug', 'Testing', 'Fixed outside the SRE pipeline'],
+  apiKeyModerationException: [
+    'Approved security research',
+    'Violence-related content is core to the product',
+    'Exception no longer needed',
+  ],
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
   publishedPageTakedown: [
@@ -101,6 +107,7 @@ export const ADMIN_REASON_PRESETS = {
   seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
   paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
   orgMembership: ['Customer request', 'Joined the team', 'Left the team', 'Account cleanup'],
+  homeOrgClear: ['Customer request', 'Billed to the wrong org', 'Service account setup', 'Account cleanup'],
   orgRoleChange: ['Customer request', 'Owner request', 'Team lead changed'],
   ipBlock: ['Card testing or payment fraud', 'Abuse / automated signups', 'Credential stuffing', 'Under investigation'],
   ipUnblock: ['Blocked in error', 'Legitimate users affected', 'Threat has ended'],
@@ -175,6 +182,7 @@ export const ADMIN_REASON_PRESETS = {
   ],
   moderationManualReport: ['Report filed on the web form', 'Filed after the second review'],
   moderationEscalation: ['Needs a second opinion', 'Unsure which verdict applies', 'Outside my review remit'],
+  modalDelete: ['Outdated announcement', 'Created in error', 'Replaced by a newer modal'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

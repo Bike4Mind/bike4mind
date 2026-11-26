@@ -27,3 +27,7 @@ export * from './SpendFreezeModel';
 export * from './BillingMismatchModel';
 export * from './UserLimitEventModel';
 export * from './spendExplorerPipelines';
+export * from './spendFeaturePipelines';
+export * from './platformUsageReporting';
+
+export * from './PlatformAttemptModel';

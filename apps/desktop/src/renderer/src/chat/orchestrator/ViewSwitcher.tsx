@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
 import ListDivider from '@mui/joy/ListDivider';
 import ListItemDecorator from '@mui/joy/ListItemDecorator';
-import Menu from '@mui/joy/Menu';
+import Menu, { type MenuProps } from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Typography from '@mui/joy/Typography';
@@ -13,6 +13,7 @@ import {
   CaretDownIcon,
   CheckIcon,
   ConstellationIcon,
+  PlanIcon,
   SwimlanesIcon,
   TableIcon,
   TavernIcon,
@@ -25,6 +26,7 @@ import {
   LAYOUT_PRESETS,
   applyPreset,
   presetOf,
+  setPaneSession,
   setPaneView,
   singlePaneLayout,
   type LayoutPresetId,
@@ -34,6 +36,7 @@ import { AMBIENT_IDLE_MS } from './ambient';
 import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
 import { SoundPackMenuSection } from './SoundPackMenuSection';
+import { PaneSessionMenu, type PaneSessionChoices } from './PaneSessionMenu';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -95,6 +98,13 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     description: 'Every agent in sortable rows',
     group: 'layout',
     icon: <TableIcon />,
+    ambient: false,
+  },
+  plan: {
+    label: 'Plan',
+    description: 'Done, working on and next for every agent',
+    group: 'layout',
+    icon: <PlanIcon />,
     ambient: false,
   },
   'tile-wall': {
@@ -180,6 +190,35 @@ const SHORTCUT_HINT = isMac ? '\u2318\u21E7[ ]' : 'Ctrl+Shift+[ ]';
 const FOCUS_SHORTCUT = isMac ? '\u2318\u21E7F' : 'Ctrl+Shift+F';
 const RESET_SHORTCUT = isMac ? '\u2318\u21E7Esc' : 'Ctrl+Shift+Esc';
 
+/** Window space a menu leaves free, in px; Joy Menu's 4px offset comes out of it, leaving a 4px gap. */
+const MENU_VIEWPORT_MARGIN = 8;
+/** Below this many px the menu stops shrinking, so a button at the very bottom still shows a few items. */
+const MENU_MIN_HEIGHT = 120;
+
+/** The tallest a menu may be and still fit `space` px of window between its anchor and the window edge. */
+export function menuMaxHeight(space: number): number {
+  return Math.max(MENU_MIN_HEIGHT, Math.floor(space - MENU_VIEWPORT_MARGIN));
+}
+
+type MenuModifier = NonNullable<MenuProps['modifiers']>[number];
+
+/**
+ * Caps the menu to the window space on its side of the button (below, or above when Popper flips it)
+ * so a long menu scrolls instead of running off a laptop screen with its last items unreachable.
+ */
+export const fitMenuToViewport: MenuModifier = {
+  name: 'fitMenuToViewport',
+  enabled: true,
+  phase: 'beforeWrite',
+  requires: ['computeStyles'],
+  fn: ({ state }) => {
+    const anchor = state.elements.reference.getBoundingClientRect();
+    const space = state.placement.startsWith('top') ? anchor.top : window.innerHeight - anchor.bottom;
+    state.styles.popper = { ...state.styles.popper, maxHeight: `${menuMaxHeight(space)}px` };
+  },
+};
+const MENU_MODIFIERS = [fitMenuToViewport];
+
 interface Toggle {
   on: boolean;
   onToggle(on: boolean): void;
@@ -191,6 +230,8 @@ export function ViewSwitcher({
   ambient,
   focus,
   presenter,
+  miniWindow,
+  paneSessions,
 }: {
   layout: OrchestratorLayout;
   onLayoutChange(layout: OrchestratorLayout): void;
@@ -200,6 +241,10 @@ export function ViewSwitcher({
   focus?: Toggle;
   /** Presenter mode (presenter.ts), on top of whichever view is chosen; Reset leaves it as it is. */
   presenter?: Toggle;
+  /** The always-on-top Orchestrate mini window (orchestrateMini.ts); absent without the desktop bridge. */
+  miniWindow?: Toggle;
+  /** Lets each pane in a split be pinned to another session (panePins.ts); without it every pane follows. */
+  paneSessions?: PaneSessionChoices;
 }) {
   const view = layout.panes[0].view;
   const current = ORCHESTRATOR_VIEW_INFO[view];
@@ -252,7 +297,7 @@ export function ViewSwitcher({
   }, []);
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.75, minWidth: 0 }}>
       <Dropdown>
         <MenuButton
           size="sm"
@@ -268,7 +313,13 @@ export function ViewSwitcher({
         >
           {focus?.on ? `${menuLabel} \u00B7 Focus` : menuLabel}
         </MenuButton>
-        <Menu size="sm" placement="bottom-start" sx={{ minWidth: 260 }} data-testid="orchestrator-view-menu">
+        <Menu
+          size="sm"
+          placement="bottom-start"
+          modifiers={MENU_MODIFIERS}
+          sx={{ minWidth: 260, overflowY: 'auto' }}
+          data-testid="orchestrator-view-menu"
+        >
           <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, pt: 0.75, pb: 0.25 }}>
             Panes
           </Typography>
@@ -349,6 +400,25 @@ export function ViewSwitcher({
               </MenuItem>
             </>
           )}
+          {miniWindow && (
+            <>
+              <ListDivider />
+              <MenuItem
+                role="menuitemcheckbox"
+                aria-checked={miniWindow.on}
+                onClick={() => miniWindow.onToggle(!miniWindow.on)}
+                data-testid="orchestrator-mini-window-toggle"
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography level="body-sm">Mini window</Typography>
+                  <Typography level="body-xs" textColor="text.tertiary">
+                    Keep what needs you in a small window on top of other apps
+                  </Typography>
+                </Box>
+                {miniWindow.on && <CheckIcon />}
+              </MenuItem>
+            </>
+          )}
           {ambient && current.ambient && !split && (
             <>
               <ListDivider />
@@ -378,7 +448,17 @@ export function ViewSwitcher({
       </Dropdown>
       {split &&
         layout.panes.map((pane, index) => (
-          <PaneViewMenu key={index} index={index} view={pane.view} onPick={id => changePaneView(index, id)} />
+          <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 0.25, minWidth: 0 }}>
+            <PaneViewMenu index={index} view={pane.view} onPick={id => changePaneView(index, id)} />
+            {paneSessions && (
+              <PaneSessionMenu
+                index={index}
+                sessionId={pane.sessionId}
+                choices={paneSessions}
+                onPick={sessionId => onLayoutChange(setPaneSession(layout, index, sessionId))}
+              />
+            )}
+          </Box>
         ))}
     </Box>
   );
@@ -448,7 +528,8 @@ function PaneViewMenu({
       <Menu
         size="sm"
         placement="bottom-start"
-        sx={{ minWidth: 260 }}
+        modifiers={MENU_MODIFIERS}
+        sx={{ minWidth: 260, overflowY: 'auto' }}
         data-testid={`orchestrator-pane-view-menu-${index}`}
       >
         <ViewOptions selected={view} onPick={onPick} testIdPrefix={`orchestrator-pane-${index}-view-option`} />

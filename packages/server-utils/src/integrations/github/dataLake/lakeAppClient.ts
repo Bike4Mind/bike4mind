@@ -1,7 +1,9 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { parseRateLimitHeaders, resolveRetryAfterDelayMs } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { Config } from '../../../utils/config';
+import { createOctokitLog } from '../octokitLog';
 import type { GitHubTreeEntry } from './lakeFileFilter';
 
 /**
@@ -54,6 +56,10 @@ export function getGitHubLakeAppConfig(): GitHubLakeAppConfig | null {
   return { appId, slug, privateKey: privateKey.replace(/\\n/g, '\n'), clientId, clientSecret };
 }
 
+let cachedOctokitLog: ReturnType<typeof createOctokitLog> | undefined;
+const octokitLog = () =>
+  (cachedOctokitLog ??= createOctokitLog(new Logger({ metadata: { component: 'github-lake-app-client' } })));
+
 const isNotFound = (error: unknown): boolean => gitHubErrorStatus(error) === 404;
 
 function appOctokit(config: GitHubLakeAppConfig): Octokit {
@@ -66,12 +72,18 @@ function appOctokit(config: GitHubLakeAppConfig): Octokit {
       clientSecret: config.clientSecret,
     },
     userAgent: USER_AGENT,
+    log: octokitLog(),
     request: { timeout: GITHUB_REQUEST_TIMEOUT_MS },
   });
 }
 
 function tokenOctokit(token: string): Octokit {
-  return new Octokit({ auth: token, userAgent: USER_AGENT, request: { timeout: GITHUB_REQUEST_TIMEOUT_MS } });
+  return new Octokit({
+    auth: token,
+    userAgent: USER_AGENT,
+    log: octokitLog(),
+    request: { timeout: GITHUB_REQUEST_TIMEOUT_MS },
+  });
 }
 
 /** Exchanges the `code` GitHub returns from the App's OAuth authorize (or user authorization on install) for a user token. */

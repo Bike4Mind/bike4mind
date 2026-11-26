@@ -220,6 +220,34 @@ describe('GET /api/admin/model-logs/[id]', () => {
       findUserSpy.mockRestore();
     });
 
+    it('refuses a support:read delegate the log of an admin, and records nothing', async () => {
+      const ownerUserId = new mongoose.Types.ObjectId().toString();
+      const quest = await createLog(ownerUserId);
+      const findUserSpy = vi
+        .spyOn(userRepository, 'findById')
+        .mockResolvedValue({ isAdmin: true } as Awaited<ReturnType<typeof userRepository.findById>>);
+      const { req, res } = run(quest.id);
+      (req as Record<string, unknown>).user = { id: 'delegate1', isAdmin: false, adminPermissions: ['support:read'] };
+
+      await expect(handler(req, res)).rejects.toThrow(/only full administrators/i);
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+
+      const asFullAdmin = run(quest.id);
+      await handler(asFullAdmin.req, asFullAdmin.res);
+      expect(asFullAdmin.res._getStatusCode()).toBe(200);
+      findUserSpy.mockRestore();
+    });
+
+    it('refuses a support:read delegate a log whose owner cannot be resolved', async () => {
+      const quest = await createLog();
+      await Quest.updateOne({ _id: quest._id }, { $unset: { 'promptMeta.session.userId': '' } });
+      const { req, res } = run(quest.id);
+      (req as Record<string, unknown>).user = { id: 'delegate1', isAdmin: false, adminPermissions: ['support:read'] };
+
+      await expect(handler(req, res)).rejects.toThrow(/only full administrators/i);
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+
     it('serves an owner with no deletion pending', async () => {
       const ownerUserId = new mongoose.Types.ObjectId().toString();
       const quest = await createLog(ownerUserId);
@@ -235,7 +263,7 @@ describe('GET /api/admin/model-logs/[id]', () => {
       findUserSpy.mockRestore();
     });
 
-    it('records an unresolved owner as such, still serving the log', async () => {
+    it('records an unresolved owner as such, still serving the log to a full admin', async () => {
       // A legacy log with no recorded owner (the schema now requires one, so unset it past validation)
       // and no session to fall back to.
       const quest = await createLog();

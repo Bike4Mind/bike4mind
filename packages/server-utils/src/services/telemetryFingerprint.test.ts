@@ -257,7 +257,7 @@ describe('extractFingerprintFromBody', () => {
 
   it('should not match non-prefixed fingerprints', () => {
     const fp = 'd'.repeat(40);
-    const body = `<!-- fingerprint:${fp} -->`; // liveops format, not telemetry
+    const body = `<!-- fingerprint:${fp} -->`; // unprefixed format, not telemetry
     expect(extractFingerprintFromBody(body)).toBeNull();
   });
 });

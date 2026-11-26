@@ -33,6 +33,8 @@ import LinkOff from '@mui/icons-material/LinkOff';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import CreateSlackAppModal from './CreateSlackAppModal';
 import { SlackEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
@@ -931,6 +933,15 @@ const SlackWorkspacesTab: React.FC = () => {
               Export channel history
             </MenuItem>
           )}
+          {workspace.installedAt && (
+            <MenuItem
+              component="a"
+              href={`/integrations/slack/install?workspaceId=${workspace.id}`}
+              data-testid={`slack-workspace-reinstall-btn-${teamIdOrId}`}
+            >
+              Reinstall in Slack
+            </MenuItem>
+          )}
           <MenuItem
             color="danger"
             disabled={!workspace.isActive}
@@ -1207,32 +1218,38 @@ const SlackWorkspacesTab: React.FC = () => {
             <Stack direction="row" gap={2} flexWrap="wrap">
               <FormControl sx={{ flex: 1, minWidth: '10rem' }}>
                 <FormLabel>Start date</FormLabel>
-                <Input
-                  type="date"
+                <OptionalDateInput
                   value={exportDateStart}
-                  onChange={e => {
-                    setExportDateStart(e.target.value);
+                  onChange={day => {
+                    setExportDateStart(day);
                     setSelectedPreset(''); // Clear preset when manually editing
                   }}
+                  emptyLabel="From the beginning"
+                  setLabel="Set start date"
+                  clearLabel="Remove start date"
+                  initialDate={() => (exportDateEnd && exportDateEnd < todayUtc() ? exportDateEnd : todayUtc())}
+                  max={exportDateEnd || undefined}
+                  aria-label="Start date"
                   disabled={exporting}
-                  slotProps={{
-                    input: { 'data-testid': 'slack-export-date-start-input' },
-                  }}
+                  testId="slack-export-date-start-input"
                 />
               </FormControl>
               <FormControl sx={{ flex: 1, minWidth: '10rem' }}>
                 <FormLabel>End date</FormLabel>
-                <Input
-                  type="date"
+                <OptionalDateInput
                   value={exportDateEnd}
-                  onChange={e => {
-                    setExportDateEnd(e.target.value);
+                  onChange={day => {
+                    setExportDateEnd(day);
                     setSelectedPreset(''); // Clear preset when manually editing
                   }}
+                  emptyLabel="Through today"
+                  setLabel="Set end date"
+                  clearLabel="Remove end date"
+                  initialDate={() => (exportDateStart && exportDateStart > todayUtc() ? exportDateStart : todayUtc())}
+                  min={exportDateStart || undefined}
+                  aria-label="End date"
                   disabled={exporting}
-                  slotProps={{
-                    input: { 'data-testid': 'slack-export-date-end-input' },
-                  }}
+                  testId="slack-export-date-end-input"
                 />
               </FormControl>
             </Stack>

@@ -31,7 +31,7 @@ import {
   researchDataRepository,
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
-import { hasVerifiedProjectCollaborator } from './socialEligibility';
+import { hasQualifyingProjectCollaborator } from './socialParty';
 
 /**
  * The gear catalog and its evaluation, shared by GET /api/gears/status, POST
@@ -217,11 +217,12 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await Artifact.exists({ userId, type: 'python' })),
   },
   {
-    // A live owned project with a distinct, verified collaborator.
+    // A project with at least one collaborator; the payout waits for a qualifying one (socialParty.ts).
     key: 'shareproject',
     credits: 5000,
     kind: 'skill',
-    check: ({ userId }) => hasVerifiedProjectCollaborator(userId),
+    check: async ({ userId }) => !!(await Project.exists({ userId, 'users.0': { $exists: true } })),
+    rewardCheck: ({ userId }) => hasQualifyingProjectCollaborator(userId),
   },
   {
     key: 'questmaster',

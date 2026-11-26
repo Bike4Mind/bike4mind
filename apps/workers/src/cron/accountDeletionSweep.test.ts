@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
     countOverdueDeletionRequests: h.countOverdueDeletionRequests,
   },
 }));
-vi.mock('@server/dataSubject/erasureRegistry', () => ({ erasureRegistry: h.erasureRegistry }));
+vi.mock('@bike4mind/server-utils/dataSubject/erasureRegistry', () => ({ erasureRegistry: h.erasureRegistry }));
 vi.mock('@bike4mind/server-utils/users/completeAccountDeletion', () => ({
   completeAccountDeletion: h.completeAccountDeletion,
 }));

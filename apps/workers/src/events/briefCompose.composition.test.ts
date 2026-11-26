@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { BRIEF_LIMITS } from '@bike4mind/common';
 import {
   assembleBrief,
+  briefedDelegationIds,
   briefedEmailIds,
   briefPushBody,
   buildBriefPrompt,
+  BRIEF_OBLIGATION_LIMIT,
   emptyBrief,
   hasActivity,
+  hasModelActivity,
+  reminderBrief,
   type BriefActivity,
 } from './briefCompose.composition';
 
@@ -28,6 +32,9 @@ const baseActivity = (): BriefActivity => ({
   ],
   questions: [],
   emails: [],
+  delegations: [],
+  reminders: [],
+  obligations: [],
 });
 
 const question = (n: number) => ({
@@ -55,6 +62,40 @@ describe('hasActivity', () => {
     expect(hasActivity({ ...emailActivity(), runs: [], approvals: [] })).toBe(true);
     expect(hasActivity({ ...baseActivity(), runs: [] })).toBe(true);
     expect(hasActivity({ ...baseActivity(), approvals: [] })).toBe(true);
+  });
+});
+
+describe('due reminders', () => {
+  const reminder = (n: number) => ({ briefId: 'b0', decisionId: `fu-reminder-${n}`, text: `Call vendor ${n}` });
+
+  it('count as activity on their own, but not as activity for the model', () => {
+    const only = { ...baseActivity(), runs: [], approvals: [], reminders: [reminder(1)] };
+    expect(hasActivity(only)).toBe(true);
+    expect(hasModelActivity(only)).toBe(false);
+  });
+
+  it('make a reminder-only brief with no model call', () => {
+    const brief = reminderBrief({ ...baseActivity(), reminders: [reminder(1), reminder(2)] });
+    expect(brief.headline).toBe('You have 2 reminders.');
+    expect(brief.happened).toEqual([
+      { id: 'h1', text: 'Reminder: Call vendor 1' },
+      { id: 'h2', text: 'Reminder: Call vendor 2' },
+    ]);
+    expect(brief.decisions).toEqual([]);
+  });
+
+  it('do not repeat the "Remind me:" prefix the follow-up decision text carries', () => {
+    const brief = reminderBrief({
+      ...baseActivity(),
+      reminders: [{ ...reminder(1), text: 'Remind me: Call vendor 1' }],
+    });
+    expect(brief.happened).toEqual([{ id: 'h1', text: 'Reminder: Call vendor 1' }]);
+  });
+
+  it('lead the happened section of a composed brief, ahead of model text', () => {
+    const reply = JSON.stringify({ headline: 'Busy day.', happened: ['Model note'] });
+    const brief = assembleBrief(reply, { ...baseActivity(), reminders: [reminder(1)] });
+    expect(brief.happened.map(item => item.text)).toEqual(['Reminder: Call vendor 1', 'Model note']);
   });
 });
 
@@ -226,5 +267,154 @@ describe('emptyBrief and briefPushBody', () => {
   it('pushes a decision count when decisions wait', () => {
     const brief = assembleBrief(JSON.stringify({ headline: 'h' }), baseActivity());
     expect(briefPushBody(brief)).toBe('2 decisions need you.');
+  });
+});
+
+const delegationActivity = (): BriefActivity => ({
+  ...baseActivity(),
+  runs: [],
+  approvals: [],
+  delegations: [
+    { delegationId: 'g1', intent: 'Summarize for the team', status: 'handled', result: 'The report says Q3 is up.' },
+    { delegationId: 'g2', intent: 'Handle this', status: 'needs_decision', result: 'Approve the quote of $40?' },
+    { delegationId: 'g3', intent: 'Read this later', status: 'pending', result: null },
+    { delegationId: 'g4', intent: 'Book it', status: 'failed', result: null },
+  ],
+});
+
+describe('delegated items in the brief', () => {
+  const reply = JSON.stringify({ headline: 'Delegations.', happened: [], handled: [], decisions: [] });
+
+  it('counts as activity and reaches the prompt as counts only', () => {
+    const activity = delegationActivity();
+    expect(hasActivity(activity)).toBe(true);
+    const prompt = buildBriefPrompt(activity);
+    expect(prompt).toContain('{"pending":1,"handled":1,"needs_decision":1,"failed":1}');
+    expect(prompt).not.toContain('Q3 is up');
+  });
+
+  it('places each item by status with a delegation source, from the stored record', () => {
+    const brief = assembleBrief(reply, delegationActivity());
+    const source = (delegationId: string) => ({ kind: 'delegation', delegationId });
+    expect(brief.handled).toEqual([{ id: 'x1', text: 'The report says Q3 is up.', source: source('g1') }]);
+    expect(brief.decisions).toEqual([{ id: 'd1', text: 'Approve the quote of $40?', source: source('g2') }]);
+    expect(brief.happened).toEqual([
+      { id: 'h1', text: 'Working on: "Read this later"', source: source('g3') },
+      { id: 'h2', text: 'Could not finish: "Book it"', source: source('g4') },
+    ]);
+  });
+
+  it('marks only the settled items the brief carries as briefed', () => {
+    const activity = delegationActivity();
+    const brief = assembleBrief(reply, activity);
+    expect(briefedDelegationIds(brief, activity).sort()).toEqual(['g1', 'g2', 'g4']);
+
+    const capped = { ...brief, handled: [] };
+    expect(briefedDelegationIds(capped, activity).sort()).toEqual(['g2', 'g4']);
+  });
+});
+
+describe('brief edge wording', () => {
+  it('carries a run error and finish time, clips long text and falls back on an empty headline', () => {
+    const activity: BriefActivity = {
+      ...baseActivity(),
+      approvals: [],
+      runs: [
+        {
+          id: 'r1',
+          query: 'Sync',
+          status: 'failed',
+          finishedAt: new Date('2026-11-16T12:00:00Z'),
+          errorMessage: 'timeout',
+        },
+      ],
+    };
+    const prompt = buildBriefPrompt(activity);
+    expect(prompt).toContain('"finishedAt":"2026-11-16T12:00:00.000Z","error":"timeout"');
+
+    const brief = assembleBrief(JSON.stringify({ headline: '  ', handled: ['z'.repeat(1000)] }), activity);
+    expect(brief.headline).toBe('Your brief');
+    expect(brief.handled[0].text).toHaveLength(BRIEF_LIMITS.itemText);
+    expect(brief.handled[0].text.endsWith('...')).toBe(true);
+  });
+});
+
+describe('confirmed obligations in the brief', () => {
+  const obligation = (n: number, over: Partial<BriefActivity['obligations'][number]> = {}) => ({
+    obligationId: `ob${n}`,
+    payee: 'Example Utilities',
+    amount: 120.5,
+    currency: 'USD',
+    dueDate: '2026-11-20',
+    summary: 'Power bill',
+    ...over,
+  });
+  const reply = JSON.stringify({ headline: 'Quiet day', happened: ['Model note'], handled: [], decisions: [] });
+
+  it('counts as activity on its own and reaches the prompt as a count, never its text', () => {
+    const activity = { ...baseActivity(), runs: [], approvals: [], obligations: [obligation(1)] };
+    expect(hasActivity(activity)).toBe(true);
+    const prompt = buildBriefPrompt(activity);
+    expect(prompt).toContain('coming due soon (count only): 1');
+    expect(prompt).not.toContain('Example Utilities');
+  });
+
+  it('leads happened with a record-written item ahead of fyi email and model text', () => {
+    const activity = {
+      ...baseActivity(),
+      emails: [{ emailId: 'e1', kind: 'fyi' as const, summary: 'Newsletter' }],
+      obligations: [obligation(1)],
+    };
+    const brief = assembleBrief(reply, activity);
+    expect(brief.happened.map(item => item.text)).toEqual([
+      'Due Nov 20: Example Utilities $120.50',
+      'Newsletter',
+      'Model note',
+    ]);
+    expect(brief.happened[0].source).toEqual({ kind: 'obligation', obligationId: 'ob1' });
+  });
+
+  it('falls back to the summary when payee and amount are missing', () => {
+    const activity = { ...baseActivity(), obligations: [obligation(1, { payee: null, amount: null, currency: null })] };
+    expect(assembleBrief(reply, activity).happened[0].text).toBe('Due Nov 20: Power bill');
+  });
+
+  it('names a payment when payee, amount and summary are all empty', () => {
+    const bare = obligation(1, { payee: null, amount: null, currency: null, summary: '' });
+    const activity = { ...baseActivity(), obligations: [bare] };
+    expect(assembleBrief(reply, activity).happened[0].text).toBe('Due Nov 20: a payment');
+  });
+
+  it('keeps obligations when the section cap cuts the rest', () => {
+    const activity = {
+      ...baseActivity(),
+      emails: Array.from({ length: BRIEF_LIMITS.itemsPerSection }, (_, i) => ({
+        emailId: `e${i}`,
+        kind: 'fyi' as const,
+        summary: `fyi ${i}`,
+      })),
+      obligations: [obligation(1), obligation(2, { dueDate: '2026-11-22' })],
+    };
+    const happened = assembleBrief(reply, activity).happened;
+    expect(happened).toHaveLength(BRIEF_LIMITS.itemsPerSection);
+    expect(happened.slice(0, 2).map(item => item.source)).toEqual([
+      { kind: 'obligation', obligationId: 'ob1' },
+      { kind: 'obligation', obligationId: 'ob2' },
+    ]);
+  });
+
+  it('gives obligations at most half the section so emails still show', () => {
+    const activity = {
+      ...baseActivity(),
+      emails: Array.from({ length: BRIEF_LIMITS.itemsPerSection }, (_, i) => ({
+        emailId: `e${i}`,
+        kind: 'fyi' as const,
+        summary: `fyi ${i}`,
+      })),
+      obligations: Array.from({ length: BRIEF_LIMITS.itemsPerSection }, (_, i) => obligation(i + 1)),
+    };
+    const kinds = assembleBrief(reply, activity).happened.map(item => item.source?.kind);
+    expect(kinds.filter(kind => kind === 'obligation')).toHaveLength(BRIEF_OBLIGATION_LIMIT);
+    expect(kinds.filter(kind => kind === 'email')).toHaveLength(BRIEF_LIMITS.itemsPerSection - BRIEF_OBLIGATION_LIMIT);
   });
 });

@@ -2,34 +2,51 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
-/// Decoded, downsampled thumbnails kept for the session. A lazy grid destroys off-screen cells, so a cell
-/// that scrolls back into view reads `cachedImage(for:)` synchronously and draws on its first frame instead
-/// of starting empty and refetching.
+/// Decoded, downsampled images kept for the session, in two tiers with separate budgets: `shared` for grid
+/// thumbnails and `fullSize` for the full-screen viewer and region editing. A lazy grid destroys off-screen
+/// cells, so a cell that scrolls back into view reads `cachedImage(for:)` synchronously and draws on its first
+/// frame instead of starting empty and refetching.
 ///
 /// Keys drop the query string: a presigned or `/content` URL is re-signed every window, but its path (the
 /// storage key or file id) names the same immutable file.
 public final class ThumbnailCache: @unchecked Sendable {
   public static let shared = ThumbnailCache()
 
+  /// Full-size images. The disk layer keeps the original bytes across launches, so reopening an image the
+  /// memory tier has evicted re-decodes instead of downloading again.
+  public static let fullSize = ThumbnailCache(
+    maxPixelSize: fullSizeMaxPixelSize, costLimitBytes: 96 * 1024 * 1024,
+    disk: ImageDiskStore(
+      directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("FullSizeImages", isDirectory: true),
+      byteLimit: 150 * 1024 * 1024))
+
   /// Covers a 3x grid cell on the largest adaptive column without decoding a multi-megapixel original.
   public static let defaultMaxPixelSize = 600
 
+  /// Past any generated image's size, but caps the bitmap (64 MB at this size) of an unusually large upload.
+  public static let fullSizeMaxPixelSize = 4096
+
   public let maxPixelSize: Int
   private let downloader: any ImageDownloading
+  private let disk: ImageDiskStore?
   private let images = NSCache<NSString, Entry>()
   // Guards `inFlight` and `nextFlightID`; NSCache is already thread-safe.
   private let lock = NSLock()
   private var inFlight: [String: Flight] = [:]
   private var nextFlightID: UInt64 = 0
 
-  /// - Parameter costLimitBytes: decoded bitmap bytes kept before NSCache starts evicting; it also evicts on
-  ///   memory pressure.
+  /// - Parameters:
+  ///   - costLimitBytes: decoded bitmap bytes kept before NSCache starts evicting; it also evicts on memory
+  ///     pressure.
+  ///   - disk: where original bytes are read from before downloading, and written to after a download decodes.
   public init(
     downloader: any ImageDownloading = URLSessionThumbnailDownloader(), maxPixelSize: Int = defaultMaxPixelSize,
-    costLimitBytes: Int = 128 * 1024 * 1024
+    costLimitBytes: Int = 128 * 1024 * 1024, disk: ImageDiskStore? = nil
   ) {
     self.downloader = downloader
     self.maxPixelSize = maxPixelSize
+    self.disk = disk
     images.totalCostLimit = costLimitBytes
   }
 
@@ -57,7 +74,8 @@ public final class ThumbnailCache: @unchecked Sendable {
     }
   }
 
-  /// Drops every thumbnail and cancels every download, so nothing from the previous account outlives a sign-out.
+  /// Drops every image, on disk too, and cancels every download, so nothing from the previous account outlives
+  /// a sign-out.
   public func removeAll() {
     let running = lock.withLock {
       defer { inFlight.removeAll() }
@@ -65,6 +83,7 @@ public final class ThumbnailCache: @unchecked Sendable {
     }
     running.forEach { $0.cancel() }
     images.removeAllObjects()
+    disk?.removeAll()
   }
 
   /// How many callers are waiting on the download for `url`; 0 when none is running. For tests.
@@ -84,11 +103,7 @@ public final class ThumbnailCache: @unchecked Sendable {
       // `finish` takes the lock, so it cannot run before this flight is registered below.
       let task = Task.detached(priority: .userInitiated) { [self] in
         defer { finish(key: key, id: id) }
-        let data = try await downloader.download(url)
-        try Task.checkCancellation()
-        guard let image = Self.decode(data, maxPixelSize: maxPixelSize) else {
-          throw URLError(.cannotDecodeContentData)
-        }
+        let image = try await load(key: key, url: url)
         // A `removeAll` during the decode must not let this image land in the emptied cache.
         try Task.checkCancellation()
         let entry = Entry(image)
@@ -98,6 +113,23 @@ public final class ThumbnailCache: @unchecked Sendable {
       inFlight[key] = Flight(id: id, task: task, waiters: 1)
       return (id, task)
     }
+  }
+
+  /// Decodes the stored bytes when the disk layer has them, else downloads. Only bytes that decode are
+  /// stored, so an error page served with a 2xx is never kept.
+  private func load(key: String, url: URL) async throws -> CGImage {
+    let generation = disk?.generation
+    if let disk, let stored = disk.data(for: key) {
+      if let image = Self.decode(stored, maxPixelSize: maxPixelSize) { return image }
+      disk.remove(for: key)
+    }
+    let data = try await downloader.download(url)
+    try Task.checkCancellation()
+    guard let image = Self.decode(data, maxPixelSize: maxPixelSize) else {
+      throw URLError(.cannotDecodeContentData)
+    }
+    if let disk, let generation { disk.store(data, for: key, generation: generation) }
+    return image
   }
 
   /// A waiter was cancelled; the last one out cancels the download. The id check keeps a late call from

@@ -18,6 +18,7 @@ import {
   EmptyState,
   ErrorState,
   BulkActionBar,
+  ChartSection,
   type AdminSelection,
 } from './index';
 import { relativeTime } from './EntityHeader';
@@ -134,6 +135,33 @@ describe('admin layout primitives', () => {
     expect(screen.getByTestId('fact-plan')).toHaveTextContent('-');
   });
 
+  it('shows inline help right after the section title, before the action', () => {
+    renderToolkit(
+      <SectionCard title="Usage" help={<span data-testid="usage-help">?</span>} action={<button>Act</button>}>
+        <Fact label="Events">3</Fact>
+      </SectionCard>
+    );
+    const heading = screen.getByRole('heading', { name: 'Usage' });
+    const help = screen.getByTestId('usage-help');
+    expect(heading.compareDocumentPosition(help) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      help.compareDocumentPosition(screen.getByRole('button', { name: 'Act' })) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('passes chart section help through to its title bar', () => {
+    renderToolkit(
+      <ChartSection
+        title="Trend"
+        testId="trend"
+        help={<span data-testid="trend-help">?</span>}
+        body={{ kind: 'notice', content: 'Nothing yet' }}
+      />
+    );
+    expect(within(screen.getByTestId('trend')).getByTestId('trend-help')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Trend' })).toBeInTheDocument();
+  });
+
   it('hands a custom section body over without a definition list', () => {
     renderToolkit(
       <SectionCard title="Balance" body="custom">
@@ -195,6 +223,13 @@ describe('formatUtc and RelativeTime', () => {
     expect(relativeTime(new Date(now + 5_000), now)).toBe('now');
     expect(relativeTime(new Date(now + 3 * 86_400_000), now)).toBe('now');
     expect(relativeTime(new Date(now - 5 * 60_000), now)).toBe('5 minutes ago');
+  });
+
+  it('reads a scheduled time as a future time when asked to', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    expect(relativeTime(new Date(now + 3 * 86_400_000), now, true)).toBe('in 3 days');
+    expect(relativeTime(new Date(now + 2 * 3_600_000), now, true)).toBe('in 2 hours');
+    expect(relativeTime(new Date(now - 5 * 60_000), now, true)).toBe('5 minutes ago');
   });
 
   describe('when the time changes between ticks', () => {

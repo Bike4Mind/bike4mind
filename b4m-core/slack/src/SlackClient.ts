@@ -11,6 +11,9 @@ import {
   FilesUploadV2Arguments,
 } from '@slack/web-api';
 import { getSlackDeps, getSlackDb } from './di/registry';
+import { isSlackFileUrl } from './slackFileUrl';
+
+const MAX_FILE_DOWNLOAD_REDIRECTS = 5;
 
 type TruncatableText = { text?: string };
 type TruncatableBlock = {
@@ -90,6 +93,8 @@ export interface SlackUser {
   id: string;
   name: string;
   real_name?: string;
+  /** Profile display name; for a bot user this is the name shown in mentions */
+  display_name?: string;
   email?: string;
   /** User's timezone as IANA string (e.g., "America/Los_Angeles") */
   tz?: string;
@@ -423,6 +428,8 @@ export class SlackClient {
         thread_ts: threadTs,
         blocks: blocks && blocks.length > 0 ? this.truncateBlocks(blocks) : undefined,
         metadata: metadata as MessageMetadata | undefined,
+        unfurl_links: false,
+        unfurl_media: false,
       });
 
       if (result.ok && result.ts) {
@@ -983,6 +990,7 @@ export class SlackClient {
         id: result.user.id || userId,
         name: result.user.name || userId,
         real_name: result.user.real_name,
+        display_name: result.user.profile?.display_name,
         email: result.user.profile?.email,
         tz: result.user.tz,
         is_admin: result.user.is_admin,
@@ -1087,32 +1095,36 @@ export class SlackClient {
   }
 
   /**
-   * Download a file from Slack using url_private
-   * Returns file content as Buffer for upload to S3
+   * Download a private Slack file. The bot token is sent only to a Slack file host over https;
+   * redirects are followed by hand so the token never leaves for another host, and every hop must
+   * be https.
    */
   async downloadFile(url: string, fileName: string): Promise<Buffer> {
     try {
-      this.logger.info('Downloading file from Slack', {
-        fileName,
-        url: url.substring(0, 50) + '...',
-      });
+      if (!isSlackFileUrl(url)) {
+        throw new Error('Refusing to download a Slack file from a non-Slack host');
+      }
+      this.logger.info('Downloading file from Slack', { fileName });
 
-      // Use axios to download file with Slack bot token authorization
-      const axios = await import('axios');
-      const response = await axios.default.get(url, {
-        headers: {
-          Authorization: `Bearer ${this.client.token}`,
-        },
-        responseType: 'arraybuffer',
-      });
+      let current = new URL(url);
+      for (let hop = 0; ; hop++) {
+        const response = await fetch(current, {
+          redirect: 'manual',
+          headers: isSlackFileUrl(current.href) ? { Authorization: `Bearer ${this.client.token}` } : {},
+        });
+        const location = response.headers.get('location');
+        if (response.status >= 300 && response.status < 400 && location) {
+          if (hop >= MAX_FILE_DOWNLOAD_REDIRECTS) throw new Error('Slack file download redirected too many times');
+          current = new URL(location, current);
+          if (current.protocol !== 'https:') throw new Error('Slack file download redirected off https');
+          continue;
+        }
+        if (!response.ok) throw new Error(`Slack file download failed with status ${response.status}`);
 
-      const buffer = Buffer.from(response.data);
-      this.logger.info('File downloaded successfully', {
-        fileName,
-        sizeBytes: buffer.length,
-      });
-
-      return buffer;
+        const buffer = Buffer.from(await response.arrayBuffer());
+        this.logger.info('File downloaded successfully', { fileName, sizeBytes: buffer.length });
+        return buffer;
+      }
     } catch (error) {
       this.logger.error('Error downloading file from Slack', { error, fileName });
       throw error;

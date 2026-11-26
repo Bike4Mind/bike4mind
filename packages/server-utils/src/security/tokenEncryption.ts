@@ -1,18 +1,15 @@
-import { encryptSecret, decryptSecret, isEncrypted, isValidEncryptionKey } from './secretEncryption';
-import { mcpEnvSecretContext } from '@bike4mind/utils/security';
-import { Config } from '../utils/config';
+import { encryptSecret, decryptSecret, isEncrypted } from './secretEncryption';
+import { getAtRestKeys, mcpEnvSecretContext } from '@bike4mind/utils/security';
 import { Logger } from '@bike4mind/observability';
 
 function requireKey(): string {
-  const key = Config.SECRET_ENCRYPTION_KEY;
+  const key = getAtRestKeys().current;
   if (!key) throw new Error('SECRET_ENCRYPTION_KEY is not configured');
   return key;
 }
 
 function previousKey(): string | null {
-  const key = Config.SECRET_ENCRYPTION_KEY_PREVIOUS;
-  if (!key || key === 'not-configured' || !isValidEncryptionKey(key)) return null;
-  return key;
+  return getAtRestKeys().previous ?? null;
 }
 
 /** Encrypts submitted plaintext, even when it has the shape of stored ciphertext. */

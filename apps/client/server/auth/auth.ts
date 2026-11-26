@@ -34,6 +34,8 @@ import {
   type DeletionGateUser,
 } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
+import { samlRelayRedirectTo } from '@server/utils/auth/signupClientId';
+import { IDP_ISSUER_MISMATCH } from './samlResponseIssuer';
 
 passport.use(
   new JwtStrategy(
@@ -87,11 +89,12 @@ function isMfaEnrollmentAllowedRoute(req: Request, userId: string): boolean {
 }
 
 /**
- * enforceMFA for sessions minted before it applied: the sign-in gate (resolveSecondFactor) only
- * binds new sign-ins, so an existing session, and every access token its refresh chain mints,
- * is confined here to the enrollment routes until the user enrolls. 403, not 401, so the client
- * does not run its token-refresh cascade; MFAEnforcementWrapper renders the enrollment flow.
- * API keys are exempt (they are not a sign-in). A failed settings read fails closed (next(err)).
+ * enforceMFA or a team MFA policy, for sessions minted before it applied: the sign-in gate
+ * (resolveSecondFactor) only binds new sign-ins, so an existing session, and every access token
+ * its refresh chain mints, is confined here to the enrollment routes until the user enrolls.
+ * 403, not 401, so the client does not run its token-refresh cascade; MFAEnforcementWrapper
+ * renders the enrollment flow. API keys are exempt (they are not a sign-in). A failed settings
+ * or policy read fails closed (next(err)).
  */
 async function mfaEnrollmentGate(req: Request, res: Response, next: (err?: unknown) => void): Promise<void> {
   const user = req.user as (IUserDocument & { impersonatedBy?: string }) | undefined;
@@ -364,6 +367,8 @@ export const setupSamlStrategy = (idp: {
     // legitimately carries no InResponseTo and must not be rejected outright.
     validateInResponseTo: ValidateInResponseTo.ifPresent,
     cacheProvider: samlRequestCache,
+    // The verify reads the RelayState redirectTo, so a new account can record its OAuth client.
+    passReqToCallback: true,
   };
 
   Logger.debug('Creating SAML strategy', { idpId: idp._id });
@@ -374,6 +379,7 @@ export const setupSamlStrategy = (idp: {
       new SamlStrategy(
         samlOptions,
         async (
+          req: Request,
           profile: SamlProfile | null,
           done: (err: Error | null, user?: Record<string, unknown>, info?: Record<string, unknown>) => void
         ) => {
@@ -383,6 +389,21 @@ export const setupSamlStrategy = (idp: {
               return done(new Error('SAML profile is null'));
             }
             // The profile is the decoded assertion: never logged, at any level.
+
+            // node-saml checks `idpIssuer` on logout messages only, so the signed assertion's
+            // Issuer is bound to this IdP here. The callback picks the IdP row before the
+            // signature is checked; this is what makes that choice binding. The Issuer is the
+            // IdP's public entity ID, so unlike the rest of the profile it is logged.
+            // Trimmed: neither node-saml nor the admin form trims, and padding is never part of an entity ID.
+            const configuredIssuer = idp.samlConfig?.issuer?.trim();
+            if (!configuredIssuer || profile.issuer?.trim() !== configuredIssuer) {
+              Logger.warn('[SAML] Rejecting assertion: its Issuer is not the one configured for this IDP', {
+                idpId: idp._id,
+                expectedIssuer: idp.samlConfig?.issuer,
+                assertedIssuer: profile.issuer,
+              });
+              return done(null, undefined, { reason: IDP_ISSUER_MISMATCH });
+            }
 
             // Extract user info from SAML assertion
             const attributeMappings = idp.samlConfig?.attributeMappings || {};
@@ -447,13 +468,14 @@ export const setupSamlStrategy = (idp: {
             // Use the same verification logic as other OAuth providers
             const samlVerifyCallback = verifyCallback(AuthStrategy.SAML);
 
-            await samlVerifyCallback('null', 'null', standardProfile, done, authProvider);
+            await samlVerifyCallback('null', 'null', standardProfile, done, authProvider, samlRelayRedirectTo(req));
           } catch (error) {
             Logger.error('Error in SAML strategy:', error);
             done(error as Error);
           }
         },
         (
+          _req: Request,
           profile: SamlProfile | null,
           done: (err: Error | null, user?: Record<string, unknown>, info?: Record<string, unknown>) => void
         ) => {

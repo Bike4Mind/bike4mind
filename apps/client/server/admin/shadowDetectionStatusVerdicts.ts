@@ -2,6 +2,7 @@ import { isAbuseSuspensionReason, type ShadowDetectionItem } from '@bike4mind/co
 import { shadowDetectionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import type { AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
+import { releaseForLegitimateVerdict } from '@server/security/interventionRelease';
 
 export type AccountStatusChange = {
   userId: string;
@@ -28,7 +29,7 @@ export type AccountStatusChange = {
  */
 export async function gradeDetectionsForStatusChange(
   change: AccountStatusChange,
-  deps: { writeAudit: AdminAuditWriter; logger: Logger }
+  deps: { writeAudit: AdminAuditWriter; logger: Logger; releaseHolds?: typeof releaseForLegitimateVerdict }
 ): Promise<ShadowDetectionItem[]> {
   const { userId, adminId, wasSuspended, isSuspended, reason } = change;
   const reverting = !isSuspended && change.undo === true;
@@ -73,5 +74,39 @@ export async function gradeDetectionsForStatusChange(
       deps.logger.error(`Audit entry failed for shadow detection verdict ${item.id}`, error);
     }
   }
+  if (!isSuspended && !reverting) await releaseReinstatedHolds(graded, input, deps);
   return graded;
+}
+
+/** A reinstatement is a legitimate verdict, so it lifts the account's automated holds as the verdict routes do. */
+async function releaseReinstatedHolds(
+  graded: ShadowDetectionItem[],
+  input: { userId: string; reviewerId: string; reason: string },
+  deps: { writeAudit: AdminAuditWriter; logger: Logger; releaseHolds?: typeof releaseForLegitimateVerdict }
+): Promise<void> {
+  const releaseHolds = deps.releaseHolds ?? releaseForLegitimateVerdict;
+  for (const item of graded) {
+    if (!item.verdict?.startsWith('legitimate_')) continue;
+    try {
+      const released = await releaseHolds(item.id, {
+        by: input.reviewerId,
+        reason: input.reason,
+        now: new Date(),
+        userIds: [input.userId],
+      });
+      for (const { decisionId, userIds } of released) {
+        for (const userId of userIds) {
+          await deps.writeAudit({
+            action: 'user.intervention_hold.released',
+            target: { kind: 'user', id: userId, displayName: userId },
+            summary: 'released an automated hold by reinstating the account',
+            reason: input.reason,
+            details: { decisionId, detectionId: item.id },
+          });
+        }
+      }
+    } catch (error) {
+      deps.logger.error(`Releasing automated holds failed for shadow detection ${item.id}`, error);
+    }
+  }
 }

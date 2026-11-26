@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
+import { encryptSecret, generateEncryptionKey, configureSecretsAtRest } from '@bike4mind/utils/security';
 
 type Handler = (req: unknown, res: unknown) => unknown;
 
@@ -52,6 +52,7 @@ describe('organization GitHub webhook config with a secret stored under the prev
     const previousKey = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY = currentKey;
     h.config.SECRET_ENCRYPTION_KEY_PREVIOUS = previousKey;
+    configureSecretsAtRest(h.config.SECRET_ENCRYPTION_KEY, h.config.SECRET_ENCRYPTION_KEY_PREVIOUS);
     const stored = {
       id: 'cfg1',
       organizationId: ORG_ID,
@@ -74,11 +75,12 @@ describe('organization GitHub webhook config with a secret stored under the prev
     expect(res._getJSONData().secretMasked).toBe('*'.repeat(secretFixture.length - 4) + secretFixture.slice(-4));
   });
 
-  it('GET reveals the secret when asked to', async () => {
+  it('GET ignores revealSecret and still masks a previous-key secret', async () => {
     const res = await call('get', { revealSecret: 'true' });
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().secret).toBe(secretFixture);
+    expect(res._getJSONData().secret).toBeUndefined();
+    expect(res._getJSONData().secretMasked).toBe('*'.repeat(secretFixture.length - 4) + secretFixture.slice(-4));
   });
 
   it('PUT returns the masked secret after an update that leaves it untouched', async () => {

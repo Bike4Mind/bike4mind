@@ -333,6 +333,7 @@ describe('GET /api/v1/agent-executions/{id}', () => {
       { type: 'final_answer' as const, content: 'done' },
     ],
     totalIterations: 2,
+    stepProgress: null,
     createdAt: new Date('2026-08-24T00:00:00.000Z'),
     updatedAt: new Date('2026-08-24T00:01:00.000Z'),
   };
@@ -358,9 +359,22 @@ describe('GET /api/v1/agent-executions/{id}', () => {
         { type: 'final_answer', content: 'done' },
       ],
       total_iterations: 2,
+      step_progress: null,
       created_at: '2026-08-24T00:00:00.000Z',
       updated_at: '2026-08-24T00:01:00.000Z',
     });
+  });
+
+  it('publishes step_progress for a run with a known total, inside the published schema', async () => {
+    mockLoadTrace.mockResolvedValue({ ...trace, status: 'running' as const, stepProgress: { completed: 1, total: 3 } });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(AgentExecutionStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.step_progress).toEqual({ completed: 1, total: 3 });
   });
 
   it('strips think spans from the answer and the final_answer step, leaving thought steps raw', async () => {

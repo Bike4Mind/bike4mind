@@ -1,14 +1,17 @@
+import type { HostBridgeApi } from './hostBridge';
+import type { HostResult } from './hostProtocol';
 import type { SkinSummary, SoundPackSummary } from './mods';
-import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
-import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
-import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { LibraryApi } from './library';
+import type { ProductionsApi } from './productions';
+import type { PendingTaskDecision, RolePolicy, TaskAction } from './orchestration';
+import type { AppWorktree, SessionWorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
 import type { AppMenuAction, RendererErrorReport } from './appShell';
-import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
+import type { AccountBilling, AccountCredits, AccountProfile, AccountSelection, SubscribePlanResult } from './account';
 import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -39,7 +42,6 @@ import type {
 import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
-  ChatApprovalAnswer,
   ChatApprovalMode,
   ChatArtifactContent,
   ChatArtifactLibrary,
@@ -59,21 +61,18 @@ import type {
   ChatMoveToBackgroundResult,
   ChatHeldRelay,
   ChatQueueEvent,
-  ChatQueuedMessage,
-  ChatSession,
+  ChatSessionMode,
   ChatSessionStatusEvent,
   ChatSessionExportResult,
   ChatSessionSummary,
+  RaiseRunBudgetResult,
   ChatStreamEvent,
   ChatVideoJob,
   ChatVideoLinkResult,
   CreateCodeSessionRequest,
-  ProjectInspection,
-  RecentFolder,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   EditMessageRequest,
-  SendMessageRequest,
   SendMessageResult,
   SpawnSuggestionResult,
   StartSpawnSuggestionRequest,
@@ -85,10 +84,11 @@ import type {
 } from './chat';
 import type { GenerationSettings } from './generation';
 import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from './modelSettings';
-import type { DevLogRecord, DevLogSnapshot } from './devLog';
+import type { DevLogErrorReport, DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
+import type { SpawnLocation } from './spawnLocation';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { ComposerDrafts } from './composerDrafts';
 import type { WorkspaceChanges } from './workspaceChanges';
@@ -145,6 +145,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LaunchSignals } from './launchSignals';
 import type {
   ModelBuildReport,
   ModelCaptureRequestEvent,
@@ -158,6 +159,7 @@ import type {
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
+import type { OrchestrateMiniPayload } from './orchestrateMini';
 import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnapshot } from './watch';
 
 /**
@@ -170,6 +172,8 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  hostRequest: 'host:request',
+  hostNotification: 'host:notification',
   studioGet: 'studio:get',
   studioPage: 'studio:page',
   studioJobAction: 'studio:job-action',
@@ -179,6 +183,16 @@ export const IPC_CHANNELS = {
   studioUploadReference: 'studio:upload-reference',
   studioAssetAction: 'studio:asset-action',
   studioChanged: 'studio:changed',
+  libraryPage: 'library:page',
+  libraryMedia: 'library:media',
+  libraryLocate: 'library:locate',
+  productionsList: 'productions:list',
+  productionsGet: 'productions:get',
+  productionsRename: 'productions:rename',
+  productionsReorder: 'productions:reorder',
+  productionsRenders: 'productions:renders',
+  productionsRender: 'productions:render',
+  productionsMedia: 'productions:media',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -196,6 +210,9 @@ export const IPC_CHANNELS = {
   accountSubscribePlan: 'account:subscribe-plan',
   accountPurchaseCredits: 'account:purchase-credits',
   accountSendFeedback: 'account:send-feedback',
+  accountGetSelection: 'account:get-selection',
+  accountSelectPayer: 'account:select-payer',
+  accountSelectionChanged: 'account:selection-changed',
   usageGetHistory: 'usage:get-history',
   usageGetLocal: 'usage:get-local',
   fleetGetState: 'fleet:get-state',
@@ -204,13 +221,16 @@ export const IPC_CHANNELS = {
   fleetSendNow: 'fleet:send-now',
   /** main -> renderer push of the integration's state; never carries the key. */
   fleetStateChanged: 'fleet:state-changed',
-  chatListModels: 'chat:list-models',
   /** main -> renderer: a model server's slow listing finished, or late effort levels rebuilt the hosted list. */
   chatModelsChanged: 'chat:models-changed',
   chatListSuggestionModels: 'chat:list-suggestion-models',
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
   chatGetLocalContextFit: 'chat:get-local-context-fit',
+  /** Where a suggested session starts (SpawnLocation); main pushes `chatSpawnLocation` when it changes. */
+  chatGetSpawnLocation: 'chat:get-spawn-location',
+  chatSetSpawnLocation: 'chat:set-spawn-location',
+  chatSpawnLocation: 'chat:spawn-location',
   chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
   chatSettleLocalModel: 'chat:settle-local-model',
@@ -221,6 +241,9 @@ export const IPC_CHANNELS = {
   chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
+  /** The Settings cap on automatic turn extensions; main validates it, see @shared/turnExtensionSetting. */
+  chatGetTurnExtensions: 'chat:get-turn-extensions',
+  chatSetTurnExtensions: 'chat:set-turn-extensions',
   chatSetSessionGeneration: 'chat:set-session-generation',
   chatGetModelSettings: 'chat:get-model-settings',
   chatGetUnsupportedModelSettings: 'chat:get-unsupported-model-settings',
@@ -228,12 +251,11 @@ export const IPC_CHANNELS = {
   chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
   chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
+  chatRaiseRunBudget: 'chat:raise-run-budget',
   chatGetRolePolicy: 'chat:get-role-policy',
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
   chatListTaskDecisions: 'chat:list-task-decisions',
-  /** The user's answer on a worker's decision card. Renderer -> main only; no tool reaches it. */
-  chatAnswerTaskDecision: 'chat:answer-task-decision',
   /** main -> renderer push; the whole list of decisions workers wait on the user for. */
   chatTaskDecisions: 'chat:task-decisions',
   /**
@@ -241,33 +263,24 @@ export const IPC_CHANNELS = {
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
    */
   chatSetApprovalMode: 'chat:set-approval-mode',
-  chatSetSessionArchived: 'chat:set-session-archived',
+  chatConfirmArchive: 'chat:confirm-archive',
   chatExportSession: 'chat:export-session',
   chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
-  chatDraftDefaults: 'chat:draft-defaults',
-  chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
-  chatListRecentFolders: 'chat:list-recent-folders',
-  chatRemoveRecentFolder: 'chat:remove-recent-folder',
-  chatInspectProject: 'chat:inspect-project',
+  chatLaunchSignals: 'chat:launch-signals',
   chatWorkspaceChanges: 'chat:workspace-changes',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
-  chatGetSession: 'chat:get-session',
-  chatRenameSession: 'chat:rename-session',
-  chatDeleteSession: 'chat:delete-session',
   chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
   chatListWorktrees: 'chat:list-worktrees',
   chatRemoveWorktrees: 'chat:remove-worktrees',
   chatRevealWorktree: 'chat:reveal-worktree',
-  chatSendMessage: 'chat:send-message',
   chatLoopCommand: 'chat:loop-command',
   chatGetLoop: 'chat:get-loop',
   chatLoopChanged: 'chat:loop-changed',
-  chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
   chatEditMessage: 'chat:edit-message',
   chatRegenerateReply: 'chat:regenerate-reply',
@@ -279,17 +292,13 @@ export const IPC_CHANNELS = {
   chatCompactContext: 'chat:compact-context',
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
   chatGetRunSpend: 'chat:get-run-spend',
-  chatGetQueued: 'chat:get-queued',
-  chatCancelQueued: 'chat:cancel-queued',
   chatGetHeldRelays: 'chat:get-held-relays',
   chatResolveHeldRelay: 'chat:resolve-held-relay',
-  chatSendQueuedNow: 'chat:send-queued-now',
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
   chatQueueChanged: 'chat:queue-changed',
   chatStartSpawnSuggestion: 'chat:start-spawn-suggestion',
   chatStartSideChat: 'chat:start-side-chat',
   chatDismissSpawnSuggestion: 'chat:dismiss-spawn-suggestion',
-  chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
@@ -542,8 +551,9 @@ export const IPC_CHANNELS = {
   /** main -> renderer push; what the pane's standing indicator draws. */
   browserCookiesChanged: 'browser:cookies-changed',
   /**
-   * The developer log. Every one of these belongs to the dev window alone, and none of them is
-   * reachable from a tool or from a reply: the window is opened by a chord the user presses.
+   * The developer log. All but devLogReportError belong to the dev window alone, and none of
+   * them is reachable from a tool or from a reply: the window is opened by a chord the user
+   * presses. devLogReportError is the one any window may call, and its input is untrusted.
    *
    * Source-agnostic by design - see @shared/devLog. Adding a source to the log adds nothing
    * here.
@@ -554,6 +564,8 @@ export const IPC_CHANNELS = {
   devLogCopy: 'devlog:copy',
   /** main -> renderer push; a batch of newly captured records, coalesced in the sink. */
   devLogRecords: 'devlog:records',
+  /** Renderer -> main, fire-and-forget (no reply). A caught renderer failure; main validates and rate-limits it. */
+  devLogReportError: 'devlog:report-error',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
   /**
@@ -632,6 +644,18 @@ export const IPC_CHANNELS = {
   watchRespond: 'watch:respond',
   watchFocusAgent: 'watch:focus-agent',
   watchCloseMini: 'watch:close-mini',
+  /** An app window's stage -> main: the OrchestrateMiniPayload the Orchestrate mini window shows, or null. */
+  orchestrateMiniPublish: 'orchestrate:mini-publish',
+  orchestrateMiniToggle: 'orchestrate:mini-toggle',
+  orchestrateMiniGetOpen: 'orchestrate:mini-get-open',
+  /** main -> app windows push: the Orchestrate mini window opened or closed. */
+  orchestrateMiniOpen: 'orchestrate:mini-open',
+  /** The Orchestrate mini window's own surface (preload/orchestrateMini.ts); refused from any other window. */
+  orchestrateMiniGetSnapshot: 'orchestrate:mini-get-snapshot',
+  /** main -> Orchestrate mini window push of the latest payload, or null. */
+  orchestrateMiniSnapshot: 'orchestrate:mini-snapshot',
+  orchestrateMiniFocus: 'orchestrate:mini-focus',
+  orchestrateMiniClose: 'orchestrate:mini-close',
   /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
   skinsList: 'skins:list',
   /** main -> renderer push after the mods folder changed on disk. */
@@ -756,10 +780,12 @@ export interface BrowserTabRequest {
 /** The request half of starting a session; see CreatedSession for the reply. */
 export interface CreateSessionRequest {
   /**
-   * The user sidebar section the new session belongs to. Main assigns it right after minting the
-   * id and before replying, so the row never shows in the default groups first.
+   * The user sidebar section the new session belongs to. The renderer places the new session in it
+   * right after the host creates it, before the row first shows.
    */
   sectionId?: string;
+  /** Omitted means Chat. Code sessions start through their own request; see CreateCodeSessionRequest. */
+  mode?: Exclude<ChatSessionMode, 'code'>;
 }
 
 /**
@@ -775,11 +801,17 @@ export interface CreatedSession {
   placementFailed?: boolean;
 }
 
+/** What session/setArchived asks before archiving a parent with sub-sessions. */
+export type ArchiveQuestion = NonNullable<HostResult<'session/setArchived'>['confirmationRequired']>;
+
+/** The user's yes, with the finished sub-sessions they chose to archive along with the parent. */
+export type ArchiveAnswer = { confirmed: true; archiveChildIds: string[] };
+
 /** A Code session's create request, plus the same optional section the Chat one takes. */
-export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessionRequest;
+export type PlacedCodeSessionRequest = CreateCodeSessionRequest & CreateSessionRequest;
 
 /** A Code session's create reply - `ok: false` never carries placement. */
-export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
+export type PlacedCodeSessionResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
 /**
@@ -797,8 +829,24 @@ export interface MiniTavernApi {
   close(): Promise<void>;
 }
 
+/**
+ * Everything the Orchestrate mini window can reach, exposed as `window.b4mOrchestrateMini` by
+ * preload/orchestrateMini.ts: the stage's snapshot and two actions, neither of which answers anything.
+ * Pushed values are `unknown` on purpose: the page parses them (parseOrchestrateMiniPayload) on receipt.
+ */
+export interface OrchestrateMiniApi {
+  getSnapshot(): Promise<unknown>;
+  onSnapshot(listener: (payload: unknown) => void): () => void;
+  /** Raise the main window on the decision this agent (or the root) waits on. */
+  focus(agentId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface DesktopApi {
   studio: StudioApi;
+  host: HostBridgeApi;
+  library: LibraryApi;
+  productions: ProductionsApi;
   getAppInfo(): Promise<AppInfo>;
   /** App-menu items (Cmd+N, Cmd+,) that act on the renderer's views. */
   appMenu: {
@@ -898,6 +946,15 @@ export interface DesktopApi {
     /** Resolves when the payment window closes, not as proof of payment. */
     purchaseCredits(packageId: string, acceptedTerms?: boolean): Promise<SubscribePlanResult>;
     sendFeedback(content: string): Promise<FeedbackSubmitResult>;
+    /**
+     * Who pays for credit-spending calls, and the accounts that could. `fresh` re-reads balances
+     * and organizations; otherwise main answers from its last read.
+     */
+    getSelection(fresh?: boolean): Promise<AccountSelection>;
+    /** Null is Personal. Rejects for an organization the user is not listed in. */
+    selectPayer(organizationId: string | null): Promise<AccountSelection>;
+    /** Any pick (this window's included), a fallback to Personal, or a sign-in or out; returns the unsubscribe. */
+    onSelectionChanged(listener: (selection: AccountSelection) => void): () => void;
   };
   usage: {
     /**
@@ -926,12 +983,6 @@ export interface DesktopApi {
   };
   chat: {
     /**
-     * Models this deployment offers the agent, from the server's own catalog. `force` skips
-     * the main-process cache, which is what a "try again" affordance needs; `'local'` re-reads
-     * device and server models but keeps the cached hosted list.
-     */
-    listModels(force?: boolean | 'local'): Promise<ChatModelCatalog>;
-    /**
      * A model server's listing finished, or a model's effort levels arrived, after the list was read; read it again
      * without forcing.
      */
@@ -943,6 +994,10 @@ export interface DesktopApi {
     setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
     /** Which local models each fixed size may not fit, by the memory estimate. */
     getLocalContextFit(): Promise<LocalContextFit>;
+    /** Where a suggested session starts; see @shared/spawnLocation. */
+    getSpawnLocation(): Promise<SpawnLocation>;
+    setSpawnLocation(location: SpawnLocation): Promise<SpawnLocation>;
+    onSpawnLocation(listener: (location: SpawnLocation) => void): () => void;
     /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
     listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
@@ -958,6 +1013,10 @@ export interface DesktopApi {
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** How long this conversation's prompt cache lives. Null when the session is gone. */
     setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null>;
+    /** How many times a productive turn is carried on past its budget; 0 always stops. */
+    getTurnExtensions(): Promise<number>;
+    /** Answers with what was saved: anything out of range lands as the default. */
+    setTurnExtensions(extensions: number): Promise<number>;
     /** Replace this conversation's sampling and output overrides; `{}` clears them. Null when the session is gone. */
     setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null>;
     /** A device-side model's defaults from the Models screen; `{}` when none are set, null for an id that is not one. */
@@ -973,21 +1032,30 @@ export interface DesktopApi {
     getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
-    setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;
+    /** `budgetCredits` caps the run Orchestrate starts; only read when it turns on. */
+    setSessionOrchestrate(
+      sessionId: string,
+      orchestrate: boolean,
+      budgetCredits?: number
+    ): Promise<ChatSessionSummary | null>;
+    /** Set or raise the credit budget of the session's orchestration run; a raise resumes a paused run. */
+    raiseRunBudget(sessionId: string, budgetCredits: number): Promise<RaiseRunBudgetResult>;
     getRolePolicy(): Promise<RolePolicy>;
     setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
     taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
     /** Decisions workers in this account wait on the user for; seeds what onTaskDecisions then replaces. */
     listTaskDecisions(): Promise<PendingTaskDecision[]>;
-    answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void>;
     onTaskDecisions(listener: (decisions: PendingTaskDecision[]) => void): () => void;
     /**
      * Set how much this conversation may do without asking. Called from the composer pill, in
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
      */
     setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
-    /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
-    setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
+    /**
+     * Asks this machine's user, in a native dialog, the question session/setArchived answered
+     * with; null when they cancel. Local only, whichever host the session lives on.
+     */
+    confirmArchive(question: ArchiveQuestion): Promise<ArchiveAnswer | null>;
     /** Save a conversation as Markdown or JSON, by the extension picked in the save dialog. Rejects on a write failure. */
     exportSession(sessionId: string): Promise<ChatSessionExportResult>;
     /** Export this account's local conversations, their files, and project memories into a selected folder. */
@@ -995,12 +1063,6 @@ export interface DesktopApi {
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
-    defaultsForNewSession(): Promise<NewSessionDefaults>;
-    /**
-     * Start a Code session, creating or adopting its worktree first when one is asked for.
-     * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
-     */
-    createCodeSession(request: CreateCodeSessionIpcRequest): Promise<CreateCodeSessionIpcResult>;
     /**
      * Ground a Code session that already exists: its first directory, or a different directory,
      * branch or workspace choice. Refused while the session is busy - see UpdateProjectResult.
@@ -1008,12 +1070,8 @@ export interface DesktopApi {
     updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult>;
     /** Open the OS folder picker for a project root. Null when the user cancels. */
     pickProjectDirectory(): Promise<string | null>;
-    /** Recently used project folders that still exist, most recent first. */
-    listRecentFolders(): Promise<RecentFolder[]>;
-    /** Forget one; the folder itself is untouched. Resolves to the list that is left. */
-    removeRecentFolder(directory: string): Promise<RecentFolder[]>;
-    /** Read a directory's branches, for the branch chip. */
-    inspectProject(directory: string): Promise<ProjectInspection>;
+    /** Local hints for which place a first launch opens on; see shared/launchSignals.ts. */
+    launchSignals(): Promise<LaunchSignals>;
     /**
      * What this Code session's working directory has changed against its base branch, for the
      * changes bar above the composer. Null when there is nothing to show or git cannot answer.
@@ -1025,24 +1083,17 @@ export interface DesktopApi {
      */
     addContextDirectory(sessionId: string, path?: string): Promise<ShareDirectoryResult>;
     removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
-    /** Null when the session is gone (deleted in another window, or a stale id). */
-    getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
-    renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
-    deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
-    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /** `alsoDeleting` are nested sessions deleted with it, which then do not hold its worktree. */
+    inspectWorktreeRemoval(sessionId: string, alsoDeleting?: string[]): Promise<SessionWorktreeRemoval | null>;
     /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
     listWorktrees(directory: string): Promise<AppWorktree[]>;
     /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */
     removeWorktrees(directory: string, paths?: string[]): Promise<WorktreeSweepItem[]>;
     /** Reveals a currently listed worktree in the file manager; false when it is not listed. */
     revealWorktree(directory: string, path: string): Promise<boolean>;
-    /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
-    sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     loopCommand(sessionId: string, args: string): Promise<LoopResult>;
     getLoop(sessionId: string): Promise<LoopState | null>;
     onLoopChanged(listener: (event: { sessionId: string; state: LoopState | null }) => void): () => void;
-    /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
-    stopReply(sessionId: string): Promise<void>;
     /**
      * Carry on the last reply if the agent loop's budget cut it short. Streams into the SAME
      * message, so the events are indistinguishable from the turn never having stopped.
@@ -1079,23 +1130,6 @@ export interface DesktopApi {
     suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
     /** The settled spend of the orchestration rooted at this session, for its job summary. */
     getRunSpend(rootSessionId: string): Promise<RunSpend>;
-    /**
-     * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
-     * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
-     * a window opening onto a session that was queued into elsewhere would see nothing.
-     */
-    getQueuedMessages(sessionId: string): Promise<ChatQueuedMessage[]>;
-    /** Take a queued message back; its text returns to the composer. Unknown ids are ignored. */
-    cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void>;
-    /**
-     * Interrupt the live reply and run this queued message next, instead of waiting for the
-     * reply to finish. The result arrives on `onQueueChanged` like every other queue change, so
-     * every window showing the conversation sees it.
-     *
-     * A no-op when the turn has already ended, when the id is unknown, and on a relayed
-     * message. Unlike `stopReply`, the queue is NOT handed back.
-     */
-    sendQueuedMessageNow(sessionId: string, queuedId: string): Promise<void>;
     /**
      * Messages from other conversations waiting for this one's user to let them in. Read on
      * open; changes arrive as the 'held-relays' stream event carrying the whole list.
@@ -1147,11 +1181,6 @@ export interface DesktopApi {
     filePathAction(sessionId: string, path: string, action: ChatFilePathAction): Promise<ChatFilePathActionResult>;
     /** Add a path a reply names to this session's draft, under the same checks as opening it. */
     attachFilePath(sessionId: string, path: string): Promise<AddAttachmentsResult>;
-    /**
-     * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
-     * ignored, so a double click cannot approve a second, different command.
-     */
-    respondToApproval(approvalId: string, answer: ChatApprovalAnswer): Promise<void>;
     /**
      * Every artifact this account has made from a desktop client, newest first.
      *
@@ -1532,6 +1561,7 @@ export interface DesktopApi {
   };
   /** OS notices for sessions that need the user while the app is not focused. */
   attention: {
+    /** Opens the signed-in environment's web app in the default browser. */
     openServerSessions(): Promise<void>;
     /**
      * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
@@ -1561,6 +1591,15 @@ export interface DesktopApi {
     setPreferences(patch: WatchPreferencesPatch): Promise<WatchPreferences>;
     onPreferences(listener: (preferences: WatchPreferences) => void): () => void;
   };
+  /** The Orchestrate mini window (main/orchestrateMini): the stage feeds it and toggles it. */
+  orchestrateMini: {
+    /** The stage's current payload, or null when no orchestration is on stage. Main validates it. */
+    publish(payload: OrchestrateMiniPayload | null): Promise<void>;
+    /** Resolves with whether the window is open afterwards. */
+    toggle(): Promise<boolean>;
+    isOpen(): Promise<boolean>;
+    onOpenChanged(listener: (open: boolean) => void): () => void;
+  };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.
    */
@@ -1573,5 +1612,7 @@ export interface DesktopApi {
     copy(text: string): Promise<void>;
     /** Subscribe to batches of newly captured records; returns the unsubscribe. */
     onRecords(listener: (records: DevLogRecord[]) => void): () => void;
+    /** Report a renderer failure to the log. Fire-and-forget, so it cannot reject into a handler. */
+    reportError(report: DevLogErrorReport): void;
   };
 }

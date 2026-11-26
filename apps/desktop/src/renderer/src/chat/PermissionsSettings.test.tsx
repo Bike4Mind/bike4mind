@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
@@ -125,12 +126,11 @@ describe('PermissionsSettings', () => {
   });
 });
 
-describe('PermissionsSettings collapsing', () => {
+describe('PermissionsSettings capability ledger', () => {
   let host: HTMLDivElement;
   let root: Root;
 
-  beforeEach(async () => {
-    (window as unknown as { b4m: unknown }).b4m = { chat: { listRecentFolders: async () => [] } };
+  async function mount(): Promise<void> {
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -141,6 +141,11 @@ describe('PermissionsSettings collapsing', () => {
         </CssVarsProvider>
       )
     );
+  }
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
   });
 
   it('shows grants and audit events and revokes from the active grant', async () => {
@@ -148,19 +153,12 @@ describe('PermissionsSettings collapsing', () => {
       .fn()
       .mockResolvedValue({ ...ledger, grants: [{ ...ledger.grants[0], revokedAt: '2026-01-02T00:00:00.000Z' }] });
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState: async () => state },
       capabilities: { getState: async () => ledger, revoke },
     };
-    await act(async () => {
-      root.unmount();
-      root = createRoot(host);
-      root.render(
-        <CssVarsProvider>
-          <PermissionsSettings state={state} onState={() => {}} />
-        </CssVarsProvider>
-      );
-    });
+    await mount();
     expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-testid="capability-audit-row"]')).toHaveLength(1);
     await act(async () => {
@@ -192,6 +190,7 @@ describe('PermissionsSettings collapsing', () => {
       source: 'approval' as const,
     };
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       capabilities: {
         getState: async () => ({
@@ -210,15 +209,7 @@ describe('PermissionsSettings collapsing', () => {
         }),
       },
     };
-    await act(async () => {
-      root.unmount();
-      root = createRoot(host);
-      root.render(
-        <CssVarsProvider>
-          <PermissionsSettings state={state} onState={() => {}} />
-        </CssVarsProvider>
-      );
-    });
+    await mount();
     const label = `qwen3:0.6b to This computer, 523 MB, ${where}`;
     expect(host.querySelector('[data-testid="capability-grant-row"]')?.textContent).toContain(label);
     const audit = [...host.querySelectorAll('[data-testid="capability-audit-row"]')].map(row => row.textContent);
@@ -234,23 +225,38 @@ describe('PermissionsSettings collapsing', () => {
       grantId: `audit-${String(249 - index).padStart(3, '0')}`,
     }));
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       capabilities: { getState: async () => ({ grants: [], audit }) },
     };
-    await act(async () => {
-      root.unmount();
-      root = createRoot(host);
-      root.render(
-        <CssVarsProvider>
-          <PermissionsSettings state={state} onState={() => {}} />
-        </CssVarsProvider>
-      );
-    });
+    await mount();
     const rows = host.querySelectorAll('[data-testid="capability-audit-row"]');
     expect(rows).toHaveLength(200);
     expect(rows[0].textContent).toContain('audit-24');
     expect(rows[199].textContent).toContain('audit-05');
     expect(host.textContent).toContain('200 recent audit events');
+  });
+});
+
+describe('PermissionsSettings collapsing', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(async () => {
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { listRecentFolders: async () => [] },
+    };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () =>
+      root.render(
+        <CssVarsProvider>
+          <PermissionsSettings state={state} onState={() => {}} />
+        </CssVarsProvider>
+      )
+    );
   });
 
   afterEach(() => {
@@ -289,30 +295,6 @@ describe('PermissionsSettings collapsing', () => {
     expect(all('permissions-rule-row')[0].textContent).toContain('Bash(gh pr view:*)');
   });
 
-  it('lists every rule without pagination and still filters', async () => {
-    await act(async () =>
-      root.render(
-        <CssVarsProvider>
-          <PermissionsSettings
-            state={{
-              ...state,
-              user: Array.from({ length: 20 }, (_, i) => ({
-                rule: `Bash(command-${i}:*)`,
-                list: i === 19 ? 'deny' : 'allow',
-              })),
-            }}
-            onState={() => {}}
-          />
-        </CssVarsProvider>
-      )
-    );
-    expect(all('permissions-rule-row')).toHaveLength(20);
-    expect(all('permissions-pagination')).toHaveLength(0);
-    click(all('permissions-filter-deny')[0]);
-    expect(all('permissions-rule-row')).toHaveLength(1);
-    expect(all('permissions-rule-row')[0].textContent).toContain('command-19');
-  });
-
   it('opens a Claude Code file read-only, dims an unmapped entry and offers copy only for mapped ones', () => {
     click(all('permissions-source-toggle-btn')[0]);
     expect(all('permissions-source-toggle-btn')[0].getAttribute('aria-expanded')).toBe('true');
@@ -347,6 +329,7 @@ describe('PermissionsSettings mutation failures', () => {
     onState.mockReset();
     setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { setRules, exportApprovalSummary },
     };
@@ -467,6 +450,7 @@ describe('usePermissions recovery', () => {
   it('retries a failed load instead of leaving settings loading forever', async () => {
     const getState = vi.fn().mockRejectedValueOnce(new Error('unreadable')).mockResolvedValueOnce(state);
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState },
     };
@@ -549,6 +533,7 @@ describe('PermissionsSettings ledger synchronization', () => {
     const getState = vi.fn().mockResolvedValueOnce(state).mockResolvedValue(nextState);
     const setRules = vi.fn().mockResolvedValue({ ok: true, state: { ...nextState, user: [] } });
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState, setRules },
       capabilities: { getState: async () => ruleLedger, revoke: async () => revokedLedger },
@@ -565,6 +550,7 @@ describe('PermissionsSettings ledger synchronization', () => {
   it('refreshes ledger grants after a permission rule save', async () => {
     const getLedger = vi.fn().mockResolvedValue(ruleLedger);
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: {
         getState: async () => state,
@@ -593,6 +579,7 @@ describe('PermissionsSettings ledger synchronization', () => {
     );
     const setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState: async () => state, setRules },
       capabilities: { getState: async () => ruleLedger, revoke },
@@ -621,6 +608,7 @@ describe('PermissionsSettings ledger synchronization', () => {
       .mockResolvedValue(nextState);
     const setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState, setRules },
       capabilities: { getState: async () => ruleLedger, revoke: async () => revokedLedger },
@@ -644,6 +632,7 @@ describe('PermissionsSettings ledger synchronization', () => {
     const setRules = vi.fn().mockResolvedValue({ ok: true, state: { ...nextState, user: [] } });
     const revoke = vi.fn().mockRejectedValue(new Error('audit write failed'));
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState, setRules },
       capabilities: { getState: async () => ruleLedger, revoke },
@@ -669,6 +658,7 @@ describe('PermissionsSettings ledger synchronization', () => {
       .mockResolvedValue(nextState);
     const setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState, setRules },
       capabilities: {

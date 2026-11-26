@@ -78,7 +78,7 @@ describe('getErrorMessage', () => {
       );
     });
 
-    // useQuestExport falls back with `getErrorMessage(error) || ...`, so an empty body stays empty.
+    // A caller falling back with `getErrorMessage(error) || fallback` needs an empty body to stay empty.
     it('returns an empty body as is', () => {
       expect(getErrorMessage(apiError(502, ''))).toBe('');
     });

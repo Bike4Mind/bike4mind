@@ -6,7 +6,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { Logger } from '@bike4mind/observability';
 import { SLACK_API_POST_EVENT_TYPE } from '@bike4mind/common';
 
-const approvals = vi.hoisted(() => ({ liveops: vi.fn(), sre: vi.fn() }));
+const approvals = vi.hoisted(() => ({ sre: vi.fn() }));
 const audit = vi.hoisted(() => ({ success: vi.fn(), failure: vi.fn() }));
 const contributed = vi.hoisted(() => {
   const handlers = {
@@ -30,6 +30,17 @@ const contributed = vi.hoisted(() => {
 });
 
 vi.mock('sst', () => ({ Resource: {} }));
+vi.mock('@server/slack/resolveSlackInstallation', () => ({ resolveSlackInstallation: vi.fn() }));
+const testSlackInstallation = {
+  ok: true as const,
+  installation: {
+    kind: 'dev' as const,
+    signingSecret: 'secret',
+    botToken: 'xoxb-test',
+    workspace: { id: 'workspace-1', name: 'Test workspace' } as never,
+    workspaceWithCreds: { id: 'workspace-1', name: 'Test workspace', slackBotName: 'test-bot' } as never,
+  },
+};
 vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test', STAGE: 'test' },
@@ -50,13 +61,6 @@ vi.mock('@bike4mind/database', async () => {
     User: { findOne: vi.fn() },
   };
 });
-vi.mock('@bike4mind/database/infra', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/database/infra')>('@bike4mind/database/infra');
-  return { ...actual, SlackDevWorkspace: { findOne: vi.fn() } };
-});
-vi.mock('@bike4mind/server-utils/integrations/slack/liveopsTriageApproval', () => ({
-  handleLiveopsApprovalAction: approvals.liveops,
-}));
 vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   handleSreApprovalAction: approvals.sre,
 }));
@@ -69,7 +73,7 @@ vi.mock('@bike4mind/slack', async () => {
 });
 
 import { User } from '@bike4mind/database';
-import { SlackDevWorkspace } from '@bike4mind/database/infra';
+import { resolveSlackInstallation } from '@server/slack/resolveSlackInstallation';
 import handler from '../interactive';
 
 const routeHandler = handler as unknown as (request: NextApiRequest, response: NextApiResponse) => Promise<void>;
@@ -124,17 +128,6 @@ function resultWithDeferred(response: Record<string, unknown>, events: string[])
 
 const FAMILIES = [
   {
-    family: 'liveops',
-    actionIds: ['liveops_approve_issue', 'liveops_reject_issue'],
-    mock: approvals.liveops,
-    expectedArgs: (actionId: string) => [
-      actionId,
-      'proposal-1',
-      SLACK_USER.id,
-      { workspaceId: 'workspace-1', channelId: 'C1', botToken: 'xoxb-test' },
-    ],
-  },
-  {
     family: 'sre',
     actionIds: ['sre_approve_fix', 'sre_reject_fix'],
     mock: approvals.sre,
@@ -159,16 +152,7 @@ describe('POST /api/slack/interactive registered actions', () => {
     vi.clearAllMocks();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     vi.mocked(User.findOne).mockResolvedValue(null as never);
-    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
-      select: () =>
-        Promise.resolve({
-          id: 'workspace-1',
-          name: 'Test workspace',
-          slackOAuthSigningSecret: 'secret',
-          slackBotToken: 'encrypted',
-          slackBotName: 'test-bot',
-        }),
-    } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
   });
 
   describe.each(FAMILIES)('$family approval actions', ({ actionIds, mock, expectedArgs }) => {
@@ -197,7 +181,7 @@ describe('POST /api/slack/interactive registered actions', () => {
     );
   });
 
-  it.each(['liveops_approve_issue', 'sre_approve_fix'])(
+  it.each(['sre_approve_fix', 'sre_reject_fix'])(
     '%s on an API-posted message never reaches an approval handler',
     async actionId => {
       const res = await post(
@@ -206,7 +190,6 @@ describe('POST /api/slack/interactive registered actions', () => {
         })
       );
 
-      expect(approvals.liveops).not.toHaveBeenCalled();
       expect(approvals.sre).not.toHaveBeenCalled();
       expect(User.findOne).not.toHaveBeenCalled();
       expect(res._getJSONData()).toEqual({});
@@ -336,5 +319,14 @@ describe('POST /api/slack/interactive registered actions', () => {
       text: expect.stringContaining('User not found'),
       response_type: 'ephemeral',
     });
+  });
+
+  it('refuses a request whose app and team match no installation', async () => {
+    vi.mocked(resolveSlackInstallation).mockResolvedValue({ ok: false, reason: 'not_found' });
+
+    const res = await post(blockAction('sre_approve_fix', 'proposal-1'));
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(approvals.sre).not.toHaveBeenCalled();
   });
 });

@@ -110,3 +110,23 @@ describe('executeVoiceTool web_search result count', () => {
     expect(postMock).toHaveBeenCalledWith('/api/tools/web-search', { query: 'x', num_results: 3 });
   });
 });
+
+describe('executeVoiceTool agent_request body', () => {
+  beforeEach(() => {
+    postMock.mockReset();
+    // No quest id in the ack, so the call returns without waiting on a reply.
+    postMock.mockResolvedValue({ status: 200, data: {} });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('posts the chat turn without any QuestMaster flag', async () => {
+    await executeVoiceTool('agent_request', { message: 'summarize my week' }, 'session-1');
+
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(postMock.mock.calls[0]).toStrictEqual([
+      '/api/chat',
+      { sessionId: 'session-1', message: 'summarize my week', wait: false, stream: false, enableTools: true },
+    ]);
+  });
+});

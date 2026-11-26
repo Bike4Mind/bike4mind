@@ -30,7 +30,8 @@ import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { highlightTextSearch } from '@client/app/components/GenAI/highlight';
-import QuestMasterPreviewCard from '@client/app/components/GenAI/QuestMasterPreviewCard';
+import LegacyQuestMasterNote from '@client/app/components/GenAI/LegacyQuestMasterNote';
+import { isLegacyQuestMasterMessage } from '@client/app/components/GenAI/legacyQuestMasterPlan';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
@@ -45,18 +46,12 @@ import ContentTransformPreviewCard from '../GenAI/ContentTransformPreviewCard';
 import MermaidIcon from '@mui/icons-material/AccountTree';
 import InsertDriveFileOutlined from '@mui/icons-material/InsertDriveFileOutlined';
 import ImageDisplay from './ImageDisplay';
-import { FreeQuestLimitNotice } from './FreeQuestLimitNotice';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
 import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import rehypeKatex from 'rehype-katex';
-import {
-  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
-  questGenerationJobs,
-  type ChessArtifact,
-  type MermaidArtifact,
-} from '@bike4mind/common';
+import { questGenerationJobs, type ChessArtifact, type MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
@@ -635,7 +630,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         settled={messageData.status === 'done' || messageData.status === 'stopped'}
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
-        reply={messageData.questMasterReply || replies[0]}
+        reply={replies[0]}
         thought={thought}
         images={images}
         generatedFiles={generatedFiles}
@@ -648,7 +643,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         onSendMessage={onSendMessage}
         messageId={messageData.id}
         onEdit={onEdit}
-        questMasterPlanId={messageData.questMasterPlanId}
+        legacyQuestMasterPlan={isLegacyQuestMasterMessage(messageData)}
         agentIds={messageData.agentIds}
         originalPrompt={messageData.promptEnhancement?.originalPrompt}
         enhancedPrompt={messageData.promptEnhancement?.enhancedPrompt}
@@ -797,6 +792,14 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
 }
 
 // The confirm route executes only allowlisted write tools, so any other pending action gets no card.
+const formatConfirmedOutput = (output: string) => {
+  try {
+    return JSON.stringify(JSON.parse(output), null, 2);
+  } catch {
+    return output;
+  }
+};
+
 export const PendingActionButtons: FC<PendingActionButtonsProps> = props =>
   isConfirmableMcpTool(props.pendingAction.tool) || isCustomConnectorAction(props.pendingAction) ? (
     <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
@@ -811,7 +814,7 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
   const [isConfirmed, setIsConfirmed] = useState(() => parsedData?.status === 'confirmed');
   const [isCancelled, setIsCancelled] = useState(() => parsedData?.status === 'cancelled');
   const [isReplaced, setIsReplaced] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; message: string; url?: string } | null>(
+  const [result, setResult] = useState<{ success: boolean; message: string; url?: string; output?: string } | null>(
     () => parsedData?.result || null
   );
 
@@ -899,6 +902,15 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
               {result.url}
             </a>
           </Typography>
+        )}
+        {typeof result?.output === 'string' && (
+          <Box
+            component="pre"
+            data-testid="mcp-confirm-output"
+            sx={{ m: 0, mt: 1, p: 1, maxHeight: 300, overflow: 'auto', fontSize: 'xs', whiteSpace: 'pre-wrap' }}
+          >
+            {formatConfirmedOutput(result.output)}
+          </Box>
         )}
       </Box>
     );
@@ -1254,7 +1266,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   completed = false,
   settled = completed,
   errorCode,
-  questMasterPlanId,
+  legacyQuestMasterPlan,
   onSendMessage,
   messageId,
   onEdit,
@@ -1569,8 +1581,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       />
     ) : null;
 
-  if (questMasterPlanId) {
-    return <QuestMasterPreviewCard questMasterPlanId={questMasterPlanId} />;
+  if (legacyQuestMasterPlan) {
+    return <LegacyQuestMasterNote />;
   }
 
   // Out-of-credits errors render as a plain-language notice with an inline "Add Credits"
@@ -1578,10 +1590,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // message (with the credit numbers).
   if (errorCode === 'insufficient_credits') {
     return <InsufficientCreditsNotice message={reply} />;
-  }
-
-  if (errorCode === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
-    return <FreeQuestLimitNotice message={reply} />;
   }
 
   return (

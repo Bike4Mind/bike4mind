@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal } from './abortAwareRetry';
 import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   createThinkMarkerEscaper,
@@ -37,12 +38,17 @@ import {
 } from './backend';
 import { appendCacheInclusiveTurn, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { replayableText } from './replayPreToolText';
 import {
   appendIdentityReminderToMessages,
   buildIdentityReminder,
   shouldOmitIdentityReminder,
 } from './identityReminder';
-import { OutputBudgetExhaustedError, StreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
+import {
+  HiddenReasoningOnlyEmptyError,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
+} from './llmEmptyTurnErrors';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { normalizeOpenAIFinishReason } from './stopReason';
@@ -257,6 +263,9 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    if (getAbortAwareRetrySignal(options)) {
+      throw new Error('Abort-aware completion retries are not supported by local OpenAI-compatible servers');
+    }
     this.currentModel = model;
     const name = this.canonical.get(model) ?? model;
     const toolCallCount = options._internal?.toolCallCount ?? 0;
@@ -424,6 +433,15 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       if (finishReason === undefined && !options.abortSignal?.aborted) {
         throw new StreamEndedWithoutFinishError(this.options.label, name);
       }
+      // A finished turn only (an aborted one has no finish reason), and not the capped round (tools
+      // stripped at maxToolCalls), whose empty is deterministic.
+      if (reasoning && finishReason !== undefined && toolCallCount < maxToolCalls) {
+        throw new HiddenReasoningOnlyEmptyError(
+          this.options.label,
+          name,
+          `${this.options.label} returned only reasoning for ${name}, with no displayed text and no tool call (finish_reason: ${finishReason}).`
+        );
+      }
       throw new Error(
         `${this.options.label} returned no content for ${name} (finish_reason: ${finishReason ?? 'unknown'}).`
       );
@@ -521,7 +539,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
         round.push({ tool: { id: target.id, name: target.name, parameters: target.parameters }, result: observation });
       }
     }
-    this.pushToolRound(messages, round, reasoning || undefined);
+    this.pushToolRound(messages, round, reasoning || undefined, roundText);
 
     if (
       shouldEndTurnAfterTools(
@@ -601,10 +619,15 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     this.pushToolRound(messages, [{ tool, result }], reasoning);
   }
 
-  private pushToolRound(messages: IMessage[], round: ToolRoundResult[], reasoning: string | undefined) {
+  private pushToolRound(
+    messages: IMessage[],
+    round: ToolRoundResult[],
+    reasoning: string | undefined,
+    assistantText?: string
+  ) {
     if (round.length === 0) return;
     messages.push({
-      content: null,
+      content: replayableText(assistantText) ?? null,
       role: 'assistant',
       ...(reasoning ? { reasoning_content: reasoning } : {}),
       tool_calls: round.map(({ tool }) => ({

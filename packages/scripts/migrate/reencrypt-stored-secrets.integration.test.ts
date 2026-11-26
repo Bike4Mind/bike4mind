@@ -781,6 +781,8 @@ describe('re-encrypt CLI', () => {
     vi.spyOn(console, 'log').mockImplementation((...args) => void out.push(args.join(' ')));
     vi.spyOn(console, 'error').mockImplementation((...args) => void err.push(args.join(' ')));
     vi.stubEnv('MONGODB_URI', '');
+    vi.stubEnv('SECRET_ENCRYPTION_KEY', '');
+    vi.stubEnv('SECRET_ENCRYPTION_KEY_PREVIOUS', '');
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -869,6 +871,27 @@ describe('re-encrypt CLI', () => {
     mocks.stage = 'cli';
     expect(await run(['--verify'])).toBe(1);
     expect(out.join('\n')).toContain(`Database: ${dbName}`);
+  });
+
+  it('reads the keys and the URI from the environment when there is no SST resource', async () => {
+    seed = await seedTable(cliDb(), subsetFields());
+    mocks.resources = {};
+    vi.stubEnv('MONGODB_URI', uriFor());
+    vi.stubEnv('SECRET_ENCRYPTION_KEY', newKey);
+    vi.stubEnv('SECRET_ENCRYPTION_KEY_PREVIOUS', oldKey);
+
+    expect(await run([])).toBe(0);
+    expect(await run(['--verify'])).toBe(0);
+    expectNoLeaks();
+  });
+
+  it('prefers the SST resource over the environment', async () => {
+    seed = await seedTable(cliDb(), subsetFields());
+    vi.stubEnv('SECRET_ENCRYPTION_KEY', otherKey);
+    vi.stubEnv('SECRET_ENCRYPTION_KEY_PREVIOUS', otherKey);
+
+    expect(await run([])).toBe(0);
+    expect(await run(['--verify'])).toBe(0);
   });
 
   it('rotates a seeded database, verifies it, and prints no key, value or document id', async () => {

@@ -2,7 +2,7 @@ import { forwardRef, useImperativeHandle, useState, type ReactNode } from 'react
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultStudioTimeline, type IFabFileDocument, type StudioCompositionResponse } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -51,6 +51,9 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
 }));
 vi.mock('./probeMediaDuration', () => ({ probeMediaDurationMs: async () => 6_000 }));
 // The Library browser has its own tests; here it only has to open and hand back the picked files.
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isFeatureEnabled: () => false }),
+}));
 vi.mock('@client/app/components/Files/EmbeddedFileBrowser', () => ({
   default: forwardRef(function PickerStub(
     {
@@ -80,6 +83,8 @@ vi.mock('@client/app/components/Files/EmbeddedFileBrowser', () => ({
 }));
 
 import ProductionEditor from './ProductionEditor';
+import { FIELD_AUTOSAVE_DELAY_MS } from './useFieldAutosave';
+import { SAVE_DEBOUNCE_MS } from './useTimelineAutosave';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -98,7 +103,7 @@ const composition = (): StudioCompositionResponse => ({
   title: 'Spring ad',
   template: 'ad_campaign',
   brief: {},
-  brandKit: { colors: [], productFileIds: [] },
+  brandKit: { colors: [], productFileIds: [], characters: [] },
   shots: [],
   timeline: defaultStudioTimeline('ad_campaign'),
   createdAt: new Date(),
@@ -113,6 +118,12 @@ beforeEach(() => {
   h.blocker.status = 'idle';
   h.blocker.options = null;
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+const elapse = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
 
 describe('ProductionEditor', () => {
   it('draws an empty lane per track kind and previews the first output', () => {
@@ -167,11 +178,15 @@ describe('ProductionEditor', () => {
   });
 
   it('saves a valid edit after a pause', async () => {
+    vi.useFakeTimers();
     renderEditor(composition());
     fireEvent.click(screen.getByTestId('production-add-captions-btn'));
     expect(screen.getByTestId('production-save-status')).toHaveAttribute('data-status', 'pending');
 
-    await waitFor(() => expect(h.updateMutate).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    await elapse(SAVE_DEBOUNCE_MS - 1);
+    expect(h.updateMutate).not.toHaveBeenCalled();
+    await elapse(1);
+    expect(h.updateMutate).toHaveBeenCalledTimes(1);
     const [body] = h.updateMutate.mock.calls[0];
     expect(body.timeline.tracks.find((track: { kind: string }) => track.kind === 'captions')).toMatchObject({
       clips: [{ text: 'New caption' }],
@@ -179,6 +194,7 @@ describe('ProductionEditor', () => {
   });
 
   it('holds the save and lists the issue while two clips overlap', async () => {
+    vi.useFakeTimers();
     renderEditor(composition());
     fireEvent.click(screen.getByTestId('production-add-captions-btn'));
     fireEvent.click(screen.getByTestId('production-add-captions-btn'));
@@ -189,7 +205,7 @@ describe('ProductionEditor', () => {
     expect(screen.getByTestId('production-issues')).toBeInTheDocument();
     // The validator flags the later clip of an overlapping pair.
     expect(clipsIn('captions').filter(clip => clip.dataset.invalid === 'true')).toHaveLength(1);
-    await act(() => new Promise(resolve => setTimeout(resolve, 1_000)));
+    await elapse(SAVE_DEBOUNCE_MS * 2);
     expect(h.updateMutate).not.toHaveBeenCalled();
   });
 
@@ -232,6 +248,7 @@ describe('ProductionEditor', () => {
       fileUrl: `https://files.test/take-${digit}.mp4`,
     }));
     h.pickedFiles = takes;
+    vi.useFakeTimers();
     renderEditor({
       ...composition(),
       shots: [
@@ -244,7 +261,8 @@ describe('ProductionEditor', () => {
     fireEvent.click(screen.getByTestId('production-shot-0-add-takes-btn'));
     fireEvent.click(screen.getByTestId('picker-stub-add'));
     const second = `production-shot-0-take-${takes[1].id}`;
-    fireEvent.click(await screen.findByTestId(`${second}-select-btn`));
+    await elapse(0);
+    fireEvent.click(screen.getByTestId(`${second}-select-btn`));
     expect(screen.getByTestId(second)).toHaveAttribute('data-selected', 'true');
 
     fireEvent.click(screen.getByTestId('production-shot-1-down-btn'));
@@ -252,25 +270,29 @@ describe('ProductionEditor', () => {
     expect(screen.getByTestId('production-shot-0')).toHaveAttribute('data-shot-id', 'shot-1');
 
     // The take's media kind comes from its Library record, which the thumbnails load.
-    await waitFor(() => expect(screen.getByTestId(second)).toHaveAttribute('title', 'hero.mp4'));
+    await elapse(0);
+    expect(screen.getByTestId(second)).toHaveAttribute('title', 'hero.mp4');
     fireEvent.click(screen.getByTestId('production-shots-send-all-btn'));
-    await waitFor(() => expect(clipsIn('video')).toHaveLength(1));
+    await elapse(0);
+    expect(clipsIn('video')).toHaveLength(1);
 
-    await waitFor(() =>
-      expect(h.updateMutate).toHaveBeenCalledWith({
-        shots: [expect.objectContaining({ id: 'shot-1', chosenFileId: takes[1].id }), expect.anything()],
-      })
-    );
+    await elapse(FIELD_AUTOSAVE_DELAY_MS);
+    expect(h.updateMutate).toHaveBeenCalledWith({
+      shots: [expect.objectContaining({ id: 'shot-1', chosenFileId: takes[1].id }), expect.anything()],
+    });
   });
 
   it('saves the brief as it is typed', async () => {
+    vi.useFakeTimers();
     renderEditor(composition());
     fireEvent.change(screen.getByTestId('production-brief-summary-input'), {
       target: { value: 'Cold brew, hot summer' },
     });
-    await waitFor(() => expect(h.updateMutate).toHaveBeenCalledWith({ brief: { summary: 'Cold brew, hot summer' } }));
+    await elapse(FIELD_AUTOSAVE_DELAY_MS);
+    expect(h.updateMutate).toHaveBeenCalledWith({ brief: { summary: 'Cold brew, hot summer' } });
     fireEvent.change(screen.getByTestId('production-brief-summary-input'), { target: { value: '' } });
-    await waitFor(() => expect(h.updateMutate).toHaveBeenLastCalledWith({ brief: {} }));
+    await elapse(FIELD_AUTOSAVE_DELAY_MS);
+    expect(h.updateMutate).toHaveBeenLastCalledWith({ brief: {} });
   });
 
   it('removes the selected clip from the inspector', () => {

@@ -1,0 +1,300 @@
+// Registered outside the `@bike4mind/database` barrel; importing them here means every walk of the
+// registry can load them, whatever else the process has imported.
+import '@bike4mind/server-utils/tutorials/coreModels';
+import type { DataHolderRegistry } from '../types';
+import { SAFETY_INCIDENT } from './retention';
+
+export const contentHolders = {
+  Activity: {
+    kind: 'holder',
+    // `ownerType` is the Mongoose model name the feed entry was created for (see ActivityRepository).
+    references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'User' } }],
+    // `ownerName` goes with the document when the person owns it, and names the owning entity otherwise.
+    unrelatedPaths: ['ownerName'],
+    unmatchedPaths: { receiverName: 'Cached display name of the receiver; the receiver id is not stored.' },
+  },
+  // Authored annotation threads go with their author; resolving or deleting someone else's is attribution only.
+  Annotation: {
+    kind: 'holder',
+    references: [
+      { path: 'authorId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'deletedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'resolvedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  AppFile: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  Artifact: {
+    kind: 'holder',
+    references: [
+      // As with FabFile: a personal artifact goes, an organization's stays with its creator cleared.
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'permissions.canRead', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'permissions.canWrite', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'permissions.canDelete', matchBy: 'userId', action: 'pullFromArray' },
+    ],
+    unrelatedPaths: ['lastVersionNumber'],
+  },
+  // Artifacts are keyed by their own string `id`, not `_id` (see `purgeArtifacts`).
+  ArtifactContent: { kind: 'viaParent', parent: 'Artifact', foreignKey: 'artifactId', parentKey: 'id' },
+  // Versions follow the artifact so no content outlives it; a collaborator's version of someone
+  // else's artifact survives with its author anonymized.
+  ArtifactVersion: {
+    kind: 'viaParent',
+    parent: 'Artifact',
+    foreignKey: 'artifactId',
+    parentKey: 'id',
+    attribution: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
+    unrelatedPaths: ['superseded'],
+  },
+  AssistantBrief: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // Source record ids (an ingested email, a delegated item), not addresses.
+    unrelatedPaths: [
+      'happened.source.emailId',
+      'handled.source.emailId',
+      'decisions.source.emailId',
+      'happened.source.delegationId',
+      'handled.source.delegationId',
+      'decisions.source.delegationId',
+    ],
+  },
+  AssistantInstruction: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  BriefcasePrompt: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // Drafts, overrides and their change log are platform tutorial content an admin wrote, so they
+  // stay with the author cleared.
+  CoreTutorialDraft: {
+    kind: 'holder',
+    references: [
+      { path: 'capturedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'updatedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  CoreTutorialOverride: {
+    kind: 'holder',
+    references: [{ path: 'updatedBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  CoreTutorialOverrideChange: {
+    kind: 'holder',
+    references: [{ path: 'actorId', matchBy: 'userId', action: 'anonymize' }],
+  },
+  CoreTutorialProgress: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  DailyReport: { kind: 'noUserData', note: 'Platform-wide generated activity summary for a date, not per person.' },
+  // What the person forwarded to the assistant. A shared link or text goes with the document.
+  DelegatedItem: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    secretPaths: ['claimToken'],
+    // The person's own uploaded files, which their FabFile entries cover.
+    unrelatedPaths: ['fileIds'],
+  },
+  DungeonInstance: {
+    kind: 'holder',
+    references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  FabFile: {
+    kind: 'holder',
+    references: [
+      // A personal upload goes; a file uploaded into an organization's lake is the org's and stays,
+      // with the uploader cleared (the anonymize below; precedence is in types.ts).
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'supersededInLakes.decidedByUserId', matchBy: 'userId', action: 'anonymize' },
+    ],
+    secretPaths: ['presignedUrl', 'fileUrl'],
+  },
+  FabFileChunk: { kind: 'viaParent', parent: 'FabFile', foreignKey: 'fabFileId' },
+  Favorite: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  GearOverride: {
+    kind: 'holder',
+    references: [{ path: 'updatedBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  GearStamp: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  ImageGenerationTemplate: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // A safety incident, possibly reported to a child-protection authority: kept against the uploader.
+  ImageModerationIncident: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...SAFETY_INCIDENT,
+      },
+      { path: 'falsePositiveBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'noActionBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'reportedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'escalatedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  ImportHistoryJob: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    secretPaths: ['errorStack'],
+  },
+  Memento: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  Obligation: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The scan is the person's own FabFile; the lake is filed into by id and covered by its own entry.
+    unrelatedPaths: ['fileId', 'destinationLakeId'],
+  },
+  OrganizationLibrary: {
+    kind: 'noUserData',
+    note: 'Organization-owned definition snapshots with no author identity or personal source reference.',
+  },
+  Project: {
+    kind: 'holder',
+    // As the account purge does: a personal project goes, an organization's stays with the organization.
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
+    ],
+  },
+  Prompt: { kind: 'noUserData', note: 'Shared prompt catalogue with no owner field.' },
+  PublishedArtifact: {
+    kind: 'holder',
+    // This hands an organization page a colleague published to that colleague and removes thumbnails and
+    // CDN copies, which deleting the rows would not. It calls `purgeOwnerPublishedArtifacts` itself and
+    // uses its result for the CDN and thumbnails, so running that one first would leave it nothing to do.
+    beforeErasure: ['purgeUserPublishedArtifacts'],
+    references: [
+      // Only personal pages go. A project or organization page the purge could not transfer is only
+      // soft-deleted and keeps `ownerId`, so the owner is cleared (precedence is in types.ts).
+      { path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', where: { tier: 'user' } },
+      { path: 'ownerId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'deletedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'lastPublishedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'previousVersionMeta.publishedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'versions.publishedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+    secretPaths: ['shareTokens.token', 'accessGate.passphraseHash'],
+  },
+  // Moderation record about someone else's artifact: the report stays, the reporter's identity goes.
+  PublishedArtifactReport: {
+    kind: 'holder',
+    references: [
+      { path: 'reporterId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'resolvedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  // The owner's view log: it goes with an erased personal page (as `purgeOwnerPublishedArtifacts` does),
+  // otherwise the row stays for the artifact owner and the viewer's identity goes.
+  PublishedArtifactViewAudit: {
+    kind: 'viaParent',
+    parent: 'PublishedArtifact',
+    foreignKey: 'publicId',
+    parentKey: 'publicId',
+    attribution: [
+      {
+        path: 'viewerId',
+        matchBy: 'userId',
+        action: 'anonymize',
+        alsoRedact: ['sourceIp', 'userAgent', 'viewerEmailDomain'],
+      },
+    ],
+  },
+  QuestExternalLink: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'createdBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  QuestGraph: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  QuestMasterPlan: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'sharedWith', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'handoff.lastUpdatedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'decisions.madeBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  QuestNode: { kind: 'viaParent', parent: 'QuestGraph', foreignKey: 'graphId' },
+  ReleaseNote: { kind: 'noUserData', note: 'Platform release notes, not per person.' },
+  ResearchData: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  ResearchLink: { kind: 'noUserData', note: 'Shared research link catalogue with no owner field.' },
+  ResearchLinkCategory: { kind: 'noUserData', note: 'Shared research link categories with no owner field.' },
+  StockPortfolio: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // Simulated agent trades, not real money, so no accounting retention applies.
+  StockTrade: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // A Studio Production: owner-only, so it goes with its owner. The FabFiles it references are their own holders.
+  StudioComposition: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  SystemPrompt: {
+    kind: 'holder',
+    references: [
+      { path: 'createdBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'lastUpdatedBy', matchBy: 'userId', action: 'anonymize', alsoRedact: ['lastUpdatedByName'] },
+    ],
+  },
+  SystemPromptHistory: {
+    kind: 'holder',
+    references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize', alsoRedact: ['createdByName'] }],
+  },
+  Tag: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  TavernMap: {
+    kind: 'holder',
+    references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  TavernQuest: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  TavernWorld: {
+    kind: 'holder',
+    references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  WeeklyReport: { kind: 'noUserData', note: 'Platform-wide generated activity summary for a week, not per person.' },
+  // The `file` discriminator of Tag (TagType.FILE), stored in the same `tags` collection.
+  file: { kind: 'discriminator', base: 'Tag' },
+} satisfies DataHolderRegistry;

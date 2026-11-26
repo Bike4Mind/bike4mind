@@ -106,8 +106,10 @@ export const createImageJobContract = defineEndpoint({
       schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {
-      description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',
-      schema: ApiErrorSchema,
+      description:
+        'The `run` does not exist or another user or billing owner minted it (`errorCode: run_not_found`). A ' +
+        'nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`.',
+      schema: ImageJobErrorResponseSchema,
     },
     422: {
       description:
@@ -115,8 +117,10 @@ export const createImageJobContract = defineEndpoint({
         '(`errorCode` names the first, e.g. `unsupported_size` or `missing_input`; `message` lists them all), an ' +
         'unknown or unavailable model (`model_unavailable`), an input file that is not yours or not found ' +
         '(`input_image_not_found`) or not a usable image (`unsupported_input_image`), too few credits ' +
-        '(`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, ' +
-        '`idempotency_key_reused`).',
+        '(`insufficient_credits`), a `run` budget with too little left for every job (`run_budget_exhausted`), ' +
+        'or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). An API key ' +
+        'without `files:read` may only name generated images and images staged by an `ai:generate` key ' +
+        'without `files:write`; any other file is `input_image_not_found`.',
       schema: ImageJobErrorResponseSchema,
     },
     429: rateLimited,

@@ -1,4 +1,7 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
+import { slackIdentityFilter, type IUserDocument } from '@bike4mind/common';
+import { isValidObjectId } from 'mongoose';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -46,11 +49,8 @@ const SlackCommandSchema = z.object({
   trigger_id: z.string(),
 });
 
-async function findUserBySlackId(slackUserId: string) {
-  const user = await User.findOne({
-    'slackSettings.slackUserId': slackUserId,
-    ...VERIFIED_SLACK_IDENTITY_FILTER,
-  });
+async function findUserBySlackId(slackUserId: string, slackTeamId: string) {
+  const user = await User.findOne(slackIdentityFilter(slackUserId, slackTeamId));
   return user;
 }
 
@@ -64,11 +64,10 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: st
 };
 
 // Includes the user token; used by the reminders API.
-async function findUserBySlackIdWithToken(slackUserId: string) {
-  const user = await User.findOne({
-    'slackSettings.slackUserId': slackUserId,
-    ...VERIFIED_SLACK_IDENTITY_FILTER,
-  }).select('+slackSettings.slackUserToken');
+async function findUserBySlackIdWithToken(slackUserId: string, slackTeamId: string) {
+  const user = await User.findOne(slackIdentityFilter(slackUserId, slackTeamId)).select(
+    '+slackSettings.slackUserToken'
+  );
 
   // Debug: log what we found to verify stored slackUserId matches
   if (user) {
@@ -85,7 +84,7 @@ async function findUserBySlackIdWithToken(slackUserId: string) {
   return user;
 }
 
-async function updateUserSlackSettings(userId: string, slackSettings: any) {
+async function updateUserSlackSettings(userId: string, slackSettings: IUserDocument['slackSettings']) {
   await User.findByIdAndUpdate(userId, { $set: { slackSettings } }, { new: true, upsert: false });
 }
 
@@ -99,7 +98,7 @@ async function getUserNotebooks(userId: string, limit = 10) {
 }
 
 // Command handlers
-async function handleNotebookCommand(dbUser: any, slackUserId: string, commandText: string): Promise<any> {
+async function handleNotebookCommand(dbUser: IUserDocument, slackUserId: string, commandText: string) {
   const args = commandText.trim().split(' ');
   const subcommand = args[0]?.toLowerCase();
 
@@ -167,14 +166,16 @@ function getHelpResponse() {
   };
 }
 
-async function getStatusResponse(dbUser: any) {
+async function getStatusResponse(dbUser: IUserDocument) {
   const slackSettings = dbUser.slackSettings || {};
   const defaultNotebookId = slackSettings.defaultNotebookId;
 
   let notebookInfo = 'None (auto-create mode)';
   if (defaultNotebookId) {
     try {
-      const notebook = await Session.findById(defaultNotebookId).select('name createdAt');
+      const notebook = isValidObjectId(defaultNotebookId)
+        ? await Session.findOne({ _id: defaultNotebookId, userId: dbUser.id }).select('name createdAt')
+        : null;
 
       if (notebook) {
         notebookInfo = `"${notebook.name}" (\`${defaultNotebookId}\`)`;
@@ -295,7 +296,7 @@ async function getNotebookListResponse(userId: string) {
   }
 }
 
-async function createNotebookResponse(dbUser: any, slackUserId: string, customName?: string) {
+async function createNotebookResponse(dbUser: IUserDocument, slackUserId: string, customName?: string) {
   try {
     const notebookName =
       customName ||
@@ -307,11 +308,10 @@ async function createNotebookResponse(dbUser: any, slackUserId: string, customNa
         minute: '2-digit',
       })}`;
 
-    const ability = { can: () => true };
     const newSession = await createSession(
       dbUser.id,
       { name: notebookName, origin: { channel: 'slack' } },
-      ability as any
+      defineAbilitiesFor(dbUser)
     );
 
     // Update user's slack settings
@@ -335,13 +335,12 @@ async function createNotebookResponse(dbUser: any, slackUserId: string, customNa
       ],
       response_type: 'ephemeral',
     };
-  } catch (error: any) {
+  } catch (error) {
     // DocumentDB doesn't support sparse unique indexes properly - it enforces uniqueness on
     // null slackMetadata, so a user can have only one notebook without it.
-    if (error.code === 11000 && error.message?.includes('slackMetadata')) {
+    if (isDuplicateKeyError(error) && error instanceof Error && error.message.includes('slackMetadata')) {
       Logger.warn('[Slack Command] DocumentDB sparse index limitation - user already has manual notebook', {
         userId: dbUser.id,
-        errorCode: error.code,
       });
 
       return {
@@ -358,7 +357,7 @@ async function createNotebookResponse(dbUser: any, slackUserId: string, customNa
   }
 }
 
-async function setDefaultNotebookResponse(dbUser: any, slackUserId: string, notebookId?: string) {
+async function setDefaultNotebookResponse(dbUser: IUserDocument, slackUserId: string, notebookId?: string) {
   if (!notebookId) {
     return {
       text: '❌ Please provide a notebook ID. Usage: `/notebook set <notebook-id>`',
@@ -396,7 +395,7 @@ async function setDefaultNotebookResponse(dbUser: any, slackUserId: string, note
   }
 }
 
-async function toggleAutoCreateResponse(dbUser: any, slackUserId: string, setting?: string) {
+async function toggleAutoCreateResponse(dbUser: IUserDocument, slackUserId: string, setting?: string) {
   const validSettings = ['on', 'off', 'true', 'false', 'enable', 'disable'];
 
   if (setting && !validSettings.includes(setting.toLowerCase())) {
@@ -708,7 +707,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
     await (async () => {
       const response_url = commandData.data.response_url;
       try {
-        const dbUser = await findUserBySlackId(user_id);
+        const dbUser = await findUserBySlackId(user_id, team_id);
 
         if (!dbUser) {
           auditLogger.failure('User not found');
@@ -762,7 +761,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
                 const query = args.slice(1).join(' ');
                 try {
                   // For search we need the user token
-                  const userWithToken = await findUserBySlackIdWithToken(user_id);
+                  const userWithToken = await findUserBySlackIdWithToken(user_id, team_id);
                   const userToken = decryptToken(userWithToken?.slackSettings?.slackUserToken) ?? undefined;
 
                   response = await withTimeout(
@@ -782,7 +781,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
 
               // For other /b4m commands (like schedule), we need the user token for reminders
               // Re-fetch user with token since findUserBySlackId excludes it
-              const userWithToken = await findUserBySlackIdWithToken(user_id);
+              const userWithToken = await findUserBySlackIdWithToken(user_id, team_id);
               const userToken = decryptToken(userWithToken?.slackSettings?.slackUserToken) ?? undefined;
               const userScopes = userWithToken?.slackSettings?.slackUserScopes;
 

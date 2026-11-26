@@ -1,21 +1,8 @@
 import { z } from 'zod';
 import { normalizeEnvKey, type AuthLogger, type AuthTokens, type TokenStore } from '@bike4mind/client-auth';
 import type { EnvironmentSelection, TokenStorageStatus } from '@shared/auth';
+import type { SecretCipher } from '../../host/ports';
 import { resealed } from '../secrets/reseal';
-
-/**
- * The slice of Electron's `safeStorage` this module needs. Narrowed to a port so the vault
- * can be tested without an Electron app, and so the "must be called after the app `ready`
- * event" rule stays a construction-order concern of the caller rather than an import-time
- * landmine here.
- */
-export interface SecretCipher {
-  isEncryptionAvailable(): boolean;
-  encryptString(plainText: string): Buffer;
-  decryptString(encrypted: Buffer): string;
-  /** True for a blob in an older format that the vault should re-save (see secrets/appSecretCipher.ts). */
-  needsReencrypt?(encrypted: Buffer): boolean;
-}
 
 /** Persistence port for the vault document. Backed by a JSON file under `userData`. */
 export interface VaultFile {
@@ -55,11 +42,12 @@ const authTokensSchema = z.object({
  *   until a method is called; construct the vault after `whenReady()`.
  * - `isEncryptionAvailable()` is false on Linux with no keyring. In that case the vault degrades
  *   to memory-only for tokens and reports {@link TokenStorageStatus} `unavailable` so the UI can
- *   say the session will not survive a restart. It never falls back to writing plaintext.
+ *   say the session will not survive a restart. It never falls back to writing plaintext
+ *   unless the cipher explicitly declares file-permission protection, as a headless host's does.
  */
 export class TokenVault {
   private document: VaultDocument | null = null;
-  /** Decrypted tokens by environment key; the only copy when encryption is unavailable. */
+  /** Decrypted tokens by environment key; the only copy when storage is memory-only. */
   private readonly cache = new Map<string, AuthTokens>();
   private documentOperation: Promise<void> = Promise.resolve();
 
@@ -82,7 +70,8 @@ export class TokenVault {
 
   /** Cheap enough to re-ask each time, and the answer can change between launches. */
   storageStatus(): TokenStorageStatus {
-    return this.cipher.isEncryptionAvailable() ? 'available' : 'unavailable';
+    if (this.cipher.isEncryptionAvailable()) return 'available';
+    return this.cipher.atRestProtection === 'file-permissions' ? 'file-permissions' : 'unavailable';
   }
 
   getEnvironment(): Promise<EnvironmentSelection | undefined> {
@@ -125,8 +114,8 @@ export class TokenVault {
   private writeTokens(envUrl: string, tokens: AuthTokens | null, expectedRefreshToken?: string): Promise<boolean> {
     return this.serialize(async () => {
       const key = normalizeEnvKey(envUrl);
-      const available = this.storageStatus() === 'available';
-      if (!available && expectedRefreshToken !== undefined) {
+      const persisted = this.storageStatus() !== 'unavailable';
+      if (!persisted && expectedRefreshToken !== undefined) {
         if (this.cache.get(key)?.refreshToken !== expectedRefreshToken) return false;
         if (tokens) this.cache.set(key, tokens);
         else this.cache.delete(key);
@@ -140,14 +129,14 @@ export class TokenVault {
         throw error;
       }
       if (expectedRefreshToken !== undefined) {
-        const current = available
+        const current = persisted
           ? await this.decryptInto(envUrl, document, { preserveOnFailure: true })
           : this.cache.get(key);
         if (current?.refreshToken !== expectedRefreshToken) return false;
       }
       if (tokens) {
         this.cache.set(key, tokens);
-        if (!available) return true;
+        if (!persisted) return true;
         document.tokens[key] = this.cipher.encryptString(JSON.stringify(tokens)).toString('base64');
       } else {
         this.cache.delete(key);

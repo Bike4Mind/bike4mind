@@ -67,7 +67,7 @@ const handler = baseApi().get(
       // customer). Surface it so a sustained rate is detectable. The classifier
       // is a synchronous in-memory tag check, so this should effectively never
       // fire; wire a counter/alert here if it ever becomes I/O-bound.
-      console.warn('[modals] viewer classification failed; fell back to safe default', {
+      req.logger.warn('Viewer classification failed; fell back to safe default', {
         safeDefaultKey: audienceKey,
         userId: req.user?.id,
         error: error instanceof Error ? error.message : String(error),

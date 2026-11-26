@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Link } from '@tanstack/react-router';
-import { Alert, Box, Button, Card, Grid, LinearProgress, Stack, Typography } from '@mui/joy';
+import { Alert, Box, Button, Grid, LinearProgress, Stack, Typography } from '@mui/joy';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { AdminTab } from './adminSidebarConfig';
@@ -11,6 +11,8 @@ import { useAdminActivitySummary } from './useAdminActivitySummary';
 import { NewSignupsTile } from './Signups/NewSignupsTile';
 import { AiAdvisoryStrip } from './AiAdvisory/AiAdvisoryStrip';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { AdminPageHeader } from './shared';
+import { SectionCard } from './shared/SectionCard';
 import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
 import { MorningBriefCard } from './MorningBriefCard';
 
@@ -46,6 +48,9 @@ const DASHBOARD_SHORTCUTS = [
   },
 ] as const;
 
+// SectionCard takes no sx, so the grid item stretches it to an equal row height.
+const EQUAL_HEIGHT_ITEM_SX = { display: 'flex', '& > section': { flex: 1 } } as const;
+
 type AdminDashboardTabProps = {
   onNavigate: (tab: AdminTab) => void;
 };
@@ -59,13 +64,11 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
 
   return (
     // overflowX clip: the Joy Grid negative gutters stick out of this wrapper
-    <Stack spacing={ADMIN_REGION_GAP} sx={{ overflowX: 'clip' }} data-testid="admin-dashboard">
-      <Box>
-        <Typography level="h1">Admin dashboard</Typography>
-        <Typography level="body-md" sx={{ mt: 1 }}>
-          See how Bike4Mind is being used and jump into the tools behind the numbers.
-        </Typography>
-      </Box>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ overflowX: 'clip' }} data-testid="admin-dashboard">
+      <AdminPageHeader
+        title="Admin dashboard"
+        description="See how Bike4Mind is being used and jump into the tools behind the numbers."
+      />
 
       <AiAdvisoryStrip />
       <MorningBriefCard />
@@ -87,24 +90,29 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
                 sm={additionalDashboards.length === 1 ? 12 : 6}
                 lg={additionalDashboards.length === 1 ? 12 : 4}
                 key={dashboard.path}
+                sx={EQUAL_HEIGHT_ITEM_SX}
               >
-                <Card variant="soft" color="primary" sx={{ height: '100%' }}>
-                  <Typography level="title-lg">{dashboard.label}</Typography>
-                  <Typography level="body-sm" sx={{ flex: 1 }}>
+                <SectionCard
+                  title={dashboard.label}
+                  body="custom"
+                  action={
+                    <Button
+                      component={Link}
+                      to={dashboard.path}
+                      size="sm"
+                      variant="plain"
+                      endDecorator={<ArrowForwardIcon />}
+                      data-testid="admin-dashboard-extension-link"
+                      aria-label={`Open ${dashboard.label}`}
+                    >
+                      Open dashboard
+                    </Button>
+                  }
+                >
+                  <Typography level="body-sm" sx={{ px: 2, py: 1.75 }}>
                     {dashboard.description}
                   </Typography>
-                  <Button
-                    component={Link}
-                    to={dashboard.path}
-                    variant="solid"
-                    endDecorator={<ArrowForwardIcon />}
-                    sx={{ alignSelf: 'flex-start' }}
-                    data-testid="admin-dashboard-extension-link"
-                    aria-label={`Open ${dashboard.label}`}
-                  >
-                    Open dashboard
-                  </Button>
-                </Card>
+                </SectionCard>
               </Grid>
             ))}
           </Grid>
@@ -143,26 +151,32 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
         </Typography>
         <Grid container spacing={2}>
           {DASHBOARD_SHORTCUTS.map(shortcut => (
-            <Grid xs={12} sm={6} lg={4} key={shortcut.tab}>
-              <Card sx={{ height: '100%' }}>
-                <Typography level="title-lg">
-                  {shortcut.title}
-                  {'help' in shortcut && <AnalyticsTermHelp term={shortcut.title} description={shortcut.help} />}
-                </Typography>
-                <Typography level="body-sm" sx={{ flex: 1 }}>
+            <Grid xs={12} sm={6} lg={4} key={shortcut.tab} sx={EQUAL_HEIGHT_ITEM_SX}>
+              <SectionCard
+                title={shortcut.title}
+                help={
+                  'help' in shortcut ? (
+                    <AnalyticsTermHelp term={shortcut.title} description={shortcut.help} />
+                  ) : undefined
+                }
+                body="custom"
+                action={
+                  <Button
+                    size="sm"
+                    variant="plain"
+                    endDecorator={<ArrowForwardIcon />}
+                    onClick={() => onNavigate(shortcut.tab)}
+                    data-testid={`admin-dashboard-open-${shortcut.tab}`}
+                    aria-label={`Open ${shortcut.title}`}
+                  >
+                    Open
+                  </Button>
+                }
+              >
+                <Typography level="body-sm" sx={{ px: 2, py: 1.75 }}>
                   {shortcut.description}
                 </Typography>
-                <Button
-                  variant="plain"
-                  endDecorator={<ArrowForwardIcon />}
-                  onClick={() => onNavigate(shortcut.tab)}
-                  sx={{ alignSelf: 'flex-start' }}
-                  data-testid={`admin-dashboard-open-${shortcut.tab}`}
-                  aria-label={`Open ${shortcut.title}`}
-                >
-                  Open
-                </Button>
-              </Card>
+              </SectionCard>
             </Grid>
           ))}
         </Grid>

@@ -1,18 +1,19 @@
 import express, { type Request, type Response } from 'express';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { connectDB, mongoose } from '@bike4mind/database';
+import { connectDB, ensureKeyringLoaded, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
 import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { requireConfiguredSecret } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { warnIfPlaintextSecretsOptOut } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
 import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
 import { requireOriginVerify } from './originVerify';
-import { registerSecretsAtRest } from './secretsAtRestBoot';
+import { ensureSecretsAtRest } from './secretsAtRestBoot';
 import { createTaskProtection } from './taskProtection';
 
 /**
@@ -80,7 +81,7 @@ interface DrainLogger {
  * Wait for the tracked in-flight work to settle, bounded by `drainTimeoutMs`. Exported
  * so a test can drive the cut-off branch without booting the service. Returns whether the
  * work drained or the window won; on the cut-off branch it emits an error naming the count
- * so LiveOps triage sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
+ * so LiveOps sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
  * line this replaces was invisible to the ERROR-level log subscription).
  */
 export async function drainInFlight({
@@ -174,7 +175,8 @@ async function main() {
   // network-error class without exiting. Must run before any request is served.
   registerProcessErrorHandlers(bootLogger, 'ChatCompletion');
 
-  registerSecretsAtRest(bootLogger, Config.SECRET_ENCRYPTION_KEY, Config.SECRET_ENCRYPTION_KEY_PREVIOUS);
+  await ensureSecretsAtRest(bootLogger, ensureKeyringLoaded);
+  warnIfPlaintextSecretsOptOut(bootLogger);
 
   const app = createApp();
 

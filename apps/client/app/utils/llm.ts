@@ -12,6 +12,7 @@ import { QueryClient } from '@tanstack/react-query';
 import perfLogger from './performanceLogger';
 import { replaceQueryData, setOptimisticQueryData, updateSingleQueryDataFast, type Optimistic } from './react-query';
 import { useStreamingState } from '../hooks/useStreamingState';
+import { randomUuid } from '@bike4mind/common';
 
 function getErrorMessage(error: unknown): string {
   if (isAxiosError(error)) {
@@ -51,7 +52,7 @@ export function isOptimisticId(id: string | null | undefined): boolean {
 }
 
 export function createOptimisticSessionId(): string {
-  return `${OPTIMISTIC_PREFIX}session-${crypto.randomUUID()}`;
+  return `${OPTIMISTIC_PREFIX}session-${randomUuid()}`;
 }
 
 /**
@@ -450,6 +451,8 @@ export type SendMessageOptions = {
   isImageEdit?: boolean;
   isVariation?: boolean;
   image?: string; // Image to be edited
+  /** The FabFile behind `image`, when the chat shows one; an edit reuses it when it is the caller's own. */
+  imageFileId?: string;
   /**
    * Correct-and-retry: the quest whose answer the user says was wrong. Unlike `isRetry`, which
    * re-runs the flagged quest in place, this sends a NEW turn carrying the user's correction and

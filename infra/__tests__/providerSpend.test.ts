@@ -100,7 +100,7 @@ const spendAlarm = (provider: string, threshold: number) => ({
   alarmDescription: expect.any(String),
   comparisonOperator: 'GreaterThanOrEqualToThreshold',
   evaluationPeriods: 1,
-  metricName: 'ProviderReportedUsd',
+  metricName: 'ProviderReportedOrgUsd',
   namespace: 'test-app/production/LLMSpend',
   dimensions: { Provider: provider },
   period: 3600,
@@ -375,6 +375,8 @@ describe('provider spend dashboard', () => {
     expect(widgets[0].properties.metrics).toEqual([
       ['test-app/production/LLMSpend', 'ProviderReportedUsd', 'Provider', 'anthropic', expect.any(Object)],
       ['test-app/production/LLMSpend', 'ProviderReportedUsd', 'Provider', 'openai', expect.any(Object)],
+      ['test-app/production/LLMSpend', 'ProviderReportedOrgUsd', 'Provider', 'anthropic', expect.any(Object)],
+      ['test-app/production/LLMSpend', 'ProviderReportedOrgUsd', 'Provider', 'openai', expect.any(Object)],
     ]);
   });
 });
@@ -390,6 +392,18 @@ describe('provider spend stage gating', () => {
     await load('preview');
     expect(resources.alarm).not.toHaveBeenCalled();
     expect(resources.dashboard).not.toHaveBeenCalled();
+  });
+
+  it('exports the hourly spend alarms for the admin threshold override', async () => {
+    const { providerReportedSpendAlarms } = await load('production');
+    expect(Object.keys(providerReportedSpendAlarms).sort()).toEqual(['anthropic', 'openai']);
+    const arn = providerReportedSpendAlarms.openai?.arn as unknown as { value: string };
+    expect(arn.value).toBe('alarm-arn-providerReportedSpendHourly-openai');
+  });
+
+  it('exports no spend alarms on an unmonitored stage', async () => {
+    const { providerReportedSpendAlarms } = await load('preview');
+    expect(providerReportedSpendAlarms).toEqual({});
   });
 
   it('skips poller alarms on a monitored preview, where the cron does not exist', async () => {

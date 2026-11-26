@@ -16,6 +16,12 @@ import {
   parseContentTransformResponse,
 } from './useContentTransformDetector';
 
+const expectLinearParse = (build: (n: number) => string, small: number) => {
+  const { baselineMs, ratio } = measureGrowth(parseContentTransformResponse, build, small);
+  expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+  expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+};
+
 describe('parseContentTransformResponse', () => {
   it('parses a fenced JSON response and the formatted fallback', () => {
     const json = '```json\n{"title":"T","content":"C","summary":"S","suggestedTags":["a"]}\n```';
@@ -65,11 +71,7 @@ describe('parseContentTransformResponse', () => {
     ['repeated title labels with values on a CR-terminated line', (n: number) => '**Title:**a'.repeat(n) + '\r', 16000],
     ['repeated content preview labels with no end', (n: number) => '**Content Preview:**\n'.repeat(n) + 'x', 16000],
     ['repeated content preview openers with no colon', (n: number) => '**Content Preview'.repeat(n), 16000],
-  ])('stays linear on %s', (_label, build, small) => {
-    const { baselineMs, ratio } = measureGrowth(parseContentTransformResponse, build, small);
-    expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
-    expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
-  });
+  ])('stays linear on %s', (_label, build, small) => expectLinearParse(build, small));
 
   const pieces = ['```', '```json', 'json', ' ', '\n', '\t', '\r', '\u2028', '{"a":1}', 'x', '`', '\n```'];
 

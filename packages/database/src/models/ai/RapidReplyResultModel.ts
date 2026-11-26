@@ -1,5 +1,6 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { Logger } from '@bike4mind/observability';
 
 export interface IRapidReplyResultDocument extends Document {
   id: string;
@@ -202,12 +203,10 @@ class RapidReplyResultRepository
 
   async createResult(data: Partial<IRapidReplyResultDocument>): Promise<IRapidReplyResultDocument> {
     try {
-      console.log('🔍🔍🔍 Creating rapid reply result with data:', JSON.stringify(data, null, 2), '🔍🔍🔍');
       const result = await this.model.create(data);
       return result.toJSON() as unknown as IRapidReplyResultDocument;
     } catch (error) {
-      console.error('❌ Failed to create rapid reply result:', error);
-      console.error('📋 Data that failed:', JSON.stringify(data, null, 2));
+      Logger.error('Failed to create rapid reply result', { questId: data.questId, error });
       // don't throw error
       return null as unknown as IRapidReplyResultDocument;
     }
@@ -226,8 +225,7 @@ class RapidReplyResultRepository
       const result = await this.model.findOneAndUpdate({ questId }, data, { new: true });
       return result?.toJSON() as unknown as IRapidReplyResultDocument | null;
     } catch (error) {
-      console.error('❌ Failed to update rapid reply result:', error);
-      console.error('📋 Data that failed:', JSON.stringify(data, null, 2));
+      Logger.error('Failed to update rapid reply result', { questId, error });
       // don't throw error
       return null as unknown as IRapidReplyResultDocument;
     }

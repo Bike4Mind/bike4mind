@@ -1,10 +1,14 @@
 import React from 'react';
-import { Box, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Box, Sheet, Stack, Typography } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { RATE_LIMIT_INTEGRATIONS } from '@bike4mind/common';
 import type { ChartData, RateLimitSnapshot } from '../types';
-import { EmptyState, SectionCard, StatusChip } from '../../shared';
+import { DataTable, EmptyState, SectionCard, StatusChip } from '../../shared';
+import { throttledColumns } from '../snapshotColumns';
+
+// DataTable requires a retry handler; this table is never given `error`, so it is never called.
+const noRetry = () => undefined;
 
 const INTEGRATION_COLORS: Record<string, string> = {
   github: '#8884d8',
@@ -116,39 +120,20 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ chartData, snapshots, 
 
       {/* Throttled events table */}
       {recentThrottled.length > 0 && (
-        <Sheet
-          data-testid="rate-limit-throttled-table"
-          variant="outlined"
-          sx={{ p: 2, borderRadius: 'lg', bgcolor: 'admin.surface', borderColor: 'admin.border' }}
-        >
-          <Typography level="title-md" sx={{ mb: 2, color: 'admin.ink' }}>
-            Recent throttled events (429s)
-          </Typography>
-          <Table size="sm" stripe="odd">
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Integration</th>
-                <th>Endpoint</th>
-                <th>Retry After</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentThrottled.map(snap => (
-                <tr key={snap._id}>
-                  <td>{new Date(snap.timestamp).toLocaleString()}</td>
-                  <td style={{ textTransform: 'capitalize' }}>{snap.integration}</td>
-                  <td>
-                    <Typography level="body-xs" sx={{ fontFamily: 'monospace' }}>
-                      {snap.endpoint}
-                    </Typography>
-                  </td>
-                  <td>{snap.retryAfterMs ? `${snap.retryAfterMs}ms` : '--'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Sheet>
+        <SectionCard title="Recent throttled events (429s)" body="custom" data-testid="rate-limit-throttled-table">
+          <DataTable
+            rows={recentThrottled}
+            columns={throttledColumns}
+            getRowId={snap => snap._id}
+            label="Recent throttled events"
+            onRetry={noRetry}
+            testId="rate-limit-throttled-data-table"
+            framed={false}
+            stripe="odd"
+            pagination={false}
+            minWidth="42.5rem"
+          />
+        </SectionCard>
       )}
 
       {/* Empty state */}

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DATA_HOLDER_REGISTRY } from '@server/dataSubject/registry';
+import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry/index';
 import { ACCOUNT_ARCHIVE_METADATA_MODELS } from './accountDataExportCollections';
 import { accountArchiveFilter, accountArchiveMetadata } from './accountDataExportCollections';
 
@@ -36,6 +36,13 @@ describe('account archive coverage', () => {
       $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: ['personal-org'] } }],
     });
     expect(accountArchiveFilter('UserApiKey', '665f1c2e8b3a4d0012345678', ['personal-org'])).toHaveProperty('userId');
+  });
+
+  it('archives the apps a user signed in to by owner alone, as the other OAuth records', () => {
+    expect(ACCOUNT_ARCHIVE_METADATA_MODELS).toContain('OAuthClientSignIn');
+    const filter = accountArchiveFilter('OAuthClientSignIn', '665f1c2e8b3a4d0012345678', ['personal-org']);
+    expect(filter).toEqual(accountArchiveFilter('OAuthGrant', '665f1c2e8b3a4d0012345678', ['personal-org']));
+    expect(filter).not.toHaveProperty('$or');
   });
 
   it('projects credential rows without their secret values', () => {

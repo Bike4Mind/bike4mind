@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ADMIN_ACTION_COUNT_KEYS } from './adminActionCounts';
+import { ADMIN_ACTION_COUNT_KEYS } from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 import {
   AdminTab,
   SIDEBAR_COLLAPSED_STORAGE_KEY,
@@ -77,9 +77,8 @@ describe('SIDEBAR_SECTIONS', () => {
   it('only gates the tabs that were previously conditionally rendered', () => {
     const gatedByTab = new Map(allItems.filter(i => i.gate).map(i => [i.tab, i.gate]));
     expect(gatedByTab.get(AdminTab.Migrate)).toBe('userMigration');
-    expect(gatedByTab.get(AdminTab.LiveOpsTriage)).toBe('liveOpsTriage');
     // Nothing else should be gated.
-    expect(gatedByTab.size).toBe(2);
+    expect(gatedByTab.size).toBe(1);
   });
 
   it('has no item for the retired issue filing page, which lives on the Security page', () => {
@@ -272,7 +271,7 @@ describe('contributed pages in a section', () => {
     path,
     testid: `page-${label.toLowerCase()}`,
   });
-  const gates = { userMigration: true, liveOpsTriage: true };
+  const gates = { userMigration: true };
   const withPages = (key: string, pages: SidebarPageLink[]): SidebarSection[] =>
     SIDEBAR_SECTIONS.map(section => (section.key === key ? { ...section, pages } : section));
 

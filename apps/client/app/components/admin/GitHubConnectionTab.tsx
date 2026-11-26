@@ -38,6 +38,8 @@ import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { IOrgGitHubConnectionResponse } from '@bike4mind/common';
 import { useAdminGitHubRepositories } from '@client/app/hooks/data/useGitHubRepositories';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { getLocalDate } from '@client/app/utils/dateUtils';
 import { sanitizeErrorMessage } from '@client/app/utils/error';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
@@ -54,6 +56,9 @@ import {
   UpdatingBar,
 } from './shared';
 import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
+
+const PAT_DEFAULT_EXPIRY_DAYS = 30;
+const PAT_MAX_EXPIRY_DAYS = 365;
 
 function extractErrorMessage(error: unknown, fallback: string): string {
   let message = fallback;
@@ -748,7 +753,7 @@ const GitHubConnectionTab: React.FC = () => {
               <Alert color="warning" size="sm" data-testid="github-repos-empty-alert">
                 <Typography level="body-sm">
                   <strong>Security:</strong> An empty whitelist blocks ALL repository access (fail-closed). You must add
-                  at least one repository for LiveOps Triage and other GitHub features to work.
+                  at least one repository for system automation and other GitHub features to work.
                 </Typography>
               </Alert>
             ) : (
@@ -912,7 +917,7 @@ const GitHubConnectionTab: React.FC = () => {
     >
       <AdminPageHeader
         title="GitHub connection"
-        description="The system GitHub API connection that automation such as LiveOps triage and scheduled tasks uses."
+        description="The system GitHub API connection that system automation, such as scheduled tasks, uses."
         actions={
           <>
             <Button
@@ -1101,12 +1106,17 @@ const GitHubConnectionTab: React.FC = () => {
 
           <FormControl>
             <FormLabel>Expiration date (optional)</FormLabel>
-            <Input
-              type="date"
+            <OptionalDateInput
               value={patExpiresAt}
-              onChange={e => setPatExpiresAt(e.target.value)}
+              onChange={setPatExpiresAt}
+              emptyLabel="No expiration date"
+              setLabel="Set expiration date"
+              clearLabel="Remove expiration date"
+              initialDate={() => getLocalDate(PAT_DEFAULT_EXPIRY_DAYS)}
+              max={getLocalDate(PAT_MAX_EXPIRY_DAYS)}
+              aria-label="Expiration date"
               disabled={connecting}
-              slotProps={{ input: { 'data-testid': 'github-pat-expiry-input' } }}
+              testId="github-pat-expiry-input"
             />
             <Typography level="body-xs" sx={{ mt: 0.5, color: 'admin.inkMuted' }}>
               Fine-grained PATs have a maximum expiry of 1 year
@@ -1144,7 +1154,7 @@ const GitHubConnectionTab: React.FC = () => {
           if (!disconnecting) setDisconnectModalOpen(false);
         }}
         title="Disconnect GitHub"
-        description="System automation (LiveOps Triage, scheduled tasks) will no longer be able to access GitHub APIs until a new connection is configured."
+        description="System automation, such as scheduled tasks, will no longer be able to access GitHub APIs until a new connection is configured."
         reasonPresets={ADMIN_REASON_PRESETS.githubDisconnect}
         // The route takes no reason yet, so the reason is collected but not sent.
         reasonAudited={false}
@@ -1208,7 +1218,7 @@ const GitHubConnectionTab: React.FC = () => {
           if (!savingRepos) setShowEmptyWarningModal(false);
         }}
         title="Save an empty repository whitelist"
-        description="Saving an empty whitelist will block ALL GitHub repository access. LiveOps Triage and other GitHub features will not work until repositories are added."
+        description="Saving an empty whitelist will block ALL GitHub repository access. System automation and other GitHub features will not work until repositories are added."
         reasonPresets={ADMIN_REASON_PRESETS.githubRepoAccess}
         // The route takes no reason yet, so the reason is collected but not sent.
         reasonAudited={false}

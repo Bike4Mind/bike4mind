@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { pyodideSandboxWorkerBody } from '@client/app/workers/pyodide/sandboxWorkerBody';
-import { pyodideCspSources } from '@client/app/utils/pyodideDistribution';
+import { pyodideCspSources, pyodideDistributionCspSources } from '@client/app/utils/pyodideDistribution';
 import { loadPythonArtifactDataOrigins } from '@server/utils/pythonArtifactDataOrigins';
 
 /**
@@ -42,12 +42,13 @@ import { loadPythonArtifactDataOrigins } from '@server/utils/pythonArtifactDataO
 const SANDBOX_READY = 'pyodide-sandbox-ready';
 
 /**
- * `dataOrigins` is the validated `pythonArtifactDataOrigins` admin list. It widens `connect-src`
- * only: the blob Worker that runs guest Python inherits this document's policy, so this is the one
- * place those fetches are governed, and no other artifact frame reads the setting.
+ * `pyodideOrigins` is where Pyodide loads from: hosts for the Output frame, the distribution's
+ * path for the network-free frame. `dataOrigins` is the validated `pythonArtifactDataOrigins`
+ * admin list. It widens `connect-src` only: the blob Worker that runs guest Python inherits this
+ * document's policy, so this is the one place those fetches are governed, and no other artifact
+ * frame reads the setting.
  */
-function buildSandboxCsp(dataOrigins: readonly string[]): string {
-  const pyodideOrigins = pyodideCspSources(process.env.PYODIDE_BASE_URL);
+function buildSandboxCsp(pyodideOrigins: readonly string[], dataOrigins: readonly string[]): string {
   const pyodideSources = pyodideOrigins.join(' ');
   const connectSources = [...pyodideOrigins, ...dataOrigins.filter(origin => !pyodideOrigins.includes(origin))];
 
@@ -135,7 +136,14 @@ function buildSandboxHtml(): string {
 
     // 'cancel' is advisory - the worker only observes it between steps. A wedged run is
     // stopped by the parent dropping this whole frame, which takes the Worker with it.
-    worker.postMessage(event.data);
+    // A call's data files move on to the worker as transferred buffers, never a second copy.
+    var transfer = [];
+    if (Array.isArray(event.data.files)) {
+      event.data.files.forEach(function (file) {
+        if (file && file.bytes instanceof ArrayBuffer) transfer.push(file.bytes);
+      });
+    }
+    worker.postMessage(event.data, transfer);
   });
 
   toParent({ type: '${SANDBOX_READY}' });
@@ -151,19 +159,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).end('Method Not Allowed');
   }
 
-  const { origins: dataOrigins, degraded } = await loadPythonArtifactDataOrigins();
+  // `?network=none` is the frame callable functions run in: the Pyodide distribution's path and
+  // nothing else, not even the rest of its CDN host.
+  const networkFree = req.query.network === 'none';
+  const { origins: dataOrigins, degraded } = networkFree
+    ? { origins: [], degraded: false }
+    : await loadPythonArtifactDataOrigins();
+  const pyodideOrigins = networkFree
+    ? pyodideDistributionCspSources(process.env.PYODIDE_BASE_URL)
+    : pyodideCspSources(process.env.PYODIDE_BASE_URL);
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Content-Security-Policy', buildSandboxCsp(dataOrigins));
+  res.setHeader('Content-Security-Policy', buildSandboxCsp(pyodideOrigins, dataOrigins));
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
-  // The parent drives the shell by postMessage after load. Matches the sibling artifact-sandbox
-  // routes, including their caveat: a CSP change here takes up to 5 minutes to propagate through
-  // CDN/browser caches. A response built after a failed settings read is not cached, so it cannot
-  // outlive the failure.
-  res.setHeader('Cache-Control', degraded ? 'no-store' : 'public, max-age=300, s-maxage=300');
+  // Browser cache only: both frames share this path, and a shared cache that ignored the query
+  // string would hand one frame the other's policy. A CSP change takes up to 5 minutes to reach a
+  // browser. A response built after a failed settings read is not cached, so it cannot outlive
+  // the failure.
+  res.setHeader('Cache-Control', degraded ? 'no-store' : 'private, max-age=300');
 
   return res.status(200).send(req.method === 'HEAD' ? '' : buildSandboxHtml());
 }

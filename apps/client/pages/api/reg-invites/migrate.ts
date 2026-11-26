@@ -138,7 +138,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`Failed to migrate user ${email}:`, message);
+      req.logger.error('Failed to migrate user', { email, error: message });
     }
   }
 

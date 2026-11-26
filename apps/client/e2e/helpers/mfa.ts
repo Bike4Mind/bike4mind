@@ -1,6 +1,6 @@
 import { expect, type APIRequestContext, type Page, type Response } from '@playwright/test';
 import { createHash } from 'crypto';
-import speakeasy from 'speakeasy';
+import { TOTP_STEP_SECONDS, totpCode } from '@bike4mind/auth/mfaService/totp';
 import { TIMEOUTS } from '../constants';
 import { BasePage } from '../pages/BasePage';
 import type { LoginPage } from '../pages/LoginPage';
@@ -18,8 +18,6 @@ export interface MfaTokens {
   refreshToken: string;
 }
 
-const TOTP_STEP_SECONDS = 30;
-
 function currentTotpStep(): number {
   return Math.floor(Date.now() / 1000 / TOTP_STEP_SECONDS);
 }
@@ -32,7 +30,7 @@ function currentTotpStep(): number {
  */
 export function generateTotp(secretBase32: string, afterStep?: number): string {
   const step = afterStep === undefined ? currentTotpStep() : Math.max(currentTotpStep(), afterStep + 1);
-  return speakeasy.totp({ secret: secretBase32, encoding: 'base32', time: step * TOTP_STEP_SECONDS });
+  return totpCode(secretBase32, step);
 }
 
 /** POST /api/auth/mfa/setup - generates a TOTP secret + backup codes (not yet enabled). */
@@ -89,7 +87,7 @@ export async function enrollMfa(
 ): Promise<{ secret: string; backupCodes: string[]; tokens: MfaTokens; enrolledStep: number }> {
   const setup = await apiSetupMfa(request, accessToken);
   const enrolledStep = currentTotpStep();
-  const code = speakeasy.totp({ secret: setup.secret, encoding: 'base32', time: enrolledStep * TOTP_STEP_SECONDS });
+  const code = totpCode(setup.secret, enrolledStep);
   const tokens = await apiVerifyMfaSetup(request, accessToken, code);
   return { secret: setup.secret, backupCodes: setup.backupCodes, tokens, enrolledStep };
 }

@@ -26,6 +26,8 @@ export interface ISreErrorTracking {
   id: string;
   /** Source-agnostic normalized hash */
   errorFingerprint: string;
+  accountingExecutionId?: string;
+  completedRevisionAccountingExecutionIds?: string[];
   /** Repository slug (owner/repo) - identifies which repo this error belongs to */
   repoSlug: string;
   /** Origin: CLOUDWATCH or GITHUB_ISSUE */
@@ -155,6 +157,8 @@ export interface ISreErrorTracking {
 const SreErrorTrackingSchema = new mongoose.Schema(
   {
     errorFingerprint: { type: String, required: true },
+    accountingExecutionId: { type: String },
+    completedRevisionAccountingExecutionIds: { type: [String], default: [] },
     repoSlug: { type: String, required: true, default: 'MillionOnMars/lumina5' },
     source: { type: String, required: true, enum: ['CLOUDWATCH', 'GITHUB_ISSUE'] },
     sourceRef: { type: String, required: true },
@@ -457,6 +461,32 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
       }
       throw error;
     }
+  }
+
+  async hasCompletedRevisionAccounting(id: string, repoSlug: string, executionId: string): Promise<boolean> {
+    return Boolean(
+      await this.model.exists({
+        _id: id,
+        ...repoSlugFilter(repoSlug),
+        completedRevisionAccountingExecutionIds: executionId,
+      })
+    );
+  }
+
+  async completeRevisionAccounting(id: string, repoSlug: string, executionId: string): Promise<void> {
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        ...repoSlugFilter(repoSlug),
+        $or: [
+          { completedRevisionAccountingExecutionIds: executionId },
+          { $expr: { $lt: [{ $size: { $ifNull: ['$completedRevisionAccountingExecutionIds', []] } }, 16] } },
+        ],
+      },
+      { $addToSet: { completedRevisionAccountingExecutionIds: executionId } },
+      { runValidators: true }
+    );
+    if (result.matchedCount !== 1) throw new Error('SRE revision accounting tracking missing');
   }
 
   async updateStatus(

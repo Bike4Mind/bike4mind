@@ -1,5 +1,61 @@
 # @bike4mind/cli
 
+## 5.0.0
+
+### Major Changes
+
+- [#8557](https://github.com/Bike4Mind/bike4mind/pull/8557) [`862fa66`](https://github.com/Bike4Mind/bike4mind/commit/862fa66be1993684c7d6610daef38970456b04fe) Thanks [@wescarda](https://github.com/wescarda)! - remove the v4 QuestMaster chat-plan path and its questmasterplans readers
+
+### Patch Changes
+
+- [#8527](https://github.com/Bike4Mind/bike4mind/pull/8527) [`c9da20b`](https://github.com/Bike4Mind/bike4mind/commit/c9da20bd0903e95df4333dd797c20c7c8e7397ef) Thanks [@maconard](https://github.com/maconard)! - replace six dependencies and align desktop versions
+
+## 4.10.0
+
+### Minor Changes
+
+- [#8436](https://github.com/Bike4Mind/bike4mind/pull/8436) [`88f0eed`](https://github.com/Bike4Mind/bike4mind/commit/88f0eed44cc701cea5b1f08e58e43616b1e922b0) Thanks [@ken-b4m](https://github.com/ken-b4m)! - undo a lake change through the public API and MCP
+
+- [#8438](https://github.com/Bike4Mind/bike4mind/pull/8438) [`81e1f88`](https://github.com/Bike4Mind/bike4mind/commit/81e1f88cea26079d8beac4e7815b7a6a9132faa1) Thanks [@maconard](https://github.com/maconard)! - list and call functions from the CLI MCP server
+
+- [#8445](https://github.com/Bike4Mind/bike4mind/pull/8445) [`08b784e`](https://github.com/Bike4Mind/bike4mind/commit/08b784efb1f2dea09c41c4320d4e71753bdc9bc3) Thanks [@maconard](https://github.com/maconard)! - share a pinned function with a project, an organization, or named people
+
+- [#8446](https://github.com/Bike4Mind/bike4mind/pull/8446) [`61712ac`](https://github.com/Bike4Mind/bike4mind/commit/61712acbf344243576c5d8ee5b67845aaefe9b80) Thanks [@maconard](https://github.com/maconard)! - review a shared function before it runs, kept while its interface holds
+
+- [#8465](https://github.com/Bike4Mind/bike4mind/pull/8465) [`8ba6c23`](https://github.com/Bike4Mind/bike4mind/commit/8ba6c23d597ff8dfdf966418b1b1818dbe3592a3) Thanks [@maconard](https://github.com/maconard)! - asynchronous function calls for runs longer than a request can wait
+
+### Patch Changes
+
+- [#8435](https://github.com/Bike4Mind/bike4mind/pull/8435) [`70222af`](https://github.com/Bike4Mind/bike4mind/commit/70222afea4779554d914024b78c8bddc5b412774) Thanks [@ken-b4m](https://github.com/ken-b4m)! - apply research changes from MCP without approval forms
+
+- [#8477](https://github.com/Bike4Mind/bike4mind/pull/8477) [`fd108d7`](https://github.com/Bike4Mind/bike4mind/commit/fd108d78049ecf1fd8715eeb102d473a14ff1eb0) Thanks [@maconard](https://github.com/maconard)! - drop unused external imports from the bundle
+
+## 4.9.0
+
+### Minor Changes
+
+- [#7880](https://github.com/Bike4Mind/bike4mind/pull/7880) [`0fe8a0c`](https://github.com/Bike4Mind/bike4mind/commit/0fe8a0c9288b97e98fe011157ac30137509c56c8) Thanks [@onoya](https://github.com/onoya)! - add the versioned image job API and deprecate the quest image routes
+
+- [#7933](https://github.com/Bike4Mind/bike4mind/pull/7933) [`1aa4837`](https://github.com/Bike4Mind/bike4mind/commit/1aa48370bae652aa38e9168be06dbda93358b965) Thanks [@vinchi777](https://github.com/vinchi777)! - add opt-in fullscreen terminal rendering
+
+- [#7950](https://github.com/Bike4Mind/bike4mind/pull/7950) [`8b06612`](https://github.com/Bike4Mind/bike4mind/commit/8b0661274bb784d7e2c7e5596b4bc0c13412cd6e) Thanks [@poysama](https://github.com/poysama)! - classify a moderated chat turn as content_blocked
+
+- [#8066](https://github.com/Bike4Mind/bike4mind/pull/8066) [`c42dbc5`](https://github.com/Bike4Mind/bike4mind/commit/c42dbc5eece3a386388916a5240fa34560f789ac) Thanks [@jjmarfa](https://github.com/jjmarfa)! - write_todos on the shared plan schema with an Ink plan block
+
+- [#8081](https://github.com/Bike4Mind/bike4mind/pull/8081) [`c26dfbd`](https://github.com/Bike4Mind/bike4mind/commit/c26dfbd83dfa1102d716242200b4a95c9571b148) Thanks [@ken-b4m](https://github.com/ken-b4m)! - let Spaces be a listing audience
+
+- [#8182](https://github.com/Bike4Mind/bike4mind/pull/8182) [`693ce9e`](https://github.com/Bike4Mind/bike4mind/commit/693ce9e68710b1675531f2f056ed332a0cd4a88f) Thanks [@ken-b4m](https://github.com/ken-b4m)! - MCP tools to set up and maintain lake research
+
+- [#8186](https://github.com/Bike4Mind/bike4mind/pull/8186) [`0607d38`](https://github.com/Bike4Mind/bike4mind/commit/0607d3899aed4bb1d6f107804180891bbc6e5491) Thanks [@onoya](https://github.com/onoya)! - require existing scopes on API-key routes for batch, artifacts, publish and userinfo
+
+- [#8193](https://github.com/Bike4Mind/bike4mind/pull/8193) [`a58c365`](https://github.com/Bike4Mind/bike4mind/commit/a58c365f63d54c74bccc497917ebfd6c9f9d84b7) Thanks [@ken-b4m](https://github.com/ken-b4m)! - record structured research changes and file events in lake history
+
+### Patch Changes
+
+- [#7881](https://github.com/Bike4Mind/bike4mind/pull/7881) [`5fbab72`](https://github.com/Bike4Mind/bike4mind/commit/5fbab7254c6c4767b420bf87c67b591e31b0a771) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - show the real site on web search source chips
+
+- [#7929](https://github.com/Bike4Mind/bike4mind/pull/7929) [`b394721`](https://github.com/Bike4Mind/bike4mind/commit/b394721a8a5413aac2e59a51f0faffa42de58615) Thanks [@juicewaa](https://github.com/juicewaa)! - drop unused picomatch dependency
+
 ## 4.8.0
 
 ### Minor Changes

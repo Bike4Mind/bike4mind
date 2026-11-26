@@ -1,7 +1,7 @@
 /**
  * CloudWatch Alarms for Application Health Monitoring
  *
- * Monitors operational health for What's New generation, LiveOps triage,
+ * Monitors operational health for What's New generation,
  * webhook delivery, integration health probes, and API rate limits.
  *
  * DLQ-specific alarms are defined separately in dlqAlarms.ts.
@@ -20,6 +20,7 @@ import {
   signupDomainHoldTriageCron,
   spendMonitor,
   voiceHoldSweepCron,
+  briefScheduleReconcileCron,
   personaExpirySweepCron,
 } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
@@ -275,26 +276,29 @@ if (isMonitoredStage) {
    * Monitors the Lambda function itself for execution errors.
    * Complements the application-level failure metric.
    */
-  new aws.cloudwatch.MetricAlarm('whatsNewLambdaErrors', {
-    name: `${$app.name}-${$app.stage}-whats-new-lambda-errors`,
-    alarmDescription: "What's New Lambda (release notes and highlights) has errors",
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'Errors',
-    namespace: 'AWS/Lambda',
-    period: 300,
-    statistic: 'Sum',
-    threshold: 0,
-    treatMissingData: 'notBreaching',
-    dimensions: {
-      FunctionName: whatsNewGenerationQueueSubscription.nodes.function.name,
-    },
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'WhatsNewGeneration',
-      Severity: 'High',
-    },
-  });
+  // Undefined on a preview, which never runs this consumer (infra/previewQueueConsumers.ts).
+  if (whatsNewGenerationQueueSubscription) {
+    new aws.cloudwatch.MetricAlarm('whatsNewLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-whats-new-lambda-errors`,
+      alarmDescription: "What's New Lambda (release notes and highlights) has errors",
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: {
+        FunctionName: whatsNewGenerationQueueSubscription.nodes.function.name,
+      },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'WhatsNewGeneration',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: Anthropic API Rate Limit Errors
@@ -352,133 +356,6 @@ if (isMonitoredStage) {
     tags: {
       Application: 'LLMStreaming',
       Severity: 'High',
-    },
-  });
-
-  /**
-   * Alarm: LiveOps Triage Failure
-   *
-   * Triggers when triage run fails.
-   * Indicates issues with Slack/GitHub integration or LLM processing.
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsTriageFailure', {
-    name: `${$app.name}-${$app.stage}-liveops-triage-failure`,
-    alarmDescription: 'LiveOps Triage run failed',
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'TriageRunFailure',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 86400, // 24 hours (matches daily schedule)
-    statistic: 'Sum',
-    threshold: 0, // Alert on any failure
-    treatMissingData: 'notBreaching',
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'High',
-    },
-  });
-
-  /**
-   * Alarm: High Error Volume
-   *
-   * Triggers when more than 50 errors are processed in a single run.
-   * Indicates a potential incident requiring immediate attention.
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsHighErrorVolume', {
-    name: `${$app.name}-${$app.stage}-liveops-high-error-volume`,
-    alarmDescription: 'LiveOps Triage detected high error volume (potential incident)',
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'ErrorsProcessed',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 86400, // 24 hours
-    statistic: 'Maximum',
-    threshold: 50, // More than 50 errors
-    treatMissingData: 'notBreaching',
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'Critical',
-    },
-  });
-
-  /**
-   * Alarm: P0 Issues Created
-   *
-   * Triggers when any P0 (blocker) issues are created.
-   * P0 issues require immediate attention.
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsP0Issues', {
-    name: `${$app.name}-${$app.stage}-liveops-p0-issues`,
-    alarmDescription: 'LiveOps Triage created P0 (blocker) issues - immediate attention required',
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'IssuesCreated',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 86400, // 24 hours
-    statistic: 'Maximum',
-    threshold: 0, // Alert on any P0 issues
-    treatMissingData: 'notBreaching',
-    dimensions: {
-      Priority: 'P0',
-    },
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'Critical',
-    },
-  });
-
-  /**
-   * Alarm: P1 Issues Created
-   *
-   * Triggers when any P1 (critical) issues are created.
-   * P1 issues indicate major features broken or significant user impact.
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsP1Issues', {
-    name: `${$app.name}-${$app.stage}-liveops-p1-issues`,
-    alarmDescription: 'LiveOps Triage created P1 (critical) issues - major feature broken, significant user impact',
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'IssuesCreated',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 86400, // 24 hours
-    statistic: 'Maximum',
-    threshold: 0, // Alert on any P1 issues
-    treatMissingData: 'notBreaching',
-    dimensions: {
-      Priority: 'P1',
-    },
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'High',
-    },
-  });
-
-  /**
-   * Alarm: Consecutive Triage Failures
-   *
-   * Triggers when triage fails 2 or more times in a 48-hour period.
-   * Indicates systematic issues that require investigation (token expiration,
-   * API changes, configuration drift).
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsConsecutiveFailures', {
-    name: `${$app.name}-${$app.stage}-liveops-consecutive-failures`,
-    alarmDescription: 'LiveOps Triage has failed 2+ times in 48hrs - systematic issue detected',
-    comparisonOperator: 'GreaterThanOrEqualToThreshold',
-    evaluationPeriods: 1,
-    metricName: 'TriageRunFailure',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 172800, // 48 hours
-    statistic: 'Sum',
-    threshold: 2, // 2 or more failures in 48 hours
-    treatMissingData: 'notBreaching',
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'Critical',
     },
   });
 
@@ -1297,6 +1174,38 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: a provider call fell back from a federated token to a static key
+   *
+   * Requests still succeed on the fallback, so nobody notices federation broke
+   * unless this fires; any single fallback is worth a look. Notify, do not page.
+   *
+   * Metric emitted by: b4m-core/llm-adapters/src/providerCredentialMetrics.ts.
+   * Alarms match one exact dimension set, so this uses the Stage-only fallback
+   * metric; the per-provider split is on ProviderCredentialUse.
+   */
+  new aws.cloudwatch.MetricAlarm('providerCredentialFallback', {
+    name: `${$app.name}-${$app.stage}-provider-credential-fallback`,
+    alarmDescription:
+      'An Anthropic or OpenAI call fell back from a federated token to the static key - check the token exchange',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ProviderCredentialFallback',
+    namespace: 'Lumina5/ProviderCredential',
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      Stage: $app.stage,
+    },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'ProviderCredential',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
    * Alarm: the REPL sandbox could not be constructed
    *
    * Both callers fail closed when `isolated-vm` will not load: the agent wake
@@ -1988,6 +1897,32 @@ if (isMonitoredStage) {
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
+   * The brief schedule reconciler throws when any due user failed to start, and a timeout or crash lands
+   * here too. Only on scheduled stages, where the cron exists.
+   */
+  if (briefScheduleReconcileCron) {
+    new aws.cloudwatch.MetricAlarm('briefScheduleReconcileLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-brief-schedule-reconcile-lambda-errors`,
+      alarmDescription: 'The scheduled brief reconciler Lambda is erroring (start failures, timeout, OOM or crash)',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 3,
+      datapointsToAlarm: 2,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: briefScheduleReconcileCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'Briefs',
         Severity: 'High',
       },
     });

@@ -19,8 +19,12 @@ export * from './vpc';
 export * from './websocket';
 export * from './searxng';
 export * from './renderWorker';
+export * from './callableFunctionData';
+export * from './callableFunctionRuntime';
 export * from './chatCompletion';
+export * from './previewSleep';
 export * from './web';
+export * from './callableFunctionDataPolicy';
 export * from './llm';
 // agentExecutor must come after websocket (it adds a route to websocketApi)
 export * from './agentExecutor';

@@ -1,4 +1,5 @@
 import { ApiKeyScope } from '@bike4mind/common';
+import { ARTIFACT_DB } from '@bike4mind/server-utils/artifacts/artifactAccess';
 import { artifactService } from '@bike4mind/services';
 import { artifactRepository, artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -37,9 +38,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
         { id: artifactId, includeContent: false, includeVersions: false },
         {
           db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
+            artifacts: artifactRepository,
+            artifactContents: artifactContentRepository,
+            artifactVersions: artifactVersionRepository,
           },
         }
       );
@@ -91,9 +92,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
         { id: artifactId, includeContent: true, includeVersions: false },
         {
           db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
+            artifacts: artifactRepository,
+            artifactContents: artifactContentRepository,
+            artifactVersions: artifactVersionRepository,
           },
         }
       );
@@ -103,27 +104,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
       }
 
       // Create new version by updating the artifact
-      const updateData: any = {
-        versionTag: validatedData.versionTag,
-        // If content is provided, use it; otherwise keep existing content
-        ...(validatedData.content && { content: validatedData.content }),
-      };
-
       const updatedArtifact = await artifactService.update(
         userId,
         {
           id: artifactId,
-          ...updateData,
+          versionTag: validatedData.versionTag,
+          // If content is provided, use it; otherwise keep existing content
+          ...(validatedData.content && { content: validatedData.content }),
           createNewVersion: true,
-          versionMessage: validatedData.changeDescription || `Version ${artifact.artifact.version + 1}`,
+          ...(validatedData.changeDescription && { versionMessage: validatedData.changeDescription }),
         },
-        {
-          db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
-          },
-        }
+        { db: ARTIFACT_DB }
       );
 
       res.setHeader('Cache-Control', 'private, no-store');

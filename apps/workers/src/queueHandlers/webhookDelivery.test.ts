@@ -44,6 +44,9 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
 
 import { WebhookDeliveryStatus } from '@bike4mind/common';
 import { dispatch } from './webhookDelivery';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 const TARGET_URL = 'https://hooks.example.com/endpoint';
 

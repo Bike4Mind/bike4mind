@@ -16,7 +16,6 @@ import {
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
 import { signedUrlExpiresAt } from './get';
 import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
@@ -177,7 +176,7 @@ export const updateFabFile = async (
     const { content, size } = rewrite;
     const mimeType = params.mimeType ?? fabFile.mimeType;
     const ext = mime.extension(mimeType) || null;
-    const filePath = fabFile.filePath ?? `${uuidv4()}${ext ? `.${ext}` : '.txt'}`;
+    const filePath = fabFile.filePath ?? `${crypto.randomUUID()}${ext ? `.${ext}` : '.txt'}`;
 
     let fileSize = size;
     // A transfer moves every byte off the current owner, and the gate above graded the new owner on this size.

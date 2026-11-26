@@ -1,4 +1,5 @@
 import B4MKit
+import EventKit
 import SwiftUI
 
 /// Routes between sign-in, the locked screen and the signed-in shell purely from `AuthController.state`;
@@ -61,9 +62,19 @@ struct RootView: View {
     }
     .onChange(of: scenePhase, initial: true) { _, phase in
       // Lock on the way out so the app-switcher snapshot never shows content.
-      if phase == .background { auth.lockIfNeeded() }
+      if phase == .background {
+        if auth.state == .signedIn || auth.state == .locked {
+          services.busyBlockRefresh.scheduleNext(after: services.busyBlockSyncer.lastOutcome)
+        }
+        auth.lockIfNeeded()
+      }
       guard phase == .active else { return }
       appDidBecomeActive()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
+      guard auth.state == .signedIn else { return }
+      let syncer = services.busyBlockSyncer
+      Task { await syncer.sync(force: true) }
     }
   }
 
@@ -111,6 +122,9 @@ struct RootView: View {
       let realtime = services.realtime
       Task { await realtime.resume() }
       services.refreshWidgetCredits()
+      services.refreshWidgetPendingDecisions()
+      let syncer = services.busyBlockSyncer
+      Task { await syncer.sync() }
     }
   }
 
@@ -124,6 +138,7 @@ struct RootView: View {
       // First sign-in (or a restored launch) is the moment to ask for quiet push authorization.
       Task { await services.push.sessionDidStart() }
       services.questActivities.sessionDidStart()
+      services.busyBlockSyncer.sessionDidStart()
     }
     if plan.releasesPendingRoute {
       services.navigator.releasePendingRoute()
@@ -140,13 +155,16 @@ struct RootView: View {
   private func endSession() {
     hasShownShell = false
     services.accountStatus.reset()
+    services.busyBlockRefresh.cancelPending()
     services.credits.invalidate()
     // The profile belongs to the account that fetched it; the next sign-in must not see it.
     services.accountProfiles.invalidate()
+    services.transcriptCache.invalidate()
     // The model lists depend on the account's plan, so they go with it.
     services.studioModels.invalidate()
     // Decoded images are account content too, and this runs for server-forced sign-outs as well as user-initiated ones.
     ThumbnailCache.shared.removeAll()
+    ThumbnailCache.fullSize.removeAll()
     // Cached rows belong to the account that fetched them.
     let realtime = services.realtime
     Task { await realtime.stop() }

@@ -34,6 +34,13 @@ describe('ImageJobRequestSchema', () => {
     expect(ImageJobRequestSchema.parse(request)).toEqual(request);
   });
 
+  it('accepts a BFL safety tolerance up to the cap and refuses one above it', () => {
+    const request = { ...valid, safetyTolerance: 0, promptUpsampling: true };
+    expect(ImageJobRequestSchema.parse(request)).toEqual(request);
+    expect(ImageJobRequestSchema.safeParse({ ...valid, safetyTolerance: 3 }).success).toBe(false);
+    expect(ImageJobRequestSchema.safeParse({ ...valid, safetyTolerance: 1.5 }).success).toBe(false);
+  });
+
   it('trims the prompt', () => {
     expect(ImageJobRequestSchema.parse({ ...valid, prompt: '  hello  ' }).prompt).toBe('hello');
   });

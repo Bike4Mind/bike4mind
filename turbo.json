@@ -1,7 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": ["CI"],
-  "globalPassThroughEnv": ["NODE_OPTIONS"],
+  // Strict env mode hands tasks only declared vars, so without VITEST_MAX_WORKERS here a local
+  // `pnpm verify` gives every vitest pool all host cores (vitest.shared.ts reads it). Pass-through,
+  // not hashed: the worker count does not change results. CI runs --env-mode=loose either way.
+  "globalPassThroughEnv": ["NODE_OPTIONS", "VITEST_MAX_WORKERS"],
   // dataLakeSearchMetrics.test.ts reads infra/dataLakeSearchDashboard.ts to pin the metric names
   // the dashboard graphs, because infra/ cannot import the constants. That file sits outside every
   // package, so without it here a dashboard-only edit is a cache hit for the very test meant to
@@ -126,7 +129,7 @@
     // mcpRegistryEntry.test.ts checks the published registry entry at the repo root.
     "@bike4mind/cli#test": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/mcp-registry/**"]
+      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/mcp-registry/**", "$TURBO_ROOT$/b4m-core/*/src/**"]
     },
     // The hook tests run the CLI's bin/hearth-hook.mjs, which is outside cli's build inputs.
     "@bike4mind/hearth#test": {
@@ -167,6 +170,8 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
+        "$TURBO_ROOT$/b4m-core/services/src/billing/platformAccounting.ts",
+        "$TURBO_ROOT$/b4m-core/services/src/billing/priceCompletionUsage.ts",
         "$TURBO_ROOT$/packages/server-utils/src/auth/ability.ts",
         "$TURBO_ROOT$/packages/scripts/migrate/migrations/20260921241039_ensure-admin-ai-attempt-retention.ts"
       ]
@@ -240,6 +245,7 @@
         "$TURBO_ROOT$/infra/cliToolHandler.ts",
         "$TURBO_ROOT$/infra/database.ts",
         "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/infra/authAbuseMetric.ts",
         "$TURBO_ROOT$/elasticmq.conf",
         "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
         "$TURBO_ROOT$/packages/scripts/index.ts",
@@ -270,6 +276,7 @@
         "$TURBO_ROOT$/infra/cliToolHandler.ts",
         "$TURBO_ROOT$/infra/database.ts",
         "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/infra/authAbuseMetric.ts",
         "$TURBO_ROOT$/elasticmq.conf",
         "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
         "$TURBO_ROOT$/packages/scripts/index.ts",
@@ -342,7 +349,10 @@
         "$TURBO_ROOT$/packages/scripts/index.ts",
         "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
         "$TURBO_ROOT$/docs-site/docs/**",
-        "$TURBO_ROOT$/apps/workers/src/dataLakes/runLakeResearch.ts",
+        "$TURBO_ROOT$/apps/workers/src/**",
+        "$TURBO_ROOT$/b4m-core/services/src/**",
+        "$TURBO_ROOT$/scripts/unmetered-provider-call-allowlist.txt",
+        "$TURBO_ROOT$/scripts/unmetered-llm-route-allowlist.txt",
         "$TURBO_ROOT$/catalog/model-hub/**"
       ]
     },
@@ -369,7 +379,10 @@
         "$TURBO_ROOT$/packages/scripts/index.ts",
         "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
         "$TURBO_ROOT$/docs-site/docs/**",
-        "$TURBO_ROOT$/apps/workers/src/dataLakes/runLakeResearch.ts",
+        "$TURBO_ROOT$/apps/workers/src/**",
+        "$TURBO_ROOT$/b4m-core/services/src/**",
+        "$TURBO_ROOT$/scripts/unmetered-provider-call-allowlist.txt",
+        "$TURBO_ROOT$/scripts/unmetered-llm-route-allowlist.txt",
         "$TURBO_ROOT$/catalog/model-hub/**"
       ]
     },

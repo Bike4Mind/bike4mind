@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
@@ -38,8 +39,9 @@ let focused = false;
 let scope: NotifyScope = 'agents';
 let viewingId: string | null = null;
 
+let unread: ReadonlySet<string> = new Set();
 const Probe = ({ statuses, loaded }: { statuses: ReadonlyMap<string, ChatSessionStatus>; loaded: boolean }) => {
-  useNeedsYouAlerts(sessions, statuses, loaded, onOpen, viewingId);
+  useNeedsYouAlerts(sessions, statuses, loaded, onOpen, viewingId, unread);
   return null;
 };
 const render = (entries: Record<string, ChatSessionStatus>, loaded = true) =>
@@ -49,10 +51,12 @@ beforeEach(() => {
   focused = false;
   scope = 'agents';
   viewingId = null;
+  unread = new Set();
   sessions = DEFAULT_SESSIONS;
   openListener = null;
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn(async () => ({
         messages: [
@@ -108,11 +112,32 @@ describe('useNeedsYouAlerts', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
+  it('does not announce an unread finished reply, but announces a request that lands on it', async () => {
+    await render({ child: 'processing' });
+    unread = new Set(['child']);
+    await render({ child: 'needs-action' });
+    expect(notify).not.toHaveBeenCalled();
+    expect(chime.playChime).not.toHaveBeenCalled();
+    unread = new Set();
+    await render({ child: 'needs-action' });
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
   it('stays quiet for a plain session with no agents', async () => {
     sessions = [...DEFAULT_SESSIONS, { ...DEFAULT_SESSIONS[0], id: 'plain', title: 'Plain' }];
     await render({ plain: 'processing' });
     await render({ plain: 'needs-action' });
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('still counts a waiting plain session on the dock badge under the agents scope', async () => {
+    sessions = [...DEFAULT_SESSIONS, { ...DEFAULT_SESSIONS[0], id: 'plain', title: 'Plain' }];
+    await render({ plain: 'processing' });
+    await render({ plain: 'needs-action' });
+    expect(chime.playChime).not.toHaveBeenCalled();
+    expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+    await render({ plain: 'done' });
+    expect(setBadgeCount).toHaveBeenLastCalledWith(0);
   });
 
   describe('with the all scope', () => {

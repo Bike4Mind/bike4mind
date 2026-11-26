@@ -77,6 +77,36 @@ describe('StudioCompositionRepository', () => {
     expect(StudioCompositionSchema.parse(found)).toMatchObject(input);
   });
 
+  it('fills an empty brief, brand kit and shot list on a document written without them', async () => {
+    const { brief: _brief, brandKit: _brandKit, shots: _shots, ...bare } = composition();
+    const created = await StudioComposition.create(bare);
+    const found = await studioCompositionRepository.findOwned(created.id, OWNER);
+    expect(found).toMatchObject({ brief: {}, brandKit: { colors: [], productFileIds: [], characters: [] }, shots: [] });
+  });
+
+  it('round-trips brand kit characters with their own ids', async () => {
+    const characters = [{ id: 'maya', name: 'Maya', fileId: 'a'.repeat(24) }];
+    const created = await studioCompositionRepository.createOwned(
+      composition({ brandKit: { colors: [], productFileIds: [], characters } })
+    );
+    const found = await studioCompositionRepository.findOwned(created.id, OWNER);
+    expect(found?.brandKit.characters).toEqual(characters);
+  });
+
+  it('stores a short film brief tone and its sized timeline', async () => {
+    const created = await studioCompositionRepository.createOwned(
+      composition({
+        template: 'short_film',
+        brief: { summary: 'A lighthouse keeper finds a message', tone: 'wistful' },
+        timeline: defaultStudioTimeline('short_film', { durationMs: 90_000, aspects: ['16:9', '9:16'] }),
+      })
+    );
+    const found = StudioCompositionSchema.parse(await studioCompositionRepository.findOwned(created.id, OWNER));
+    expect(found.brief).toEqual({ summary: 'A lighthouse keeper finds a message', tone: 'wistful' });
+    expect(found.timeline.durationMs).toBe(90_000);
+    expect(found.timeline.outputs.map(output => output.aspectRatio)).toEqual(['16:9', '9:16']);
+  });
+
   it("hides another user's composition from every owner-scoped call", async () => {
     const created = await studioCompositionRepository.createOwned(composition());
 
@@ -90,6 +120,7 @@ describe('StudioCompositionRepository', () => {
   it('treats a malformed id as missing', async () => {
     expect(await studioCompositionRepository.findOwned('not-an-id', OWNER)).toBeNull();
     expect(await studioCompositionRepository.deleteOwned('not-an-id', OWNER)).toBe(false);
+    expect(await studioCompositionRepository.updateOwned('not-an-id', OWNER, { title: 'Renamed' })).toBeNull();
   });
 
   it('lists summaries newest-updated first, without shots or timeline', async () => {

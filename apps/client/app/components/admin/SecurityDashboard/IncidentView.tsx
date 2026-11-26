@@ -37,7 +37,7 @@ import {
   type IncidentSignals,
   type IncidentState,
   type PaymentWindow,
-} from './incidentTypes';
+} from '@bike4mind/server-utils/app/components/admin/SecurityDashboard/incidentTypes';
 
 const DASH = '\u2014';
 const SIGNALS_DOWN = 'Could not load live signals.';

@@ -19,7 +19,6 @@ import {
   type CdnInvalidationBatch,
   appFileCdnPath,
   createCdnInvalidationBatch,
-  generatedCdnPath,
 } from '../services/cdn/invalidateRouterCdn';
 import { NOTEBOOK_DOWNLOAD_KEY_PREFIX } from '../notebooks/downloadCopyKeys';
 import { TEXT_EDIT_BACKUP_PREFIX } from '../utils/textEditBackupPrefix';
@@ -28,6 +27,7 @@ import { Resource } from 'sst';
 import { z } from 'zod';
 import { OrganizationAuditEventModel } from '@bike4mind/database/infra';
 import { claimAccountFilePurgeLease, type AccountFilePurgeLease } from './accountFilePurgeLease';
+import { purgeCallableFunctionDataForUser } from '../callableFunctions/dataPins';
 import {
   legacyOrganizationExportKey,
   legacyOrganizationExportLocator,
@@ -41,7 +41,7 @@ const BATCH_SIZE = 50;
 
 /**
  * Preserve legacy org uploads which predate the organizationId ownership stamp. Also decides what
- * the data subject walks treat as a personal file (`apps/client/server/dataSubject/subjectMatcher.ts`).
+ * the data subject walks treat as a personal file (`dataSubject/subjectMatcher.ts`).
  */
 export async function isOrganizationFile(file: IFabFileDocument, userId: string): Promise<boolean> {
   return (await findOrganizationFileIds([file], userId)).has(file.id);
@@ -171,7 +171,6 @@ async function purgeFile(
               .select('_id');
             if (!other) {
               await getGeneratedImageStorage().deletePermanently(key);
-              cdn.add(generatedCdnPath(key));
             }
           },
         },
@@ -353,6 +352,8 @@ async function purgeAccountFilesWithLease(userId: string, options: PurgeOptions)
   await purgeLegacyEditBackups(owner, options);
   await options.assertLease();
   await new S3Storage(Resource.historyImportBucket.name).deletePrefixPermanently(`notebooks/${owner}/`);
+  await options.assertLease();
+  await purgeCallableFunctionDataForUser(userId);
 }
 
 /** Pre-edit copies written before `text-edit-backups/` existed; no lifecycle rule reaches them. */

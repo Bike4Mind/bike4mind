@@ -30,7 +30,6 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { Logger } from '@bike4mind/observability';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { createCdnInvalidationBatch, generatedCdnPath } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import {
   RETENTION_BATCH_SIZE,
@@ -376,9 +375,6 @@ export async function cleanupOrganizationRetention(
           });
           if (!stillOwned || (await retainedMedia(object.key, object.sessionId))) return;
           await getGeneratedImageStorage().delete(object.key);
-          const batch = createCdnInvalidationBatch('organization-retention', logger);
-          batch.add(generatedCdnPath(object.key));
-          await batch.flush();
           const result = await OrganizationGeneratedObject.updateOne(
             { _id: object._id, organizationId, deletedAt: null },
             { $set: { deletedAt: now } }

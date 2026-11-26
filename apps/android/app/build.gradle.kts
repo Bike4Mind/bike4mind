@@ -107,6 +107,8 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     // Document scanning UI, run by Google Play services, so the app ships no camera or edge-detection code.
     implementation(libs.mlkit.document.scanner)
+    // Unbundled: the model comes from Play services, so the APK does not carry it.
+    implementation(libs.mlkit.text.recognition)
 
     // Firebase pulls an old fragment; the activity-result permission launcher needs 1.3.0 or later (lint-enforced).
     implementation(libs.androidx.fragment)
@@ -117,6 +119,9 @@ dependencies {
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.robolectric)
     testImplementation(libs.junit)
+    testImplementation(libs.ktor.client.mock)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.androidx.work.testing)
     // Declares the empty activity Compose UI tests host their content in; debug builds only.
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

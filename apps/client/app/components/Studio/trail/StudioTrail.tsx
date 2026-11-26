@@ -1,23 +1,24 @@
-import {
-  Alert,
-  Box,
-  Chip,
-  CircularProgress,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemContent,
-  ListItemDecorator,
-  Stack,
-  Typography,
-} from '@mui/joy';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { styled } from '@mui/system';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
+import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
+import GraphicEqRoundedIcon from '@mui/icons-material/GraphicEqRounded';
+import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
+import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 import type { GeneratedAssetGenerator, GeneratedAssetLineageRole } from '@bike4mind/common';
 import type { FileLineage, LineageEdge, LineageNode, VisibleLineageNode } from '@server/files/fileLineage';
 import { useFileLineage } from '@client/app/hooks/data/fileLineage';
 import type { StudioRestoreRequest } from '@client/app/components/Studio/restore/studioRestore';
 import type { StudioMedium } from '@client/app/components/Studio/studioModality';
+import { StudioSectionLabel } from '@client/app/components/Studio/design/StudioPanel';
+import { StudioSkeletonBlock, StudioTakesMessage } from '@client/app/components/Studio/design/StudioTakesStates';
+import {
+  STUDIO_FOCUS_VISIBLE,
+  studioColor,
+  studioFont,
+  studioRadius,
+} from '@client/app/components/Studio/design/studioTokens';
 
 export const LINEAGE_ROLE_LABELS: Record<GeneratedAssetLineageRole, string> = {
   first_frame: 'First frame',
@@ -54,47 +55,173 @@ type StudioTrailProps = {
   onRestore?: StudioTrailRestore;
 };
 
-const THUMB_SIZE = 56;
+// px; wide enough for a two-line prompt under the thumbnail, narrow enough that a few steps fit the dialog.
+const STEP_WIDTH = 148;
+const SKELETON_STEP_COUNT = 3;
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-const Thumbnail = ({ node }: { node: VisibleLineageNode }) => (
-  <Box
-    sx={{
-      width: THUMB_SIZE,
-      height: THUMB_SIZE,
-      borderRadius: 'sm',
-      overflow: 'hidden',
-      bgcolor: 'background.level2',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      flexShrink: 0,
-    }}
-  >
+const stripStyle = {
+  display: 'flex',
+  alignItems: 'stretch',
+  gap: '4px',
+  margin: 0,
+  padding: '2px 2px 8px',
+  listStyle: 'none',
+  overflowX: 'auto',
+  scrollSnapType: 'x proximity',
+  scrollbarWidth: 'thin',
+} as const;
+
+const OrderedStrip = styled('ol')(stripStyle);
+const UnorderedStrip = styled('ul')(stripStyle);
+const LoadingStrip = styled('div')(stripStyle);
+
+const StripItem = styled('li')({ display: 'flex', alignItems: 'stretch', flexShrink: 0, scrollSnapAlign: 'start' });
+
+// Centred on the thumbnail, so the arrows read as one line through the strip.
+const Connector = styled('span')({
+  display: 'flex',
+  alignSelf: 'flex-start',
+  alignItems: 'center',
+  height: `${STEP_WIDTH}px`,
+  color: studioColor('text-muted'),
+  '& svg': { fontSize: '20px' },
+});
+
+// Steps of one generation (several parents of the same take) stack, so no arrow implies one made the other.
+const Generation = styled('div')({ display: 'flex', flexDirection: 'column', gap: '8px' });
+
+const stepStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '8px',
+  width: `${STEP_WIDTH}px`,
+  margin: 0,
+  padding: '10px',
+  borderRadius: studioRadius('lg'),
+  border: `1px solid ${studioColor('hairline')}`,
+  backgroundColor: studioColor('surface'),
+  color: studioColor('text'),
+  font: `400 12px/1.4 ${studioFont('ui')}`,
+  textAlign: 'left',
+  '&[data-current="true"]': {
+    borderColor: studioColor('accent-border'),
+    backgroundColor: studioColor('accent-soft'),
+  },
+} as const;
+
+const StaticStep = styled('div')(stepStyle);
+
+const RestorableStep = styled('button')({
+  ...stepStyle,
+  cursor: 'pointer',
+  transition: 'background-color 120ms ease, border-color 120ms ease',
+  '&:hover': { backgroundColor: studioColor('hover'), borderColor: studioColor('border-strong') },
+  '&:focus-visible': STUDIO_FOCUS_VISIBLE,
+  '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+});
+
+const ThumbnailFrame = styled('span')({
+  position: 'relative',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  aspectRatio: '1 / 1',
+  overflow: 'hidden',
+  borderRadius: studioRadius('md'),
+  border: `1px solid ${studioColor('hairline')}`,
+  backgroundColor: studioColor('sunken'),
+  color: studioColor('text-muted'),
+  '& svg': { fontSize: '28px' },
+  '& img': { width: '100%', height: '100%', objectFit: 'cover' },
+});
+
+const CurrentBadge = styled('span')({
+  position: 'absolute',
+  top: '6px',
+  left: '6px',
+  padding: '2px 8px',
+  borderRadius: studioRadius('pill'),
+  backgroundColor: studioColor('accent'),
+  color: studioColor('accent-contrast'),
+  font: `600 10px/1.4 ${studioFont('ui')}`,
+  whiteSpace: 'nowrap',
+});
+
+const StepTitle = styled('span')({
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  font: `500 11px/1.3 ${studioFont('mono')}`,
+  color: studioColor('text-strong'),
+  '&[data-muted="true"]': { fontFamily: studioFont('ui'), color: studioColor('text-muted') },
+});
+
+const StepPrompt = styled('span')({
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+  overflow: 'hidden',
+  color: studioColor('text-secondary'),
+});
+
+const StepDate = styled('span')({ font: `400 10px/1.3 ${studioFont('mono')}`, color: studioColor('text-muted') });
+
+const RoleTags = styled('span')({ display: 'flex', flexWrap: 'wrap', gap: '4px' });
+
+const RoleTag = styled('span')({
+  padding: '2px 8px',
+  borderRadius: studioRadius('pill'),
+  border: `1px solid ${studioColor('accent-border')}`,
+  backgroundColor: studioColor('accent-soft'),
+  color: studioColor('accent-on-soft'),
+  font: `500 10px/1.4 ${studioFont('ui')}`,
+});
+
+const TruncatedNote = styled('p')({
+  margin: 0,
+  font: `400 12px/1.4 ${studioFont('ui')}`,
+  color: studioColor('text-muted'),
+});
+
+const TrailRoot = styled('div')({ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 });
+
+const SkeletonStep = styled('div')({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '8px',
+  width: `${STEP_WIDTH}px`,
+  padding: '10px',
+  borderRadius: studioRadius('lg'),
+  border: `1px solid ${studioColor('hairline')}`,
+  backgroundColor: studioColor('surface'),
+});
+
+const MediaIcon = ({ mimeType }: { mimeType: string }) => {
+  if (mimeType.startsWith('video/')) return <MovieOutlinedIcon />;
+  if (mimeType.startsWith('audio/')) return <GraphicEqRoundedIcon />;
+  return <InsertDriveFileOutlinedIcon />;
+};
+
+const Thumbnail = ({ node, isCurrent }: { node: VisibleLineageNode; isCurrent?: boolean }) => (
+  <ThumbnailFrame>
     {node.url && node.mimeType.startsWith('image/') ? (
-      <Box
-        component="img"
-        src={node.url}
-        alt={node.prompt ?? node.fileName}
-        loading="lazy"
-        sx={{ width: '100%', height: '100%', objectFit: 'cover' }}
-      />
+      <img src={node.url} alt={node.prompt ?? node.fileName} loading="lazy" />
     ) : (
-      <InsertDriveFileOutlinedIcon />
+      <MediaIcon mimeType={node.mimeType} />
     )}
-  </Box>
+    {isCurrent && <CurrentBadge>This take</CurrentBadge>}
+  </ThumbnailFrame>
 );
 
 const RoleChips = ({ roles, testId }: { roles: GeneratedAssetLineageRole[]; testId: string }) =>
   roles.length === 0 ? null : (
-    <Stack direction="row" gap={0.5} flexWrap="wrap" data-testid={testId}>
+    <RoleTags data-testid={testId}>
       {[...new Set(roles)].map(role => (
-        <Chip key={role} size="sm" variant="soft" color="primary">
-          {LINEAGE_ROLE_LABELS[role]}
-        </Chip>
+        <RoleTag key={role}>{LINEAGE_ROLE_LABELS[role]}</RoleTag>
       ))}
-    </Stack>
+    </RoleTags>
   );
 
 const restorableMedium = (node: VisibleLineageNode): StudioMedium | null =>
@@ -118,89 +245,90 @@ const VisibleStep = ({
   restorable = true,
 }: StepProps & { node: VisibleLineageNode }) => {
   const medium = restorableMedium(node);
+  const title = node.modelId ?? (node.generator ? 'Generated' : 'Uploaded file');
   const content = (
     <>
-      <ListItemDecorator sx={{ mr: 1.5 }}>
-        <Thumbnail node={node} />
-      </ListItemDecorator>
-      <ListItemContent>
-        <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-          <Typography level="title-sm">{node.modelId ?? (node.generator ? 'Generated' : 'Uploaded file')}</Typography>
-          {isCurrent && (
-            <Chip size="sm" variant="outlined">
-              This take
-            </Chip>
-          )}
-        </Stack>
-        {node.prompt && (
-          <Typography
-            level="body-sm"
-            sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-          >
-            {node.prompt}
-          </Typography>
-        )}
-        {node.createdAt && (
-          <Typography level="body-xs" textColor="text.tertiary">
-            {dateFormat.format(new Date(node.createdAt))}
-          </Typography>
-        )}
-        <RoleChips roles={roles} testId={`studio-trail-roles-${node.fileId}`} />
-      </ListItemContent>
+      <Thumbnail node={node} isCurrent={isCurrent} />
+      <StepTitle data-muted={!node.modelId} title={title}>
+        {title}
+      </StepTitle>
+      {node.prompt && <StepPrompt>{node.prompt}</StepPrompt>}
+      {node.createdAt && <StepDate>{dateFormat.format(new Date(node.createdAt))}</StepDate>}
+      <RoleChips roles={roles} testId={`studio-trail-roles-${node.fileId}`} />
     </>
   );
 
   if (!onRestore || !restorable || !medium || !node.request) {
     return (
-      <ListItem data-testid={`studio-trail-step-${node.fileId}`} data-restorable="false">
+      <StaticStep data-testid={`studio-trail-step-${node.fileId}`} data-restorable="false" data-current={!!isCurrent}>
         {content}
-      </ListItem>
+      </StaticStep>
     );
   }
   const request = node.request;
   return (
-    <ListItem>
-      <ListItemButton
-        data-testid={`studio-trail-step-${node.fileId}`}
-        data-restorable="true"
-        title="Use these settings"
-        onClick={() => onRestore(node.fileId, request, medium)}
-        sx={{ borderRadius: 'sm' }}
-      >
-        {content}
-      </ListItemButton>
-    </ListItem>
+    <RestorableStep
+      type="button"
+      data-testid={`studio-trail-step-${node.fileId}`}
+      data-restorable="true"
+      data-current={!!isCurrent}
+      title="Use these settings"
+      onClick={() => onRestore(node.fileId, request, medium)}
+    >
+      {content}
+    </RestorableStep>
   );
 };
 
 const RedactedStep = ({ node, roles }: StepProps) => (
-  <ListItem data-testid={`studio-trail-redacted-${node.fileId}`}>
-    <ListItemDecorator sx={{ mr: 1.5 }}>
-      <Box
-        sx={{
-          width: THUMB_SIZE,
-          height: THUMB_SIZE,
-          borderRadius: 'sm',
-          bgcolor: 'background.level1',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <LockOutlinedIcon />
-      </Box>
-    </ListItemDecorator>
-    <ListItemContent>
-      <Typography level="title-sm" textColor="text.tertiary">
-        Not available
-      </Typography>
-      <RoleChips roles={roles} testId={`studio-trail-roles-${node.fileId}`} />
-    </ListItemContent>
-  </ListItem>
+  <StaticStep data-testid={`studio-trail-redacted-${node.fileId}`}>
+    <ThumbnailFrame>
+      <LockOutlinedIcon />
+    </ThumbnailFrame>
+    <StepTitle data-muted="true">Not available</StepTitle>
+    <RoleChips roles={roles} testId={`studio-trail-roles-${node.fileId}`} />
+  </StaticStep>
 );
 
 const Step = (props: StepProps) =>
   props.node.redacted ? <RedactedStep {...props} /> : <VisibleStep {...props} node={props.node} />;
+
+/** Steps left to right; an ordered strip draws an arrow between each pair, an unordered one is a plain set. */
+const StepStrip = ({
+  children,
+  testId,
+  ordered = true,
+  scrollToEnd = false,
+}: {
+  children: ReactNode[];
+  testId: string;
+  ordered?: boolean;
+  /** Start scrolled to the newest step, so a long ancestry opens on the take itself. */
+  scrollToEnd?: boolean;
+}) => {
+  const stripRef = useRef<HTMLOListElement>(null);
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (scrollToEnd && strip) strip.scrollLeft = strip.scrollWidth;
+  }, [scrollToEnd]);
+  const items = children.map((child, index) => (
+    <StripItem key={index}>
+      {ordered && index > 0 && (
+        <Connector aria-hidden="true">
+          <ChevronRightRoundedIcon />
+        </Connector>
+      )}
+      {child}
+    </StripItem>
+  ));
+  return ordered ? (
+    <OrderedStrip ref={stripRef} data-testid={testId}>
+      {items}
+    </OrderedStrip>
+  ) : (
+    <UnorderedStrip data-testid={testId}>{items}</UnorderedStrip>
+  );
+};
 
 const rolesFrom = (edges: LineageEdge[], parentId: string) =>
   edges.filter(edge => edge.parentId === parentId).map(edge => edge.role);
@@ -215,8 +343,12 @@ const rolesInto = (edges: LineageEdge[], parentId: string, childId: string) =>
 const exportedFileIds = (lineage: FileLineage): Set<string> =>
   new Set(lineage.edges.filter(edge => edge.role === 'timeline_clip').map(edge => edge.childId));
 
-/** Oldest generation first, so the list reads top to bottom in the order the take was made. */
-const stepsInOrder = (lineage: FileLineage) => [...lineage.ancestors].sort((a, b) => b.depth - a.depth);
+/** Ancestors grouped by depth, oldest generation first, so the strip reads left to right in the order the take was made. */
+const generationsInOrder = (lineage: FileLineage): LineageNode[][] => {
+  const byDepth = new Map<number, LineageNode[]>();
+  for (const node of lineage.ancestors) byDepth.set(node.depth, [...(byDepth.get(node.depth) ?? []), node]);
+  return [...byDepth.entries()].sort(([a], [b]) => b - a).map(([, nodes]) => nodes);
+};
 
 /** The files `fileId` was made from, with their roles, as its `derivedFrom` recorded them. */
 const inputsOf = (lineage: FileLineage, fileId: string) =>
@@ -231,28 +363,30 @@ const fileNamesOf = (lineage: FileLineage): Record<string, string | null> =>
 const TrailBody = ({ lineage, onRestore }: { lineage: FileLineage; onRestore?: StepRestore }) => {
   const exported = exportedFileIds(lineage);
   return (
-    <Stack gap={2}>
+    <>
       {lineage.truncated && (
-        <Typography level="body-xs" textColor="text.tertiary" data-testid="studio-trail-truncated">
-          Earlier steps are not shown.
-        </Typography>
+        <TruncatedNote data-testid="studio-trail-truncated">Earlier steps are not shown.</TruncatedNote>
       )}
-      <List data-testid="studio-trail-ancestors" sx={{ '--ListItem-paddingX': 0, gap: 0.5 }}>
-        {stepsInOrder(lineage).map(node => (
-          <Step
-            key={node.fileId}
-            node={node}
-            roles={rolesFrom(ancestorEdges(lineage), node.fileId)}
-            isCurrent={node.fileId === lineage.fileId}
-            onRestore={onRestore}
-            restorable={!exported.has(node.fileId)}
-          />
+      <StepStrip testId="studio-trail-ancestors" scrollToEnd>
+        {generationsInOrder(lineage).map(nodes => (
+          <Generation key={nodes[0].depth}>
+            {nodes.map(node => (
+              <Step
+                key={node.fileId}
+                node={node}
+                roles={rolesFrom(ancestorEdges(lineage), node.fileId)}
+                isCurrent={node.fileId === lineage.fileId}
+                onRestore={onRestore}
+                restorable={!exported.has(node.fileId)}
+              />
+            ))}
+          </Generation>
         ))}
-      </List>
+      </StepStrip>
       {lineage.children.length > 0 && (
-        <Stack gap={0.5}>
-          <Typography level="title-sm">Made from this</Typography>
-          <List data-testid="studio-trail-children" sx={{ '--ListItem-paddingX': 0, gap: 0.5 }}>
+        <TrailRoot>
+          <StudioSectionLabel testId="studio-trail-children-label">Made from this</StudioSectionLabel>
+          <StepStrip testId="studio-trail-children" ordered={false}>
             {lineage.children.map(child => (
               <Step
                 key={child.fileId}
@@ -262,30 +396,43 @@ const TrailBody = ({ lineage, onRestore }: { lineage: FileLineage; onRestore?: S
                 restorable={!exported.has(child.fileId)}
               />
             ))}
-          </List>
-        </Stack>
+          </StepStrip>
+        </TrailRoot>
       )}
-    </Stack>
+    </>
   );
 };
 
+const TrailLoading = () => (
+  <LoadingStrip role="status" aria-label="Loading the trail" data-testid="studio-trail-loading">
+    {Array.from({ length: SKELETON_STEP_COUNT }, (_, index) => (
+      <SkeletonStep key={index} aria-hidden>
+        <StudioSkeletonBlock style={{ aspectRatio: '1 / 1', borderRadius: studioRadius('md') }} />
+        <StudioSkeletonBlock style={{ height: '10px', width: '70%' }} />
+        <StudioSkeletonBlock style={{ height: '10px' }} />
+      </SkeletonStep>
+    ))}
+  </LoadingStrip>
+);
+
 /**
- * How a generated file was made: its ancestors oldest first, each labelled with the role it played (first
- * frame, reference, variation of, ...), then the files made from it. Ancestors the viewer cannot read show as
- * placeholders. Clicking a step hands its stored request to `onRestore`.
+ * How a generated file was made, as a lineage strip: its ancestors oldest first, left to right, each tagged with
+ * the role it played (first frame, reference, variation of, ...), then the files made from it. Ancestors the
+ * viewer cannot read show as placeholders. Clicking a step hands its stored request to `onRestore`.
+ * Reads the `--studio-*` tokens, so it must render under a StudioThemeScope (StudioTrailDialog brings its own).
  */
 const StudioTrail = ({ fileId, onRestore }: StudioTrailProps) => {
   const lineage = useFileLineage(fileId);
-  if (lineage.isPending) return <CircularProgress size="sm" data-testid="studio-trail-loading" />;
+  if (lineage.isPending) return <TrailLoading />;
   if (lineage.isError) {
     return (
-      <Alert color="danger" variant="soft" data-testid="studio-trail-error">
+      <StudioTakesMessage tone="danger" icon={<ErrorOutlineRoundedIcon />} testId="studio-trail-error">
         The trail could not be loaded.
-      </Alert>
+      </StudioTakesMessage>
     );
   }
   return (
-    <Box data-testid="studio-trail">
+    <TrailRoot data-testid="studio-trail">
       <TrailBody
         lineage={lineage.data}
         onRestore={
@@ -299,7 +446,7 @@ const StudioTrail = ({ fileId, onRestore }: StudioTrailProps) => {
             }))
         }
       />
-    </Box>
+    </TrailRoot>
   );
 };
 

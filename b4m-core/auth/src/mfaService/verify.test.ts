@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import speakeasy from 'speakeasy';
+import { TOTP_STEP_SECONDS, generateTOTPSecret, totpCode } from './totp';
 import { verifyMFA } from './verify';
 import { MfaAttemptRejectedError } from './attempt';
 import { hashBackupCode } from './utils';
 import type { IUserDocument } from '@bike4mind/common';
 
-const SECRET = speakeasy.generateSecret().base32;
+const SECRET = generateTOTPSecret();
 // Backup codes are stored as SHA-256 hashes; plaintext is only shown at setup.
 const BACKUP_CODE_PLAINTEXTS = ['ABCDE12345', 'FGHIJ67890'];
 const BACKUP_CODES = BACKUP_CODE_PLAINTEXTS.map(hashBackupCode);
@@ -39,7 +39,7 @@ const makeRepo = (overrides: { reserved?: boolean; claimed?: boolean; consumed?:
   };
 };
 
-const currentToken = () => speakeasy.totp({ secret: SECRET, encoding: 'base32' });
+const currentToken = () => totpCode(SECRET, Math.floor(Date.now() / 1000 / TOTP_STEP_SECONDS));
 
 describe('verifyMFA', () => {
   it('accepts a valid current TOTP code', async () => {
@@ -159,7 +159,7 @@ describe('verifyMFA', () => {
     try {
       const repo = makeRepo();
       const step = Math.floor(nowMs / 1000 / 30) - 1;
-      const token = speakeasy.totp({ secret: SECRET, encoding: 'base32', time: Math.floor(nowMs / 1000) - 30 });
+      const token = totpCode(SECRET, step);
       await verifyMFA({ user: makeUser(), token }, repo);
       expect(repo.atomicClaimTotpStep).toHaveBeenCalledWith('user-1', step);
     } finally {

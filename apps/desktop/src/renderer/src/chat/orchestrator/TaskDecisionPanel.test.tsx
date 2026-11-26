@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { inheritancePolicy, type TaskContract, type WorkerTask } from '@shared/orchestration';
@@ -42,6 +43,7 @@ const taskAction = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: { listModels: vi.fn(async () => ({ models: [{ id: 'worker', name: 'Catalog Worker' }] })), taskAction },
   };
 });
@@ -170,7 +172,10 @@ it.each(['blocked', 'escalation-requested', 'completed'] as const)(
       activity: new Map(),
       prSummaries: new Map(),
     };
-    expect(agentStates(input.sessions, input.statuses, input.rootId)).toEqual(['needs-you']);
-    expect(buildRoster(input)[0].state).toBe('needs-you');
+    expect(agentStates(input.sessions, input.statuses, input.rootId)).toEqual(['done']);
+    expect(buildRoster(input)[0].state).toBe('done');
+    const waiting = { ...input, statuses: new Map([[session.id, 'needs-action' as const]]) };
+    expect(agentStates(waiting.sessions, waiting.statuses, waiting.rootId)).toEqual(['needs-you']);
+    expect(buildRoster(waiting)[0].state).toBe('needs-you');
   }
 );

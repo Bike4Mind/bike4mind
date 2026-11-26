@@ -14,6 +14,7 @@ import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 
 export const QuestMasterDataSchema: Schema<QuestMasterData> = new Schema<QuestMasterData>(
   {
@@ -207,8 +208,7 @@ export const QuestMasterPlan: Model<IQuestMasterPlanDocument> =
  * Filter arms that keep a write to a plan the caller can still write: owner or sharedWith, and not
  * soft-deleted. ANDed into every sharee-reachable write so a revoke or delete landing after the
  * route's access check turns the write into a no-op. Public visibility is read-only, so it has no
- * arm. Must stay in sync with verifyQuestPlanWriteAccess (apps/client/server/utils/questMasterPlanAccess.ts)
- * and callerCanWritePlan (b4m-core/services/src/llm/ChatCompletionFeatures.ts).
+ * arm. Kept for the legacy plan conversion and drop migrations; no route or chat path writes plans anymore.
  */
 const writableBy = (userId: string) => ({ deletedAt: null, $or: [{ userId }, { sharedWith: userId }] });
 
@@ -224,7 +224,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
   private scheduleMetricsUpdate(planId: string): void {
     this.updateMetrics(planId).catch(err => {
       // Log with structured format for easier debugging
-      console.warn('[QuestMasterPlan] Metrics update failed', { planId, error: err.message });
+      Logger.warn('[QuestMasterPlan] Metrics update failed', { planId, error: err });
     });
   }
 

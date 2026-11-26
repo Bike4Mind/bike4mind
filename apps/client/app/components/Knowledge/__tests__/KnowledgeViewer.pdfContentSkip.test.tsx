@@ -34,7 +34,6 @@ vi.mock('../JSONViewer', () => ({ default: () => null }));
 vi.mock('../XLSXViewer', () => ({ default: () => null }));
 vi.mock('../DiffPreview', () => ({ default: () => null }));
 vi.mock('../EditFileDialog', () => ({ default: () => null }));
-vi.mock('@client/app/components/GenAI/QuestMasterReply', () => ({ default: () => null }));
 vi.mock('@client/app/components/Charts/RechartsRenderer', () => ({ default: () => null }));
 vi.mock('@client/app/components/Chess/ChessBoard', () => ({ default: () => null }));
 vi.mock('@client/app/components/Chess/InteractiveChessBoard', () => ({ default: () => null }));

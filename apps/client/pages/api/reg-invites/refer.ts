@@ -17,7 +17,7 @@ import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mai
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Request } from 'express';
 import { z } from 'zod';
-import { escape } from 'html-escaper';
+import { escapeHtml } from '@bike4mind/utils/escapeHtml';
 
 const CreateReferralRequestSchema = z.object({
   userName: z.string(),
@@ -188,9 +188,9 @@ const handler = baseApi()
             <body>
               <div class="content">
                 ${buildEmailLogoImg(brand, logoUrl)}
-                <p>${escape(emailBody)}</p>
-                <p>Invite code: <strong>${escape(inviteCode)}</strong></p>
-                <p><a href="${escape(registrationLink)}">Click here to register</a></p>
+                <p>${escapeHtml(emailBody)}</p>
+                <p>Invite code: <strong>${escapeHtml(inviteCode)}</strong></p>
+                <p><a href="${escapeHtml(registrationLink)}">Click here to register</a></p>
               </div>
             </body>
             </html>
@@ -219,7 +219,7 @@ const handler = baseApi()
           sent.push(target);
         } catch (error) {
           const errorMessage = `Failed to process invite for ${target}: ${error instanceof Error ? error.message : error}`;
-          console.error(errorMessage);
+          req.logger.error('Failed to process invite', { target, error });
           slackErrorMessages.push(errorMessage);
           failed.push(target);
           if (!hasUsableInvite) refundCount++;
@@ -240,7 +240,7 @@ const handler = baseApi()
       // behind which emails failed, and it is rethrown only after that report is out.
       if (settlement.status === 'rejected') {
         // The refund and invite ids never reached the user document; record them for repair.
-        console.error('Referral settlement failed', {
+        req.logger.error('Referral settlement failed', {
           userId,
           refundCount,
           newInviteIds,
@@ -255,7 +255,7 @@ const handler = baseApi()
         const errorMessage = `Failed to deliver referral email to ${delivery.target}: ${
           reason instanceof Error ? reason.message : reason
         }`;
-        console.error(errorMessage);
+        req.logger.error('Failed to deliver referral email', { target: delivery.target, error: reason });
         slackErrorMessages.push(errorMessage);
         failed.push(delivery.target);
       });

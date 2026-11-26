@@ -9,10 +9,24 @@ import { installedCache } from '../models/installedCache';
 import type { ChatWith } from '../models/modelTarget';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 vi.mock('./Composer', () => ({
   Composer: ({ onSend, footer }: { onSend: (text: string) => void; footer: (node: null) => React.ReactNode }) => (
     <>
@@ -119,6 +133,7 @@ const deleteSession = vi.fn(async () => undefined);
 function stubBridge() {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
         defaultsForNewSession: async () => ({ model: HOSTED, approvalMode: 'auto', reasoningEffort: 'default' }),
         listSessions: async () => [summary('old-1', HOSTED)],
@@ -181,7 +196,14 @@ async function openModels() {
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ChatShell />
+        {/* The avatar menu's Models row lives in the account slot Home supplies; a stand-in reaches the same screen. */}
+        <ChatShell
+          account={context => (
+            <button type="button" onClick={context.onOpenModels} data-testid="chat-models-btn">
+              Models
+            </button>
+          )}
+        />
       </CssVarsProvider>
     );
   });
@@ -212,19 +234,14 @@ describe('Use in chat', () => {
     expect(document.querySelector('[data-testid="models-screen"]')).toBeNull();
   });
 
-  it('routes a saved server model to that server, and offers nothing for a server that is down', async () => {
+  it('routes a saved server model to that server, offers one still listing, and nothing for a server that is down', async () => {
     await openModels();
     expect(offered?.('gpu', 'qwen3.5:0.8b')).toBeNull();
+    // A server still listing its models is pending, not down: the same lookup offers it.
+    expect(offered?.('slow', 'qwen3.5:0.8b')).toBeTypeOf('function');
     await act(async () => offered?.('lab', 'qwen3.5:0.8b')?.());
     await sendDraft();
     expect(setSessionModel).toHaveBeenCalledWith('fresh-1', LAB_ID);
-  });
-
-  it('offers a model on a server that is still listing its models', async () => {
-    await openModels();
-    await act(async () => offered?.('slow', 'qwen3.5:0.8b')?.());
-    await sendDraft();
-    expect(setSessionModel).toHaveBeenCalledWith('fresh-1', SLOW_ID);
   });
 
   it('starts one conversation for a double click', async () => {
@@ -245,7 +262,7 @@ describe('Use in chat', () => {
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
     expect(createSession).not.toHaveBeenCalled();
     await sendDraft();
-    expect(deleteSession).toHaveBeenCalledWith('fresh-1');
+    expect(deleteSession).toHaveBeenCalledWith('fresh-1', false);
     expect(document.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain('draft settings');
     createSession.mockRejectedValueOnce(new Error('disk full'));
     await sendDraft();
@@ -258,7 +275,7 @@ describe('Use in chat', () => {
     await openModels();
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
     await sendDraft();
-    expect(deleteSession).toHaveBeenCalledWith('fresh-1');
+    expect(deleteSession).toHaveBeenCalledWith('fresh-1', false);
     expect(document.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain(
       'Could not remove the unsent'
     );

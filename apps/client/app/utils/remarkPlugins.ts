@@ -40,12 +40,38 @@ const SINGLE_DOLLAR_SPAN = /(?<!\$)\$(?!\$)(?!\s)([^$\n]*[^$\n\s])(?<!\$)\$(?!\$
 // newline, so the text after it starts mid-line.
 const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g;
 
-// LaTeX's own delimiters. CommonMark reads `\(` and `\[` as backslash escapes, so without this the
-// parser drops the backslash and prints "( a^2 )". The lookbehind requires an even run of
-// backslashes before the delimiter: `\\[2pt]` is a LaTeX line break, not an opening bracket.
-export const UNESCAPED = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)`;
-const INLINE_PAREN_SPAN = new RegExp(String.raw`${UNESCAPED}\\\(([^\n]*?)${UNESCAPED}\\\)`, 'g');
-const INLINE_BRACKET_SPAN = new RegExp(String.raw`${UNESCAPED}\\\[([^\n]*?)${UNESCAPED}\\\]`, 'g');
+// An unescaped `\` + delimiter: the even backslash run before it is what makes `\\[2pt]` (a LaTeX
+// line break) not an opening bracket. The lookbehind follows the literal on purpose. Leading the
+// pattern it walks the backslash run back from every position, quadratic on a long run once V8 stops
+// optimizing regexps (it does after an isolate has compiled about 10k: a long-lived tab).
+export const unescapedDelimiter = (delimiter: string) => String.raw`\\${delimiter}(?<=(?:^|[^\\])(?:\\\\)*\\.)`;
+
+type SpanReplacer = (match: string, inner: string, offset: number, whole: string) => string;
+
+// LaTeX's own inline delimiters, `\(...\)` and `\[...\]`. CommonMark reads `\(` and `\[` as backslash
+// escapes, so without this the parser drops the backslash and prints "( a^2 )". Each span runs from
+// an unescaped opener to the first unescaped closer on the same line, exactly what the regexp
+// `open([^\n]*?)close` would match. That regexp rescans to the end of the line from every unclosed
+// opener, quadratic on a line of them, so this walks the text once in escape pairs instead. Pairing
+// backslashes left to right means every `\(`-style pair it meets is unescaped.
+export function replaceInlineSpans(text: string, open: string, close: string, replace: SpanReplacer): string {
+  let out = '';
+  let copiedTo = 0;
+  let openAt = -1;
+  for (const { 0: token, index } of text.matchAll(/\\[\s\S]|\n/g)) {
+    if (token.includes('\n')) openAt = -1;
+    else if (openAt < 0 && token === `\\${open}`) openAt = index;
+    else if (openAt >= 0 && token === `\\${close}`) {
+      const end = index + token.length;
+      out +=
+        text.slice(copiedTo, openAt) + replace(text.slice(openAt, end), text.slice(openAt + 2, index), openAt, text);
+      copiedTo = end;
+      openAt = -1;
+    }
+  }
+  return copiedTo ? out + text.slice(copiedTo) : text;
+}
+
 // `\[` opening its line (after indentation or blockquote markers) and `\]` closing a line. The body
 // may not cross a blank line, so an unclosed `\[` cannot swallow the paragraphs that follow, nor
 // hold another unescaped `\[`/`\]`, so `\[ a \] and \[ b \]` is left to the inline pass instead of
@@ -106,8 +132,8 @@ function unescapeStars(tex: string): string {
 // markdown-escaped citation `\[1\]`) or holds a `$` that would break the produced delimiters. A
 // span touching a `$` or another delimiter gets a space on that side, so `$x$\(y^2\)` does not
 // become an unparseable `$x$$$y^2$$`.
-function toInlineMath(isMath: (raw: string) => boolean) {
-  return (match: string, inner: string, offset: number, whole: string): string => {
+function toInlineMath(isMath: (raw: string) => boolean): SpanReplacer {
+  return (match, inner, offset, whole) => {
     const body = inner.trim();
     if (!body || body.includes('$') || !isMath(inner)) return match;
     const before = whole[offset - 1] === '$' ? ' ' : '';
@@ -137,17 +163,21 @@ function toDisplayMath(match: string, prefix: string, inner: string): string {
 }
 
 function normalizeLatexBrackets(segment: string, startsLine: boolean, endsLine: boolean): string {
-  return segment
-    .replace(OWN_LINE_BRACKET_BLOCK, (match: string, prefix: string, inner: string, offset: number) => {
+  const blocks = segment.replace(
+    OWN_LINE_BRACKET_BLOCK,
+    (match: string, prefix: string, inner: string, offset: number) => {
       // `^`/`$` also match at the segment's edges, which sit mid-line next to inline code.
       const atEdge = (offset === 0 && !startsLine) || (offset + match.length === segment.length && !endsLine);
       return atEdge ? match : toDisplayMath(match, prefix, inner);
-    })
-    .replace(INLINE_BRACKET_SPAN, toInlineMath(looksLikeBracketMath))
-    .replace(
-      INLINE_PAREN_SPAN,
-      toInlineMath(raw => looksLikeMath(raw.trim()))
-    );
+    }
+  );
+  const brackets = replaceInlineSpans(blocks, '[', ']', toInlineMath(looksLikeBracketMath));
+  return replaceInlineSpans(
+    brackets,
+    '(',
+    ')',
+    toInlineMath(raw => looksLikeMath(raw.trim()))
+  );
 }
 
 /**

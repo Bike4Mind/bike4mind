@@ -3,8 +3,14 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16+: lets the running-agent notification (push/AgentRunNotifications.kt) show as a Live Update. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+    <!-- push/AgentRunKeepAlive.kt: keeps a followed agent run polling after the user leaves the app. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Dictation records a short voice note and sends it for transcription. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
 
     <!-- Lets MainActivity find a browser for pages with no native screen (package visibility, Android 11+). -->
     <queries>
@@ -25,6 +31,11 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
+        <!-- Fetches the on-device text recognition model at install, so the first scan on a fresh install reads text. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr" />
+
         <!-- FCM: a notification message shown while the app is backgrounded uses this channel (created in B4MApplication). -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
@@ -38,6 +49,12 @@
             </intent-filter>
         </service>
 
+        <!-- dataSync: it fetches a run's state from the server for as long as the run lasts (an hour at most). -->
+        <service
+            android:name=".push.AgentRunKeepAlive"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- singleTask so the OAuth redirect returns to the running activity (onNewIntent) instead of a new one. -->
         <activity
             android:name=".MainActivity"
@@ -48,6 +65,10 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Long-press launcher shortcuts (Ask, Capture note, Start quest), routed by kit AppShortcut. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
 
             <!-- Non-production OAuth redirect (OAuthConfiguration.nonProduction). The production App Link
                  (https, autoVerify) is added once the server registers an Android OAuth client. -->

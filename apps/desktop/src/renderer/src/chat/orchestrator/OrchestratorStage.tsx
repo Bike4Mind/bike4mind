@@ -14,10 +14,15 @@ import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
 import { useRunSpend } from './runSpend';
 import { NeedsYouCard } from './NeedsYouCard';
+import { NeedsYouStrip } from './NeedsYouStrip';
+import { toMiniPayload, useOrchestrateMiniWindow, usePublishOrchestrateMini } from './orchestrateMini';
 import { numberAgents, redactForPresenter, restorePresentedAction, type PresentedStage } from './presenter';
 import type { OrchestratorViewId } from './orchestratorPrefs';
-import type { OrchestratorLayout } from './orchestratorLayout';
+import type { OrchestratorLayout, OrchestratorPane } from './orchestratorLayout';
 import { StageLayout } from './StageLayout';
+import { StageDropZones } from './StageDropZones';
+import { pinLabel, resolvePaneSession } from './panePins';
+import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
@@ -28,6 +33,8 @@ import { useQuickApprovals } from './quickApprovals';
 import { runViewAction, toViewSnapshot } from './viewSnapshot';
 import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
 import { useAvatarDetailsPosition } from './useAvatarDetailsPosition';
+import type { FillWindow } from './useFillWindow';
+import { ExpandIcon } from '../icons';
 
 export interface AgentActions {
   open(id: string): void;
@@ -62,6 +69,13 @@ export interface OrchestratorViewProps {
    * roster (Presenter mode's placeholder option labels); absent when the props are not redacted.
    */
   restoreAction?(action: ViewAction): ViewAction;
+  /**
+   * The view answers every request in its own scene (the Tavern's dialogue box), so the stage leaves out its
+   * Needs-you strip. Set only for a single unredacted view.
+   */
+  inSceneDecisions?: boolean;
+  /** Bumped when the "N need you" pill asks the in-scene requests to come forward. */
+  needsYouFocusRequest?: number;
 }
 
 /** The parent conversation's front door in the scene: one thread, reached from the bar as well as the composer. */
@@ -97,8 +111,16 @@ export interface StageAmbient {
   onToggle(on: boolean): void;
 }
 
+/** An agent archived out of the run; the empty stage lists these so they stay one click away. */
+export interface ArchivedAgent {
+  id: string;
+  title: string;
+}
+
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
+  /** Agents archived out of this run, newest first (archivedAgentsOf). Shown only on the empty stage. */
+  archivedAgents?: readonly ArchivedAgent[];
   selection?: { id: string | null; onChange(id: string | null): void };
   parent?: ParentView;
   /** Bring the parent's own conversation forward for an attention action. */
@@ -106,6 +128,8 @@ export interface OrchestratorStageProps {
   onParentToggle?(): void;
   /** The orchestrating session; scopes the remembered finale. Without it the finale never plays. */
   rootId?: string;
+  /** The orchestrating session's title, at the head of the path each Needs-you card shows. */
+  rootTitle?: string;
   /** The parent's closing summary, once its transcript ends on one; the finale waits for it. */
   report?: ParentReport;
   /** The finale's "Read the report": show that summary. */
@@ -134,13 +158,23 @@ export interface OrchestratorStageProps {
   /** Showing the parent conversation takes precedence over an agent peek. */
   conversationRequest?: number;
   presenter?: StagePresenter;
+  /**
+   * Fill window (useFillWindow.ts): the shell hides everything around the stage, and the header slims to
+   * the view name, the counts and Exit. Without it the header offers no Fill window button.
+   */
+  fillWindow?: FillWindow;
+  /**
+   * The shell's sessions, so a pane in a split can be pinned to another session (panePins.ts) and draw its
+   * roster. Without it every pane shows this stage's roster.
+   */
+  paneSessions?: PaneSessionSource;
 }
 
 const NO_PARENT: ParentView = {};
 const NO_NUMBERS: ReadonlyMap<string, number> = new Map();
 
 /** Presenter mode's agent numbers: given in roster order as agents first show, kept until the mode is turned off. */
-function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
+export function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
   const numbers = useRef(NO_NUMBERS);
   // Written during render on purpose: numberAgents is deterministic and idempotent, so a double render is
   // harmless, and moving it to an effect would flash the real titles for a frame.
@@ -155,11 +189,13 @@ const pulse = keyframes`
 
 export function OrchestratorStage({
   agents: rosterAgents,
+  archivedAgents = NO_ARCHIVED,
   selection,
   parent: rosterParent = NO_PARENT,
   onParentFocus,
   onParentToggle,
   rootId,
+  rootTitle,
   report,
   onReadReport,
   focusAgent = null,
@@ -176,8 +212,11 @@ export function OrchestratorStage({
   focus,
   conversationRequest,
   presenter,
+  paneSessions,
+  fillWindow,
 }: OrchestratorStageProps) {
   const [prAgentId, setPrAgentId] = useState<string | null>(null);
+  const [needsYouFocusRequest, setNeedsYouFocusRequest] = useState(0);
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
   const selectedId = selection ? selection.id : localSelectedId;
   const onSelectionChange = selection?.onChange;
@@ -191,6 +230,7 @@ export function OrchestratorStage({
   // The one place Presenter mode applies: everything below draws from `agents`, `parent`, `approvals` and
   // `desk`, except the peek drawer, which reads the real roster.
   const presenting = presenter?.on === true;
+  const filling = fillWindow?.on === true;
   const presenterNumbers = usePresenterNumbers(presenting, rosterAgents);
   const shown = useMemo((): PresentedStage => {
     const real = { agents: rosterAgents, parent: rosterParent, approvals: rosterApprovals, desk: rosterDesk };
@@ -318,6 +358,11 @@ export function OrchestratorStage({
     />
   );
 
+  // The Tavern asks its requests in a dialogue box of its own (tavern/TavernDialogue.tsx). Presenter mode keeps
+  // the strip off and the bubbles' Open-only answers, since the box would show the real requests.
+  const inSceneDecisions =
+    !split && view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused && !presenting;
+
   const detailsInScene =
     (parentScene || (!split && view === 'aquarium')) && renderView !== undefined && agents.length > 0 && !focused;
   const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
@@ -354,6 +399,7 @@ export function OrchestratorStage({
         actions={actions}
         skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
         visible={!settled}
+        onOpenPr={openPr}
       />
     </Box>
   );
@@ -374,12 +420,50 @@ export function OrchestratorStage({
     desk,
     settled: ambient?.settled === true,
     restoreAction,
+    inSceneDecisions,
+    needsYouFocusRequest,
   };
+
+  // A pane pinned to another session draws that session's roster; the stage's selection, drawer, finale and
+  // desk stay the active session's, so a click there opens the agent's session instead.
+  const renderPane = (pane: OrchestratorPane) => {
+    if (!renderView) return null;
+    const pinned =
+      paneSessions && resolvePaneSession(pane, { activeId: rootId, sessions: paneSessions.sessions, split });
+    if (!paneSessions || !pinned) return renderView(pane.view, viewProps);
+    return (
+      <PinnedPane
+        key={pinned.id}
+        rootId={pinned.id}
+        view={pane.view}
+        label={pinLabel(pinned, rootId, paneSessions.sessions, { presenting })}
+        source={paneSessions}
+        renderView={renderView}
+        onOpenSession={actions.open}
+        presenting={presenting}
+        settled={settled}
+      />
+    );
+  };
+
+  const isListedSession = (id: string) => paneSessions?.sessions.some(session => session.id === id) === true;
 
   const snapshot = useMemo(
     () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
     [focused, rootId, agents, parent, approvals]
   );
+  // The mini window draws from the same (possibly redacted) roster as the views, never the real one.
+  const miniWindow = useOrchestrateMiniWindow();
+  const miniOpen = miniWindow?.on === true;
+  const miniPayload = useMemo(
+    () =>
+      miniOpen && rootId !== undefined && agents.length > 0
+        ? toMiniPayload(toViewSnapshot(rootId, agents, parent), skin, presenting)
+        : null,
+    [miniOpen, rootId, agents, parent, skin, presenting]
+  );
+  usePublishOrchestrateMini(miniPayload, miniOpen);
+
   // Through the same gate a view that does not ship with the app will go through.
   const onViewAction = async (action: ViewAction) => {
     const accepted = snapshot && acceptViewAction(snapshot, action);
@@ -389,11 +473,13 @@ export function OrchestratorStage({
       openPr,
       openRoot: () => onParentFocus?.(),
       stop: actions.stop,
+      sessionOfApproval: approvalId => snapshot?.approvals?.find(entry => entry.id === approvalId)?.sessionId,
     });
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
-  const askingAgent = parentNeedsYou ? undefined : firstNeedsYou;
+  // An agent's request is the Tavern dialogue box's to show; the card keeps the parent's.
+  const askingAgent = parentNeedsYou || inSceneDecisions ? undefined : firstNeedsYou;
   const needsYouCard = settled && (parentNeedsYou || askingAgent) && (
     <NeedsYouCard
       key={askingAgent?.id ?? 'parent'}
@@ -447,14 +533,22 @@ export function OrchestratorStage({
           </Typography>
         </Box>
       ) : (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
-          <ViewSwitcher
-            layout={layout}
-            onLayoutChange={onLayoutChange}
-            ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
-            focus={focus}
-            presenter={presenter}
-          />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1, minWidth: 0 }}>
+          {filling ? (
+            <Typography level="title-sm" noWrap data-testid="orchestrator-fill-view-name" sx={{ flexShrink: 0 }}>
+              {ORCHESTRATOR_VIEW_INFO[view].label}
+            </Typography>
+          ) : (
+            <ViewSwitcher
+              layout={layout}
+              onLayoutChange={onLayoutChange}
+              ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
+              focus={focus}
+              presenter={presenter}
+              miniWindow={miniWindow}
+              paneSessions={paneSessions && { activeId: rootId, sessions: paneSessions.sessions, presenting }}
+            />
+          )}
           {presenting && <PresentingBadge />}
           <Typography
             level="body-sm"
@@ -483,7 +577,11 @@ export function OrchestratorStage({
               color="warning"
               variant="solid"
               data-testid="orchestrator-needs-you-pill"
-              onClick={() => (firstNeedsYou ? setSelectedId(firstNeedsYou.id) : onParentFocus?.())}
+              onClick={() => {
+                if (inSceneDecisions && firstNeedsYou) setNeedsYouFocusRequest(value => value + 1);
+                else if (firstNeedsYou) setSelectedId(firstNeedsYou.id);
+                else onParentFocus?.();
+              }}
               sx={{
                 flexShrink: 0,
                 animation: `${pulse} 1.6s ease-in-out infinite`,
@@ -494,8 +592,43 @@ export function OrchestratorStage({
             </Button>
           )}
           <Box sx={{ flex: 1 }} />
-          {dockControl}
+          {fillWindow &&
+            (filling ? (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                title="Exit full window (Esc)"
+                aria-keyshortcuts="Escape"
+                data-testid="orchestrator-fill-exit-btn"
+                data-fill-window-toggle
+                onClick={() => fillWindow.setOn(false)}
+                sx={{ flexShrink: 0 }}
+              >
+                Exit {'\u00b7'} Esc
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="primary"
+                title="Fill window (F)"
+                aria-keyshortcuts="F"
+                startDecorator={<ExpandIcon expanded={false} />}
+                data-testid="orchestrator-fill-window-btn"
+                data-fill-window-toggle
+                onClick={() => fillWindow.setOn(true)}
+                sx={{ flexShrink: 0 }}
+              >
+                Fill window
+              </Button>
+            ))}
+          {!filling && dockControl}
         </Box>
+      )}
+      {!settled && !presenting && !inSceneDecisions && (
+        // Off in Presenter mode: its cards would show the real requests the redacted stage hides.
+        <NeedsYouStrip agents={rosterAgents} personas={personas} rootTitle={rootTitle} onOpenDetails={setSelectedId} />
       )}
       <Box
         data-testid="orchestrator-scene-viewport"
@@ -517,15 +650,23 @@ export function OrchestratorStage({
             <EmptyStage
               scene={parentScene && renderView ? renderView(view, viewProps) : null}
               office={view === 'office'}
+              archived={archivedAgents}
+              presenting={presenting}
+              onOpen={actions.open}
             />
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
-          ) : renderView ? (
-            <StageLayout
+          ) : renderView && paneSessions ? (
+            <StageDropZones
               layout={layout}
               onLayoutChange={onLayoutChange}
-              renderPane={paneView => renderView(paneView, viewProps)}
-            />
+              activeId={rootId}
+              isListed={isListedSession}
+            >
+              <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
+            </StageDropZones>
+          ) : renderView ? (
+            <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
           ) : (
             <TableView {...viewProps} />
           )}
@@ -561,7 +702,32 @@ function PresentingBadge() {
   );
 }
 
-function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
+const NO_ARCHIVED: readonly ArchivedAgent[] = [];
+
+interface EmptyStageProps {
+  scene: ReactNode;
+  office: boolean;
+  archived: readonly ArchivedAgent[];
+  presenting: boolean;
+  onOpen(id: string): void;
+}
+
+/** `plain` is the wording without the Tavern's Innkeeper, for the Office and for a stage with no scene. */
+function emptyStageHint(plain: boolean, archivedCount: number): string {
+  if (archivedCount > 0) {
+    return plain
+      ? 'Every agent has finished and been archived. Describe more work to start new ones.'
+      : 'Every quest is done and its agent archived. Describe more work and the Innkeeper will hand it out.';
+  }
+  return plain
+    ? 'No agents yet. Describe the work and it will be split across agents.'
+    : 'No quests yet. Describe the work and the Innkeeper will split it across agents.';
+}
+
+function EmptyStage({ scene, office, archived, presenting, onOpen }: EmptyStageProps) {
+  const archivedList = archived.length > 0 && (
+    <ArchivedAgentList archived={archived} presenting={presenting} onOpen={onOpen} />
+  );
   if (scene) {
     return (
       <Box
@@ -571,10 +737,9 @@ function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
         {scene}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            {office
-              ? 'No agents yet. Describe the work and it will be split across agents.'
-              : 'No quests yet. Describe the work and the Innkeeper will split it across agents.'}
+            {emptyStageHint(office, archived.length)}
           </Typography>
+          {archivedList}
         </Box>
       </Box>
     );
@@ -593,8 +758,51 @@ function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
       }}
     >
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
-        No agents yet. Describe the work and it will be split across agents.
+        {emptyStageHint(true, archived.length)}
       </Typography>
+      {archivedList}
+    </Box>
+  );
+}
+
+/** Presenter mode hides titles, so it shows the count alone. */
+function ArchivedAgentList({
+  archived,
+  presenting,
+  onOpen,
+}: Pick<EmptyStageProps, 'archived' | 'presenting' | 'onOpen'>) {
+  const label = archived.length === 1 ? '1 archived agent' : `${archived.length} archived agents`;
+  if (presenting) {
+    return (
+      <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-archived-agents">
+        {label}
+      </Typography>
+    );
+  }
+  return (
+    <Box
+      data-testid="orchestrator-archived-agents"
+      sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 0.75 }}
+    >
+      <Typography level="body-xs" textColor="text.tertiary">
+        {label}:
+      </Typography>
+      {archived.map(agent => (
+        <Button
+          key={agent.id}
+          size="sm"
+          variant="soft"
+          color="neutral"
+          data-testid="orchestrator-archived-agent-open-btn"
+          title={`Open ${agent.title}`}
+          onClick={() => onOpen(agent.id)}
+          sx={{ maxWidth: 240, minWidth: 0 }}
+        >
+          <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {agent.title}
+          </Box>
+        </Button>
+      ))}
     </Box>
   );
 }

@@ -71,7 +71,7 @@ const users = {
     h.order.push('delete');
   }),
 };
-// Stands in for apps/client/server/dataSubject/erasureRegistry.ts: classify, then plan; audit re-plans.
+// Stands in for ../dataSubject/erasureRegistry.ts: classify, then plan; audit re-plans.
 const erasureRegistry: ErasureRegistry = {
   assertReady: vi.fn(),
   async scope(_subject, assertLease) {

@@ -5,6 +5,13 @@ import { describeStatus } from './tools/backgroundTools';
 /** Exits this close together become one notice, so a script that ends three watchers costs one turn. */
 const COALESCE_MS = 1_500;
 
+/**
+ * How long a job that ended on its own keeps its agent Waiting (BackgroundJobsFeed): past the
+ * coalesce delay, with a margin for the wake turn to start, so the Tavern goes Waiting -> Working
+ * without a Done flash in between. In ms.
+ */
+export const BACKGROUND_EXIT_HOLD_MS = COALESCE_MS + 1_000;
+
 /** Enough of the end of the output for an error or a summary line, not a log dump. */
 const TAIL_CHARS = 1_500;
 

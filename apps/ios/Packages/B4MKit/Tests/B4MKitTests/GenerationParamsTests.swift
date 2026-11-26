@@ -214,12 +214,20 @@ final class GenerationParamsTests: XCTestCase {
     XCTAssertNil(CreditEstimate.credits(for: images[0].capabilities, params: GenerationParams()))
   }
 
+  func testImageCountIsCappedAtWhatAJobRequestAccepts() throws {
+    let json =
+      #"{"sizing":{"kind":"presets","presets":["1024x1024"],"default_size":"1024x1024"},"supports":{"max_images":10}}"#
+    let image = try JSONDecoder().decode(StudioWire.ImageModelsPage.Image.self, from: Data(json.utf8))
+    XCTAssertEqual(image.capabilities.maxImages, 4)
+  }
+
   // MARK: Request bodies
 
   func testChangedValuesReachTheWireAndDefaultsStayOff() async throws {
     let transport = FakeTransport { request in
-      request.url?.path() == "/api/v1/image-generations"
-        ? (200, Data(#"{"quest":{"id":"q1"}}"#.utf8)) : (202, Data(#"{"id":"j1","state":"pending"}"#.utf8))
+      request.url?.path() == "/api/v1/image-jobs"
+        ? (202, Data(#"{"group_id":"g1","data":[{"id":"q1","state":"pending"}]}"#.utf8))
+        : (202, Data(#"{"id":"j1","state":"pending"}"#.utf8))
     }
     let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
 
@@ -247,9 +255,12 @@ final class GenerationParamsTests: XCTestCase {
     let sent = try await transport.requests.map(body)
     XCTAssertEqual(sent[0]["size"] as? String, "1536x1024")
     XCTAssertEqual(sent[0]["quality"] as? String, "high")
-    XCTAssertEqual(sent[0]["n"] as? Int, 2)
+    XCTAssertEqual(
+      Set(sent[0].keys),
+      ["model", "mode", "prompt", "size", "quality", "seed", "count", "transparent_background", "organization_id"])
+    XCTAssertEqual(sent[0]["count"] as? Int, 2)
     XCTAssertEqual(sent[0]["seed"] as? Int, 42)
-    XCTAssertEqual(sent[0]["background"] as? String, "transparent")
+    XCTAssertEqual(sent[0]["transparent_background"] as? Bool, true)
     XCTAssertEqual(
       Set(sent[1].keys), ["model", "prompt", "duration_seconds", "aspect_ratio", "audio", "organization_id"])
     XCTAssertEqual(sent[1]["audio"] as? Bool, false)
@@ -258,8 +269,8 @@ final class GenerationParamsTests: XCTestCase {
       Set(sent[3].keys), ["model", "prompt", "instrumental", "organization_id"],
       "the server refuses lyrics on an instrumental")
     XCTAssertEqual(
-      Set(sent[4].keys), ["prompt", "model", "n", "prompt_resolution", "organization_id"],
-      "an untouched panel sends only the defaults the route needs")
+      Set(sent[4].keys), ["prompt", "model", "mode", "organization_id"],
+      "an untouched panel sends only the keys the route requires")
   }
 
   // MARK: Errors and persistence

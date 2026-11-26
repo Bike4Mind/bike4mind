@@ -471,23 +471,24 @@ describe('image_generation OpenAI model selection for transparent backgrounds', 
     mockOpenAIGenerate.mockResolvedValue([]);
   });
 
-  it('steps a default gpt-image-2 selection down to gpt-image-1.5 when transparency is requested', async () => {
+  it.each([
+    ['a default gpt-image-2 selection', {}],
+    ['an explicitly-selected gpt-image-2', { model: ImageModels.GPT_IMAGE_2 }],
+  ])('refuses transparency on %s instead of stepping down', async (_label, selection) => {
     const context = createFakeContext();
 
-    const { toolFn } = imageGenerationTool.implementation(context, {});
+    const { toolFn } = imageGenerationTool.implementation(context, selection);
 
-    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+    const result = await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
 
-    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
-      'an inventory icon',
-      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
-    );
+    expect(result).toContain('cannot render a transparent background');
+    expect(mockOpenAIGenerate).not.toHaveBeenCalled();
   });
 
-  it('steps an explicitly-selected gpt-image-2 down to gpt-image-1.5 when transparency is requested', async () => {
+  it('keeps a transparent background on a capable model', async () => {
     const context = createFakeContext();
 
-    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_1_5 });
 
     await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
 
@@ -587,7 +588,7 @@ describe('image_generation expected provider failures become the tool result, lo
 });
 
 describe('imageGeneration model admission', () => {
-  it('refuses before provider execution and admits the resolved transparent-image model', async () => {
+  it('refuses before provider execution and admits the selected model', async () => {
     const refusal = new Error('paid plan required');
     const assertAdmission = vi.fn(async (_modelId: string) => {
       throw refusal;
@@ -598,10 +599,8 @@ describe('imageGeneration model admission', () => {
       model: ImageModels.GPT_IMAGE_2,
       editModel: ImageModels.GPT_IMAGE_2,
     });
-    await expect(
-      toolFn({ prompt: 'transparent image', background: 'transparent', image: 'data:image/png;base64,AAAA' })
-    ).rejects.toBe(refusal);
+    await expect(toolFn({ prompt: 'an image', image: 'data:image/png;base64,AAAA' })).rejects.toBe(refusal);
     expect(createToolModelAdmission).toHaveBeenLastCalledWith(context);
-    expect(assertAdmission).toHaveBeenCalledWith(ImageModels.GPT_IMAGE_1_5);
+    expect(assertAdmission).toHaveBeenCalledWith(ImageModels.GPT_IMAGE_2);
   });
 });

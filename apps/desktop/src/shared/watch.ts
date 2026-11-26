@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { activityLabel, type AgentActivity } from './agentActivity';
 import { deriveTaskAgentState, type AgentState } from './agentState';
-import type { ChatSessionStatus, ChatSessionSummary, ChatToolCall } from './chat';
+import type { ChatSessionStatus, ChatSessionSummary, ChatToolCall, SessionBackgroundJobs } from './chat';
 import { REQUEST_DIRECTORY_TOOL_NAME } from './directoryRequest';
 import { isMcpConfigToolName } from './mcp';
 import { alertableSessions, rootSessionOf } from './needsYou';
@@ -80,6 +80,8 @@ export const EMPTY_WATCH_SNAPSHOT: WatchSnapshot = {
 export interface WatchSnapshotInput {
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  /** Running wake-on-exit background jobs per session, so a waiting agent reads Waiting here as in the Tavern. */
+  background?: ReadonlyMap<string, SessionBackgroundJobs>;
   activity: ReadonlyMap<string, AgentActivity>;
   /** Calls parked at the approval gate, by session; only sessions in needs-action are read. */
   pending: ReadonlyMap<string, readonly ChatToolCall[]>;
@@ -144,7 +146,7 @@ function timeOf(iso: string): number {
 }
 
 export function buildWatchSnapshot(input: WatchSnapshotInput): WatchSnapshot {
-  const { sessions, statuses, activity, pending, needsYouSince, unacknowledgedDone, now } = input;
+  const { sessions, statuses, background, activity, pending, needsYouSince, unacknowledgedDone, now } = input;
   // Agents scope on purpose: the menu bar lists orchestrations and their approvals, whatever the
   // notify scope, so under "All sessions" the dock badge can count plain sessions this does not.
   const alertable = alertableSessions(sessions, 'agents');
@@ -163,7 +165,7 @@ export function buildWatchSnapshot(input: WatchSnapshotInput): WatchSnapshot {
     if (!root) continue;
     const members = [root, ...descendantsOf(sessions, rootId).map(({ session }) => session as ChatSessionSummary)];
     const agents = members.slice(1).map((session): WatchAgent => {
-      const state = deriveTaskAgentState(session, statuses.get(session.id));
+      const state = deriveTaskAgentState(session, statuses.get(session.id), background?.get(session.id));
       const live = activity.get(session.id);
       return { id: session.id, title: session.title, state, activity: live ? activityLabel(live) : null };
     });
@@ -192,7 +194,8 @@ export function buildWatchSnapshot(input: WatchSnapshotInput): WatchSnapshot {
       }
     }
 
-    const finished = members.every(member => !isBusy(statuses.get(member.id)));
+    // An agent still waiting on its background jobs has not finished, so no celebration yet.
+    const finished = members.every(member => !isBusy(statuses.get(member.id)) && !background?.has(member.id));
     orchestrations.push({
       rootId,
       title: root.title,

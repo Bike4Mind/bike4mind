@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { COOKIE_BANNER_HEIGHT_VAR } from '@client/app/utils/cookieBannerSpace';
 
 const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
   mockLoadRedditPixel: vi.fn(),
@@ -24,6 +25,7 @@ import { CONSENT_VENDORS } from '../utils/consentVendors';
 import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
 import { beaconVisit } from '../utils/visitBeacon';
 import { startPageBeacon } from '../utils/pageBeacon';
+import { useTutorialPicker } from './tutorial/core/tutorialPickerStore';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
 
@@ -68,6 +70,7 @@ describe('CookieConsentBanner', () => {
     mockLoadMetaPixel.mockClear();
     clearCookies();
     useCookieSettings.setState({ isOpen: false });
+    useTutorialPicker.setState({ walkOnScreen: false });
     // The grant loads only configured vendors, so configure the pixels the mocks stand in for.
     vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
     vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
@@ -174,6 +177,32 @@ describe('CookieConsentBanner', () => {
     expect(localStorageMock.getItem('cookie_consent')).toBe('granted');
     expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'granted' });
     expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
+  });
+
+  it('publishes its height while it shows, so the layout can make room, and clears it once answered', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(94);
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+    const rootStyle = document.documentElement.style;
+    expect(rootStyle.getPropertyValue(COOKIE_BANNER_HEIGHT_VAR)).toBe('94px');
+
+    fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+    expect(rootStyle.getPropertyValue(COOKIE_BANNER_HEIGHT_VAR)).toBe('');
+    vi.restoreAllMocks();
+  });
+
+  it('publishes no height while a tutorial walk holds the ask back', () => {
+    useTutorialPicker.setState({ walkOnScreen: true });
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+    expect(document.documentElement.style.getPropertyValue(COOKIE_BANNER_HEIGHT_VAR)).toBe('');
   });
 
   it('denies consent and hides banner on Decline click', () => {
@@ -406,6 +435,33 @@ describe('CookieConsentBanner', () => {
       expect(mockGtag).not.toHaveBeenCalled();
       expect(mockLoadRedditPixel).not.toHaveBeenCalled();
       expect(mockLoadMetaPixel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('while a tutorial walk is on screen', () => {
+    const renderBanner = () =>
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+    it('holds the unprompted ask back, then shows it once the walk ends', () => {
+      setRegion('eu');
+      useTutorialPicker.setState({ walkOnScreen: true });
+      renderBanner();
+      expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+
+      act(() => useTutorialPicker.setState({ walkOnScreen: false }));
+      expect(screen.getByTestId('cookie-consent-banner')).toBeInTheDocument();
+    });
+
+    it('still shows when reopened from Cookie settings', () => {
+      setRegion('eu');
+      useTutorialPicker.setState({ walkOnScreen: true });
+      renderBanner();
+      act(() => useCookieSettings.getState().open());
+      expect(screen.getByTestId('cookie-consent-banner')).toBeInTheDocument();
     });
   });
 

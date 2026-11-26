@@ -9,7 +9,7 @@ import type { ShellCommandPermissionDeps } from '../utils/commandPermission.js';
 // These cases never reach a lifecycle hook, so the permission is unused - but it
 // is now a required dep, so pass a never-prompt stub.
 const NOOP_PERM = {
-  permissionManager: { needsPermission: () => false },
+  permissionManager: { needsPermission: () => false, isExactCommandSessionTrusted: () => false },
   promptFn: async () => ({ action: 'allow-once' as const }),
 } as unknown as ShellCommandPermissionDeps;
 

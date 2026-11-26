@@ -10,7 +10,7 @@ vi.mock('@client/app/utils/feedbackAPICalls', () => ({
   getFeedbackHistoryFromServer: mocks.get,
   addFeedbackNoteOnServer: mocks.add,
 }));
-import FeedbackHistory from './FeedbackHistory';
+import FeedbackHistory, { formatHistorySummary } from './FeedbackHistory';
 const theme = extendTheme({ ...getThemeConfig() });
 const renderHistory = () =>
   render(
@@ -97,5 +97,44 @@ describe('private feedback history UI', () => {
       expect(input).toBeEnabled();
       expect(input).toHaveValue('Keep pending draft');
     }
+  });
+  it('shows status labels for stored raw-token rows without rewriting notes', async () => {
+    const entry = (id: string, extra: object) => ({
+      id,
+      occurredAt: '2026-01-03T00:00:00Z',
+      author: 'Admin',
+      ...extra,
+    });
+    mocks.get.mockResolvedValue({
+      items: [
+        entry('moved', {
+          summary: 'changed feedback status from New to InProgress',
+          changes: [{ field: 'status', before: 'New', after: 'InProgress' }],
+        }),
+        entry('undone', {
+          summary: 'undid a feedback status change: InProgress back to New',
+          changes: [{ field: 'status', before: 'InProgress', after: 'New' }],
+        }),
+        entry('note', { summary: 'added note', note: 'Still InProgress upstream' }),
+        entry('other', {
+          summary: 'mentions InProgress',
+          changes: [{ field: 'resolution', before: null, after: 'fixed' }],
+        }),
+      ],
+      nextCursor: null,
+    });
+    renderHistory();
+    const moved = await screen.findByTestId('feedback-history-entry-moved');
+    expect(moved).toHaveTextContent('changed feedback status from New to In progress');
+    expect(moved).toHaveTextContent('Status: New to In progress');
+    const undone = screen.getByTestId('feedback-history-entry-undone');
+    expect(undone).toHaveTextContent('undid a feedback status change: In progress back to New');
+    expect(undone).toHaveTextContent('Status: In progress to New');
+    expect(screen.getByTestId('feedback-history-entry-note')).toHaveTextContent('Still InProgress upstream');
+    expect(screen.getByTestId('feedback-history-entry-other')).toHaveTextContent('mentions InProgress');
+  });
+  it('relabels whole status tokens only', () => {
+    expect(formatHistorySummary('from InProgress to Closed')).toBe('from In progress to Closed');
+    expect(formatHistorySummary('NotInProgressYet')).toBe('NotInProgressYet');
   });
 });

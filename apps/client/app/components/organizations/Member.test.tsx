@@ -96,14 +96,12 @@ vi.mock('./UserCard', () => ({
   default: (p: {
     user: { id: string; role: string; creditUsage: { used: number } | null; permissions: string[] };
     canRevokeMembers: boolean;
-    canManageManagers: boolean;
     showEmails: boolean;
   }) => (
     <div
       data-testid={`member-card-${p.user.id}`}
       data-show-emails={String(p.showEmails)}
       data-revoke={String(p.canRevokeMembers)}
-      data-manage-managers={String(p.canManageManagers)}
       data-credit-usage={p.user.creditUsage?.used ?? 'hidden'}
       data-role={p.user.role}
       data-permissions={p.user.permissions.join(',')}
@@ -580,47 +578,6 @@ describe('OrganizationMembers email invitations', () => {
   });
 });
 
-// Mirrors the owner-only gate on the manager route: a manager cannot appoint or remove managers.
-describe('OrganizationMembers manager controls', () => {
-  beforeEach(() => {
-    mocks.viewer = undefined;
-    mocks.members = [{ id: 'member1', name: 'Member One' }];
-  });
-
-  const org = () =>
-    buildOrg({
-      adminUserIds: ['admin1'],
-      users: [
-        { userId: 'admin1', permissions: [Permission.read] },
-        { userId: 'member1', permissions: [Permission.read] },
-      ],
-    });
-
-  it('are offered to the owner', () => {
-    mocks.viewerId = 'owner1';
-    renderMembers(org());
-    expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('true');
-  });
-
-  it('are offered to a platform admin', () => {
-    mocks.viewer = { id: 'staff1', isAdmin: true };
-    renderMembers(org());
-    expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('true');
-  });
-
-  it('are withheld in a personal organization', () => {
-    mocks.viewerId = 'owner1';
-    renderMembers({ ...org(), personal: true });
-    expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('false');
-  });
-
-  it('are withheld from a manager', () => {
-    mocks.viewerId = 'admin1';
-    renderMembers(org());
-    expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('false');
-  });
-});
-
 describe('OrganizationMembers roster wiring', () => {
   beforeEach(() => {
     mocks.viewer = { id: 'owner1', isAdmin: false };
@@ -829,15 +786,16 @@ describe('OrganizationMembers invite plumbing', () => {
     expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 
-  it('points a platform admin who is not the owner at the owner, since only the owner can buy seats', () => {
+  it('sends a platform admin who is not the owner to Billing to add seats, like the owner', () => {
     mocks.viewer = { id: 'staff1', isAdmin: true };
     mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    mocks.navigate.mockReset();
     renderMembers(buildOrg({}));
-    expect(screen.getByTestId('organization-members-seats-limit')).toHaveTextContent(
-      'All seats are in use. Ask the team owner to add seats.'
-    );
     expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
-    expect(screen.queryByTestId('organization-members-add-seats-link')).toBeNull();
+    fireEvent.click(screen.getByTestId('organization-members-add-seats-link'));
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '/organizations/$id', params: { id: 'org1' }, search: { tab: 'billing' } })
+    );
     expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 

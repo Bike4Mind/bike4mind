@@ -63,6 +63,10 @@ const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/utils/auth/oauthSourceTag', () => ({
   stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
 }));
+const mockResolveSignupClientId = vi.fn();
+vi.mock('@server/utils/auth/signupClientId', () => ({
+  resolveSignupClientId: (...a: unknown[]) => mockResolveSignupClientId(...a),
+}));
 
 // State token verification.
 const mockVerifyState = vi.fn();
@@ -85,8 +89,12 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
+const testEnv = vi.hoisted(() => ({
+  appUrl: 'http://localhost:3000' as string | null,
+  encryptionKey: undefined as string | undefined,
+}));
 vi.mock('@bike4mind/server-utils/utils/validators', () => ({
-  validateAppUrl: () => 'http://localhost:3000',
+  validateAppUrl: () => testEnv.appUrl,
   // The route now shares one localhost predicate with csrfProtection; the real
   // implementation is pure, so mirror it rather than stubbing a boolean.
   isLocalAppUrl: (u?: string) => {
@@ -98,7 +106,13 @@ vi.mock('@bike4mind/server-utils/utils/validators', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: {
+    get SECRET_ENCRYPTION_KEY() {
+      return testEnv.encryptionKey;
+    },
+  },
+}));
 // A class, not a bare object: the real services barrel constructs Loggers at import time.
 vi.mock('@bike4mind/observability', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/observability')>();
@@ -177,6 +191,8 @@ async function runCallback(opts: { user: any; userInfo: Record<string, unknown>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  testEnv.appUrl = 'http://localhost:3000';
+  testEnv.encryptionKey = undefined;
   mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
   process.env.APP_URL = 'http://localhost:3000';
 
@@ -267,10 +283,9 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
     expect(mockEndConnections).toHaveBeenCalledTimes(1);
     // The prune's failure is reported, not swallowed silently.
-    expect(reqLogger.warn).toHaveBeenCalledWith(
-      'Failed to end realtime connections; the sweep will retry',
-      expect.any(Error)
-    );
+    expect(reqLogger.warn).toHaveBeenCalledWith('Failed to end realtime connections; the sweep will retry', {
+      error: expect.any(Error),
+    });
   });
 
   it('exempts a same-identity refresh from the gate (mismatch allowed on re-login)', async () => {
@@ -779,6 +794,28 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
     );
   });
 
+  it('records the client the verified redirectTo names on a new account only', async () => {
+    const redirectTo = '/oauth/authorize?client_id=b4m_sat_0123abcd';
+    mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1', redirectTo } });
+    mockResolveSignupClientId.mockResolvedValueOnce('b4m_sat_0123abcd');
+    await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
+    });
+    expect(mockResolveSignupClientId).toHaveBeenCalledWith(redirectTo);
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ signupClientId: 'b4m_sat_0123abcd' }));
+  });
+
+  it('records no client when the redirect names none', async () => {
+    mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1' } });
+    mockResolveSignupClientId.mockResolvedValueOnce(null);
+    await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
+    });
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signupClientId');
+  });
+
   it('never stamps an existing account that signs in through a client', async () => {
     mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1', clientId: 'b4m_sat_0123abcd' } });
     await runCallback({
@@ -792,6 +829,8 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
       userInfo: { sub: 'okta-sub-default', email: 'old@example.com', email_verified: true, name: 'Old User' },
     });
     expect(mockStampSourceTag).not.toHaveBeenCalled();
+    expect(mockResolveSignupClientId).not.toHaveBeenCalled();
+    expect(JSON.stringify(mockUpdateOne.mock.calls)).not.toContain('signupClientId');
     expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
     expect(mockRefreshSignupRiskScore).not.toHaveBeenCalled();
   });
@@ -1058,5 +1097,172 @@ describe('/api/auth/okta/callback - token exchange failure log level', () => {
     expect(mockAuthFailCreate).toHaveBeenCalledWith(
       expect.objectContaining({ meta: expect.objectContaining({ status: 500 }) })
     );
+  });
+});
+
+describe('/api/auth/okta/callback - configuration and failure edges', () => {
+  // node-mocks-http objects stand in for the Next request and response the handler declares.
+  const asHandlerArgs = (req: unknown, res: unknown) => [req, res] as Parameters<typeof handler>;
+
+  const OLD_USER = {
+    id: 'old-user',
+    _id: 'old-user',
+    email: 'old@example.com',
+    emailVerified: true,
+    tokenVersion: 0,
+    isBanned: false,
+    authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-sub-default', oktaIdentityProviderId: 'idp-1' }],
+  };
+  const NEW_USER_INFO = { email: 'new@example.com', email_verified: true, name: 'New User' };
+
+  it('reports an unrecognised provider error generically, without a description or user agent', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { error: 'odd_error' }, url: '/api/auth/okta/callback' });
+    Object.assign(req, { logger: reqLogger });
+
+    await handler(...asHandlerArgs(req, res));
+
+    expect(res._getRedirectUrl()).toBe(`/login?error=${encodeURIComponent('Authentication failed')}`);
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'odd_error', userAgent: 'unknown' })
+    );
+  });
+
+  it('stops when no Okta configuration resolves', async () => {
+    mockGetConfig.mockResolvedValue({ config: null, source: 'none', idp: undefined });
+
+    const res = await runCallback({ user: null, userInfo: NEW_USER_INFO });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=okta_config_missing');
+  });
+
+  it('stops when APP_URL is missing', async () => {
+    testEnv.appUrl = null;
+
+    const res = await runCallback({ user: null, userInfo: NEW_USER_INFO });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=server_configuration_error');
+  });
+
+  it('stops when the ID token carries no subject', async () => {
+    mockExchange.mockResolvedValue({ accessToken: 'okta-access', tokenResponse: { claims: () => ({}) } });
+
+    const res = await runCallback({ user: null, userInfo: NEW_USER_INFO });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=invalid_id_token');
+  });
+
+  it('builds a local callback URL from defaults when the request names no host or protocol', async () => {
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { state: STATE, code: CODE },
+      headers: { cookie: 'b4m_okta_pkce=pkce-verifier' },
+      url: '/api/auth/okta/callback',
+    });
+    Object.assign(req, { logger: reqLogger });
+    mockFetchUserInfo.mockResolvedValue({ sub: 'okta-sub-default', ...NEW_USER_INFO });
+
+    await handler(...asHandlerArgs(req, res));
+
+    expect(String(mockExchange.mock.calls[0][1])).toMatch(/^http:\/\/localhost:3000\/api\/auth\/okta\/callback/);
+  });
+
+  it('refuses to store unencrypted tokens outside local development', async () => {
+    const previousAppUrl = process.env.APP_URL;
+    process.env.APP_URL = 'https://app.example.com';
+    testEnv.appUrl = 'https://app.example.com';
+    try {
+      const res = await runCallback({ user: null, userInfo: NEW_USER_INFO });
+
+      expect(res._getRedirectUrl()).toBe('/login?error=server_configuration_error');
+      expect(String(mockExchange.mock.calls[0][1])).toMatch(/^https:\/\/app\.example\.com\//);
+    } finally {
+      process.env.APP_URL = previousAppUrl;
+    }
+  });
+
+  it('encrypts both provider tokens when a key is configured', async () => {
+    testEnv.encryptionKey = 'key';
+
+    await runCallback({ user: null, userInfo: NEW_USER_INFO });
+
+    expect(mockCreate.mock.calls[0][0].oauthCredentials).toMatchObject({
+      accessToken: 'enc:okta-access',
+      refreshToken: 'enc:okta-refresh',
+      encrypted: true,
+    });
+  });
+
+  it('stores an empty refresh token when the provider issues none', async () => {
+    mockExchange.mockResolvedValue({
+      accessToken: 'okta-access',
+      tokenResponse: { claims: () => ({ sub: 'okta-sub-default' }) },
+    });
+
+    await runCallback({ user: null, userInfo: NEW_USER_INFO });
+
+    expect(mockCreate.mock.calls[0][0].oauthCredentials.refreshToken).toBe('');
+  });
+
+  it('skips the provider-id lookup when userinfo carries no subject', async () => {
+    await runCallback({ user: null, userInfo: { ...NEW_USER_INFO, sub: '' } });
+
+    expect(mockFindOne).toHaveBeenCalledTimes(1);
+    expect(mockFindOne.mock.calls[0][0]).toHaveProperty('$or');
+  });
+
+  it('links to an account that has no provider list yet', async () => {
+    const res = await runCallback({
+      user: { id: 'bare', _id: 'bare', email: 'new@example.com', emailVerified: true, isBanned: false },
+      userInfo: NEW_USER_INFO,
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(JSON.stringify(mockUpdateOne.mock.calls[0][1])).toContain('okta-sub-default');
+  });
+
+  it('mints the session at token version 0 for an account that never had one', async () => {
+    const { tokenVersion: _omitted, ...withoutVersion } = OLD_USER;
+
+    await runCallback({ user: withoutVersion, userInfo: { email: 'old@example.com', email_verified: true } });
+
+    expect(issueBrowserSession).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'old-user',
+      expect.objectContaining({ tokenVersion: 0 })
+    );
+  });
+
+  it('fails the callback when the email backfill fails for a reason other than a duplicate', async () => {
+    mockUpdateOne.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('write failed'));
+
+    const res = await runCallback({
+      user: { ...OLD_USER, email: undefined },
+      userInfo: { email: 'old@example.com', email_verified: true },
+    });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'write failed' }));
+  });
+
+  it('refuses a banned account', async () => {
+    const res = await runCallback({
+      user: { ...OLD_USER, isBanned: true },
+      userInfo: { email: 'old@example.com', email_verified: true },
+    });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('records a generic reason for a non-Error failure and survives a failed audit write', async () => {
+    mockExchange.mockRejectedValue('boom');
+    mockAuthFailCreate.mockRejectedValueOnce(new Error('log down'));
+
+    const res = await runCallback({ user: null, userInfo: NEW_USER_INFO });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'Callback processing error' }));
+    expect(Logger.error).toHaveBeenCalledWith('[Okta Callback] Failed to log auth failure:', expect.any(Error));
   });
 });

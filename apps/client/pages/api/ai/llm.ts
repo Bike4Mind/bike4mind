@@ -9,8 +9,9 @@ import {
   chatMessageResponseSchema,
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
-import { SQSService } from '@bike4mind/utils';
+import { NotFoundError, SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
+import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
@@ -18,7 +19,7 @@ import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/free
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
-import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { apiKeyToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
@@ -88,6 +89,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // Everything that can reject the request runs before getOrCreateSession, so a rejected request
     // leaves no session behind. invoke() parses the body again, but only after that write.
     const body = LLMApiRequestBodySchema.parse(req.body);
+    const fileInputsAllowed = fileInputsAllowedFor(req);
     // agentIds and messageOnlyFileIds are destructured out so session-write input never rides into the
     // completion body.
     const { sessionId: reqSessionId, sessionName, agentIds, messageOnlyFileIds, ...invokeParams } = body;
@@ -118,7 +120,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       sessionId: reqSessionId,
       sessionName,
       projectId: body.projectId,
-      fabFileIds: body.fabFileIds,
+      fabFileIds: fileInputsAllowed ? body.fabFileIds : [],
       // In-app sends only: an API-key turn keeps its files per-run, as the v1 agent route does.
       ...(req.apiKeyInfo ? {} : { messageFileIds: body.messageFileIds, messageOnlyFileIds }),
       agentIds,
@@ -160,7 +162,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
 
     // Unioned and placed after the spread, so a client value can only ADD denials; the key's own
     // scope gaps always win.
-    const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...dataLakeToolsDeniedFor(req)];
+    const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...apiKeyToolsDeniedFor(req)];
 
     const turnAuth = requestTurnAuth(req);
     const quest = await chatCompletion.invoke({
@@ -178,19 +180,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+      fileInputsAllowed,
       // The visit the question was asked in, so the turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
 
-    // Handle case where quest creation failed (session or quest not found during invoke)
-    if (!quest) {
-      req.logger.error('Quest creation failed - invoke returned undefined (session or quest not found)');
-      return res.status(404).json({
-        error: 'Session not found',
-        message: 'The session may have been deleted or expired. Please start a new session.',
-        code: 'SESSION_NOT_FOUND',
-      });
-    }
+    if (!quest) throw new NotFoundError('Failed to create quest');
 
     // Pushed only once the quest exists, so a failed invoke() does not move the pointer.
     asyncPromises.push(userRepository.update({ id: req.user.id, lastNotebookId: sessionId }));

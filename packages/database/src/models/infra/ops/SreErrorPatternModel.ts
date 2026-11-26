@@ -104,7 +104,8 @@ const SreErrorPatternSchema = new mongoose.Schema(
     workaroundIneffective: { type: Boolean, default: false },
     rootCauseTrackingIssue: { type: Number },
   },
-  { timestamps: true }
+  // Repository reads return plain objects; virtuals carries `id`, which callers pass back to update().
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
 // Unique compound index: patterns are repo-scoped to prevent cross-repo collision
@@ -225,8 +226,9 @@ class SreErrorPatternRepository extends BaseRepository<ISreErrorPattern> {
       .find(filter)
       .sort({ matchCount: -1, updatedAt: -1 })
       .limit(limit)
-      .lean<ISreErrorPattern[]>();
-    return docs;
+      .lean<Array<Omit<ISreErrorPattern, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    // lean() skips the `id` virtual; the admin UI keys rows and PATCH URLs on it.
+    return docs.map(doc => ({ ...doc, id: String(doc._id) }));
   }
 }
 

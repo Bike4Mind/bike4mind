@@ -298,6 +298,27 @@ const getOAuthErrorGuidance = (provider: OAuthProvider, error: string): string |
   return null;
 };
 
+const MAIL_DELIVERY_LABELS: Record<SystemHealthResponse['email']['transport'], string> = {
+  ses: 'Amazon SES',
+  smtp: 'SMTP server',
+};
+
+const MAIL_SETTING_LABELS: Record<string, { label: string; help: string }> = {
+  MAIL_FROM: {
+    label: 'Sender address',
+    help: 'the address system emails are sent from when the mailFrom admin setting is empty',
+  },
+  MAIL_HOST: { label: 'SMTP host', help: 'the mail server to connect to' },
+  MAIL_PORT: { label: 'SMTP port', help: 'the port on the mail server' },
+  MAIL_USERNAME: { label: 'SMTP username', help: 'the login for the mail server' },
+  MAIL_PASSWORD: { label: 'SMTP password', help: 'the password for the mail server' },
+};
+
+const MAIL_SENDER_SOURCE_LABELS: Record<NonNullable<SystemHealthResponse['email']['senderSource']>, string> = {
+  setting: 'Set in admin settings (mailFrom)',
+  secret: 'From the MAIL_FROM secret',
+};
+
 const ConfigStatusChip = ({ configured, testId }: { configured: boolean; testId?: string }) => (
   <StatusChip tone={configured ? 'good' : 'warn'} label={configured ? 'Configured' : 'Missing'} data-testid={testId} />
 );
@@ -626,7 +647,7 @@ const AdminSystemHealthTab = () => {
     );
   }
 
-  const { email, database, oauth, selfHost } = systemHealth.data || {};
+  const { email, database, oauth, selfHost, plaintextSecretsOptOut } = systemHealth.data || {};
   const integrations = integrationHealth.data?.integrations ?? [];
 
   const renderBreakerChip = (
@@ -648,6 +669,20 @@ const AdminSystemHealthTab = () => {
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-system-health-tab">
       {header}
+
+      {plaintextSecretsOptOut && (
+        <Alert color="warning" variant="outlined" data-testid="system-health-plaintext-secrets-warning">
+          <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+            <Typography level="body-sm" fontWeight="bold">
+              Secrets are stored unencrypted
+            </Typography>
+            <Typography level="body-xs">
+              B4M_ALLOW_PLAINTEXT_SECRETS is set and there is no valid SECRET_ENCRYPTION_KEY. Set a 64-character hex key
+              to encrypt stored secrets (see SELF_HOST.md).
+            </Typography>
+          </Stack>
+        </Alert>
+      )}
 
       <SectionCard
         title="Email"
@@ -672,26 +707,41 @@ const AdminSystemHealthTab = () => {
             Mail settings
           </Typography>
 
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 1 }}>
+          {email?.transport && (
+            <Typography level="body-sm" sx={{ color: 'admin.ink' }} data-testid="system-health-email-delivery">
+              Sent through {MAIL_DELIVERY_LABELS[email.transport]}
+            </Typography>
+          )}
+
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 1.5 }}>
             {email?.secrets &&
               Object.entries(email.secrets).map(([key, configured]) => (
-                <Stack
-                  key={key}
-                  data-testid={`system-health-email-secret-${key}`}
-                  direction="row"
-                  alignItems="center"
-                  gap={1}
-                  sx={{ minWidth: 0 }}
-                >
-                  <Typography level="body-sm" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
-                    {key}
-                  </Typography>
-                  {!configured &&
-                    (email.optionalSecrets?.some(name => name === key) ? (
-                      <StatusChip tone="neutral" label="Optional" />
-                    ) : (
-                      <StatusChip tone="warn" label="Missing" />
-                    ))}
+                <Stack key={key} data-testid={`system-health-email-secret-${key}`} gap={0.25} sx={{ minWidth: 0 }}>
+                  <Stack direction="row" alignItems="center" gap={1}>
+                    <Typography level="body-sm" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
+                      {MAIL_SETTING_LABELS[key]?.label ?? key}
+                    </Typography>
+                    {!configured &&
+                      (email.optionalSecrets?.some(name => name === key) ? (
+                        <StatusChip tone="neutral" label="Optional" />
+                      ) : (
+                        <StatusChip tone="warn" label="Missing" />
+                      ))}
+                  </Stack>
+                  {MAIL_SETTING_LABELS[key] && (
+                    <Typography level="body-xs" sx={{ color: 'admin.inkMuted', overflowWrap: 'anywhere' }}>
+                      {key}: {MAIL_SETTING_LABELS[key].help}
+                    </Typography>
+                  )}
+                  {key === 'MAIL_FROM' && email.senderSource && (
+                    <Typography
+                      level="body-xs"
+                      sx={{ color: 'admin.ink' }}
+                      data-testid="system-health-email-sender-source"
+                    >
+                      {MAIL_SENDER_SOURCE_LABELS[email.senderSource]}
+                    </Typography>
+                  )}
                 </Stack>
               ))}
           </Box>

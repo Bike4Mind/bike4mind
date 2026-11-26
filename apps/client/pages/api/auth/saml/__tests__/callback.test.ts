@@ -33,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   authFailLogRepository: { create: vi.fn() },
   identityProviderRepository: {
     findByIdWithSecrets: vi.fn().mockResolvedValue({ id: 'idp-1', isActive: true, type: 'saml' }),
-    findAll: vi.fn().mockResolvedValue([]),
+    findActiveSamlIdpIdsByIssuer: vi.fn().mockResolvedValue([]),
   },
 }));
 vi.mock('@server/auth/auth', () => ({ setupSamlStrategy: () => 'saml-idp-1' }));
@@ -259,7 +259,7 @@ describe('/api/auth/saml/callback - callbacks naming no usable IdP', () => {
     const { identityProviderRepository } = await import('@bike4mind/database');
     vi.mocked(identityProviderRepository.findByIdWithSecrets).mockResolvedValueOnce(null);
 
-    const res = await runWithQuery({ idp: 'not-an-idp' });
+    const res = await runWithQuery({ RelayState: 'idp=not-an-idp' });
 
     expect(res._getRedirectUrl()).toBe('/login?error=invalid_idp');
     expect(logger.error).not.toHaveBeenCalled();
@@ -269,9 +269,81 @@ describe('/api/auth/saml/callback - callbacks naming no usable IdP', () => {
     const { identityProviderRepository } = await import('@bike4mind/database');
     vi.mocked(identityProviderRepository.findByIdWithSecrets).mockRejectedValueOnce(new Error('db down'));
 
-    const res = await runWithQuery({ idp: 'idp-1' });
+    const res = await runWithQuery({ RelayState: 'idp=idp-1' });
 
     expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
     expect(logger.error).toHaveBeenCalledWith('SAML callback processing error', expect.anything());
+  });
+});
+
+describe('/api/auth/saml/callback - choosing the IdP', () => {
+  const ISSUER = 'https://idp.a.example/metadata';
+  const samlResponse = (issuer: string) =>
+    Buffer.from(
+      `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"><saml:Issuer>${issuer}</saml:Issuer></samlp:Response>`
+    ).toString('base64');
+
+  async function post(body: Record<string, unknown>, query: Record<string, string> = {}) {
+    const { req, res } = createMocks<NextApiRequest, NextApiResponse>({
+      method: 'POST',
+      body,
+      query,
+      headers: { 'user-agent': 'UA/9' },
+    });
+    Object.assign(req, { ip: '203.0.113.7', logger });
+    await captured.handler!(req, res);
+    await vi.waitFor(() => expect(res._getRedirectUrl()).not.toBe(''));
+    return res;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
+    mockSamlErr.mockReturnValue(null);
+    mockSamlInfo.mockReturnValue({});
+    mockSamlUser.mockReturnValue({ id: 'u1', isBanned: false, isNewUser: false });
+  });
+
+  it('routes an IdP-initiated response to the one active IdP configured with its Issuer', async () => {
+    const { identityProviderRepository } = await import('@bike4mind/database');
+    vi.mocked(identityProviderRepository.findActiveSamlIdpIdsByIssuer).mockResolvedValueOnce(['idp-1']);
+
+    const res = await post({ SAMLResponse: samlResponse(ISSUER) });
+
+    expect(identityProviderRepository.findActiveSamlIdpIdsByIssuer).toHaveBeenCalledWith(ISSUER);
+    expect(identityProviderRepository.findByIdWithSecrets).toHaveBeenCalledWith('idp-1');
+    expect(res._getRedirectUrl()).toContain('/auth/success');
+  });
+
+  it('uses the IdP named in RelayState without looking the Issuer up', async () => {
+    const { identityProviderRepository } = await import('@bike4mind/database');
+
+    const res = await post({ RelayState: 'idp=idp-1', SAMLResponse: samlResponse(ISSUER) });
+
+    expect(identityProviderRepository.findActiveSamlIdpIdsByIssuer).not.toHaveBeenCalled();
+    expect(identityProviderRepository.findByIdWithSecrets).toHaveBeenCalledWith('idp-1');
+    expect(res._getRedirectUrl()).toContain('/auth/success');
+  });
+
+  it.each([
+    ['several active IdPs share the Issuer', ['idp-1', 'idp-2']],
+    ['no active IdP has the Issuer', []],
+  ])('refuses an IdP-initiated response when %s', async (_label, matches) => {
+    const { identityProviderRepository } = await import('@bike4mind/database');
+    vi.mocked(identityProviderRepository.findActiveSamlIdpIdsByIssuer).mockResolvedValueOnce(matches);
+
+    const res = await post({ SAMLResponse: samlResponse(ISSUER) });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=missing_idp_context');
+    expect(identityProviderRepository.findByIdWithSecrets).not.toHaveBeenCalled();
+  });
+
+  it('ignores an idp query parameter', async () => {
+    const { identityProviderRepository } = await import('@bike4mind/database');
+
+    const res = await post({}, { idp: 'idp-1' });
+
+    expect(res._getRedirectUrl()).toBe('/login?error=missing_idp_context');
+    expect(identityProviderRepository.findByIdWithSecrets).not.toHaveBeenCalled();
   });
 });

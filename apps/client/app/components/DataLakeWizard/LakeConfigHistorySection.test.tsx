@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type {
@@ -518,6 +518,15 @@ describe('file entries and the retention footnote', () => {
     expect(screen.getByText('fab-123')).toBeTruthy();
   });
 
+  it('shows the file name instead of the id, and the id when the file is gone', () => {
+    const { unmount } = renderSection({ view: view({ entries: [fileEntry({ fileName: 'handbook.pdf' })] }) });
+    expect(screen.getByTestId('datalake-config-history-file-name').textContent).toBe('handbook.pdf');
+    expect(screen.queryByText('fab-123')).toBeNull();
+    unmount();
+    renderSection({ view: view({ entries: [fileEntry()] }) });
+    expect(screen.getByTestId('datalake-config-history-file-name').textContent).toBe('fab-123');
+  });
+
   it('labels a removal', () => {
     renderSection({ view: view({ entries: [fileEntry({ action: 'file-removed' })] }) });
     expect(screen.getByText('File removed')).toBeTruthy();
@@ -533,5 +542,59 @@ describe('file entries and the retention footnote', () => {
   it('still renders an old config row without target or leverChanges', () => {
     renderSection({ view: view({ entries: [entry()] }) });
     expect(screen.getByTestId('datalake-config-history-change')).toBeTruthy();
+  });
+});
+
+describe('Undo controls', () => {
+  const withEntry = (over: Partial<LakeConfigHistoryConfigEntry>) => view({ entries: [entry(over)] });
+
+  it('shows an Undo button on an undoable row and calls onUndo with the event id', async () => {
+    const onUndo = vi.fn().mockResolvedValue({ entry: null, notes: [] });
+    renderSection({ view: withEntry({ undoable: true, undone: false }), onUndo });
+
+    fireEvent.click(screen.getByTestId('datalake-config-history-undo-btn'));
+
+    await waitFor(() => expect(onUndo).toHaveBeenCalledWith('evt-1'));
+  });
+
+  it('shows an Undone chip, not a button, once the change was undone', () => {
+    renderSection({ view: withEntry({ undoable: false, undone: true }), onUndo: vi.fn() });
+
+    expect(screen.getByTestId('datalake-config-history-undone-chip')).toBeTruthy();
+    expect(screen.queryByTestId('datalake-config-history-undo-btn')).toBeNull();
+  });
+
+  it('shows the server refusal inline beside the row', async () => {
+    const onUndo = vi.fn().mockRejectedValue(new Error('Min relevance is now 0.8'));
+    renderSection({ view: withEntry({ undoable: true }), onUndo });
+
+    fireEvent.click(screen.getByTestId('datalake-config-history-undo-btn'));
+
+    expect((await screen.findByTestId('datalake-config-history-undo-error')).textContent).toBe(
+      'Min relevance is now 0.8'
+    );
+  });
+
+  it('shows the follow-up notes a successful undo returns', async () => {
+    const onUndo = vi.fn().mockResolvedValue({ entry: null, notes: ['Proposals are on hold'] });
+    renderSection({ view: withEntry({ undoable: true }), onUndo });
+
+    fireEvent.click(screen.getByTestId('datalake-config-history-undo-btn'));
+
+    expect((await screen.findByTestId('datalake-config-history-undo-result-note')).textContent).toBe(
+      'Proposals are on hold'
+    );
+  });
+
+  it('shows the reason a row has no Undo', () => {
+    renderSection({ view: withEntry({ undoable: false, undoNote: 'Delete it from Research' }), onUndo: vi.fn() });
+
+    expect(screen.getByTestId('datalake-config-history-undo-note').textContent).toBe('Delete it from Research');
+  });
+
+  it('shows no button when the caller wires no onUndo', () => {
+    renderSection({ view: withEntry({ undoable: true }) });
+
+    expect(screen.queryByTestId('datalake-config-history-undo-btn')).toBeNull();
   });
 });

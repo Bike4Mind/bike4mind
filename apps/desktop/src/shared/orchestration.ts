@@ -49,6 +49,20 @@ export const rootPolicySchema = z.strictObject({
    * stored before it existed. `rootRunId` stays the local identity; this one is the server's.
    */
   serverRunId: z.string().min(1).optional(),
+  /**
+   * The organization the server run was minted for, and so the payer of every call attached to it.
+   * Absent for a Personal run, and on runs stored before payers were bound.
+   */
+  serverRunOrganizationId: z.string().min(1).optional(),
+  /**
+   * The run's credit budget, sent when the server run is minted and raised in place after. Absent
+   * for a run without one. Every completion in the run, root and workers, is charged against it.
+   */
+  budgetCredits: z.number().int().positive().optional(),
+  /** Set when the server refused a completion for an exhausted budget; cleared by a raise. */
+  budgetPaused: z.literal(true).optional(),
+  /** The budget the 80% warning was last shown for, so it shows once per budget. */
+  budgetWarnedAt: z.number().int().positive().optional(),
   policy: rolePolicySchema,
 });
 export type RootPolicy = z.infer<typeof rootPolicySchema>;
@@ -505,3 +519,25 @@ export function automaticUpgradeAllowed(
     task.automaticUpgrades < policy.escalation.maxAutomaticUpgrades
   );
 }
+
+/**
+ * The bounds a host holds a task decision answer to before it reaches the worker; the answer is
+ * checked against the card's own shapes again where it is applied (sanitizeAnswers). The answer
+ * shapes are strict on purpose, an exception to the protocol's ignore-unknown-keys rule: an
+ * answer is user input handed to a worker, so an unexpected key is refused, not dropped.
+ */
+export const taskDecisionReplySchema = z.object({
+  sessionId: z.uuid(),
+  decisionId: z.string().min(1).max(100),
+  answer: z.union([
+    z.strictObject({ status: z.literal('skipped') }),
+    z.strictObject({
+      status: z.literal('answered'),
+      answers: z
+        .array(
+          z.strictObject({ selected: z.array(z.string().max(200)).max(4), other: z.string().max(5000).optional() })
+        )
+        .max(4),
+    }),
+  ]) satisfies z.ZodType<TaskDecisionAnswer>,
+});

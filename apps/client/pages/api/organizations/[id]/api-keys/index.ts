@@ -28,6 +28,7 @@ import {
 } from '@server/organizations/orgApiKeys';
 import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 import { z } from 'zod';
 
 const CreateOrgApiKeyBodySchema = z.object({
@@ -49,10 +50,11 @@ const orgIdOf = (query: { id?: string }): string => (typeof query.id === 'string
 // Session only: a key must never be able to mint, list or replace the org's keys.
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(
-    asyncHandler<{}, IOrgApiKeyView[], unknown, { id?: string; includeDisabled?: string }>(async (req, res) => {
+    asyncHandler<{}, unknown, unknown, { id?: string; includeDisabled?: string }>(async (req, res) => {
       const org = await verifyOrgPermission(req.user!, orgIdOf(req.query), 'manageKeys');
+      await recordOrganizationRead(req, [org], { view: 'api_keys' });
       const serviceAccount = await findServiceAccount(org.id);
-      if (!serviceAccount) return res.json([]);
+      if (!serviceAccount) return res.json([] satisfies IOrgApiKeyView[]);
 
       const keys = await userApiKeyService.listUserApiKeys(
         serviceAccount.id,
@@ -61,7 +63,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       );
       const orgKeys = keys.filter(key => key.orgOwned && key.organizationId === org.id);
       const creatorNames = await resolveCreatorNames(orgKeys);
-      return res.json(orgKeys.map(key => toOrgApiKeyView(key, creatorNames)));
+      return res.json(orgKeys.map(key => toOrgApiKeyView(key, creatorNames)) satisfies IOrgApiKeyView[]);
     })
   )
   .post(

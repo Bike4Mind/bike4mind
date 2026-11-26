@@ -1,5 +1,5 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { chatCompletionCapacity } from './chatCompletionCapacity';
+import { chatCompletionCapacity, chatCompletionScaling } from './chatCompletionCapacity';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   isPreviewStage,
@@ -9,11 +9,26 @@ import {
 import { ecsEnvSecret, ecsResourceSecrets, ecsSecretsVersion } from './ecsSecrets';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
+import { withDirectPathSourceIp } from './listenerRuleConditions';
+import {
+  PREVIEW_SHARED_STAGE_TAG,
+  previewStageNumber,
+  sharedRuleConditions,
+  sharedRulePriorities,
+} from './previewSharedChatOrigin';
 import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
-import { cdnUrlForLambdaEnv, domain, managedAppDomain, originVerifySecret, router, routePrefix } from './router';
+import {
+  cdnUrlForLambdaEnv,
+  domain,
+  managedAppDomain,
+  ORIGIN_VERIFY_HEADER,
+  originVerifySecret,
+  router,
+  routePrefix,
+} from './router';
 import { searxngUrl } from './searxng';
 import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
@@ -173,6 +188,15 @@ function originDomainFor(appDomain: string) {
   return sharedOriginCertificateArn ? `chat-origin-${domain}` : `chat-origin.${appDomain}`;
 }
 const originDomain = !$dev && managedAppDomain ? originDomainFor(managedAppDomain) : undefined;
+
+// A load balancer every preview shares instead of creating its own; the stage adds only a target group and
+// host-based rules on its HTTPS listener. Needs the shared certificate's host name. See
+// infra/preview-shared-chat-origin-alb.md.
+const previewNumber = previewStageNumber($app.stage);
+const sharedListenerArn =
+  sharedOriginCertificateArn && originDomain && previewNumber !== undefined
+    ? process.env.PREVIEW_CHAT_SHARED_LISTENER_ARN || undefined
+    : undefined;
 const originDns = sst.aws.dns({ override: true });
 
 // Issued here instead of by the Service: the Service resolves its `url` only once every load
@@ -202,6 +226,121 @@ const originCertificateArn = originDomain
   ? (sharedOriginCertificateArn ?? issueOriginCertificate(originDomain))
   : undefined;
 
+// NAT public IP(s) as /32 CIDRs: a managed NAT Gateway in the shared env VPC (VPC_ID set), or the
+// EC2 NAT instance's Elastic IP in a self-provisioned VPC (VPC_ID unset). See infra/vpc.ts. Lazy
+// because `sst dev` has no load balancer to use it.
+let natEgressCidrsCache: $util.Output<string[]> | undefined;
+function natEgressCidrs() {
+  natEgressCidrsCache ??= vpcId
+    ? aws.ec2
+        .getNatGatewaysOutput({ filters: [{ name: 'vpc-id', values: [resolvedVpcId] }] })
+        .ids.apply(ids => $util.all(ids.map(id => aws.ec2.getNatGatewayOutput({ id }).publicIp)))
+        .apply(ips => ips.map(ip => `${ip}/32`))
+    : vpc!.nodes.elasticIps.apply(eips => $util.all(eips.map(e => e.publicIp))).apply(ips => ips.map(ip => `${ip}/32`));
+  return natEgressCidrsCache;
+}
+
+// Paths callers reach on the load balancer directly rather than through CloudFront: the quest
+// dispatch (dispatchQuest.ts, from the frontend and worker Lambdas) and the status probe
+// (pages/api/chat-completion-status.ts). Both leave through the VPC NAT.
+const DIRECT_PATHS = ['/process', '/health'] as const;
+const forwardListen = originDomain ? ('443/https' as const) : ('80/http' as const);
+
+// With origin verification on, the forwarding listener has no unconditional rule, so SST gives it
+// a fixed 403 default action. It forwards a request only when it carries this stage's CloudFront
+// origin header (stamped in infra/router.ts), or when it is for a direct path and comes from the
+// NAT egress IPs (added to those rules by the transform below). The container checks the same
+// header again (apps/client/server/chatCompletion/originVerify.ts).
+const forwardRules = originVerifyEnabled
+  ? [
+      {
+        listen: forwardListen,
+        forward: '8080/http' as const,
+        // Unsecret so SST's rule normalization does not turn the whole load balancer config (and
+        // the service URL derived from it) secret; the transform below re-secrets the condition.
+        conditions: {
+          header: { name: ORIGIN_VERIFY_HEADER, values: [$util.unsecret(originVerifySecret.result)] },
+        },
+      },
+      ...DIRECT_PATHS.map(path => ({ listen: forwardListen, forward: '8080/http' as const, conditions: { path } })),
+    ]
+  : [{ listen: forwardListen, forward: '8080/http' as const }];
+
+// SST names the listener rules it creates `ChatCompletionListener<protocol><port>Rule<hash>` and
+// exposes no other handle on them. ALB rules accept at most five condition values, so a direct
+// path rule fits up to four NAT IPs.
+if (originVerifyEnabled) {
+  $transform(aws.lb.ListenerRule, (args, _opts, name) => {
+    if (!name.startsWith('ChatCompletionListener')) return;
+    args.conditions = $util.secret(
+      $util
+        .all([args.conditions, natEgressCidrs()])
+        .apply(([conditions, cidrs]) => withDirectPathSourceIp(conditions, cidrs))
+    );
+  });
+}
+
+function createSharedListenerTarget(listenerArn: string, host: string, prNumber: number) {
+  const tags = { [PREVIEW_SHARED_STAGE_TAG]: $app.stage };
+  const targetGroup = new aws.lb.TargetGroup('ChatCompletionSharedTarget', {
+    // Target group names cap at 32 characters, too short for an autoname.
+    namePrefix: 'chat-',
+    port: 8080,
+    protocol: 'HTTP',
+    targetType: 'ip',
+    vpcId: resolvedVpcId,
+    healthCheck: {
+      path: '/health',
+      interval: 15,
+      timeout: 5,
+      healthyThreshold: 2,
+      unhealthyThreshold: 5,
+      matcher: '200',
+    },
+    tags,
+  });
+  const conditions = $util
+    .all([originVerifyEnabled ? originVerifySecret.result : '', natEgressCidrs()])
+    .apply(([secret, cidrs]) =>
+      sharedRuleConditions({
+        host,
+        originVerify: originVerifyEnabled ? { header: ORIGIN_VERIFY_HEADER, value: secret } : undefined,
+        directPaths: DIRECT_PATHS,
+        natCidrs: cidrs,
+      })
+    );
+  const priorities = sharedRulePriorities(prNumber);
+  const forward = [{ type: 'forward', targetGroupArn: targetGroup.arn }];
+  const rules = [
+    new aws.lb.ListenerRule('ChatCompletionSharedRuleCloudfront', {
+      listenerArn,
+      priority: priorities.cloudfront,
+      actions: forward,
+      conditions: $util.secret(conditions.cloudfront),
+      tags,
+    }),
+    ...(originVerifyEnabled
+      ? [
+          new aws.lb.ListenerRule('ChatCompletionSharedRuleDirect', {
+            listenerArn,
+            priority: priorities.direct,
+            actions: forward,
+            conditions: conditions.apply(c => c.direct ?? []),
+            tags,
+          }),
+        ]
+      : []),
+  ];
+  // ECS refuses a target group that no listener uses yet, so the service waits on the rules through this ARN.
+  const attachedTargetGroupArn = $util.all([targetGroup.arn, ...rules.map(rule => rule.arn)]).apply(([arn]) => arn);
+  return { attachedTargetGroupArn, rules };
+}
+
+const sharedListenerTarget =
+  sharedListenerArn && originDomain && previewNumber !== undefined
+    ? createSharedListenerTarget(sharedListenerArn, originDomain, previewNumber)
+    : undefined;
+
 export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   cluster,
   // Prebuilt image referenced by URI (built & pushed by CI — see note above). Building
@@ -216,34 +355,34 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // below) to exactly CloudFront's edge (completions) + the VPC NAT egress IP (the frontend
   // Lambda's /process dispatch, which hairpins out through NAT to the ALB's public DNS). The
   // CHAT_COMPLETION_INTERNAL_SECRET bearer checked in internal/route.ts is then defense-in-depth.
+  // The forwarding listener's rules (forwardRules above) then admit only CloudFront requests that
+  // carry this stage's origin header, plus the direct paths from the NAT IPs.
   // With an origin domain the service URL is https://<originDomain>/, so both callers use the
   // HTTPS listener. Port 80 has a redirect action but is blocked by the security group below.
-  loadBalancer: {
-    public: true,
-    ...(originDomain && originCertificateArn
-      ? { domain: { name: originDomain, cert: originCertificateArn, dns: false } }
-      : {}),
-    rules: originDomain
-      ? [
-          { listen: '443/https', forward: '8080/http' },
-          { listen: '80/http', redirect: '443/https' },
-        ]
-      : [{ listen: '80/http', forward: '8080/http' }],
-    health: {
-      '8080/http': {
-        path: '/health',
-        interval: '15 seconds',
-        timeout: '5 seconds',
-        healthyThreshold: 2,
-        unhealthyThreshold: 5,
+  // In shared mode the stage has no load balancer of its own (createSharedListenerTarget above).
+  loadBalancer: sharedListenerTarget
+    ? undefined
+    : {
+        public: true,
+        ...(originDomain && originCertificateArn
+          ? { domain: { name: originDomain, cert: originCertificateArn, dns: false } }
+          : {}),
+        rules: originDomain ? [...forwardRules, { listen: '80/http', redirect: '443/https' }] : forwardRules,
+        health: {
+          '8080/http': {
+            path: '/health',
+            interval: '15 seconds',
+            timeout: '5 seconds',
+            healthyThreshold: 2,
+            unhealthyThreshold: 5,
+          },
+        },
       },
-    },
-  },
   // Match the old Lambda's compute (2048 MB ≈ 1 vCPU on Fargate). 0.5 vCPU needs 1–4 GB;
   // 1 vCPU needs 2–8 GB — both combos below are valid Fargate sizes.
   cpu: isProd ? '1 vCPU' : '0.5 vCPU',
   memory: isProd ? '2 GB' : '1 GB',
-  scaling: isProd ? { min: 2, max: 6, cpuUtilization: 70 } : { min: 1, max: 2 },
+  scaling: chatCompletionScaling(isProd),
   capacity: chatCompletionCapacity(isPreviewStage),
   link: [
     ...linkedSecrets,
@@ -323,6 +462,19 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // it, leaving ~10s of margin so the drain-expiry error can log before SIGKILL. Without this
   // transform ECS defaults to 30s and a deploy would hard-kill long quests.
   transform: {
+    ...(sharedListenerTarget
+      ? {
+          service: (args: aws.ecs.ServiceArgs) => {
+            args.loadBalancers = [
+              {
+                targetGroupArn: sharedListenerTarget.attachedTargetGroupArn,
+                containerName: 'ChatCompletion',
+                containerPort: 8080,
+              },
+            ];
+          },
+        }
+      : {}),
     taskDefinition: args => {
       args.containerDefinitions = $output(args.containerDefinitions).apply(json => {
         const defs = JSON.parse(json) as Array<Record<string, unknown>>;
@@ -342,17 +494,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
       const cloudfrontPrefixListId = aws.ec2.getManagedPrefixListOutput({
         name: 'com.amazonaws.global.cloudfront.origin-facing',
       }).id;
-
-      // NAT public IP(s): a managed NAT Gateway in the shared env VPC (VPC_ID set), or the EC2
-      // NAT instance's Elastic IP in a self-provisioned VPC (VPC_ID unset). See infra/vpc.ts.
-      const natCidrs = vpcId
-        ? aws.ec2
-            .getNatGatewaysOutput({ filters: [{ name: 'vpc-id', values: [resolvedVpcId] }] })
-            .ids.apply(ids => $util.all(ids.map(id => aws.ec2.getNatGatewayOutput({ id }).publicIp)))
-            .apply(ips => ips.map(ip => `${ip}/32`))
-        : vpc!.nodes.elasticIps
-            .apply(eips => $util.all(eips.map(e => e.publicIp)))
-            .apply(ips => ips.map(ip => `${ip}/32`));
+      const natCidrs = natEgressCidrs();
 
       // Only the port that forwards is admitted. The CloudFront prefix list counts its full entry
       // limit against the group's rule quota for every rule that references it, so a second rule
@@ -396,16 +538,36 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
 
 // The alias record is created here, not by the Service (`dns: false` above), so the routes can
 // wait for it: the returned URL resolves only once the origin name points at the load balancer.
-// Until then the name is answered by the app host's wildcard record.
-function routableOriginUrl(domainName: string) {
-  const loadBalancer = chatCompletion.nodes.loadBalancer;
+// Until then the name is answered by the app host's wildcard record. Shared mode keeps the same
+// record name, so switching a preview over updates the record in place instead of replacing it.
+function routableOriginUrl(
+  domainName: string,
+  target: { dnsName: $util.Input<string>; zoneId: $util.Input<string> },
+  url: $util.Input<string>
+) {
   const aliasRecords = originDns.createAlias(
     'ChatCompletionOrigin',
-    { name: domainName, aliasName: loadBalancer.dnsName, aliasZone: loadBalancer.zoneId },
+    { name: domainName, aliasName: target.dnsName, aliasZone: target.zoneId },
     {}
   );
-  return $util.all([chatCompletion.url, ...aliasRecords.map(record => record.id)]).apply(([url]) => url);
+  return $util.all([url, ...aliasRecords.map(record => record.id)]).apply(([resolved]) => resolved);
 }
+
+function sharedRoutableOriginUrl(listenerArn: string, domainName: string, rules: aws.lb.ListenerRule[]) {
+  const listener = aws.lb.getListenerOutput({ arn: listenerArn });
+  const loadBalancer = aws.lb.getLoadBalancerOutput({ arn: listener.loadBalancerArn });
+  const ready = $util.all(rules.map(rule => rule.arn)).apply(() => `https://${domainName}/`);
+  return routableOriginUrl(domainName, loadBalancer, ready);
+}
+
+/**
+ * Origin URL of the shared preview load balancer, set on the frontend as CHAT_COMPLETION_ORIGIN_URL because a
+ * Service without its own load balancer links no `url` (apps/client/server/utils/chatCompletionBaseUrl.ts).
+ */
+export const chatCompletionSharedOriginUrl =
+  sharedListenerArn && originDomain && sharedListenerTarget
+    ? sharedRoutableOriginUrl(sharedListenerArn, originDomain, sharedListenerTarget.rules)
+    : undefined;
 
 // Allow the service's internal ALB to reach the task on the container port (8080).
 // The cluster pins the VPC's shared `default` security group for tasks (see infra/vpc.ts),
@@ -426,7 +588,11 @@ if (!$dev) {
   // on the shared dev distribution (empty on deployed dev/production). Guarded on !$dev because
   // the load balancer (and thus `.url`) only exists when the Service runs in the cloud - under
   // `sst dev` it runs via dev.command with no ALB, and the CLI reaches it on localhost:8788.
-  const originUrl = originDomain ? routableOriginUrl(originDomain) : chatCompletion.url;
+  const originUrl =
+    chatCompletionSharedOriginUrl ??
+    (originDomain
+      ? routableOriginUrl(originDomain, chatCompletion.nodes.loadBalancer, chatCompletion.url)
+      : chatCompletion.url);
   router.route(`${routePrefix}/api/ai/v1/completions`, originUrl);
 
   // Public embed chat endpoint (epic #41 Phase B). Same always-on origin as the
@@ -436,22 +602,25 @@ if (!$dev) {
   // path is on this origin; /api/embed/session is a normal Next app route.
   router.route(`${routePrefix}/api/embed/chat`, originUrl);
 
-  const defaultSecurityGroupId = aws.ec2
-    .getSecurityGroupsOutput({
-      filters: [
-        { name: 'vpc-id', values: [resolvedVpcId] },
-        { name: 'group-name', values: ['default'] },
-      ],
-    })
-    .ids.apply(ids => ids[0]);
+  // The shared preview load balancer's equivalent rule is owned with that load balancer.
+  if (!sharedListenerTarget) {
+    const defaultSecurityGroupId = aws.ec2
+      .getSecurityGroupsOutput({
+        filters: [
+          { name: 'vpc-id', values: [resolvedVpcId] },
+          { name: 'group-name', values: ['default'] },
+        ],
+      })
+      .ids.apply(ids => ids[0]);
 
-  new aws.ec2.SecurityGroupRule('ChatCompletionAlbToTask', {
-    type: 'ingress',
-    protocol: 'tcp',
-    fromPort: 8080,
-    toPort: 8080,
-    securityGroupId: defaultSecurityGroupId,
-    sourceSecurityGroupId: chatCompletion.nodes.loadBalancer.securityGroups.apply(sgs => sgs[0]),
-    description: 'ChatCompletion ALB to task :8080 (health checks + traffic)',
-  });
+    new aws.ec2.SecurityGroupRule('ChatCompletionAlbToTask', {
+      type: 'ingress',
+      protocol: 'tcp',
+      fromPort: 8080,
+      toPort: 8080,
+      securityGroupId: defaultSecurityGroupId,
+      sourceSecurityGroupId: chatCompletion.nodes.loadBalancer.securityGroups.apply(sgs => sgs[0]),
+      description: 'ChatCompletion ALB to task :8080 (health checks + traffic)',
+    });
+  }
 }

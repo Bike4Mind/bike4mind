@@ -2,6 +2,7 @@ package com.bike4mind.kit.briefs
 
 import com.bike4mind.kit.networking.ApiException
 import com.bike4mind.kit.networking.UpgradeRequiredException
+import java.time.ZoneId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -24,6 +25,10 @@ data class BriefState(
     val composing: Boolean = false,
     /** The poll gave up waiting. The brief may still finish: a refresh looks again. */
     val composeTimedOut: Boolean = false,
+    /** Follow-up decisions with an edit, approve or dismiss in flight; a second tap on one is ignored. */
+    val followUpBusy: Set<String> = emptySet(),
+    /** Why the last edit, approve or dismiss of a follow-up failed, by decision id. */
+    val followUpErrors: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -48,6 +53,9 @@ class BriefController(
 
     private var job: Job? = null
 
+    /** A memo brief started here. The list only carries activity briefs, so it stays reachable by id alone. */
+    private var memoBriefId: String? = null
+
     fun load() = launchExclusive {
         fetch()
         pollWhileComposing()
@@ -59,8 +67,71 @@ class BriefController(
         launchExclusive {
             mutableState.update { it.copy(composing = true, composeTimedOut = false, error = null) }
             val composed = attempt { api.compose() } ?: return@launchExclusive
+            memoBriefId = null
             mutableState.update { it.copy(loading = false, brief = composed) }
             pollWhileComposing()
+        }
+    }
+
+    /** Sends a dictated follow-up memo, then shows the brief it starts and polls it until it settles. */
+    fun startFollowUp(transcript: String) {
+        val trimmed = transcript.trim().take(FOLLOW_UP_TRANSCRIPT_MAX)
+        if (trimmed.isEmpty() || state.value.composing) return
+        launchExclusive {
+            mutableState.update { it.copy(composing = true, composeTimedOut = false, error = null) }
+            val started = attempt { api.followUp(trimmed, ZoneId.systemDefault().id) } ?: return@launchExclusive
+            memoBriefId = started.id
+            mutableState.update { it.copy(loading = false, brief = started) }
+            pollWhileComposing()
+        }
+    }
+
+    /** Saves an edit to a pending follow-up; [onSaved] runs only when it was saved, so a form can stay open. */
+    fun editFollowUp(decision: BriefDecision, edit: BriefDecisionEdit, onSaved: () -> Unit = {}) {
+        if (edit.isEmpty) return
+        submitFollowUp(decision, { briefId -> api.editDecision(briefId, decision.id, edit) }) { onSaved() }
+    }
+
+    /**
+     * Approves or dismisses a pending follow-up. An approved email's draft goes to [onEmailApproved] for the device
+     * mail app; the server never sends it.
+     */
+    fun resolveFollowUp(decision: BriefDecision, outcome: BriefDecisionOutcome, onEmailApproved: (BriefDraftReply) -> Unit = {}) {
+        submitFollowUp(decision, { briefId -> api.resolveDecision(briefId, decision.id, outcome) }) { resolved ->
+            if (outcome == BriefDecisionOutcome.APPROVE && resolved.followUp?.kind == FollowUpKind.FOLLOW_UP_EMAIL) {
+                resolved.draftReply?.let(onEmailApproved)
+            }
+        }
+    }
+
+    private fun submitFollowUp(decision: BriefDecision, call: suspend (String) -> BriefDecision, onDone: (BriefDecision) -> Unit) {
+        val brief = state.value.brief ?: return
+        val current = brief.decisions.firstOrNull { it.id == decision.id } ?: return
+        if (current.followUp?.isActionable != true || decision.id in state.value.followUpBusy) return
+        mutableState.update { it.copy(followUpBusy = it.followUpBusy + decision.id, followUpErrors = it.followUpErrors - decision.id) }
+        scope.launch {
+            try {
+                val updated = call(brief.id)
+                mutableState.update { s ->
+                    s.copy(
+                        brief = s.brief?.let { shown -> if (shown.id == brief.id) shown.replacing(updated) else shown },
+                        followUpBusy = s.followUpBusy - decision.id,
+                    )
+                }
+                onDone(updated)
+            } catch (cancelled: CancellationException) {
+                mutableState.update { it.copy(followUpBusy = it.followUpBusy - decision.id) }
+                throw cancelled
+            } catch (closed: DecisionClosedException) {
+                // Settled elsewhere (another device, a double tap): the refetched live state shows what became of it.
+                mutableState.update { it.copy(followUpBusy = it.followUpBusy - decision.id) }
+                val fresh = attempt { api.brief(brief.id) } ?: return@launch
+                mutableState.update { s -> if (s.brief?.id == brief.id) s.copy(brief = fresh) else s }
+            } catch (failure: Exception) {
+                mutableState.update {
+                    it.copy(followUpBusy = it.followUpBusy - decision.id, followUpErrors = it.followUpErrors + (decision.id to decisionMessage(failure)))
+                }
+            }
         }
     }
 
@@ -70,8 +141,8 @@ class BriefController(
     }
 
     private suspend fun fetch() {
-        // A retry/refresh keeps the in-progress brief, even if an older ready one is listed.
-        val requestedId = briefId ?: state.value.brief?.takeIf { it.status == BriefStatus.COMPOSING }?.id
+        // A retry/refresh keeps a memo started here and the in-progress brief, even if an older ready one is listed.
+        val requestedId = memoBriefId ?: briefId ?: state.value.brief?.takeIf { it.status == BriefStatus.COMPOSING }?.id
         val brief = attempt {
             if (requestedId != null) {
                 api.brief(requestedId)
@@ -118,6 +189,18 @@ class BriefController(
     private companion object {
         /** Marks "the list was empty" apart from a failed call (null). */
         val NONE = Brief(id = "", status = BriefStatus.UNKNOWN, createdAt = null, periodStart = null, periodEnd = null)
+
+        // Must match BRIEF_LIMITS.followUpTranscript in b4m-core/common/src/schemas/brief.ts.
+        const val FOLLOW_UP_TRANSCRIPT_MAX = 6_000
+
+        fun decisionMessage(failure: Exception): String = when {
+            failure is InvalidDecisionException -> failure.message ?: BriefWire.FALLBACK_INVALID
+            failure is ApiException && failure.status == 404 -> "This follow-up is no longer available."
+            failure is ApiException && failure.status == 429 -> "Too many requests. Try again in a moment."
+            failure is ApiException -> "The server could not save that (HTTP ${failure.status})."
+            failure is MalformedBriefException -> "This follow-up needs a newer version of Bike4Mind."
+            else -> "Couldn't reach Bike4Mind. Check your connection and try again."
+        }
 
         fun message(failure: Exception): String = when {
             failure is ApiException && failure.status == 404 -> "This brief is no longer available."

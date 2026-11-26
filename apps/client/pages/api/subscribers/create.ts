@@ -123,7 +123,7 @@ ${blockedSignupNote}
       }
     } catch (slackError) {
       // Don't fail the request if the Slack notification fails
-      console.error('Failed to send Slack notification for new subscriber:', slackError);
+      req.logger.error('Failed to send Slack notification for new subscriber', { error: slackError });
     }
 
     return res.status(201).json(SIGNUP_ACK);

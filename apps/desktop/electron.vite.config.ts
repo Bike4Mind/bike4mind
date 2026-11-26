@@ -154,12 +154,13 @@ export default defineConfig(({ mode }) => {
       plugins: [externalizeDepsPlugin()],
       build: {
         rollupOptions: {
-          // The app's preload and the mini Tavern's narrow one (main/watch/miniWindow.ts). Both are
-          // sandboxed, which cannot load a shared chunk, so mini.ts imports nothing at runtime but
-          // electron (see its MINI_CHANNELS).
+          // The app's preload and the two floating windows' narrow ones (main/floatingWindow.ts). All are
+          // sandboxed, which cannot load a shared chunk, so mini.ts and orchestrateMini.ts import nothing
+          // at runtime but electron (see their *_CHANNELS).
           input: {
             index: resolve(__dirname, 'src/preload/index.ts'),
             mini: resolve(__dirname, 'src/preload/mini.ts'),
+            orchestrateMini: resolve(__dirname, 'src/preload/orchestrateMini.ts'),
           },
         },
       },

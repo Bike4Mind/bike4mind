@@ -10,7 +10,7 @@ const configValues = vi.hoisted((): Record<string, string | undefined> => ({
 
 vi.mock('../config', () => ({ Config: configValues }));
 
-import { getMailConfigStatus, requiredMailSecrets, statusTransportKind } from './configStatus';
+import { getMailConfigStatus, requiredMailSecrets, statusTransportKind, unusedMailSecrets } from './configStatus';
 
 const SMTP_KEYS = ['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_FROM'];
 
@@ -44,13 +44,31 @@ describe('getMailConfigStatus', () => {
       missingSecrets: [],
       optionalSecrets: [],
       secrets: { MAIL_FROM: true },
+      senderSource: 'secret',
     });
   });
 
   it('reports SES as unconfigured without a sender', () => {
     configValues.MAIL_FROM = '';
 
-    expect(getMailConfigStatus('ses')).toMatchObject({ configured: false, missingSecrets: ['MAIL_FROM'] });
+    const status = getMailConfigStatus('ses');
+    expect(status).toMatchObject({ configured: false, missingSecrets: ['MAIL_FROM'] });
+    expect(status.senderSource).toBeUndefined();
+  });
+
+  it.each(['ses', 'smtp'] as const)('counts a sender from the admin setting on %s when the secret is unset', kind => {
+    configValues.MAIL_FROM = 'not-configured';
+
+    const status = getMailConfigStatus(kind, true);
+
+    expect(status.configured).toBe(true);
+    expect(status.missingSecrets).not.toContain('MAIL_FROM');
+    expect(status.secrets.MAIL_FROM).toBe(true);
+    expect(status.senderSource).toBe('setting');
+  });
+
+  it('names the setting as the source when both hold a sender', () => {
+    expect(getMailConfigStatus('ses', true).senderSource).toBe('setting');
   });
 
   it('names every required SMTP setting when none is set, leaving the credentials optional', () => {
@@ -136,6 +154,13 @@ describe('requiredMailSecrets', () => {
   it('needs only the sender on SES and the whole set on SMTP', () => {
     expect(requiredMailSecrets('ses')).toEqual(['MAIL_FROM']);
     expect(requiredMailSecrets('smtp')).toEqual(SMTP_KEYS);
+  });
+});
+
+describe('unusedMailSecrets', () => {
+  it('names the four SMTP settings on SES and nothing on SMTP', () => {
+    expect(unusedMailSecrets('ses')).toEqual(['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD']);
+    expect(unusedMailSecrets('smtp')).toEqual([]);
   });
 });
 

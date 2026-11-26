@@ -55,8 +55,13 @@ import {
 } from '@client/app/hooks/data/useOrgGitHubConnection';
 import { useOrgGitHubRepositories } from '@client/app/hooks/data/useGitHubRepositories';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { getLocalDate } from '@client/app/utils/dateUtils';
 import { sanitizeErrorMessage } from '@client/app/utils/error';
 import OrgFormSaveBar from './OrgFormSaveBar';
+
+const PAT_DEFAULT_EXPIRY_DAYS = 30;
+const PAT_MAX_EXPIRY_DAYS = 365;
 
 interface OrgGitHubConnectionTabProps {
   orgId: string;
@@ -1102,12 +1107,17 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
 
               <FormControl>
                 <FormLabel>Expiration Date (Optional)</FormLabel>
-                <Input
-                  type="date"
+                <OptionalDateInput
                   value={patExpiresAt}
-                  onChange={e => setPatExpiresAt(e.target.value)}
+                  onChange={setPatExpiresAt}
+                  emptyLabel="No expiration date"
+                  setLabel="Set expiration date"
+                  clearLabel="Remove expiration date"
+                  initialDate={() => getLocalDate(PAT_DEFAULT_EXPIRY_DAYS)}
+                  max={getLocalDate(PAT_MAX_EXPIRY_DAYS)}
+                  aria-label="Expiration Date"
                   disabled={createConnection.isPending}
-                  slotProps={{ input: { 'data-testid': 'org-github-pat-expiry-input' } }}
+                  testId="org-github-pat-expiry-input"
                 />
                 <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.secondary' }}>
                   Fine-grained PATs have a maximum expiry of 1 year
@@ -1300,12 +1310,17 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
 
               <FormControl>
                 <FormLabel>New Expiration Date (Optional)</FormLabel>
-                <Input
-                  type="date"
+                <OptionalDateInput
                   value={newPatExpiresAt}
-                  onChange={e => setNewPatExpiresAt(e.target.value)}
+                  onChange={setNewPatExpiresAt}
+                  emptyLabel="No expiration date"
+                  setLabel="Set expiration date"
+                  clearLabel="Remove expiration date"
+                  initialDate={() => getLocalDate(PAT_DEFAULT_EXPIRY_DAYS)}
+                  max={getLocalDate(PAT_MAX_EXPIRY_DAYS)}
+                  aria-label="New Expiration Date"
                   disabled={rotatePAT.isPending}
-                  slotProps={{ input: { 'data-testid': 'org-github-new-pat-expiry-input' } }}
+                  testId="org-github-new-pat-expiry-input"
                 />
               </FormControl>
             </Stack>

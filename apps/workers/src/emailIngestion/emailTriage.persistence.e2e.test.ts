@@ -102,11 +102,15 @@ async function composeNextBrief() {
       approvals: [],
       questions: [],
       emails: await loadPendingBriefEmails(userId, end),
+      delegations: [],
+      reminders: [],
+      obligations: [],
     }),
     canCompose: async () => 'ok',
     complete: async () => JSON.stringify({ headline: 'Your brief' }),
     push: async () => undefined,
     emails: emailTriageItemRepository,
+    delegations: { markBriefed: async () => 0 },
     logger,
   };
   await composeBrief(deps, { briefId: brief._id.toString(), userId });
@@ -301,6 +305,9 @@ it('lets handled and FYI sections progress while approvals block older email dec
       approvals: waiting,
       questions: [],
       emails,
+      delegations: [],
+      reminders: [],
+      obligations: [],
     });
     await emailTriageItemRepository.markBriefed(userId, briefedEmailIds(composed), end);
     return composed;

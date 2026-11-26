@@ -74,9 +74,10 @@ export interface SpecAuth {
  * rotateSession's reuse-detection) and no OTC (rate limited). An access token is not single-use, so
  * one value works across every parallel context.
  *
- * Caveat: the access token has a 30m TTL (server/auth/tokenGenerator.ts) and is minted at spec
- * setup, so a tail/retry test on a ~30-minute run can outlive it and bounce to /login. A purely
- * test-side seed cannot mint a fresh token for the seeded user without OTC or a dedicated endpoint.
+ * The access token has a 30m TTL (server/auth/tokenGenerator.ts) and is minted at spec setup, so
+ * fixtures.ts renews a project's saved tokens through an OTC sign-in when they are close to expiry
+ * (helpers/token-renewal.ts). The admin project, which starts last, also gets a new token and a
+ * new storage state from admin.setup.ts.
  */
 export function buildAuthSuccessUrl(target: string, auth: SpecAuth): string {
   // Token and userId ride the FRAGMENT, matching what every production callback emits: parseAuthParams

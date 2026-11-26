@@ -9,6 +9,8 @@ import {
   DEFAULT_STORAGE_LIMIT_MB,
   USER_ACCOUNT_SEGMENTS,
   type UserAccountSegment,
+  type BriefSchedule,
+  ConflictError,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -22,8 +24,13 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  IUserModeration,
+  MODERATION_REVIEW_STATUSES,
+  MODERATION_SEVERE_CATEGORIES,
+  ModerationReviewUser,
   ISignupRiskAutoApproval,
   ISignupRiskScore,
+  type InterventionHold,
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
@@ -46,15 +53,18 @@ import {
   PaginatedResponse,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
-import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
+import mongoose, { Document, Model, model, Schema, Query, type PipelineStage, type ClientSession } from 'mongoose';
 import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
+import { AutoContainmentDecisionModel } from '../infra/security/AutoContainmentDecisionModel';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
+import { normalizeBusyBlocks, type BusyBlockInterval, type BusyBlocksState } from './busyBlocks';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -208,6 +218,22 @@ const UserPreferencesSchema = new Schema(
         { _id: false }
       ),
     },
+    // Validated by BriefScheduleSchema (@bike4mind/common) in PUT /api/v1/briefs/schedule. The general user
+    // update rewrites the whole preferences object, so it can carry a stale copy back; see IUserPreferences.
+    briefSchedule: {
+      type: new Schema(
+        {
+          enabled: { type: Boolean },
+          timeOfDay: { type: String },
+          days: { type: [Number], default: undefined },
+          timeZone: { type: String },
+        },
+        { _id: false }
+      ),
+    },
+    busyBlockBrief: {
+      type: new Schema({ enabled: { type: Boolean } }, { _id: false }),
+    },
   },
   { _id: false }
 );
@@ -278,6 +304,22 @@ const KeywordRoutingRuleSchema = new Schema(
 
 /** Newest-first cap on the retained per-user moderation-hit log. */
 export const MODERATION_HITS_RETAINED = 50;
+
+const InterventionHoldSchema = new Schema(
+  {
+    decisionId: { type: String, required: true },
+    detectionId: { type: String, required: true },
+    tier: { type: String, enum: ['limit', 'verify', 'holdGrant', 'review'], required: true },
+    policyVersion: { type: Number, required: true },
+    reason: { type: String, required: true },
+    appliedAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true },
+    releasedAt: { type: Date, default: null },
+    releasedBy: { type: String, default: null },
+    creditsPerHour: { type: Number },
+  },
+  { _id: false }
+);
 
 const ModerationHitSchema = new Schema(
   {
@@ -411,19 +453,6 @@ export const overdueDeletionRequestFilter = (requestedBefore: Date) => ({
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
     super(model);
-  }
-
-  async claimFreeQuestStart(userId: string, startId: string): Promise<boolean> {
-    const result = await this.model.updateOne(
-      { _id: userId, $or: [{ freeQuestStartId: null }, { freeQuestStartId: startId }] },
-      { $set: { freeQuestStartId: startId } }
-    );
-    return result.matchedCount === 1;
-  }
-
-  /** Clears the free start only while it still holds `startId`, so a later claim is never undone. */
-  async releaseFreeQuestStart(userId: string, startId: string): Promise<void> {
-    await this.model.updateOne({ _id: userId, freeQuestStartId: startId }, { $unset: { freeQuestStartId: 1 } });
   }
 
   /** Remove the given group ids from EVERY user that has them (group-type revoke/delete). */
@@ -1131,7 +1160,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async incrementCredits(userId: string, credits: number, options?: { updateLastCreditsPurchasedAt?: boolean }) {
-    console.log(`Incrementing credits for user ${userId} by ${credits}`);
+    Logger.debug('Incrementing credits', { userId, credits });
     const result = await this.model.findOneAndUpdate(
       { _id: userId },
       {
@@ -1213,36 +1242,63 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, planStorageLimitMb);
+  }
+
+  /**
+   * Drops the plan allowance once the subscription that granted it has ended, so the enforced
+   * `storageLimit` falls back to the manual override, or to DEFAULT_STORAGE_LIMIT_MB without one.
+   * Files already stored are untouched: a user left over the new limit can still read and delete,
+   * and the upload checks refuse anything that would add to the usage.
+   */
+  async clearPlanStorageLimit(userId: string): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, null);
+  }
+
+  private async writePlanStorageLimit(userId: string, planStorageLimitMb: number | null): Promise<boolean> {
     if (!mongoose.isValidObjectId(userId)) return false;
-    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
-    const res = await this.model.updateOne({ _id: userId }, [
-      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
-      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
-      {
-        $set: {
-          storageLimitOverride: {
-            $cond: [
-              fieldMissing('$storageLimitOverride'),
-              {
-                $cond: [
-                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
-                  null,
-                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
-                ],
-              },
-              '$storageLimitOverride',
-            ],
+    type StorageSnapshot = {
+      storageLimitOverride?: number | null;
+      planStorageLimit?: number | null;
+      storageLimit?: number | null;
+      __v?: number;
+    };
+    const fields = ['storageLimitOverride', 'planStorageLimit', 'storageLimit', '__v'] as const;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snapshot = await this.model
+        .findById(userId, { storageLimitOverride: 1, planStorageLimit: 1, storageLimit: 1, __v: 1 })
+        .lean<StorageSnapshot>();
+      if (!snapshot) return false;
+      // Preserve a legacy custom limit before retiring the missing-override fallback. Field
+      // presence matters: an explicit null means use the plan, and zero is a manual override.
+      const override = Object.hasOwn(snapshot, 'storageLimitOverride')
+        ? (snapshot.storageLimitOverride ?? null)
+        : snapshot.storageLimit == null || snapshot.storageLimit === DEFAULT_STORAGE_LIMIT_MB
+          ? null
+          : snapshot.storageLimit;
+      const result = await this.model.updateOne(
+        {
+          _id: userId,
+          $and: fields.map(field => ({
+            [field]: Object.hasOwn(snapshot, field) ? { $eq: snapshot[field], $exists: true } : { $exists: false },
+          })),
+        },
+        {
+          $set: {
+            storageLimitOverride: override,
+            planStorageLimit: planStorageLimitMb,
+            storageLimit: override ?? planStorageLimitMb ?? DEFAULT_STORAGE_LIMIT_MB,
           },
+          // Even an equal-quantity grant must write: this fences a concurrent release's
+          // subscription snapshot. Timestamp changes alone can be elided in the same millisecond.
+          $inc: { __v: 1 },
         },
-      },
-      {
-        $set: {
-          planStorageLimit: planStorageLimitMb,
-          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
-        },
-      },
-    ]);
-    return res.matchedCount === 1;
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return true;
+      // Native transaction errors deliberately propagate so the entire transaction can retry.
+    }
+    throw new ConflictError('Storage allowance changed concurrently; retry the operation');
   }
 
   async findCurrentStorageSize(userId: string): Promise<number | null> {
@@ -1358,19 +1414,159 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async setModerationStatus(
     userId: string,
     status: UserModerationStatus,
-    options?: { throttledUntil?: Date | null }
+    options?: { throttledUntil?: Date | null; automatic?: boolean }
   ): Promise<IUserDocument | null> {
     return this.model.findOneAndUpdate(
       { _id: userId },
       {
         $set: {
           'moderation.status': status,
-          'moderation.statusChangedAt': new Date(),
+          ...(options?.automatic ? {} : { 'moderation.statusChangedAt': new Date() }),
           'moderation.throttledUntil': status === 'throttled' ? (options?.throttledUntil ?? null) : null,
         },
       },
       { new: true }
     );
+  }
+
+  /**
+   * Adds a graduated hold unless one from the same decision is already there, so a retried decision
+   * never applies twice. True when this call added it.
+   */
+  async addInterventionHold(userId: string, hold: InterventionHold, session?: ClientSession): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        isAdmin: { $ne: true },
+        isBanned: { $ne: true },
+        'interventionHolds.decisionId': { $ne: hold.decisionId },
+      },
+      { $push: { interventionHolds: hold } },
+      { runValidators: true, session }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Serializes a hold write with release and claim replacement on the original decision. */
+  async addClaimedInterventionHold(userId: string, hold: InterventionHold, startedAt: Date): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(hold.decisionId)) return false;
+    return withTransaction(async session => {
+      const claim = await AutoContainmentDecisionModel.updateOne(
+        {
+          _id: new mongoose.Types.ObjectId(hold.decisionId),
+          tier: hold.tier,
+          outcome: 'pending',
+          decidedAt: startedAt,
+          releasedAt: null,
+          containedUserIds: { $ne: userId },
+          userIds: userId,
+        },
+        { $inc: { holdWriteVersion: 1 } },
+        { session, runValidators: true }
+      );
+      if (claim.modifiedCount !== 1) return false;
+      return this.addInterventionHold(userId, hold, session);
+    });
+  }
+
+  /** Keeps a durable per-account Contain receipt and lifts only the original decision's holds. */
+  async releaseContainedInterventionHolds(
+    decisionId: string,
+    committedUserIds: string[],
+    release: { by: string; now: Date }
+  ): Promise<void> {
+    if (!mongoose.Types.ObjectId.isValid(decisionId) || committedUserIds.length === 0) return;
+    await withTransaction(async session => {
+      const decision = await AutoContainmentDecisionModel.findOne({
+        _id: new mongoose.Types.ObjectId(decisionId),
+        tier: { $ne: 'contain' },
+        outcome: { $in: ['pending', 'intervened', 'failed', 'capped'] },
+        releasedAt: null,
+      }).session(session);
+      if (!decision) return;
+      const selected = [...new Set(committedUserIds)].filter(userId => decision.userIds.includes(userId));
+      if (selected.length === 0) return;
+      // Both writers change this row in their transaction, so neither can commit from a stale snapshot.
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        { $inc: { holdWriteVersion: 1 }, $addToSet: { containedUserIds: { $each: selected } } },
+        { session, runValidators: true }
+      );
+      for (const userId of selected) await this.releaseInterventionHold(userId, decisionId, release, session);
+      const contained = new Set([...(decision.containedUserIds ?? []), ...selected]);
+      if (!decision.userIds.every(userId => contained.has(userId))) return;
+      const remaining = await this.model
+        .exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } })
+        .session(session);
+      if (remaining) return;
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        {
+          $set: {
+            outcome: 'released',
+            releasedAt: release.now,
+            releasedBy: release.by,
+            releaseReason: 'Graduated holds replaced by committed account containment',
+            releaseCondition: 'contained',
+          },
+        },
+        { session, runValidators: true }
+      );
+    });
+  }
+
+  /**
+   * Releases only the hold that decision applied. Never touches moderation, riskScore.reviewState,
+   * signupGrantHeldReason or any other decision's hold. True when an unreleased hold was released.
+   */
+  async releaseInterventionHold(
+    userId: string,
+    decisionId: string,
+    { by, now }: { by: string; now: Date },
+    session?: ClientSession
+  ): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        interventionHolds: { $elemMatch: { decisionId, releasedAt: null } },
+      },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': by } },
+      { arrayFilters: [{ 'hold.decisionId': decisionId, 'hold.releasedAt': null }], runValidators: true, session }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** True while any account still carries an unreleased hold from this decision (expired or not). */
+  async hasUnreleasedInterventionHold(decisionId: string): Promise<boolean> {
+    const found = await this.model.exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } });
+    return found !== null;
+  }
+
+  /**
+   * Stamps released every unreleased hold past its expiry, for audit only: the gates already ignore an
+   * expired hold. Returns the deciding decision ids so their records can be marked expired too.
+   */
+  async expireInterventionHolds(now: Date, limit = 500): Promise<string[]> {
+    const due = { releasedAt: null, expiresAt: { $lte: now } };
+    const docs = await this.model
+      .find({ interventionHolds: { $elemMatch: due } }, { interventionHolds: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId; interventionHolds?: InterventionHold[] }>>();
+    if (docs.length === 0) return [];
+    await this.model.updateMany(
+      { _id: { $in: docs.map(doc => doc._id) } },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': 'expiry' } },
+      { arrayFilters: [{ 'hold.releasedAt': null, 'hold.expiresAt': { $lte: now } }], runValidators: true }
+    );
+    const ids = new Set<string>();
+    for (const doc of docs) {
+      for (const hold of doc.interventionHolds ?? []) {
+        if (hold.releasedAt == null && hold.expiresAt.getTime() <= now.getTime()) ids.add(hold.decisionId);
+      }
+    }
+    return [...ids];
   }
 
   async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
@@ -1394,6 +1590,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
         },
       },
     ]);
+  }
+
+  // The createdAt range rides the createdAt index, so the unindexed email regex only scans that window.
+  async countSignupsOnEmailHost(host: string, from: Date, to: Date): Promise<{ total: number; banned: number }> {
+    const normalized = host.trim().toLowerCase();
+    if (!normalized) return { total: 0, banned: 0 };
+    const filter = {
+      createdAt: { $gte: from, $lte: to },
+      email: { $regex: `@${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
+      isSystem: { $ne: true },
+    };
+    const [total, banned] = await Promise.all([
+      this.model.countDocuments(filter),
+      this.model.countDocuments({ ...filter, isBanned: true }),
+    ]);
+    return { total, banned };
   }
 
   async findRiskScoringCandidateIds(since: Date, options: { afterId?: string; limit: number }): Promise<string[]> {
@@ -1644,6 +1856,324 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  /** The review list's membership: an escalated status, or a severe hit newer than the last admin decision. */
+  private moderationReviewFilter() {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
+    // The newest retained severe hit is after the last status change, so no admin has acted on it yet.
+    const latestSevereHitAt = {
+      $max: {
+        $map: {
+          input: {
+            $filter: {
+              input: { $ifNull: ['$moderation.hits', []] },
+              as: 'hit',
+              cond: { $gt: [{ $size: { $setIntersection: [{ $ifNull: ['$$hit.categories', []] }, severe] } }, 0] },
+            },
+          },
+          as: 'hit',
+          in: '$$hit.at',
+        },
+      },
+    };
+    const lastStatusChange = { $ifNull: ['$moderation.statusChangedAt', new Date(0)] };
+    return {
+      $or: [
+        { 'moderation.status': { $in: [...MODERATION_REVIEW_STATUSES] } },
+        {
+          'moderation.hits.categories': { $in: severe },
+          $expr: { $gt: [latestSevereHitAt, lastStatusChange] },
+        },
+      ],
+    };
+  }
+
+  async countModerationReviewQueue(options: { limit?: number } = {}): Promise<number> {
+    return this.model.countDocuments(this.moderationReviewFilter(), { limit: options.limit }).maxTimeMS(5000).exec();
+  }
+
+  async findModerationReviewQueue(limit: number): Promise<ModerationReviewUser[]> {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
+    const docs = await this.model
+      .find(this.moderationReviewFilter())
+      .select('name email createdAt moderation')
+      .sort({ 'moderation.lastHitAt': -1, _id: -1 })
+      .limit(limit)
+      .maxTimeMS(5000)
+      .lean();
+    return docs.map(doc => {
+      const moderation = doc.moderation as IUserModeration;
+      const statusChangedAt = moderation.statusChangedAt ? new Date(moderation.statusChangedAt).getTime() : 0;
+      return {
+        id: String(doc._id),
+        name: doc.name ?? null,
+        email: doc.email ?? null,
+        createdAt: doc.createdAt ?? null,
+        moderation,
+        hasUnreviewedSevereHit: (moderation.hits ?? []).some(
+          hit =>
+            new Date(hit.at).getTime() > statusChangedAt && hit.categories?.some(category => severe.includes(category))
+        ),
+      };
+    });
+  }
+
+  /**
+   * Replaces the brief schedule and its due time together. A null `nextBriefAt` (schedule off) removes the field and drops the user from the
+   * reconciler's index.
+   */
+  async setBriefSchedule(userId: string, schedule: BriefSchedule, nextBriefAt: Date | null): Promise<void> {
+    await this.ensurePreferencesObject(userId);
+    await this.model.updateOne(
+      { _id: userId },
+      nextBriefAt
+        ? { $set: { 'preferences.briefSchedule': schedule, nextBriefAt } }
+        : { $set: { 'preferences.briefSchedule': schedule }, $unset: { nextBriefAt: 1 } },
+      { runValidators: true }
+    );
+  }
+
+  /** A dotted `$set` under `preferences` fails while the field is null (its schema default). */
+  private async ensurePreferencesObject(userId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId, preferences: null },
+      { $set: { preferences: {} } },
+      { runValidators: true }
+    );
+  }
+
+  async getBriefSchedule(userId: string): Promise<{ schedule: BriefSchedule | null; nextBriefAt: Date | null }> {
+    const user = await this.model
+      .findById(userId, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
+      .lean<Pick<IUserDocument, 'preferences' | 'nextBriefAt'>>();
+    return { schedule: user?.preferences?.briefSchedule ?? null, nextBriefAt: user?.nextBriefAt ?? null };
+  }
+
+  /**
+   * Replaces the synced busy blocks (normalized by normalizeBusyBlocks) and the due time of the next block
+   * brief. The write is a compare-and-set on `lastBlockBriefEnd`, so a block the reconciler claims between
+   * the read and the write is never re-armed. Disabling clears the blocks and the due time.
+   */
+  async setBusyBlocks(
+    userId: string,
+    input: { enabled: boolean; blocks: BusyBlockInterval[] },
+    now: Date
+  ): Promise<BusyBlocksState> {
+    await this.ensurePreferencesObject(userId);
+    if (!input.enabled) {
+      await this.model.updateOne(
+        { _id: userId },
+        {
+          $set: { 'preferences.busyBlockBrief': { enabled: false } },
+          $unset: { busyBlocks: 1, busyBlocksSyncedAt: 1, nextBlockBriefAt: 1 },
+        },
+        { runValidators: true }
+      );
+      return { enabled: false, blocks: [], nextBlockBriefAt: null };
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const user = await this.model
+        .findById(userId, { lastBlockBriefEnd: 1 })
+        .lean<Pick<IUserDocument, 'lastBlockBriefEnd'>>();
+      if (!user) return { enabled: false, blocks: [], nextBlockBriefAt: null };
+      const lastBlockBriefEnd = user.lastBlockBriefEnd ?? null;
+      const blocks = normalizeBusyBlocks(input.blocks, { now, lastBlockBriefEnd });
+      const nextBlockBriefAt = blocks[0]?.end ?? null;
+      const set = {
+        'preferences.busyBlockBrief': { enabled: true },
+        busyBlocks: blocks,
+        busyBlocksSyncedAt: now,
+        ...(nextBlockBriefAt ? { nextBlockBriefAt } : {}),
+      };
+      const result = await this.model.updateOne(
+        { _id: userId, lastBlockBriefEnd },
+        nextBlockBriefAt ? { $set: set } : { $set: set, $unset: { nextBlockBriefAt: 1 } },
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return { enabled: true, blocks, nextBlockBriefAt };
+    }
+    throw new Error('Busy blocks changed concurrently; retry the sync');
+  }
+
+  async getBusyBlocks(userId: string): Promise<BusyBlocksState> {
+    const user = await this.model
+      .findById(userId, { 'preferences.busyBlockBrief': 1, busyBlocks: 1, nextBlockBriefAt: 1 })
+      .lean<Pick<IUserDocument, 'preferences' | 'busyBlocks' | 'nextBlockBriefAt'>>();
+    const enabled = user?.preferences?.busyBlockBrief?.enabled === true;
+    if (!enabled) return { enabled: false, blocks: [], nextBlockBriefAt: null };
+    return {
+      enabled,
+      blocks: (user?.busyBlocks ?? []).map(({ start, end }) => ({ start, end })),
+      nextBlockBriefAt: user?.nextBlockBriefAt ?? null,
+    };
+  }
+
+  /**
+   * Users whose scheduled brief is due, earliest first. The `$type` term is what lets the planner use the
+   * `user_nextBriefAt` partial index; without it the scan is a COLLSCAN plus an in-memory sort.
+   */
+  async findDueBriefSchedules(
+    now: Date,
+    limit: number
+  ): Promise<{ id: string; schedule: BriefSchedule | null; nextBriefAt: Date }[]> {
+    const users = await this.model
+      .find({ nextBriefAt: { $type: 'date', $lte: now } }, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
+      .sort({ nextBriefAt: 1 })
+      .limit(limit)
+      .lean<(Pick<IUserDocument, 'preferences'> & { _id: unknown; nextBriefAt: Date })[]>();
+    return users.map(user => ({
+      id: String(user._id),
+      schedule: user.preferences?.briefSchedule ?? null,
+      nextBriefAt: user.nextBriefAt,
+    }));
+  }
+
+  /**
+   * Moves a due user to its next slot (or off the schedule with null), only while `nextBriefAt` still holds
+   * the value the caller read. That compare-and-set is the claim: false means another run took this slot.
+   */
+  async advanceNextBriefAt(userId: string, expected: Date, next: Date | null): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, nextBriefAt: expected },
+      next ? { $set: { nextBriefAt: next } } : { $unset: { nextBriefAt: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Users with a busy block that has ended, earliest first. Uses the `user_nextBlockBriefAt` partial index. */
+  async findDueBlockBriefs(
+    now: Date,
+    limit: number
+  ): Promise<{ id: string; blocks: BusyBlockInterval[]; nextBlockBriefAt: Date; lastBlockBriefEnd: Date | null }[]> {
+    const users = await this.model
+      .find(
+        { nextBlockBriefAt: { $type: 'date', $lte: now } },
+        { busyBlocks: 1, nextBlockBriefAt: 1, lastBlockBriefEnd: 1 }
+      )
+      .sort({ nextBlockBriefAt: 1 })
+      .limit(limit)
+      .lean<(Pick<IUserDocument, 'busyBlocks' | 'lastBlockBriefEnd'> & { _id: unknown; nextBlockBriefAt: Date })[]>();
+    return users.map(user => ({
+      id: String(user._id),
+      blocks: (user.busyBlocks ?? []).map(({ start, end }) => ({ start, end })),
+      nextBlockBriefAt: user.nextBlockBriefAt,
+      lastBlockBriefEnd: user.lastBlockBriefEnd ?? null,
+    }));
+  }
+
+  /**
+   * Compare-and-set on the block-brief pair (`nextBlockBriefAt`, `lastBlockBriefEnd`); null means unset.
+   * Claiming a due block moves the pair forward. False means the pair changed since the caller read it
+   * (another run claimed the block, or a sync re-armed it).
+   */
+  async advanceNextBlockBriefAt(
+    userId: string,
+    expected: { nextBlockBriefAt: Date | null; lastBlockBriefEnd: Date | null },
+    next: { nextBlockBriefAt: Date | null; lastBlockBriefEnd: Date | null }
+  ): Promise<boolean> {
+    const $set: Record<string, Date> = {};
+    const $unset: Record<string, 1> = {};
+    for (const key of ['nextBlockBriefAt', 'lastBlockBriefEnd'] as const) {
+      const value = next[key];
+      if (value) $set[key] = value;
+      else $unset[key] = 1;
+    }
+    const result = await this.model.updateOne(
+      { _id: userId, nextBlockBriefAt: expected.nextBlockBriefAt, lastBlockBriefEnd: expected.lastBlockBriefEnd },
+      { ...(Object.keys($set).length ? { $set } : {}), ...(Object.keys($unset).length ? { $unset } : {}) },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Hands a claimed block back so a later run retries it: restores `lastBlockBriefEnd`, re-adds the block
+   * when a sync since the claim dropped it, and moves `nextBlockBriefAt` back to its end. False when a later
+   * claim moved past it or the opt-in was turned off.
+   */
+  async releaseBlockBriefClaim(
+    userId: string,
+    block: BusyBlockInterval,
+    previousLastBlockBriefEnd: Date | null
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const user = await this.model
+        .findById(userId, { 'preferences.busyBlockBrief': 1, busyBlocks: 1, nextBlockBriefAt: 1, lastBlockBriefEnd: 1 })
+        .lean<Pick<IUserDocument, 'preferences' | 'busyBlocks' | 'nextBlockBriefAt' | 'lastBlockBriefEnd'>>();
+      if (user?.preferences?.busyBlockBrief?.enabled !== true) return false;
+      if (user.lastBlockBriefEnd?.getTime() !== block.end.getTime()) return false;
+      const stored = (user.busyBlocks ?? []).map(({ start, end }) => ({ start, end }));
+      const blocks = stored.some(b => b.end.getTime() === block.end.getTime())
+        ? stored
+        : [...stored, block].sort((a, b) => a.start.getTime() - b.start.getTime());
+      const current = user.nextBlockBriefAt ?? null;
+      const next = current && current.getTime() < block.end.getTime() ? current : block.end;
+      const result = await this.model.updateOne(
+        { _id: userId, lastBlockBriefEnd: block.end, nextBlockBriefAt: current },
+        previousLastBlockBriefEnd
+          ? { $set: { busyBlocks: blocks, nextBlockBriefAt: next, lastBlockBriefEnd: previousLastBlockBriefEnd } }
+          : { $set: { busyBlocks: blocks, nextBlockBriefAt: next }, $unset: { lastBlockBriefEnd: 1 } },
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Moves an enabled schedule's due time earlier to `at`, never later, so an approved reminder starts a brief
+   * when it falls due. A user with no enabled schedule is left alone; false when nothing moved.
+   */
+  async pullNextBriefAtForward(userId: string, at: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: userId,
+        'preferences.briefSchedule.enabled': true,
+        $or: [{ nextBriefAt: { $exists: false } }, { nextBriefAt: null }, { nextBriefAt: { $gt: at } }],
+      },
+      { $set: { nextBriefAt: at } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Claims the shared brief-start debounce when no brief started within `minGapMs` of `now`, returning the
+   * replaced value for releaseBriefStart; null when refused. A stored value in the future counts as recent.
+   */
+  async claimBriefStart(userId: string, now: Date, minGapMs: number): Promise<{ previous: Date | null } | null> {
+    const before = await this.model
+      .findOneAndUpdate(
+        {
+          _id: userId,
+          $or: [
+            { lastBriefStartedAt: { $exists: false } },
+            { lastBriefStartedAt: null },
+            { lastBriefStartedAt: { $lte: new Date(now.getTime() - minGapMs) } },
+          ],
+        },
+        { $set: { lastBriefStartedAt: now } },
+        { new: false, projection: { lastBriefStartedAt: 1 }, runValidators: true }
+      )
+      .lean<{ lastBriefStartedAt?: Date | null }>()
+      .exec();
+    return before ? { previous: before.lastBriefStartedAt ?? null } : null;
+  }
+
+  /**
+   * Gives back a claim by restoring the value it replaced, only while `lastBriefStartedAt` still holds this
+   * caller's `claimedAt`. Restoring rather than unsetting matters because the scheduled and event paths
+   * claim with different gaps: an unset would let an event start ignore an earlier event brief.
+   */
+  async releaseBriefStart(userId: string, claimedAt: Date, previous: Date | null): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, lastBriefStartedAt: claimedAt },
+      previous ? { $set: { lastBriefStartedAt: previous } } : { $unset: { lastBriefStartedAt: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations
@@ -1781,6 +2311,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
     // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
     signupGrantHeldAt: { type: Date },
+    interventionHolds: { type: [InterventionHoldSchema], default: undefined },
     signupGrant: {
       type: new Schema(
         {
@@ -1845,6 +2376,17 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    nextBriefAt: { type: Date },
+    lastBriefStartedAt: { type: Date },
+    busyBlocks: {
+      type: [
+        new Schema({ start: { type: Date, required: true }, end: { type: Date, required: true } }, { _id: false }),
+      ],
+      default: undefined,
+    },
+    busyBlocksSyncedAt: { type: Date },
+    nextBlockBriefAt: { type: Date },
+    lastBlockBriefEnd: { type: Date },
     accountFilePurge: {
       type: new Schema(
         {
@@ -1915,6 +2457,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
       ),
       default: undefined,
     },
+    // Immutable so no update path can rewrite it; see IUser.signupClientId.
+    signupClientId: { type: String, default: null, immutable: true },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
     loginRecords: [LoginRecordSchema],
     // reset password
@@ -2338,6 +2882,15 @@ UserSchema.index(
   { 'signupMeta.ip': 1 },
   { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
 );
+// Expiry stamping of graduated holds (apps/workers/src/cron/abuseAssessmentSweep.ts). Only accounts that
+// carry a hold: a null-equality filter would also match every account with no holds field.
+UserSchema.index(
+  { 'interventionHolds.expiresAt': 1 },
+  {
+    name: 'user_interventionHolds_expiresAt_held',
+    partialFilterExpression: { 'interventionHolds.expiresAt': { $exists: true } },
+  }
+);
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
@@ -2351,6 +2904,11 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// Serve findModerationReviewQueue, one per $or branch. Not partial: a partial index is only chosen when
+// the query provably implies its filter, which an $in does not; sparse keeps users with no moderation
+// state out. Built by the ensure-user-moderation-review-indexes migration.
+UserSchema.index({ 'moderation.status': 1 }, { sparse: true, name: 'user_moderation_status' });
+UserSchema.index({ 'moderation.hits.categories': 1 }, { sparse: true, name: 'user_moderation_hit_categories' });
 // The persona caps and expiry sweep read only persona accounts, a handful among all users.
 UserSchema.index(
   { isPersona: 1, personaExpiresAt: 1 },
@@ -2395,6 +2953,16 @@ UserSchema.index(
 UserSchema.index(
   { 'deletion.scheduledFor': 1 },
   { partialFilterExpression: { 'deletion.scheduledFor': { $type: 'date' } }, name: 'user_deletion_scheduledFor' }
+);
+// Serves the brief-schedule reconciler's due scan; only users with a schedule on carry the field.
+UserSchema.index(
+  { nextBriefAt: 1 },
+  { partialFilterExpression: { nextBriefAt: { $type: 'date' } }, name: 'user_nextBriefAt' }
+);
+// Serves the block-end brief due scan; only opted-in users with a pending block carry the field.
+UserSchema.index(
+  { nextBlockBriefAt: 1 },
+  { partialFilterExpression: { nextBlockBriefAt: { $type: 'date' } }, name: 'user_nextBlockBriefAt' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 

@@ -22,6 +22,25 @@ import requireUpdateValidators from './eslint-rules/require-update-validators.mj
  * - b4m-core packages (with import restrictions)
  * - packages/*
  */
+// Core server packages under the no-console rule (see the block that uses these). Append as packages convert.
+const CORE_NO_CONSOLE_SRC = [
+  'b4m-core/db-core',
+  'b4m-core/agents',
+  'b4m-core/utils',
+  'b4m-core/llm-adapters',
+  'packages/database',
+  'b4m-core/services',
+  'b4m-core/common',
+].map(pkg => `${pkg}/src/**/*.{ts,tsx,mts,cts}`);
+const CORE_NO_CONSOLE_EXEMPT_SCRIPTS = [
+  'b4m-core/llm-adapters/src/syncModelDescriptions.ts',
+  'packages/database/src/seeds/regenerateModelPriceSeed.ts',
+  'packages/database/src/seeds/regenerateModelCatalogSeed.ts',
+  'packages/database/src/utils/testModelStats.ts',
+  'b4m-core/common/src/openapi/generate.ts',
+  'b4m-core/common/src/openapi/generateDeployment.ts',
+];
+
 // B4Mv3 Track 1 — deprecated facade import restrictions.
 // Extracted as consts so they can be spread into blocks that also carry other rules.
 // flat-config last-rule-wins means only the last matching no-restricted-imports rule
@@ -263,6 +282,17 @@ const noDeadPaletteTokens = [
   },
 ];
 
+const RANDOM_UUID_MESSAGE =
+  "crypto.randomUUID is undefined outside secure contexts (plain-http LAN). Use randomUuid from '@bike4mind/common'.";
+const noRandomUUIDAccess = [
+  { selector: "MemberExpression[property.name='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "MemberExpression[property.value='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "ObjectPattern > Property[key.name='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "ObjectPattern > Property[key.value='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "BinaryExpression[operator='in'][left.value='randomUUID']", message: RANDOM_UUID_MESSAGE },
+];
+const spaRestrictedSyntax = [...noWindowOpenInClientUi, ...noDeadPaletteTokens];
+
 // A regex can only recognise a token shape. It cannot know that `primary.25` or `warning.550` name
 // a shade this palette does not have, or that `neutral.outlinedHoverBorder` was a Joy key that a
 // version bump removed - those are just as dead, and only the built theme can tell. That half is
@@ -387,8 +417,6 @@ const SERVER_UTILS_BOUNDARY = {
 const localRuleSources = [
   './eslint-rules/no-raw-entity-response.mjs',
   './eslint-rules/no-raw-admin-joy.mjs',
-  './eslint-rules/admin-joy-legacy.mjs',
-  './eslint-rules/admin-joy-legacy-imports.mjs',
   './eslint-rules/no-content-in-log-message.mjs',
   './eslint-rules/no-workers-server-bridge.mjs',
   './eslint-rules/no-direct-decrypt-secret.mjs',
@@ -460,7 +488,7 @@ export default defineConfig([
 
   // CommonJS files (legacy configs, scripts, etc.)
   {
-    files: ['**/*.cjs', 'packages/eslint-config/**/*.js'],
+    files: ['**/*.cjs'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: {
@@ -789,6 +817,37 @@ export default defineConfig([
     },
   },
 
+  // apps/desktop/src/host - the agent runtime that a headless remote host also runs, where there is
+  // no Electron to load. It may import apps/desktop/src/main/chat, so this catches a direct import
+  // only; HostRuntime.electronFree.test.ts catches one that arrives through a dependency. Repeats
+  // the B4Mv3 facade guards from the apps/** block above (no-restricted-imports is last-rule-wins).
+  {
+    files: ['apps/desktop/src/host/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            ...b4mv3RestrictedPaths,
+            {
+              name: 'electron',
+              message:
+                'src/host runs headless on remote machines. Take the capability through a port in src/host/ports.ts instead.',
+            },
+          ],
+          patterns: [
+            ...b4mv3RestrictedPatterns,
+            {
+              group: ['electron/*'],
+              message:
+                'src/host runs headless on remote machines. Take the capability through a port in src/host/ports.ts instead.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Freezes the interim @server/* bridge into apps/client: existing uses are baselined in
   // eslint-suppressions.json, so only new ones fail. Tests are included because vi.mock needs the alias too.
   {
@@ -834,6 +893,43 @@ export default defineConfig([
     rules: { 'no-console': 'error' },
   },
 
+  // API routes log through req.logger (or a module Logger), same rationale as the server-utils block above.
+  {
+    files: ['apps/client/pages/api/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
+  // The stdio MCP servers use stdout as the JSON-RPC channel, so log through shared/stderrLog instead.
+  {
+    files: ['b4m-core/mcp/src/**/*.{ts,mts,cts}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**', '**/__fixtures__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
+  // apps/client/server is covered too. server/scripts and the tutorials apply CLI print for a person at a
+  // terminal by design, and *.integration.ts files are run by hand, so those stay on console.
+  {
+    files: ['apps/client/server/**/*.{ts,tsx}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'apps/client/server/scripts/**',
+      'apps/client/server/tutorials/apply/cli.ts',
+      '**/*.integration.ts',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
+  // Core server packages log through the Logger too (same rationale as the server-utils block above).
+  // CORE_NO_CONSOLE_EXEMPT_SCRIPTS are CLI scripts run with tsx whose stdout is their output.
+  {
+    files: CORE_NO_CONSOLE_SRC,
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**', ...CORE_NO_CONSOLE_EXEMPT_SCRIPTS],
+    rules: { 'no-console': 'error' },
+  },
+
   // #9627 — ban filesystem tree-walking in test files anywhere under apps/client/pages/**. Uses
   // no-restricted-syntax (a different rule id than no-restricted-imports), so the apps/client
   // Next.js block's import restrictions still apply to these files unchanged. See
@@ -845,19 +941,33 @@ export default defineConfig([
     },
   },
 
-  // Ban window.open and dead Material UI palette tokens in the SPA's UI code - see
-  // noWindowOpenInClientUi and noDeadPaletteTokens above for the rationale behind each. Both sets
-  // must be spread into this one rule: flat-config last-rule-wins means a second block declaring
-  // no-restricted-syntax for these files would replace them, not add to them. The glob is disjoint
-  // from the pages-tests block above, so that rule is left intact.
+  // Ban window.open, dead Material UI palette tokens and crypto.randomUUID in the SPA's UI code - see
+  // noWindowOpenInClientUi, noDeadPaletteTokens and noRandomUUIDAccess above. Flat-config last-rule-wins
+  // means a second block declaring no-restricted-syntax for these files would replace this one, so new
+  // SPA selectors go into spaRestrictedSyntax. The glob is disjoint from the pages-tests block above.
   {
     files: ['apps/client/app/**/*.{ts,tsx}'],
     rules: {
-      'no-restricted-syntax': ['error', ...noWindowOpenInClientUi, ...noDeadPaletteTokens],
+      'no-restricted-syntax': ['error', ...spaRestrictedSyntax, ...noRandomUUIDAccess],
       // Catches the bare `open(url)` form the selectors above cannot safely match. Scope-aware,
       // so a local/parameter named `open` is untouched.
       'no-restricted-globals': ['error', { name: 'open', message: WINDOW_OPEN_MESSAGE }],
     },
+  },
+  // Tests may stub crypto.randomUUID; the serwist route runs in Node at build time.
+  {
+    files: ['apps/client/app/**/*.{test,spec}.{ts,tsx}', 'apps/client/app/**/__tests__/**', 'apps/client/app/serwist/**'],
+    rules: { 'no-restricted-syntax': ['error', ...spaRestrictedSyntax] },
+  },
+  {
+    files: ['apps/client/lib/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**'],
+    rules: { 'no-restricted-syntax': ['error', ...noRandomUUIDAccess] },
+  },
+  {
+    files: ['b4m-core/common/src/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', 'b4m-core/common/src/utils/randomUuid.ts'],
+    rules: { 'no-restricted-syntax': ['error', ...noRandomUUIDAccess] },
   },
 
   // RFC #483 Phase 2 - an API route must not send a raw entity document; see

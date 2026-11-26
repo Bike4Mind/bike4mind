@@ -1,7 +1,12 @@
 package com.bike4mind.app.ui
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +43,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -48,11 +54,15 @@ import com.bike4mind.app.AppGraph
 import com.bike4mind.app.R
 import com.bike4mind.kit.account.AccountCallError
 import com.bike4mind.kit.account.AccountDeletionController
+import com.bike4mind.kit.credits.CreditsController
+import com.bike4mind.kit.credits.CreditsState
 import com.bike4mind.kit.push.NotificationCategory
 import kotlinx.coroutines.launch
 
 class SettingsViewModel(graph: AppGraph) : ViewModel() {
     val controller = graph.settings(viewModelScope).also { it.load() }
+    val credits = graph.credits(viewModelScope).also { it.load() }
+    val busyBlocks = graph.busyBlockBrief(viewModelScope).also { it.load() }
 }
 
 /** The profile header, a switch per push category, sign out and the way to account deletion. Twin of apps/ios SettingsView. */
@@ -61,9 +71,24 @@ class SettingsViewModel(graph: AppGraph) : ViewModel() {
 fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onDeleteAccount: () -> Unit) {
     val model = viewModel { SettingsViewModel(graph) }
     val state by model.controller.state.collectAsStateWithLifecycle()
+    val credits by model.credits.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var systemAllows by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
+    val busyBlocks by model.busyBlocks.state.collectAsStateWithLifecycle()
+    val calendarPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        model.busyBlocks.setEnabled(true, accessGranted = granted)
+    }
+    val toggleBusyBlocks: (Boolean) -> Unit = { on ->
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+        if (!on || granted) {
+            model.busyBlocks.setEnabled(on, accessGranted = granted)
+        } else {
+            // Read by CalendarBusyBlockReader.access(): once asked, a missing grant means denied, not undecided.
+            graph.busyBlockPermissions.markRequested()
+            calendarPermission.launch(Manifest.permission.READ_CALENDAR)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -119,6 +144,19 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onDeleteAccount: () -> U
                     )
                 }
             }
+            if (showsBusyBlockBrief(systemAllows, busyBlocks)) {
+                item {
+                    BusyBlockBriefSection(
+                        state = busyBlocks,
+                        onToggle = toggleBusyBlocks,
+                        onOpenSettings = {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                            )
+                        },
+                    )
+                }
+            }
             state.saveError?.let { error ->
                 item {
                     Text(
@@ -146,6 +184,7 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit, onDeleteAccount: () -> U
             }
 
             item { SectionHeader(stringResource(R.string.settings_account)) }
+            item { CreditsRow(credits, onRetry = model.credits::load) }
             item {
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.settings_sign_out)) },
@@ -196,6 +235,30 @@ private fun ProfileHeader(name: String?, email: String?, initial: String?, loadi
             email?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
+}
+
+@Composable
+private fun CreditsRow(state: CreditsState, onRetry: () -> Unit) {
+    val balance = state.balance
+    val error = state.error.takeIf { balance == null }
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.settings_credits)) },
+        supportingContent = error?.let { { Text(accountErrorText(it), color = MaterialTheme.colorScheme.error) } },
+        trailingContent = {
+            when {
+                balance != null -> Text(
+                    CreditsController.formatted(balance),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontFeatureSettings = "tnum"),
+                    modifier = Modifier.testTag("settings-credits-balance"),
+                )
+                error != null -> TextButton(onClick = onRetry, modifier = Modifier.testTag("settings-credits-retry-btn")) {
+                    Text(stringResource(R.string.action_try_again))
+                }
+                state.loading -> CircularProgressIndicator(modifier = Modifier.size(Spacing.l))
+            }
+        },
+        modifier = Modifier.testTag("settings-credits-row"),
+    )
 }
 
 @Composable

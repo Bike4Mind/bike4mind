@@ -5,6 +5,7 @@ import {
   type ViewApproval,
   type ViewSnapshot,
 } from '@shared/viewSnapshot';
+import { hostChat } from '../../host/hostChat';
 import { agentNowText } from './activity';
 import type { AgentView, ParentView } from './roster';
 import { isOneClickDecision } from './tavern/bubbleAnswer';
@@ -42,9 +43,20 @@ function toViewAgent(agent: AgentView): ViewAgent {
             ),
         },
       }),
-    ...(agent.pr && { pr: { number: agent.pr.number, state: agent.pr.state } }),
+    ...(agent.pr && {
+      pr: {
+        number: agent.pr.number,
+        state: agent.pr.state,
+        ...(agent.pr.repo && { repo: agent.pr.repo }),
+        ...(agent.pr.attention && { attention: agent.pr.attention }),
+        ...(agent.pr.behind && { behind: true }),
+        ...(agent.pr.autoMerge && { autoMerge: true }),
+        ...(agent.pr.stale && { stale: true }),
+      },
+    }),
     ...(agent.usdCost !== undefined && { usdCost: agent.usdCost }),
     ...(agent.credits !== undefined && { credits: agent.credits }),
+    ...(agent.plan && { plan: agent.plan }),
   };
 }
 
@@ -75,6 +87,8 @@ export interface ViewActionHost {
   openRoot(): void;
   /** The stage's own Stop (AgentActions.stop); absent where the host has none, and the action rejects. */
   stop?(agentId: string): void | Promise<void>;
+  /** The session a listed quick approval belongs to, which picks the host that answers it; absent where the host lists none. */
+  sessionOfApproval?(approvalId: string): string | undefined;
 }
 
 /**
@@ -91,9 +105,12 @@ export async function runViewAction(action: ViewAction, host: ViewActionHost): P
     case 'open-root':
       return host.openRoot();
     case 'answer':
-      return window.b4m.chat.answerTaskDecision(action.agentId, action.decisionId, action.answer);
-    case 'approve':
-      return window.b4m.chat.respondToApproval(action.approvalId, { decision: action.mode });
+      return hostChat.answerTaskDecision(action.agentId, action.decisionId, action.answer);
+    case 'approve': {
+      const sessionId = host.sessionOfApproval?.(action.approvalId);
+      if (!sessionId) throw new Error('Approvals are not available here');
+      return hostChat.respondToApproval(sessionId, action.approvalId, { decision: action.mode });
+    }
     case 'stop':
       if (!host.stop) throw new Error('Stop is not available here');
       return host.stop(action.agentId);

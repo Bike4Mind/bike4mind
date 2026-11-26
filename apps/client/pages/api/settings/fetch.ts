@@ -4,12 +4,11 @@ import {
   allSettingDefinitions,
   hasAdminPermission,
   isEnforceCreditsLocked,
-  redactSettingSecrets,
   settingsMap,
   userReadableSettingKeys,
   type AdminSettingDoc,
 } from '@bike4mind/common';
-import { decryptAtRest } from '@bike4mind/utils/security';
+import { redactStoredSetting } from '@server/utils/redactStoredSetting';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensurePublicSettingsArtifactOncePerInstance } from '@server/utils/publicSettingsArtifact';
 
@@ -51,17 +50,9 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   // Server-side consumers (apiKeyService.getEffective*) read AdminSettings directly and
   // are unaffected by this endpoint.
   //
-  // Sensitive values are stored encrypted; decrypt before redacting so the mask carries the
-  // real last-4 rather than the ciphertext tail. Only the mask leaves the server - the
-  // decrypted plaintext exists here just long enough to compute it. decryptAtRest passes a
-  // plaintext (not-yet-migrated) or non-encrypted value through unchanged.
-  const redacted: AdminSettingDoc[] = (settings ?? []).map(setting => {
-    const decrypted =
-      typeof setting.settingValue === 'string'
-        ? { ...setting, settingValue: decryptAtRest(setting.settingValue) }
-        : setting;
-    return redactSettingSecrets(decrypted as unknown as AdminSettingDoc);
-  });
+  // Sensitive values are stored encrypted; redactStoredSetting decrypts only those, so the mask
+  // carries the real last-4 rather than the ciphertext tail and only the mask leaves the server.
+  const redacted: AdminSettingDoc[] = (settings ?? []).map(redactStoredSetting);
 
   // Hosted always meters credits, even if a stored row says false.
   if (isEnforceCreditsLocked()) {

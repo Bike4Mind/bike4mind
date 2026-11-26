@@ -106,7 +106,7 @@ export interface ModerationLabelHit {
 
 export interface CheckImageOptions {
   /**
-   * Called once with the number of detector calls the scan needs (1 for a still image, the sampled
+   * Called once with the number of detector calls the scan needs (1 for a still image, the distinct
    * frame count for an animation), before the first one. False ends the scan with
    * ModerationBudgetExceededError and no detector call.
    */
@@ -317,9 +317,8 @@ export class RekognitionImageModerationService implements ImageModerationService
 
   /**
    * Rekognition reads only the first frame of an animated image, so an animated GIF, APNG or WebP is
-   * moderated on at most MAX_SAMPLED_FRAMES sampled frames (see extractAnimationFrames): any flagged
-   * frame blocks the image, and one that cannot be split or is over the frame cap is unsupported, so
-   * blocked as well.
+   * moderated on each of its distinct frames (see extractAnimationFrames): any flagged frame blocks
+   * the image, and one that cannot be split or is over the frame cap is unsupported, so blocked as well.
    */
   async checkImage(bytes: Buffer, _mimeType: string, options: CheckImageOptions = {}): Promise<void> {
     const deadline = Date.now() + this.deadlineMs;

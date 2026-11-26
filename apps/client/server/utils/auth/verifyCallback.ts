@@ -17,7 +17,7 @@ import { isSignupNetworkOverLimit } from '@bike4mind/server-utils/auth/signupNet
 import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { wasTurnstileVerified } from '@server/auth/signupChallenge';
-import { readOAuthInviteCode } from '@server/auth/passportOAuthStateStore';
+import { readOAuthInviteCode, readOAuthRedirectTo } from '@server/auth/passportOAuthStateStore';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -28,6 +28,7 @@ import { isOpenRegistrationAllowed } from './openRegistration';
 import { isPartnerDomainSignupAllowed } from './partnerSignupBypass';
 import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
 import { sealProviderTokens } from './providerTokensAtRest';
+import { resolveSignupClientId } from './signupClientId';
 
 /**
  * Strategies where anyone on the internet can present an identity, so a first login
@@ -76,7 +77,7 @@ async function prepareOAuthReferral(code: string, verifiedEmail: string): Promis
     // An admin reopens a stranded claim by setting the invite back to open (/api/reg-invites/update).
     const claim = await userService.claimRegistrationInvite(resolved, registrationInviteRepository);
     if (!claim) {
-      console.warn('[oauth signup] invite already redeemed; signing up uninvited');
+      Logger.globalInstance.warn('[oauth signup] invite already redeemed; signing up uninvited');
       return null;
     }
     return { resolved, claim };
@@ -98,7 +99,9 @@ const authenticateUser = async (
   authProvider?: Partial<IAuthProviders>,
   signupNetwork?: INetworkMeta,
   challengeVerified?: true | null,
-  inviteCode?: string | null
+  inviteCode?: string | null,
+  // The flow's post-login redirectTo; a new account records the OAuth client it names.
+  signupRedirectTo?: unknown
 ) => {
   const selectedEmail = selectProviderEmail(profile)?.value;
   const email = typeof selectedEmail === 'string' ? selectedEmail : null;
@@ -331,6 +334,7 @@ const authenticateUser = async (
             inviterId: referral.resolved.invite.userId ?? null,
           }
         : undefined;
+      const signupClientId = await resolveSignupClientId(signupRedirectTo);
       try {
         user = await createUniqueOAuthUser({
           name,
@@ -340,10 +344,11 @@ const authenticateUser = async (
           pendingFreeCredits,
           ...(signupNetwork ? { signupMeta: { ...signupNetwork, capturedAt: new Date(), challengeVerified } } : {}),
           ...(referralInvite ? { referralInvite } : {}),
+          signupClientId,
         });
       } catch (e) {
         await referral?.claim.release().catch(() => {
-          console.warn('[oauth signup] invite claim release failed; the code may remain claimed');
+          Logger.globalInstance.warn('[oauth signup] invite claim release failed; the code may remain claimed');
         });
         throw e;
       }
@@ -353,7 +358,7 @@ const authenticateUser = async (
           await userService.redeemRegistrationInvite(referral.resolved, newUserId, registrationInviteRepository);
         } catch (e) {
           // The code is already closed by the claim; this only loses its usedbyId/history entry.
-          console.error('[oauth signup] invite redeem failed:', e);
+          Logger.globalInstance.error('[oauth signup] invite redeem failed', { error: e });
         }
       }
       let creditsGranted = 0;
@@ -390,7 +395,7 @@ const authenticateUser = async (
     // attach a canonical, data-free `code` the callback can safely record -
     // the raw `message` rides along only for the callback's console.error
     // (CloudWatch), never for the audit reason or redirect.
-    console.error('[verifyCallback] authenticateUser threw:', e);
+    Logger.globalInstance.error('[verifyCallback] authenticateUser threw', { error: e });
     const code: OAuthFailureReason = isDuplicateKeyError(e)
       ? 'duplicate_account'
       : e instanceof ForbiddenError
@@ -409,7 +414,7 @@ export const verifyCallback = (strategy: AuthStrategy) => {
     // Different OAuth providers call with different signatures:
     // - Standard (GitHub): (accessToken, refreshToken, profile, done)
     // - With params (Google): (accessToken, refreshToken, params, profile, done)
-    // - With custom data (SAML): (accessToken, refreshToken, profile, done, authProvider)
+    // - With custom data (SAML): (accessToken, refreshToken, profile, done, authProvider, signupRedirectTo)
 
     if (rest.length === 2) {
       // Standard: (profile, done)
@@ -418,8 +423,19 @@ export const verifyCallback = (strategy: AuthStrategy) => {
       // With params: (params, profile, done)
       return authenticateUser(strategy, accessToken, refreshToken, rest[1], rest[2]);
     } else {
-      // With custom data: (profile, done, authProvider)
-      return authenticateUser(strategy, accessToken, refreshToken, rest[0], rest[1], rest[2]);
+      // With custom data: (profile, done, authProvider, signupRedirectTo)
+      return authenticateUser(
+        strategy,
+        accessToken,
+        refreshToken,
+        rest[0],
+        rest[1],
+        rest[2],
+        undefined,
+        undefined,
+        undefined,
+        rest[3]
+      );
     }
   };
 };
@@ -442,7 +458,8 @@ export const selfServeVerifyCallback =
       undefined,
       readNetworkMeta(req),
       wasTurnstileVerified(req),
-      readOAuthInviteCode(req)
+      readOAuthInviteCode(req),
+      readOAuthRedirectTo(req)
     );
 
 /**
@@ -468,5 +485,6 @@ export const authenticateSelfServeProfile = (
     authProvider,
     readNetworkMeta(req),
     wasTurnstileVerified(req),
-    readOAuthInviteCode(req)
+    readOAuthInviteCode(req),
+    readOAuthRedirectTo(req)
   );

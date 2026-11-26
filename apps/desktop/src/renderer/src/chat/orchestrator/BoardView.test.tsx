@@ -51,6 +51,17 @@ describe('BoardView', () => {
     expect(el('orchestrator-board-card-b').textContent).toContain('Idle');
   });
 
+  it('names a paused agent in Done and a waiting agent in Working on their chips', async () => {
+    await renderBoard([
+      agentFixture('a', 'paused'),
+      agentFixture('b', 'waiting', { background: { running: 2, label: 'pnpm test' } }),
+    ]);
+    expect(el('orchestrator-board-column-done').contains(el('orchestrator-board-card-a'))).toBe(true);
+    expect(el('orchestrator-board-card-a').textContent).toContain('Paused');
+    expect(el('orchestrator-board-column-working').contains(el('orchestrator-board-card-b'))).toBe(true);
+    expect(el('orchestrator-board-card-b').textContent).toContain('Waiting - 2 background jobs');
+  });
+
   it('shows a count per column header', async () => {
     await renderBoard([
       agentFixture('a', 'working'),

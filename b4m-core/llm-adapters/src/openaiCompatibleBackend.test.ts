@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ExpectedToolError, ModelBackend, type IMessage } from '@bike4mind/common';
+import { ExpectedToolError, ModelBackend, type ICompletionOptions, type IMessage } from '@bike4mind/common';
 import { createServerFetch, credentialRedactor, type FetchLike } from '@bike4mind/local-models/servers';
 import {
   json,
@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/local-models/testing';
 import type { ServerResponse } from 'node:http';
 import type { CompletionInfo, ICompletionOptionTools } from './backend';
-import { OutputBudgetExhaustedError } from './llmEmptyTurnErrors';
+import { isHiddenReasoningOnlyEmptyError, OutputBudgetExhaustedError } from './llmEmptyTurnErrors';
 import { OpenAICompatibleBackend } from './openaiCompatibleBackend';
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -454,6 +454,38 @@ describe('OpenAICompatibleBackend against vLLM', () => {
   });
 });
 
+describe('OpenAICompatibleBackend reasoning-only turns', () => {
+  it('types a finished stream of reasoning only as a hidden-reasoning empty turn', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => sse(res, [{ reasoning_content: 'hmm' }]),
+    });
+    const { backend } = make(server.baseUrl, null);
+    const error = await run(backend, 'm').catch((e: unknown) => e);
+
+    expect(isHiddenReasoningOnlyEmptyError(error)).toBe(true);
+    expect((error as Error).message).not.toMatch(/abort|overload|timeout/i);
+  });
+
+  it('does not type the empty turn left by the max-tool-calls cap', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => sse(res, [{ reasoning_content: 'hmm' }]),
+    });
+    const { backend } = make(server.baseUrl, null);
+    const error = await backend
+      .complete(
+        'm',
+        userMessage('hi'),
+        { stream: true, tools: [], _internal: { toolCallCount: 5, maxToolCalls: 5 } } as Partial<ICompletionOptions>,
+        async () => {}
+      )
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(isHiddenReasoningOnlyEmptyError(error)).toBe(false);
+    expect((error as Error).message).toMatch(/returned no content/);
+  });
+});
+
 describe('OpenAICompatibleBackend tool rounds and usage', () => {
   const toolCallOnce =
     (call: object): Parameters<typeof startFakeServer>[0][string] =>
@@ -501,6 +533,27 @@ describe('OpenAICompatibleBackend tool rounds and usage', () => {
     const messages = chats(server)[1].messages as { tool_calls?: { id: string }[]; tool_call_id?: string }[];
     expect(messages.at(-1)?.tool_call_id).toBe('call_0_0');
     expect(messages.at(-2)?.tool_calls?.[0].id).toBe('call_0_0');
+  });
+
+  it('replays the text streamed ahead of a tool call on the next request', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (req, res) =>
+        bodyOf(req).messages?.at(-1)?.role === 'tool'
+          ? sse(res, [{ content: 'Done.' }])
+          : sse(res, [
+              { content: 'Checking the weather. ' },
+              {
+                tool_calls: [
+                  { index: 0, id: 'call-1', function: { name: 'get_weather', arguments: '{"city":"Paris"}' } },
+                ],
+              },
+            ]),
+    });
+    const { backend } = make(server.baseUrl, null);
+    expect((await run(backend, 'm', [weatherTool(async () => '21C')])).text).toBe('Checking the weather. Done.');
+    const messages = chats(server)[1].messages as { role: string; content?: string | null; tool_calls?: unknown[] }[];
+    expect(messages.at(-2)).toMatchObject({ role: 'assistant', content: 'Checking the weather. ' });
+    expect(messages.at(-2)?.tool_calls).toHaveLength(1);
   });
 
   it.each([

@@ -167,7 +167,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
 
       return res.json({ urls: presignedUrls });
     } catch (error) {
-      console.error('Error generating presigned URL:', error);
+      req.logger.error('Error generating presigned URL', { error });
       throw new BadRequestError('Failed to generate presigned URL');
     }
   }

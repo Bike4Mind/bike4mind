@@ -8,6 +8,7 @@ import {
   lookupDomainIntel,
   resetRdapBootstrap,
 } from './domainIntelligence';
+import { Logger } from '@bike4mind/observability';
 
 const NOW = new Date('2026-06-01T00:00:00Z');
 const daysAgo = (days: number) => new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -51,7 +52,7 @@ const memoryRepo = (sources: Record<string, DisposableListSource[]> = {}) => {
 
 beforeEach(() => {
   resetRdapBootstrap();
-  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 });
 
 describe('lookupDomainIntel', () => {
@@ -163,7 +164,7 @@ describe('getDomainIntel', () => {
     repo.saveDomainIntel.mockRejectedValueOnce(new Error('db down'));
     const intel = await getDomainIntel('flaky.test', repo, lookupOptions({ fetchImpl: rdapFetch({}, 503) }));
     expect(intel.failed).toEqual(['rdap']);
-    expect(console.warn).toHaveBeenCalledWith('Domain intelligence lookup failed', expect.anything());
+    expect(Logger.warn).toHaveBeenCalledWith('Domain intelligence lookup failed', expect.anything());
   });
 });
 

@@ -67,6 +67,22 @@ describe('DataTable', () => {
     expect(getComputedStyle(frame).borderWidth).toBe('0px');
   });
 
+  it('stripes alternate rows only when asked', () => {
+    // jsdom does not resolve the stripe's CSS variable, so look for Joy's stripe rule under this table's
+    // own Emotion class. Injected <style> tags outlive unmount, so a global scan would see an earlier render.
+    const hasStripeRule = () => {
+      const css = Array.from(document.querySelectorAll('style'), style => style.textContent ?? '').join('');
+      return Array.from(screen.getByTestId('admin-data-table').classList)
+        .filter(cls => cls.startsWith('css-'))
+        .some(cls => new RegExp(`\\.${cls}(?![\\w-])[^{}]*\\{[^}]*--TableRow-stripeBackground`).test(css));
+    };
+    const { unmount } = renderTable({ stripe: 'odd' });
+    expect(hasStripeRule()).toBe(true);
+    unmount();
+    renderTable();
+    expect(hasStripeRule()).toBe(false);
+  });
+
   it('offers a way back from an empty server page past the end', () => {
     const onPageChange = vi.fn();
     renderTable({
@@ -274,6 +290,25 @@ describe('DataTable', () => {
     fireEvent.click(screen.getByTestId('action-1'));
     expect(activate.mock.calls.map(call => call[0].id)).toEqual(['1', '2', '3']);
     expect(cellClick).toHaveBeenCalledOnce();
+  });
+
+  it('does not activate a row when the click ends a text selection inside it', () => {
+    const activate = vi.fn();
+    renderTable({ onRowActivate: activate });
+    const row = document.querySelector<HTMLElement>('tr[data-row-id="1"]');
+    if (!row) throw new Error('row 1 not rendered');
+
+    const range = document.createRange();
+    range.selectNodeContents(row);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    fireEvent.click(row);
+    expect(activate).not.toHaveBeenCalled();
+
+    selection?.removeAllRanges();
+    fireEvent.click(row);
+    expect(activate).toHaveBeenCalledOnce();
   });
 
   it('ignores clicks from portalled cell content such as a row menu', () => {

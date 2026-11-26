@@ -47,7 +47,6 @@ const GeneralSettingsTab = () => {
   const hasExperimentalFeatures =
     experimentalSettingsWithDefaults?.some(setting => {
       const isExperimentalSetting = [
-        'EnableQuestMaster',
         'EnableMementos',
         'EnableArtifacts',
         'EnableAgents',

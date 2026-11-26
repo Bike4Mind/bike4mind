@@ -88,9 +88,16 @@ import {
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
 import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
+import { InterventionDecisionsPanel } from './InterventionHolds';
 import { WatchAccountsButton } from './CampaignWatches/WatchAccountsButton';
 import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
-import { DetectionsIntro, EnforceBarTile, TermHelp, VERDICT_GUIDES } from './shadowDetectionExplainer';
+import {
+  DetectionsIntro,
+  EnforceBarTile,
+  ReversibleTierBarTile,
+  TermHelp,
+  VERDICT_GUIDES,
+} from './shadowDetectionExplainer';
 import { VerdictEvalPanel } from './VerdictEvalPanel';
 import { DETECTOR_LABELS } from './shadowDetectorLabels';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -111,6 +118,8 @@ const IGNORED_REASON_LABELS: Record<AccountCampaignIgnoredReason, string> = {
 const ACTION_DISPLAY: Record<ShadowDetectionAction, { label: string; tone: AdminStatusTone }> = {
   contain: { label: 'Contain', tone: 'neutral' },
   restrict: { label: 'Restrict', tone: 'neutral' },
+  limit: { label: 'Limit spend', tone: 'neutral' },
+  verify: { label: 'Require verification', tone: 'neutral' },
   suspend: { label: 'Suspend', tone: 'warn' },
   blockIp: { label: 'Block IP', tone: 'warn' },
   confirmHold: { label: 'Confirm hold', tone: 'neutral' },
@@ -602,8 +611,9 @@ export const formatPrecision = (row: ShadowDetectionSummaryRow): { value: string
 };
 
 /**
- * Graded and precision count only admin verdicts on records that would have acted; `noAction` rows are
- * listed only, and automation verdicts are counted apart.
+ * Graded and precision count only admin verdicts on records that would have acted, with every record
+ * of a review-only detector counted as if it would have (see shadowDetectionRepository.summarize);
+ * `noAction` rows are listed only, and automation verdicts are counted apart.
  */
 const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => {
   const graded = row.confirmedAbuse + row.legitimateHuman + row.legitimateAutomation + row.insufficientEvidence;
@@ -629,7 +639,11 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
         <StatTile
           label="Graded"
           help={<TermHelp term="graded" />}
-          value={graded}
+          value={
+            <Box component="span" data-testid={`${testId}-graded`}>
+              {graded.toLocaleString()}
+            </Box>
+          }
           comparison={`${(row.recorded - row.noAction - graded - row.automated).toLocaleString()} unreviewed`}
         />
         <StatTile
@@ -658,6 +672,7 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
           comparison={`${row.legitimateHuman.toLocaleString()} human, ${row.legitimateAutomation.toLocaleString()} automation`}
         />
         <EnforceBarTile row={row} testId={testId} />
+        <ReversibleTierBarTile row={row} testId={testId} />
       </StatStrip>
     </Stack>
   );
@@ -1231,6 +1246,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
           initialOverriding={initialOverriding}
         />
       )}
+      <InterventionDecisionsPanel detectionId={row.id} />
       <VerdictHistory row={row} now={now} reviewers={context.reviewers} />
     </ActionDialog>
   );

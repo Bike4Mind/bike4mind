@@ -1,16 +1,12 @@
+import { organizationMemberRole, type OrgRoleSubject } from '@bike4mind/common';
 import { resolveSubscriptionSource, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 
-export type OrgRole = 'owner' | 'admin' | 'member';
+export type OrgRole = 'owner' | 'admin' | 'billingManager' | 'member';
 
-type OrgRoleSubject = { userId?: string; adminUserIds?: string[]; users?: { userId: string }[] };
-
-// Same admin rule as OrganizationModel.findIdsAdministeredBy: a manager id counts only with a member row.
 export const orgRoleOf = (org: OrgRoleSubject, userId: string): OrgRole => {
-  if (org.userId === userId) return 'owner';
-  const isManager = org.adminUserIds?.includes(userId) === true;
-  const isMember = org.users?.some(member => member.userId === userId) === true;
-  return isManager && isMember ? 'admin' : 'member';
+  const role = organizationMemberRole(org, userId);
+  return role === 'manager' ? 'admin' : (role ?? 'member');
 };
 
 export const toIso = (value: Date | string | null | undefined): string | null =>

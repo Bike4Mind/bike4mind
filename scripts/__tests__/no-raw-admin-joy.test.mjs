@@ -1,12 +1,9 @@
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint, RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
 import { afterAll, describe, expect, it } from 'vitest';
 import rule from '../../eslint-rules/no-raw-admin-joy.mjs';
-import legacy from '../../eslint-rules/admin-joy-legacy.mjs';
-import imports from '../../eslint-rules/admin-joy-legacy-imports.mjs';
 
 RuleTester.describe = describe;
 RuleTester.it = it;
@@ -97,32 +94,13 @@ tester.run('no-raw-admin-joy', rule, {
 describe('repository config', () => {
   const eslint = new ESLint({ cwd: root });
 
-  it('does not transfer a removed Modal exception to a new declaration in the same file', async () => {
-    const filePath = path.join(admin, 'CreateSlackAppModal.tsx');
-    const original = readFileSync(filePath, 'utf8');
-    const declaration = original.match(/import \{[\s\S]*?\} from '@mui\/joy';/)?.[0];
-    expect(declaration).toBeTruthy();
-    for (const code of [
-      original.replace(declaration, ''),
-      original.replace(declaration, declaration.replace('  Modal,\n', '')),
-      original.replace(declaration, declaration.replace('  Modal,\n', '')) + "\nimport { Modal } from '@mui/joy';",
-      original.replace(declaration, declaration.replace('  Modal,\n', '  Modal as Dialog,\n')),
-      '\n' + original,
-    ]) {
-      const [result] = await eslint.lintText(code, { filePath });
-      const messages = result.messages.filter(message => message.ruleId === 'b4m/no-raw-admin-joy');
-      expect(messages.some(message => message.messageId === 'stale')).toBe(true);
-      if (code.includes('import { Modal }')) expect(messages.some(message => message.messageId === 'raw')).toBe(true);
-    }
-  });
-
-  it('rejects additional imports while the original legacy declaration remains', async () => {
-    const filePath = path.join(admin, 'CreateSlackAppModal.tsx');
-    const code = readFileSync(filePath, 'utf8') + "\nimport { Modal as AnotherDialog } from '@mui/joy';";
+  it('rejects a raw import added to a toolkit-only admin screen', async () => {
+    const filePath = path.join(admin, 'NewTab.tsx');
+    const code =
+      "import { Stack } from '@mui/joy';\nimport { DataTable } from './shared';\nimport { Modal as Dialog } from '@mui/joy';\nexport { Stack, DataTable, Dialog };\n";
     const [result] = await eslint.lintText(code, { filePath });
-    expect(result.messages.filter(message => message.ruleId === 'b4m/no-raw-admin-joy').map(m => m.messageId)).toEqual([
-      'raw',
-    ]);
+    const messages = result.messages.filter(message => message.ruleId === 'b4m/no-raw-admin-joy');
+    expect(messages.map(m => [m.messageId, m.line])).toEqual([['raw', 3]]);
   });
 
   it('enables an error on new admin imports but exempts only the root toolkit', async () => {
@@ -136,45 +114,5 @@ describe('repository config', () => {
       expect(result.messages.filter(message => message.ruleId === 'b4m/no-raw-admin-joy')).toHaveLength(count);
       expect(result.errorCount).toBe(count);
     }
-  });
-
-  it('keeps the legacy baseline exact so removed imports cannot leave reusable exemptions', () => {
-    expect(Object.keys(imports).sort()).toEqual(Object.keys(legacy).sort());
-    for (const [file, { components, date, reason }] of Object.entries(legacy)) {
-      expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(reason).toContain(file);
-      const { ast } = tseslint.parser.parseForESLint(readFileSync(path.join(admin, file), 'utf8'), {
-        sourceType: 'module',
-        ecmaFeatures: { jsx: true },
-      });
-      const actual = ast.body.flatMap(node => {
-        if (node.type !== 'ImportDeclaration' || node.importKind === 'type') return [];
-        if (/^@mui\/joy\/(Card|Modal|Table)(?:\/|$)/.test(node.source.value)) {
-          return [node.source.value.split('/')[2]];
-        }
-        if (node.source.value !== '@mui/joy') return [];
-        return node.specifiers.flatMap(specifier => {
-          const name = specifier.imported?.name;
-          return specifier.importKind !== 'type' && ['Card', 'Modal', 'Table'].includes(name) ? [name] : [];
-        });
-      });
-      expect(actual.sort(), file).toEqual([...components].sort());
-    }
-  });
-
-  it('matches every pinned declaration and reports no stale legacy exceptions', async () => {
-    const guard = new ESLint({
-      cwd: root,
-      allowInlineConfig: false,
-      overrideConfigFile: true,
-      overrideConfig: {
-        files: ['**/*.tsx'],
-        languageOptions: { parser: tseslint.parser, parserOptions: { ecmaFeatures: { jsx: true } } },
-        plugins: { b4m: { rules: { 'no-raw-admin-joy': rule } } },
-        rules: { 'b4m/no-raw-admin-joy': 'error' },
-      },
-    });
-    const results = await guard.lintFiles(Object.keys(imports).map(file => path.join(admin, file)));
-    expect(results.flatMap(result => result.messages)).toEqual([]);
   });
 });

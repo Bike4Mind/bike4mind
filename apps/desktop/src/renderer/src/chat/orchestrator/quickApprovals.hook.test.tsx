@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatMessage } from '@shared/chat';
+import type { ChatMessage, ChatToolCall } from '@shared/chat';
 import type { ViewApproval } from '@shared/viewSnapshot';
-import { useQuickApprovals } from './quickApprovals';
+import { useQuickApprovals, quickApprovalsIn } from './quickApprovals';
 import type { AgentView, ParentView } from './roster';
 import { agentFixture } from './testUtils';
 
@@ -52,7 +53,7 @@ beforeEach(() => {
     b: [parked('p-b', 'pwd')],
     busy: [parked('p-busy', 'pwd')],
   };
-  (window as unknown as { b4m: unknown }).b4m = { chat: { getSession } };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat: { getSession } };
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -121,5 +122,40 @@ describe('useQuickApprovals', () => {
     await render({ enabled: true, agents: [agentFixture('b', 'needs-you')], parent: {} });
     await act(async () => release({ messages: [parked('p-late', 'ls')] }));
     expect(seen.map(approval => approval.id)).toEqual(['p-b']);
+  });
+});
+
+describe('quickApprovals', () => {
+  const call = (approvalId: string, extra: Partial<ChatToolCall> = {}): ChatToolCall =>
+    ({
+      id: `call-${approvalId}`,
+      name: 'bash',
+      input: { command: 'pnpm test' },
+      status: 'awaiting-approval',
+      approvalId,
+      approvalDetail: 'pnpm test',
+      ...extra,
+    }) as ChatToolCall;
+
+  const message = (toolCalls: ChatToolCall[]): ChatMessage =>
+    ({ id: 'm1', role: 'assistant', content: '', toolCalls }) as unknown as ChatMessage;
+
+  describe('quickApprovalsIn', () => {
+    it('lists the calls the menu bar could answer, with its one-line summary', () => {
+      expect(quickApprovalsIn('a', [message([call('p1')])])).toEqual([
+        { id: 'p1', sessionId: 'a', label: 'bash pnpm test' },
+      ]);
+    });
+
+    it('leaves out calls that need the full card or are no longer parked', () => {
+      const calls = [
+        call('irreversible', { approvalIrreversible: true }),
+        call('warned', { approvalWarning: 'Touches the network' }),
+        call('two-lines', { approvalDetail: 'pnpm test\nrm -rf dist' }),
+        call('asked', { name: 'ask_user' }),
+        call('done', { status: 'done' } as Partial<ChatToolCall>),
+      ];
+      expect(quickApprovalsIn('a', [message(calls)])).toEqual([]);
+    });
   });
 });

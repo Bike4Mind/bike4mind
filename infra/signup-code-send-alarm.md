@@ -117,6 +117,10 @@ value to 0 stops managing that threshold: its current value, including a previou
 until a deploy restores the deployed default. A deploy that
 changes the env default rewrites the threshold until the next hourly run re-applies the override.
 
+The same run applies `providerSpendOpenaiUsdPerHour` and `providerSpendAnthropicUsdPerHour` to the
+hourly `provider-reported-spend-hourly-<provider>` alarms from `infra/providerSpend.ts`, with the same
+0-means-unmanaged rule (`apps/workers/src/cron/providerSpendAlarmThresholds.ts`).
+
 A breached run also records one shadow detection per listed account (detector
 `youngAccountSpend`, would-action `contain`) for grading on the admin Detections
 page, before the Slack step, and logs `young-account-spend-shadow-detections` with

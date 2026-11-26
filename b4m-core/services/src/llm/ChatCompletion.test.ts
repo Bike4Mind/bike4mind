@@ -21,8 +21,10 @@ import {
   FORCE_STREAM_STALL_TEST_MARKER,
   SLOW_MODEL_ERROR_REPLY,
   PROVIDER_SPEND_LIMIT_REPLY,
+  EMPTY_CONVERSATION_REPLY,
   MODEL_UNAVAILABLE_ERROR_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_REPLY,
+  HIDDEN_REASONING_ONLY_EMPTY_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
 } from './ChatCompletionProcess';
 import { outOfCreditsNotice } from './chatCreditCap';
@@ -60,6 +62,7 @@ import {
   createAnthropicStreamTimeoutError,
   OutputBudgetExhaustedError,
   StreamEndedWithoutFinishError,
+  HiddenReasoningOnlyEmptyError,
   bedrockEmptyResponseMessage,
   type ICompletionBackend,
   type ICompletionOptions,
@@ -99,19 +102,24 @@ import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { SYSTEM_PROMPT_PRIORITY, TURN_CONTEXT_END, TURN_CONTEXT_HEADER } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
-import { LakeMemoryFeature } from './ChatCompletionFeatures';
+import { LakeMemoryFeature, KnowledgeRetrievalFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
-import { AiAccessRefusedError, insufficientCreditsError } from '@bike4mind/common';
+import { AiAccessRefusedError, EmptyConversationError, insufficientCreditsError } from '@bike4mind/common';
 import { FlaggedContentError, BedrockGuardrailsService, OpenaiModerationsService } from '@bike4mind/utils';
 import { applyModerationHit } from '../userService/moderationPolicy';
 
-vi.mock('../userService/moderationPolicy', () => ({
-  applyModerationHit: vi.fn().mockResolvedValue({ hitsInWindow: 1, status: 'active' }),
-  MODERATION_POLICY: {},
-  moderationThrottleKey: vi.fn(),
-}));
+vi.mock('../userService/moderationPolicy', async importOriginal => {
+  const actual = await importOriginal<typeof import('../userService/moderationPolicy')>();
+  return {
+    applyModerationHit: vi.fn().mockResolvedValue({ hitsInWindow: 1, status: 'active', transitionedTo: null }),
+    MODERATION_POLICY: {},
+    moderationThrottleKey: vi.fn(),
+    // Real: the alert decision is pure, and these tests assert which hits raise one.
+    moderationEscalationAlert: actual.moderationEscalationAlert,
+  };
+});
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -338,11 +346,14 @@ describe('ChatCompletionProcess', () => {
         create: vi.fn(),
       },
       mcpServers: { find: vi.fn().mockResolvedValue([]) },
-      users: { update: vi.fn() },
+      users: { update: vi.fn(), findById: vi.fn().mockResolvedValue(mockUser) },
+      newAccountSpendCap: {
+        adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+        personalSpendSince: async () => [],
+      },
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: {},
-      questMasterPlans: {},
       connections: {},
       creditTransactions: {},
       agents: {},
@@ -807,6 +818,23 @@ describe('ChatCompletionProcess', () => {
       const final = JSON.parse(JSON.stringify(mockQuest));
       for (const key of ['deletedAt', 'createdAt', 'updatedAt']) delete final[key];
       expect(persisted).toEqual(final);
+    });
+
+    it('never write lakeSaveCount back, so a retried turn cannot reset the count its tools claimed', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.lakeSaveCount = 2;
+      const writes: Record<string, unknown>[] = [];
+      const record = async (patch: Record<string, unknown>) => {
+        writes.push(JSON.parse(JSON.stringify(patch)));
+        return patch;
+      };
+      mockDb.quests.update.mockImplementation(record);
+      mockDb.quests.updateIfUnfinished.mockImplementation(record);
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      expect(writes.length).toBeGreaterThan(0);
+      for (const w of writes) expect(w).not.toHaveProperty('lakeSaveCount');
     });
   });
 
@@ -8718,6 +8746,115 @@ describe('ChatCompletionProcess', () => {
       });
     });
 
+    describe('a conversation with nothing readable', () => {
+      const setupTurn = (builtMessages: IMessage[], complete: ReturnType<typeof vi.fn>) => {
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({ messages: builtMessages, messageTruncation: null });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: '' });
+      };
+      const body = () => ({
+        ...startQuestParams,
+        message: '   ',
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      });
+      const emptyConversationErrorLogs = () =>
+        vi
+          .mocked(mockLogger.error)
+          .mock.calls.filter(args => args.some(arg => String(arg).includes('non-empty user or assistant message')));
+
+      // The prod shape: a blank prompt on a turn with no history and no attachments leaves only
+      // system context, which every backend sanitizer drops down to nothing.
+      it('refuses a blank prompt before the model call, at warn, with a readable reply', async () => {
+        const complete = vi.fn();
+        setupTurn(
+          [
+            { role: 'system', content: 'You are helpful.' },
+            { role: 'user', content: '   ' },
+          ],
+          complete
+        );
+        // enforceCredits refuses an unpriced model at admission, so price it to reach the credit hold.
+        mockedGetAvailableModels.mockResolvedValue([
+          { ...(await mockedGetAvailableModels())[0], pricing: { 200_000: { input: 1e-6, output: 2e-6 } } },
+        ]);
+        enableAdminFlags('enforceCredits');
+        mockedUsdToCredits.mockReturnValue(50);
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 500 });
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await expect(service.process({ body: body(), logger: mockLogger })).resolves.toBeUndefined();
+
+        expect(complete).not.toHaveBeenCalled();
+        expect(incrementCredits).not.toHaveBeenCalled();
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ reply: EMPTY_CONVERSATION_REPLY, type: 'error', status: 'done' })
+        );
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          '[Empty Conversation] Request refused: no readable user or assistant message',
+          expect.objectContaining({ questId: expect.anything() })
+        );
+        expect(emptyConversationErrorLogs()).toHaveLength(0);
+      });
+
+      it('settles the same way when a backend sanitizer refuses the conversation', async () => {
+        const complete = vi.fn().mockRejectedValue(new EmptyConversationError());
+        setupTurn(
+          [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'orphan', content: 'x' }] }],
+          complete
+        );
+        const releaseSpy = vi.spyOn(service, 'releaseReservedCredits');
+
+        await expect(service.process({ body: body(), logger: mockLogger })).resolves.toBeUndefined();
+
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ reply: EMPTY_CONVERSATION_REPLY, type: 'error', status: 'done' })
+        );
+        expect(emptyConversationErrorLogs()).toHaveLength(0);
+        expect(releaseSpy).toHaveBeenCalled();
+      });
+
+      it('still sends a blank prompt that carries an attached file', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Summary of the file']);
+        });
+        setupTurn(
+          [
+            { role: 'user', content: 'Attached file contents' },
+            { role: 'user', content: '' },
+          ],
+          complete
+        );
+
+        await service.process({ body: body(), logger: mockLogger });
+
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(mockDb.quests.update).not.toHaveBeenCalledWith(
+          expect.objectContaining({ reply: EMPTY_CONVERSATION_REPLY })
+        );
+      });
+    });
+
     // Exhaustion path + final-hop cross-provider wiring: every hop fails, so the loop runs the
     // full MAX_FALLBACK_HOPS budget and throws. Asserts the loop asks getLlmWithFallback for a
     // cross-provider (preferUntriedBackend) ONLY on the final hop, and settles as errored.
@@ -10187,6 +10324,13 @@ describe('ChatCompletionProcess', () => {
     // so `enabledToolsArg` below is exactly what the model would actually be offered.
     const runKnowledgeGatingCase = async (opts: {
       knowledgeIds?: string[];
+      turn?: { authOrigin: 'apiKey' | 'session' | 'internal'; apiKeyId?: string; fileInputsAllowed?: boolean };
+      realFileLoader?: boolean;
+      realFeatureBuild?: boolean;
+      projectSummaryLookup?: () => Promise<Array<{ id: string }>>;
+      projectId?: string;
+      messageFileIds?: string[];
+      sessionFabFileIds?: string[];
       files?: Array<Partial<{ id: string; fileName: string; vectorized: boolean; chunkCount: number }>>;
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
@@ -10228,7 +10372,10 @@ describe('ChatCompletionProcess', () => {
       const getAccessibleFiles = opts.getAccessibleFilesImpl
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
-      mockDb.fabfiles = { getAccessibleFiles };
+      mockDb.fabfiles = {
+        getAccessibleFiles,
+        ...(opts.projectSummaryLookup ? { find: opts.projectSummaryLookup } : {}),
+      };
       (service as any).user.isAdmin = opts.userIsAdmin;
       if (opts.countGateExcludedLakesImpl || opts.lakesByTag) {
         mockDb.dataLakes = {
@@ -10311,12 +10458,33 @@ describe('ChatCompletionProcess', () => {
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
+      if (opts.realFeatureBuild) {
+        const internals = service as unknown as { buildOptimizedFeatures: () => Promise<void> };
+        if (vi.isMockFunction(internals.buildOptimizedFeatures))
+          vi.mocked(internals.buildOptimizedFeatures).mockRestore();
+      }
+      if (opts.realFileLoader) {
+        if (vi.isMockFunction(service.fabFilesToMessages)) vi.mocked(service.fabFilesToMessages).mockRestore();
+        mockedFetchAndConvertFabFiles.mockClear();
+        mockedProcessFabFilesServer.mockImplementation(async () => ({
+          userMessages: (mockedFetchAndConvertFabFiles.mock.calls.at(-1)?.[0] ?? []).map(id => ({
+            role: 'user' as const,
+            content: `FILE_CONTENT_${id}`,
+          })),
+          fileNotices: [],
+          deliveredFileIds: [],
+          fullyDeliveredFileIds: [],
+        }));
+      }
       const body = {
         ...startQuestParams,
+        ...opts.turn,
+        messageFileIds: opts.messageFileIds ?? [],
+        fabFileIds: opts.sessionFabFileIds ?? [],
         ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
         ...(opts.skipAutoOffers ? { skipAutoOffers: true } : {}),
         tools: opts.requestTools ?? [],
-        projectId: undefined,
+        projectId: opts.projectId,
         organizationId: undefined,
       };
 
@@ -10325,6 +10493,9 @@ describe('ChatCompletionProcess', () => {
       // Read the recorded call BEFORE restoring - mockRestore() also clears mock.calls.
       const enabledToolsArg: string[] = (buildToolsSpy.mock.calls[0]?.[0] as any)?.enabledTools ?? [];
       const contextAndSystemMessages: IMessage[] = mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? [];
+      const attachedFileIds =
+        (buildToolsSpy.mock.instances[0] as unknown as { deps: { attachedFileIds?: string[] } })?.deps
+          .attachedFileIds ?? [];
       const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
         promptMeta?: { retrieval?: unknown; offeredTools?: string[] };
       };
@@ -10333,6 +10504,7 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
 
       return {
+        attachedFileIds,
         enabledToolsArg,
         getAccessibleFiles,
         contextAndSystemMessages,
@@ -10340,6 +10512,103 @@ describe('ChatCompletionProcess', () => {
         offeredTools: savedQuest?.promptMeta?.offeredTools,
       };
     };
+
+    it.each([
+      ['denied key', { authOrigin: 'apiKey' as const, apiKeyId: 'key1', fileInputsAllowed: false }, false],
+      ['legacy key', { authOrigin: 'apiKey' as const, apiKeyId: 'key1' }, false],
+      ['inconsistent key origin', { authOrigin: 'session' as const, apiKeyId: 'key1' }, false],
+      ['read-capable key', { authOrigin: 'apiKey' as const, apiKeyId: 'key1', fileInputsAllowed: true }, true],
+      ['session without new metadata', { authOrigin: 'session' as const }, true],
+    ])('admits pinned file content only for an authorized %s', async (_name, turn, allowed) => {
+      const { contextAndSystemMessages, getAccessibleFiles, attachedFileIds } = await runKnowledgeGatingCase({
+        knowledgeIds: ['private-canary'],
+        promptMode: 'raw',
+        turn,
+        realFileLoader: true,
+      });
+      const assembled = JSON.stringify(contextAndSystemMessages);
+      expect(assembled.includes('FILE_CONTENT_private-canary')).toBe(allowed);
+      const fetchedIds = mockedFetchAndConvertFabFiles.mock.calls.flatMap(call => call[0]);
+      expect(fetchedIds.includes('private-canary')).toBe(allowed);
+      expect(attachedFileIds.includes('private-canary')).toBe(allowed);
+      if (!allowed) expect(getAccessibleFiles).not.toHaveBeenCalled();
+      expect(mockSession.knowledgeIds).toEqual(['private-canary']);
+    });
+
+    it('keeps global files while filtering private inputs across allowed-denied-allowed cached turns', async () => {
+      const user = (service as unknown as { user: { systemFiles?: Array<{ fileId: string; enabled: boolean }> } }).user;
+      user.systemFiles = [{ fileId: 'user-canary', enabled: true }];
+      mockedGetSettingsValue.mockImplementation(((key: string) =>
+        key === 'SystemFiles' ? 'global-canary' : undefined) as typeof getSettingsValue);
+      onTestFinished(() => {
+        delete user.systemFiles;
+        mockedGetSettingsValue.mockReset();
+      });
+      for (const allowed of [true, false, true]) {
+        const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+          knowledgeIds: ['pinned-canary'],
+          messageFileIds: ['message-canary'],
+          sessionFabFileIds: ['session-canary'],
+          promptMode: 'raw',
+          realFileLoader: true,
+          turn: { authOrigin: 'apiKey', apiKeyId: 'key1', fileInputsAllowed: allowed },
+        });
+        const assembled = JSON.stringify(contextAndSystemMessages);
+        expect(assembled).toContain('FILE_CONTENT_global-canary');
+        for (const id of ['user-canary', 'pinned-canary', 'message-canary', 'session-canary']) {
+          expect(assembled.includes(`FILE_CONTENT_${id}`)).toBe(allowed);
+        }
+        expect(user.systemFiles).toEqual([{ fileId: 'user-canary', enabled: true }]);
+        expect(mockSession.knowledgeIds).toEqual(['pinned-canary']);
+      }
+    });
+
+    it.each([false, true])(
+      'gates secondary project notebook and summary file reads with admission %s',
+      async allowed => {
+        const findNotebooks = vi
+          .fn()
+          .mockResolvedValue([{ id: 'other-notebook', knowledgeIds: ['project-pinned-canary'] }]);
+        const findSummaries = vi.fn().mockResolvedValue([{ id: 'summary-canary' }]);
+        mockDb.sessions.findAllByIds = findNotebooks;
+        mockDb.projects.shareable = {
+          findAccessibleById: vi.fn().mockResolvedValue({
+            id: 'project1',
+            sessionIds: ['session1', 'other-notebook'],
+            systemPrompts: [],
+            fileIds: [],
+          }),
+        };
+        // runKnowledgeGatingCase resets the attachment repository; retain the project-summary edge there.
+        const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+          skipAutoOffers: true,
+          projectId: 'project1',
+          realFeatureBuild: true,
+          realFileLoader: true,
+          turn: { authOrigin: 'apiKey', apiKeyId: 'key1', fileInputsAllowed: allowed },
+          projectSummaryLookup: findSummaries,
+        });
+        expect(findNotebooks.mock.calls.length > 0).toBe(allowed);
+        expect(findSummaries.mock.calls.length > 0).toBe(allowed);
+        const assembled = JSON.stringify(contextAndSystemMessages);
+        expect(assembled.includes('FILE_CONTENT_project-pinned-canary')).toBe(allowed);
+        expect(assembled.includes('FILE_CONTENT_summary-canary')).toBe(allowed);
+      }
+    );
+
+    it.each([false, true])('gates forced file retrieval before its producer with admission %s', async allowed => {
+      mockSession.forceKnowledgeRetrieval = true;
+      const retrieval = vi
+        .spyOn(KnowledgeRetrievalFeature.prototype, 'getContextMessages')
+        .mockResolvedValue([{ role: 'system', content: 'FORCED_PRIVATE_CANARY' }]);
+      onTestFinished(() => retrieval.mockRestore());
+      const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+        realFeatureBuild: true,
+        turn: { authOrigin: 'apiKey', apiKeyId: 'key1', fileInputsAllowed: allowed },
+      });
+      expect(retrieval.mock.calls.length > 0).toBe(allowed);
+      expect(JSON.stringify(contextAndSystemMessages).includes('FORCED_PRIVATE_CANARY')).toBe(allowed);
+    });
 
     // #2228: a file that never reached the model used to leave no trace at all - the model answered
     // as though it had the content and the user saw nothing. Both halves of the fix are asserted
@@ -12070,8 +12339,8 @@ describe('ChatCompletionProcess', () => {
           processError,
           modelCalled: complete.mock.calls.length > 0,
           requestedMcpServers: buildMcpToolsSpy.mock.calls[0]?.[0]?.requestedMcpServers,
-          // buildOptimizedFeatures is stubbed in beforeEach; its eighth argument is the session prompt.
-          sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[7] as string | undefined,
+          // buildOptimizedFeatures is stubbed in beforeEach; its seventh argument is the session prompt.
+          sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[6] as string | undefined,
           temperature: completeOptions?.temperature,
           maxToolCalls: completeOptions?._internal?.maxToolCalls,
           enabledTools: (buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined)?.enabledTools,
@@ -14399,6 +14668,96 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    describe('a turn that finished after hidden reasoning only', () => {
+      const hiddenOnly = () => new HiddenReasoningOnlyEmptyError('Bedrock', 'test-model', 'empty after thinking');
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      it('retries once on the same model and succeeds when the second attempt answers', async () => {
+        setupStreamIdleTimeoutMocks();
+        let callCount = 0;
+        const complete = vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              callCount++;
+              if (callCount === 1) throw hiddenOnly();
+              await cb(['Recovered']);
+            }
+          );
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(complete).toHaveBeenCalledTimes(2);
+        expect(complete.mock.calls[1][0]).toBe(complete.mock.calls[0][0]);
+        expect(mockLogger.error).not.toHaveBeenCalledWith(expect.any(HiddenReasoningOnlyEmptyError));
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ replies: ['Recovered'], status: 'done', type: 'message' })
+        );
+      });
+
+      it('moves to the fallback model after the same-model retry fails too', async () => {
+        setupStreamIdleTimeoutMocks();
+        mockQuest.promptMeta.model = { name: modelInfo.id, backend: modelInfo.backend };
+        const primaryComplete = vi.fn().mockRejectedValue(hiddenOnly());
+        const fallbackComplete = vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['From fallback']);
+            }
+          );
+        const fallbackModel = { ...modelInfo, id: 'fallback-model', name: 'Fallback Model' };
+        mockedGetLlmByModel.mockReturnValue({
+          complete: primaryComplete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetLlmWithFallback
+          .mockResolvedValueOnce({
+            model: fallbackModel,
+            backend: {
+              complete: fallbackComplete,
+              getModelInfo: vi.fn().mockResolvedValue([]),
+              currentModel: fallbackModel.id,
+            },
+            attempt: 1,
+          })
+          .mockResolvedValue(null);
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(primaryComplete).toHaveBeenCalledTimes(2);
+        expect(fallbackComplete).toHaveBeenCalledTimes(1);
+        expect(fallbackComplete.mock.calls[0][0]).toBe('fallback-model');
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ replies: ['From fallback'], status: 'done', type: 'message' })
+        );
+      });
+
+      it('settles with the dedicated reply when every attempt returns only hidden reasoning', async () => {
+        setupStreamIdleTimeoutMocks();
+        const complete = vi.fn().mockRejectedValue(hiddenOnly());
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(complete).toHaveBeenCalledTimes(2);
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ reply: HIDDEN_REASONING_ONLY_EMPTY_REPLY, type: 'error', status: 'done' })
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('[Hidden Reasoning Only]'));
+      });
+    });
+
     it('should succeed on stream idle timeout retry if second attempt works', async () => {
       setupStreamIdleTimeoutMocks();
 
@@ -15648,7 +16007,6 @@ describe('prompt moderation', () => {
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: {},
-      questMasterPlans: {},
       connections: {},
       creditTransactions: {},
       agents: {},
@@ -15960,6 +16318,110 @@ describe('prompt moderation', () => {
     expect(quest?.type).toBe('error');
     expect(quest?.errorCode).toBeUndefined();
     expect(applyModerationHit).not.toHaveBeenCalled();
+  });
+
+  describe('escalation alerts', () => {
+    const blockWith = (categories: string[]) => {
+      wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
+      enableAdminFlags('ModerationEnabled');
+      vi.mocked(BedrockGuardrailsService).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', categories));
+      } as unknown as typeof BedrockGuardrailsService);
+    };
+
+    it('sends an alert for a severe-category hit', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockResolvedValue(undefined);
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(
+          expect.objectContaining({ reasons: ['severe_category'], categories: ['sexual/minors'], source: 'bedrock' })
+        )
+      );
+    });
+
+    it('sends an alert when the hit moves the user into suspend_pending', async () => {
+      blockWith(['violence']);
+      vi.mocked(applyModerationHit).mockResolvedValueOnce({
+        hitsInWindow: 5,
+        action: 'suspend_pending',
+        status: 'suspend_pending',
+        transitionedTo: 'suspend_pending',
+      });
+      const notify = vi.fn().mockResolvedValue(undefined);
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(expect.objectContaining({ reasons: ['suspend_pending'], hitsInWindow: 5 }))
+      );
+    });
+
+    it('sends nothing for an ordinary hit', async () => {
+      blockWith(['violence']);
+      const notify = vi.fn().mockResolvedValue(undefined);
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(applyModerationHit).toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('keeps the request outcome when the alert fails, and warns', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockRejectedValue(new Error('event bus down'));
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to send the escalation alert'),
+          expect.any(Error)
+        )
+      );
+    });
+
+    it('keeps the request outcome when the notifier throws synchronously', async () => {
+      blockWith(['sexual/minors']);
+      service.notifyModerationEscalation = () => {
+        throw new Error('not wired');
+      };
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to send the escalation alert'),
+          expect.objectContaining({ message: 'not wired' })
+        )
+      );
+    });
+
+    it('does not wait for a notifier that never settles', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockReturnValue(new Promise(() => undefined));
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs without a notifier and does not warn about one', async () => {
+      blockWith(['sexual/minors']);
+      service.notifyModerationEscalation = undefined;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(applyModerationHit).toHaveBeenCalled();
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('escalation alert'), expect.anything());
+    });
   });
 
   it('records a provider moderation hit (Hook A) when the Anthropic safety classifier throws', async () => {

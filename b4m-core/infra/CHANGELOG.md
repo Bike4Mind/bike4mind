@@ -1,5 +1,31 @@
 # @bike4mind/infra
 
+## 7.4.0
+
+### Minor Changes
+
+- [#8537](https://github.com/Bike4Mind/bike4mind/pull/8537) [`a11c0cf`](https://github.com/Bike4Mind/bike4mind/commit/a11c0cf401247443a6376e5b79d6900a0f86a213) Thanks [@maconard](https://github.com/maconard)! - pin data files to a saved function
+
+## 7.3.0
+
+### Minor Changes
+
+- [#8377](https://github.com/Bike4Mind/bike4mind/pull/8377) [`518a275`](https://github.com/Bike4Mind/bike4mind/commit/518a275d35ab144d8d06d5aa34eeb1217f33ff0d) Thanks [@onoya](https://github.com/onoya)! - notebook image-model sends and in-chat edits create image jobs
+
+## 7.2.0
+
+### Minor Changes
+
+- [#7849](https://github.com/Bike4Mind/bike4mind/pull/7849) [`11494a0`](https://github.com/Bike4Mind/bike4mind/commit/11494a0c114a597c536351a746ae08549aa935a3) Thanks [@onoya](https://github.com/onoya)! - export Productions to MP4 with an ffmpeg render worker and multi-size export pack
+
+- [#7995](https://github.com/Bike4Mind/bike4mind/pull/7995) [`96e21d5`](https://github.com/Bike4Mind/bike4mind/commit/96e21d52a7b7b6d751c4abd477378ad56b8aac4c) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - add v1 artifact publish, republish and unpublish endpoints
+
+- [#8306](https://github.com/Bike4Mind/bike4mind/pull/8306) [`1c3eb43`](https://github.com/Bike4Mind/bike4mind/commit/1c3eb436197e86ead54cb4e57f0a0a2c5e2e72e4) Thanks [@poysama](https://github.com/poysama)! - widen the queue pair spec and the context handed to package infra
+
+### Patch Changes
+
+- [#8125](https://github.com/Bike4Mind/bike4mind/pull/8125) [`fe5d1fe`](https://github.com/Bike4Mind/bike4mind/commit/fe5d1fe58371b75ebb5ee97ea17a6a82ada0b38c) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - offload oversized mail bodies so large emails are sent
+
 ## 7.1.0
 
 ### Minor Changes

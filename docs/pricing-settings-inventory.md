@@ -65,6 +65,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `preferenceArenaLifetimeCreditCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
 | `ReferralFirstPaymentCredits` | Invite Center > Rewards | The reward held for the inviter on the invited friend's first full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `ReferralSecondPaymentCredits` | Invite Center > Rewards | The reward held for the inviter on the invited friend's second full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralMilestones` | Invite Center > Rewards | Credits an inviter earns once that many of their referred friends are active (a verified email and a first answer), as `friends:credits` pairs, e.g. `5:500, 10:1500`. Parsed by `parseReferralMilestones` (`b4m-core/common/src/utils/referralMilestones.ts`), paid once per milestone by `packages/server-utils/src/referrals/milestoneReward.ts` when a friend becomes active, and shown as progress in the referral modal (`apps/client/server/referrals/inviterSummary.ts`). Default empty (off). | no. A free grant. | Signup and starter credits |
 | `ReferralHoldDays` | Invite Center > Rewards | Days a payment reward is held before the release job credits it (`packages/server-utils/src/referrals/subscriptionReward.ts`, `apps/workers/src/cron/referralRewardRelease.ts`). | no. A hold period. | Signup and starter credits |
 | `ReferralInvitesPerUser` | Invite Center > Rewards | The starting invite count at registration (`register.ts`). New signups only. | no. A limit. | Usage limits |
 | `ReferralLinkSignupsPerMonth` | Invite Center > Rewards | The most signups one user's share link is credited with in any 30 days (`apps/client/server/referrals/shareLink.ts`). A signup past it still creates the account but credits nobody. 0 stops share links from crediting anyone. Default 10. | no. A limit. | Usage limits |
@@ -90,7 +91,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `fileUploadLimitFreePerHour` | Admin Settings > Security > API Rate Limiting | The per-user hourly file-upload allowance (`apps/client/server/files/fileUploadBudget.ts`), spent per file by these upload routes: single and batch presign, direct upload, URL import, generated-image copy, re-chunk, reprocess and the public API. Applies to Free and admin-restricted users; a value of 0 blocks their uploads. Default 300 files per hour. | no. An upload rate limit. | Usage limits |
 | `fileUploadLimitPaidPerHour` | Admin Settings > Security > API Rate Limiting | Same as `fileUploadLimitFreePerHour`, for Basic and Pro subscribers. Admins and developer-tagged users are not limited. Default 3000 files per hour. | no. An upload rate limit. | Usage limits |
 | `pendingUploadLimit` | Admin Settings > Security > API Rate Limiting | The per-user cap on presigned client uploads whose bytes have not landed (`apps/client/server/files/pendingUploads.ts`), checked by single and batch presign, the public API and direct upload without content. An upload stops counting when its bytes land or 30 minutes after it was requested. Recent client-upload bytes remain reserved against storage quota until their charge is recorded. Admission checks a snapshot; overlapping requests can each pass the same count and byte reading, so this is not an atomic reservation or a strict concurrent maximum. One value for every tier; admins and developer-tagged users are not limited; a value of 0 blocks presigned uploads. Default 250 uploads. | no. An upload limit. | Usage limits |
-| `imageModerationLimitFreePerDay` | Admin Settings > Security > API Rate Limiting | The per-user daily allowance of moderation scans for uploaded images (`packages/server-utils/src/s3/imageModerationBudget.ts`), spent by the upload-landing scan, the on-demand moderate route and the daily moderation rescue sweep: one per still image, one per sampled frame (at most 10) for an animated image. An image over the allowance stays pending (not served). Applies to Free and admin-restricted users; a value of 0 holds all their uploaded images. Default 200 per day. | no. A moderation usage limit. | Usage limits |
+| `imageModerationLimitFreePerDay` | Admin Settings > Security > API Rate Limiting | The per-user daily allowance of moderation scans for uploaded images (`packages/server-utils/src/s3/imageModerationBudget.ts`), spent by the upload-landing scan, the on-demand moderate route and the daily moderation rescue sweep: one per still image, one per distinct frame (at most 60) for an animated image. An image over the allowance stays pending (not served). Applies to Free and admin-restricted users; a value of 0 holds all their uploaded images. Default 200 per day. | no. A moderation usage limit. | Usage limits |
 | `imageModerationLimitPaidPerDay` | Admin Settings > Security > API Rate Limiting | Same as `imageModerationLimitFreePerDay`, for Basic and Pro subscribers. Admins and developer-tagged users are not limited. Default 2000 per day. | no. A moderation usage limit. | Usage limits |
 
 ## Pricing that is not an admin setting
@@ -173,6 +174,15 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 - `apps/client/app/components/admin/settingHomes.ts`
 - `apps/client/server/referrals/inviterSummary.ts`
 - `packages/server-utils/src/referrals/subscriptionReward.ts`
+
+</details>
+
+<details><summary><code>ReferralMilestones</code> (4 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/settingHomes.ts`
+- `apps/client/server/referrals/inviterSummary.ts`
+- `packages/server-utils/src/referrals/firstAnswerReward.ts`
 
 </details>
 

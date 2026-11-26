@@ -12,6 +12,7 @@ import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.gener
 import { getWorkspaceSurface } from '@bike4mind/common';
 import { hostedWorkspaceAt } from '@client/app/utils/premiumHostedWorkspace';
 import { coachCover } from '@client/app/components/tutorial/coachCover';
+import { VIEWPORT_ABOVE_COOKIE_BANNER } from '@client/app/utils/cookieBannerSpace';
 
 // Lazy load CombinedNotebooks to reduce initial bundle size
 const CombinedNotebooks = dynamic(() => import('./CombinedNotebooks'), {
@@ -77,7 +78,7 @@ const NotebookSideNav = () => {
       data-testid="sidenav-container"
       {...coachCover(isMobile && openSideNav)}
       sx={theme => ({
-        height: '100dvh',
+        height: VIEWPORT_ABOVE_COOKIE_BANNER,
         backgroundColor: theme.palette.background.surface2,
         borderRight: `1px solid ${theme.palette.mode === 'dark' ? gray[800] : gray[200]}`,
         gap: 0,

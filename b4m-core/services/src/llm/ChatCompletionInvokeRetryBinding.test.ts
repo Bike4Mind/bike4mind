@@ -100,6 +100,7 @@ describe('ChatCompletionInvoke retry path session binding', () => {
       id: 'quest-1',
       sessionId: SESSION,
       type: 'error',
+      prompt: body.message,
       errorCode: 'insufficient_credits',
       turnTiming: {
         queueMs: 120,
@@ -126,7 +127,7 @@ describe('ChatCompletionInvoke retry path session binding', () => {
     // the retry's timestamp, so a carried-over record would report the wrong total.
     expect(quest?.turnTiming).toBeUndefined();
     expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest-1', status: 'running' }), {
-      unset: ['errorCode', 'turnTiming'],
+      unset: ['errorCode', 'turnTiming', 'questMasterPlanId'],
     });
     // Pins the full reset: a key dropped from this partial is a retry field that silently stops
     // reaching the database.

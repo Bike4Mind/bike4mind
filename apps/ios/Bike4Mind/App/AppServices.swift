@@ -16,6 +16,7 @@ final class AppServices {
     let api: APIClient
     let realtime: WSClient
     let cache: FileSessionListCache
+    let transcriptCache: SettledTranscriptCache
     let media: MediaClient
     let studio: StudioClient
     let capture: CaptureStack
@@ -43,12 +44,24 @@ final class AppServices {
   let pendingActions: any PendingActionAPI
   /// The server-composed assistant brief, on whichever server the app currently points at.
   let briefs: any BriefAPI
+  /// Follow-up memos and their proposed action items, emails and reminders, on whichever server the app points at.
+  let briefFollowUps: any BriefFollowUpAPI
   /// The standing instructions the brief composer follows, on whichever server the app points at.
   let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
+  /// Reads and saves when the server composes the user's brief.
+  let briefSchedule: any BriefScheduleAPI
+  /// The busy-block brief opt-in and the device calendar it syncs from.
+  let busyBlocks: any BusyBlocksAPI
+  let busyBlockReader: any BusyBlockReader
+  let busyBlockSyncer: BusyBlockSyncer
+  /// Re-syncs busy blocks from a system background refresh while the app is not opened.
+  let busyBlockRefresh: BusyBlockBackgroundRefresh
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
+  /// How many decisions wait on the user, for the lock-screen widget.
+  let pendingDecisions: any PendingDecisionAPI
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
   /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
@@ -131,6 +144,7 @@ final class AppServices {
       return BriefClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     briefs = briefAPI
+    briefFollowUps = ForwardingBriefFollowUpAPI { BriefClient(baseURL: auth.environment.baseURL, tokens: auth) }
     instructions = ForwardingInstructionAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.instructionAPI }
@@ -138,6 +152,25 @@ final class AppServices {
       return InstructionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     approvalNotifications = ApprovalNotificationHandler(api: pendingActionAPI, feedback: SystemApprovalFeedback())
+    briefSchedule = ForwardingBriefScheduleAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.briefSchedule }
+      #endif
+      return BriefScheduleClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
+    let busyBlocksAPI = ForwardingBusyBlocksAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.busyBlocks }
+      #endif
+      return BusyBlocksClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
+    busyBlocks = busyBlocksAPI
+    busyBlockReader = EventKitBusyBlockReader()
+    let syncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
+    busyBlockSyncer = syncer
+    busyBlockRefresh = BusyBlockBackgroundRefresh(
+      identifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, scheduler: SystemBackgroundRefreshScheduler()
+    ) { await syncer.syncJoiningInFlight() }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG
@@ -174,6 +207,9 @@ final class AppServices {
         #endif
         return try await StudioClient(baseURL: auth.environment.baseURL, tokens: auth).models(for: kind)
       })
+    pendingDecisions = ForwardingPendingDecisionAPI {
+      PendingDecisionClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
 
     #if DEBUG
       if FixtureServices.isEnabled, FixtureServices.accountScenario == .pending {
@@ -187,6 +223,11 @@ final class AppServices {
       isShellReady: { auth.state == .signedIn },
       isAppActive: { UIApplication.shared.applicationState == .active }
     )
+
+    LiveActivityApprovals.answer = { [weak self] target, decision in
+      await self?.approvalNotifications.answer(target, decision: decision)
+      self?.refreshWidgetPendingDecisions()
+    }
   }
 
   var api: any B4MAPI {
@@ -240,6 +281,7 @@ final class AppServices {
   }
 
   var sessionListCache: any SessionListCache { current.cache }
+  var transcriptCache: SettledTranscriptCache { current.transcriptCache }
   var sessionHandoff: SessionHandoffClient {
     SessionHandoffClient(baseURL: auth.environment.baseURL, tokens: auth)
   }
@@ -258,25 +300,34 @@ final class AppServices {
     return current.studio
   }
 
-  /// Uploads a frame grabbed from a video so it can be edited or animated. The PUT carries no `Authorization`
-  /// header: the presigned signature is the credential.
+  /// Uploads a frame grabbed from a video so it can be edited or animated.
   var frameUploader: FrameUploader {
     #if DEBUG
       if FixtureServices.isEnabled { return FixtureServices.frameUploader }
     #endif
     return FrameUploader(
       capture: CaptureClient(baseURL: auth.environment.baseURL, tokens: auth), media: media,
-      put: { url, data, contentType in
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        // Create-only: the URL names a freshly minted key, so the PUT must never overwrite one.
-        request.setValue("*", forHTTPHeaderField: "If-None-Match")
-        let (_, response) = try await URLSession.shared.upload(for: request, from: data)
-        guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
-          throw APIError.malformedResponse
-        }
-      })
+      put: Self.presignedPut)
+  }
+
+  /// Hands a scanned bill to the assistant. The scan is uploaded with the user's own token, like any capture.
+  func obligationHandoffModel(file: URL, text: String) -> ObligationHandoffModel {
+    ObligationHandoffModel(
+      file: file, text: text, api: CaptureClient(baseURL: auth.environment.baseURL, tokens: auth),
+      destinations: capture.destinations, put: Self.presignedPut)
+  }
+
+  /// The PUT carries no `Authorization` header: the presigned signature is the credential.
+  private static let presignedPut: FrameUploader.Put = { url, data, contentType in
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+    // Create-only: the URL names a freshly minted key, so the PUT must never overwrite one.
+    request.setValue("*", forHTTPHeaderField: "If-None-Match")
+    let (_, response) = try await URLSession.shared.upload(for: request, from: data)
+    guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
+      throw APIError.malformedResponse
+    }
   }
 
   @ObservationIgnored private var studioTrackerState: (environment: ServerEnvironment, tracker: GenerationTracker)?
@@ -330,6 +381,25 @@ final class AppServices {
     Task { await credits.load(force: true) }
   }
 
+  /// Re-reads the decisions-waiting count for the lock-screen widget: on foreground, when a turn settles, after
+  /// the brief loads and after an approval is answered. Fixture runs keep the canned snapshot.
+  func refreshWidgetPendingDecisions() {
+    #if DEBUG
+      if FixtureServices.isEnabled { return }
+    #endif
+    let api = pendingDecisions
+    let widgets = widgets
+    Task {
+      do {
+        await widgets.recordPendingDecisions(try await api.pendingDecisionCount())
+      } catch {
+        // The widget keeps its last count; approvals in it still lapse on the widget's own clock.
+        AppServices.logger.error(
+          "Decisions widget refresh failed: \(String(describing: error), privacy: .public)")
+      }
+    }
+  }
+
   nonisolated static let logger = Logger(subsystem: "com.bike4mind.app", category: "app")
 
   /// A fresh launch or sign-in knows of no running agent, and fixture runs seed the widgets with canned data.
@@ -373,6 +443,7 @@ final class AppServices {
     }
     let environment = auth.environment
     let auth = self.auth
+    let transcriptCache = SettledTranscriptCache()
     // The share extension reads the server from the App Group, so it always follows the app's choice.
     SharedServerEnvironment.store().save(environment)
     let fresh = Graph(
@@ -382,9 +453,12 @@ final class AppServices {
         handshake: RealtimeHandshake(baseURL: environment.baseURL, tokens: auth),
         tokenRotations: { await auth.accessTokenRotations() }),
       cache: FileSessionListCache(directory: FileSessionListCache.defaultDirectory(), environment: environment),
+      transcriptCache: transcriptCache,
       media: MediaClient(baseURL: environment.baseURL, tokens: auth),
       studio: StudioClient(baseURL: environment.baseURL, tokens: auth),
-      capture: .live(baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app),
+      capture: .live(
+        baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app,
+        didSendToSession: { id in await transcriptCache.remove(sessionID: id) }),
       account: AccountClient(baseURL: environment.baseURL, tokens: auth),
       stepUp: StepUpClient(baseURL: environment.baseURL, tokens: auth)
     )
@@ -434,6 +508,39 @@ struct ForwardingPendingActionAPI: PendingActionAPI {
   }
 }
 
+struct ForwardingBriefScheduleAPI: BriefScheduleAPI {
+  let provider: @MainActor @Sendable () -> any BriefScheduleAPI
+
+  func schedule() async throws -> BriefSchedule? {
+    try await provider().schedule()
+  }
+
+  func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+    try await provider().save(schedule)
+  }
+}
+
+struct ForwardingBusyBlocksAPI: BusyBlocksAPI {
+  let provider: @MainActor @Sendable () -> any BusyBlocksAPI
+
+  func state() async throws -> BusyBlocksState {
+    try await provider().state()
+  }
+
+  func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
+    try await provider().save(enabled: enabled, blocks: blocks)
+  }
+}
+
+/// Routes the decisions-waiting count to whichever server the app currently points at.
+struct ForwardingPendingDecisionAPI: PendingDecisionAPI {
+  let provider: @MainActor @Sendable () -> any PendingDecisionAPI
+
+  func pendingDecisionCount() async throws -> PendingDecisionCount {
+    try await provider().pendingDecisionCount()
+  }
+}
+
 /// Routes brief calls to whichever server the app currently points at (it can change in debug builds).
 struct ForwardingBriefAPI: BriefAPI {
   let provider: @MainActor @Sendable () -> any BriefAPI
@@ -452,6 +559,25 @@ struct ForwardingBriefAPI: BriefAPI {
 
   func reply(briefID: String, decisionID: String, text: String, choiceIndex: Int?) async throws -> BriefReplyResult {
     try await provider().reply(briefID: briefID, decisionID: decisionID, text: text, choiceIndex: choiceIndex)
+  }
+}
+
+/// Routes follow-up calls to whichever server the app currently points at (it can change in debug builds).
+struct ForwardingBriefFollowUpAPI: BriefFollowUpAPI {
+  let provider: @MainActor @Sendable () -> any BriefFollowUpAPI
+
+  func followUp(transcript: String, timeZone: String?) async throws -> Brief {
+    try await provider().followUp(transcript: transcript, timeZone: timeZone)
+  }
+
+  func editDecision(briefID: String, decisionID: String, edit: BriefDecisionEdit) async throws -> BriefDecision {
+    try await provider().editDecision(briefID: briefID, decisionID: decisionID, edit: edit)
+  }
+
+  func resolveDecision(
+    briefID: String, decisionID: String, outcome: BriefDecisionOutcome
+  ) async throws -> BriefDecision {
+    try await provider().resolveDecision(briefID: briefID, decisionID: decisionID, outcome: outcome)
   }
 }
 

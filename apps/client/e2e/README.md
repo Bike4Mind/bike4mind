@@ -106,6 +106,7 @@ Copy `.env.e2e.example` to `.env.e2e` and fill in the values:
 ```
 e2e/
 ├── core.setup.ts              # Creates core test users (admin/manager) and seeds auth state
+├── admin.setup.ts             # Signs the setup admin in again right before the admin project
 ├── global-setup.ts            # Pre-run cleanup of stale test data
 ├── global-teardown.ts         # Post-run cleanup
 ├── fixtures.ts                # Custom fixtures (page objects, helpers)
@@ -177,6 +178,15 @@ run before the tests:
 4. **Saves credentials** to `.auth/*-data.json` (including tokens) for API-based test setup and mid-test user switching
 5. **Creates invite code** for the signup spec
 
+An access token lasts 30 minutes and the `admin` project starts last, so `admin.setup.ts`
+(project `setup-admin`) signs the setup admin in again through OTC right before it and saves the
+new tokens over the old ones.
+
+Every other authenticated project renews on demand: `fixtures.ts` calls
+`helpers/token-renewal.ts` when a worker starts and before each test, and it signs in again (OTC)
+any of the project's users, plus the setup admin and manager, whose saved token has under 12
+minutes left. Specs must import `test` from `./fixtures` to get this.
+
 For mid-test user switching, `seedAuthOnPage` swaps the same cookie on a live
 page's context and navigates to `/` to bootstrap the authenticated app. An agent
 (Claude Code + Playwright MCP) authenticates the same way — by cookie-seeding, not
@@ -244,7 +254,7 @@ Cloudflare's widget script and adds the secret header to the browser's `/api/otc
 `bypassTurnstile(page)` before it requests a code.
 
 **MFA** needs no extra infra: the MFA setup endpoint returns the `totpSecret`, so a test
-can enroll, then generate valid codes in-test with `otplib`/`speakeasy`.
+can enroll, then generate valid codes in-test with `generateTotp` in `helpers/mfa.ts`.
 
 The OTC verification logic is also covered by unit tests in `b4m-core/services`
 (`sendOTC.test.ts` / `verifyOTC.test.ts`), the endpoint gating by `apps/client/__tests__/otc-code.test.ts`,
@@ -394,12 +404,12 @@ demoting a spec back to advisory over letting a red Core gate get ignored.
 
 ## CI Integration
 
-Preview deploys are created on demand by maintainers via the internal deployer (not by PR events). To run the suite against a PR preview, a maintainer adds the **`run-e2e`** label, which triggers `.github/workflows/e2e-on-label.yml`:
+Preview deploys are created on demand by maintainers via the internal deployer (not by PR events). To run the suite against a PR preview, a maintainer dispatches **`E2E Tests (preview rerun)`** (`.github/workflows/e2e-on-label.yml`) or `e2e-manual.yml` with a `pr_number`. Both dispatch `e2e-core.yml` on `main`, which:
 
-1. CI waits for the preview URL to become healthy
-2. Tests run headless (1 worker) against the preview URL
-3. Results are posted as a **comment on the PR** with pass/fail counts
-4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>-label`)
+1. Verifies the deployed preview (revision, deploy status and marker comment) before any test starts
+2. Selects the projects to run (see [PROJECT_SELECTION.md](./PROJECT_SELECTION.md)) and runs them headless (3 workers, `PW_WORKERS`) against the preview URL
+3. Posts an advisory **comment on the PR** (`Advisory preview E2E: <outcome>`) and sets the `e2e/preview-advisory` commit status; neither is a required check
+4. Uploads the **HTML report** as a build artifact (`playwright-report-preview-pr<N>`)
 
 In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is written into each stage's SST secret on every deploy. Each `pr<N>` preview gets its own value, HMAC-SHA256(seed, `pr<N>`), so it is stable across redeploys but differs per preview; dev/staging has one stable value. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
 
@@ -410,8 +420,7 @@ How the suite reads that value depends on the account it is running against:
 
 That repo secret must hold the same seed the deployer derives preview values from, and it has to be set on this repo specifically - a copy living only on the deployer repo is not visible here. **When it is unset, preview-targeted runs cannot start at all.** Zero tests ran, so neither a pass nor a failure would be true, and each workflow reports it as a labeled skip instead:
 
-- `e2e-on-label.yml` - the PR comment reads `E2E Tests Skipped` and names the secret.
-- `e2e-run.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET_PREVIEW not configured)`. The promotion commit status is left missing, which is not promotable.
+- Preview path (`e2e-core.yml` -> `e2e-run.yml`) - the advisory PR comment reads `Advisory preview E2E: skipped` and the `e2e/preview-advisory` status is `error`, never `success`. `e2e-run.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET_PREVIEW not configured)`. The promotion commit status is left missing, which is not promotable.
 - `e2e-ai-latency.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET_PREVIEW not configured)` and the table legend names the configuration gap instead of blaming Playwright. **One exception:** a *full-matrix* preview dispatch still fails red, because model discovery cannot run without the secret and the matrix cannot be built without discovered models. That run names the cause in an `::error::` rather than reporting an empty discovery result.
 
 If you see any of these, the fix is to set the repo secret, not to debug the suite.

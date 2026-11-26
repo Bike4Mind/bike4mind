@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
@@ -19,6 +20,10 @@ window.matchMedia ??= ((query: string) => ({
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
 
+// Joy's popups (menus, selects, tooltips, modals) read every ancestor's computed style on each update,
+// and jsdom resolves that against every emotion sheet with no layout to find; the inline style will do.
+window.getComputedStyle = ((element: Element) => (element as HTMLElement).style) as typeof getComputedStyle;
+
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
@@ -33,7 +38,7 @@ const el = (testId: string) => document.querySelector<HTMLElement>(`[data-testid
 
 function mount(result: () => Promise<SendMessageResult>, onClose = vi.fn()) {
   const sendMessage = vi.fn(result);
-  (window as unknown as { b4m: unknown }).b4m = { chat: { sendMessage } };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat: { sendMessage } };
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);

@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { Box, Button, Card, Input, Modal, ModalDialog, Select, Sheet, Textarea, Typography } from '@mui/joy';
+import {
+  Box,
+  Button,
+  Card,
+  FormControl,
+  Input,
+  Modal,
+  ModalDialog,
+  Select,
+  Sheet,
+  Textarea,
+  Typography,
+} from '@mui/joy';
 import type { Components, Theme } from '@mui/joy/styles';
 import { adminFocusScope } from '@client/app/components/admin/shared/adminStyles';
 import AppTheme from '../AppTheme';
@@ -90,6 +102,61 @@ describe('admin skin scope', () => {
     expect(keys.length).toBeGreaterThan(0);
     const scopes = [IN_ADMIN, IN_ADMIN_PORTAL, IN_ADMIN_POPUP, IN_ADMIN_TOOLTIP, IN_ADMIN_ROW];
     expect(keys.filter(key => !scopes.includes(key))).toEqual([]);
+  });
+});
+
+// jsdom cannot resolve the palette variables, so this reads the emitted rule rather than a computed color.
+describe('admin field error state', () => {
+  /** The border-color the skin emits for this field root when its outlined root also carries `stateClass`. */
+  const errorBorderOf = (testId: string, outlinedClass: string, stateClass: string) => {
+    const emotionClass = [...screen.getByTestId(testId).classList].find(name => name.startsWith('css-'));
+    const rules = [...document.styleSheets].flatMap(sheet => [...sheet.cssRules]) as CSSStyleRule[];
+    return rules
+      .find(
+        rule =>
+          rule.selectorText?.includes(`.${emotionClass}`) &&
+          rule.selectorText.includes(`.${outlinedClass}.${stateClass}`)
+      )
+      ?.style.getPropertyValue('border-color');
+  };
+
+  it('gives a field the danger border from its own error prop', () => {
+    render(
+      <AppTheme>
+        <Sheet data-admin-surface>
+          <Input error data-testid="direct" />
+        </Sheet>
+      </AppTheme>
+    );
+
+    expect(screen.getByTestId('direct')).toHaveClass('Mui-error');
+    expect(errorBorderOf('direct', 'MuiInput-variantOutlined', 'Mui-error')).toBe('var(--joy-palette-admin-danger)');
+  });
+
+  // Joy only turns a field's color to danger from FormControl's error, without Mui-error on the field root.
+  it('gives a field the danger border when its FormControl holds the error', () => {
+    render(
+      <AppTheme>
+        <Sheet data-admin-surface>
+          <FormControl error>
+            <Input data-testid="input-in-control" />
+          </FormControl>
+          <FormControl error>
+            <Select data-testid="select-in-control" />
+          </FormControl>
+        </Sheet>
+      </AppTheme>
+    );
+
+    expect(screen.getByTestId('input-in-control')).not.toHaveClass('Mui-error');
+    expect(screen.getByTestId('input-in-control')).toHaveClass('MuiInput-colorDanger');
+    expect(errorBorderOf('input-in-control', 'MuiInput-variantOutlined', 'MuiInput-colorDanger')).toBe(
+      'var(--joy-palette-admin-danger)'
+    );
+    expect(screen.getByTestId('select-in-control')).toHaveClass('MuiSelect-colorDanger');
+    expect(errorBorderOf('select-in-control', 'MuiSelect-variantOutlined', 'MuiSelect-colorDanger')).toBe(
+      'var(--joy-palette-admin-danger)'
+    );
   });
 });
 

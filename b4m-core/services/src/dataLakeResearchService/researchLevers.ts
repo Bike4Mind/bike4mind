@@ -74,7 +74,7 @@ const resolveUnlistedSources = (
 
 export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRunLevers {
   const query = typeof input.query === 'string' ? input.query.trim() : '';
-  if (!query) throw new BadRequestError('A research run needs a question to research');
+  if (!query) throw new BadRequestError('A research run needs a question to research', { field: 'query' });
 
   const source = (input.source as unknown) === 'feed' ? ('feed' as const) : ('search' as const);
   const feedUrl = typeof input.feedUrl === 'string' ? input.feedUrl.trim().slice(0, RESEARCH_FEED_URL_MAX_CHARS) : '';

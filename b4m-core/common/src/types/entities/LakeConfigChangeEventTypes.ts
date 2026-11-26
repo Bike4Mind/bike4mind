@@ -490,6 +490,8 @@ export interface ILakeConfigChangeEvent {
   leverChanges?: ILakeConfigLeverChange[];
   /** The file an approve or auto-approve admitted, so the admission can be traced to its proposal. */
   admittedFabFileId?: string;
+  /** This row reverses that event. Set by Undo, and by nothing else. */
+  undoesEventId?: string;
   /** Computed at write time from the floor-clamped retention; TTL-indexed. */
   expiresAt: Date;
 }
@@ -509,6 +511,9 @@ export interface RecordLakeConfigChangeInput {
   target?: ILakeConfigEventTarget;
   leverChanges?: ILakeConfigLeverChange[];
   admittedFabFileId?: string;
+  undoesEventId?: string;
+  /** A pre-minted id for the row, for a writer that must name it before the row is written. */
+  eventId?: string;
   /** The platform-configured retention (days), if the caller resolved it; unconditionally clamped
    * to the floor inside `record()` regardless of what is passed here. */
   retentionDays?: number;

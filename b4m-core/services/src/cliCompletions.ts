@@ -35,6 +35,8 @@ import {
   type IUserDocument,
   normalizeMultimodalMessages,
   BadRequestError,
+  EmptyConversationError,
+  hasReadableConversationMessage,
   HTTPError,
   UnauthorizedError,
   type CompletionSource,
@@ -164,6 +166,7 @@ export type CompletionSettlement = {
 };
 
 export interface CompletionParams {
+  evaluation?: NonNullable<ICompletionOptions['_internal']>['evaluation'];
   userId: string;
   model: string;
   messages: IMessage[];
@@ -595,19 +598,6 @@ export function resolveOpenAiBareModelAlias(modelId: string): string {
   return OPENAI_BARE_MODEL_ALIASES.get(modelId) ?? modelId;
 }
 
-const EMPTY_CONVERSATION_MESSAGE = 'request must contain at least one non-empty user or assistant message';
-
-function hasEffectiveConversationMessage(messages: IMessage[]): boolean {
-  return messages.some(message => {
-    if (message.role !== 'user' && message.role !== 'assistant') return false;
-    if ('tool_calls' in message && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
-    if (typeof message.content === 'string') return message.content.trim().length > 0;
-    return Array.isArray(message.content)
-      ? message.content.some(block => block.type !== 'text' || Boolean(block.text?.trim()))
-      : false;
-  });
-}
-
 async function resolveCallerThinkingVisibility(
   params: Pick<CompletionParams, 'getThinkingVisibility' | 'userId' | 'db'>,
   actor: IUserDocument | null,
@@ -666,8 +656,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const runLineage = params.run && { ...params.run, sessionId: params.sessionId };
   const completionStartTime = Date.now();
 
-  if (!hasEffectiveConversationMessage(messages)) {
-    throw new BadRequestError(EMPTY_CONVERSATION_MESSAGE);
+  if (!hasReadableConversationMessage(messages)) {
+    throw new EmptyConversationError();
   }
 
   // Fail-closed before any credit reservation: wire tools (client-executed, executeTools
@@ -819,6 +809,16 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     }
   }
   const modelInfo = shadowModelInfo ?? requestedModelInfo;
+  const evaluationFamilyAllowed =
+    modelInfo?.backend === ModelBackend.OpenAI
+      ? !modelInfo.adapterFamily || ['openai-chat', 'openai-responses'].includes(modelInfo.adapterFamily)
+      : modelInfo?.backend === ModelBackend.Anthropic &&
+        (!modelInfo.adapterFamily || modelInfo.adapterFamily === 'anthropic-messages');
+  if (params.evaluation && (shadowModelInfo || !evaluationFamilyAllowed || params.serverTools?.length)) {
+    throw new BadRequestError(
+      'Evaluation requires exact audited provider routing without server-side client tool execution.'
+    );
+  }
   // Credits are priced on the requested model; cost and token sizing stay on the one that runs.
   const chargedModelInfo = shadowModelInfo ? requestedModelInfo : modelInfo;
   const runModel = shadowModelInfo ? shadowModelInfo.id : model;
@@ -973,6 +973,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     logger?.info?.(
       `[CLI_COMPLETIONS] response_format gate: enabled=${responseFormatEnabled}, type=${options.response_format.type}, hasTools=${(options?.tools?.length ?? 0) > 0}`
     );
+  }
+
+  if (params.evaluation) {
+    completionOptions._internal = { ...completionOptions._internal, evaluation: params.evaluation };
   }
 
   const recordRefusal = async (reason: string, required: number, available?: number): Promise<void> => {
@@ -1214,7 +1218,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       );
     }
     if (firstRound.outputTokens < maxTokens) {
-      logger?.info?.('[CLI_CREDITS] Output budget lowered to what the balance can pay for', {
+      logger?.info?.('[CLI_CREDITS] Output budget lowered to what the balance or run claim can pay for', {
         model,
         maxTokens,
         affordableOutputTokens: firstRound.outputTokens,
@@ -1389,12 +1393,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         })
       : llm;
   try {
-    await params.onReady?.();
+    if (!params.evaluation) await params.onReady?.();
     await completionLlm.complete(runModel, messages, completionOptions, wrappedOnChunk);
     if (stoppedForCredits) finalStopReason = 'max_tokens';
     const heldText = reasoningWithholder?.flush();
     if (heldText) await onChunk([heldText]);
   } catch (error) {
+    await params.evaluation?.unknown();
     if (params.abortSignal?.aborted && streamedOutputChars > 0) {
       abortError = error;
     } else {

@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatToolCall } from '@shared/chat';
+import { noticeChildId } from './childCardLayout';
 import { presentReply } from './codeStream';
 import { displayText } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
@@ -71,6 +72,8 @@ function messageSegments(message: ChatMessage, messageIndex: number): FindSegmen
 
   if (message.boundary) return message.boundary.kind === 'compact' ? whole(message.content) : [];
   if (message.automatic) return whole(message.content);
+  // A child's notices fold into its card (ChildSessionCards), which draws no find scope for them.
+  if (noticeChildId(message)) return [];
   if (message.relay || message.system) return whole(displayText(message));
   if (message.role === 'user') return message.skill ? [] : whole(message.content);
 

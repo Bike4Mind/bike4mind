@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { newSessionDefaultsSchema, type NewSessionDefaults } from '@shared/sessionDefaults';
 import type { ChatAttachment, ChatSession, ChatSessionMode, CreateCodeSessionRequest } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import type { ConversationController, SessionPlacement } from './useChat';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 
@@ -22,6 +23,8 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   current.current = session;
   const placement = useRef<SessionPlacement | undefined>(undefined);
   const sending = useRef(false);
+  // Applied when the draft's session is created and Orchestrate turns on there.
+  const orchestrateBudget = useRef<number | undefined>(undefined);
   const defaultsVersion = useRef(0);
   const explicitDefaults = useRef(new Set<keyof NewSessionDefaults>());
   const [busy, setBusy] = useState(false);
@@ -49,7 +52,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   const loadDefaults = useCallback(async (draftId: string): Promise<{ ok: true } | { ok: false; error: string }> => {
     const version = ++defaultsVersion.current;
     try {
-      const defaults = newSessionDefaultsSchema.parse(await window.b4m.chat.defaultsForNewSession());
+      const defaults = newSessionDefaultsSchema.parse(await hostChat.defaultsForNewSession());
       const before = current.current;
       if (before?.id !== draftId || defaultsVersion.current !== version) return { ok: true };
       const next = { ...before };
@@ -122,7 +125,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   const chooseDirectory = useCallback(
     async (directory: string) => {
       const before = current.current;
-      const inspected = await window.b4m.chat.inspectProject(directory);
+      const inspected = await hostChat.inspectProject(directory);
       if (!before || current.current?.id !== before.id) return;
       if (inspected.refusal) {
         setProjectError(inspected.refusal);
@@ -188,7 +191,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         const section = place ? { sectionId: place.sectionId } : undefined;
         const created =
           draft.mode === 'code'
-            ? await window.b4m.chat.createCodeSession({
+            ? await hostChat.createCodeSession({
                 ...section,
                 ...(draft.project
                   ? {
@@ -214,7 +217,14 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         if (draft.generation) requireSaved(await window.b4m.chat.setSessionGeneration(id, draft.generation));
         if (draft.historyEnabled !== undefined)
           requireSaved(await window.b4m.chat.setSessionHistory(id, draft.historyEnabled));
-        if (draft.orchestrate) requireSaved(await window.b4m.chat.setSessionOrchestrate(id, true));
+        if (draft.orchestrate) {
+          const budget = orchestrateBudget.current;
+          requireSaved(
+            await (budget === undefined
+              ? window.b4m.chat.setSessionOrchestrate(id, true)
+              : window.b4m.chat.setSessionOrchestrate(id, true, budget))
+          );
+        }
         for (const path of draft.project?.contextDirectories ?? draft.grantedDirectories ?? []) {
           const result = await window.b4m.chat.addContextDirectory(id, path);
           if (result.status === 'refused') throw new Error(result.error);
@@ -224,7 +234,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
           id,
           attachments.map(attachment => attachment.id)
         );
-        const result = await window.b4m.chat.sendMessage({ sessionId: id, text, attachments: [...attachments] });
+        const result = await hostChat.sendMessage({ sessionId: id, text, attachments: [...attachments] });
         if (!result.ok) throw new Error(result.error);
         accepted = true;
         if (created.sidebarSections) place?.placed(created.sidebarSections);
@@ -244,7 +254,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
       } catch (cause) {
         if (id && !accepted) {
           try {
-            await window.b4m.chat.deleteSession(id);
+            await hostChat.deleteSession(id, { allowDiscard: false });
           } catch {
             if (current.current?.id === draftId)
               setError('Could not remove the unsent conversation. Delete it from the sidebar before retrying.');
@@ -283,7 +293,10 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         return true;
       },
       setHistory: historyEnabled => patch({ historyEnabled }),
-      setOrchestrate: orchestrate => patch({ orchestrate }),
+      setOrchestrate: (orchestrate, budgetCredits) => {
+        orchestrateBudget.current = orchestrate ? budgetCredits : undefined;
+        return patch({ orchestrate });
+      },
       settleLocalModel: async () => undefined,
       addContextDirectoryTo: async (_target, path) => {
         await share(path);

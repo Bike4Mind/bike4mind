@@ -47,7 +47,7 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   deleteFromQueue: h.delete,
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
-vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: vi.fn() }));
+vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestion: vi.fn() }));
 vi.mock('@bike4mind/observability', async importOriginal => {
   const original = await importOriginal<typeof import('@bike4mind/observability')>();
   class Logger extends original.Logger {
@@ -85,15 +85,13 @@ const attempt = {
   replayedBy: 'admin-1',
 };
 
-async function callReplay(mode: 'direct' | 'batch') {
+async function callReplay(mode: 'targeted' | 'batch') {
   const { req, res } = createMocks({
     method: 'POST',
     body: {
       queueLabel: 'quest',
       reason: 'Verify persisted replay budget',
-      ...(mode === 'direct'
-        ? { messages: [{ messageId: attempt.messageId, receiptHandle: 'receipt-1', body: '{}' }] }
-        : { batchSize: 1 }),
+      ...(mode === 'targeted' ? { messageIds: [attempt.messageId] } : { batchSize: 1 }),
     },
   });
   (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
@@ -102,7 +100,7 @@ async function callReplay(mode: 'direct' | 'batch') {
 }
 
 describe('replay budget with persisted discard history', () => {
-  it.each(['direct', 'batch'] as const)('allows %s replay after three failed discards', async mode => {
+  it.each(['targeted', 'batch'] as const)('allows %s replay after three failed discards', async mode => {
     for (let index = 0; index < 3; index++) {
       const pending = await dlqReplayLogRepository.logReplay({ ...attempt, operation: 'discard', status: 'pending' });
       await dlqReplayLogRepository.finalizeDiscard(pending.id, 'failed', 'expired receipt');
@@ -112,7 +110,7 @@ describe('replay budget with persisted discard history', () => {
     expect(await dlqReplayLogRepository.countAttempts(attempt.messageId)).toBe(1);
   });
 
-  it.each(['direct', 'batch'] as const)('still blocks %s replay after three genuine replay failures', async mode => {
+  it.each(['targeted', 'batch'] as const)('still blocks %s replay after three genuine replay failures', async mode => {
     for (let index = 0; index < 3; index++) {
       await dlqReplayLogRepository.logReplay({ ...attempt, status: 'failed' });
     }

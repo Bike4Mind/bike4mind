@@ -16,13 +16,8 @@ import {
   Input,
   ListDivider,
   MenuItem,
-  Modal,
-  ModalClose,
-  ModalDialog,
-  ModalOverflow,
   Option,
   Select,
-  Sheet,
   Stack,
   Switch,
   Textarea,
@@ -43,7 +38,7 @@ import CodeIcon from '@mui/icons-material/Code';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SaveIcon from '@mui/icons-material/Save';
 import { IModalDocument } from '@bike4mind/common';
-import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
+import { useDeploymentInfo } from '@client/app/hooks/data/admin';
 import {
   useGetWhatsNewModals,
   useDeleteWhatsNewModal,
@@ -107,8 +102,11 @@ import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
+  AdminDialog,
+  AdminDialogFooter,
   AdminPageHeader,
   DataTable,
   EmptyState,
@@ -118,13 +116,37 @@ import {
   type DataColumn,
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { DeleteModalDialog } from './DeleteModalDialog';
 
 // Layout constants
 const MODAL_MAX_WIDTH = 600;
-const MODAL_MIN_WIDTH = 400;
 const PREVIEW_MAX_WIDTH = 700;
 const DESCRIPTION_MIN_ROWS = 6;
 const PREVIEW_MAX_HEIGHT = 400;
+
+function PromptBlock({ text }: { text: string }) {
+  return (
+    <Typography
+      component="pre"
+      sx={{
+        fontFamily: 'monospace',
+        fontSize: 'xs',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        m: 0,
+        p: 2,
+        maxHeight: '55vh',
+        overflow: 'auto',
+        bgcolor: 'background.level1',
+        borderRadius: 'sm',
+        border: '1px solid',
+        borderColor: 'admin.border',
+      }}
+    >
+      {text}
+    </Typography>
+  );
+}
 const MAX_EXPIRY_YEARS = 2; // Maximum years into the future for expiry date
 
 /**
@@ -134,6 +156,12 @@ function getMaxExpiryDate(): string {
   const date = new Date();
   date.setFullYear(date.getFullYear() + MAX_EXPIRY_YEARS);
   return date.toISOString().split('T')[0];
+}
+
+const DEFAULT_EXPIRY_DAYS = 30;
+
+function defaultExpiryDate(): string {
+  return getLocalDate(DEFAULT_EXPIRY_DAYS);
 }
 
 interface ExpiryStatus {
@@ -286,9 +314,9 @@ function WhatsNewErrorFallback() {
 export default function AdminWhatsNewModalsTab() {
   // isForkProduction distinguishes a fork's production stage from the source deployment. The
   // highlights card stays on the main environments only (source prod, dev, PR previews).
-  const { data: env } = useLiveOpsTriageEnv();
-  const stage = env?.stage || 'unknown';
-  const isForkProduction = env?.isForkProduction ?? false;
+  const { data: deployment } = useDeploymentInfo();
+  const stage = deployment?.stage || 'unknown';
+  const isForkProduction = deployment?.isForkProduction ?? false;
 
   const [createOpen, setCreateOpen] = useState(false);
   const { refetch, isFetching } = useGetWhatsNewModals();
@@ -334,7 +362,7 @@ export default function AdminWhatsNewModalsTab() {
         <ModalsSection createOpen={createOpen} onCreateOpenChange={setCreateOpen} />
 
         {/* Weekly Highlights to Slack - only for main environments (production, dev, or PR previews), not forks */}
-        {shouldShowWeeklyHighlights(env) && <WeeklyHighlightsSection />}
+        {shouldShowWeeklyHighlights(deployment) && <WeeklyHighlightsSection />}
       </Stack>
     </ErrorBoundary>
   );
@@ -550,411 +578,371 @@ function ModalsSection({
   return (
     <>
       {/* Create Modal Dialog */}
-      <Modal open={createOpen} onClose={() => onCreateOpenChange(false)}>
-        <ModalOverflow>
-          <ModalDialog
-            aria-labelledby="create-modal-title"
-            data-testid="whats-new-create-dialog"
-            sx={{
-              width: { xs: '95%', sm: '90%' },
-              maxWidth: MODAL_MAX_WIDTH,
-              minWidth: { xs: 'auto', sm: MODAL_MIN_WIDTH },
-            }}
+      <AdminDialog
+        open={createOpen}
+        onClose={() => onCreateOpenChange(false)}
+        title="Create what's new modal"
+        width={MODAL_MAX_WIDTH}
+        anchorTop
+        data-testid="whats-new-create-dialog"
+      >
+        <Stack spacing={2}>
+          <FormControl required>
+            <FormLabel>Title</FormLabel>
+            <Input
+              placeholder="e.g., New Feature: Dark Mode"
+              value={newModalData.title}
+              onChange={e => setNewModalData(prev => ({ ...prev, title: e.target.value }))}
+              data-testid="whats-new-create-title-input"
+            />
+          </FormControl>
+          <FormControl required>
+            <FormLabel>Display Date</FormLabel>
+            <Input
+              type="date"
+              value={newModalData.displayDate}
+              onChange={e => setNewModalData(prev => ({ ...prev, displayDate: e.target.value }))}
+              data-testid="whats-new-create-displaydate-input"
+            />
+          </FormControl>
+          <FormControl>
+            <FormLabel>
+              Subtitle
+              <Typography level="body-xs" component="span" sx={{ ml: 1, color: 'admin.inkMuted' }}>
+                (Optional)
+              </Typography>
+            </FormLabel>
+            <Input
+              placeholder="e.g., Customize your experience"
+              value={newModalData.subtitle}
+              onChange={e => setNewModalData(prev => ({ ...prev, subtitle: e.target.value }))}
+              data-testid="whats-new-create-subtitle-input"
+            />
+          </FormControl>
+          <FormControl required>
+            <FormLabel>Description</FormLabel>
+            <Textarea
+              minRows={DESCRIPTION_MIN_ROWS}
+              placeholder="Describe the new feature or update... (Markdown supported)"
+              value={newModalData.description}
+              onChange={e => setNewModalData(prev => ({ ...prev, description: e.target.value }))}
+              data-testid="whats-new-create-description-input"
+            />
+          </FormControl>
+          <FormControl>
+            <FormLabel>
+              Expiry Date
+              <Typography level="body-xs" component="span" sx={{ ml: 1, color: 'admin.inkMuted' }}>
+                (Optional - defaults to 30 days)
+              </Typography>
+            </FormLabel>
+            <OptionalDateInput
+              value={newModalData.endDate}
+              onChange={endDate => setNewModalData(prev => ({ ...prev, endDate }))}
+              emptyLabel="Defaults to 30 days"
+              setLabel="Set an expiry date"
+              clearLabel="Remove expiry date"
+              initialDate={defaultExpiryDate}
+              min={getLocalDate()}
+              max={getMaxExpiryDate()}
+              aria-label="Expiry Date"
+              testId="whats-new-create-enddate-input"
+            />
+          </FormControl>
+        </Stack>
+        <AdminDialogFooter>
+          <Button variant="plain" color="neutral" onClick={() => onCreateOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleCreateModal}
+            disabled={!newModalData.title.trim() || !newModalData.description.trim() || createModal.isPending}
+            loading={createModal.isPending}
+            data-testid="whats-new-create-submit-btn"
           >
-            <ModalClose />
-            <Typography id="create-modal-title" level="h4" sx={{ mb: 2 }}>
-              Create What&apos;s New Modal
-            </Typography>
-            <Stack spacing={2}>
-              <FormControl required>
-                <FormLabel>Title</FormLabel>
-                <Input
-                  placeholder="e.g., New Feature: Dark Mode"
-                  value={newModalData.title}
-                  onChange={e => setNewModalData(prev => ({ ...prev, title: e.target.value }))}
-                  data-testid="whats-new-create-title-input"
-                />
-              </FormControl>
-              <FormControl required>
-                <FormLabel>Display Date</FormLabel>
-                <Input
-                  type="date"
-                  value={newModalData.displayDate}
-                  onChange={e => setNewModalData(prev => ({ ...prev, displayDate: e.target.value }))}
-                  data-testid="whats-new-create-displaydate-input"
-                />
-              </FormControl>
-              <FormControl>
-                <FormLabel>
-                  Subtitle
-                  <Typography level="body-xs" component="span" sx={{ ml: 1, color: 'admin.inkMuted' }}>
-                    (Optional)
-                  </Typography>
-                </FormLabel>
-                <Input
-                  placeholder="e.g., Customize your experience"
-                  value={newModalData.subtitle}
-                  onChange={e => setNewModalData(prev => ({ ...prev, subtitle: e.target.value }))}
-                  data-testid="whats-new-create-subtitle-input"
-                />
-              </FormControl>
-              <FormControl required>
-                <FormLabel>Description</FormLabel>
-                <Textarea
-                  minRows={DESCRIPTION_MIN_ROWS}
-                  placeholder="Describe the new feature or update... (Markdown supported)"
-                  value={newModalData.description}
-                  onChange={e => setNewModalData(prev => ({ ...prev, description: e.target.value }))}
-                  data-testid="whats-new-create-description-input"
-                />
-              </FormControl>
-              <FormControl>
-                <FormLabel>
-                  Expiry Date
-                  <Typography level="body-xs" component="span" sx={{ ml: 1, color: 'admin.inkMuted' }}>
-                    (Optional - defaults to 30 days)
-                  </Typography>
-                </FormLabel>
-                <Input
-                  type="date"
-                  value={newModalData.endDate}
-                  onChange={e => setNewModalData(prev => ({ ...prev, endDate: e.target.value }))}
-                  slotProps={{
-                    input: { min: getLocalDate(), max: getMaxExpiryDate() },
-                  }}
-                  data-testid="whats-new-create-enddate-input"
-                />
-              </FormControl>
-              <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
-                <Button variant="plain" color="neutral" onClick={() => onCreateOpenChange(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleCreateModal}
-                  disabled={!newModalData.title.trim() || !newModalData.description.trim() || createModal.isPending}
-                  loading={createModal.isPending}
-                  data-testid="whats-new-create-submit-btn"
-                >
-                  Create
-                </Button>
-              </Stack>
-            </Stack>
-          </ModalDialog>
-        </ModalOverflow>
-      </Modal>
+            Create modal
+          </Button>
+        </AdminDialogFooter>
+      </AdminDialog>
 
       {/* Preview Modal Dialog */}
-      <Modal open={!!previewModal} onClose={() => setPreviewModal(null)}>
-        <ModalDialog
-          aria-labelledby="preview-modal-title"
-          data-testid="whats-new-preview-dialog"
-          sx={{ width: '90%', maxWidth: PREVIEW_MAX_WIDTH, minWidth: MODAL_MIN_WIDTH }}
-        >
-          <ModalClose />
-          {previewModal && (
-            <Stack spacing={2}>
-              <Typography id="preview-modal-title" level="h4">
-                {previewModal.title ?? "What's New"}
-              </Typography>
-
-              {rawModalLoading ? (
-                <Stack alignItems="center" sx={{ py: 2 }}>
-                  <CircularProgress size="sm" />
-                </Stack>
-              ) : (
-                (() => {
-                  const presentVariants = AUDIENCE_VARIANTS_CLIENT.filter(v => rawModal?.variants?.[v.key]?.title);
-                  if (presentVariants.length) {
-                    const activeVariant = presentVariants.find(v => v.key === previewVariantTab) ?? presentVariants[0];
-                    const c = rawModal!.variants![activeVariant.key]!;
-                    return (
-                      <Stack spacing={1.5}>
-                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                          {presentVariants.map(v => (
-                            <Chip
-                              key={v.key}
-                              variant={previewVariantTab === v.key ? 'solid' : 'soft'}
-                              color={v.audienceType === 'internal' ? 'warning' : 'success'}
-                              onClick={() => setPreviewVariantTab(v.key)}
-                              data-testid={`whats-new-preview-variant-tab-${v.key}`}
-                            >
-                              {v.label}
-                            </Chip>
-                          ))}
-                        </Stack>
-                        <Box sx={{ maxHeight: PREVIEW_MAX_HEIGHT, overflow: 'auto' }}>
-                          <Typography level="title-md" sx={{ color: 'primary.500' }}>
-                            {c.title}
-                          </Typography>
-                          {c.subtitle && (
-                            <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mt: 0.5 }}>
-                              {c.subtitle}
-                            </Typography>
-                          )}
-                          {c.description && (
-                            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', mt: 1 }}>
-                              {c.description}
-                            </Typography>
-                          )}
-                        </Box>
-                      </Stack>
-                    );
-                  }
-                  // Legacy modal - render top-level content.
-                  return (
-                    <Box sx={{ maxHeight: PREVIEW_MAX_HEIGHT, overflow: 'auto' }}>
-                      {previewModal.subtitle && (
-                        <Typography level="title-md" sx={{ color: 'admin.inkMuted', mb: 1 }}>
-                          {previewModal.subtitle}
-                        </Typography>
-                      )}
-                      <Typography level="body-md" sx={{ whiteSpace: 'pre-wrap' }}>
-                        {previewModal.description}
-                      </Typography>
-                    </Box>
-                  );
-                })()
-              )}
-
-              <Divider />
-
-              <Stack direction="row" gap={1} flexWrap="wrap">
-                <StatusChip
-                  tone={previewModal.enabled ? 'good' : 'neutral'}
-                  label={previewModal.enabled ? 'Enabled' : 'Disabled'}
-                />
-                <StatusChip
-                  tone="neutral"
-                  label={`Source: ${previewModal.generationMetadata?.importedFrom || 'self'}`}
-                />
-                {previewModal.generationMetadata?.generatedDate && (
-                  <StatusChip tone="neutral" label={`Generated: ${previewModal.generationMetadata.generatedDate}`} />
-                )}
-                {previewModal.endDate && (
-                  <StatusChip
-                    tone={getExpiryStatus(previewModal.endDate).tone}
-                    label={`Expires: ${formatDateISO(previewModal.endDate)}`}
-                  />
-                )}
-              </Stack>
-            </Stack>
-          )}
-        </ModalDialog>
-      </Modal>
-
-      {/* Edit Modal Dialog */}
-      <Modal open={!!editModal} onClose={() => setEditModal(null)}>
-        <ModalOverflow>
-          <ModalDialog
-            aria-labelledby="edit-modal-title"
-            data-testid="whats-new-edit-dialog"
-            sx={{
-              width: { xs: '95%', sm: '90%' },
-              maxWidth: MODAL_MAX_WIDTH,
-              minWidth: { xs: 'auto', sm: MODAL_MIN_WIDTH },
-            }}
-          >
-            <ModalClose />
-            <Typography id="edit-modal-title" level="h4" sx={{ mb: 2 }}>
-              Edit What&apos;s New Modal
-            </Typography>
+      <AdminDialog
+        open={!!previewModal}
+        onClose={() => setPreviewModal(null)}
+        title={previewModal?.title ?? "What's new"}
+        width={PREVIEW_MAX_WIDTH}
+        data-testid="whats-new-preview-dialog"
+      >
+        {previewModal && (
+          <Stack spacing={2}>
             {rawModalLoading ? (
-              <Stack alignItems="center" sx={{ py: 3 }}>
+              <Stack alignItems="center" sx={{ py: 2 }}>
                 <CircularProgress size="sm" />
               </Stack>
             ) : (
-              <Stack spacing={2}>
-                {isVariantModal ? (
-                  <>
-                    {/* Variant tab picker */}
-                    <FormControl>
-                      <FormLabel>Variant</FormLabel>
+              (() => {
+                const presentVariants = AUDIENCE_VARIANTS_CLIENT.filter(v => rawModal?.variants?.[v.key]?.title);
+                if (presentVariants.length) {
+                  const activeVariant = presentVariants.find(v => v.key === previewVariantTab) ?? presentVariants[0];
+                  const c = rawModal!.variants![activeVariant.key]!;
+                  return (
+                    <Stack spacing={1.5}>
                       <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                        {AUDIENCE_VARIANTS_CLIENT.map(v => {
-                          const hasContent = !!editVariantData[v.key].title.trim();
-                          return (
-                            <Chip
-                              key={v.key}
-                              variant={editVariantTab === v.key ? 'solid' : 'soft'}
-                              color={editVariantTab === v.key ? 'primary' : hasContent ? 'success' : 'neutral'}
-                              onClick={() => setEditVariantTab(v.key)}
-                              data-testid={`whats-new-edit-variant-tab-${v.key}`}
-                            >
-                              {v.label}
-                              {hasContent ? ' ●' : ''}
-                            </Chip>
-                          );
-                        })}
+                        {presentVariants.map(v => (
+                          <Chip
+                            key={v.key}
+                            variant={previewVariantTab === v.key ? 'solid' : 'soft'}
+                            color={v.audienceType === 'internal' ? 'warning' : 'success'}
+                            onClick={() => setPreviewVariantTab(v.key)}
+                            data-testid={`whats-new-preview-variant-tab-${v.key}`}
+                          >
+                            {v.label}
+                          </Chip>
+                        ))}
                       </Stack>
-                      <FormHelperText>
-                        A green dot marks variants with content. Empty title removes that variant on save.
-                      </FormHelperText>
-                    </FormControl>
-                    <FormControl>
-                      <FormLabel>Title</FormLabel>
-                      <Input
-                        value={editVariantData[editVariantTab].title}
-                        onChange={e =>
-                          setEditVariantData(prev => ({
-                            ...prev,
-                            [editVariantTab]: { ...prev[editVariantTab], title: e.target.value },
-                          }))
-                        }
-                        data-testid="whats-new-edit-variant-title-input"
-                      />
-                    </FormControl>
-                    <FormControl>
-                      <FormLabel>Subtitle</FormLabel>
-                      <Input
-                        value={editVariantData[editVariantTab].subtitle}
-                        onChange={e =>
-                          setEditVariantData(prev => ({
-                            ...prev,
-                            [editVariantTab]: { ...prev[editVariantTab], subtitle: e.target.value },
-                          }))
-                        }
-                        data-testid="whats-new-edit-variant-subtitle-input"
-                      />
-                    </FormControl>
-                    <FormControl>
-                      <FormLabel>Description</FormLabel>
-                      <Textarea
-                        minRows={DESCRIPTION_MIN_ROWS}
-                        value={editVariantData[editVariantTab].description}
-                        onChange={e =>
-                          setEditVariantData(prev => ({
-                            ...prev,
-                            [editVariantTab]: { ...prev[editVariantTab], description: e.target.value },
-                          }))
-                        }
-                        data-testid="whats-new-edit-variant-description-input"
-                      />
-                    </FormControl>
-                  </>
-                ) : (
-                  <>
-                    <FormControl required>
-                      <FormLabel>Title</FormLabel>
-                      <Input
-                        placeholder="e.g., New Feature: Dark Mode"
-                        value={editModalData.title}
-                        onChange={e => setEditModalData(prev => ({ ...prev, title: e.target.value }))}
-                        data-testid="whats-new-edit-title-input"
-                      />
-                    </FormControl>
-                    <FormControl required>
-                      <FormLabel>Display Date</FormLabel>
-                      <Input
-                        type="date"
-                        value={editModalData.displayDate}
-                        onChange={e => setEditModalData(prev => ({ ...prev, displayDate: e.target.value }))}
-                        data-testid="whats-new-edit-displaydate-input"
-                      />
-                    </FormControl>
-                    <FormControl>
-                      <FormLabel>
-                        Subtitle
-                        <Typography level="body-xs" component="span" sx={{ ml: 1, color: 'admin.inkMuted' }}>
-                          (Optional)
+                      <Box sx={{ maxHeight: PREVIEW_MAX_HEIGHT, overflow: 'auto' }}>
+                        <Typography level="title-md" sx={{ color: 'primary.500' }}>
+                          {c.title}
                         </Typography>
-                      </FormLabel>
-                      <Input
-                        placeholder="e.g., Customize your experience"
-                        value={editModalData.subtitle}
-                        onChange={e => setEditModalData(prev => ({ ...prev, subtitle: e.target.value }))}
-                        data-testid="whats-new-edit-subtitle-input"
-                      />
-                    </FormControl>
-                    <FormControl required>
-                      <FormLabel>Description</FormLabel>
-                      <Textarea
-                        minRows={DESCRIPTION_MIN_ROWS}
-                        placeholder="Describe the new feature or update... (Markdown supported)"
-                        value={editModalData.description}
-                        onChange={e => setEditModalData(prev => ({ ...prev, description: e.target.value }))}
-                        data-testid="whats-new-edit-description-input"
-                      />
-                    </FormControl>
-                  </>
-                )}
+                        {c.subtitle && (
+                          <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mt: 0.5 }}>
+                            {c.subtitle}
+                          </Typography>
+                        )}
+                        {c.description && (
+                          <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', mt: 1 }}>
+                            {c.description}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Stack>
+                  );
+                }
+                // Legacy modal - render top-level content.
+                return (
+                  <Box sx={{ maxHeight: PREVIEW_MAX_HEIGHT, overflow: 'auto' }}>
+                    {previewModal.subtitle && (
+                      <Typography level="title-md" sx={{ color: 'admin.inkMuted', mb: 1 }}>
+                        {previewModal.subtitle}
+                      </Typography>
+                    )}
+                    <Typography level="body-md" sx={{ whiteSpace: 'pre-wrap' }}>
+                      {previewModal.description}
+                    </Typography>
+                  </Box>
+                );
+              })()
+            )}
+
+            <Divider />
+
+            <Stack direction="row" gap={1} flexWrap="wrap">
+              <StatusChip
+                tone={previewModal.enabled ? 'good' : 'neutral'}
+                label={previewModal.enabled ? 'Enabled' : 'Disabled'}
+              />
+              <StatusChip tone="neutral" label={`Source: ${previewModal.generationMetadata?.importedFrom || 'self'}`} />
+              {previewModal.generationMetadata?.generatedDate && (
+                <StatusChip tone="neutral" label={`Generated: ${previewModal.generationMetadata.generatedDate}`} />
+              )}
+              {previewModal.endDate && (
+                <StatusChip
+                  tone={getExpiryStatus(previewModal.endDate).tone}
+                  label={`Expires: ${formatDateISO(previewModal.endDate)}`}
+                />
+              )}
+            </Stack>
+          </Stack>
+        )}
+      </AdminDialog>
+
+      {/* Edit Modal Dialog */}
+      <AdminDialog
+        open={!!editModal}
+        onClose={() => setEditModal(null)}
+        title="Edit what's new modal"
+        width={MODAL_MAX_WIDTH}
+        anchorTop
+        data-testid="whats-new-edit-dialog"
+      >
+        {rawModalLoading ? (
+          <Stack alignItems="center" sx={{ py: 3 }}>
+            <CircularProgress size="sm" />
+          </Stack>
+        ) : (
+          <Stack spacing={2}>
+            {isVariantModal ? (
+              <>
+                {/* Variant tab picker */}
+                <FormControl>
+                  <FormLabel>Variant</FormLabel>
+                  <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                    {AUDIENCE_VARIANTS_CLIENT.map(v => {
+                      const hasContent = !!editVariantData[v.key].title.trim();
+                      return (
+                        <Chip
+                          key={v.key}
+                          variant={editVariantTab === v.key ? 'solid' : 'soft'}
+                          color={editVariantTab === v.key ? 'primary' : hasContent ? 'success' : 'neutral'}
+                          onClick={() => setEditVariantTab(v.key)}
+                          data-testid={`whats-new-edit-variant-tab-${v.key}`}
+                        >
+                          {v.label}
+                          {hasContent ? ' \u25CF' : ''}
+                        </Chip>
+                      );
+                    })}
+                  </Stack>
+                  <FormHelperText>
+                    A green dot marks variants with content. Empty title removes that variant on save.
+                  </FormHelperText>
+                </FormControl>
+                <FormControl>
+                  <FormLabel>Title</FormLabel>
+                  <Input
+                    value={editVariantData[editVariantTab].title}
+                    onChange={e =>
+                      setEditVariantData(prev => ({
+                        ...prev,
+                        [editVariantTab]: { ...prev[editVariantTab], title: e.target.value },
+                      }))
+                    }
+                    data-testid="whats-new-edit-variant-title-input"
+                  />
+                </FormControl>
+                <FormControl>
+                  <FormLabel>Subtitle</FormLabel>
+                  <Input
+                    value={editVariantData[editVariantTab].subtitle}
+                    onChange={e =>
+                      setEditVariantData(prev => ({
+                        ...prev,
+                        [editVariantTab]: { ...prev[editVariantTab], subtitle: e.target.value },
+                      }))
+                    }
+                    data-testid="whats-new-edit-variant-subtitle-input"
+                  />
+                </FormControl>
+                <FormControl>
+                  <FormLabel>Description</FormLabel>
+                  <Textarea
+                    minRows={DESCRIPTION_MIN_ROWS}
+                    value={editVariantData[editVariantTab].description}
+                    onChange={e =>
+                      setEditVariantData(prev => ({
+                        ...prev,
+                        [editVariantTab]: { ...prev[editVariantTab], description: e.target.value },
+                      }))
+                    }
+                    data-testid="whats-new-edit-variant-description-input"
+                  />
+                </FormControl>
+              </>
+            ) : (
+              <>
+                <FormControl required>
+                  <FormLabel>Title</FormLabel>
+                  <Input
+                    placeholder="e.g., New Feature: Dark Mode"
+                    value={editModalData.title}
+                    onChange={e => setEditModalData(prev => ({ ...prev, title: e.target.value }))}
+                    data-testid="whats-new-edit-title-input"
+                  />
+                </FormControl>
+                <FormControl required>
+                  <FormLabel>Display Date</FormLabel>
+                  <Input
+                    type="date"
+                    value={editModalData.displayDate}
+                    onChange={e => setEditModalData(prev => ({ ...prev, displayDate: e.target.value }))}
+                    data-testid="whats-new-edit-displaydate-input"
+                  />
+                </FormControl>
                 <FormControl>
                   <FormLabel>
-                    Expiry Date
+                    Subtitle
                     <Typography level="body-xs" component="span" sx={{ ml: 1, color: 'admin.inkMuted' }}>
                       (Optional)
                     </Typography>
                   </FormLabel>
                   <Input
-                    type="date"
-                    value={isVariantModal ? editEndDate : editModalData.endDate}
-                    onChange={e =>
-                      isVariantModal
-                        ? setEditEndDate(e.target.value)
-                        : setEditModalData(prev => ({ ...prev, endDate: e.target.value }))
-                    }
-                    slotProps={{
-                      input: { min: getLocalDate(), max: getMaxExpiryDate() },
-                    }}
-                    data-testid="whats-new-edit-enddate-input"
+                    placeholder="e.g., Customize your experience"
+                    value={editModalData.subtitle}
+                    onChange={e => setEditModalData(prev => ({ ...prev, subtitle: e.target.value }))}
+                    data-testid="whats-new-edit-subtitle-input"
                   />
                 </FormControl>
-                <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
-                  <Button variant="plain" color="neutral" onClick={() => setEditModal(null)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={handleEditModal}
-                    disabled={
-                      isVariantModal
-                        ? !Object.values(editVariantData).some(v => v.title.trim()) || updateVariants.isPending
-                        : !editModalData.title.trim() || !editModalData.description.trim() || updateModal.isPending
-                    }
-                    loading={updateVariants.isPending || updateModal.isPending}
-                    data-testid="whats-new-edit-submit-btn"
-                  >
-                    Save Changes
-                  </Button>
-                </Stack>
-              </Stack>
+                <FormControl required>
+                  <FormLabel>Description</FormLabel>
+                  <Textarea
+                    minRows={DESCRIPTION_MIN_ROWS}
+                    placeholder="Describe the new feature or update... (Markdown supported)"
+                    value={editModalData.description}
+                    onChange={e => setEditModalData(prev => ({ ...prev, description: e.target.value }))}
+                    data-testid="whats-new-edit-description-input"
+                  />
+                </FormControl>
+              </>
             )}
-          </ModalDialog>
-        </ModalOverflow>
-      </Modal>
-
-      {/* Delete Confirmation Dialog */}
-      <Modal open={!!modalToDelete} onClose={() => setDeleteConfirmModal(null)}>
-        <ModalDialog
-          aria-labelledby="delete-confirm-title"
-          data-testid="whats-new-delete-confirm-dialog"
-          sx={{ maxWidth: MODAL_MAX_WIDTH }}
-        >
-          <ModalClose />
-          <Typography id="delete-confirm-title" level="h4" sx={{ mb: 1 }}>
-            Delete Modal
-          </Typography>
-          <Typography level="body-md" sx={{ mb: 2 }}>
-            Are you sure you want to delete &quot;{modalToDelete?.title}&quot;? This action cannot be undone.
-          </Typography>
-          <Stack direction="row" spacing={1} justifyContent="flex-end">
-            <Button variant="plain" color="neutral" onClick={() => setDeleteConfirmModal(null)}>
-              Cancel
-            </Button>
-            <Button
-              color="danger"
-              onClick={() => {
-                if (modalToDelete?._id) {
-                  deleteModal.mutate(modalToDelete._id.toString());
-                  setDeleteConfirmModal(null);
+            <FormControl>
+              <FormLabel>
+                Expiry Date
+                <Typography level="body-xs" component="span" sx={{ ml: 1, color: 'admin.inkMuted' }}>
+                  (Optional)
+                </Typography>
+              </FormLabel>
+              <OptionalDateInput
+                value={isVariantModal ? editEndDate : editModalData.endDate}
+                onChange={endDate =>
+                  isVariantModal ? setEditEndDate(endDate) : setEditModalData(prev => ({ ...prev, endDate }))
                 }
-              }}
-              loading={deleteModal.isPending}
-              data-testid="whats-new-delete-confirm-btn"
-            >
-              Delete
-            </Button>
+                emptyLabel="No end date"
+                setLabel="Set an expiry date"
+                clearLabel="Remove expiry date"
+                initialDate={defaultExpiryDate}
+                min={getLocalDate()}
+                max={getMaxExpiryDate()}
+                aria-label="Expiry Date"
+                testId="whats-new-edit-enddate-input"
+              />
+            </FormControl>
+            <AdminDialogFooter>
+              <Button variant="plain" color="neutral" onClick={() => setEditModal(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleEditModal}
+                disabled={
+                  isVariantModal
+                    ? !Object.values(editVariantData).some(v => v.title.trim()) || updateVariants.isPending
+                    : !editModalData.title.trim() || !editModalData.description.trim() || updateModal.isPending
+                }
+                loading={updateVariants.isPending || updateModal.isPending}
+                data-testid="whats-new-edit-submit-btn"
+              >
+                Save changes
+              </Button>
+            </AdminDialogFooter>
           </Stack>
-        </ModalDialog>
-      </Modal>
+        )}
+      </AdminDialog>
+
+      <DeleteModalDialog
+        modal={modalToDelete}
+        onClose={() => setDeleteConfirmModal(null)}
+        pending={deleteModal.isPending}
+        onDelete={async () => {
+          if (!modalToDelete?._id) return;
+          try {
+            await deleteModal.mutateAsync(modalToDelete._id.toString());
+            setDeleteConfirmModal(null);
+          } catch {
+            // The mutation's onError already toasts; keep the dialog open so the admin can retry.
+          }
+        }}
+        data-testid="whats-new-delete-confirm-dialog"
+        confirmTestId="whats-new-delete-confirm-btn"
+      />
 
       <DataTable
         label="Active What's New modals"
@@ -1108,7 +1096,7 @@ function WeeklyHighlightsSection() {
     }
   }, [configData]);
 
-  // Computed dirty tracking (same pattern as Daily Gen and LiveOps)
+  // Computed dirty tracking (same pattern as Daily Gen)
   const isDirty = configData
     ? JSON.stringify({ enabled, slackChannelId, slackTeamId, llmModel, promptTemplate, attachMarkdownFile }) !==
       JSON.stringify({
@@ -1614,254 +1602,183 @@ function WeeklyHighlightsSection() {
         )}
       </Box>
 
-      {/* Preview Modal */}
-      <Modal open={showPreview} onClose={() => setShowPreview(false)}>
-        <ModalDialog
-          aria-labelledby="highlights-preview-title"
-          data-testid="highlights-preview-dialog"
-          sx={{ width: '90%', maxWidth: 800, maxHeight: '80vh', overflow: 'auto' }}
-        >
-          <ModalClose />
-          <Typography id="highlights-preview-title" level="h4" sx={{ mb: 2 }}>
-            Last Generated Highlights
-          </Typography>
-          <Divider sx={{ mb: 2 }} />
-          <Box
-            sx={{
-              whiteSpace: 'pre-wrap',
-              fontFamily: 'monospace',
-              fontSize: 'sm',
-              p: 2,
-              bgcolor: 'background.level1',
-              borderRadius: 'sm',
-              overflow: 'auto',
-            }}
-          >
-            {configData?.lastHighlights || 'No highlights available'}
-          </Box>
-        </ModalDialog>
-      </Modal>
-
-      {/* Default Template Modal */}
-      <Modal open={showDefaultTemplate} onClose={() => setShowDefaultTemplate(false)}>
-        <ModalDialog
-          aria-labelledby="default-template-title"
-          data-testid="highlights-default-template-dialog"
+      <AdminDialog
+        open={showPreview}
+        onClose={() => setShowPreview(false)}
+        title="Last generated highlights"
+        width={800}
+        data-testid="highlights-preview-dialog"
+      >
+        <Box
           sx={{
-            width: '90%',
-            maxWidth: 900,
-            maxHeight: '90vh',
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
+            whiteSpace: 'pre-wrap',
+            fontFamily: 'monospace',
+            fontSize: 'sm',
+            p: 2,
+            bgcolor: 'background.level1',
+            borderRadius: 'sm',
+            maxHeight: '60vh',
+            overflow: 'auto',
           }}
         >
-          <ModalClose />
-          <Typography id="default-template-title" level="h4" sx={{ mb: 1 }}>
-            Default Prompt Template
-          </Typography>
-          <Alert variant="outlined" color="neutral" sx={{ mb: 2 }}>
-            <Typography level="body-sm">
-              This is the default template used when no custom template is specified. You can copy it and modify for
-              your needs.
-            </Typography>
-          </Alert>
-          <Divider sx={{ mb: 2 }} />
-          <Sheet
-            sx={{
-              flex: 1,
-              overflow: 'auto',
-              p: 2,
-              bgcolor: 'background.level1',
-              borderRadius: 'sm',
-              border: '1px solid',
-              borderColor: 'divider',
+          {configData?.lastHighlights || 'No highlights available'}
+        </Box>
+      </AdminDialog>
+
+      <AdminDialog
+        open={showDefaultTemplate}
+        onClose={() => setShowDefaultTemplate(false)}
+        title="Default prompt template"
+        width={900}
+        data-testid="highlights-default-template-dialog"
+      >
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mb: 2 }}>
+          This is the default template used when no custom template is specified. You can copy it and modify it for your
+          needs.
+        </Typography>
+        <PromptBlock text={getDefaultHighlightsTemplate()} />
+        <AdminDialogFooter>
+          <Button
+            variant="outlined"
+            color="neutral"
+            startDecorator={<ContentCopyIcon />}
+            onClick={() => {
+              navigator.clipboard.writeText(getDefaultHighlightsTemplate());
+              toast.success('Default template copied to clipboard');
+            }}
+            data-testid="highlights-copy-default-btn"
+          >
+            Copy template
+          </Button>
+          <Button onClick={() => setShowDefaultTemplate(false)}>Close</Button>
+        </AdminDialogFooter>
+      </AdminDialog>
+
+      <AdminDialog
+        open={highlightsPreviewOpen}
+        onClose={() => setHighlightsPreviewOpen(false)}
+        title="Preview LLM prompt"
+        width={900}
+        data-testid="highlights-llm-preview-dialog"
+      >
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mb: 2 }}>
+          This is the prompt that will be sent to the LLM, rendered with sample data. Use it to verify your template
+          produces the expected output.
+        </Typography>
+        <PromptBlock text={highlightsPreviewContent} />
+        <AdminDialogFooter>
+          <Button
+            variant="outlined"
+            color="neutral"
+            startDecorator={<ContentCopyIcon />}
+            onClick={() => {
+              navigator.clipboard.writeText(highlightsPreviewContent);
+              toast.success('Prompt copied to clipboard');
             }}
           >
-            <Typography
-              component="pre"
-              sx={{
-                fontFamily: 'monospace',
-                fontSize: 'xs',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                m: 0,
-              }}
-            >
-              {getDefaultHighlightsTemplate()}
-            </Typography>
-          </Sheet>
-          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-            <Button
-              variant="outlined"
-              startDecorator={<ContentCopyIcon />}
-              onClick={() => {
-                navigator.clipboard.writeText(getDefaultHighlightsTemplate());
-                toast.success('Default template copied to clipboard');
-              }}
-              data-testid="highlights-copy-default-btn"
-            >
-              Copy Template
-            </Button>
-            <Button onClick={() => setShowDefaultTemplate(false)}>Close</Button>
-          </Box>
-        </ModalDialog>
-      </Modal>
+            Copy prompt
+          </Button>
+          <Button onClick={() => setHighlightsPreviewOpen(false)}>Close</Button>
+        </AdminDialogFooter>
+      </AdminDialog>
 
-      {/* Preview LLM Prompt Modal */}
-      <Modal open={highlightsPreviewOpen} onClose={() => setHighlightsPreviewOpen(false)}>
-        <ModalDialog
-          sx={{
-            maxWidth: '90vw',
-            width: 900,
-            maxHeight: '90vh',
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
-          <ModalClose />
-          <Typography level="h4" sx={{ mb: 1 }}>
-            Preview LLM Prompt
-          </Typography>
-          <Alert variant="outlined" color="primary" sx={{ mb: 2 }}>
-            <Typography level="body-sm">
-              This is the prompt that will be sent to the LLM, rendered with sample data. Use it to verify your template
-              produces the expected output.
-            </Typography>
-          </Alert>
-          <Divider sx={{ mb: 2 }} />
-          <Sheet
-            sx={{
-              flex: 1,
-              overflow: 'auto',
-              p: 2,
-              bgcolor: 'background.level1',
-              borderRadius: 'sm',
-              border: '1px solid',
-              borderColor: 'divider',
-            }}
-          >
-            <Typography
-              component="pre"
-              sx={{
-                fontFamily: 'monospace',
-                fontSize: 'xs',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                m: 0,
-              }}
-            >
-              {highlightsPreviewContent}
-            </Typography>
-          </Sheet>
-          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-            <Button
-              variant="outlined"
-              startDecorator={<ContentCopyIcon />}
-              onClick={() => {
-                navigator.clipboard.writeText(highlightsPreviewContent);
-                toast.success('Prompt copied to clipboard');
-              }}
-            >
-              Copy Prompt
-            </Button>
-            <Button onClick={() => setHighlightsPreviewOpen(false)}>Close</Button>
-          </Box>
-        </ModalDialog>
-      </Modal>
-
-      {/* Highlights Action Modal (Dry Run / Run Now) */}
-      <Modal open={highlightsModalOpen} onClose={() => setHighlightsModalOpen(false)}>
-        <ModalDialog sx={{ maxWidth: 500 }}>
-          <ModalClose />
-          <Typography level="h4" sx={{ mb: 1 }}>
-            {highlightsDryRun ? 'Dry Run — Weekly Highlights' : 'Run Weekly Highlights Now?'}
-          </Typography>
-          <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mb: 2 }}>
-            {highlightsDryRun
-              ? 'Preview which release notes would be included without posting to Slack.'
-              : 'Generate highlights from release notes in the date range and post them to Slack.'}
-          </Typography>
-          <Stack spacing={2}>
-            <Stack direction="row" spacing={2}>
-              <FormControl sx={{ flex: 1 }}>
-                <FormLabel>Start Date</FormLabel>
-                <Input
-                  type="date"
-                  value={highlightsStartDate}
-                  onChange={e => setHighlightsStartDate(e.target.value)}
-                  data-testid="highlights-start-date"
-                />
-              </FormControl>
-              <FormControl sx={{ flex: 1 }}>
-                <FormLabel>End Date</FormLabel>
-                <Input
-                  type="date"
-                  value={highlightsEndDate}
-                  onChange={e => setHighlightsEndDate(e.target.value)}
-                  data-testid="highlights-end-date"
-                />
-              </FormControl>
-            </Stack>
-            {!highlightsDryRun && (
-              <Alert color="warning" variant="outlined">
-                <Typography level="body-sm">This will post highlights to Slack!</Typography>
-              </Alert>
-            )}
-
-            {/* Dry run results */}
-            {highlightsResult && (
-              <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm', maxHeight: 300, overflow: 'auto' }}>
-                <Typography level="title-sm" sx={{ mb: 1 }}>
-                  Results: {highlightsResult.modalCount ?? 0} release note{highlightsResult.modalCount !== 1 ? 's' : ''}{' '}
-                  found
-                </Typography>
-                {highlightsResult.dateRange && (
-                  <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 1 }}>
-                    Range: {highlightsResult.dateRange.startDate} to {highlightsResult.dateRange.endDate}
-                  </Typography>
-                )}
-                {highlightsResult.modals && highlightsResult.modals.length > 0 ? (
-                  <Stack spacing={1}>
-                    {highlightsResult.modals.map((modal, i) => (
-                      <Box key={i} sx={{ pl: 1, borderLeft: '2px solid', borderColor: 'primary.300' }}>
-                        <Typography level="body-sm" fontWeight="bold">
-                          {modal.title}
-                        </Typography>
-                        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                          {modal.subtitle} • {new Date(modal.createdAt).toLocaleDateString()}
-                        </Typography>
-                      </Box>
-                    ))}
-                  </Stack>
-                ) : (
-                  <Alert variant="outlined" color="warning" size="sm">
-                    {highlightsResult.skipped
-                      ? 'Release notes are disabled, so generation would be skipped.'
-                      : 'No release notes were published in this date range. Generation would post a warning instead.'}
-                  </Alert>
-                )}
-              </Sheet>
-            )}
-
-            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-              <Button variant="plain" color="neutral" onClick={() => setHighlightsModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="solid"
-                color={highlightsDryRun ? 'primary' : 'success'}
-                startDecorator={generateHighlights.isPending ? <CircularProgress size="sm" /> : <PlayArrowIcon />}
-                onClick={handleHighlightsSubmit}
-                disabled={!highlightsStartDate || !highlightsEndDate || generateHighlights.isPending}
-              >
-                {highlightsDryRun ? 'Run Dry Test' : 'Run Now'}
-              </Button>
-            </Box>
+      <AdminDialog
+        open={highlightsModalOpen}
+        onClose={() => setHighlightsModalOpen(false)}
+        title={highlightsDryRun ? 'Dry run weekly highlights' : 'Run weekly highlights now?'}
+        width={500}
+        anchorTop
+        data-testid="highlights-run-dialog"
+      >
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mb: 2 }}>
+          {highlightsDryRun
+            ? 'Preview which release notes would be included without posting to Slack.'
+            : 'Generate highlights from release notes in the date range and post them to Slack.'}
+        </Typography>
+        <Stack spacing={2}>
+          <Stack direction="row" spacing={2}>
+            <FormControl sx={{ flex: 1 }}>
+              <FormLabel>Start date</FormLabel>
+              <Input
+                type="date"
+                value={highlightsStartDate}
+                onChange={e => setHighlightsStartDate(e.target.value)}
+                data-testid="highlights-start-date"
+              />
+            </FormControl>
+            <FormControl sx={{ flex: 1 }}>
+              <FormLabel>End date</FormLabel>
+              <Input
+                type="date"
+                value={highlightsEndDate}
+                onChange={e => setHighlightsEndDate(e.target.value)}
+                data-testid="highlights-end-date"
+              />
+            </FormControl>
           </Stack>
-        </ModalDialog>
-      </Modal>
+          {!highlightsDryRun && (
+            <Alert color="warning" variant="outlined">
+              <Typography level="body-sm">This will post highlights to Slack.</Typography>
+            </Alert>
+          )}
+
+          {highlightsResult && (
+            <Box
+              sx={{
+                p: 2,
+                borderRadius: 'sm',
+                border: '1px solid',
+                borderColor: 'admin.border',
+                maxHeight: 300,
+                overflow: 'auto',
+              }}
+            >
+              <Typography level="title-sm" sx={{ mb: 1 }}>
+                Results: {highlightsResult.modalCount ?? 0} release note{highlightsResult.modalCount !== 1 ? 's' : ''}{' '}
+                found
+              </Typography>
+              {highlightsResult.dateRange && (
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 1 }}>
+                  Range: {highlightsResult.dateRange.startDate} to {highlightsResult.dateRange.endDate}
+                </Typography>
+              )}
+              {highlightsResult.modals && highlightsResult.modals.length > 0 ? (
+                <Stack spacing={1}>
+                  {highlightsResult.modals.map((modal, i) => (
+                    <Box key={i} sx={{ pl: 1, borderLeft: '2px solid', borderColor: 'primary.300' }}>
+                      <Typography level="body-sm" fontWeight="bold">
+                        {modal.title}
+                      </Typography>
+                      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                        {modal.subtitle} &middot; {new Date(modal.createdAt).toLocaleDateString()}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Stack>
+              ) : (
+                <Alert variant="outlined" color="warning" size="sm">
+                  {highlightsResult.skipped
+                    ? 'Release notes are disabled, so generation would be skipped.'
+                    : 'No release notes were published in this date range. Generation would post a warning instead.'}
+                </Alert>
+              )}
+            </Box>
+          )}
+        </Stack>
+        <AdminDialogFooter>
+          <Button variant="plain" color="neutral" onClick={() => setHighlightsModalOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            startDecorator={<PlayArrowIcon />}
+            loading={generateHighlights.isPending}
+            onClick={handleHighlightsSubmit}
+            disabled={!highlightsStartDate || !highlightsEndDate}
+          >
+            {highlightsDryRun ? 'Run dry test' : 'Run now'}
+          </Button>
+        </AdminDialogFooter>
+      </AdminDialog>
     </SettingsSection>
   );
 }

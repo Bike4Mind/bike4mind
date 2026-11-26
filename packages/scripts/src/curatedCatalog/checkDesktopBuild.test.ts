@@ -13,7 +13,7 @@ import {
 import { CURATED_DEV_SEED_TEXTS, curatedDevKey } from './devKey';
 
 describe('the curated test keys', () => {
-  // The same pins as apps/desktop/src/main/models/curated/devKey.test.ts, so the two seed copies cannot drift.
+  // The same pins as apps/desktop/src/main/models/models.test.ts, so the two seed copies cannot drift.
   it('derive the key ids Desktop trusts in a flagged build', () => {
     expect(curatedDevKey().keyId).toBe('b132926cb06522d5');
     expect(curatedDevKey('recovery').keyId).toBe('689f488b0fe321ad');

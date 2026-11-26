@@ -87,7 +87,7 @@ describe('retrieval-floor banner wiring in a rendered reply', () => {
         <CssVarsProvider theme={appTheme}>
           <PromptReplies
             messageData={
-              { id: 'quest-1', questMasterReply: 'answer with no citations', status: 'streaming', promptMeta } as never
+              { id: 'quest-1', replies: ['answer with no citations'], status: 'streaming', promptMeta } as never
             }
             onSendMessage={async () => {}}
           />
@@ -126,7 +126,6 @@ describe('retrieval-coverage notice wiring in a rendered reply', () => {
               timestamp: new Date('2026-01-01T00:00:00Z'),
               prompt: 'What does the library say?',
               reply,
-              questMasterReply: reply,
               status: 'done',
               promptMeta: {
                 finishReason: TRUNCATED_FINISH_REASON,
@@ -259,6 +258,25 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     expect(screen.getByTestId('mcp-cancel-btn')).toBeInTheDocument();
     expect(screen.getByText(/Acme \(mcp\.acme\.test\)/)).toBeInTheDocument();
     expect(screen.getByTestId('mcp-custom-action-args')).toHaveTextContent('Ship it');
+  });
+
+  it('shows a confirmed function output on the card, and none for a reply without one', async () => {
+    const output = JSON.stringify({ output: { deflection: 0.000406901 }, stamp: { trust_label: 'unverified' } });
+    postMock.mockResolvedValue({
+      data: { success: true, message: 'Functions: beam_midspan_deflection completed', output },
+    });
+    renderCard({
+      tool: 'beam_midspan_deflection',
+      params: { load: 2000 },
+      ts: Date.now(),
+      customConnector: { connectionId: '_fn', slug: '_fn', displayName: 'Functions', urlHost: 'functions' },
+    });
+
+    fireEvent.click(screen.getByTestId('mcp-confirm-btn'));
+
+    const shown = await screen.findByTestId('mcp-confirm-output');
+    expect(shown.textContent).toBe(JSON.stringify(JSON.parse(output), null, 2));
+    expect(screen.getByTestId('mcp-confirm-result')).toHaveTextContent('Functions: beam_midspan_deflection completed');
   });
 
   it('does not render a GitHub project chip for a custom action that reuses a project tool name', () => {
@@ -624,7 +642,7 @@ describe('reply UI side effects: live only on first arrival', () => {
             {
               id,
               sessionId: sessionOf(),
-              questMasterReply: 'answer',
+              replies: ['answer'],
               status,
               ...(withEffects ? { uiSideEffects: effects } : {}),
             } as never
@@ -736,11 +754,11 @@ describe('artifact card ids agree with the rows persistence writes', () => {
   const midStream = `Here is the timer:\n\n${stopwatch}\n\nAnd the app that uses it:`;
   const finished = `${midStream}\n\n${app}\n\nAnd a board:\n\n${board}`;
 
-  const reply = (questMasterReply: string, status: string) => (
+  const reply = (replyText: string, status: string) => (
     <QueryClientProvider client={new QueryClient()}>
       <CssVarsProvider theme={appTheme}>
         <PromptReplies
-          messageData={{ id: questId, sessionId: 'session-1', questMasterReply, status } as never}
+          messageData={{ id: questId, sessionId: 'session-1', replies: [replyText], status } as never}
           onSendMessage={async () => {}}
         />
       </CssVarsProvider>
@@ -854,7 +872,7 @@ describe('deep research panel settle wiring in a rendered reply', () => {
       <QueryClientProvider client={new QueryClient()}>
         <CssVarsProvider theme={appTheme}>
           <PromptReplies
-            messageData={{ id: 'quest-1', questMasterReply: 'partial', status, deepResearchState } as never}
+            messageData={{ id: 'quest-1', replies: ['partial'], status, deepResearchState } as never}
             onSendMessage={async () => {}}
           />
         </CssVarsProvider>
@@ -869,5 +887,54 @@ describe('deep research panel settle wiring in a rendered reply', () => {
 
   it('keeps the running state while the turn is streaming', () => {
     expect(renderStatus('running')).not.toMatch(/stopped|complete/i);
+  });
+});
+
+describe('legacy QuestMaster plan replies', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const LEGACY_NOTE =
+    'This reply had a QuestMaster plan. QuestMaster plans are no longer shown in chat. ' +
+    'Saved plans were copied as markdown files to the "Questmaster archive" folder in your files.';
+
+  const renderReply = (messageData: Record<string, unknown>) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies messageData={messageData as never} onSendMessage={async () => {}} />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+  it('renders the legacy note, not a plan card, for a message that points at a legacy plan', () => {
+    renderReply({
+      id: 'quest-legacy',
+      sessionId: 'session-1',
+      status: 'done',
+      questMasterPlanId: 'plan-1',
+      replies: [],
+    });
+
+    expect(screen.getByTestId('legacy-questmaster-note').textContent).toBe(LEGACY_NOTE);
+  });
+
+  it('renders the legacy note instead of the stored plan-generator JSON', () => {
+    renderReply({
+      id: 'quest-legacy-error',
+      sessionId: 'session-1',
+      status: 'done',
+      type: 'error',
+      questMasterReply: '{"title":"Error Processing Quest","quests":[]}',
+      replies: [],
+    });
+
+    expect(screen.getByTestId('legacy-questmaster-note').textContent).toBe(LEGACY_NOTE);
+    expect(screen.queryByText(/Error Processing Quest/)).toBeNull();
+  });
+
+  it('renders an ordinary reply without the legacy note', () => {
+    renderReply({ id: 'quest-plain', sessionId: 'session-1', status: 'done', replies: ['A plain answer.'] });
+
+    expect(screen.queryByTestId('legacy-questmaster-note')).toBeNull();
+    expect(screen.getByText('A plain answer.')).toBeInTheDocument();
   });
 });

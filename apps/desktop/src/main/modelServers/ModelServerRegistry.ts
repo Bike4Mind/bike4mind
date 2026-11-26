@@ -75,7 +75,8 @@ import {
 import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal, type LoadSettingsReader } from '../chat/OllamaLocal';
 import type { ModelHubServer } from '../models/ModelHubService';
-import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import type { ProcessProbe } from './adoptedServers';
 import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';

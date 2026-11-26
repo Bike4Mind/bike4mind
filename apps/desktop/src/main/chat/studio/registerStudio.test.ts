@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,10 +12,12 @@ import type { ChatService } from '../ChatService';
 import type { ModelCatalog } from '../ModelCatalog';
 import { AttachmentStore } from '../AttachmentStore';
 import { SessionStore } from '../SessionStore';
+import { MediaApiClient } from '../media/MediaApiClient';
 import { MediaStore } from '../media/MediaStore';
 import { registerStudio } from './registerStudio';
 
-vi.mock('electron', () => ({ app: { once: vi.fn() }, dialog: {}, shell: {} }));
+const showOpenDialog = vi.hoisted(() => vi.fn());
+vi.mock('electron', () => ({ app: { once: vi.fn() }, dialog: { showOpenDialog }, shell: {} }));
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const remove of cleanup.splice(0)) await remove();
@@ -58,14 +60,14 @@ async function setup() {
       case '/api/ai/elevenlabs-voices':
         data = { voices: [] };
         break;
-      case '/api/studio/image-jobs?limit=1':
-        data = { data: [] };
-        break;
-      case '/api/studio/image-jobs': {
+      case '/api/v1/image-jobs': {
         paid(config);
-        data = { groupId: 'group', jobs: [{ id: 'remote', state: 'queued', output: null, error: null }] };
+        data = { group_id: 'group', data: [queuedImageJob] };
         break;
       }
+      case '/api/v1/image-jobs/remote':
+        data = queuedImageJob;
+        break;
       default:
         throw new Error(`Unexpected fixture request ${config.url}`);
     }
@@ -118,7 +120,41 @@ async function setup() {
   };
 }
 
+const queuedImageJob = {
+  id: 'remote',
+  object: 'image_generation',
+  state: 'pending',
+  model: 'gpt-image-2',
+  mode: 'generate',
+  prompt: 'Prepared garden',
+  group_id: 'group',
+  source: 'studio',
+  error: null,
+  output: null,
+  credits: { reserved: null, settled: null },
+  created_at: '2026-01-01T00:00:00.000Z',
+  updated_at: '2026-01-01T00:00:00.000Z',
+};
+
 describe('registered Studio authorization', () => {
+  it('uploads a reference image the user picked although the session has no granted folders', async () => {
+    const { invoke, draft } = await setup();
+    const directory = await mkdtemp(join(tmpdir(), 'studio-reference-'));
+    cleanup.push(() => rm(directory, { recursive: true, force: true }));
+    const image = join(directory, 'ref.png');
+    await writeFile(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [image] });
+    const upload = vi
+      .spyOn(MediaApiClient.prototype, 'uploadFile')
+      .mockResolvedValue({ id: 'file-1' } as Awaited<ReturnType<MediaApiClient['uploadFile']>>);
+    cleanup.push(async () => upload.mockRestore());
+    expect(await invoke(IPC_CHANNELS.studioUploadReference, draft.sessionId)).toEqual({
+      fileId: 'file-1',
+      name: 'ref.png',
+    });
+    expect(upload).toHaveBeenCalledWith('ref.png', 'image/png', expect.any(Buffer));
+  });
+
   it('prepares and creates once, then refuses both review and authorization replay', async () => {
     const { integration, invoke, draft, paid, prepareText, api } = await setup();
     const submit = vi.spyOn(integration.generation, 'submit');
