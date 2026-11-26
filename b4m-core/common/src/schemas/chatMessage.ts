@@ -118,8 +118,9 @@ const CHAT_MESSAGE_RESPONSE_FIELDS = {
 } as const satisfies Record<ChatMessageResponseField, true>;
 
 /**
- * A chat message (quest) as returned by the session chat routes. `promptMeta` passes through
- * as given, so routes must still apply redactPromptMetaForViewer for share viewers first.
+ * A chat message (quest) as returned by the session chat routes. `promptMeta` and the owner-only
+ * fields pass through as given, so routes must still apply redactChatMessageForViewer for share
+ * viewers first.
  */
 export const chatMessageResponseSchema = z.object(passthroughShape(CHAT_MESSAGE_RESPONSE_FIELDS));
 
