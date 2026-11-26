@@ -6,8 +6,10 @@ import Foundation
 struct SystemBackgroundRefreshScheduler: BackgroundRefreshScheduling {
   /// The bundle id differs per signing team, so the identifier is derived from it; AppSupport/Info.plist lists it
   /// the same way.
-  static let busyBlockIdentifier =
-    (Bundle.main.bundleIdentifier ?? "com.bike4mind.app") + BusyBlockBackgroundRefresh.identifierSuffix
+  static let busyBlockIdentifier: String = {
+    guard let bundleID = Bundle.main.bundleIdentifier else { preconditionFailure("The app has no bundle identifier") }
+    return BusyBlockBackgroundRefresh.identifier(bundleID: bundleID)
+  }()
 
   func submit(identifier: String, earliestBegin: Date) throws {
     let request = BGAppRefreshTaskRequest(identifier: identifier)
