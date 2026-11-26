@@ -8,6 +8,9 @@ import {
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
   SERVER_OWNED_SESSION_FIELDS,
   SERVER_OWNED_SESSION_ORIGIN_FIELDS,
+  USER_SECRET_FIELDS,
+  USER_SECRET_SUBFIELD_PATHS,
+  USER_SUBFIELD_REDACTED_FIELDS,
 } from '@bike4mind/common';
 
 /**
@@ -50,9 +53,22 @@ import {
  * `origin.`) for every viewer.
  * A subscription may include both owned and shared sessions, so the query projection must
  * exclude them for everyone, including the owner, to match the REST response shape.
+ *
+ * users: mirrors the REST self-view (redactUserSecretsForSelf). A projection can only exclude, so it
+ * withholds every USER_SECRET_FIELDS entry, and for the integration objects (USER_SUBFIELD_REDACTED_FIELDS)
+ * only their secret sub-paths, because the client reads their status from live pushes (the Atlassian
+ * reconnect toast). The dotted `signupGrant.blocked` withholds an admin's grant block without hiding the
+ * rest of signupGrant, which the credits UI reads.
  */
 /** Quest fields no session viewer should see, the owner included; see the quests note above. */
 const QUEST_SERVER_ONLY_FIELDS = CHAT_MESSAGE_WITHHELD_FIELDS;
+
+const SUBFIELD_REDACTED_USER_FIELDS: ReadonlySet<string> = new Set(USER_SUBFIELD_REDACTED_FIELDS);
+const USER_WITHHELD_PATHS = [
+  ...USER_SECRET_FIELDS.filter(field => !SUBFIELD_REDACTED_USER_FIELDS.has(field)),
+  ...USER_SECRET_SUBFIELD_PATHS,
+  'signupGrant.blocked',
+];
 
 /** Invite fields no subscriber may see, and those only a platform admin may; see the invites note above. */
 const INVITE_SECRET_FIELDS = ['token'] as const;
@@ -85,26 +101,7 @@ export function resolveFieldLimits(
   }: FieldLimitOptions
 ): Record<string, boolean> | undefined {
   if (collectionName === 'users') {
-    // Keep admin-only fields in sync with USER_SECRET_FIELDS (toSafeUser.ts), which covers REST only. The dotted
-    // path withholds an admin's grant block without hiding the rest of signupGrant, which the credits UI reads.
-    return {
-      password: false,
-      freeQuestStartId: false,
-      'signupGrant.blocked': false,
-      stripeCustomerId: false,
-      resetPasswordToken: false,
-      signupGrantAssessment: false,
-      riskScore: false,
-      riskEvidence: false,
-      riskReviewAutoApproval: false,
-      riskReviewReopenedAt: false,
-      paymentRiskEventAt: false,
-      riskReviewAutoCheckedAt: false,
-      throttle: false,
-      riskSignals: false,
-      signupLanding: false,
-      interventionHolds: false,
-    };
+    return Object.fromEntries(USER_WITHHELD_PATHS.map(path => [path, false]));
   }
   if (collectionName === questCollectionName) {
     const excluded = [...(isQuestOwner ? [] : OWNER_ONLY_PROMPT_META_PROJECTION_PATHS), ...QUEST_SERVER_ONLY_FIELDS];
