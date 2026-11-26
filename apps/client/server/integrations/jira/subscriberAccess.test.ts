@@ -93,4 +93,39 @@ describe('canSubscriberViewJiraEvent', () => {
     await expect(canSubscriberViewJiraEvent({ subscriberUserId: 'u1', config, payload })).resolves.toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('checks project browse permission for a deleted issue', async () => {
+    const payload = {
+      webhookEvent: 'jira:issue_deleted',
+      issue: { key: 'SEC-7', fields: { project: { key: 'SEC' } } },
+    };
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ permissions: { BROWSE_PROJECTS: { havePermission: true } } }),
+    });
+
+    await expect(canSubscriberViewJiraEvent({ subscriberUserId: 'u1', config, payload })).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.atlassian.com/ex/jira/cloud-1/rest/api/3/mypermissions?projectKey=SEC&permissions=BROWSE_PROJECTS',
+      expect.any(Object)
+    );
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ permissions: { BROWSE_PROJECTS: { havePermission: false } } }),
+    });
+    await expect(canSubscriberViewJiraEvent({ subscriberUserId: 'u1', config, payload })).resolves.toBe(false);
+  });
+
+  it('denies a deleted issue with no project to check', async () => {
+    const payload = { webhookEvent: 'jira:issue_deleted', issue: { key: 'SEC-7' } };
+    await expect(canSubscriberViewJiraEvent({ subscriberUserId: 'creator', config, payload })).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('checks project browse permission for project events', async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 403 });
+    const payload = { webhookEvent: 'project_updated', project: { key: 'SEC' } };
+    await expect(canSubscriberViewJiraEvent({ subscriberUserId: 'creator', config, payload })).resolves.toBe(false);
+  });
 });
