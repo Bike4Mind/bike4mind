@@ -22,6 +22,14 @@ export const CORE_TUTORIALS: readonly CoreTutorial[] = [
     track: 'different',
     order: 30,
   },
+  {
+    id: 'artifacts',
+    title: 'Make a page you can keep',
+    visibility: { public: true },
+    enabled: true,
+    track: 'different',
+    order: 40,
+  },
 ];
 
 /** Resolves only core's own tutorials, so an owner's module id never reaches a core route. */
