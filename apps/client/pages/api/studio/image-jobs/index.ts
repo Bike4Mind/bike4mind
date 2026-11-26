@@ -26,6 +26,7 @@ const LIST_LIMIT_MAX = 100;
 const CreateBodySchema = z.strictObject({
   count: z.number(),
   request: z.unknown(),
+  organization_id: z.string().trim().min(1).nullable().optional(),
 });
 
 const ListQuerySchema = z.strictObject({
@@ -44,8 +45,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         return res.status(400).json({ error: 'invalid_request', message: 'Body must be { count, request }' });
       }
       const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
-      // undefined: bill the caller's active organization, as a first-party session does on every media route.
-      const organizationId = await resolveMediaBillingOrgId(req, undefined);
+      // Omitted: the caller's home organization, as on every media route; null is personal credits.
+      const organizationId = await resolveMediaBillingOrgId(req, body.data.organization_id);
       const result = await createImageJobs(
         {
           user: { id: req.user.id, organizationId },

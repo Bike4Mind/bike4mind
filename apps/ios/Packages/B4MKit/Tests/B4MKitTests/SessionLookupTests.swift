@@ -3,41 +3,40 @@ import XCTest
 @testable import B4MKit
 
 final class SessionLookupTests: XCTestCase {
-  func testFindsSessionsBeyondTheFirstPage() async throws {
+  func testFetchesEachRequestedIDWithoutListingPages() async throws {
     let api = FakeAPI()
-    await api.setSessionPages([
-      nil: Page(items: [Samples.session("a"), Samples.session("b")], nextCursor: "p2"),
-      "p2": Page(items: [Samples.session("c")], nextCursor: "p3"),
-      "p3": Page(items: [Samples.session("d")], nextCursor: nil),
-    ])
+    await api.setSessions([Samples.session("a"), Samples.session("c")])
 
     let found = try await SessionLookup.sessions(withIDs: ["a", "c"], api: api)
 
     XCTAssertEqual(found.map(\.id), ["a", "c"])
     let cursors = await api.sessionCursors
-    XCTAssertEqual(cursors, [nil, "p2"], "the scan stops once every id is found")
+    XCTAssertTrue(cursors.isEmpty)
+    let lookups = await api.sessionLookups
+    XCTAssertEqual(lookups, ["a", "c"])
   }
 
-  func testTheScanIsBounded() async throws {
+  func testMissingIDsAreOmitted() async throws {
     let api = FakeAPI()
-    await api.setSessionPages([
-      nil: Page(items: [Samples.session("a")], nextCursor: "p2"),
-      "p2": Page(items: [Samples.session("b")], nextCursor: "p3"),
-    ])
+    await api.setSessions([Samples.session("a")])
 
-    let found = try await SessionLookup.sessions(withIDs: ["missing"], api: api, maxPages: 2)
+    let found = try await SessionLookup.sessions(withIDs: ["a", "missing"], api: api)
 
-    XCTAssertTrue(found.isEmpty)
+    XCTAssertEqual(found.map(\.id), ["a"])
     let cursors = await api.sessionCursors
-    XCTAssertEqual(cursors, [nil, "p2"])
+    XCTAssertTrue(cursors.isEmpty)
   }
 
   @MainActor
-  func testNameComesFromTheListThenFromTheFirstPrompt() async {
+  func testColdNameUsesOneDirectRequestThenFallsBackToTheFirstPrompt() async {
     let api = FakeAPI()
-    await api.setSessionPages([nil: Page(items: [Samples.session("a")], nextCursor: nil)])
+    await api.setSessions([Samples.session("a")])
     let named = await SessionLookup.name(forSession: "a", api: api, cache: nil, turns: [])
     XCTAssertEqual(named, "Session a")
+    let lookups = await api.sessionLookups
+    XCTAssertEqual(lookups, ["a"])
+    let cursors = await api.sessionCursors
+    XCTAssertTrue(cursors.isEmpty)
 
     let turns = [Samples.quest("q1", prompt: "  Plan a weekend in Kyoto  ", reply: nil, status: .done)]
     let derived = await SessionLookup.name(forSession: "unlisted", api: api, cache: nil, turns: turns)

@@ -17,12 +17,14 @@ import { createSpeechJob, inlineMinStepMs } from '@bike4mind/services/audioJobs'
 import { getCreateSpeechJobDeps, readAudioJobOutput } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 import {
   awaitInlineAudioJob,
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
   GENERATION_JOB_ID_HEADER,
   failureLogLevelOf,
+  isQuotaExhaustedFailure,
   isRateLimitedFailure,
   prefersRespondAsync,
   providerStatusOf,
@@ -71,6 +73,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     preview,
     organization_id,
     end_user_id,
+    run,
   } = req.validated;
   // Validated so a platform can send the field on every AI route; no TTS provider takes an end-user id.
   resolvePlatformEndUser(end_user_id, { userId: req.user?.id, apiKeyInfo: req.apiKeyInfo });
@@ -79,7 +82,11 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
 
   // Omitted keeps the historical personal default; a key bills its own account (resolveAudioBillingOrgId 403s any
   // other target). Undefined is a user-billed key, which bills the user.
-  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
+  // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
+  const paidRun = await resolvePaidCallRun(req, run, organization_id);
+  const billingOrganizationId = paidRun
+    ? paidRun.billingOrganizationId
+    : await resolveAudioBillingOrgId(req, organization_id, 'user');
   // As the v1 media routes: 'studio' is any first-party session.
   const source: GenerationJobSource = req.apiKeyInfo ? 'api' : 'studio';
   const created = await createAudioJobKeepingAudioOnFullQuota(
@@ -96,6 +103,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
           apiKeyId: req.apiKeyInfo?.keyId,
           saveToFiles,
           preferredVoice: user.preferredVoice,
+          ...(paidRun && { run: paidRun.attribution }),
         },
         getCreateSpeechJobDeps()
       ),
@@ -183,7 +191,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
       return res.status(422).json({ error: `TTS request rejected by the ${vendor} provider`, provider: vendor });
     case 'failed': {
       const failure = failedResponse(job, vendor);
-      if (failure.status === 502) {
+      if (failure.status === 502 || failure.status === 503) {
         req.logger[failureLogLevelOf(job)]('TTS synthesis failed', {
           jobId: job.id,
           error: job.error,
@@ -252,13 +260,21 @@ function formatUsed(
 
 /**
  * Folds a failed job onto a status tts.contract.ts documents, with a generic body so the provider's raw error text
- * never leaks: a credential rejection (401 or 403) is a 401, a provider rate limit stays a 429, any other rejection
- * of the request (bad voice, bad parameter) is a 422, and anything else is an upstream 502.
+ * never leaks: an exhausted provider quota is a 503, a credential rejection (401 or 403) is a 401, a provider rate
+ * limit stays a 429, any other rejection of the request (bad voice, bad parameter) is a 422, and anything else is an
+ * upstream 502.
  */
 function failedResponse(
   job: IGenerationJobDocumentOf<'speech'>,
   vendor: VoiceGenerationVendor
-): { status: 401 | 422 | 429 | 502; body: Record<string, unknown> } {
+): { status: 401 | 422 | 429 | 502 | 503; body: Record<string, unknown> } {
+  // Every candidate was tried before this, so no other vendor could cover for the empty account.
+  if (isQuotaExhaustedFailure(job)) {
+    return {
+      status: 503,
+      body: { error: 'Text-to-speech is temporarily unavailable. Please try again later.', provider: vendor },
+    };
+  }
   const rejected = { error: `TTS request rejected by the ${vendor} provider`, provider: vendor };
   const status = providerStatusOf(job);
   if (isRateLimitedFailure(job)) return { status: 429, body: rejected };

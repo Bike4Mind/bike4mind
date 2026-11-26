@@ -83,8 +83,37 @@ describe('POST /api/files/copy-generated-image response boundary', () => {
     expect(sent).not.toHaveProperty('_id');
     expect(sent).not.toHaveProperty('__v');
     expect(sent).not.toHaveProperty('secretNotInSchema');
-    expect(sent).toMatchObject({ id: 'f1', fileName: 'image.png', fileUrl: 'https://signed.test/img.png' });
+    expect(sent).toMatchObject({
+      id: 'f1',
+      fileName: 'image.png',
+      fileUrl: 'https://signed.test/img.png',
+      created: true,
+    });
     expect(sent.fileUrlExpireAt).toBeDefined();
+    expect(h.signUrl).toHaveBeenCalledWith(
+      'owned/image.png',
+      'get',
+      expect.objectContaining({ ResponseContentType: 'image/png' })
+    );
+  });
+
+  it('signs a stored SVG copy as an attachment', async () => {
+    h.signUrl.mockResolvedValue('https://signed.test/img.svg');
+    h.findById.mockResolvedValue({
+      id: 'f1',
+      fileName: 'image.svg',
+      filePath: 'owned/image.svg',
+      mimeType: 'image/svg+xml',
+      moderationStatus: 'clean',
+    });
+
+    await run(makeRes().res);
+
+    expect(h.signUrl).toHaveBeenCalledWith(
+      'owned/image.svg',
+      'get',
+      expect.objectContaining({ ResponseContentDisposition: 'attachment; filename="image.svg"' })
+    );
   });
 
   it('strips undeclared keys on the plain return when the image is not yet serveable', async () => {
@@ -103,7 +132,7 @@ describe('POST /api/files/copy-generated-image response boundary', () => {
     expect(sent).not.toHaveProperty('_id');
     expect(sent).not.toHaveProperty('__v');
     expect(sent).not.toHaveProperty('secretNotInSchema');
-    expect(sent).toMatchObject({ id: 'f2', fileName: 'image.png' });
+    expect(sent).toMatchObject({ id: 'f2', fileName: 'image.png', created: true });
     expect(sent).not.toHaveProperty('fileUrl');
   });
 });

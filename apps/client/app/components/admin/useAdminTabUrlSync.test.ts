@@ -29,7 +29,7 @@ function useHarness(initialTab: TabValue, isRenderable?: IsAdminTabRenderable) {
 
 const lastNavigation = () => routerMock.navigate.mock.calls.at(-1)[0];
 
-const gatedOffLiveOps: IsAdminTabRenderable = tab => tab !== AdminTab.LiveOpsTriage;
+const gatedOffMigrate: IsAdminTabRenderable = tab => tab !== AdminTab.Migrate;
 
 describe('useAdminTabUrlSync', () => {
   beforeEach(() => {
@@ -120,7 +120,8 @@ describe('useAdminTabUrlSync', () => {
 
   it.each([
     ['registration-invites', 'invites'],
-    ['partner-signup-rules', 'packages'],
+    ['partner-signup-rules', 'partners'],
+    ['held-signup-grants', 'pending'],
   ])('rewrites the retired %s link to the %s Invite Center section, once', (slug, section) => {
     routerMock.search = { tab: slug };
 
@@ -135,7 +136,11 @@ describe('useAdminTabUrlSync', () => {
     expect(routerMock.navigate).toHaveBeenCalled();
 
     routerMock.navigate.mockClear();
-    routerMock.search = { tab: 'waitlist', inviteSection: section };
+    routerMock.search = {
+      tab: 'waitlist',
+      inviteSection: section,
+      ...(slug === 'held-signup-grants' && { heldGrants: 'open' }),
+    };
     rerender();
     expect(result.current.activeTab).toBe(AdminTab.Waitlist);
     expect(routerMock.navigate).not.toHaveBeenCalled();
@@ -337,18 +342,18 @@ describe('useAdminTabUrlSync', () => {
   });
 
   it('ignores a deep link to a tab the console cannot render', () => {
-    routerMock.search = { tab: 'live-ops-triage' };
+    routerMock.search = { tab: 'migrate' };
 
     const seen: unknown[] = [];
     const { result } = renderHook(() => {
-      const h = useHarness(AdminTab.Users, gatedOffLiveOps);
+      const h = useHarness(AdminTab.Users, gatedOffMigrate);
       seen.push(h.activeTab);
       return h;
     });
 
     expect(result.current.activeTab).toBe(AdminTab.Users);
-    expect(seen).not.toContain(AdminTab.LiveOpsTriage);
-    expect(lastNavigation().search({ tab: 'live-ops-triage' }).tab).toBe('users');
+    expect(seen).not.toContain(AdminTab.Migrate);
+    expect(lastNavigation().search({ tab: 'migrate' }).tab).toBe('users');
   });
 
   it("falls back to the first sidebar tab it can render when Users is not one (a delegated admin's console)", () => {
@@ -376,12 +381,12 @@ describe('useAdminTabUrlSync', () => {
 
   // The gate can resolve after a deep link has already selected the tab.
   it('falls back to Users when the selected tab stops being renderable', () => {
-    routerMock.search = { tab: 'live-ops-triage' };
+    routerMock.search = { tab: 'migrate' };
     const { result, rerender } = renderHook(
-      ({ gated }: { gated: boolean }) => useHarness(AdminTab.LiveOpsTriage, gated ? gatedOffLiveOps : undefined),
+      ({ gated }: { gated: boolean }) => useHarness(AdminTab.Migrate, gated ? gatedOffMigrate : undefined),
       { initialProps: { gated: false } }
     );
-    expect(result.current.activeTab).toBe(AdminTab.LiveOpsTriage);
+    expect(result.current.activeTab).toBe(AdminTab.Migrate);
 
     rerender({ gated: true });
 
@@ -390,13 +395,13 @@ describe('useAdminTabUrlSync', () => {
   });
 
   it("falls back when a delegate's deep link names a tab they cannot open", () => {
-    routerMock.search = { tab: 'live-ops-triage' };
+    routerMock.search = { tab: 'migrate' };
     const delegateTabs: IsAdminTabRenderable = tab => tab === AdminTab.Models || tab === AdminTab.HelpAnalytics;
 
     const { result } = renderHook(() => useHarness(AdminTab.Dashboard, delegateTabs));
 
-    expect(result.current.activeTab).not.toBe(AdminTab.LiveOpsTriage);
+    expect(result.current.activeTab).not.toBe(AdminTab.Migrate);
     expect(delegateTabs(result.current.activeTab as AdminTab)).toBe(true);
-    expect(lastNavigation().search({ tab: 'live-ops-triage' }).tab).not.toBe('live-ops-triage');
+    expect(lastNavigation().search({ tab: 'migrate' }).tab).not.toBe('migrate');
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
 const mocks = vi.hoisted(() => ({
@@ -53,6 +53,12 @@ const resMock = () => {
 const reqOf = (fields: Record<string, unknown>) => ({ user: { id: 'b' }, ...fields }) as unknown as Request;
 
 describe('approval routes', () => {
+  // A route registers its handler only on first import, so every test after it reads the same chains.
+  beforeAll(async () => {
+    await load('index', () => import('../index'));
+    await load('approve', () => import('../[id]/approve'));
+    await load('reject', () => import('../[id]/reject'));
+  });
   beforeEach(() => vi.clearAllMocks());
 
   it('are JWT-only so an API key never decides an approval', async () => {

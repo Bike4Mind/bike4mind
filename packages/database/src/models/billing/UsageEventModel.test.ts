@@ -6,7 +6,12 @@ import { UsageEvent, UsageEventRepository, usageEventRepository } from './UsageE
 import { CreditLot } from './CreditLotModel';
 import { User } from '../auth/UserModel';
 import { Organization } from '../infra/admin/OrganizationModel';
-import { CreditHolderType, IUsageEventInput } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  IUsageEventInput,
+  PLATFORM_USAGE_OWNER_ID,
+  PLATFORM_USAGE_OWNER_TYPE,
+} from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
 
@@ -450,6 +455,73 @@ describe('UsageEventRepository', () => {
 
       await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date(oldestMonthStart.getTime() - 1) } });
       expect(await usageEventRepository.monthlyCogsByProvider(3)).toHaveLength(0);
+    });
+  });
+
+  describe('providerUnitsBreakdown', () => {
+    const at = async (doc: { id: string } | null, iso: string) => {
+      await UsageEvent.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(doc!.id) },
+        { $set: { createdAt: new Date(iso) } }
+      );
+    };
+    const window = {
+      provider: 'elevenlabs',
+      from: new Date('2026-03-01T00:00:00Z'),
+      to: new Date('2026-04-01T00:00:00Z'),
+    };
+    const tts = { feature: 'text_to_speech' as const, provider: 'elevenlabs', model: 'eleven_multilingual_v2' };
+
+    it('sums units and requests per day, feature, model, user, key source and status', async () => {
+      await at(await record({ ...tts, units: 100, keySource: 'platform' }), '2026-03-02T01:00:00Z');
+      await at(await record({ ...tts, units: 50, keySource: 'platform' }), '2026-03-02T23:00:00Z');
+      await at(await record({ ...tts, units: 7, keySource: 'user' }), '2026-03-02T05:00:00Z');
+      await at(await record({ ...tts, units: 30, status: 'error' }), '2026-03-03T05:00:00Z');
+
+      const rows = await usageEventRepository.providerUnitsBreakdown(window);
+
+      expect(rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ day: '2026-03-02', keySource: 'platform', status: 'ok', requests: 2, units: 150 }),
+          expect.objectContaining({ day: '2026-03-02', keySource: 'user', requests: 1, units: 7 }),
+          expect.objectContaining({ day: '2026-03-03', keySource: null, status: 'error', requests: 1, units: 30 }),
+        ])
+      );
+      expect(rows).toHaveLength(3);
+      expect(rows.at(-1)!.day).toBe('2026-03-03');
+      expect(rows[0]).toMatchObject({ feature: 'text_to_speech', model: 'eleven_multilingual_v2', userId: 'user-1' });
+    });
+
+    it('excludes other providers and rows outside [from, to)', async () => {
+      await at(await record({ ...tts, units: 1 }), '2026-02-28T23:59:59Z');
+      await at(await record({ ...tts, units: 2 }), '2026-04-01T00:00:00Z');
+      await at(await record({ units: 3 }), '2026-03-10T00:00:00Z');
+      await at(await record({ ...tts, units: 4 }), '2026-03-01T00:00:00Z');
+
+      const rows = await usageEventRepository.providerUnitsBreakdown(window);
+
+      expect(rows.map(r => r.units)).toEqual([4]);
+    });
+
+    it('buckets rows at the flat-priced default units apart', async () => {
+      const sound = { feature: 'sound_effects' as const, provider: 'elevenlabs', model: 'elevenlabs' };
+      await at(await record({ ...sound, units: 200 / 11 }), '2026-03-05T01:00:00Z');
+      await at(await record({ ...sound, units: 200 / 11 }), '2026-03-05T02:00:00Z');
+      await at(await record({ ...sound, units: 5 }), '2026-03-05T03:00:00Z');
+
+      const rows = await usageEventRepository.providerUnitsBreakdown({ ...window, defaultUnits: 200 / 11 });
+
+      expect(rows).toHaveLength(2);
+      expect(rows.find(r => r.atDefaultUnits)).toMatchObject({ requests: 2 });
+      expect(rows.find(r => !r.atDefaultUnits)).toMatchObject({ requests: 1, units: 5 });
+    });
+
+    it('counts a row without units as zero units', async () => {
+      await at(await record({ ...tts }), '2026-03-05T00:00:00Z');
+
+      const [row] = await usageEventRepository.providerUnitsBreakdown(window);
+
+      expect(row).toMatchObject({ requests: 1, units: 0 });
     });
   });
 
@@ -1445,6 +1517,7 @@ describe('UsageEventRepository.costByFundingCohort', () => {
         costUsd: { granted: 2.75, purchased: 0.25, subscription: 0, unknown: 0 },
         credits: { granted: 115, purchased: 25, subscription: 0, unknown: 0 },
         unattributedCostUsd: 0.5,
+        platformCostUsd: 0,
       },
       {
         cohortWeek: new Date('2026-10-12T00:00:00Z'),
@@ -1452,6 +1525,7 @@ describe('UsageEventRepository.costByFundingCohort', () => {
         costUsd: { granted: 0, purchased: 0, subscription: 4, unknown: 0 },
         credits: { granted: 0, purchased: 0, subscription: 10, unknown: 0 },
         unattributedCostUsd: 0,
+        platformCostUsd: 0,
       },
     ]);
   });
@@ -1462,5 +1536,70 @@ describe('UsageEventRepository.costByFundingCohort', () => {
     const rows = await usageEventRepository.costByFundingCohort(30);
 
     expect(rows).toEqual([expect.objectContaining({ cohortWeek: null, accounts: 1, unattributedCostUsd: 1 })]);
+  });
+});
+
+describe('platform-paid rows', () => {
+  const platformRow: Partial<IUsageEventInput> = {
+    requestId: 'quest-example',
+    userId: PLATFORM_USAGE_OWNER_ID,
+    ownerId: PLATFORM_USAGE_OWNER_ID,
+    ownerType: PLATFORM_USAGE_OWNER_TYPE,
+    source: 'system',
+    costUsd: 0.5,
+    creditsCharged: 0,
+    platformPaid: { reason: 'template_example_run', listingId: 'listing-1' },
+  };
+  const since = new Date(Date.now() - 60_000);
+
+  it('stores the platform owner and the listing it was spent on', async () => {
+    const doc = await record(platformRow);
+
+    const stored = await UsageEvent.findById(doc!.id).lean();
+    expect(stored).toMatchObject({ ownerType: 'Platform', ownerId: 'platform', creditsCharged: 0 });
+    expect(stored?.platformPaid).toEqual({ reason: 'template_example_run', listingId: 'listing-1' });
+    expect(stored?.fundingBreakdown).toBeUndefined();
+  });
+
+  it('rejects a platform-paid reason outside the vocabulary', async () => {
+    await expect(
+      record({ ...platformRow, platformPaid: { reason: 'gift' as unknown as 'template_example_run' } })
+    ).rejects.toThrow(/reason/);
+  });
+
+  it('stays out of every per-user and per-org spend read and cap', async () => {
+    await record();
+    await record({ ownerId: 'org-1', ownerType: CreditHolderType.Organization });
+    await record(platformRow);
+
+    const user = await usageEventRepository.ownerUsageSummary('user-1', CreditHolderType.User);
+    const org = await usageEventRepository.ownerUsageSummary('org-1', CreditHolderType.Organization);
+    expect(user.totals).toEqual({ requests: 1, cogsUsd: 0.01, creditsCharged: 50 });
+    expect(org.totals).toEqual({ requests: 1, cogsUsd: 0.01, creditsCharged: 50 });
+    expect(await usageEventRepository.findDailySpendByUser('user-1', since)).toBe(50);
+    expect(await usageEventRepository.creditsSpentByUser('user-1', since, new Date(Date.now() + 60_000))).toBe(100);
+    expect((await usageEventRepository.userTokensSince('user-1', since)).tokens).toBe(1500);
+    expect(await usageEventRepository.systemCostUsdByUserSince('user-1', since)).toBe(0);
+  });
+
+  it('counts in the admin platform reports without error', async () => {
+    await record();
+    await record(platformRow);
+
+    const platform = await usageEventRepository.platformUsageSummary({ days: 1 });
+    expect(platform.totals.requests).toBe(2);
+    expect(platform.totals.cogsUsd).toBeCloseTo(0.51, 9);
+    expect(platform.totals.creditsCharged).toBe(50);
+
+    const spend = await usageEventRepository.spendSummary({ from: since });
+    expect(spend.totals.cogsUsd).toBeCloseTo(0.51, 9);
+    expect(spend.byAccount).toEqual(
+      expect.arrayContaining([expect.objectContaining({ ownerId: 'platform', ownerType: 'Platform' })])
+    );
+
+    const cogs = await usageEventRepository.monthlyCogsByProvider(1);
+    expect(cogs.reduce((sum, row) => sum + row.cogsUsd, 0)).toBeCloseTo(0.51, 9);
+    const margin = await usageEventRepository.marginByModelDay(since);
+    expect(margin.reduce((sum, row) => sum + row.cogsUsd, 0)).toBeCloseTo(0.51, 9);
   });
 });

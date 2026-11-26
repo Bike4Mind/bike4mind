@@ -1,6 +1,6 @@
-import type { AdminActionCounts } from '@client/app/components/admin/adminActionCounts';
+import type { AdminActionCounts } from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 import { adminApi } from '@server/middlewares/adminApi';
-import { computeAdminActionCounts } from '@server/admin/actionCounts';
+import { computeAdminActionCounts } from '@bike4mind/server-utils/admin/actionCounts';
 
 /**
  * GET /api/admin/action-counts: how many items wait in each admin queue the caller may act on,

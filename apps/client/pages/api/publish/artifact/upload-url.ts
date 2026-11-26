@@ -1,7 +1,6 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
-import { v4 as uuidv4 } from 'uuid';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { PublishedArtifact } from '@bike4mind/database';
 import {
@@ -11,6 +10,7 @@ import {
   ALLOWED_MIME_EXACT,
   type UploadUrlResponse,
   normalizePublishTags,
+  ApiKeyScope,
 } from '@bike4mind/common';
 import {
   checkScopePermission,
@@ -42,7 +42,10 @@ function isAllowedMime(mimeType: string): boolean {
   return ALLOWED_MIME_EXACT.includes(mimeType) || ALLOWED_MIME_PREFIXES.some(p => mimeType.startsWith(p));
 }
 
-const handler = baseApi().post(outboundActionGate(), async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).post(outboundActionGate(), async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -156,7 +159,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   };
 
   // ── Issue draft + presigned PUT URLs ──
-  const draftId = uuidv4();
+  const draftId = crypto.randomUUID();
   const draftPrefix = `drafts/${draftId}/`;
   const expiresAt = new Date(Date.now() + PRESIGNED_URL_EXPIRY_SECONDS * 1000).toISOString();
 

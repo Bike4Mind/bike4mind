@@ -1,5 +1,4 @@
 import { ModelBackend, ModelInfo, ModelName } from '@bike4mind/common';
-import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -10,7 +9,7 @@ import { Logger } from '@bike4mind/observability';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config();
+if (fs.existsSync('.env')) process.loadEnvFile('.env');
 
 interface CompletionInfo {
   inputTokens?: number;

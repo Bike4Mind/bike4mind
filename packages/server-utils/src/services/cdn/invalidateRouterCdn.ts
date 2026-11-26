@@ -5,8 +5,8 @@ import { appFileKeyToCdnPath, resolveProxyTarget } from '../../utils/appFileProx
 import type { MinimalLogger } from '../publish/minimalLogger';
 
 /**
- * CloudFront invalidation on the Router distribution, which serves `/p/*`, `/generated/*` and the
- * app-file prefixes. Best-effort throughout: a failed invalidation is logged and never thrown, so
+ * CloudFront invalidation on the Router distribution, which serves `/p/*` and the app-file
+ * prefixes. Best-effort throughout: a failed invalidation is logged and never thrown, so
  * it cannot fail the delete that triggered it. The frontend lambda and the account-deletion sweep
  * already hold `cloudfront:CreateInvalidation` on this distribution (infra/web.ts, infra/cron.ts).
  */
@@ -110,11 +110,6 @@ export function createCdnInvalidationBatch(label: string, logger?: MinimalLogger
       await invalidateRouterPaths(pending, { label, logger });
     },
   };
-}
-
-/** CDN path of a generated-images bucket object (served at `/generated/<key>`). */
-export function generatedCdnPath(key: string): string {
-  return `/generated/${encodeURI(key)}`;
 }
 
 /**

@@ -46,7 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   adminAiSuggestionRepository: { transition: h.transition },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
+vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: (value: unknown) => {
     if (typeof value !== 'string' || value.trim().length < 5) throw new BadRequestError('Reason required');
@@ -106,6 +106,15 @@ describe('POST /api/admin/dlq/discard', () => {
     });
     expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.acquire.mock.invocationCallOrder[0]);
     expect(h.audit.mock.calls[1][1].details).toMatchObject({ aiSuggestionId: id });
+    expect(h.logReplay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aiSuggestionId: id,
+        messageId: 'm1',
+        queueLabel: 'quest',
+        operation: 'discard',
+        status: 'pending',
+      })
+    );
     await expect(invoke()).rejects.toThrow('already been decided');
     expect(h.deleteFromQueue).toHaveBeenCalledOnce();
   });

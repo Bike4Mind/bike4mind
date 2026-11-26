@@ -1,9 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
-import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import path from 'path';
 import { TIMEOUTS } from './e2e/constants';
+import { prEligibleConfigProjects } from './e2e/project-selection.mjs';
 
-dotenv.config({ path: path.resolve(__dirname, '.env.e2e') });
+const envFile = path.resolve(__dirname, '.env.e2e');
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const adminAuthFile = './e2e/.auth/admin.json';
 
@@ -147,17 +149,21 @@ const specProjects = [
     : []),
 ];
 
-export default defineConfig({
+const config = defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 1,
   workers: Number(process.env.PW_WORKERS) || 3,
   timeout: TIMEOUTS.TEST,
-  // 30 min: with PW_WORKERS=3 the full suite runs in ~15–20 min under normal conditions,
-  // leaving a 10-min buffer. The GitHub Actions job cap is 35 min, so this inner guard
-  // gives Playwright time to run teardown and write artifacts before the job is killed.
-  globalTimeout: process.env.CI && process.env.AI_LATENCY_RUN !== 'true' ? 30 * 60_000 : undefined,
+  // Inner guard that stops the run early enough for teardown and artifacts before the GitHub
+  // Actions job is killed. 30 min by default; callers of .github/workflows/e2e-run.yml raise it
+  // through the global_timeout_minutes input (PW_GLOBAL_TIMEOUT_MINUTES), as e2e-manual.yml does
+  // for the full suite. Keep it below the caller's timeout_minutes.
+  globalTimeout:
+    process.env.CI && process.env.AI_LATENCY_RUN !== 'true'
+      ? (Number(process.env.PW_GLOBAL_TIMEOUT_MINUTES) || 30) * 60_000
+      : undefined,
   expect: { timeout: TIMEOUTS.VISIBLE },
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',
@@ -246,6 +252,13 @@ export default defineConfig({
       testMatch: [/(?:^|\/)websocket-auth\.spec\.ts$/],
       dependencies: ['setup-core'],
     },
+    // Admin setup: signs the setup admin in again. Depending on `unauthenticated` keeps it in the
+    // last phase before `admin`, so the new token is minted right before the admin specs use it.
+    {
+      name: 'setup-admin',
+      testMatch: /(?:^|\/)admin\.setup\.ts$/,
+      dependencies: ['setup-core', 'unauthenticated'],
+    },
     // Admin specs
     {
       name: 'admin',
@@ -253,9 +266,11 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         storageState: adminAuthFile,
       },
-      dependencies: ['setup-core', 'unauthenticated'],
+      dependencies: ['setup-admin'],
       testMatch: [
         /(?:^|\/)admin\.spec\.ts$/,
+        /(?:^|\/)admin-access-review\.spec\.ts$/,
+        /(?:^|\/)signup-grants\.spec\.ts$/,
         /(?:^|\/)admin-settings-secrets\.spec\.ts$/,
         /(?:^|\/)admin-approvals\.spec\.ts$/,
         /(?:^|\/)admin-tutorials\.spec\.ts$/,
@@ -289,3 +304,9 @@ export default defineConfig({
       : []),
   ],
 });
+
+if (process.env.PR_E2E === 'true' && config.projects) {
+  config.projects = prEligibleConfigProjects(config.projects);
+}
+
+export default config;

@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   useSpendTimeline: vi.fn(),
   useSpendAccounts: vi.fn(),
   timelineRefetch: vi.fn(),
+  featureSection: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -31,6 +32,12 @@ vi.mock('./SpendChart', () => ({
 }));
 vi.mock('./SpendBucketTable', () => ({ SpendBucketTable: () => null }));
 vi.mock('./AccountSpendPanel', () => ({ AccountSpendPanel: () => null }));
+vi.mock('./FeatureCostSection', () => ({
+  FeatureCostSection: (props: unknown) => {
+    h.featureSection(props);
+    return null;
+  },
+}));
 vi.mock('./SpendDrillDown', () => ({ SpendDrillDown: () => <div data-testid="stub-drilldown" /> }));
 
 import SpendExplorerTab from './SpendExplorerTab';
@@ -169,5 +176,40 @@ describe('SpendExplorerTab error paths', () => {
     fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
 
     expect(h.timelineRefetch).toHaveBeenCalledOnce();
+  });
+});
+
+describe('SpendExplorerTab feature section', () => {
+  type SectionProps = {
+    selection: { audience: string; feature: string | null; user: string | null };
+    onChange: (patch: Record<string, unknown>) => void;
+  };
+  const sectionProps = () => h.featureSection.mock.calls.at(-1)![0] as SectionProps;
+
+  it('reads the audience, feature and user from the URL', () => {
+    h.search = { spendAudience: 'internal', spendFeature: 'music_generation', spendUser: 'u'.repeat(24) };
+    renderTab();
+    expect(sectionProps().selection).toEqual({
+      audience: 'internal',
+      feature: 'music_generation',
+      user: 'u'.repeat(24),
+    });
+  });
+
+  it('falls back to everyone for an unknown audience', () => {
+    h.search = { spendAudience: 'staff' };
+    renderTab();
+    expect(sectionProps().selection).toEqual({ audience: 'all', feature: null, user: null });
+  });
+
+  it('writes selection changes to the URL, dropping the default audience', () => {
+    renderTab();
+    sectionProps().onChange({ audience: 'external' });
+    expect(lastPatch()).toMatchObject({ spendAudience: 'external' });
+    sectionProps().onChange({ audience: 'all', feature: null });
+    expect(lastPatch({ spendAudience: 'external', spendFeature: 'chat' })).toMatchObject({
+      spendAudience: undefined,
+      spendFeature: undefined,
+    });
   });
 });

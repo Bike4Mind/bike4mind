@@ -1,4 +1,3 @@
-import { isQuestMasterCompatible } from './questMasterEligibility';
 import type { AudioToolJobs } from './tools/implementation/audioGeneration';
 import {
   type EmbeddingRuntime,
@@ -8,6 +7,7 @@ import {
 } from '@bike4mind/utils/embeddingProviders';
 import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
 import type { ISpendFreezeRepository, IUserApiKeyRepository, UserLimitEventKind } from '@bike4mind/common';
+import type { ModerationEscalationAlert } from '../userService/moderationPolicy';
 
 export type LimitEventRecord = {
   userId: string;
@@ -16,7 +16,6 @@ export type LimitEventRecord = {
   details?: Record<string, string | number | boolean | null>;
 };
 import {
-  ChatCompletionCreateInput,
   ChatCompletionCreateInputSchema,
   isLowSignalNamingPrompt,
   ContextTelemetry,
@@ -33,7 +32,6 @@ import {
   LLMEvents,
   ModelInfo,
   Permission,
-  QuestMasterParamsSchema,
   IAgentRepository,
   ISkillRepository,
   IChatHistoryItemRepository,
@@ -45,8 +43,6 @@ import {
   IAdminSettingsRepository,
   IMcpServerRepository,
   IMcpServerDocument,
-  IQuestMasterPlanRepository,
-  IQuestMasterPlanDocument,
   IPromptDocument,
   ICacheRepository,
   ICreditTransactionRepository,
@@ -143,7 +139,6 @@ import {
   type ForcedRetrievalCandidateSelection,
   type ForcedRetrievalFallbackReason,
 } from './forcedRetrievalCandidateSelection';
-import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
 import type { OperationalBillingAdapters } from '../billing/recordOperationalUsage';
 import { recordForcedRetrievalCutMetrics } from './forcedRetrievalSelectionMetrics';
 import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
@@ -178,15 +173,12 @@ import { getRelevantMementos } from '../mementoService';
 import {
   BaseStorage,
   computeCosineSimilarity,
-  computeVerbatimTokenBudget,
   type FabFileNotice,
-  fetchAndProcessPreviousMessages,
   getSettingsByNames,
   IQueueService,
   ITokenizer,
   normalizeId,
   postMessageToSlack,
-  QuestMaster,
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -196,7 +188,6 @@ import mongoose from 'mongoose';
 import { z } from 'zod';
 import { GetEffectiveApiKeyAdapters } from '@bike4mind/auth/apiKeyService';
 import type { ChatCompletionProcess } from './ChatCompletionProcess';
-import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { QuestStartBodySchema } from './questStartBody';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
@@ -204,7 +195,6 @@ import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
 import type { CustomMcpToolHost } from './tools/customMcpTools';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
-import { isObjectIdShaped } from './tools/base/objectId';
 import { scrubStaleProjectFiles } from '../sessionService/scrubStaleFileReferences';
 
 interface DatabaseAdapters {
@@ -228,7 +218,6 @@ interface DatabaseAdapters {
     | 'pullSystemFilesForUsers'
   >;
   quests: IChatHistoryItemRepository;
-  questMasterPlans: IQuestMasterPlanRepository;
   connections: {
     findByUserId(userId: string): Promise<IConnection[]>;
     deleteByConnectionId(connectionId: string): Promise<void>;
@@ -384,7 +373,6 @@ interface DatabaseAdapters {
 export type featureNames =
   | 'slack'
   | 'mementos'
-  | 'questMaster'
   | 'autoNameSession'
   | 'project'
   | 'summarizeNotebook'
@@ -405,7 +393,6 @@ export type featureNames =
 const ALL_FEATURE_NAMES_MAP: Record<featureNames, true> = {
   slack: true,
   mementos: true,
-  questMaster: true,
   autoNameSession: true,
   project: true,
   summarizeNotebook: true,
@@ -437,12 +424,6 @@ export interface IChatCompletionServiceOptions {
   queue?: IQueueService;
   wsHttpsUrl: string;
   slackWebhookUrl: string;
-  /**
-   * Builds a CompletionMeter billing the turn's owner (`organizationId` = the turn's active org, null =
-   * the user) for platform-key calls the turn makes outside its own credit reservation, e.g. the
-   * QuestMaster plan. Unset = those calls run unmetered (hosts that do not bill).
-   */
-  createCompletionMeter?: (opts: { organizationId: string | null; featureLabel: string }) => CompletionMeter;
   imageProcessorLambdaName?: string; // Lambda function name for image processing
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
   /**
@@ -463,6 +444,12 @@ export interface IChatCompletionServiceOptions {
    */
   coreTutorialTurns?: CoreTutorialTurnHook;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
+  /**
+   * Delivers a moderation escalation alert to liveops (the app tier publishes it to the event bus).
+   * Called fire-and-forget: a rejection is logged as a warning and never reaches the chat request.
+   * Optional: a host without it still records hits and escalates, it just alerts no one.
+   */
+  notifyModerationEscalation?: (alert: ModerationEscalationAlert) => Promise<void>;
   invokeCreateMemento: (
     questId: string,
     sessionId: string,
@@ -537,6 +524,8 @@ export interface IChatCompletionServiceOptions {
    * path) so b4m-core never imports it. Omitted -> no custom tools are offered.
    */
   customMcp?: CustomMcpToolHost;
+  /** When an inline turn must end (epoch ms), passed to each `customMcp` call; unset for queued turns. */
+  customMcpDeadline?: number;
   logEvent: (
     event: LLMEventPayload,
     options?: { session?: mongoose.ClientSession; ability?: MongoAbility }
@@ -551,10 +540,6 @@ export interface IChatCompletionServiceOptions {
    * entitlement-scoped data lakes in retrieval. Omitted -> no keys -> tag-only matching.
    */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
-  /** Hosts with account allowances atomically admit a new plan before any provider or credit work. */
-  admitQuestStart: (user: IUserDocument, startId: string) => Promise<'subscriber' | 'free'>;
-  /** Gives back a free start admitted for a turn that failed before dispatch. Omitted -> the start stays spent. */
-  releaseQuestStart?: (user: IUserDocument, startId: string) => Promise<void>;
   /**
    * How much model reasoning the caller may see (services/thinkingVisibility.ts), injected by the
    * app tier like getEntitlements. Omitted -> `raw`; a failed resolution withholds.
@@ -617,11 +602,16 @@ export interface IChatCompletionServiceOptions {
     requestId?: string; // Quest ID for correlation
   }) => Promise<void>;
   /**
-   * Secret key for deriving daily telemetry salts via HMAC.
-   * Reuses SECRET_ENCRYPTION_KEY - no dedicated secret needed.
+   * Secret key for deriving daily telemetry salts via HMAC. The host supplies it; the apps take it
+   * from `signingKey('telemetry-salt')` in server-utils/src/security/signingKeys.ts.
    * When undefined, falls back to a deterministic placeholder (dev-only).
    */
   telemetryHmacSecret?: string;
+  /**
+   * Key that signs web_search image URLs (`signingKey('search-image-url')` in the apps). When
+   * undefined, `telemetryHmacSecret` signs them, which is what hosts without a separate key rely on.
+   */
+  imageUrlSigningSecret?: string;
   /**
    * Whether the Global Privacy Control (GPC) signal was detected in the request.
    * When true, telemetry capture is skipped for this request regardless of user preference.
@@ -653,7 +643,6 @@ export type ChatCompletionContext = Pick<
   | 'personalCorpusOnly'
   | 'embeddingBinding'
   | 'priorUserPrompts'
-  | 'createCompletionMeter'
 > & {
   sendStatusUpdate: (
     q: IChatHistoryItemDocument,
@@ -680,7 +669,6 @@ export interface ChatCompletionFeature {
     quest: IChatHistoryItemDocument;
     session: ISessionDocument;
     messages: IMessage[];
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
     model: string;
     historyCount?: number;
     oldestIncludedQuestId?: string | null;
@@ -698,9 +686,10 @@ export interface ChatCompletionFeature {
     historyCount: number;
     fabFileIds: string[];
     questId: string;
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
     /** The turn's active organization, which owns its billing (null/unset = the user). */
     organizationId?: string | null;
+    /** An example run's approved skill (ExampleRunMode.skill); SkillsFeature expands `/name` from it. */
+    exampleRunSkill?: { name: string; body: string };
   }) => Promise<{ shouldContinue: boolean }>;
   getContextMessages: (
     quest: IChatHistoryItemDocument,
@@ -1209,413 +1198,6 @@ export class AutoNameSessionFeature implements ChatCompletionFeature {
   }
 }
 
-export class QuestMasterFeature implements ChatCompletionFeature {
-  private chatCompletion: ChatCompletionContext;
-  private logger: Logger;
-  private user: IUserDocument;
-
-  constructor(chatCompletion: ChatCompletionContext) {
-    this.chatCompletion = chatCompletion;
-    this.logger = chatCompletion.logger;
-    this.user = chatCompletion.user;
-  }
-
-  async getContextMessages(): Promise<IMessage[]> {
-    // The real QuestMaster system prompt is handled in createQuestPlan
-    return [];
-  }
-
-  async beforeDataGathering({
-    quest,
-    session,
-    startParams,
-    llm,
-    model,
-    modelInfo,
-    message,
-    historyCount,
-    fabFileIds,
-    questId,
-    questMaster,
-    organizationId,
-  }: {
-    quest: IChatHistoryItemDocument;
-    session: ISessionDocument;
-    startParams: z.infer<typeof ChatCompletionCreateInputSchema>;
-    llm: ICompletionBackend;
-    model: string;
-    modelInfo: ModelInfo;
-    message: string;
-    historyCount: number;
-    fabFileIds: string[];
-    questId: string;
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
-    organizationId?: string | null;
-  }): Promise<{ shouldContinue: boolean }> {
-    // If questMaster is provided, that means we are to process a task from a QuestMaster plan
-    if (questMaster) {
-      await this.processQuestMasterTask(quest, questMaster);
-
-      return { shouldContinue: true };
-    }
-
-    if (!isQuestMasterCompatible(model)) {
-      this.logger.log(
-        `QuestMaster: Skipping for model ${model} as it may not be fully compatible with structured JSON output`
-      );
-      return { shouldContinue: true };
-    }
-
-    try {
-      quest.status = 'running';
-      quest.type = 'message';
-      // promptMeta carries the in-memory statusLog ('Spinning up...'); a QuestMaster takeover
-      // returns without the pipeline's saveQuest, so these writes are the only ones that persist it.
-      await this.chatCompletion.db.quests.update({
-        id: quest.id,
-        status: quest.status,
-        type: quest.type,
-        promptMeta: quest.promptMeta,
-      });
-
-      await this.chatCompletion.sendStatusUpdate(quest, 'Generating QuestMaster plan...');
-
-      await this.sendQuestMasterRapidReply(quest, message);
-
-      // Fetch conversation history to provide context for quest plan generation. Passing `model`
-      // is what gates Priority 2 tool replay for Gemini (see fetchAndProcessPreviousMessages's own
-      // doc comment) - this call site went live without it (missed sibling of the one in
-      // ChatCompletionProcess.ts), so the flag is derived from the model id, not opt-in per caller.
-      //
-      // verbatimTokenBudget bounds the history that createQuestPlan later splices in whole
-      // (QuestMaster has no downstream trim of its own), sized against the REAL model's context
-      // window via the same helper ChatCompletionProcess.ts's own call site uses, so the two
-      // cannot drift the way an unknown-model floor would for a model with a small real window.
-      // Two known divergences from that call site's overhead: it does not read the
-      // ContextVerbatimWindowFraction admin override (no admin-settings map is threaded into
-      // QuestMasterFeature) - it always uses the compiled-in default fraction. It also omits
-      // enabledTools.length * PER_TOOL_SCHEMA_RESERVE_TOKENS, which does apply on the GPT-5
-      // function-calling quest-plan path (createQuestPlan is passed { history } only, so omitting
-      // contextSummary's reserve is correct, but the tool-schema reserve is not); this makes that
-      // path's budget slightly over-generous rather than unsafe, and QuestMasterFeature has no
-      // enabled-tool count in scope to reserve for without threading more state through.
-      const verbatimTokenBudget = computeVerbatimTokenBudget(modelInfo, startParams.max_tokens, {
-        verbatimWindowFraction: DEFAULT_VERBATIM_WINDOW_FRACTION,
-        nonHistoryOverheadTokens: SYSTEM_PROMPT_RESERVE_TOKENS + Math.ceil(message.length / 4),
-      });
-      const [conversationHistory] = await fetchAndProcessPreviousMessages(session, historyCount, {
-        db: this.chatCompletion.db,
-        // modelInfo.id (post-resolveDeprecatedModelId), matching ChatCompletionProcess.ts's own
-        // call site, so a future Gemini id landing in the deprecation map can't desync the two.
-        model: modelInfo.id,
-        verbatimTokenBudget,
-      });
-
-      this.logger.log(`QuestMaster: Fetched ${conversationHistory.length} history messages for context`);
-
-      // The plan runs before the turn reserves credits, so each plan call is billed on its own (a
-      // provider failure is refunded); a fallback turn after a failed plan pays only for its own reply.
-      const meter = this.chatCompletion.createCompletionMeter?.({
-        organizationId: organizationId ?? null,
-        featureLabel: 'QuestMaster planning',
-      });
-      const plannerLlm = meter ? meterCompletionBackend(llm, meter, modelInfo) : llm;
-      await this.questMasterRequest(
-        quest,
-        plannerLlm,
-        model,
-        startParams,
-        quest.sessionId,
-        message,
-        conversationHistory
-      );
-
-      // Refetch to verify the questMasterReply was set
-      const updatedQuest = await this.chatCompletion.db.quests.findById(questId);
-      if (!updatedQuest) throw new Error('Quest not found after processing');
-
-      await this.chatCompletion.sendStatusUpdate(updatedQuest, 'QuestMaster plan generated');
-
-      this.logger.log('QuestMaster processing result:', {
-        questMasterReply: updatedQuest.questMasterReply,
-        reply: updatedQuest.reply,
-      });
-
-      updatedQuest.status = 'done';
-      await this.chatCompletion.db.quests.update({
-        id: updatedQuest.id,
-        status: updatedQuest.status,
-        promptMeta: updatedQuest.promptMeta,
-      });
-
-      await this.chatCompletion.sendStatusUpdate(updatedQuest, null);
-
-      // Return false so normal processing is skipped
-      return { shouldContinue: false };
-    } catch (error) {
-      this.logger.error('Error in QuestMaster processing:', error);
-
-      quest.type = 'error';
-      quest.status = 'done';
-      quest.reply = (error as Error).message;
-      await this.chatCompletion.db.quests.update({
-        id: quest.id,
-        type: quest.type,
-        status: quest.status,
-        reply: quest.reply,
-      });
-
-      // Let normal processing continue
-      return { shouldContinue: true };
-    }
-  }
-
-  /**
-   * Guard mutations of a QuestMaster plan. The plan/quest/sub-quest ids arrive from
-   * client-supplied `questMaster` params, so a bare findById would let one user drive
-   * status changes on another user's plan. Access = plan owner or explicit sharee;
-   * legacy plans without a userId bind to their owning notebook's owner.
-   *
-   * Must stay in sync with apps/client/server/utils/questMasterPlanAccess.ts, which is the same
-   * predicate on the HTTP side (it also guards the notebook lookup on ObjectId shape below).
-   */
-  private async callerCanWritePlan(plan: IQuestMasterPlanDocument): Promise<boolean> {
-    const userId = this.user.id;
-    if (plan.userId) {
-      return plan.userId === userId || (plan.sharedWith?.includes(userId) ?? false);
-    }
-    // notebookId is a schema String: placeholder plans carry `direct-<uuid>` / `clone-<uuid>`, so
-    // guard on ObjectId shape before findById to keep a non-id from casting into a CastError.
-    const session = isObjectIdShaped(plan.notebookId)
-      ? await this.chatCompletion.db.sessions.findById(plan.notebookId)
-      : null;
-    if (session?.userId !== userId) return false;
-    // Backfill like the HTTP side does, so the owner arm of the plan's write filter (writableBy in
-    // QuestMasterPlanModel.ts) matches the write that follows.
-    await this.chatCompletion.db.questMasterPlans.update({ id: plan.id, userId });
-    plan.userId = userId;
-    return true;
-  }
-
-  async onComplete({
-    quest,
-    questMaster,
-  }: {
-    quest: IChatHistoryItemDocument;
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
-  }): Promise<void> {
-    if (!questMaster) return;
-
-    const questMasterPlan = await this.chatCompletion.db.questMasterPlans.findById(questMaster.questMasterPlanId);
-    if (!questMasterPlan) {
-      this.logger.warn(`QuestMaster plan with id ${questMaster.questMasterPlanId} not found`);
-      return;
-    }
-
-    if (!(await this.callerCanWritePlan(questMasterPlan))) {
-      this.logger.warn(
-        `User ${this.user.id} is not authorized to modify QuestMaster plan ${questMaster.questMasterPlanId}`
-      );
-      return;
-    }
-
-    const mainQuest = questMasterPlan.quests.find(t => t.id === questMaster.questId);
-    if (!mainQuest) {
-      this.logger.warn(
-        `Main quest with id ${questMaster.questId} not found in QuestMaster plan with id ${questMaster.questMasterPlanId}`
-      );
-      return;
-    }
-
-    await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
-      questMaster.questMasterPlanId,
-      this.user.id,
-      questMaster.questId,
-      questMaster.subQuestId,
-      'completed'
-    );
-  }
-
-  private readonly processQuestMasterTask = async (
-    quest: IChatHistoryItemDocument,
-    questMaster: z.infer<typeof QuestMasterParamsSchema>
-  ) => {
-    const questMasterPlan = await this.chatCompletion.db.questMasterPlans.findById(questMaster.questMasterPlanId);
-    if (!questMasterPlan) {
-      this.logger.warn(`QuestMaster plan with id ${questMaster.questMasterPlanId} not found`);
-      return;
-    }
-
-    if (!(await this.callerCanWritePlan(questMasterPlan))) {
-      this.logger.warn(
-        `User ${this.user.id} is not authorized to modify QuestMaster plan ${questMaster.questMasterPlanId}`
-      );
-      return;
-    }
-
-    const subQuest = await this.chatCompletion.db.questMasterPlans.getSubQuest(
-      questMaster.questMasterPlanId,
-      questMaster.questId,
-      questMaster.subQuestId
-    );
-    if (!subQuest) {
-      this.logger.warn(
-        `Sub quest with id ${questMaster.subQuestId} not found in QuestMaster plan with id ${questMaster.questMasterPlanId} for main quest with id ${questMaster.questId}`
-      );
-      return;
-    }
-
-    // Only skip if already completed or explicitly skipped - allow other statuses to proceed
-    // This fixes the freeze issue where UI sets in_progress before LLM call, causing silent return
-    if (subQuest.status === 'completed' || subQuest.status === 'skipped') {
-      this.logger.log(
-        `Sub quest ${questMaster.subQuestId} for main quest ${questMaster.questId} is ${subQuest.status}. Skipping.`
-      );
-      return;
-    }
-
-    // Log if we're re-processing an in_progress task (e.g., after page refresh)
-    if (subQuest.status === 'in_progress') {
-      this.logger.log(
-        `Sub quest ${questMaster.subQuestId} for main quest ${questMaster.questId} is already in_progress. Re-processing.`
-      );
-    }
-
-    // No 'blocked' arm below: SubQuestStatus has no such value, so every status
-    // other than the in_progress case above just falls through to processing.
-
-    this.logger.log(
-      `Started sub quest ${questMaster.subQuestId} for main quest ${questMaster.questId} in QuestMaster plan ${questMaster.questMasterPlanId}`
-    );
-
-    await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
-      questMaster.questMasterPlanId,
-      this.user.id,
-      questMaster.questId,
-      questMaster.subQuestId,
-      'in_progress'
-    );
-  };
-
-  private async questMasterRequest(
-    quest: IChatHistoryItemDocument,
-    llm: ICompletionBackend,
-    model: string,
-    params: ChatCompletionCreateInput,
-    sessionId: string,
-    message: string,
-    conversationHistory: IMessage[] = []
-  ) {
-    try {
-      this.logger.log('QuestMaster Request Debug - Initial params:', {
-        model,
-        parameterNames: Object.keys(params ?? {}),
-        sessionId,
-        messageLength: message.length,
-        historyMessageCount: conversationHistory.length,
-      });
-
-      const questMaster = new QuestMaster(
-        llm,
-        {
-          quests: this.chatCompletion.db.quests,
-          questMasterPlans: this.chatCompletion.db.questMasterPlans,
-        },
-        async (quest, status) => {
-          await this.chatCompletion.sendStatusUpdate(quest, status);
-        },
-        quest,
-        this.logger,
-        this.user.id
-      );
-
-      // History provides context about what the user has already discussed
-      const questPlanResult = await questMaster.createQuestPlan(model, message, {
-        history: conversationHistory,
-      });
-
-      // Return type is `string | void`:
-      // - GPT-5 models with tool support use function calling, which handles processing internally
-      //   and returns void (the quest plan is already saved to DB by processQuestPlan inside createQuestPlan)
-      // - Other models return the HTML string that needs to be processed here
-      if (typeof questPlanResult === 'string') {
-        await questMaster.processQuestPlan(questPlanResult);
-      }
-      // If questPlanResult is void (undefined), GPT-5 function calling path already processed it
-
-      if (this.user?.tags?.includes('debugQuestMaster')) {
-        const debugText = typeof questPlanResult === 'string' ? questPlanResult : '[Processed via function calling]';
-        await postMessageToSlack(
-          this.chatCompletion.slackWebhookUrl,
-          `*${this.user.name}* prompted: ${message}\nQuestMaster Plan:\n${debugText}`
-        );
-      }
-    } catch (error) {
-      this.logger.error('Error in QuestMaster processing:', error);
-      throw error;
-    }
-  }
-
-  /** Send an immediate rapid reply for QuestMaster activation, before the plan is generated. */
-  private async sendQuestMasterRapidReply(quest: IChatHistoryItemDocument, message: string): Promise<void> {
-    try {
-      const rapidReplyContent = this.generateQuestMasterRapidReply(message);
-
-      // Sent as a status message, not a stored reply
-      await this.chatCompletion.sendStatusUpdate(quest, `🚀 ${rapidReplyContent}`, {
-        immediate: true,
-        statusAt: new Date(),
-      });
-
-      this.logger.info(`[QuestMaster] Rapid reply sent (${rapidReplyContent.length} characters)`);
-    } catch (error) {
-      // Don't throw - rapid reply failures shouldn't break QuestMaster
-      this.logger.warn('Failed to send QuestMaster rapid reply:', error);
-    }
-  }
-
-  /** Generate an enthusiastic rapid reply message for QuestMaster activation. */
-  private generateQuestMasterRapidReply(message: string): string {
-    const lowerMessage = message.toLowerCase();
-
-    // Determine the type of quest based on keywords
-    let questType = 'comprehensive plan';
-    if (lowerMessage.includes('learn') || lowerMessage.includes('study') || lowerMessage.includes('understand')) {
-      questType = 'learning journey';
-    } else if (lowerMessage.includes('build') || lowerMessage.includes('create') || lowerMessage.includes('make')) {
-      questType = 'step-by-step build guide';
-    } else if (
-      lowerMessage.includes('improve') ||
-      lowerMessage.includes('optimize') ||
-      lowerMessage.includes('better')
-    ) {
-      questType = 'improvement roadmap';
-    } else if (lowerMessage.includes('solve') || lowerMessage.includes('fix') || lowerMessage.includes('debug')) {
-      questType = 'solution strategy';
-    } else if (
-      lowerMessage.includes('plan') ||
-      lowerMessage.includes('strategy') ||
-      lowerMessage.includes('approach')
-    ) {
-      questType = 'strategic plan';
-    }
-
-    const responses = [
-      `Great idea! 🎯 I'm creating a detailed ${questType} to help you achieve exactly what you're looking for. This Quest will break everything down into clear, actionable steps that you can follow at your own pace!`,
-
-      `Perfect! ✨ Let me craft a comprehensive ${questType} that will guide you through this step-by-step. I'm organizing all the key tasks and sub-tasks to make this as smooth as possible for you!`,
-
-      `Excellent request! 🚀 I'm building a structured ${questType} that will transform your goal into a clear roadmap. Each task will have specific actions you can take to move forward!`,
-
-      `Love this! 💫 Creating a detailed ${questType} right now that will break down everything you need to know and do. This Quest will be your personal guide to success!`,
-
-      `Fantastic! 🌟 I'm putting together a thorough ${questType} that will give you clarity and direction. Each step will build on the last to help you reach your objective efficiently!`,
-    ];
-
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-}
-
 export class ProjectFeature implements ChatCompletionFeature {
   private chatCompletion: ChatCompletionContext;
   private logger: Logger;
@@ -1690,7 +1272,7 @@ export class ProjectFeature implements ChatCompletionFeature {
       const closing = questReplies.substring(questReplies.length - 400, questReplies.length);
       await postMessageToSlack(
         this.chatCompletion.slackWebhookUrl,
-        `*${this.chatCompletion.user.name}* prompted: ${quest.prompt} QuestMaster Plan*:\n${opening}...\n...\n...${closing}`
+        `*${this.chatCompletion.user.name}* prompted: ${quest.prompt} Project notebook reply*:\n${opening}...\n...\n...${closing}`
       );
     }
   }
@@ -4206,7 +3788,6 @@ export class ContextSummarizationFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument;
     session: ISessionDocument;
     messages: IMessage[];
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
     model: string;
     historyCount?: number;
     oldestIncludedQuestId?: string | null;

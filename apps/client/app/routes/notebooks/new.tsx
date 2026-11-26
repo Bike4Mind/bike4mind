@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { NEW_NOTEBOOK_DRAFT_KEY, useChatInput } from '@client/app/hooks/useChatInput';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useQuestPreparation } from '@client/app/hooks/useQuestPreparation';
@@ -9,7 +10,7 @@ import { setQuestLaunchIntent, consumeTrustedQuestLaunch } from '@client/app/uti
 const NewNotebookPage = () => {
   const { setCurrentSession, setCurrentSessionId, setWorkBenchAgents } = useSessions();
   const { clearAllSessions } = useWorkBenchActions();
-  const search = useSearch({ strict: false }) as { questmaster?: string; goal?: string; article?: string };
+  const search = useSearch({ strict: false }) as { goal?: string; article?: string };
   const navigate = useNavigate();
   const hasProcessedQuestParams = useRef(false);
   // Snapshotted at mount, deliberately NOT a dependency below: this reset is a one-time "blank
@@ -31,10 +32,11 @@ const NewNotebookPage = () => {
       // redirectTo replay carries no trust flag, so it only pre-fills the composer
       // and never issues a request without a click.
       const trusted = consumeTrustedQuestLaunch();
+      // useMessageDraft restores this draft after the goal is applied; seeding it keeps the goal.
+      useChatInput.getState().setDraft(NEW_NOTEBOOK_DRAFT_KEY, search.goal);
       setQuestLaunchIntent({
         goal: search.goal,
         autoSubmit: trusted,
-        enableQuestMaster: trusted && search.questmaster === 'true',
       });
       if (trusted) {
         setPreparingQuest(search.goal);
@@ -43,7 +45,7 @@ const NewNotebookPage = () => {
       // auto-submit (the intent itself is in-memory and consume-once).
       void navigate({ to: '/new', search: {}, replace: true });
     }
-  }, [search.goal, search.questmaster, setPreparingQuest, navigate]);
+  }, [search.goal, setPreparingQuest, navigate]);
 
   // Runs on entering /new, from anywhere: the shell keeps the chat mounted, but mounts this
   // component only while /new is the matched child.

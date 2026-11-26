@@ -115,7 +115,6 @@ export const pushChatMessage = async (
   sessionId: string,
   message: IChatHistoryItem,
   experimentalFeatures?: {
-    enableQuestMaster?: boolean;
     enableMementos: boolean;
     enableArtifacts: boolean;
     enableAgents: boolean;
@@ -135,7 +134,6 @@ export const pushChatMessage = async (
 
   const response = await api.post(`/api/sessions/${sessionId}/chat`, {
     ...message,
-    enableQuestMaster: experimentalFeatures?.enableQuestMaster,
     enableMementos: experimentalFeatures?.enableMementos,
     enableArtifacts: experimentalFeatures?.enableArtifacts,
     enableAgents: experimentalFeatures?.enableAgents,

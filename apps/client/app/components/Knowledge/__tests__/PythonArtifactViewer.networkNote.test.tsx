@@ -33,6 +33,8 @@ vi.mock('@client/app/utils/artifactPersistence', () => ({
 vi.mock('@client/app/hooks/useSessionLayout', () => ({ setSelectedArtifactVersion: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn().mockResolvedValue({ data: {} }) } }));
 vi.mock('@client/app/components/artifacts', () => ({ ArtifactVersionDropdown: () => null }));
+vi.mock('@client/app/hooks/data/callableFunctions', () => ({ useCallableFunctionsEnabled: () => false }));
+vi.mock('@client/app/hooks/data/artifacts', () => ({ useArtifact: () => ({ data: undefined }) }));
 
 import PythonArtifactViewer from '../PythonArtifactViewer';
 

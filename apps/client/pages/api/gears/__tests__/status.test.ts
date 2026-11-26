@@ -4,6 +4,7 @@ import { createMocks } from 'node-mocks-http';
 const { mocks } = vi.hoisted(() => ({
   mocks: {
     projectExists: vi.fn(),
+    projectAggregate: vi.fn(),
     agentCount: vi.fn(),
     dataLakeFindOne: vi.fn(),
     fabFileExists: vi.fn(),
@@ -22,6 +23,7 @@ const { mocks } = vi.hoisted(() => ({
     hearthHasAnyChannel: vi.fn(),
     userFindById: vi.fn(),
     gearMinAgeSetting: vi.fn(),
+    projectCollaboratorQualifies: vi.fn(),
   },
 }));
 
@@ -44,7 +46,10 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  Project: { exists: (...a: unknown[]) => mocks.projectExists(...a) },
+  Project: {
+    exists: (...a: unknown[]) => mocks.projectExists(...a),
+    aggregate: (...a: unknown[]) => mocks.projectAggregate(...a),
+  },
   FabFile: { exists: (...a: unknown[]) => mocks.fabFileExists(...a) },
   PublishedArtifact: { exists: (...a: unknown[]) => mocks.publishedExists(...a) },
   Artifact: { exists: (...a: unknown[]) => mocks.artifactExists(...a) },
@@ -94,6 +99,10 @@ vi.mock('@bike4mind/common', () => ({
   CreditHolderType: { User: 'User' },
 }));
 
+vi.mock('@server/services/gears/socialParty', () => ({
+  hasQualifyingProjectCollaborator: (...a: unknown[]) => mocks.projectCollaboratorQualifies(...a),
+}));
+
 import handler from '../status';
 import { GEAR_DEFAULTS, GEAR_KEYS } from '@server/services/gears/catalog';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
@@ -110,6 +119,7 @@ const run = (user?: { id: string }) => {
 
 const lockEverything = () => {
   mocks.projectExists.mockResolvedValue(null);
+  mocks.projectAggregate.mockResolvedValue([]);
   mocks.agentCount.mockResolvedValue(0);
   mocks.dataLakeFindOne.mockResolvedValue(null);
   mocks.fabFileExists.mockResolvedValue(null);
@@ -125,6 +135,7 @@ const lockEverything = () => {
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
   mocks.heldFind.mockResolvedValue([]);
+  mocks.projectCollaboratorQualifies.mockResolvedValue(false);
   // Default: trusted account so existing status tests continue to pass.
   mocks.userFindById.mockReturnValue({
     lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true }),
@@ -505,10 +516,46 @@ describe('GET /api/gears/status - reward schedule', () => {
   });
 });
 
+describe('GET /api/gears/status - Team Up reward waits for a qualifying collaborator', () => {
+  type Body = {
+    gears: Array<{
+      key: string;
+      unlocked: boolean;
+      rewardPending?: boolean;
+      pendingReason?: string;
+      claimable?: boolean;
+    }>;
+  };
+
+  it('sharing unlocks the gear but the payout stays pending without a qualifying collaborator', async () => {
+    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const team = (res._getJSONData() as Body).gears.find(g => g.key === 'shareproject')!;
+    expect(mocks.projectCollaboratorQualifies).toHaveBeenCalledWith('u1');
+    expect(team.unlocked).toBe(true);
+    expect(team.rewardPending).toBe(true);
+    expect(team.pendingReason).toBe('reward_check');
+    expect(team.claimable).toBeUndefined();
+  });
+
+  it('becomes claimable once a qualifying collaborator is on a project', async () => {
+    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    mocks.projectCollaboratorQualifies.mockResolvedValue(true);
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const team = (res._getJSONData() as Body).gears.find(g => g.key === 'shareproject')!;
+    expect(team.claimable).toBe(true);
+    expect(team.rewardPending).toBeUndefined();
+  });
+});
+
 describe('GET /api/gears/status - published reward waits for a non-owner view', () => {
   it('publishing unlocks the gear but the payout stays pending until an external view', async () => {
-    mocks.publishedExists.mockImplementation((q: { externalViewCount?: unknown }) =>
-      Promise.resolve(q.externalViewCount ? null : { _id: 'a1' })
+    mocks.publishedExists.mockImplementation((q: { verifiedExternalViewCount?: unknown }) =>
+      Promise.resolve(q.verifiedExternalViewCount ? null : { _id: 'a1' })
     );
     const { res, promise } = run({ id: 'u1' });
     await promise;

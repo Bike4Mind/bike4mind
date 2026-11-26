@@ -5,6 +5,8 @@ import LanguageIcon from '@mui/icons-material/Language';
 import DateTimeIcon from '@mui/icons-material/Schedule';
 import DiceIcon from '@mui/icons-material/Casino';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import FunctionsIcon from '@mui/icons-material/DataObject';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import ImageIcon from '@mui/icons-material/Image';
 import MusicIcon from '@mui/icons-material/MusicNote';
 import AudioIcon from '@mui/icons-material/GraphicEq';
@@ -41,13 +43,20 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
-import { B4MLLMTools, IMcpServerResponse, type McpConnectionListEntry } from '@bike4mind/common';
+import {
+  CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
+  B4MLLMTools,
+  IMcpServerResponse,
+  type ICallableFunctionPublic,
+  type McpConnectionListEntry,
+  MAX_CALLABLE_FUNCTIONS_PER_TURN,
+} from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useTheme } from '@mui/joy';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { brand, gray, green } from '@client/app/utils/themes/colors';
+import { brand, gray } from '@client/app/utils/themes/colors';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import DeepResearchConfigModal from './DeepResearchConfigModal';
 import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionModal';
@@ -59,10 +68,13 @@ import {
 } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
+import { useCallableFunctionList, useCallableFunctionsEnabled } from '@client/app/hooks/data/callableFunctions';
 import {
+  connectionMenuText,
   isComposerConnectionOn,
   toggleComposerConnection,
 } from '@client/app/components/integrations/customMcp/customMcpModel';
+import McpConnectorToolsDialog from '@client/app/components/integrations/customMcp/McpConnectorToolsDialog';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
 import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
@@ -122,7 +134,7 @@ interface ToolContainerProps extends PropsWithChildren {
    * When set, this row represents a Smart Tool that can be gated by a missing API
    * key or by the current mode. When it is, the row is dimmed + made
    * non-interactive and wrapped in a tooltip explaining why. Omit for non-tool
-   * rows (Thinking, Quest Master, MCP servers, etc.) which are never gated.
+   * rows (Thinking, Lattice, Research Mode, MCP servers, etc.) which are never gated.
    * A tool the session denies renders nothing at all.
    */
   toolId?: B4MLLMTools;
@@ -200,6 +212,8 @@ const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
 interface ToolLabelProps {
   name: string;
   description: string;
+  // Hover text for a description the two-line clamp may cut; screen readers get the whole text anyway.
+  descriptionTitle?: string;
   dim?: boolean;
   // Blue accent line under the description, e.g. to flag an agent-only integration.
   agentOnlyNote?: string;
@@ -209,7 +223,7 @@ interface ToolLabelProps {
 
 // Two-line label (name + inline description) used in place of the old
 // name-plus-(i)-tooltip pattern, so users can read what a tool does without hovering.
-const ToolLabel = ({ name, description, dim = false, agentOnlyNote, detail }: ToolLabelProps) => (
+const ToolLabel = ({ name, description, descriptionTitle, dim = false, agentOnlyNote, detail }: ToolLabelProps) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
     <Typography
       level="body-sm"
@@ -224,6 +238,7 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote, detail }: To
     </Typography>
     <Typography
       level="body-xs"
+      title={descriptionTitle}
       sx={{
         color: 'text.primary50', // match the agent tags color
         fontSize: '0.7rem',
@@ -254,6 +269,25 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote, detail }: To
 );
 
 const AGENT_ONLY_MCP_NOTE = 'Agent mode only - mention an @agent to use it in chat';
+
+// The function host's offer is switched like a user's own connector, by its reserved slug `fn`.
+const FUNCTIONS_CONNECTION = {
+  id: CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
+  slug: CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
+  ownerType: 'user',
+} as const;
+
+// Chat offers the oldest MAX_CALLABLE_FUNCTIONS_PER_TURN live tools, the same order the list arrives in.
+const functionsRowDescription = (functions: ICallableFunctionPublic[]) => {
+  if (functions.length === 0) return 'No live tools yet. Promote a saved tool to offer it in chat.';
+  const offered = functions
+    .slice(0, MAX_CALLABLE_FUNCTIONS_PER_TURN)
+    .map(fn => `${fn.slug} (${fn.trustLabel ?? 'unverified'})`)
+    .join(', ');
+  const rest = functions.length - MAX_CALLABLE_FUNCTIONS_PER_TURN;
+  return rest > 0 ? `${offered}, and ${rest} more not offered` : offered;
+};
+const FUNCTIONS_ROW_DETAIL = `Up to ${MAX_CALLABLE_FUNCTIONS_PER_TURN} of your live tools, run on the server with a stamp`;
 
 // Tools rendered under the "Fun & Novelty" section. They count toward that section's
 // own pinned tally, not the Individual tools one. Must stay in sync with the tools
@@ -310,7 +344,6 @@ const ToolsSection = ({
   // Use props if provided, otherwise use context
   const contextTools = useLLM(state => state.tools);
   const toolMode = useLLM(state => state.toolMode);
-  const isQuestMasterEnabled = useLLM(state => state.isQuestMasterEnabled);
   const isAgentsEnabled = useLLM(state => state.isAgentsEnabled);
   const isLatticeEnabled = useLLM(state => state.isLatticeEnabled);
   const researchMode = useLLM(state => state.researchMode);
@@ -333,12 +366,14 @@ const ToolsSection = ({
   const { offered: customConnections } = useComposerMcpConnections();
   const disabledMcpConnections = useLLM(state => state.disabledMcpConnections) ?? [];
   const enabledPlatformMcpConnections = useLLM(state => state.enabledPlatformMcpConnections) ?? [];
+  const callableFunctionsOn = useCallableFunctionsEnabled();
+  const { data: savedFunctions } = useCallableFunctionList(callableFunctionsOn);
+  const liveFunctions = (savedFunctions ?? []).filter(fn => fn.status === 'live');
 
   // Must stay above the unsupported-model early return further down, which cuts off hooks.
   const isMobile = useIsMobile();
 
   const { isFeatureEnabled: checkFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
-  const isQuestMasterFeatureEnabled = checkFeatureEnabled('enableQuestMaster');
   const isAgentsFeatureEnabled = checkFeatureEnabled('enableAgents');
   const isLatticeFeatureEnabled = checkFeatureEnabled('enableLattice');
   const isResearchModeFeatureEnabled = checkFeatureEnabled('enableResearchMode');
@@ -365,6 +400,11 @@ const ToolsSection = ({
 
   const [deepResearchConfigOpen, setDeepResearchConfigOpen] = useState(false);
   const [imageGenModelSelectionOpen, setImageGenModelSelectionOpen] = useState(false);
+  // Looked up live, so a refetch updates the open view and a connector that drops out of the menu
+  // closes it for good (reset during render, React's pattern), rather than reopening if it returns.
+  const [toolsViewId, setToolsViewId] = useState<string | null>(null);
+  const toolsViewConnection = customConnections.find(c => c.id === toolsViewId) ?? null;
+  if (toolsViewId !== null && !toolsViewConnection) setToolsViewId(null);
   const imageModel = useLLM(state => state.imageModel);
   const imageToolPrice = useImageToolPrice(imageModel);
 
@@ -379,9 +419,10 @@ const ToolsSection = ({
   }, [updatePreferences, userSettings.showFunTools]);
 
   // Notify parent when modal opens/closes
+  const toolsViewOpen = toolsViewConnection !== null;
   useEffect(() => {
-    onModalOpenChange?.(deepResearchConfigOpen || imageGenModelSelectionOpen);
-  }, [deepResearchConfigOpen, imageGenModelSelectionOpen, onModalOpenChange]);
+    onModalOpenChange?.(deepResearchConfigOpen || imageGenModelSelectionOpen || toolsViewOpen);
+  }, [deepResearchConfigOpen, imageGenModelSelectionOpen, toolsViewOpen, onModalOpenChange]);
 
   // Check if the current model supports thinking
   const modelSupportsThinking = useMemo(() => {
@@ -531,10 +572,6 @@ const ToolsSection = ({
     [toolMode, toolAvailability]
   );
 
-  const toggleQuestMaster = () => {
-    setLLM({ isQuestMasterEnabled: !isQuestMasterEnabled });
-  };
-
   const toggleAgents = () => {
     setLLM({ isAgentsEnabled: !isAgentsEnabled });
   };
@@ -602,9 +639,7 @@ const ToolsSection = ({
   // state flag) but appear in this panel, so they count like any other tool. Must stay
   // in sync with the same tally in AdvancedAISettings' otherActiveToolsCount.
   const specialToolsCount =
-    (isQuestMasterFeatureEnabled && isQuestMasterEnabled ? 1 : 0) +
-    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) +
-    (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
+    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) + (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
   // Fun & Novelty tools count toward their own section's tally, not Individual tools.
   // Both lines must read displayTools: splitting them (one raw, one filtered) would
   // count a filtered-out tool in the Individual total.
@@ -963,33 +998,76 @@ const ToolsSection = ({
               </ToolContainer>
             </Grid>
           ))}
-          {customConnections.map(connection => (
-            <Grid xs={12} key={connection.id} className={`tool-item tool-item-mcp-connection-${connection.slug}`}>
+          {customConnections.map(connection => {
+            const text = connectionMenuText(connection);
+            return (
+              <Grid xs={12} key={connection.id} className={`tool-item tool-item-mcp-connection-${connection.slug}`}>
+                <ToolContainer sx={toolContainerSx}>
+                  <Box
+                    className="tool-content"
+                    sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
+                  >
+                    <HubOutlinedIcon
+                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                    />
+                    <ToolLabel
+                      name={connection.displayName}
+                      description={text.description}
+                      descriptionTitle={text.detail ? text.description : undefined}
+                      detail={text.detail}
+                    />
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Tooltip title="View tools">
+                      <IconButton
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        aria-label={`View tools for ${connection.displayName}`}
+                        data-testid={`tool-info-mcp-connection-${connection.slug}`}
+                        onClick={() => setToolsViewId(connection.id)}
+                        sx={{ '--IconButton-size': '28px' }}
+                      >
+                        <InfoOutlinedIcon
+                          sx={{ fontSize: '20px', color: theme => `${theme.palette.text.primary}80` }}
+                        />
+                      </IconButton>
+                    </Tooltip>
+                    <SquareSlideToggle
+                      data-testid={`tool-toggle-mcp-connection-${connection.slug}`}
+                      onChange={() => toggleConnection(connection)}
+                      checked={isConnectionOn(connection)}
+                    />
+                  </Box>
+                </ToolContainer>
+              </Grid>
+            );
+          })}
+          {callableFunctionsOn && (
+            <Grid xs={12} className="tool-item tool-item-functions">
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
                   sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
-                  <HubOutlinedIcon
+                  <FunctionsIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
                   />
                   <ToolLabel
-                    name={connection.displayName}
-                    description={
-                      connection.ownerType === 'platform'
-                        ? `Connector set up by an admin on ${connection.urlHost}`
-                        : `Custom connector on ${connection.urlHost}`
-                    }
+                    name="Functions"
+                    description={functionsRowDescription(liveFunctions)}
+                    descriptionTitle={functionsRowDescription(liveFunctions)}
+                    detail={FUNCTIONS_ROW_DETAIL}
                   />
                 </Box>
                 <SquareSlideToggle
-                  data-testid={`tool-toggle-mcp-connection-${connection.slug}`}
-                  onChange={() => toggleConnection(connection)}
-                  checked={isConnectionOn(connection)}
+                  data-testid="tool-toggle-functions"
+                  onChange={() => setLLM(toggleComposerConnection(FUNCTIONS_CONNECTION, connectionChoices))}
+                  checked={isComposerConnectionOn(FUNCTIONS_CONNECTION, connectionChoices)}
                 />
               </ToolContainer>
             </Grid>
-          ))}
+          )}
           {/* Prompt Enhancement */}
           <Grid xs={12} className="tool-item tool-item-prompt-enhancement">
             <ToolContainer sx={toolContainerSx} toolId="prompt_enhancement">
@@ -1372,33 +1450,6 @@ const ToolsSection = ({
               </Box>
             </ToolContainer>
           </Grid>
-          {/* Quest Master */}
-          {isQuestMasterFeatureEnabled && (
-            <Grid xs={12} className="tool-item tool-item-quest-master">
-              <ToolContainer sx={toolContainerSx}>
-                <Box
-                  className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
-                >
-                  <AutoAwesomeIcon
-                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                  />
-                  <Box className="tool-info" sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-                    <ToolLabel
-                      name="Quest Master"
-                      description="Generates a structured plan for your request; auto-disables after"
-                    />
-                    {isQuestMasterEnabled && (
-                      <Typography level="body-xs" sx={{ color: green[800], fontSize: '0.7rem', fontWeight: 500 }}>
-                        Will create plan for next prompt
-                      </Typography>
-                    )}
-                  </Box>
-                </Box>
-                <SquareSlideToggle onChange={toggleQuestMaster} checked={isQuestMasterEnabled} />
-              </ToolContainer>
-            </Grid>
-          )}
           {/* Agent Detection */}
           {isAgentsFeatureEnabled && (
             <Grid xs={12} className="tool-item tool-item-agent-detection">
@@ -1822,6 +1873,8 @@ const ToolsSection = ({
         open={imageGenModelSelectionOpen}
         onClose={() => setImageGenModelSelectionOpen(false)}
       />
+
+      <McpConnectorToolsDialog connection={toolsViewConnection} onClose={() => setToolsViewId(null)} />
     </DeniedToolsContext.Provider>
   );
 };

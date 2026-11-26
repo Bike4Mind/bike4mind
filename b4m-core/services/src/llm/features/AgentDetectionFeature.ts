@@ -4,14 +4,12 @@ import {
   ISessionDocument,
   IMessage,
   ModelInfo,
-  QuestMasterParamsSchema,
   detectAgentMentions,
   buildAgentPersonaPrompt,
 } from '@bike4mind/common';
 
 import { IAgent } from '@bike4mind/common';
 import { ChatCompletionFeature, ChatCompletionContext } from '../ChatCompletionFeatures';
-import { z } from 'zod';
 
 export class AgentDetectionFeature implements ChatCompletionFeature {
   constructor(private service: ChatCompletionContext) {
@@ -22,7 +20,6 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument;
     session: ISessionDocument;
     messages: IMessage[];
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
   }): Promise<void> {
     // No cleanup needed
   }
@@ -37,7 +34,6 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
     historyCount: number;
     fabFileIds: string[];
     questId: string;
-    questMaster?: any;
   }): Promise<{ shouldContinue: boolean }> {
     const { message, quest, session } = args;
 

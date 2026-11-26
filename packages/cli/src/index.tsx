@@ -17,7 +17,6 @@ import { randomBytes } from 'crypto';
 import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import {
   App,
   TrustLocationSelector,
@@ -177,6 +176,7 @@ import { deferredToolRegistry } from './tools/deferredToolRegistry.js';
 import {
   createWriteTodosTool,
   createTodoStore,
+  resetTodoStore,
   createSkillTool,
   createFindDefinitionTool,
   createGetFileStructureTool,
@@ -394,7 +394,7 @@ function CliApp() {
   const mcpApprovalResolvedRef = useRef(false);
   const detectedOllamaRef = useRef<BuildLlmBackendResult['detectedOllama']>(null);
   const initGenerationRef = useRef(0);
-  const todoStoreRef = useRef(createTodoStore());
+  const todoStoreRef = useRef(createTodoStore(items => useCliStore.getState().setPlan(items)));
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
@@ -866,7 +866,7 @@ function CliApp() {
         newSession = resumed;
       } else {
         newSession = {
-          id: pinnedSessionId || uuidv4(),
+          id: pinnedSessionId || crypto.randomUUID(),
           name: `Session ${new Date().toLocaleString()}`,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -1109,7 +1109,7 @@ function CliApp() {
 
       // Create write_todos tool for task tracking
       const todoStore = todoStoreRef.current;
-      todoStore.todos = [];
+      resetTodoStore(todoStore);
       const writeTodosTool = createWriteTodosTool(todoStore);
 
       // Create durable workflow tools (Q-inspired agentic patterns)
@@ -1169,7 +1169,7 @@ function CliApp() {
           () => peerServiceRef.current,
           async (target, text) => {
             const response = await reviewGateFn({
-              id: uuidv4(),
+              id: crypto.randomUUID(),
               description: `Send this peer message to ${JSON.stringify(target)}? It may start model usage in the recipient.\n${JSON.stringify(text)}`,
             });
             return response.decision === 'approved';
@@ -1555,7 +1555,7 @@ function CliApp() {
 
       // Create user message with concise display
       const userMessage: Message = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         role: 'user',
         content: userMessageContent,
         timestamp: new Date().toISOString(),
@@ -1563,7 +1563,7 @@ function CliApp() {
 
       // Create a pending assistant message
       const pendingAssistantMessage: Message = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         role: 'assistant',
         content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
@@ -2013,7 +2013,7 @@ function CliApp() {
     const abortController = new AbortController();
     setState(prev => ({ ...prev, abortController }));
 
-    const pendingId = uuidv4();
+    const pendingId = crypto.randomUUID();
     try {
       // Create a pending assistant message (no user message added to conversation)
       const pendingAssistantMessage: Message = {
@@ -2060,7 +2060,7 @@ function CliApp() {
       // This works with Ink's Static component which doesn't re-render existing items
       const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
       const continuationMessage: Message = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         role: 'assistant',
         content: '---\n\n**Background Agent Results:**\n\n' + result.finalAnswer,
         ...(richContent ? { richContent } : {}),
@@ -2148,14 +2148,14 @@ function CliApp() {
         if (!session || session.id !== sessionId) return;
 
         const userMessage: Message = {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           role: 'user',
           content: `$ ${command}`,
           timestamp: new Date().toISOString(),
         };
 
         const assistantMessage: Message = {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           role: 'assistant',
           content: isError ? `\u274c Error:\n${output}` : output.trim() || '(no output)',
           timestamp: new Date().toISOString(),
@@ -2430,7 +2430,7 @@ function CliApp() {
     // If the prompt times out, the user is treated as having declined and the
     // prompt is cleared from the store so the UI doesn't keep rendering it
     // during cleanup. See EXIT_HANDOFF_PROMPT_TIMEOUT_MS at module-level.
-    const promptId = uuidv4();
+    const promptId = crypto.randomUUID();
     let timer: NodeJS.Timeout | undefined;
     const wantsHandoff = await new Promise<boolean>(resolve => {
       let settled = false;

@@ -132,7 +132,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -142,14 +142,15 @@ jobs:
         run: pnpm turbo:core:build
       - name: Check desktop types
         run: pnpm --filter @bike4mind/desktop typecheck
-      # The full desktop suite runs on macOS only: ci.yml's desktop shard already runs
-      # it on Linux, and the local tool layer it covers assumes a POSIX shell and paths, so
-      # Windows runs only the packaging script tests until that layer is ported.
+      # ci.yml's "Run Tests (desktop)" shard owns the desktop suite on PRs (Linux). The
+      # macOS run is kept for main only, as a guard on the build that actually ships. The
+      # local tool layer assumes a POSIX shell and paths, so Windows runs only the
+      # packaging script tests until that layer is ported.
       - name: Test desktop
-        if: matrix.platform == 'mac'
+        if: matrix.platform == 'mac' && github.event_name != 'pull_request'
         run: pnpm --filter @bike4mind/desktop test
       - name: Test desktop packaging script
-        if: matrix.platform != 'mac'
+        if: matrix.platform != 'mac' || github.event_name == 'pull_request'
         run: pnpm --filter @bike4mind/desktop exec node --test scripts/test_package_local.cjs
       - name: Check updater transport with temporary profiles
         if: matrix.platform == 'linux'

@@ -81,8 +81,10 @@ function endpointSlug(url: string): string {
  * this process - the URL from a text field, the id from a server response - so neither reaches
  * the path in its own characters.
  */
+export const DEVICE_LOCAL_SCOPE_KEY = 'device-local';
+
 export function sessionScopeKey(scope: SessionScope): string {
-  if (scope.local) return 'device-local';
+  if (scope.local) return DEVICE_LOCAL_SCOPE_KEY;
   const endpoint = canonicalEndpoint(scope.environmentUrl);
   const digest = createHash('sha256').update(`${endpoint}\n${scope.accountId}`).digest('hex').slice(0, DIGEST_LENGTH);
   return assertScopeKey(`${endpointSlug(endpoint)}-${digest}`);

@@ -161,6 +161,14 @@ export type RestoreDataLakeProposalResult =
   | { restored: false; reason: 'not_declined' | 'pending_exists' };
 
 /**
+ * What `unapprove` reports. `not_approved` means the row is not approved any more; `pending_exists`
+ * means a newer proposal for the same source already holds the lake's one pending slot for it.
+ */
+export type UnapproveDataLakeProposalResult =
+  | { unapproved: true; proposal: IDataLakeProposalDocument; previous: IDataLakeProposalDocument }
+  | { unapproved: false; reason: 'not_approved' | 'pending_exists' };
+
+/**
  * What `createProposal` reports. `created: false` is the LOST side of a create race: a concurrent
  * producer run's pending row for the same source landed first, so this candidate is the duplicate
  * open question the caller already has an outcome for. Not an error - the caller reports it as
@@ -197,7 +205,11 @@ export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakePr
   /** The review queue for a lake, newest first, optionally narrowed to one status. */
   listByLake(
     dataLakeId: string,
-    options?: { status?: DataLakeProposalStatus; limit?: number }
+    options?: {
+      status?: DataLakeProposalStatus;
+      limit?: number;
+      after?: { createdAt: Date; id: string };
+    }
   ): Promise<IDataLakeProposalDocument[]>;
   /**
    * Atomically move a PENDING proposal to a terminal status, stamping the reviewer. Returns the
@@ -213,6 +225,14 @@ export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakePr
    * rationale stay gone - a decline stripped them, and restoring does not re-fetch the source.
    */
   restoreDeclined(id: string): Promise<RestoreDataLakeProposalResult>;
+  /**
+   * Atomically move an APPROVED proposal back to pending, clearing the reviewer stamp, the admitted
+   * file pointer and any `autoAdmission`. Conditioned on `status: 'approved'`, so two undoes cannot
+   * both succeed. Reports the row as it stood, so a failed follow-up can `rollbackUnapprove`.
+   */
+  unapprove(id: string): Promise<UnapproveDataLakeProposalResult>;
+  /** Put a row `unapprove` reset back as it was, only while it is still pending. */
+  rollbackUnapprove(previous: IDataLakeProposalDocument): Promise<void>;
   /**
    * Record the file an approval admitted, once the ingestion door has created it. `trustedDomain`
    * is the source-rule entry a rule admission matched on the final URL.

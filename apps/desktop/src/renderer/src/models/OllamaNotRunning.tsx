@@ -186,7 +186,7 @@ export function OllamaNotRunning({
   const retryButton = onRetry && (
     <Button
       size="sm"
-      variant="plain"
+      variant="outlined"
       color="neutral"
       onClick={() => {
         recheck();

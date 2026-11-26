@@ -100,7 +100,7 @@ const VersionReviewCard: FC<{ item: ReviewQueueVersionItem; mode: 'pending' | 'a
             <Chip size="sm" variant="outlined">
               v{version.version}
             </Chip>
-            <VisibilityChip visibility={listing.visibility} />
+            <VisibilityChip visibility={listing.visibility} spaceId={listing.spaceId} />
             <TierChip tier={version.riskTier} />
           </Stack>
           <Typography level="body-xs" textColor="text.tertiary">

@@ -2,6 +2,7 @@ import { IAppFileDocument, IShareableDocument, IShareableStaticMethods } from '.
 import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
+import type { AssignableOrgRole } from '../../constants/orgRoles';
 import type { OrganizationRetentionPolicy } from './OrganizationRetention';
 import type { OrganizationSharingPolicy } from '../../organizationSharingPolicy';
 import type { IOrgBudgetAlerts } from './OrgAlertTypes';
@@ -38,6 +39,11 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * and need not appear here.
    */
   adminUserIds: string[];
+  /**
+   * User ids holding the Billing manager role (constants/orgRoles.ts): billing and usage, no roster
+   * control. Like `adminUserIds`, an entry counts only with a `users[]` row; Manager wins on overlap.
+   */
+  billingManagerUserIds?: string[];
   description: string;
   billingContact: string;
   seats: number;
@@ -275,18 +281,15 @@ export interface IOrganizationRepository
    */
   ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
 
-  /** Remove a member from users/userDetails/adminUserIds (one targeted, idempotent update). */
+  /** Remove a member from users/userDetails and every role list (one targeted, idempotent update). */
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**
-   * Appoint one manager without rewriting the rest of `adminUserIds` (idempotent). Matches only while the
-   * user still holds a `users[]` row, so a concurrent removal cannot leave a manager outside the roster.
-   * Returns false when no such row exists.
+   * Give one member one assignable role, keeping `adminUserIds` and `billingManagerUserIds` disjoint
+   * (one atomic update; idempotent). Manager and Billing manager match only while the user holds a
+   * `users[]` row that confers membership. Returns false when nothing matched.
    */
-  addAdmin(organizationId: string, userId: string): Promise<boolean>;
-
-  /** Drop one manager from `adminUserIds` without rewriting the rest (idempotent). */
-  removeAdmin(organizationId: string, userId: string): Promise<void>;
+  setMemberRole(organizationId: string, userId: string, role: AssignableOrgRole): Promise<boolean>;
 
   /**
    * Set one member's monthly credit budget override (`userDetails[].maxCredits`; null inherits the

@@ -64,6 +64,8 @@ export type DataTableProps<Row> = {
   onSelectionChange?: (selection: AdminSelection) => void;
   /** Keeps the current selection but stops changes to it, for rows that are not yet the ones the filters match. */
   selectionDisabled?: boolean;
+  /** Rows that cannot be selected get a disabled checkbox and are left out of "Select page". */
+  isRowSelectable?: (row: Row) => boolean;
   onRowActivate?: (row: Row) => void;
   /** Single-key commands on a focused row (A accept, O override); same modifier and IME guards as X. */
   rowShortcuts?: (row: Row) => Partial<Record<DataTableRowShortcut, () => void>>;
@@ -80,6 +82,8 @@ export type DataTableProps<Row> = {
   groups?: readonly DataTableGroup[];
   /** Ghost controls in a trailing cell, shown while the row is hovered or holds focus. */
   rowActions?: (row: Row) => ReactNode;
+  /** Renders the row in muted ink, for a row kept for the record that no longer needs attention. */
+  isRowMuted?: (row: Row) => boolean;
   /**
    * Width of the row-action column. The default fits one `sm` icon button or one "..." menu, which is
    * all a row should carry (DESIGN_GUIDE.md, Tables). Count it in `minWidth`. Wider content is clipped.
@@ -96,6 +100,8 @@ export type DataTableProps<Row> = {
    * (`body="custom"`): the card is then the one surface (DESIGN_GUIDE.md, Cards).
    */
   framed?: boolean;
+  /** Shades alternate body rows, for long uniform logs. */
+  stripe?: 'odd' | 'even';
 };
 /** One `sm` icon button (32 px) plus the cell's 12 px padding on each side. */
 export const ROW_ACTIONS_WIDTH = '3.5rem';
@@ -119,6 +125,7 @@ export function DataTable<Row>({
   selection,
   onSelectionChange,
   selectionDisabled = false,
+  isRowSelectable,
   onRowActivate,
   rowShortcuts,
   activeRowId,
@@ -130,11 +137,13 @@ export function DataTable<Row>({
   pagination: paginationProp,
   groups,
   rowActions,
+  isRowMuted,
   actionsWidth = ROW_ACTIONS_WIDTH,
   minWidth = '40rem',
   maxHeight = '65vh',
   alwaysShowScrollbar = false,
   framed = true,
+  stripe,
 }: DataTableProps<Row>) {
   const [localSort, setLocalSort] = useState<DataTableSort>();
   const [localPage, setLocalPage] = useState(0);
@@ -179,10 +188,13 @@ export function DataTable<Row>({
   const sections = groupSections(pageRows, getRowId, groups);
   const visibleRows = sections.flatMap(section => section.rows);
   const visibleIds = visibleRows.map(getRowId);
+  const selectableVisibleIds = isRowSelectable
+    ? visibleRows.filter(row => isRowSelectable(row)).map(getRowId)
+    : visibleIds;
 
   const selectable = selection !== undefined && onSelectionChange !== undefined;
   const isSelected = (id: string) => selection?.mode === 'allMatching' || (selection?.ids.includes(id) ?? false);
-  const selectedVisible = visibleIds.filter(isSelected).length;
+  const selectedVisible = selectableVisibleIds.filter(isSelected).length;
   const toggleRows = (ids: readonly string[], checked: boolean) => {
     // Deselecting from all-matching converts the loaded rows to an explicit selection.
     const previousIds = selection?.mode === 'allMatching' ? rows.map(getRowId) : (selection?.ids ?? []);
@@ -199,7 +211,11 @@ export function DataTable<Row>({
     rangeAnchor.current = id;
     if (!extendRange || anchorIndex < 0) return toggleRows([id], checked);
     const [from, to] = anchorIndex < index ? [anchorIndex, index] : [index, anchorIndex];
-    toggleRows(visibleIds.slice(from, to + 1), checked);
+    const range = new Set(visibleIds.slice(from, to + 1));
+    toggleRows(
+      selectableVisibleIds.filter(rangeId => range.has(rangeId)),
+      checked
+    );
   };
 
   const changeSort = (columnId: string) => {
@@ -215,6 +231,7 @@ export function DataTable<Row>({
     const all = Array.from(bodyRef.current?.querySelectorAll<HTMLElement>('tr[data-row-id]') ?? []);
     all[all.indexOf(row) + step]?.focus();
   };
+  const canSelect = (row: Row) => selectable && !selectionDisabled && (isRowSelectable?.(row) ?? true);
   const onRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, row: Row, id: string) => {
     if (event.target !== event.currentTarget) return;
     const plainKey =
@@ -224,7 +241,7 @@ export function DataTable<Row>({
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       focusSiblingRow(event.currentTarget, event.key === 'ArrowDown' ? 1 : -1);
-    } else if (event.key.toLowerCase() === 'x' && selectable && !selectionDisabled && plainKey) {
+    } else if (event.key.toLowerCase() === 'x' && canSelect(row) && plainKey) {
       event.preventDefault();
       toggleRow(id, !isSelected(id), event.shiftKey);
     } else if (shortcut) {
@@ -237,7 +254,7 @@ export function DataTable<Row>({
   };
   const rowKeyShortcuts = (row: Row): string | undefined => {
     const keys = [
-      ...(selectable && !selectionDisabled ? ['x'] : []),
+      ...(canSelect(row) ? ['x'] : []),
       ...Object.entries(rowShortcuts?.(row) ?? {}).flatMap(([key, run]) => (run !== undefined ? [key] : [])),
     ];
     return keys.length ? keys.join(' ') : undefined;
@@ -328,6 +345,7 @@ export function DataTable<Row>({
         <Table
           stickyHeader
           hoverRow
+          stripe={stripe}
           size="sm"
           aria-label={label}
           aria-busy={loading || undefined}
@@ -358,6 +376,8 @@ export function DataTable<Row>({
             '& [data-row-actions]': { opacity: 0, transition: 'opacity 120ms' },
             '& tr:hover [data-row-actions], & tr:focus-within [data-row-actions]': { opacity: 1 },
             '@media (hover: none)': { '& [data-row-actions]': { opacity: 1 } },
+            '& tr[data-row-muted] > td': { color: 'admin.inkMuted' },
+            '& tr[data-row-muted] > td *': { color: 'inherit' },
           }}
         >
           <thead>
@@ -368,10 +388,10 @@ export function DataTable<Row>({
                     size="sm"
                     aria-label="Select page"
                     data-testid="admin-table-select-page"
-                    checked={visibleRows.length > 0 && selectedVisible === visibleRows.length}
-                    indeterminate={selectedVisible > 0 && selectedVisible < visibleRows.length}
-                    disabled={loading || selectionDisabled}
-                    onChange={event => toggleRows(visibleIds, event.target.checked)}
+                    checked={selectableVisibleIds.length > 0 && selectedVisible === selectableVisibleIds.length}
+                    indeterminate={selectedVisible > 0 && selectedVisible < selectableVisibleIds.length}
+                    disabled={loading || selectionDisabled || selectableVisibleIds.length === 0}
+                    onChange={event => toggleRows(selectableVisibleIds, event.target.checked)}
                   />
                 </th>
               )}
@@ -460,6 +480,7 @@ export function DataTable<Row>({
                         <tr
                           key={id}
                           data-row-id={id}
+                          data-row-muted={isRowMuted?.(row) ? '' : undefined}
                           tabIndex={onRowActivate || selectable || rowShortcuts ? 0 : undefined}
                           aria-keyshortcuts={rowKeyShortcuts(row)}
                           aria-current={activeRowId === id ? true : undefined}
@@ -476,7 +497,7 @@ export function DataTable<Row>({
                                 aria-label={`Select ${id}`}
                                 data-testid={`admin-table-select-${id}`}
                                 checked={isSelected(id)}
-                                disabled={selectionDisabled}
+                                disabled={selectionDisabled || (isRowSelectable ? !isRowSelectable(row) : false)}
                                 onChange={event =>
                                   toggleRow(
                                     id,

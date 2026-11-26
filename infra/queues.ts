@@ -6,7 +6,14 @@ import {
   publishedArtifactsBucket,
   slackExportBucket,
 } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
+import {
+  DEFAULT_LAMBDA_ENVIRONMENT,
+  SINGLE_RECORD_BATCH,
+  TEST_GENERATION_PROVIDER_ENVIRONMENT,
+  isPreviewStage,
+} from './constants';
+import { subscribeUnlessPreview } from './previewQueueConsumers';
+import { CALLABLE_FUNCTION_CALL_CONSUMER_MAX_CONCURRENCY } from '../packages/server-utils/src/callableFunctions/runtimeLimits';
 import { imageProcessor } from './imageProcessor';
 import {
   buildQueuePair,
@@ -24,6 +31,7 @@ import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
 import { appUrlForLambdaEnv, cdnUrlForLambdaEnv, router, routerDistributionId } from './router';
 import { searxngUrl } from './searxng';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -169,9 +177,11 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
       eventBus,
     ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:InvokeModel'],
         resources: ['*'],
@@ -283,6 +293,7 @@ const fabFileBucketNotification = fabFileBucket.notify({
         // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
         link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket, eventBus],
         permissions: [
+          mailBodyPutPermission(appFilesBucket),
           { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
           // Required for Lambda's async-invoke failure mechanism to deliver the failed
           // event to the DLQ — AWS Lambda uses the function's own execution role to send.
@@ -290,6 +301,7 @@ const fabFileBucketNotification = fabFileBucket.notify({
         ],
         vpc: lambdaVpc,
         environment: {
+          ...mailBodyEnvironment(appFilesBucket),
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
         transform: {
@@ -381,9 +393,11 @@ const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
       generationCallbackQueue,
     ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:*'],
         resources: ['*'],
@@ -429,9 +443,11 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
       generationCallbackQueue,
     ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:*'],
         resources: ['*'],
@@ -466,7 +482,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
     runtime: 'nodejs24.x',
     vpc: lambdaVpc,
     timeout: '15 minutes',
-    link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue],
+    link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -508,7 +524,10 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
     },
   },
 });
-const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
+const whatsNewGenerationQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'whatsNewGenerationQueue',
+  whatsNewGenerationQueue,
   {
     handler: 'apps/workers/src/queueHandlers/whatsNewJob.dispatch',
     timeout: '5 minutes',
@@ -589,9 +608,11 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:*'],
         resources: ['*'],
@@ -641,7 +662,10 @@ const githubWebhookQueue = new sst.aws.Queue('githubWebhookQueue', {
     },
   },
 });
-const githubWebhookQueueSubscription = githubWebhookQueue.subscribe(
+const githubWebhookQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'githubWebhookQueue',
+  githubWebhookQueue,
   {
     handler: 'apps/workers/src/queueHandlers/githubWebhook.dispatch',
     runtime: 'nodejs24.x',
@@ -733,7 +757,10 @@ const slackExportQueue = new sst.aws.Queue('slackExportQueue', {
     retry: 2, // Only retry twice - exports are expensive
   },
 });
-const slackExportQueueSubscription = slackExportQueue.subscribe(
+const slackExportQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'slackExportQueue',
+  slackExportQueue,
   {
     handler: 'apps/workers/src/queueHandlers/slackExport.dispatch',
     runtime: 'nodejs24.x',
@@ -754,6 +781,41 @@ const slackExportQueueSubscription = slackExportQueue.subscribe(
       : undefined,
   },
   SINGLE_RECORD_BATCH
+);
+
+// Asynchronous callable function calls queued by POST /api/v1/functions/{id}/invoke with mode async. The job carries
+// only the call id; the handler claims the call once, so a redelivery never runs the guest twice.
+const callableFunctionCallQueueDLQ = new sst.aws.Queue('callableFunctionCallQueueDLQ', {});
+const callableFunctionCallQueue = new sst.aws.Queue('callableFunctionCallQueue', {
+  // With retry 2 the one redelivery lands this long after receive; 5 minutes of slack past the consumer's
+  // timeout keeps it after claim + 900 s, so a live call is never handed on and a dead one is always settled.
+  visibilityTimeout: '20 minutes',
+  dlq: {
+    queue: callableFunctionCallQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const callableFunctionCallQueueSubscription = callableFunctionCallQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/callableFunctionCall.dispatch',
+    runtime: 'nodejs24.x',
+    // CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS in packages/server-utils/src/callableFunctions/runtimeLimits.ts.
+    timeout: '15 minutes',
+    memory: '512 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Caps pollers instead of reserving concurrency: a throttled consumer would return the job unclaimed and spend
+    // one of its two receives, sending a call that never ran to the dead-letter queue.
+    transform: {
+      eventSourceMapping: { scalingConfig: { maximumConcurrency: CALLABLE_FUNCTION_CALL_CONSUMER_MAX_CONCURRENCY } },
+    },
+  }
 );
 
 // Quest Export Queue
@@ -882,7 +944,7 @@ const accountDataExportQueueSubscription = accountDataExportQueue.subscribe(
 // Owner-only thumbnails of published bundles: one message per artifact version, enqueued by publish
 // finalize, restore and AI revise (enqueuePublishThumbnail in packages/server-utils). Hosted only -
 // the self-host worker image ships no browser (see selfhostParityPolicy.ts and
-// manifestCoverage.test.ts).
+// manifestCoverage.repo.test.ts).
 //
 // Two functions. The queue handler (orchestrator) has the database and the private bucket: it
 // loads the artifact, checks the version, builds the fully inlined document, stages it under
@@ -992,7 +1054,7 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
+    link: [...allSecrets, websocketApi, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1014,7 +1076,7 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     // lakeMemoryQueue: this handler self-re-enqueues for bounded continuation (a lake too large for one
     // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
     // the sqs:SendMessage grant that linking the queue confers.
-    link: [...allSecrets, websocketApi, lakeMemoryQueue],
+    link: [...allSecrets, websocketApi, lakeMemoryQueue, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1077,7 +1139,7 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket],
+    link: [...allSecrets, fabFileBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // Research runs resolve the web-search provider like ChatCompletion does; same wiring
@@ -1132,7 +1194,10 @@ const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscrib
   SINGLE_RECORD_BATCH
 );
 
-const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
+const githubLakeIngestQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'githubLakeIngestQueue',
+  githubLakeIngestQueue,
   {
     handler: 'apps/workers/src/queueHandlers/githubLakeIngest.dispatch',
     runtime: 'nodejs24.x',
@@ -1148,7 +1213,10 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
+const githubLakeRevokeQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'githubLakeRevokeQueue',
+  githubLakeRevokeQueue,
   {
     handler: 'apps/workers/src/queueHandlers/githubLakeRevoke.dispatch',
     runtime: 'nodejs24.x',
@@ -1182,21 +1250,14 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
     timeout: '5 minutes',
     vpc: lambdaVpc,
     // Links its own queue: a run that hits its deadline re-enqueues what it did not reach.
-    link: [...allSecrets, generatedImagesBucket, routerDistributionId, generatedMediaPurgeQueue],
+    link: [...allSecrets, generatedImagesBucket, generatedMediaPurgeQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    permissions: [
-      {
-        actions: ['cloudfront:CreateInvalidation'],
-        resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
-      },
-    ],
   },
   {
     ...SINGLE_RECORD_BATCH,
-    // Each run flushes up to 500 exact CDN paths (MAX_DELETES_PER_RUN in purgeDeletedNotebookMedia.ts), so
-    // 2 runs hold a third of the in-flight quota publish takedowns share; 2 is the SQS minimum.
+    // 2 is the SQS minimum; each run deletes at most MAX_DELETES_PER_RUN keys (purgeDeletedNotebookMedia.ts).
     // Capped at the event source rather than on the function, so throttled polls never burn the DLQ retries.
     transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
   }
@@ -1264,8 +1325,12 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       imageProcessor,
     ],
     // Image jobs run our post-generation scan before the image is stored.
-    permissions: [{ actions: ['rekognition:DetectModerationLabels'], resources: ['*'] }],
+    permissions: [
+      { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
+      mailBodyPutPermission(appFilesBucket),
+    ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     },
@@ -1273,45 +1338,6 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       // Store steps hold up to 256MB of output and providers rate-limit.
       reserved: 5,
     },
-  },
-  SINGLE_RECORD_BATCH
-);
-
-// LiveOps Triage Queue (Multi-Config)
-// Handles triage jobs dispatched by liveopsTriageDispatcher.
-// Each message contains a configId for independent processing.
-const liveOpsTriageQueueDLQ = new sst.aws.Queue('liveOpsTriageQueueDLQ', {
-  visibilityTimeout: '10 minutes',
-  transform: {
-    queue: {
-      messageRetentionSeconds: 1209600, // 14 days for forensics
-    },
-  },
-});
-const liveOpsTriageQueue = new sst.aws.Queue('liveOpsTriageQueue', {
-  visibilityTimeout: '8 minutes', // Lambda timeout (5 min) + 3 min safety buffer
-  dlq: {
-    queue: liveOpsTriageQueueDLQ.arn,
-    retry: 2, // Retry twice to handle transient failures
-  },
-});
-const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
-  {
-    handler: 'apps/workers/src/cron/liveopsTriageWorker.handler',
-    runtime: 'nodejs24.x',
-    timeout: '5 minutes',
-    memory: '512 MB',
-    vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus, mcpHandler],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-    ],
   },
   SINGLE_RECORD_BATCH
 );
@@ -1341,7 +1367,10 @@ const secopsTriageQueue = new sst.aws.Queue('secopsTriageQueue', {
   },
 });
 
-const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
+const secopsTriageQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'secopsTriageQueue',
+  secopsTriageQueue,
   {
     handler: 'apps/workers/src/cron/secopsTriageWorker.handler',
     runtime: 'nodejs24.x',
@@ -1358,7 +1387,7 @@ const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
         resources: ['*'],
       },
     ],
-    // Only set reserved concurrency on production/dev — ZAP scans are weekly, low volume
+    // Only set reserved concurrency on production/dev - ZAP scans are weekly, low volume
     concurrency: ['production', 'dev'].includes($app.stage)
       ? {
           reserved: 2,
@@ -1402,9 +1431,11 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
     // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
     link: [...allSecrets, eventBus],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:InvokeModel'],
         resources: ['*'],
@@ -1459,7 +1490,10 @@ const sreFixQueue = new sst.aws.Queue('sreFixQueue', {
     retry: 2,
   },
 });
-const sreFixQueueSubscription = sreFixQueue.subscribe(
+const sreFixQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'sreFixQueue',
+  sreFixQueue,
   {
     handler: 'apps/workers/src/queueHandlers/sreFix.dispatch',
     runtime: 'nodejs24.x',
@@ -1512,7 +1546,10 @@ const sreJobQueue = new sst.aws.Queue('sreJobQueue', {
     },
   },
 });
-const sreJobQueueSubscription = sreJobQueue.subscribe(
+const sreJobQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'sreJobQueue',
+  sreJobQueue,
   {
     handler: 'apps/workers/src/queueHandlers/sreJob.dispatch',
     runtime: 'nodejs24.x',
@@ -1543,7 +1580,7 @@ const sreJobQueueSubscription = sreJobQueue.subscribe(
     ],
     // reserved: 4 preserves the pre-merge aggregate capacity (analysis had 2 +
     // revision had 2). Note: this is now a single shared pool, NOT a per-stage
-    // partition — a sustained analysis burst can consume all 4 slots and delay
+    // partition - a sustained analysis burst can consume all 4 slots and delay
     // revisions until visibility timeouts roll. Acceptable given low SRE volume;
     // raise this if revision latency suffers under co-tenancy.
     concurrency: ['production', 'dev'].includes($app.stage)
@@ -1583,7 +1620,10 @@ const overwatchAnalyticsQueue = new sst.aws.Queue('overwatchAnalyticsQueue', {
   },
 });
 
-const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
+const overwatchAnalyticsQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'overwatchAnalyticsQueue',
+  overwatchAnalyticsQueue,
   {
     handler: 'apps/client/server/premium-generated/queueHandlers/overwatchAnalytics.dispatch',
     runtime: 'nodejs24.x',
@@ -1720,7 +1760,8 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     memory: '1024 MB',
     vpc: lambdaVpc,
     // appFilesBucket: a run's first-screen screenshots are stored under bob-screenshots/<runId>/.
-    link: [...allSecrets, websocketApi, appFilesBucket],
+    // eventBus: the org credit alert email from a run's debit is queued as an email.send event.
+    link: [...allSecrets, websocketApi, appFilesBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1801,8 +1842,8 @@ export const contributedQueues: Record<
 > = Object.fromEntries(
   contributedQueuePartition.registered.map(spec => {
     const pair = buildQueuePair<$util.Output<string>>(contributedQueuePairOptions(spec));
-    const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs);
     // partitionContributedQueues only registers durations QueueArgs accepts, within the SQS 12-hour ceiling.
+    const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs as sst.aws.QueueArgs);
     const queue = new sst.aws.Queue(pair.name, pair.queueArgs(dlq.arn) as sst.aws.QueueArgs);
     return [spec.name, { spec, queue, dlq }];
   })
@@ -1824,6 +1865,7 @@ export {
   slackExportQueue,
   githubWebhookQueue,
   webhookDeliveryQueue,
+  callableFunctionCallQueue,
   questExportQueue,
   accountDataExportQueue,
   accountErasureQueue,
@@ -1839,7 +1881,6 @@ export {
   githubLakeIngestQueue,
   githubLakeRevokeQueue,
   generatedMediaPurgeQueue,
-  liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
   sreFixQueue,
@@ -1865,6 +1906,7 @@ export {
   slackExportQueueDLQ,
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
   accountErasureQueueDLQ,
@@ -1880,7 +1922,6 @@ export {
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
   generatedMediaPurgeQueueDLQ,
-  liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
   sreFixQueueDLQ,
@@ -1907,6 +1948,7 @@ export {
   slackExportQueueSubscription,
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
+  callableFunctionCallQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
   accountErasureQueueSubscription,
@@ -1923,7 +1965,6 @@ export {
   githubLakeIngestQueueSubscription,
   githubLakeRevokeQueueSubscription,
   generatedMediaPurgeQueueSubscription,
-  liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
   sreJobQueueSubscription,

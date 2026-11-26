@@ -581,7 +581,7 @@ function ModelDefaultsForm({
             Save
           </Button>
           <Button
-            variant="plain"
+            variant="outlined"
             color="neutral"
             disabled={saving}
             onClick={onClose}
@@ -590,7 +590,7 @@ function ModelDefaultsForm({
             Cancel
           </Button>
           <Button
-            variant="plain"
+            variant="outlined"
             color="neutral"
             disabled={saving || loaded === null || !touched}
             onClick={() => {

@@ -3,9 +3,10 @@ import { websocketApi } from './websocket';
 import { domain, router, routePrefix, isSharedRouterConsumer } from './router';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { getAllowedOrigins } from './allowedOrigins';
-import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
+import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest, scopeCloudfrontRead } from './bucketSecurity';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
+import { MAIL_BODY_PREFIX, mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 // Bucket options:  Named buckets are named, and kept; otherwise, they're auto-deleted.
 // Buckets in production and dev (staging) are retained on deletion for data safety,
@@ -184,7 +185,6 @@ const generatedImagesBucket = new sst.aws.Bucket(
       allowHeaders: ['*'],
       allowMethods: ['GET', 'PUT', 'POST'],
     },
-    access: 'cloudfront',
     transform: {
       publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS,
       bucket: generatedImagesBucketName
@@ -227,22 +227,6 @@ const generatedImagesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2
   ],
 });
 
-// PARITY: these routeBucket prefixes are mirrored by resolveProxyTarget in
-// packages/server-utils/src/utils/appFileProxy.ts (the dev local-proxy path) and by
-// toCdnPath in apps/client/app/utils/s3.ts. If you add/remove/rewrite a prefix
-// here, update both in lockstep.
-if (router && !isSharedRouterConsumer) {
-  // When using shared router, namespace routes by stage to prevent conflicts
-  // routePrefix is imported from router.ts
-
-  router.routeBucket(`${routePrefix}/generated`, generatedImagesBucket, {
-    rewrite: {
-      regex: `^${routePrefix}/generated/(.*)$`,
-      to: '/$1',
-    },
-  });
-}
-
 /**
  * ===============================
  * AppFilesBucket
@@ -260,6 +244,7 @@ const appFilesBucket = new sst.aws.Bucket(
     access: 'cloudfront',
     transform: {
       publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS,
+      policy: scopeCloudfrontRead,
       bucket: appFilesBucketName
         ? (args, opts) => {
             args.bucket = appFilesBucketName;
@@ -274,6 +259,10 @@ const appFilesBucket = new sst.aws.Bucket(
 );
 encryptBucketAtRest('appFilesBucket', appFilesBucket);
 
+// PARITY: these routeBucket prefixes are mirrored by resolveProxyTarget in
+// packages/server-utils/src/utils/appFileProxy.ts (the dev local-proxy path) and by
+// toCdnPath in apps/client/app/utils/s3.ts. If you add/remove/rewrite a prefix
+// here, update both in lockstep. Generated media has no route: it is read only through signed URLs.
 // Route publicly accessible directories through CloudFront
 // Only these paths will be accessible via CloudFront URLs
 if (router && !isSharedRouterConsumer) {
@@ -449,6 +438,24 @@ const appFilesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('appFi
         daysAfterInitiation: 1,
       },
     },
+    {
+      // Mail bodies too large for an email.send event (infra/mailBodyOffload.ts). Nothing deletes
+      // them on send, so a retried or redriven event inside this window can still be delivered.
+      id: 'expire-queued-mail',
+      status: 'Enabled',
+      filter: {
+        prefix: MAIL_BODY_PREFIX,
+      },
+      expiration: {
+        days: 1,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+      abortIncompleteMultipartUpload: {
+        daysAfterInitiation: 1,
+      },
+    },
     expireNoncurrentVersionsRule,
   ],
 });
@@ -481,6 +488,7 @@ const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunct
   ],
   vpc: lambdaVpc,
   environment: {
+    ...mailBodyEnvironment(appFilesBucket),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
   timeout: '5 minutes', // Longer timeout for large imports
@@ -488,7 +496,10 @@ const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunct
   // Imported knowledge files are moderated post-commit inside this handler; like every other
   // moderation-calling Lambda it needs Rekognition access, or the scan AccessDenies and the
   // file is released back to pending unservable.
-  permissions: [{ actions: ['rekognition:DetectModerationLabels'], resources: ['*'] }],
+  permissions: [
+    { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
+    mailBodyPutPermission(appFilesBucket),
+  ],
 });
 
 // Now use the created functions in bucket notifications

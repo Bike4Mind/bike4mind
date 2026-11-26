@@ -53,3 +53,29 @@ export function pyodideCspSources(raw: string | undefined): string[] {
   const mirror = resolvePyodideMirrorOrigin(raw);
   return mirror && mirror !== DEFAULT_PYODIDE_ORIGIN ? [DEFAULT_PYODIDE_ORIGIN, mirror] : [DEFAULT_PYODIDE_ORIGIN];
 }
+
+/**
+ * The mirror's full base URL (origin and path, ending in `/`) for a path-scoped CSP source, or ''
+ * when unset or invalid. A ',' is refused as well, since it would split the CSP header.
+ */
+export function resolvePyodideMirrorBaseUrl(raw: string | undefined): string {
+  const origin = resolvePyodideMirrorOrigin(raw);
+  if (!raw || !origin) return '';
+  if (raw.includes(',')) {
+    console.warn(`[csp] ignoring invalid PYODIDE_BASE_URL "${raw}": contains ","`);
+    return '';
+  }
+  const { pathname } = new URL(raw);
+  return `${origin}${pathname.endsWith('/') ? pathname : `${pathname}/`}`;
+}
+
+/**
+ * Like `pyodideCspSources`, but each source is the distribution's path rather than its host, so
+ * a frame that allows only these cannot read other files the same CDN serves.
+ */
+export function pyodideDistributionCspSources(raw: string | undefined): string[] {
+  const mirror = resolvePyodideMirrorBaseUrl(raw);
+  return mirror && mirror !== DEFAULT_PYODIDE_BASE_URL
+    ? [DEFAULT_PYODIDE_BASE_URL, mirror]
+    : [DEFAULT_PYODIDE_BASE_URL];
+}

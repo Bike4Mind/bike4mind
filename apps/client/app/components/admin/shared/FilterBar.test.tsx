@@ -33,7 +33,7 @@ describe('FilterToolbar', () => {
     render(
       <CssVarsProvider theme={theme}>
         <FilterToolbar data-testid="dates-toolbar">
-          <Input type="date" size="sm" startDecorator={<FilterInputLabel>From</FilterInputLabel>} />
+          <Input size="sm" startDecorator={<FilterInputLabel>From</FilterInputLabel>} />
         </FilterToolbar>
       </CssVarsProvider>
     );

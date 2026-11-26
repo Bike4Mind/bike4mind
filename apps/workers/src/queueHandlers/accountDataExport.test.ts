@@ -85,9 +85,7 @@ vi.mock('@bike4mind/database', () => ({
   memoryPrincipalKeyRepository: {},
 }));
 
-vi.mock('@bike4mind/server-utils/models/Subscription', () => ({}));
-vi.mock('@bike4mind/server-utils/models/UserSubscription', () => ({}));
-vi.mock('@server/dataSubject/subjectRecordExport', () => ({
+vi.mock('@bike4mind/server-utils/dataSubject/subjectRecordExport', () => ({
   assertEveryModelClassified: h.assertClassified,
   SubjectRecordExport: class {
     async walkOrder() {

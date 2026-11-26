@@ -5,13 +5,14 @@ import { keyframes } from '@mui/system';
 import { AGENT_STATE_LABEL, type AgentState } from '@shared/agentState';
 import type { ViewAction, ViewSnapshot } from '@shared/viewSnapshot';
 import { stateJoyColor } from './statePalette';
+import { AgentPrIndicator } from './AgentPrIndicator';
 
 /*
  * Built on the view contract alone, as TileWall is: it may import only @shared/viewSnapshot, @shared/agentState,
- * ./statePalette, React and the UI kit. snapshotView.tsx hosts it.
+ * ./statePalette, ./AgentPrIndicator, React and the UI kit. snapshotView.tsx hosts it.
  */
 
-const DIMMED: ReadonlySet<AgentState> = new Set(['stopped', 'idle']);
+const DIMMED: ReadonlySet<AgentState> = new Set(['paused', 'stopped', 'idle']);
 
 /** Per depth level (px); capped so a deep chain still leaves the lane room for its text. */
 const INDENT_STEP = 20;
@@ -23,6 +24,7 @@ interface Lane {
   title: string;
   line?: string;
   depth: number;
+  pr?: SnapshotAgent['pr'];
   action: ViewAction;
 }
 
@@ -64,6 +66,7 @@ function lanes(snapshot: ViewSnapshot): Lane[] {
     title: agent.title,
     line: agent.decision?.question ?? agent.now,
     depth: agent.depth,
+    pr: agent.pr,
     action: { kind: 'open-agent', agentId: agent.id },
   }));
   if (snapshot.root.state !== 'needs-you') return agentLanes;
@@ -105,8 +108,13 @@ export function Swimlanes({ snapshot, onAction }: { snapshot: ViewSnapshot; onAc
         return (
           <Box
             key={lane.key}
-            component="button"
-            type="button"
+            role="button"
+            tabIndex={0}
+            onKeyDown={event => {
+              if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+              event.preventDefault();
+              onAction(lane.action);
+            }}
             onClick={() => onAction(lane.action)}
             aria-label={`${lane.title}: ${AGENT_STATE_LABEL[lane.state]}`}
             data-testid={`orchestrator-swimlanes-lane-${lane.key}`}
@@ -165,6 +173,11 @@ export function Swimlanes({ snapshot, onAction }: { snapshot: ViewSnapshot; onAc
             >
               {lane.line ?? ''}
             </Typography>
+            <AgentPrIndicator
+              agentId={lane.key}
+              pr={lane.pr}
+              onOpen={() => onAction({ kind: 'open-pr', agentId: lane.key })}
+            />
           </Box>
         );
       })}

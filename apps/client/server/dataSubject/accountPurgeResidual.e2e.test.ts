@@ -1,11 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ADMIN_ERASURE_COMPLETED_ACTION } from '@bike4mind/common';
-import { AdminAuditLogModel, ErasureRecordModel, Session, mongoose } from '@bike4mind/database';
+import {
+  AdminAuditLogModel,
+  ErasureRecordModel,
+  Session,
+  User,
+  FabFile,
+  AssistantInstructionModel,
+  assistantInstructionRepository,
+  mongoose,
+} from '@bike4mind/database';
 import { inboxRepository } from '@bike4mind/database/social';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-// Registered outside the `@bike4mind/database` barrel, so they register only when imported.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -39,6 +45,10 @@ vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async import
   ...(await importOriginal<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   createCdnInvalidationBatch: () => ({ add: vi.fn(), flush: vi.fn() }),
 }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/storage/index')>()),
+  getGeneratedImageStorage: () => ({ deletePermanently: vi.fn(), deletePrefixPermanently: vi.fn() }),
+}));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return { ...actual, authSessionService: { ...actual.authSessionService, endRealtimeConnections: vi.fn() } };
@@ -48,13 +58,13 @@ import { completeAccountDeletion, type ErasureRegistry } from '@bike4mind/server
 import { PlatformEndUser, platformEndUserRepository } from '@bike4mind/database/ai';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import { reapplyErasure } from '../users/reapplyErasure';
-import { erasureRegistry } from './erasureRegistry';
-import { DELETED_USER_ID } from './placeholder';
-import { SubjectErasurePlan } from './subjectErasurePlan';
-import { SubjectErasureExecutor } from './subjectErasureExecutor';
-import { SubjectRecordExport } from './subjectRecordExport';
-import { aiHolders } from './registry/ai';
-import { DATA_HOLDER_REGISTRY } from './registry';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
+import { DELETED_USER_ID } from '@bike4mind/server-utils/dataSubject/placeholder';
+import { SubjectErasurePlan } from '@bike4mind/server-utils/dataSubject/subjectErasurePlan';
+import { SubjectErasureExecutor } from '@bike4mind/server-utils/dataSubject/subjectErasureExecutor';
+import { SubjectRecordExport } from '@bike4mind/server-utils/dataSubject/subjectRecordExport';
+import { aiHolders } from '@bike4mind/server-utils/dataSubject/registry/ai';
+import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry/index';
 import { purgePersonalLakeById } from '@bike4mind/server-utils/users/purgeAccountContent';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -169,6 +179,9 @@ async function seedAccount(source: 'self' | 'admin' = 'admin') {
   await insert('FeedbackNote', { userId, body: 'private account note' });
   await insert('Friendship', { requester: userId, recipient: String(other) });
   await insert('McpConnection', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
+  await insert('CallableFunction', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
+  await insert('CallableFunctionCall', { functionId: 'f1', callerUserId: userId, ownerUserId: userId, outcome: 'ok' });
+  await insert('CallableFunctionResult', { callId: 'c1', functionId: 'f1', callerUserId: userId, state: 'finished' });
   await insert('GenerationJob', { ownerType: 'User', ownerId: userId });
   await insert('Activity', { ownerType: 'User', ownerId: userId });
   await insert('TaskSchedule', { payload: { userId } });
@@ -557,7 +570,11 @@ describe('file family authority', () => {
       return original.call(this, checkpoint, async (model, entries) => {
         if (model === 'FabFile') {
           expect(entries.find(entry => String(entry.document._id) === String(file))?.outcome).toBe('deleted');
-          await mongoose.model('FabFile').collection.updateOne({ _id: file }, { $push: { tags: { name: tag } } });
+          const database = mongoose.connection.db;
+          if (!database) throw new Error('Fixture database is not connected');
+          await database
+            .collection<{ tags: { name: string }[] }>(FabFile.collection.name)
+            .updateOne({ _id: file }, { $push: { tags: { name: tag } } });
         }
         await sink?.(model, entries);
       });
@@ -740,5 +757,92 @@ describe('platform end-user metadata and real account deletion', () => {
     await expect(completeAccountDeletion(userId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
     expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
     expect(await PlatformEndUser.exists({ keyOwnerId: other })).not.toBeNull();
+  });
+});
+
+describe('standing instruction admission and real account deletion', () => {
+  it('rejects late text after real holder erasure and after final deletion, preserving foreign instructions', async () => {
+    const { userId, other } = await seedAccount('self');
+    await assistantInstructionRepository.createWithinCap({ userId, text: 'private instruction' }, 20);
+    await assistantInstructionRepository.createWithinCap({ userId: other, text: 'foreign control' }, 20);
+    const erased = deletionBarrier();
+    const resume = deletionBarrier();
+    const registry: ErasureRegistry = {
+      ...erasureRegistry,
+      async erase(subject, assertLease, stage, session) {
+        await erasureRegistry.erase(subject, assertLease, stage, session);
+        if (stage === 'beforeDelete' && subject.userId === userId) {
+          erased.release();
+          await resume.promise;
+        }
+      },
+    };
+    const deletion = completeAccountDeletion(userId, { logger, erasureRegistry: registry });
+    try {
+      await Promise.race([
+        erased.promise,
+        deletion.then(() => {
+          throw new Error('Deletion missed instruction erasure barrier');
+        }),
+      ]);
+      expect(await AssistantInstructionModel.countDocuments({ userId })).toBe(0);
+      const owner = await User.findById(userId).lean();
+      expect(owner?.deletion?.purgeStartedAt).toBeInstanceOf(Date);
+      await expect(
+        assistantInstructionRepository.createWithinCap({ userId, text: 'late private text' }, 20)
+      ).rejects.toThrow('Account unavailable');
+      expect(await AssistantInstructionModel.countDocuments({ userId })).toBe(0);
+    } finally {
+      resume.release();
+      await deletion;
+    }
+    await expect(
+      assistantInstructionRepository.createWithinCap({ userId, text: 'after deletion' }, 20)
+    ).rejects.toThrow('Account unavailable');
+    expect(await User.exists({ _id: userId })).toBeNull();
+    expect(await AssistantInstructionModel.countDocuments({ userId })).toBe(0);
+    expect((await assistantInstructionRepository.listByUser(other)).map(row => row.text)).toEqual(['foreign control']);
+  });
+
+  it('erases an instruction transaction that acquires the User fence before deletion starts', async () => {
+    const { userId, other } = await seedAccount('self');
+    await assistantInstructionRepository.createWithinCap({ userId: other, text: 'foreign control' }, 20);
+    const locked = deletionBarrier();
+    const resume = deletionBarrier();
+    const deleteAttempted = deletionBarrier();
+    const update = User.collection.updateOne.bind(User.collection);
+    const claim = User.collection.findOneAndUpdate.bind(User.collection);
+    const writerSpy = vi.spyOn(User.collection, 'updateOne').mockImplementationOnce(async (...args) => {
+      const result = await update(...args);
+      locked.release();
+      await resume.promise;
+      return result;
+    });
+    const writer = assistantInstructionRepository.createWithinCap({ userId, text: 'committed before purge' }, 20);
+    await locked.promise;
+    const claimSpy = vi.spyOn(User.collection, 'findOneAndUpdate').mockImplementationOnce(async (...args) => {
+      deleteAttempted.release();
+      return claim(...args);
+    });
+    const deletion = completeAccountDeletion(userId, { logger, erasureRegistry });
+    try {
+      await Promise.race([
+        deleteAttempted.promise,
+        deletion.then(() => {
+          throw new Error('Deletion missed User claim');
+        }),
+      ]);
+    } finally {
+      resume.release();
+      try {
+        await Promise.all([writer, deletion]);
+      } finally {
+        writerSpy.mockRestore();
+        claimSpy.mockRestore();
+      }
+    }
+    expect(await User.exists({ _id: userId })).toBeNull();
+    expect(await AssistantInstructionModel.countDocuments({ userId })).toBe(0);
+    expect((await assistantInstructionRepository.listByUser(other)).map(row => row.text)).toEqual(['foreign control']);
   });
 });

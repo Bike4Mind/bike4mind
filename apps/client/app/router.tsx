@@ -33,6 +33,7 @@ import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
 import { AdminLayoutRoute } from './components/admin/AdminLayout';
+import { adminPageFrame } from './components/admin/shared/adminStyles';
 import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
@@ -41,7 +42,7 @@ import { partitionPremiumRoutes } from './premiumRoutePartition';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioMedium } from './components/Studio/studioModality';
-import { parseQaStatusSearch } from './hooks/data/qaStatus';
+import { hasQaSearchKeys, parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
 import { parseSubscriptionDetailSearch } from './components/admin/Subscriptions/Detail/subscriptionDetailSearch';
@@ -76,20 +77,24 @@ const SkillDetailPage = lazy(() => import('./routes/skills/$id'));
 const EditSkillPage = lazy(() => import('./routes/skills/$id/edit'));
 const SkillMarketPage = lazy(() => import('./routes/skills/market'));
 const SkillListingPage = lazy(() => import('./routes/skills/market/$listingId'));
+const SkillTemplateEditorPage = lazy(() => import('./routes/skills/market/$listingId/template'));
 const UnlistedSkillListingPage = lazy(() => import('./routes/skills/market/u/$token'));
+const SkillTemplateTryPage = lazy(() => import('./routes/skills/market/try/$slug'));
 const MySkillListingsPage = lazy(() => import('./routes/skills/market/mine'));
 const SkillReviewQueuePage = lazy(() => import('./routes/skills/market/review'));
 const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions'));
 const FeedbackRollupPage = lazy(() => import('./routes/feedback/rollup'));
 const MissionDossierPage = lazy(() => import('./routes/agents/$id/missions/$missionId'));
 const DeepAgentConsolePage = lazy(() => import('./routes/deep-agents'));
-const QaStatusPage = lazy(() => import('./routes/status'));
-const QaRunPage = lazy(() => import('./routes/status/runs/$id'));
-const QaTestPage = lazy(() => import('./routes/status/tests/$testKey'));
+const QaStatusPage = lazy(() => import('./routes/admin/qa'));
+const QaRunPage = lazy(() => import('./routes/admin/qa/runs/$id'));
+const QaTestPage = lazy(() => import('./routes/admin/qa/tests/$testKey'));
 const SharePage = lazy(() => import('./routes/share/$id'));
 const ReportPublicPage = lazy(() => import('./routes/report/$id'));
 const OrganizationsPage = lazy(() => import('./routes/organizations'));
 const OrganizationDetailPage = lazy(() => import('./routes/organizations/$id'));
+const SpacesPage = lazy(() => import('./routes/spaces'));
+const SpaceDetailPage = lazy(() => import('./routes/spaces/$id'));
 const AuthCallbackPage = lazy(() => import('./routes/auth/$strategy/callback'));
 const AuthSuccessPage = lazy(() => import('./routes/auth/success'));
 const LoginPage = lazy(() => import('./routes/login'));
@@ -201,9 +206,10 @@ function buildPremiumGatedElement(descriptor: (typeof premiumRoutes)[number]) {
 // own ProviderBundle; app-shell premium routes hang off layoutRoute (rendered
 // inside the notebook layout) and inherit ProviderBundle + chrome from its
 // Outlet, so wrapping again would double the context providers and their API
-// fetches. getParentRoute is a thunk (lazy), so referencing rootRoute/layoutRoute
-// (declared below) is safe. In the open-core fork `premiumRoutes` is empty -> both
-// arrays are empty.
+// fetches. Admin premium routes hang off adminLayoutRoute the same way: its guard,
+// providers and Suspense boundary already wrap them. getParentRoute is a thunk
+// (lazy), so referencing rootRoute/layoutRoute/adminLayoutRoute (declared below)
+// is safe. In the open-core fork `premiumRoutes` is empty -> every array is empty.
 const premiumPartition = partitionPremiumRoutes(premiumRoutes);
 
 // Public premium routes render bare under the root route: the URL is the authorization,
@@ -238,6 +244,20 @@ const builtAppShellPremiumRoutes = premiumPartition.appShell.map(descriptor => {
     getParentRoute: () => layoutRoute,
     path: descriptor.path,
     component: () => gated,
+  });
+});
+// The frame is what a core admin detail route spreads on its own root, so a contributed page sets
+// no outer padding of its own. Access (full admins only) is the layout's, not the route's.
+const builtAdminPremiumRoutes = premiumPartition.admin.map(descriptor => {
+  const LazyComponent = lazy(descriptor.lazyImport);
+  return createRoute({
+    getParentRoute: () => adminLayoutRoute,
+    path: descriptor.path,
+    component: () => (
+      <Box data-testid="admin-contributed-page" sx={adminPageFrame}>
+        <LazyComponent />
+      </Box>
+    ),
   });
 });
 
@@ -378,10 +398,9 @@ export const newRoute = createRoute({
   path: '/new',
   validateSearch: (
     search: Record<string, unknown>
-  ): { projectId?: string; questmaster?: string; goal?: string; article?: string; passage?: string } => {
+  ): { projectId?: string; goal?: string; article?: string; passage?: string } => {
     return {
       projectId: optionalStringParam(search, 'projectId'),
-      questmaster: optionalStringParam(search, 'questmaster'),
       goal: optionalStringParam(search, 'goal'),
       // Data Lake article deep link, forwarded here from the retired /data-lakes route (#1943).
       article: optionalStringParam(search, 'article'),
@@ -732,7 +751,10 @@ const skillMarketRoute = marketRoute('/skills/market', SkillMarketPage);
 const mySkillListingsRoute = marketRoute('/skills/market/mine', MySkillListingsPage);
 const skillReviewQueueRoute = marketRoute('/skills/market/review', SkillReviewQueuePage);
 const unlistedSkillListingRoute = marketRoute('/skills/market/u/$token', UnlistedSkillListingPage);
+// The Try button on a public template page (templateTryPath in server/skillMarket/templatePage.ts).
+const skillTemplateTryRoute = marketRoute('/skills/market/try/$slug', SkillTemplateTryPage);
 const skillListingRoute = marketRoute('/skills/market/$listingId', SkillListingPage);
+const skillTemplateEditorRoute = marketRoute('/skills/market/$listingId/template', SkillTemplateEditorPage);
 
 const skillDetailRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -803,62 +825,6 @@ const deepAgentsRoute = createRoute({
   ),
 });
 
-// Layout for the QA status pages: layoutRoute's providers and consent guard without the notebook
-// sidenav/header. A rootRoute child like adminRoute; the login redirect comes from RestrictedPage.
-const qaStatusLayoutRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  id: 'qa-status-layout',
-  beforeLoad: ({ location }) => enforceConsentRedirect(location),
-  component: () => (
-    <RestrictedPage requireAdmin={false}>
-      <ProviderBundle>
-        <Outlet />
-      </ProviderBundle>
-    </RestrictedPage>
-  ),
-});
-
-// QA status (admin only). Exported so pages read typed search/params via
-// `qaStatusRoute.useSearch()` etc.; filters live in the URL so links deep-link.
-export const qaStatusRoute = createRoute({
-  getParentRoute: () => qaStatusLayoutRoute,
-  path: '/status',
-  validateSearch: parseQaStatusSearch,
-  component: () => (
-    <RestrictedPage requireAdmin>
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <QaStatusPage />
-      </Suspense>
-    </RestrictedPage>
-  ),
-});
-
-export const qaRunRoute = createRoute({
-  getParentRoute: () => qaStatusLayoutRoute,
-  path: '/status/runs/$id',
-  component: () => (
-    <RestrictedPage requireAdmin>
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <QaRunPage />
-      </Suspense>
-    </RestrictedPage>
-  ),
-});
-
-// The router encodes the key into one segment (it contains / > ? #); the page
-// re-sends it as ?testKey=.
-export const qaTestRoute = createRoute({
-  getParentRoute: () => qaStatusLayoutRoute,
-  path: '/status/tests/$testKey',
-  component: () => (
-    <RestrictedPage requireAdmin>
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <QaTestPage />
-      </Suspense>
-    </RestrictedPage>
-  ),
-});
-
 // Share route (replaces /share/[id].tsx)
 const shareRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -910,6 +876,29 @@ const organizationDetailRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { tab?: string; section?: string } => {
     return { tab: optionalStringParam(search, 'tab'), section: optionalStringParam(search, 'section') };
   },
+});
+
+const spacesRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/spaces',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <SpacesPage />
+    </Suspense>
+  ),
+});
+
+const spaceDetailRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/spaces/$id',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <SpaceDetailPage />
+    </Suspense>
+  ),
+  validateSearch: (search: Record<string, unknown>): { tab?: string } => ({
+    tab: optionalStringParam(search, 'tab'),
+  }),
 });
 
 // Auth callback route (replaces /auth/[strategy]/callback.tsx) - no layout needed
@@ -1291,7 +1280,7 @@ const adminLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'admin-layout',
   beforeLoad: ({ location }) => enforceConsentRedirect(location),
-  component: () => <AdminLayoutRoute fallback={<RouteLoadingFallback />} />,
+  component: () => <AdminLayoutRoute fallback={<RouteLoadingFallback />} adminPages={premiumPartition.admin} />,
 });
 
 // The tabbed admin console (replaces /admin/index.tsx)
@@ -1349,6 +1338,97 @@ export const adminModelDiscoveryRunRoute = createRoute({
   path: '/admin/models/runs/$runId',
   component: AdminModelDiscoveryRunPage,
 });
+
+// QA status (full admins only, via the admin layout). Exported so pages read typed search/params via
+// `qaStatusRoute.useSearch()` etc.; filters live in the URL so links deep-link.
+export const qaStatusRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/qa',
+  validateSearch: parseQaStatusSearch,
+  component: () => (
+    <RestrictedPage requireAdmin>
+      <Box sx={adminPageFrame}>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <QaStatusPage />
+        </Suspense>
+      </Box>
+    </RestrictedPage>
+  ),
+});
+
+export const qaRunRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/qa/runs/$id',
+  component: () => (
+    <RestrictedPage requireAdmin>
+      <Box sx={adminPageFrame}>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <QaRunPage />
+        </Suspense>
+      </Box>
+    </RestrictedPage>
+  ),
+});
+
+// The router encodes the key into one segment (it contains / > ? #); the page
+// re-sends it as ?testKey=.
+export const qaTestRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/qa/tests/$testKey',
+  component: () => (
+    <RestrictedPage requireAdmin>
+      <Box sx={adminPageFrame}>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <QaTestPage />
+        </Suspense>
+      </Box>
+    </RestrictedPage>
+  ),
+});
+
+// The QA pages used to live under /status (links already sent, e.g. in Slack, still point there);
+// each old URL redirects to its /admin/qa twin. These stay under the root so no layout renders first.
+export const legacyQaStatusRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/status',
+  beforeLoad: ({ search }) => {
+    if (hasQaSearchKeys(search)) {
+      throw redirect({ to: '/admin/qa', search: parseQaStatusSearch(search), replace: true });
+    }
+    throw redirect({ to: '/admin/qa', replace: true });
+  },
+});
+
+export const legacyQaRunRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/status/runs/$id',
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: '/admin/qa/runs/$id', params: { id: params.id }, search: true, replace: true });
+  },
+});
+
+export const legacyQaTestRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/status/tests/$testKey',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/admin/qa/tests/$testKey',
+      params: { testKey: params.testKey },
+      search: true,
+      replace: true,
+    });
+  },
+});
+
+export const legacyQaSegmentlessRoutes = ['/status/runs', '/status/tests'].map(path =>
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path,
+    beforeLoad: () => {
+      throw redirect({ to: '/admin/qa', replace: true });
+    },
+  })
+);
 
 // Email unsubscribe route - public page for managing email preferences
 // The link's token is taken out of the address at module load (captureEmailLinkToken below), so the page
@@ -1496,6 +1576,8 @@ const routeTree = rootRoute.addChildren([
     skillReviewQueueRoute,
     unlistedSkillListingRoute,
     skillListingRoute,
+    skillTemplateEditorRoute,
+    skillTemplateTryRoute,
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,
@@ -1503,6 +1585,8 @@ const routeTree = rootRoute.addChildren([
     reportPublicRoute,
     organizationsRoute,
     organizationDetailRoute,
+    spacesRoute,
+    spaceDetailRoute,
     artifactsRoute,
     artifactRoute,
     artifactsDemoRoute,
@@ -1516,8 +1600,10 @@ const routeTree = rootRoute.addChildren([
     studioLibraryRoute,
     ...builtAppShellPremiumRoutes,
   ]),
-  // QA status pages (admin layout without the sidenav)
-  qaStatusLayoutRoute.addChildren([qaStatusRoute, qaRunRoute, qaTestRoute]),
+  legacyQaStatusRoute,
+  legacyQaRunRoute,
+  legacyQaTestRoute,
+  ...legacyQaSegmentlessRoutes,
   // Standalone auth routes (no layout)
   authCallbackRoute,
   authSuccessRoute,
@@ -1540,6 +1626,10 @@ const routeTree = rootRoute.addChildren([
     adminSubscriptionByStripeIdRoute,
     adminModelDetailRoute,
     adminModelDiscoveryRunRoute,
+    qaStatusRoute,
+    qaRunRoute,
+    qaTestRoute,
+    ...builtAdminPremiumRoutes,
   ]),
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,

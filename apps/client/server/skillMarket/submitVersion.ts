@@ -124,6 +124,9 @@ export async function submitListingVersion(
   return scanAndDecide(listing, plainVersion(created), claimedAt, deps);
 }
 
+/** A scan claim older than this has a dead request behind it and can be released or retried. */
+export const SCAN_STALE_MS = 5 * 60_000;
+
 /** Author retry of an `error` scan, or of a `scanning` claim whose request died (older than 5 min). */
 export async function rescanVersion(
   listing: ISkillListing,
@@ -131,7 +134,7 @@ export async function rescanVersion(
   deps: ScanDeps
 ): Promise<ISkillListingVersion> {
   const claimedAt = new Date();
-  const claimed = await claimSkillVersionScan(versionId, claimedAt, new Date(Date.now() - 5 * 60_000));
+  const claimed = await claimSkillVersionScan(versionId, claimedAt, new Date(Date.now() - SCAN_STALE_MS));
   if (!claimed) throw new ConflictError('This version is not waiting for a rescan');
   return scanAndDecide(listing, plainVersion(claimed), claimedAt, deps);
 }

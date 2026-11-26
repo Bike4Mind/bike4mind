@@ -1,4 +1,4 @@
-import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   IWebhookAuditLogDocument,
@@ -65,6 +65,8 @@ export const useWebhookAuditLogs = (filters: WebhookAuditFiltersParams) => {
     getNextPageParam: lastPage => lastPage.nextCursor,
     initialPageParam: undefined as string | undefined,
     staleTime: 1000 * 60, // 1 minute
+    // A filter change keeps the previous rows on screen (under the tab's UpdatingBar) until the new ones load.
+    placeholderData: keepPreviousData,
   });
 };
 
@@ -109,6 +111,7 @@ export const useWebhookAuditStats = (
       return response.data;
     },
     staleTime: 1000 * 60 * 5, // 5 minutes - stats don't change frequently
+    placeholderData: keepPreviousData,
   });
 };
 

@@ -141,6 +141,7 @@ describe('help feedback consolidation', () => {
     expect(reports).toHaveLength(1);
     expect(reports[0].subject).toBe('help');
     expect(reports[0].contentStored).toBe(true);
+    expect(reports[0].userIdVerified).toBe(true);
     // Never on the permanent record - only in the TTL'd sibling.
     expect(reports[0].content).toBeUndefined();
     expect(reports[0].helpContext).toMatchObject({

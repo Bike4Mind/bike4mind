@@ -4,7 +4,7 @@ import dayjs from 'dayjs';
 const h = vi.hoisted(() => ({
   generateDailyReport: vi.fn(),
   formatWeeklySlackMessage: vi.fn(),
-  axiosPost: vi.fn(),
+  fetch: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'production' } } }));
@@ -30,7 +30,6 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   resolveSlackWebhookUrl: () => 'https://hooks.example.com/x',
 }));
-vi.mock('axios', () => ({ default: { post: h.axiosPost } }));
 
 import { handler, previousIsoWeek } from './userActivityReport';
 
@@ -52,10 +51,12 @@ describe('weekly user activity report handler', () => {
     vi.setSystemTime(new Date('2026-10-26T05:00:00Z'));
     h.generateDailyReport.mockResolvedValue({ metrics: {}, userActivity: undefined });
     h.formatWeeklySlackMessage.mockReturnValue('weekly');
-    h.axiosPost.mockResolvedValue({});
+    vi.stubGlobal('fetch', h.fetch);
+    h.fetch.mockResolvedValue({ ok: true, status: 200 });
   });
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
 
@@ -71,5 +72,32 @@ describe('weekly user activity report handler', () => {
       expect.objectContaining({ weekStart: '2026-10-19', weekEnd: '2026-10-25' })
     );
     expect(result).toEqual({ status: 'success', reportType: 'weekly', date: '2026-10-19 to 2026-10-25' });
+  });
+
+  it('posts the formatted message to the Slack webhook as JSON', async () => {
+    await handler({ reportType: 'weekly' }, context);
+
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+    expect(h.fetch).toHaveBeenCalledWith('https://hooks.example.com/x', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'weekly' }),
+    });
+  });
+
+  it('returns an error result when the Slack post fails', async () => {
+    h.fetch.mockRejectedValue(new Error('webhook down'));
+
+    const result = await handler({ reportType: 'weekly' }, context);
+
+    expect(result).toMatchObject({ status: 'error', reason: 'Error posting report to Slack' });
+  });
+
+  it('returns an error result when Slack answers with an error status', async () => {
+    h.fetch.mockResolvedValue({ ok: false, status: 500 });
+
+    const result = await handler({ reportType: 'weekly' }, context);
+
+    expect(result).toMatchObject({ status: 'error', reason: 'Error posting report to Slack' });
   });
 });

@@ -85,8 +85,13 @@ export type { PendingActionDeps, PendingActionResult } from './tools/pendingActi
 export { customAgentToPersona } from './custom-agent-adapter';
 
 // ─── Installer / OAuth ───────────────────────────────────────────────────────
-export { createInstallProvider, getDefaultInstallUrlOptions, getInstallUrlOptionsForWorkspace } from './installer';
-export type { InstallationMetadata, StateBinding } from './installer';
+export {
+  createInstallProvider,
+  getDefaultInstallUrlOptions,
+  getInstallUrlOptionsForWorkspace,
+  getWorkspaceIdFromInstallState,
+} from './installer';
+export type { InstallationMetadata, InstallCallbackOptions, StateBinding } from './installer';
 
 // ─── Org Slack Helpers ───────────────────────────────────────────────────────
 export {

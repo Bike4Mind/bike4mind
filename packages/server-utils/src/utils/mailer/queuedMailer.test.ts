@@ -22,13 +22,20 @@ async function loadFreshQueuedMailer() {
   return (await import('./queuedMailer')).queuedMailer;
 }
 
-import { MAX_QUEUED_MAIL_BYTES, queuedMailer } from './queuedMailer';
+import { mockClient } from 'aws-sdk-client-mock';
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { MAX_INLINE_MAIL_BYTES, MAX_OFFLOADED_MAIL_BYTES, queuedMailer } from './queuedMailer';
+
+const s3 = mockClient(S3Client);
 
 const mail = { subject: 'Hello', html: '<p>Body</p>' };
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('B4M_SELF_HOST', 'false');
+  vi.stubEnv('MAIL_BODY_BUCKET', 'mail-bodies');
+  s3.reset();
+  s3.on(PutObjectCommand).resolves({});
   mocks.publish.mockResolvedValue({ FailedEntryCount: 0, Entries: [{ EventId: 'event-1' }] });
 });
 
@@ -48,6 +55,19 @@ describe('queuedMailer on a hosted stage', () => {
     await queuedMailer.sendEmail('a@example.org', mail);
 
     expect(Object.keys(mocks.publish.mock.calls[0][0]).sort()).toEqual(['body', 'subject', 'to']);
+  });
+
+  it('carries the delivery ref on the event so the worker can record the outcome', async () => {
+    const ref = { kind: 'emailAttempt' as const, attemptId: 'attempt-1' };
+    await queuedMailer.sendEmail('a@example.org', mail, { ref, logRecipient: false });
+
+    expect(mocks.publish).toHaveBeenCalledWith({
+      to: 'a@example.org',
+      subject: 'Hello',
+      body: '<p>Body</p>',
+      logRecipient: false,
+      ref,
+    });
   });
 
   it('puts text, category, mirror and logRecipient on the event when they are set', async () => {
@@ -107,17 +127,108 @@ describe('queuedMailer on a hosted stage', () => {
     expect(mocks.logError.mock.calls[0][0]).toContain('plain string failure');
   });
 
-  it('resolves false without publishing when the mail is over the event size limit', async () => {
-    const html = 'x'.repeat(MAX_QUEUED_MAIL_BYTES);
-    await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Big', html })).resolves.toBe(false);
-    expect(mocks.publish).not.toHaveBeenCalled();
-    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('over the 262144-byte event limit'));
+  it('publishes mail at the inline limit without storing the body', async () => {
+    const html = 'x'.repeat(MAX_INLINE_MAIL_BYTES - 200);
+    await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Big', html })).resolves.toEqual({ queued: true });
+    expect(mocks.publish).toHaveBeenCalledWith(expect.objectContaining({ body: html }));
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
   });
 
-  it('publishes mail just under the event size limit', async () => {
-    const html = 'x'.repeat(MAX_QUEUED_MAIL_BYTES - 200);
-    await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Big', html })).resolves.toEqual({ queued: true });
-    expect(mocks.publish).toHaveBeenCalledTimes(1);
+  describe('inline limit edge', () => {
+    // Bytes of the serialized event properties around an empty body, so html fills the rest exactly.
+    const envelope = Buffer.byteLength(JSON.stringify({ to: 'a@example.org', subject: 'Edge', body: '' }));
+
+    it('keeps mail whose serialized properties are exactly the inline limit inline', async () => {
+      const html = 'x'.repeat(MAX_INLINE_MAIL_BYTES - envelope);
+      await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Edge', html })).resolves.toEqual({
+        queued: true,
+      });
+      expect(mocks.publish).toHaveBeenCalledWith(expect.objectContaining({ body: html }));
+      expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+    });
+
+    it('offloads mail one byte over the inline limit', async () => {
+      const html = 'x'.repeat(MAX_INLINE_MAIL_BYTES - envelope + 1);
+      await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Edge', html })).resolves.toEqual({
+        queued: true,
+      });
+      expect(s3.commandCalls(PutObjectCommand)).toHaveLength(1);
+      expect(mocks.publish).toHaveBeenCalledWith(expect.not.objectContaining({ body: expect.anything() }));
+    });
+
+    it('sets the inline limit at 200 KB', () => {
+      expect(MAX_INLINE_MAIL_BYTES).toBe(200 * 1024);
+    });
+
+    it('measures UTF-8 bytes, not characters', async () => {
+      // Two bytes per character: under the limit in characters, over it in bytes.
+      const html = '\u00e9'.repeat(Math.ceil(MAX_INLINE_MAIL_BYTES / 2) + 1);
+      expect(html.length).toBeLessThan(MAX_INLINE_MAIL_BYTES - envelope);
+      await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Edge', html })).resolves.toEqual({
+        queued: true,
+      });
+      expect(s3.commandCalls(PutObjectCommand)).toHaveLength(1);
+    });
+  });
+
+  it('stores an over-limit body under the prefix and publishes a reference to it', async () => {
+    const html = 'x'.repeat(300 * 1024);
+    await expect(
+      queuedMailer.sendEmail('a@example.org', { subject: 'Big', html, text: 'plain' }, { mirror: false })
+    ).resolves.toEqual({ queued: true });
+
+    const [put] = s3.commandCalls(PutObjectCommand);
+    const { Bucket, Key, Body, ContentType } = put.args[0].input;
+    expect(Bucket).toBe('mail-bodies');
+    expect(Key).toMatch(/^queued-mail\/[0-9a-f-]{36}\.json$/);
+    expect(ContentType).toBe('application/json');
+    expect(JSON.parse(Body as string)).toEqual({ html, text: 'plain' });
+    expect(mocks.publish).toHaveBeenCalledWith({
+      to: 'a@example.org',
+      subject: 'Big',
+      bodyRef: { key: Key },
+      mirror: false,
+    });
+  });
+
+  it('resolves false without storing or publishing a body over the message limit', async () => {
+    const html = 'x'.repeat(MAX_OFFLOADED_MAIL_BYTES + 1);
+    await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Huge', html })).resolves.toBe(false);
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('over the 10485760-byte message limit'));
+  });
+
+  it('counts the text part toward the message limit', async () => {
+    const html = 'x'.repeat(MAX_OFFLOADED_MAIL_BYTES - 10);
+    const result = await queuedMailer.sendEmail('a@example.org', { subject: 'Huge', html, text: 'y'.repeat(11) });
+    expect(result).toBe(false);
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('mail body is 10485761 bytes'));
+  });
+
+  it('stores a body of html plus text exactly at the message limit', async () => {
+    const html = 'x'.repeat(MAX_OFFLOADED_MAIL_BYTES - 10);
+    const result = await queuedMailer.sendEmail('a@example.org', { subject: 'Huge', html, text: '\u00e9'.repeat(5) });
+    expect(result).toEqual({ queued: true });
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(1);
+  });
+
+  it('resolves false without publishing when the body bucket is not configured', async () => {
+    vi.stubEnv('MAIL_BODY_BUCKET', '');
+    const html = 'x'.repeat(300 * 1024);
+    await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Big', html })).resolves.toBe(false);
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('MAIL_BODY_BUCKET is not set'));
+  });
+
+  it('resolves false without publishing when storing the body fails, and keeps the body out of the log', async () => {
+    s3.on(PutObjectCommand).rejects(new Error('AccessDenied'));
+    const html = 'secret-'.repeat(50 * 1024);
+    await expect(queuedMailer.sendEmail('a@example.org', { subject: 'Big', html })).resolves.toBe(false);
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining('AccessDenied'));
+    expect(mocks.logError).not.toHaveBeenCalledWith(expect.stringContaining('secret-'));
   });
 
   it('resolves false when the bus response rejects an entry instead of throwing', async () => {
@@ -195,6 +306,15 @@ describe('queuedMailer on self-host', () => {
     expect(mocks.mailerSend).toHaveBeenCalledWith('a@example.org', richMail, options);
   });
 
+  it('does not hand the delivery ref to the mailer, which has no use for it', async () => {
+    await queuedMailer.sendEmail('a@example.org', mail, {
+      mirror: false,
+      ref: { kind: 'incidentAlert', incidentId: 'inc-1', alert: 'review' },
+    });
+
+    expect(mocks.mailerSend).toHaveBeenCalledWith('a@example.org', mail, { mirror: false });
+  });
+
   it('passes an empty options object when the caller gave none', async () => {
     await queuedMailer.sendEmail('a@example.org', mail);
 
@@ -211,6 +331,13 @@ describe('queuedMailer on self-host', () => {
     mocks.mailerSend.mockResolvedValue(false);
 
     await expect(queuedMailer.sendEmail('a@example.org', mail)).resolves.toBe(false);
+  });
+
+  it('hands over-limit mail to the mailer without storing the body', async () => {
+    const big = { subject: 'Big', html: 'x'.repeat(300 * 1024) };
+    await queuedMailer.sendEmail('a@example.org', big);
+    expect(mocks.mailerSend).toHaveBeenCalledWith('a@example.org', big, {});
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
   });
 
   it('does not publish an event', async () => {

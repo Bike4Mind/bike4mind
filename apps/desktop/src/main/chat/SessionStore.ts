@@ -35,7 +35,15 @@ import { normalizeGeneration, type GenerationSettings } from '@shared/generation
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
-import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
+import type { LocalUsageScope } from '@shared/usage';
+import {
+  assertScopeKey,
+  DEVICE_LOCAL_SCOPE_KEY,
+  migrateLegacySessions,
+  sessionScopeKey,
+  type SessionScope,
+} from './sessionScope';
+import { isLocalUsageBucket, sessionUsageBuckets, type LocalUsageBucket } from '../usage/localUsage';
 import { StudioFamilyStore } from './studio/StudioFamilyStore';
 import { studioIdSchema, type StudioWorkspaceIdentity } from '@shared/studio';
 
@@ -46,6 +54,21 @@ const UNTITLED = 'New chat';
 
 export function isValidSessionId(id: string): boolean {
   return SESSION_ID_PATTERN.test(id);
+}
+
+export type AgentRenameOutcome =
+  { ok: true; summary: ChatSessionSummary } | { ok: false; reason: 'user-title' | 'missing' };
+
+/**
+ * Whether an agent may replace this session's title. Unlocked and agent-set titles are fair game.
+ * A hand rename ('user') never is. A locked title with no recorded source is read by where it
+ * came from: on a spawned session it was the spawning agent's choice at creation; on any other
+ * it predates `titleSource` and only a hand rename could have locked it, so it is the user's.
+ */
+export function agentMayRetitle(session: Pick<ChatSession, 'titleLocked' | 'titleSource' | 'origin'>): boolean {
+  if (!session.titleLocked || session.titleSource === 'agent') return true;
+  if (session.titleSource === 'user') return false;
+  return session.origin !== undefined;
 }
 
 /**
@@ -122,7 +145,7 @@ export interface CreateOptions {
  */
 const SUMMARY_INDEX = '.summary-index';
 // Bump whenever summarizeSession derives a field differently, or cached summaries keep the old value.
-const SUMMARY_INDEX_VERSION = 6;
+const SUMMARY_INDEX_VERSION = 7;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
@@ -138,6 +161,34 @@ interface SummaryIndexFile {
   /** The launch defaults baked into every summary; a change invalidates them all. */
   defaults: string;
   entries: Record<string, IndexedSummary>;
+}
+
+/**
+ * Each session's local-model usage buckets, keyed and invalidated like SUMMARY_INDEX, so the
+ * profile screen re-reads only the transcripts that changed since it last asked.
+ */
+const LOCAL_USAGE_INDEX = '.local-usage-index';
+// Bump whenever sessionUsageBuckets output changes; cached buckets are reused while a file's size and mtime hold.
+const LOCAL_USAGE_INDEX_VERSION = 2;
+
+interface IndexedLocalUsage {
+  size: number;
+  mtimeMs: number;
+  buckets: LocalUsageBucket[];
+}
+
+export interface LocalUsageScan {
+  scope: LocalUsageScope;
+  /** `<environment url>\n<account id>` the folder belongs to, for an account scope. */
+  account?: string;
+  buckets: LocalUsageBucket[];
+}
+
+interface LocalUsageIndexFile {
+  version: number;
+  /** The session model a file without one falls back to; see SummaryIndexFile.defaults. */
+  defaults: string;
+  entries: Record<string, IndexedLocalUsage>;
 }
 
 /** Whether an import wrote its copy, preserved a continuation, or respected conversation/workspace deletion. */
@@ -310,6 +361,10 @@ export class SessionStore implements SessionWritesStore {
 
   /** Per scope directory; see SUMMARY_INDEX. */
   private readonly summaryIndexes = new Map<string, Promise<Map<string, IndexedSummary>>>();
+  /** Per scope directory; see LOCAL_USAGE_INDEX. */
+  private readonly localUsageIndexes = new Map<string, Promise<Map<string, IndexedLocalUsage>>>();
+  /** The scan running per scope directory; see localUsage. */
+  private readonly localUsageScans = new Map<string, Promise<LocalUsageBucket[]>>();
 
   constructor(
     private readonly baseDirectory: string,
@@ -520,14 +575,23 @@ export class SessionStore implements SessionWritesStore {
     id: string,
     rootRunId: string,
     serverRunId: string,
-    expectedScope?: string | null
+    expectedScope?: string | null,
+    organizationId: string | null = null
   ): Promise<ChatSessionSummary | null> {
     return this.mutate(
       id,
       session => {
         const policy = session.orchestrationPolicy;
-        if (policy?.rootRunId !== rootRunId || policy.serverRunId === serverRunId) return null;
-        session.orchestrationPolicy = rootPolicySchema.parse({ ...policy, serverRunId });
+        if (policy?.rootRunId !== rootRunId) return null;
+        if (policy.serverRunId === serverRunId && (policy.serverRunOrganizationId ?? null) === organizationId) {
+          return null;
+        }
+        const { serverRunOrganizationId: _previous, ...rest } = policy;
+        session.orchestrationPolicy = rootPolicySchema.parse({
+          ...rest,
+          serverRunId,
+          ...(organizationId ? { serverRunOrganizationId: organizationId } : {}),
+        });
         return true;
       },
       expectedScope
@@ -549,8 +613,37 @@ export class SessionStore implements SessionWritesStore {
       session => {
         const policy = session.orchestrationPolicy;
         if (policy?.rootRunId !== rootRunId || policy.serverRunId !== refusedRunId) return null;
-        const { serverRunId: _refused, ...rest } = policy;
+        const { serverRunId: _refused, serverRunOrganizationId: _payer, ...rest } = policy;
         session.orchestrationPolicy = rootPolicySchema.parse(rest);
+        return true;
+      },
+      expectedScope
+    );
+  }
+
+  /**
+   * Update a run's budget fields on a session's orchestration policy. `undefined` in `patch` clears
+   * that field. A no-op unless the policy still belongs to `rootRunId`, as for setServerRunId, and,
+   * when `expectedBudget` is given, unless the budget is still that one.
+   */
+  setRunBudget(
+    id: string,
+    rootRunId: string,
+    patch: Partial<Pick<RootPolicy, 'budgetCredits' | 'budgetPaused' | 'budgetWarnedAt'>>,
+    expectedScope?: string | null,
+    expectedBudget?: number
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const policy = session.orchestrationPolicy;
+        if (policy?.rootRunId !== rootRunId) return null;
+        if (expectedBudget !== undefined && policy.budgetCredits !== expectedBudget) return null;
+        const next: Record<string, unknown> = { ...policy, ...patch };
+        for (const key of Object.keys(patch) as (keyof typeof patch)[]) {
+          if (patch[key] === undefined) delete next[key];
+        }
+        session.orchestrationPolicy = rootPolicySchema.parse(next);
         return true;
       },
       expectedScope
@@ -621,6 +714,11 @@ export class SessionStore implements SessionWritesStore {
   async get(id: string): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     return directory ? this.read(directory, id) : null;
+  }
+
+  /** `get`, ordered after the writes already queued for the session. */
+  getAfterWrites(id: string): Promise<ChatSession | null> {
+    return this.serialize(id, () => this.get(id));
   }
 
   async resolveStudioWorkspace(id: string, expectedScope = this.scopeKey()): Promise<StudioWorkspaceIdentity | null> {
@@ -828,6 +926,118 @@ export class SessionStore implements SessionWritesStore {
   }
 
   /**
+   * Usage buckets for every session in the current scope, and its kind. Only transcripts whose size
+   * or mtime moved are parsed, each reduced to buckets at once so a first build stays small.
+   */
+  async localUsage(fresh = false): Promise<LocalUsageScan> {
+    const current = this.scope?.();
+    const account = current && !current.local ? `${current.environmentUrl}\n${current.accountId}` : undefined;
+    const directory = await this.directoryFor(true);
+    if (!directory) return { scope: 'none', buckets: [] };
+    const scope = this.scope && basename(directory) === DEVICE_LOCAL_SCOPE_KEY ? 'device' : 'account';
+
+    // One scan per folder at a time: two overlapping ones would each prune what the other just indexed.
+    let scanning = this.localUsageScans.get(directory);
+    if (fresh && scanning) {
+      // A running scan may already have passed files saved since; wait it out, then join whatever started after.
+      await scanning.catch(() => undefined);
+      scanning = this.localUsageScans.get(directory);
+    }
+    if (!scanning) {
+      scanning = this.scanLocalUsage(directory).finally(() => this.localUsageScans.delete(directory));
+      this.localUsageScans.set(directory, scanning);
+    }
+    return { scope, ...(scope === 'account' && account ? { account } : {}), buckets: await scanning };
+  }
+
+  private async scanLocalUsage(directory: string): Promise<LocalUsageBucket[]> {
+    let entries: string[];
+    try {
+      entries = await readdir(directory);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+
+    const index = await this.localUsageIndex(directory);
+    const ids = entries.filter(name => name.endsWith('.json')).map(name => name.slice(0, -'.json'.length));
+    let changed = false;
+    let next = 0;
+    const worker = async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        try {
+          const info = await stat(this.filePath(directory, id));
+          const cached = index.get(id);
+          if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) continue;
+          const session = await this.read(directory, id);
+          if (session) index.set(id, { size: info.size, mtimeMs: info.mtimeMs, buckets: sessionUsageBuckets(session) });
+          else index.delete(id);
+          changed = true;
+        } catch {
+          // Unreadable now: dropped, so a file that recovers is read again rather than trusted.
+          if (index.delete(id)) changed = true;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(LIST_READ_CONCURRENCY, ids.length) }, worker));
+
+    const present = new Set(ids);
+    for (const id of index.keys()) {
+      if (!present.has(id)) {
+        index.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) await this.saveLocalUsageIndex(directory, index);
+
+    return [...index.values()].flatMap(entry => entry.buckets);
+  }
+
+  private localUsageIndex(directory: string): Promise<Map<string, IndexedLocalUsage>> {
+    let loading = this.localUsageIndexes.get(directory);
+    if (!loading) {
+      loading = this.loadLocalUsageIndex(directory);
+      this.localUsageIndexes.set(directory, loading);
+    }
+    return loading;
+  }
+
+  private async loadLocalUsageIndex(directory: string): Promise<Map<string, IndexedLocalUsage>> {
+    const index = new Map<string, IndexedLocalUsage>();
+    try {
+      const parsed = JSON.parse(
+        await readFile(join(directory, LOCAL_USAGE_INDEX), 'utf8')
+      ) as Partial<LocalUsageIndexFile>;
+      if (parsed.version !== LOCAL_USAGE_INDEX_VERSION || parsed.defaults !== this.defaultModel) return index;
+      for (const [id, entry] of Object.entries(parsed.entries ?? {})) {
+        if (!isValidSessionId(id) || typeof entry?.size !== 'number' || typeof entry.mtimeMs !== 'number') continue;
+        if (!Array.isArray(entry.buckets) || !entry.buckets.every(isLocalUsageBucket)) continue;
+        index.set(id, entry);
+      }
+    } catch {
+      // Missing or unreadable: every file is read once and the index is rebuilt.
+    }
+    return index;
+  }
+
+  private async saveLocalUsageIndex(directory: string, index: Map<string, IndexedLocalUsage>): Promise<void> {
+    const file: LocalUsageIndexFile = {
+      version: LOCAL_USAGE_INDEX_VERSION,
+      defaults: this.defaultModel,
+      entries: Object.fromEntries(index),
+    };
+    const path = join(directory, LOCAL_USAGE_INDEX);
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify(file), 'utf8');
+      await rename(temporary, path);
+    } catch {
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
    * Name a conversation deliberately, and mark the name as chosen.
    *
    * `titleLocked` is what stops a generated title landing on top of it later - see
@@ -838,9 +1048,32 @@ export class SessionStore implements SessionWritesStore {
     return this.mutate(id, session => {
       session.title = deriveTitle(title);
       session.titleLocked = true;
+      session.titleSource = 'user';
       session.updatedAt = new Date().toISOString();
       return true;
     });
+  }
+
+  /**
+   * Name a conversation on an agent's behalf (session_rename). Locks the title exactly as `rename`
+   * does, so the generator stops too, but refuses one the user chose - see agentMayRetitle.
+   * Checked inside the serialized write, so a hand rename that lands first always wins.
+   */
+  async renameByAgent(id: string, title: string): Promise<AgentRenameOutcome> {
+    let refused = false;
+    const summary = await this.mutate(id, session => {
+      if (!agentMayRetitle(session)) {
+        refused = true;
+        return null;
+      }
+      session.title = deriveTitle(title);
+      session.titleLocked = true;
+      session.titleSource = 'agent';
+      session.updatedAt = new Date().toISOString();
+      return true;
+    });
+    if (refused) return { ok: false, reason: 'user-title' };
+    return summary ? { ok: true, summary } : { ok: false, reason: 'missing' };
   }
 
   /**
@@ -976,21 +1209,6 @@ export class SessionStore implements SessionWritesStore {
     } catch {
       return 'ask';
     }
-  }
-
-  /**
-   * Remember the b4m notebook this conversation's generations are filed under. Written once,
-   * on the first generation; see `remoteSessionId` in @shared/chat for why it exists at all.
-   *
-   * Leaves `updatedAt` alone: this is bookkeeping about a turn, not a turn, and bumping it
-   * would reorder the sidebar behind the user's back.
-   */
-  async setRemoteSessionId(id: string, remoteSessionId: string): Promise<void> {
-    await this.mutate(id, session => {
-      if (session.remoteSessionId === remoteSessionId) return false;
-      session.remoteSessionId = remoteSessionId;
-      return true;
-    });
   }
 
   /**
@@ -1227,7 +1445,13 @@ export class SessionStore implements SessionWritesStore {
         // does not set (granted folders, a remote link) rides along, and these it does set lose.
         const kept: Partial<ChatSession> = existing
           ? {
-              ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
+              ...(existing.titleLocked
+                ? {
+                    title: existing.title,
+                    titleLocked: true,
+                    ...(existing.titleSource ? { titleSource: existing.titleSource } : {}),
+                  }
+                : {}),
               // Same repository only: a project the importer now derives differently is not the user's.
               ...(existing.project && existing.project.directory === session.project?.directory
                 ? { project: existing.project }
@@ -1367,6 +1591,39 @@ export class SessionStore implements SessionWritesStore {
     return session;
   }
 
+  /**
+   * Drop `messageId` and every message after it, in one write: what editing a sent prompt and
+   * regenerating a reply rewind. Everything a turn carries (tool calls, rounds, artifacts, stats,
+   * attachment refs, a /compact marker) lives on its message and goes with it; the callers prune
+   * attachment files nothing references any more.
+   *
+   * `null` when there is no such session, `false` (nothing written) when the message is not in
+   * the thread or `admit` rejects it as stored.
+   */
+  async truncateFrom(
+    id: string,
+    messageId: string,
+    admit: (message: ChatMessage, session: ChatSession) => boolean = () => true
+  ): Promise<ChatSession | null | false> {
+    return this.serialize(id, async () => {
+      const directory = await this.directoryFor(false);
+      if (!directory) return null;
+      const session = await this.read(directory, id);
+      if (!session) return null;
+      const at = session.messages.findIndex(message => message.id === messageId);
+      if (at < 0 || !admit(session.messages[at], session)) return false;
+
+      session.messages = session.messages.slice(0, at);
+      session.updatedAt = new Date().toISOString();
+      // The thread no longer matches its source, so a re-import must not overwrite it.
+      if (session.importOrigin && !session.importOrigin.forkedAt) {
+        session.importOrigin = { ...session.importOrigin, forkedAt: session.updatedAt };
+      }
+      await this.write(directory, session);
+      return session;
+    });
+  }
+
   /** Replace an already-appended message, for settling a streamed reply into its final text. */
   async updateMessage(id: string, messageId: string, changes: Partial<ChatMessage>): Promise<ChatSession | null> {
     return this.serialize(id, () => this.updateNow(id, messageId, changes));
@@ -1462,9 +1719,13 @@ export class SessionStore implements SessionWritesStore {
       if (!result.success && parsed[field] !== undefined)
         console.warn(`Dropping unreadable ${field} from session ${parsed.id ?? id}.`);
     }
-    // A root's snapshot is only reused while its orchestrate flag is; workers keep theirs.
+    // A root's snapshot is only reused while its orchestrate flag is; workers keep theirs. A budgeted
+    // run's policy outlives the flag: it holds the run's identity, budget and pause, which a
+    // relaunch must not reset (only permission to spawn expires).
     const orchestrateExpired =
-      parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch !== this.launchId;
+      parsed.orchestrate === true &&
+      (parsed as StoredSession).orchestrateLaunch !== this.launchId &&
+      !(orchestrationPolicy.success && orchestrationPolicy.data.budgetCredits !== undefined);
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
       ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))
@@ -1480,7 +1741,7 @@ export class SessionStore implements SessionWritesStore {
       // project did not survive normalizeProject reads back as an UNBOUND Code session rather
       // than being downgraded: it keeps the chips that can re-point it, and it is safe only
       // because such a session is granted no roots at all - see ChatService.resolveToolScope.
-      mode: parsed.mode === 'code' ? 'code' : 'chat',
+      mode: parsed.mode === 'code' || parsed.mode === 'studio' ? parsed.mode : 'chat',
       approvalMode: normalizeApprovalMode(
         parsed.approvalMode,
         (parsed as StoredSession).approvalModeLaunch,
@@ -1494,6 +1755,9 @@ export class SessionStore implements SessionWritesStore {
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
+      ...(parsed.titleLocked && (parsed.titleSource === 'user' || parsed.titleSource === 'agent')
+        ? { titleSource: parsed.titleSource }
+        : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch === this.launchId
         ? { orchestrate: true }
@@ -1512,7 +1776,6 @@ export class SessionStore implements SessionWritesStore {
         ? { studioWorkspaceId: parsed.studioWorkspaceId, studioRootSessionId: parsed.studioRootSessionId }
         : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-      ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
       ...(suggestions.length > 0 ? { spawnSuggestions: suggestions } : {}),
     };
   }

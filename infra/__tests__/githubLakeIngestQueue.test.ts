@@ -27,7 +27,7 @@ describe('githubLakeIngestQueue mirrors the Drive ingest queue', () => {
   });
 
   it('subscribes the handler with a 10-minute timeout, the VPC, the bucket, a self-link and the revoke queue, one record at a time', () => {
-    const sub = cut(QUEUES, 'const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(', '\n);');
+    const sub = cut(QUEUES, 'const githubLakeIngestQueueSubscription = subscribeUnlessPreview(', '\n);');
     expect(sub).toMatch(/handler:\s*'apps\/workers\/src\/queueHandlers\/githubLakeIngest\.dispatch'/);
     expect(sub).toMatch(/timeout:\s*'10 minutes'/);
     expect(sub).toMatch(/vpc:\s*lambdaVpc/);
@@ -44,7 +44,7 @@ describe('githubLakeIngestQueue mirrors the Drive ingest queue', () => {
       return Number(match?.[1]);
     };
     const queue = cut(QUEUES, "const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue'", '\n});');
-    const sub = cut(QUEUES, 'const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(', '\n);');
+    const sub = cut(QUEUES, 'const githubLakeIngestQueueSubscription = subscribeUnlessPreview(', '\n);');
     expect(minutes(queue, 'visibilityTimeout')).toBeGreaterThan(minutes(sub, 'timeout'));
   });
 

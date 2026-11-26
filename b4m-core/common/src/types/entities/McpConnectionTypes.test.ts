@@ -14,6 +14,7 @@ import {
   type IMcpConnectionDocument,
   type IMcpConnectionSummary,
 } from './McpConnectionTypes';
+import { CALLABLE_FUNCTION_TOOL_CONNECTION_ID } from './CallableFunctionTypes';
 import { McpServerName } from './McpServerTypes';
 
 describe('McpConnectionSlugSchema', () => {
@@ -39,6 +40,11 @@ describe('McpConnectionSlugSchema', () => {
     ['a_2345678901234567890', 'too long with underscores'],
   ])('rejects %s (%s)', slug => {
     expect(isValidMcpConnectionSlug(slug)).toBe(false);
+  });
+
+  it('keeps the function namespace outside valid connector slugs without reserving legacy fn', () => {
+    expect(isValidMcpConnectionSlug('fn')).toBe(true);
+    expect(isValidMcpConnectionSlug(CALLABLE_FUNCTION_TOOL_CONNECTION_ID)).toBe(false);
   });
 
   it('reserves every built-in server name and the first-party names', () => {
@@ -215,6 +221,19 @@ describe('toMcpPlatformConnectionMemberView', () => {
     expect(view.tools).toEqual([tool]);
     for (const hidden of ['draft_unreviewed', 'Awaiting review', 'drop_switched_off', 'Switched off']) {
       expect(JSON.stringify(view)).not.toContain(hidden);
+    }
+  });
+
+  it('carries the description the admin wrote, and none when it is absent or empty', () => {
+    const described = { ...doc, description: 'Searches the team handbook.' };
+    expect(toMcpPlatformConnectionMemberView(described, { allowed: true }).description).toBe(
+      'Searches the team handbook.'
+    );
+    expect(toMcpConnectionPublic(described).description).toBe('Searches the team handbook.');
+    const serializedKeys = (view: object) => Object.keys(JSON.parse(JSON.stringify(view)) as object);
+    for (const source of [doc, { ...doc, description: '' }]) {
+      expect(serializedKeys(toMcpPlatformConnectionMemberView(source, { allowed: true }))).not.toContain('description');
+      expect(serializedKeys(toMcpConnectionPublic(source))).not.toContain('description');
     }
   });
 });

@@ -5,3 +5,5 @@ export type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']
 /** The prefix's namespace segments, e.g. 'books' -> ['books']. Lake navigation seeds the
  *  path past these so clicking a lake lands directly on its categories. */
 export const prefixSegments = (fileTagPrefix: string) => fileTagPrefix.replace(/:+$/, '').split(':').filter(Boolean);
+
+export const sourceCount = (count: number) => `${count} ${count === 1 ? 'source' : 'sources'}`;

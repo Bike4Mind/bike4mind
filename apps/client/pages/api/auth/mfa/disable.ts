@@ -76,7 +76,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
         res.json(result);
       } catch (error: any) {
-        console.error('Error disabling MFA:', error);
+        req.logger.error('Error disabling MFA', { error });
         res.status(400).json({ error: error.message || 'Failed to disable MFA' });
       }
     })

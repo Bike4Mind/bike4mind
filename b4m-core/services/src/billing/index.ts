@@ -3,3 +3,5 @@ export * from './assertOwnerHasCredits';
 export * from './assertKeySpendWithinCap';
 export * from './isOperationalBillingEnabled';
 export * from './completionMeter';
+
+export * from './platformAccounting';

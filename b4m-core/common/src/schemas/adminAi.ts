@@ -98,6 +98,37 @@ export const adminAiSuggestionItemSchema = z.object({
 });
 export type AdminAiSuggestionItem = z.infer<typeof adminAiSuggestionItemSchema>;
 
+export const dlqTriageEvidenceSchema = z.object({
+  coverage: z.literal('partial-sqs-sample'),
+  failureSource: z.enum(['recorded', 'unavailable']),
+  failureCategory: z.enum(['refused', 'timeout', 'invalid output', 'bug', 'unknown']),
+  failedAt: z.string().nullable().optional(),
+  sentTimestamp: z.string().nullable().optional(),
+  retentionSeconds: z.number().nullable().optional(),
+  consumerVersion: z.string(),
+  fixVerification: z.literal('unavailable'),
+  entityContext: z.enum(['present-id-withheld', 'unavailable']),
+  owner: z.string().nullable(),
+  expiry: z.object({
+    status: z.enum(['within-24-hours', 'outside-24-hours', 'elapsed', 'unavailable']),
+    estimatedExpiresAt: z.string().nullable(),
+    explanation: z.string(),
+  }),
+  logFallback: z.object({
+    status: z.enum(['not-needed', 'sampled-matches', 'no-sampled-match', 'unavailable']),
+    sampledEvents: z.number().int().min(0).max(20),
+  }),
+  issueDraft: z.object({ title: z.string(), body: z.string() }).nullable(),
+});
+export type DlqTriageEvidence = z.infer<typeof dlqTriageEvidenceSchema>;
+
+export type DlqTriageExecution = {
+  status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
+  operation: 'replay' | 'discard';
+  hasWarning: boolean;
+  recordedAt: string;
+};
+
 /**
  * The admin queues that offer an abuse assessment as a suggestion. Each records its own suggestion
  * rows (feature + entityType), so agreement is measured per queue. Server side:

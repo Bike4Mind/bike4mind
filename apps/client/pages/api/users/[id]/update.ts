@@ -54,6 +54,9 @@ import {
   requestAuditWriter,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { gradeDetectionsForStatusChange } from '@server/admin/shadowDetectionStatusVerdicts';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'userUpdate' } });
 
 const idParamSchema = z.object({ id: z.string() });
 
@@ -112,9 +115,7 @@ function logConsentToggle(
     outcome: 'success',
     durationMs: 0,
     metadata: { previousLevel, newLevel, source: 'user_preferences' },
-  }).catch(err =>
-    console.warn('[TelemetryAudit] Failed to log consent toggle:', err instanceof Error ? err.message : 'Unknown error')
-  );
+  }).catch(err => logger.warn('Failed to log consent toggle', { error: err }));
 }
 
 /**
@@ -143,6 +144,7 @@ type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0]
   suspensionReasonCategory?: string | null;
   isModerated?: boolean;
   email?: string | null;
+  moderation?: { status?: string | null; throttledUntil?: Date | string | null } | null;
 };
 
 type AuditTargetSnapshot = {
@@ -176,6 +178,8 @@ const STATUS_FLAGS = [
     off: { action: 'user.restriction_lifted', summary: 'lifted the restriction' },
   },
 ] as const;
+
+const toIsoOrNull = (value: Date | string | null | undefined) => (value ? new Date(value).toISOString() : null);
 
 /**
  * The flags this body actually flips. Generic edits resend the whole user, so a flag sent with its
@@ -371,6 +375,26 @@ const handler = baseApi().put(
                         after: updated?.suspensionReasonCategory ?? null,
                       },
                     ]
+                  : []),
+              ],
+            });
+          }
+          const moderationBefore = snapshot?.moderation?.status ?? 'active';
+          const moderationAfter = updated?.moderation?.status ?? 'active';
+          // Every moderation decision is recorded, including one that keeps the status: it re-arms the
+          // throttle and marks the account reviewed.
+          if (body.moderationStatus && updated) {
+            const throttledBefore = toIsoOrNull(snapshot?.moderation?.throttledUntil);
+            const throttledAfter = toIsoOrNull(updated.moderation?.throttledUntil);
+            await recordAdminActionFromRequest(req, {
+              action: 'user.moderation_status.changed',
+              target: auditTarget,
+              summary: `set the moderation status to ${moderationAfter}`,
+              reason: readAdminActionReason(body.statusChangeReason),
+              changes: [
+                { field: 'moderation.status', before: moderationBefore, after: moderationAfter },
+                ...(throttledBefore !== throttledAfter
+                  ? [{ field: 'moderation.throttledUntil', before: throttledBefore, after: throttledAfter }]
                   : []),
               ],
             });

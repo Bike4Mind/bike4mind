@@ -1,6 +1,6 @@
 import Foundation
 
-public enum MediaKind: String, CaseIterable, Hashable, Sendable {
+public enum MediaKind: String, CaseIterable, Hashable, Sendable, Codable {
   case image, video, audio
 
   /// `nil` for anything the gallery cannot show (documents).
@@ -20,7 +20,7 @@ public enum MediaKind: String, CaseIterable, Hashable, Sendable {
 }
 
 /// One generated file as the gallery shows it.
-public struct MediaItem: Identifiable, Hashable, Sendable {
+public struct MediaItem: Identifiable, Hashable, Sendable, Codable {
   public let id: String
   public let kind: MediaKind
   public let fileName: String
@@ -30,7 +30,7 @@ public struct MediaItem: Identifiable, Hashable, Sendable {
   /// A presigned storage URL. Short-lived: see `isURLUsable(at:)`.
   public let url: URL?
   public let urlExpiresAt: Date?
-  /// The notebook a generated file came from; an image edit must run in a session, so it reuses this one.
+  /// The notebook a generated file came from.
   public let sessionID: String?
   /// The prompt that made it, when the server recorded one.
   public let prompt: String?
@@ -68,7 +68,7 @@ public struct MediaItem: Identifiable, Hashable, Sendable {
   }
 }
 
-public struct MediaPage: Equatable, Sendable {
+public struct MediaPage: Equatable, Sendable, Codable {
   public let items: [MediaItem]
   public let hasMore: Bool
 

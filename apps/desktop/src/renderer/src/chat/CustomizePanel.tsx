@@ -17,10 +17,9 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { SkillMarketImport, SkillMarketListingRef } from '@shared/skillMarket';
 import type { SkillSummary } from '@shared/skills';
-import { entryAttentionChip, EntrySection, type ConfigEntry } from './ConfigEntry';
-import { ChevronIcon, CloseIcon, ExternalLinkIcon, SearchIcon, ServerIcon, SlidersIcon, SparkIcon } from './icons';
+import { EntrySection, type ConfigEntry } from './ConfigEntry';
+import { ChevronIcon, CloseIcon, ExternalLinkIcon, SearchIcon, ServerIcon, SparkIcon } from './icons';
 import { McpServersSettings } from './McpServersSettings';
-import { NavItem } from './SessionList';
 import {
   COLLAPSE_ABOVE_GROUPS,
   filterSkillGroups,
@@ -115,7 +114,7 @@ const SkillRow = memo(function SkillRow({
         {onUpload && skill.source !== 'account' && (
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             onClick={() => onUpload(skill)}
             data-testid="skill-row-upload-btn"
@@ -514,29 +513,12 @@ function useCustomizeEntries(): ConfigEntry[] {
 }
 
 /**
- * The Customize row in the nav, which opens the screen.
- *
- * It carries the attention badge whether or not the screen is showing. On the old collapse the
- * badge was hidden while open, because the entry it named was then one row below it and the
- * chip was saying the same thing twice; a screen replaces the conversation instead, so nothing
- * about which screen is up changes whether the sidebar should report a dead server.
- *
- * That badge is the whole reason MCP lives here: it used to hold a permanent card in the
- * sidebar for a control that is opened rarely, and the failure count was the only part of that
- * card worth the space.
+ * What the Customize screen would flag, for the dot on the rail's avatar and the chip on its
+ * menu row. Read from the same entries the screen draws, so the dot answers the same question
+ * as the section it points at. MCP is the only entry that can raise one today.
  */
-export function CustomizeNavItem({ onOpen }: { onOpen: () => void }) {
-  const entries = useCustomizeEntries();
-
-  return (
-    <NavItem
-      icon={<SlidersIcon />}
-      label="Customize"
-      onClick={onOpen}
-      end={entryAttentionChip(entries, 'customize-attention-chip')}
-      testId="chat-customize-btn"
-    />
-  );
+export function useCustomizeAttention(): string | undefined {
+  return useCustomizeEntries().find(entry => entry.attention)?.attention;
 }
 
 /**

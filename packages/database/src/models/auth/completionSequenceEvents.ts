@@ -1,4 +1,8 @@
-import { COMPLETION_SEQUENCE_SCAN_LIMIT, COMPLETION_SEQUENCE_WINDOW_HOURS } from '@bike4mind/common';
+import {
+  COMPLETION_SEQUENCE_SCAN_LIMIT,
+  COMPLETION_SEQUENCE_WINDOW_HOURS,
+  type IAttributedUsageEvent,
+} from '@bike4mind/common';
 import { UsageEvent } from '../billing/UsageEventModel';
 import { User } from './UserModel';
 
@@ -9,6 +13,7 @@ const QUERY_MS = 10_000;
 export async function loadCompletionSequenceEvents(now: Date) {
   const rows = await UsageEvent.find({
     feature: 'completion_api',
+    'attribution.kind': { $ne: 'platform_operation' },
     status: 'ok',
     createdAt: { $gte: new Date(now.getTime() - COMPLETION_SEQUENCE_WINDOW_HOURS * 3_600_000), $lt: now },
   })
@@ -16,7 +21,7 @@ export async function loadCompletionSequenceEvents(now: Date) {
     .sort({ createdAt: -1 })
     .limit(COMPLETION_SEQUENCE_SCAN_LIMIT + 1)
     .maxTimeMS(QUERY_MS)
-    .lean();
+    .lean<Array<Pick<IAttributedUsageEvent, 'userId' | 'requestId' | 'createdAt'>>>();
   const kept = rows.slice(0, COMPLETION_SEQUENCE_SCAN_LIMIT);
   const ids = [...new Set(kept.map(row => row.userId))].filter(id => /^[a-f0-9]{24}$/i.test(id));
   const accounts = await User.find({

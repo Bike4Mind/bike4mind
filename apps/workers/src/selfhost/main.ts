@@ -10,6 +10,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { warnIfPlaintextSecretsOptOut } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
 import { dispatch as researchEngineDispatch } from '@workers/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@workers/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@workers/queueHandlers/fabFileVectorize';
@@ -44,6 +45,7 @@ import { registerCreditLotSweep } from './creditLotSweep';
 import { registerSpendReconciliation } from './spendReconciliation';
 import { registerCreditPurchaseReconciliation } from './creditPurchaseReconciliation';
 import { registerVoiceHoldSweep } from './voiceHoldSweep';
+import { registerBriefScheduleReconcile } from './briefScheduleReconcile';
 import { registerCreditHoldSweep } from './creditHoldSweep';
 import { registerReferralRewardRelease } from './referralRewardRelease';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
@@ -126,6 +128,7 @@ async function main() {
     process.exit(1);
   }
 
+  warnIfPlaintextSecretsOptOut(bootLogger);
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger);
   bootLogger.info('MongoDB connected');
   // Self-host runs no packages/scripts migrations, so the pool seed the hosted migration
@@ -160,6 +163,7 @@ async function main() {
   registerSpendReconciliation(worker);
   registerCreditPurchaseReconciliation(worker);
   registerVoiceHoldSweep(worker);
+  registerBriefScheduleReconcile(worker);
   registerCreditHoldSweep(worker);
   registerReferralRewardRelease(worker);
 

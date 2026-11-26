@@ -142,6 +142,17 @@ export interface IResolvedPromptDispatch {
    *   a host (`hostCreateSession`) ignores it.
    */
   systemContext?: string;
+  /**
+   * Route this one send to agent mode, as the composer's Agent toggle would. Still gated on the agent-mode
+   * feature flag, so a user without agent mode gets a plain chat send.
+   */
+  forceAgent?: boolean;
+  /**
+   * The Studio production this launch directs. Sent with an agent start; the server marks the session with it
+   * (only for the composition's owner with Productions open), and every later turn in that session then runs in
+   * agent mode with the production tools and the director context.
+   */
+  productionCompositionId?: string;
 }
 
 /**

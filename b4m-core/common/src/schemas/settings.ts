@@ -42,6 +42,7 @@ import {
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { THINKING_VISIBILITY_LEVELS } from '../utils/streamVisibility';
+import { parseReferralMilestones } from '../utils/referralMilestones';
 import {
   ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
   ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
@@ -62,6 +63,7 @@ import {
   VoyageAIEmbeddingModel,
 } from './embedding';
 import { SreAgentConfigSchema } from '../types/entities/SreTypes';
+import { DEFAULT_FEATURE_SPIKE_MULTIPLE } from '../types/entities/SpendExplorerTypes';
 import {
   hasNestedSecretValue,
   isValidNestedSecretGroups,
@@ -328,9 +330,7 @@ export const SettingKeySchema = z.enum([
   'UseFormatPrompt',
   'EnableDeferredToolLoading',
   'DeferredToolStartSetMaxTokens',
-  'EnableQuestMaster',
   'QuestMasterLegacyShutdownDate',
-  'EnableQuestMasterDefault',
   'EnableHearth',
   'EnableHearthDefault',
   'EnableMementos',
@@ -338,6 +338,10 @@ export const SettingKeySchema = z.enum([
   'EnableArtifacts',
   'EnableArtifactsDefault',
   'pythonArtifactDataOrigins',
+  'EnableCallableFunctions',
+  'EnableCallableFunctionsMcp',
+  'CallableFunctionTimeLimitSeconds',
+  'CallableFunctionPendingCallLimit',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -393,8 +397,10 @@ export const SettingKeySchema = z.enum([
   'ReferralFirstAnswerCredits',
   'ReferralFirstPaymentCredits',
   'ReferralSecondPaymentCredits',
+  'ReferralMilestones',
   'ReferralHoldDays',
   'ReferralInvitesPerUser',
+  'ReferralLinkSignupsPerMonth',
   'ReferralAlertRewardsPerDay',
   'BedrockNewsPuzzleCredits5',
   'BedrockNewsPuzzleCredits6',
@@ -560,6 +566,7 @@ export const SettingKeySchema = z.enum([
   'spendMonitorSlackEnabled',
   'spendMonitorPlatformSpikeRatio',
   'spendMonitorPlatformCriticalRatio',
+  'spendExplorerFeatureSpikeMultiple',
   'spendMonitorPlatformSpikeFloorCredits',
   'spendMonitorPlatformCostFloorUsd',
   'spendMonitorAccountSpikeRatio',
@@ -576,6 +583,10 @@ export const SettingKeySchema = z.enum([
   'spendMonitorMarginMinRatio',
   'spendMonitorMarginWindowHours',
   'spendMonitorMarginCostFloorUsd',
+  'spendMonitorAutoPauseMode',
+  'spendMonitorAutoPauseStandardMinCredits',
+  'spendMonitorAutoPausePaidMinCredits',
+  'spendMonitorAutoPauseTrustedMinCredits',
   'youngAccountSpendPageUsdPerHour',
   'youngAccountSpendWarnUsdPerHour',
   'freeTierDailySystemCostCapUsd',
@@ -672,6 +683,14 @@ export const SettingKeySchema = z.enum([
   'SkillMarketMaxListingsPerUser',
   'SkillMarketPublicMinAccountAgeDays',
   'SkillMarketReportAutoHideThreshold',
+  'SkillTemplateFreeRunEnabled',
+  'SkillTemplateFreeRunModel',
+  'SkillTemplateFreeRunPerTemplateDailyCap',
+  'SkillTemplateFreeRunGlobalDailyCap',
+  'SkillTemplateFreeRunInputMaxChars',
+  'SkillTemplateFreeRunOutputMaxTokens',
+  'SkillTemplateFreeRunFileMaxMb',
+  'SkillTemplateFreeRunFileMaxPages',
 
   // Slack Webhook URL settings
   'SlackDefaultWebhookUrl',
@@ -716,6 +735,9 @@ export const SettingKeySchema = z.enum([
   'elevenLabsServerApiKey',
   'elevenLabsMusicConcurrencyLimit',
   'elevenLabsSoundConcurrencyLimit',
+  'elevenLabsPlanCycleStartDay',
+  'elevenLabsPlanMonthlyCredits',
+  'elevenLabsPlanAgentMinutes',
   'voiceSessionAiVoice',
   'voiceSessionTranscriptionModel',
   'voiceSessionVadType',
@@ -932,6 +954,12 @@ export const OrchestrationDefaultsSchema = z.object({
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
     'video_generation',
+    // Only offered when the run gets a production config: the Productions flag and its audience rule must open to
+    // the run's user (never an API-key run). Each writes only a composition the user owns; every take is a capped job.
+    'production_storyboard',
+    'production_generate_shot',
+    'production_add_audio',
+    'production_assemble',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
     // they are strictly safer than the storage-backed tools above. Without
@@ -1309,6 +1337,13 @@ function makeStringSetting(
       : z.string(),
   };
 }
+
+/** SkillTemplateFreeRunModel value that defers to the operations model. */
+export const SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL = 'operations';
+
+/** Modes of the spend monitor's automatic pause; read by apps/workers/src/cron/spendMonitor/autoPause.ts. */
+export const SPEND_AUTO_PAUSE_MODES = ['off', 'shadow', 'enforce'] as const;
+export type SpendAutoPauseMode = (typeof SPEND_AUTO_PAUSE_MODES)[number];
 
 /**
  * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
@@ -1731,6 +1766,30 @@ export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
 export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
 export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
 
+const interventionTierShape = {
+  mode: z.enum(AUTO_CONTAINMENT_MODES).prefault('off').meta({
+    title: 'Mode',
+    description: 'off: no decisions for this tier. shadow: record what would be done. enforce: apply the hold.',
+  }),
+  minConfidence: z.number().min(0.5).max(1).prefault(0.9).meta({
+    title: 'Minimum confidence',
+    description: "The judgment's confidence (0.5-1) at or above which this tier acts.",
+  }),
+  maxPerHour: z.number().int().min(0).max(100).prefault(5).meta({
+    title: 'Decisions per hour',
+    description: 'Decisions for this tier per fixed one-hour window, counted per mode.',
+  }),
+  expiryHours: z.number().int().min(1).max(720).prefault(72).meta({
+    title: 'Expiry (hours)',
+    description: 'A hold lapses on its own after this many hours unless released sooner.',
+  }),
+  rolloutPercent: z.number().int().min(0).max(100).prefault(0).meta({
+    title: 'Rollout percent',
+    description: 'Share of accounts (stable per account) this tier applies to. 0 applies it to nobody.',
+  }),
+};
+const interventionTierConfig = (title: string) => z.object(interventionTierShape).prefault({}).meta({ title });
+
 /**
  * Automated containment from abuse assessments (apps/workers/src/security/autoContainment). Acts
  * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
@@ -1773,8 +1832,35 @@ export const AutoContainmentConfigSchema = z.object({
     title: 'Device-link common networks',
     description: 'A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence.',
   }),
+  tiers: z
+    .object({
+      limit: z
+        .object({
+          ...interventionTierShape,
+          creditsPerHour: z.number().int().min(0).max(1_000_000).prefault(1000).meta({
+            title: 'Credits per hour',
+            description: 'AI spend admitted per fixed one-hour window while a limit hold is active.',
+          }),
+        })
+        .prefault({})
+        .meta({ title: 'Limit spend' }),
+      verify: interventionTierConfig('Require verification').meta({
+        title: 'Require verification',
+        description:
+          'Not used yet: no card or phone verification flow can clear a verify hold, so verify decisions run under Request review and its settings.',
+      }),
+      holdGrant: interventionTierConfig('Hold signup grant'),
+      review: interventionTierConfig('Request review'),
+    })
+    .prefault({})
+    .meta({
+      title: 'Intervention tiers',
+      description:
+        'Graduated interventions below Contain. Each tier is off by default; mode off above turns every tier off.',
+    }),
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
+export type InterventionTierConfig = AutoContainmentConfig['tiers']['verify'];
 
 export const ADMIN_AI_MODES = ['off', 'shadow', 'recommend', 'act'] as const;
 export type AdminAiMode = (typeof ADMIN_AI_MODES)[number];
@@ -2209,7 +2295,7 @@ export const CONTEXT_TELEMETRY_VALIDATION_LIMITS = {
   criticalThreshold: { min: 0, max: 100, default: 50 },
   dedupWindowMinutes: { min: 1, max: 60, default: 5 },
 
-  // Issue Deduplication & Regression (aligned with LiveOps)
+  // Issue Deduplication & Regression
   regressionLookbackDays: { min: 7, max: 180, default: 30 },
   regressionGracePeriodHours: { min: 1, max: 168, default: 48 }, // 1 hour to 1 week, default 48 hours
   duplicateAlertCooldownHours: { min: 1, max: 168, default: 24 }, // Hours before re-alerting for same fingerprint
@@ -2231,20 +2317,19 @@ export const CONTEXT_TELEMETRY_VALIDATION_LIMITS = {
 } as const;
 
 // Context Telemetry Alert Configuration Schema
-// Aligned with LiveOps Triage pattern for Slack/GitHub/LLM integrations
 const CT = CONTEXT_TELEMETRY_VALIDATION_LIMITS; // Shorthand for readability
 
 export const ContextTelemetryAlertsSchema = z.object({
   /** Whether telemetry alerts are enabled */
   enabled: z.boolean().default(false),
 
-  // Slack Integration (OAuth-based like LiveOps Triage)
+  // Slack Integration (OAuth-based)
   /** MongoDB ObjectId of the Slack workspace to use */
   slackWorkspaceId: z.string().optional(),
   /** Slack channel ID for posting anomaly alerts */
   slackChannelId: z.string().optional(),
 
-  // GitHub Integration (uses GitHubService like LiveOps Triage)
+  // GitHub Integration (uses GitHubService)
   /** GitHub repository owner (user or organization) */
   githubOwner: z.string().optional(),
   /** GitHub repository name */
@@ -2286,7 +2371,7 @@ export const ContextTelemetryAlertsSchema = z.object({
     .max(CT.dedupWindowMinutes.max)
     .default(CT.dedupWindowMinutes.default),
 
-  // Issue Deduplication & Regression (aligned with LiveOps)
+  // Issue Deduplication & Regression
   /** Days to look back for closed issues when checking for regressions (default: 30) */
   regressionLookbackDays: z
     .number()
@@ -2368,182 +2453,6 @@ export const ContextTelemetryAlertsSchema = z.object({
 });
 
 export type ContextTelemetryAlerts = z.infer<typeof ContextTelemetryAlertsSchema>;
-
-// LiveOps Triage Configuration Validation Limits
-export const LIVEOPS_TRIAGE_VALIDATION_LIMITS = {
-  // Model configuration
-  temperature: { min: 0, max: 2, default: 0.3 },
-  maxTokens: { min: 100, max: 10000, default: 1000 },
-  // Max 180000ms (3 min) to leave 2-minute buffer for post-LLM operations within 5-min Lambda timeout
-  timeoutMs: { min: 30000, max: 180000, default: 60000 },
-
-  // Schedule configuration
-  runIntervalHours: { options: [6, 12, 24] as const, default: 12 },
-
-  // Processing limits
-  maxErrorsPerRun: { min: 1, max: 100, default: 50 },
-  regressionLookbackDays: { min: 7, max: 180, default: 30 },
-  regressionGracePeriodHours: { min: 1, max: 168, default: 48 }, // 1 hour to 1 week, default 48 hours
-
-  // Prompt template
-  promptTemplate: { min: 50, max: 10000 },
-} as const;
-
-// LiveOps Triage Configuration Schema
-const LT = LIVEOPS_TRIAGE_VALIDATION_LIMITS; // Shorthand for readability
-
-export const LiveopsTriageConfigSchema = z.object({
-  // General settings
-  enabled: z.boolean().default(false),
-  slackWorkspaceId: z.string().optional(), // MongoDB ObjectId of the Slack workspace to use
-  slackChannelId: z.string(), // Source channel - where errors are read from
-  slackOutputChannelId: z.string().optional(), // Output channel - where summaries are posted (defaults to slackChannelId if not set)
-  githubOwner: z.string(),
-  githubRepo: z.string(),
-
-  // Schedule configuration
-  runIntervalHours: z
-    .number()
-    .refine(v => LT.runIntervalHours.options.includes(v as 6 | 12 | 24), {
-      message: `Run interval must be one of: ${LT.runIntervalHours.options.join(', ')} hours`,
-    })
-    .default(LT.runIntervalHours.default),
-  postWhenNoErrors: z.boolean().default(true), // Post "all clear" message when no errors found
-
-  // Model configuration
-  modelId: z.string(),
-  temperature: z.number().min(LT.temperature.min).max(LT.temperature.max).default(LT.temperature.default),
-  maxTokens: z.number().min(LT.maxTokens.min).max(LT.maxTokens.max).default(LT.maxTokens.default),
-  timeoutMs: z.number().min(LT.timeoutMs.min).max(LT.timeoutMs.max).default(LT.timeoutMs.default),
-
-  // Processing configuration
-  maxErrorsPerRun: z
-    .number()
-    .min(LT.maxErrorsPerRun.min)
-    .max(LT.maxErrorsPerRun.max)
-    .default(LT.maxErrorsPerRun.default),
-  regressionLookbackDays: z
-    .number()
-    .min(LT.regressionLookbackDays.min)
-    .max(LT.regressionLookbackDays.max)
-    .default(LT.regressionLookbackDays.default),
-  regressionGracePeriodHours: z
-    .number()
-    .min(LT.regressionGracePeriodHours.min)
-    .max(LT.regressionGracePeriodHours.max)
-    .default(LT.regressionGracePeriodHours.default),
-  autoCreateIssues: z.boolean().default(false),
-  approverIds: z.string().default(''),
-
-  // Custom prompt template (optional)
-  promptTemplate: z
-    .string()
-    .min(LT.promptTemplate.min, `Prompt template must be at least ${LT.promptTemplate.min} characters`)
-    .max(LT.promptTemplate.max, `Prompt template cannot exceed ${LT.promptTemplate.max.toLocaleString()} characters`)
-    .trim()
-    .optional(),
-
-  // Run tracking (for idempotency)
-  lastRunAt: z.iso.datetime().optional(),
-  lastRunDate: z.string().optional(), // YYYY-MM-DD for idempotency
-  lastRunResult: z
-    .object({
-      status: z.enum(['success', 'partial', 'failed']),
-      errorsProcessed: z.number(),
-      issuesCreated: z.array(z.number()),
-      issuesDeduplicated: z.number(),
-    })
-    .optional(),
-});
-
-export type LiveopsTriageConfig = z.infer<typeof LiveopsTriageConfigSchema>;
-
-// LiveOps Triage Result Validation Limits (for LLM response validation)
-export const LIVEOPS_TRIAGE_RESULT_VALIDATION_LIMITS = {
-  alertId: { min: 1, max: 100 },
-  category: { min: 1, max: 100 },
-  title: { min: 1, max: 500 },
-  body: { min: 1, max: 10000 },
-  labels: { maxItems: 20, maxItemLength: 50 },
-  occurrenceCount: { min: 1, max: 10000 },
-  matchesExisting: {
-    issueNumber: { min: 1, max: 999999 },
-    title: { min: 1, max: 500 },
-  },
-  recurringPatterns: { maxItems: 50, maxItemLength: 500 },
-  healthAssessment: { maxLength: 2000 },
-} as const;
-
-const TRL = LIVEOPS_TRIAGE_RESULT_VALIDATION_LIMITS; // Shorthand
-
-// TriageResult Schema - validates individual triage results from LLM
-export const TriageResultSchema = z.object({
-  alertId: z.string().min(TRL.alertId.min).max(TRL.alertId.max),
-  priority: z.enum(['P0', 'P1', 'P2', 'P3']),
-  category: z.enum(['database', 'api', 'auth', 'frontend', 'infrastructure', 'llm', 'integration', 'other']),
-  title: z.string().min(TRL.title.min).max(TRL.title.max),
-  body: z.string().min(TRL.body.min).max(TRL.body.max),
-  labels: z.array(z.string().max(TRL.labels.maxItemLength)).max(TRL.labels.maxItems).default([]),
-  matchesExisting: z
-    .object({
-      issueNumber: z.number().int().min(TRL.matchesExisting.issueNumber.min),
-      title: z.string().min(1).max(TRL.matchesExisting.title.max),
-      state: z.enum(['open', 'closed']).optional(),
-    })
-    .nullable()
-    .default(null),
-  isRecurring: z.boolean(),
-  occurrenceCount: z.number().int().min(TRL.occurrenceCount.min).max(TRL.occurrenceCount.max),
-  isRegression: z.boolean().default(false),
-  // Details of the closed issue this error is regressing from (only when isRegression=true)
-  matchedClosedIssue: z
-    .object({
-      issueNumber: z.number().int().min(1),
-      title: z.string().min(1).max(TRL.matchesExisting.title.max),
-      // ISO date string. Accept null/undefined: the LLM is not given the closed
-      // issue's closedAt in the prompt, and any matchedClosedIssue is recomputed
-      // from real GitHub data downstream - so a null here must not fail the run.
-      closedAt: z.string().nullish(),
-    })
-    .nullable()
-    .optional(),
-  // Deterministic fingerprint for cross-batch deduplication (SHA-1 hash, 40 chars)
-  // Added post-LLM processing, not generated by LLM
-  fingerprint: z
-    .string()
-    .length(40)
-    .regex(/^[a-f0-9]+$/)
-    .optional(),
-});
-
-export type TriageResult = z.infer<typeof TriageResultSchema>;
-
-// TriageSummary Schema - validates the summary section of LLM response
-export const TriageSummarySchema = z.object({
-  totalAlerts: z.number().int().min(0),
-  newIssues: z.number().int().min(0),
-  duplicates: z.number().int().min(0),
-  regressions: z.number().int().min(0).default(0),
-  p0Count: z.number().int().min(0),
-  p1Count: z.number().int().min(0),
-  p2Count: z.number().int().min(0),
-  p3Count: z.number().int().min(0),
-  recurringPatterns: z
-    .array(z.string().max(TRL.recurringPatterns.maxItemLength))
-    .max(TRL.recurringPatterns.maxItems)
-    .default([]),
-  healthAssessment: z.string().max(TRL.healthAssessment.maxLength).default(''),
-});
-
-export type TriageSummary = z.infer<typeof TriageSummarySchema>;
-
-// LLMTriageResponse Schema - validates complete LLM response
-export const LLMTriageResponseSchema = z.object({
-  triageResults: z.array(TriageResultSchema),
-  summary: TriageSummarySchema,
-});
-
-export type LLMTriageResponse = z.infer<typeof LLMTriageResponseSchema>;
 
 // API Service Groups
 export const API_SERVICE_GROUPS = {
@@ -2639,6 +2548,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'elevenLabsServerApiKey', order: 7 },
       { key: 'elevenLabsMusicConcurrencyLimit', order: 8 },
       { key: 'elevenLabsSoundConcurrencyLimit', order: 9 },
+      { key: 'elevenLabsPlanCycleStartDay', order: 10 },
+      { key: 'elevenLabsPlanMonthlyCredits', order: 11 },
+      { key: 'elevenLabsPlanAgentMinutes', order: 12 },
     ],
   },
   XAI: {
@@ -2787,6 +2699,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableArtifacts', order: 20 },
       { key: 'EnableArtifactsDefault', order: 21 },
       { key: 'pythonArtifactDataOrigins', order: 22 },
+      { key: 'EnableCallableFunctions', order: 23 },
+      { key: 'EnableCallableFunctionsMcp', order: 24 },
+      { key: 'CallableFunctionTimeLimitSeconds', order: 24.5 },
+      { key: 'CallableFunctionPendingCallLimit', order: 24.6 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -2815,8 +2731,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'HardwareComputeMaxConcurrentRunsPerUser', order: 90 },
       { key: 'HardwareComputeMaxUsdPerUserPerDay', order: 91 },
       { key: 'SimulatorComputeCreditsPerRound', order: 91.5 },
-      { key: 'EnableQuestMaster', order: 92 },
-      { key: 'EnableQuestMasterDefault', order: 93 },
       { key: 'QuestMasterLegacyShutdownDate', order: 93.5 },
       { key: 'EnableHearth', order: 94 },
       { key: 'EnableHearthDefault', order: 95 },
@@ -2892,6 +2806,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorSlackEnabled', order: 19.42 },
       { key: 'spendMonitorPlatformSpikeRatio', order: 19.43 },
       { key: 'spendMonitorPlatformCriticalRatio', order: 19.44 },
+      { key: 'spendExplorerFeatureSpikeMultiple', order: 19.445 },
       { key: 'spendMonitorPlatformSpikeFloorCredits', order: 19.45 },
       { key: 'spendMonitorPlatformCostFloorUsd', order: 19.46 },
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
@@ -2908,6 +2823,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorMarginMinRatio', order: 19.4942 },
       { key: 'spendMonitorMarginWindowHours', order: 19.4943 },
       { key: 'spendMonitorMarginCostFloorUsd', order: 19.4944 },
+      { key: 'spendMonitorAutoPauseMode', order: 19.4945 },
+      { key: 'spendMonitorAutoPauseStandardMinCredits', order: 19.4946 },
+      { key: 'spendMonitorAutoPausePaidMinCredits', order: 19.4947 },
+      { key: 'spendMonitorAutoPauseTrustedMinCredits', order: 19.4948 },
       { key: 'youngAccountSpendPageUsdPerHour', order: 19.495 },
       { key: 'youngAccountSpendWarnUsdPerHour', order: 19.496 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
@@ -3665,25 +3584,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
   }),
-  EnableQuestMaster: makeBooleanSetting({
-    key: 'EnableQuestMaster',
-    name: 'Enable Quest Master',
-    defaultValue: true,
-    description: 'Whether to enable the Quest Master feature.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 90,
-  }),
-  EnableQuestMasterDefault: makeBooleanSetting({
-    key: 'EnableQuestMasterDefault',
-    name: 'Quest Master: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, Quest Master is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 91,
-    dependsOn: 'EnableQuestMaster',
-  }),
   QuestMasterLegacyShutdownDate: {
     ...makeStringSetting({
       key: 'QuestMasterLegacyShutdownDate',
@@ -3785,6 +3685,64 @@ export const settingsMap = {
     // Plain strings so the update route can name each bad entry; every reader applies
     // resolvePythonArtifactDataOrigins, which drops the whole list if any entry is invalid.
     schema: z.array(z.string()),
+  }),
+  EnableCallableFunctions: makeBooleanSetting({
+    key: 'EnableCallableFunctions',
+    name: 'Enable Callable Functions',
+    defaultValue: false,
+    description:
+      'Lets a person call the run function of a Python artifact with typed inputs. Off (default): Python artifacts behave as before. Can be overridden per organization.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 23,
+    dependsOn: 'EnableArtifacts',
+    // Read through resolveCallableFunctionsEnabled in packages/server-utils, never as the raw platform value.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  EnableCallableFunctionsMcp: makeBooleanSetting({
+    key: 'EnableCallableFunctionsMcp',
+    name: 'Enable Callable Functions over MCP',
+    defaultValue: false,
+    description:
+      'Lets an MCP client list and call the live functions of the person whose functions:invoke API key it uses, at /api/mcp/functions. Needs Enable Callable Functions. Off (default): the endpoint refuses every request. Can be overridden per organization.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24,
+    dependsOn: 'EnableCallableFunctions',
+    // Read through resolveCallableFunctionsMcpEnabled in packages/server-utils, never as the raw platform value.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionTimeLimitSeconds: makeNumberSetting({
+    key: 'CallableFunctionTimeLimitSeconds',
+    name: 'Callable Function Time Limit (seconds)',
+    defaultValue: 30,
+    min: 1,
+    max: 795,
+    int: true,
+    description:
+      "How long one call of a saved function may run, in seconds, not counting the runtime's start. Default 30, at most 795. A synchronous API call stops at 45 seconds whatever this is; a call sent with mode async runs to this limit and is polled for its result. Can be overridden per organization; a person in several organizations gets the lowest.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.5,
+    dependsOn: 'EnableCallableFunctions',
+    // Read through resolveCallableFunctionTimeLimitMs in packages/server-utils.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionPendingCallLimit: makeNumberSetting({
+    key: 'CallableFunctionPendingCallLimit',
+    name: 'Callable Function Pending Call Limit',
+    defaultValue: 10,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many asynchronous calls one person may have queued or running at once. A call sent with mode async past this is refused with 429 until one finishes. Can be overridden per organization; a person in several organizations gets the lowest.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.6,
+    dependsOn: 'EnableCallableFunctions',
+    // Read through resolveCallableFunctionPendingCallLimit in packages/server-utils.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   EnableAgents: makeBooleanSetting({
     key: 'EnableAgents',
@@ -4124,6 +4082,76 @@ export const settingsMap = {
       'Open reports from this many distinct users hide a listing from the market until an admin restores or delists it.',
     category: 'AI Moderation',
   }),
+  SkillTemplateFreeRunEnabled: makeBooleanSetting({
+    key: 'SkillTemplateFreeRunEnabled',
+    name: 'Skill Template Free Runs Enabled',
+    defaultValue: false,
+    description:
+      'Lets a signed-out visitor run a skill once from its public template page (/t/<slug>), billed to the platform. Off hides the run box on every page and refuses every run. Runs also need the Turnstile secret and site key configured, whatever the sign-in Turnstile toggle says.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunModel: makeStringSetting({
+    key: 'SkillTemplateFreeRunModel',
+    name: 'Skill Template Free Run Model',
+    defaultValue: SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL,
+    description: `Model a template page free run asks. "${SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL}" uses the operations model.`,
+    options: [SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL, ...CHAT_MODELS],
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunPerTemplateDailyCap: makeNumberSetting({
+    key: 'SkillTemplateFreeRunPerTemplateDailyCap',
+    name: 'Skill Template Free Run Daily Cap (per template)',
+    defaultValue: 50,
+    min: 0,
+    int: true,
+    description: 'Free runs one template page allows per UTC day. Past it the page offers sign-up instead.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunGlobalDailyCap: makeNumberSetting({
+    key: 'SkillTemplateFreeRunGlobalDailyCap',
+    name: 'Skill Template Free Run Daily Cap (all templates)',
+    defaultValue: 500,
+    min: 0,
+    int: true,
+    description: 'Free runs allowed across every template page per UTC day.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunInputMaxChars: makeNumberSetting({
+    key: 'SkillTemplateFreeRunInputMaxChars',
+    name: 'Skill Template Free Run Input Cap (characters)',
+    defaultValue: 8000,
+    min: 1,
+    int: true,
+    description: 'Longest text a visitor may paste into a free run; longer input is refused.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunOutputMaxTokens: makeNumberSetting({
+    key: 'SkillTemplateFreeRunOutputMaxTokens',
+    name: 'Skill Template Free Run Output Cap (tokens)',
+    defaultValue: 1500,
+    min: 1,
+    int: true,
+    description: 'Most tokens a free run may generate; the answer stops there.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunFileMaxMb: makeNumberSetting({
+    key: 'SkillTemplateFreeRunFileMaxMb',
+    name: 'Skill Template Free Run File Size Cap (MB)',
+    defaultValue: 4,
+    min: 0.1,
+    description:
+      'Largest file (PDF, image or plain text) a visitor may attach to a free run; larger files are refused. A hosted request body tops out near 6 MB, so files over 4 MB are refused whatever this says.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunFileMaxPages: makeNumberSetting({
+    key: 'SkillTemplateFreeRunFileMaxPages',
+    name: 'Skill Template Free Run File Page Cap',
+    defaultValue: 10,
+    min: 1,
+    int: true,
+    description: 'Most pages a PDF attached to a free run may have; longer PDFs are refused.',
+    category: 'AI Moderation',
+  }),
   FormatPromptTemplate: makeStringSetting({
     key: 'FormatPromptTemplate',
     name: 'Format Prompt Template',
@@ -4397,7 +4425,7 @@ export const settingsMap = {
     max: 1000000,
     int: true,
     description:
-      "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per sampled frame (at most 10). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
+      "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per distinct frame (at most 60). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 10,
@@ -4629,6 +4657,20 @@ export const settingsMap = {
       "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
+  ReferralMilestones: {
+    ...makeStringSetting({
+      key: 'ReferralMilestones',
+      name: 'Referral Reward: Milestones',
+      defaultValue: '',
+      description:
+        'Credits an inviter earns once a number of the friends they referred are active (a verified email and a first answer), as friends:credits pairs separated by commas, e.g. 5:500, 10:1500. Each milestone pays once. An inviter already past a milestone is paid it when their next friend becomes active. Empty turns milestones off.',
+      category: 'Referrals',
+    }),
+    schema: z.string().refine(value => parseReferralMilestones(value) !== null, {
+      message:
+        'Use friends:credits pairs separated by commas, e.g. 5:500, 10:1500. At most 10, each friend count once, 1 to 10,000 friends and 1 to 100,000,000 credits.',
+    }),
+  },
   ReferralHoldDays: makeNumberSetting({
     key: 'ReferralHoldDays',
     name: 'Referral Reward Hold (days)',
@@ -4649,6 +4691,17 @@ export const settingsMap = {
     max: 1000,
     description:
       'Invites a user starts with when they register by email code. Existing users keep theirs; OAuth sign-ups start with 0 and admin-created accounts with 3.',
+    category: 'Referrals',
+  }),
+  ReferralLinkSignupsPerMonth: makeNumberSetting({
+    key: 'ReferralLinkSignupsPerMonth',
+    name: 'Referral Link Signups Per Month',
+    defaultValue: 10,
+    int: true,
+    min: 0,
+    max: 1000,
+    description:
+      "Most signups a user's share link can be credited with in any 30 days. Signups past it still create the account but credit nobody, so they earn no referral reward. 0 stops share links from crediting anyone.",
     category: 'Referrals',
   }),
   ReferralAlertRewardsPerDay: makeNumberSetting({
@@ -6046,6 +6099,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
+  spendExplorerFeatureSpikeMultiple: makeNumberSetting({
+    key: 'spendExplorerFeatureSpikeMultiple',
+    name: 'Spend Explorer: Feature Spike Multiple',
+    defaultValue: DEFAULT_FEATURE_SPIKE_MULTIPLE,
+    int: false,
+    min: 1,
+    description:
+      'Ratio. The Spend explorer flags a feature, or a user of a feature, as a spike when its cost on the last complete UTC day of the range is above this multiple of its average daily cost over the 7 days before. Display only; nothing alerts on it. Changes show within 5 minutes (the explorer caches its results). Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
   spendMonitorPlatformSpikeFloorCredits: makeNumberSetting({
     key: 'spendMonitorPlatformSpikeFloorCredits',
     name: 'Spend Monitor: Platform Spike Floor',
@@ -6217,6 +6281,49 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
+  spendMonitorAutoPauseMode: makeStringSetting({
+    key: 'spendMonitorAutoPauseMode',
+    name: 'Spend Monitor: Automatic Pause Mode',
+    defaultValue: 'shadow',
+    options: [...SPEND_AUTO_PAUSE_MODES],
+    description:
+      '"shadow" (default): an open spend incident that reaches its tier\'s automatic pause threshold is marked "Would pause" on the Spend monitor page, and nothing is paused. "enforce": the paying user, organization or API key gets a spending freeze, which an admin lifts from the Spend monitor page. "off": incidents are never evaluated for pausing.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPauseStandardMinCredits: makeNumberSetting({
+    key: 'spendMonitorAutoPauseStandardMinCredits',
+    name: 'Spend Monitor: Automatic Pause Threshold (Standard)',
+    defaultValue: 10_000,
+    int: true,
+    min: 0,
+    description:
+      'Credits per 15-minute window. An open incident on a standard account or API key whose current window spend reaches this value is paused (or marked in shadow mode). 0 turns automatic pausing off for standard accounts.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPausePaidMinCredits: makeNumberSetting({
+    key: 'spendMonitorAutoPausePaidMinCredits',
+    name: 'Spend Monitor: Automatic Pause Threshold (Paid)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'Credits per 15-minute window. Same as the standard threshold, for accounts held to the paid-account limits. 0 (default) turns automatic pausing off for paid accounts.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPauseTrustedMinCredits: makeNumberSetting({
+    key: 'spendMonitorAutoPauseTrustedMinCredits',
+    name: 'Spend Monitor: Automatic Pause Threshold (Trusted)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'Credits per 15-minute window. Same as the standard threshold, for trusted accounts. 0 (default) turns automatic pausing off for trusted accounts.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
   youngAccountSpendPageUsdPerHour: makeNumberSetting({
     key: 'youngAccountSpendPageUsdPerHour',
     name: 'Young-Account Spend Alarm: Page Ceiling (USD)',
@@ -6332,7 +6439,7 @@ export const settingsMap = {
     name: 'Turnstile Site Key',
     defaultValue: '',
     description:
-      'The public Cloudflare Turnstile site key shown to the sign-in form. With the toggle above off, a set key still challenges sign-in code requests past the send budgets (see Sign-in Code Limits). The secret key is never stored here.',
+      'The public Cloudflare Turnstile site key shown to the sign-in form. With the toggle above off, a set key still challenges sign-in code requests past the send budgets (see Sign-in Code Limits), and it is required for skill template free runs. The secret key is never stored here.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -8081,6 +8188,45 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
     order: 13,
   }),
+  // Plan allowance and billing cycle for the ElevenLabs usage admin view (api/admin/elevenlabs-usage).
+  // 0 means "not configured": the view shows usage without a percentage of plan.
+  elevenLabsPlanCycleStartDay: makeNumberSetting({
+    key: 'elevenLabsPlanCycleStartDay',
+    name: 'ElevenLabs Billing Cycle Start Day',
+    defaultValue: 1,
+    min: 1,
+    max: 31,
+    int: true,
+    description:
+      'Day of the month (UTC) the ElevenLabs subscription renews and its credit quota resets. In shorter months a later day falls on the last day of the month. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 14,
+  }),
+  elevenLabsPlanMonthlyCredits: makeNumberSetting({
+    key: 'elevenLabsPlanMonthlyCredits',
+    name: 'ElevenLabs Plan Monthly Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Credits the ElevenLabs plan includes per billing cycle (text to speech, sound effects and music draw from this pool). 0 leaves the allowance unset. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 15,
+  }),
+  elevenLabsPlanAgentMinutes: makeNumberSetting({
+    key: 'elevenLabsPlanAgentMinutes',
+    name: 'ElevenLabs Plan Agent Minutes',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Conversational agent call minutes the ElevenLabs plan includes per billing cycle (agents are billed by minute, not from the credit pool). 0 leaves the allowance unset. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 16,
+  }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',
     userReadable: true,
@@ -8525,9 +8671,8 @@ export const settingsMap = {
       'only affects later submissions. Set to 0 to make simulator rounds free.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd and
-    // EnableQuestMaster, which would render this row after them instead of beside the Hardware
-    // Compute settings.
+    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd, which
+    // would render this row after it instead of beside the Hardware Compute settings.
     order: 89.5,
     dependsOn: 'EnableComputeSubmission',
   }),

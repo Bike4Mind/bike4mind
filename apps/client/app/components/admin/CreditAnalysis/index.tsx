@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Stack, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import { MarginDashboard } from './components/MarginDashboard';
 import { UsageDashboard } from './components/UsageDashboard';
 import { PlatformUsageDashboard } from './components/PlatformUsageDashboard';
 import { SideAppsDashboard } from './components/SideAppsDashboard';
+import { ElevenLabsDashboard } from './components/ElevenLabsDashboard';
 import { CreditHolderType } from '@bike4mind/common';
 import { TransactionLedger } from './components/TransactionLedger';
 import { CreditAdjustmentsAuditLink } from './components/CreditAdjustmentsAuditLink';
@@ -14,13 +15,19 @@ import { AdminPageHeader } from '../shared';
 import { ADMIN_REGION_GAP, adminTabStrip } from '../shared/adminStyles';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { CreditEconomy } from './components/CreditEconomy';
+import { creditTabSearchValue, parseCreditTab } from './creditTabSearch';
 
 export const CreditAnalyticsTab: React.FC = () => {
   const activeTab = useCreditAnalysisStore(state => state.activeTab);
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
   const search = useSearch({ strict: false });
   const navigate = useNavigate();
-  const selectedTab = search.creditView === 'economy' ? 'economy' : activeTab;
+  const linkedTab = parseCreditTab(search.creditTab);
+  const selectedTab = search.creditView === 'economy' ? 'economy' : (linkedTab ?? activeTab);
+
+  useEffect(() => {
+    if (linkedTab) setActiveTab(linkedTab);
+  }, [linkedTab, setActiveTab]);
 
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }}>
@@ -36,7 +43,11 @@ export const CreditAnalyticsTab: React.FC = () => {
           void navigate({
             to: '/admin',
             replace: true,
-            search: previous => ({ ...previous, creditView: value === 'economy' ? 'economy' : undefined }),
+            search: previous => ({
+              ...previous,
+              creditView: value === 'economy' ? 'economy' : undefined,
+              creditTab: creditTabSearchValue(value as CreditAnalysisTab),
+            }),
           });
         }}
         sx={{ minWidth: 0, gap: ADMIN_REGION_GAP }}
@@ -60,6 +71,9 @@ export const CreditAnalyticsTab: React.FC = () => {
           </Tab>
           <Tab value="side-apps" data-testid="credit-analysis-side-apps-tab">
             Side apps
+          </Tab>
+          <Tab value="elevenlabs" data-testid="credit-analysis-elevenlabs-tab">
+            ElevenLabs
           </Tab>
           <Tab value="ledger" data-testid="credit-analysis-ledger-tab">
             Ledger
@@ -90,6 +104,10 @@ export const CreditAnalyticsTab: React.FC = () => {
 
         <TabPanel value="side-apps" sx={{ p: 0 }}>
           <SideAppsDashboard />
+        </TabPanel>
+
+        <TabPanel value="elevenlabs" sx={{ p: 0 }}>
+          <ElevenLabsDashboard />
         </TabPanel>
 
         <TabPanel value="ledger" sx={{ p: 0 }}>

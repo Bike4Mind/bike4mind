@@ -9,9 +9,15 @@ const STATIC_ASSET_EXTENSION_RE =
 
 export function isStaticAssetPath(slug: string[] | undefined): boolean {
   if (!slug || slug.length === 0) return false;
-  // `/status/tests/$testKey` is a client route whose one dynamic segment is an arbitrary
+  // `/admin/qa/tests/$testKey` is a client route whose one dynamic segment is an arbitrary
   // encoded QA key (e.g. `notebook.spec.ts > saves`) that can end in a file-like token, so it
-  // must keep deep-linking to the SPA rather than 404.
-  if (slug[0] === 'status' && slug[1] === 'tests') return false;
+  // must keep deep-linking to the SPA rather than 404. `/status/tests` is the old path of the
+  // same page and still has to reach the SPA to be redirected.
+  if (
+    (slug[0] === 'admin' && slug[1] === 'qa' && slug[2] === 'tests') ||
+    (slug[0] === 'status' && slug[1] === 'tests')
+  ) {
+    return false;
+  }
   return STATIC_ASSET_EXTENSION_RE.test(slug[slug.length - 1]);
 }

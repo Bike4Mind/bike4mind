@@ -1,6 +1,6 @@
 // GET/PUT/DELETE /api/organizations/:id/model-policy
-// The org's allowlist of providers, models and built-in tools (OrgModelPolicySchema). Owner, current
-// manager or platform admin (verifyOrgAccess). DELETE removes the policy so the org is unrestricted.
+// The org's allowlist of providers, models and built-in tools (OrgModelPolicySchema). managePolicies
+// holder or platform admin (verifyOrgPermission). DELETE removes the policy so the org is unrestricted.
 
 import { OrgModelPolicySchema } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
@@ -15,7 +15,7 @@ import {
   toOrgModelPolicyView,
 } from '@server/organizations/orgModelPolicy';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import type { Request } from 'express';
 
 type OrgRequest = Request<{}, unknown, unknown, { id?: string }>;
@@ -41,7 +41,7 @@ type PolicyChange = { kind: 'replace'; body: unknown } | { kind: 'reset' };
 async function changePolicy(req: OrgRequest, change: PolicyChange) {
   const { organization, changes, changed, view } = await withTransaction(async () => {
     // Re-read authorization and the before value on every transaction attempt.
-    const organization = await verifyOrgAccess(req.user!, orgIdOf(req));
+    const organization = await verifyOrgPermission(req.user!, orgIdOf(req), 'managePolicies');
     const policy =
       change.kind === 'reset' ? OrgModelPolicySchema.parse({}) : parseOrBadRequest(OrgModelPolicySchema, change.body);
     const before = toOrgModelPolicyView(organization.modelPolicy);
@@ -79,7 +79,7 @@ async function changePolicy(req: OrgRequest, change: PolicyChange) {
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      const org = await verifyOrgAccess(req.user!, orgIdOf(req));
+      const org = await verifyOrgPermission(req.user!, orgIdOf(req), 'managePolicies');
       return res.json(toOrgModelPolicyView(org.modelPolicy));
     })
   )

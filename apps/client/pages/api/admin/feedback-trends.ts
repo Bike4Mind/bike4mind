@@ -6,7 +6,7 @@ import { computeFeedbackTrends } from '@server/admin/feedbackTrends';
 /**
  * GET /api/admin/feedback-trends: open, last-24-hour, thumbs-down-share and 30-day-by-type counts
  * for the strip above the admin feedback table. Full admins only, like the Feedback tab and its
- * sidebar count (server/admin/actionCounts.ts).
+ * sidebar count (packages/server-utils/src/admin/actionCounts.ts).
  */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },

@@ -310,6 +310,17 @@ export {
 } from '../constants/completionRuns';
 
 /** A run id issued by `POST /api/v1/completion-runs`. Knowing one grants nothing; the server checks its owner. */
+/**
+ * The payer a completion or completion-run request names. Every route that takes it resolves it the same
+ * way (apps/client/server/billing/resolveCompletionBillingOrgId.ts), so a run and its completions agree.
+ */
+const BillingOrganizationIdSchema = z.string().trim().min(1);
+const BILLING_ORGANIZATION_RULES =
+  'An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: "billing_organization_mismatch"`). A caller who cannot use the named organization gets a 403.';
+const RUN_ORGANIZATION_LOOKUP =
+  "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. " +
+  BILLING_ORGANIZATION_RULES;
+
 export const CompletionRunIdSchema = z.uuid().describe('A run id issued by `POST /api/v1/completion-runs`.');
 
 const CompletionRunLabelSchema = z.string().min(1).max(128);
@@ -344,17 +355,82 @@ export const CompletionRunAttributionSchema = z
 
 export type CompletionRunAttribution = z.infer<typeof CompletionRunAttributionSchema>;
 
+/** The largest run budget accepted, in credits; well past any real job, it keeps the counter exact. */
+export const COMPLETION_RUN_MAX_BUDGET_CREDITS = 1_000_000_000;
+
+export const CompletionRunBudgetCreditsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(COMPLETION_RUN_MAX_BUDGET_CREDITS)
+  .describe(
+    "The most the run's completions may claim together, in credits. Each completion claims its share before the model is called, so concurrent completions cannot together be admitted past it. An estimate miss can take the run slightly over."
+  );
+
+export {
+  CompletionEvaluationLimitsSchema,
+  CompletionEvaluationReceiptSchema,
+  CompletionEvaluationStateSchema,
+} from './completionEvaluation';
+export type {
+  CompletionEvaluationLimits,
+  CompletionEvaluationReceipt,
+  CompletionEvaluationState,
+} from './completionEvaluation';
+import {
+  CompletionEvaluationLimitsSchema,
+  CompletionEvaluationRequestSchema,
+  CompletionEvaluationStateSchema,
+} from './completionEvaluation';
+
 export const CreateCompletionRunRequestSchema = z.object({
+  evaluation: CompletionEvaluationLimitsSchema.optional(),
   rootSessionId: CompletionSessionIdSchema.optional().describe(
     'Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id.'
   ),
+  budgetCredits: CompletionRunBudgetCreditsSchema.optional().describe(
+    'Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one.'
+  ),
+  organization_id: BillingOrganizationIdSchema.nullable()
+    .optional()
+    .describe(
+      "Organization whose credit pool the run's completions pay from, or null for personal credits. Omitted: personal credits for a signed-in user. A completion matches the run only when it bills the same account, so send this same `organization_id` on those completions and on the run's budget, usage and evaluation requests. " +
+        BILLING_ORGANIZATION_RULES
+    ),
 });
 
 export const CompletionRunSchema = z.object({
+  evaluation: CompletionEvaluationStateSchema.optional(),
   runId: CompletionRunIdSchema,
   rootSessionId: z.string().optional(),
+  budgetCredits: z.number().int().positive().optional().describe('The run budget; absent for a run without one.'),
   createdAt: z.iso.datetime(),
 });
+
+export const RaiseCompletionRunBudgetRequestSchema = z.object({
+  budgetCredits: CompletionRunBudgetCreditsSchema.describe(
+    "The run's new budget, in credits. Must be above the current one: a budget is only ever raised."
+  ),
+  organization_id: BillingOrganizationIdSchema.nullable().optional().describe(RUN_ORGANIZATION_LOOKUP),
+});
+
+export type RaiseCompletionRunBudgetRequest = z.infer<typeof RaiseCompletionRunBudgetRequestSchema>;
+
+const CreditAmountSchema = z.number().nonnegative();
+
+/** A budgeted run's ceiling and what is held against it. */
+export const CompletionRunBudgetStateSchema = z.object({
+  budgetCredits: z.number().int().positive(),
+  committedCredits: CreditAmountSchema.describe(
+    'Settled charges plus the claims of completions still running: what new completions are admitted against. Can sit above `settled.creditsCharged` until those completions settle.'
+  ),
+  reservedCredits: CreditAmountSchema.describe(
+    'The part of `committedCredits` not yet settled: claims of completions still running, or waiting for the expired-hold sweep.'
+  ),
+  remainingCredits: CreditAmountSchema.describe('`budgetCredits` minus `committedCredits`, never below zero.'),
+});
+
+export type CompletionRunBudgetState = z.infer<typeof CompletionRunBudgetStateSchema>;
 
 export type CompletionRun = z.infer<typeof CompletionRunSchema>;
 
@@ -362,6 +438,11 @@ export type CompletionRun = z.infer<typeof CompletionRunSchema>;
 export const COMPLETION_RUN_USAGE_MAX_ATTEMPTS = 500;
 
 export const CompletionRunIdParamSchema = z.object({ runId: CompletionRunIdSchema });
+
+/** Query of the completion-run reads (usage, evaluation): which payer's run to look up. */
+export const CompletionRunOwnerQuerySchema = z.object({
+  organization_id: BillingOrganizationIdSchema.optional().describe(RUN_ORGANIZATION_LOOKUP),
+});
 
 const TokenCountSchema = z.number().int().nonnegative();
 
@@ -408,6 +489,7 @@ export const CompletionRunUsageSchema = z.object({
   byAttemptTruncated: z
     .boolean()
     .describe('True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them.'),
+  budget: CompletionRunBudgetStateSchema.optional().describe('Present only for a run minted with a budget.'),
 });
 
 export type CompletionRunUsage = z.infer<typeof CompletionRunUsageSchema>;
@@ -423,6 +505,7 @@ export type CompletionRunUsage = z.infer<typeof CompletionRunUsageSchema>;
  * canonical `options.<field>` location before downstream consumption.
  */
 export const CompletionRequestSchema = z.object({
+  evaluation: CompletionEvaluationRequestSchema.optional(),
   model: ModelIdSchema,
   messages: z.array(CompletionMessageSchema).min(1),
   response_format: ResponseFormatSchema.optional(),
@@ -434,6 +517,12 @@ export const CompletionRequestSchema = z.object({
   sessionId: CompletionSessionIdSchema.optional(),
   run: CompletionRunAttributionSchema.optional(),
   end_user_id: EndUserIdSchema.optional(),
+  organization_id: BillingOrganizationIdSchema.nullable()
+    .optional()
+    .describe(
+      'Organization whose credit pool pays for this call, or null for personal credits. Omitted: personal credits for a signed-in user. With `run`, send the `organization_id` the run was minted with. ' +
+        BILLING_ORGANIZATION_RULES
+    ),
   options: z
     .object({
       temperature: z.number().optional(),
@@ -559,7 +648,7 @@ const CompletionSettledEventSchema = z.object({
 
 /**
  * Classifiers the completions `error` frame may carry: the persisted quest codes plus the two
- * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests and must not widen.
+ * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests, where provider codes never land.
  */
 export const COMPLETION_SSE_ERROR_CODES = [
   ...QUEST_ERROR_CODES,

@@ -29,7 +29,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: h.config }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgOwner: vi.fn(async () => ({ id: 'org-1', name: 'Org' })),
+  verifyOrgPermission: vi.fn(async () => ({ id: 'org-1', name: 'Org' })),
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn(async () => null) }));
 
@@ -74,11 +74,12 @@ describe('organization GitHub webhook config with a secret stored under the prev
     expect(res._getJSONData().secretMasked).toBe('*'.repeat(secretFixture.length - 4) + secretFixture.slice(-4));
   });
 
-  it('GET reveals the secret when asked to', async () => {
+  it('GET ignores revealSecret and still masks a previous-key secret', async () => {
     const res = await call('get', { revealSecret: 'true' });
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().secret).toBe(secretFixture);
+    expect(res._getJSONData().secret).toBeUndefined();
+    expect(res._getJSONData().secretMasked).toBe('*'.repeat(secretFixture.length - 4) + secretFixture.slice(-4));
   });
 
   it('PUT returns the masked secret after an update that leaves it untouched', async () => {

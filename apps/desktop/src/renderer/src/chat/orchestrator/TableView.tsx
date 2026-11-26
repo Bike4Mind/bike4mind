@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { timeAgo } from '../prBarModel';
 import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
+import { AgentPrIndicator } from './AgentPrIndicator';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import { formatAgentCost, type AgentView } from './roster';
 
@@ -56,7 +57,7 @@ function SortHeader({
   );
 }
 
-export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProps) {
+export function TableView({ agents, onSelect, onOpenPr, selectedId }: OrchestratorViewProps) {
   const [sort, setSort] = useState<Sort | null>(null);
 
   const rows = useMemo(() => {
@@ -96,7 +97,7 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
             <th>Now</th>
             <SortHeader sortKey="updated" label="Updated" sort={sort} onSort={toggleSort} />
             <SortHeader sortKey="cost" label="Cost" sort={sort} onSort={toggleSort} />
-            <th style={{ width: 96 }}>PR</th>
+            <th style={{ width: 116 }}>PR</th>
             <th>Branch</th>
           </tr>
         </thead>
@@ -134,7 +135,13 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
               </td>
               <td>{timeAgo(agent.updatedAt, now) ?? '-'}</td>
               <td>{formatAgentCost(agent.usdCost, agent.credits)}</td>
-              <td>{agent.pr ? `#${agent.pr.number} ${agent.pr.state}` : '-'}</td>
+              <td>
+                {agent.pr ? (
+                  <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} />
+                ) : (
+                  '-'
+                )}
+              </td>
               <td>
                 <Typography level="body-xs" sx={clamp}>
                   {agent.branch ?? '-'}

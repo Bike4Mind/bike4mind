@@ -15,6 +15,7 @@ vi.mock('@client/app/hooks/data/useOrgStorageUsage', () => ({
 }));
 vi.mock('./OrganizationGroupTypesCard', () => ({ default: () => null }));
 vi.mock('./OrganizationSegmentCard', () => ({ default: () => null }));
+vi.mock('./OrganizationApiKeysCard', () => ({ default: () => null }));
 vi.mock('./OrganizationGroupMembersCard', () => ({ default: () => null }));
 // Stubbed here because it reads the router.
 vi.mock('./Billing/OrganizationBillingSection', () => ({

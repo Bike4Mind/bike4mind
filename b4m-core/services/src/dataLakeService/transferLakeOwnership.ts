@@ -17,6 +17,7 @@ import {
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { ownershipChange } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * The adapters the AUTHORIZE half needs: only the two lookups the gate makes. Deliberately separate
@@ -261,7 +262,7 @@ export async function applyLakeOwnershipTransfer(
     // stamp quietly naming an older, smaller edit with nothing anywhere to say why. Called through a
     // closure rather than passing `logger.warn` by reference, so a logger whose method needs `this`
     // still works.
-    const warn = (msg: string, meta: unknown) => (logger ? logger.warn(msg, meta) : console.warn(msg, meta));
+    const warn = (msg: string, meta: unknown) => (logger ? logger.warn(msg, meta) : Logger.warn(msg, meta));
     try {
       // The return value matters as much as the throw: `BaseModel.update` is a `findOneAndUpdate`
       // that RESOLVES `null` when no document matches, so a lake deleted between the caller's access

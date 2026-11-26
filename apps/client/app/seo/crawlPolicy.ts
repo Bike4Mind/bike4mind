@@ -26,6 +26,9 @@ import type { PremiumRouteIndexing } from '../premiumContract';
  *    handler says so itself, and a `Disallow:` here would defeat it. `/uc/` has a
  *    second reason: it is served on an isolated origin, so a rule in THIS origin's
  *    robots.txt does not govern that host at all.
+ *  - `/t/` (Skill Market template pages) follows the same rule: its handler,
+ *    `pages/api/skills/template/serve.ts`, sends `noindex` on every response, and the
+ *    page must stay fetchable for link previews.
  *  - An authenticated app path IS listed. The path is no secret, and the SPA serves
  *    every one of them as the same content-free shell from `app/[[...slug]]`, with no
  *    `noindex` of its own. Without these lines an `Allow: /` invites a crawler to
@@ -58,6 +61,8 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/verify-',
   '/auth',
   '/oauth',
+  // Share links: a referral code is public by design and grants nothing, and the path only redirects to /register.
+  '/r/',
   // Authenticated product surfaces.
   '/admin',
   '/agent',
@@ -153,6 +158,19 @@ export function buildSitemapPaths(overlays: readonly PremiumRouteIndexing[]): st
   return normalize(overlays.flatMap(o => o.sitemapPaths ?? [])).filter(
     path => !disallowed.some(pattern => path.startsWith(pattern))
   );
+}
+
+/**
+ * Whether a build for this SST stage publishes the crawl policy above. Production does,
+ * and so does a build with no stage at all (self-host, a plain `next build`), which keeps
+ * the operator's own host crawlable. Every other stage is a preview, staging or personal
+ * deploy whose robots.txt disallows everything.
+ *
+ * Must stay in step with noindexResponseInjection in infra/routerFunctionCode.ts, which
+ * sets `X-Robots-Tag: noindex, nofollow` on the same stages.
+ */
+export function isCrawlableStage(stage: string): boolean {
+  return stage === '' || stage === 'production';
 }
 
 /** Trailing slashes would double up when a path is appended. */

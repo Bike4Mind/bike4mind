@@ -113,6 +113,28 @@ describe('DataLakeProposalRepository', () => {
     expect(await repo.listByLake('lake-1')).toHaveLength(2);
   });
 
+  it('pages by keyset without skipping or repeating rows that share a createdAt', async () => {
+    const ids: string[] = [];
+    for (const n of ['a', 'b', 'c', 'd', 'e']) {
+      ids.push((await create({ canonicalSourceKey: `https://example.com/${n}`, textHash: `hash-${n}` })).id);
+    }
+    await DataLakeProposalModel.collection.updateMany(
+      { dataLakeId: 'lake-1' },
+      { $set: { createdAt: new Date('2026-01-01T00:00:00.000Z') } }
+    );
+
+    const seen: string[] = [];
+    let after: { createdAt: Date; id: string } | undefined;
+    for (let page = 0; page < 5; page++) {
+      const rows = await repo.listByLake('lake-1', { status: 'pending', limit: 2, after });
+      seen.push(...rows.map(r => r.id));
+      if (rows.length < 2) break;
+      after = { createdAt: rows[rows.length - 1].createdAt, id: rows[rows.length - 1].id };
+    }
+
+    expect(seen).toEqual([...ids].sort().reverse());
+  });
+
   it('lets the same source be pending in two different lakes at once', async () => {
     expect((await repo.createProposal(input())).created).toBe(true);
     expect((await repo.createProposal(input({ dataLakeId: 'lake-2' }))).created).toBe(true);
@@ -294,6 +316,53 @@ describe('DataLakeProposalRepository', () => {
 
     expect(await repo.restoreDeclined(declined.id)).toEqual({ restored: false, reason: 'pending_exists' });
     expect((await DataLakeProposalModel.findById(declined.id))?.status).toBe('declined');
+  });
+
+  it('unapproves an approved proposal back to pending, clearing the file and auto-admission', async () => {
+    const created = await create();
+    await repo.claimForReview(created.id, review());
+    await repo.recordAdmission(created.id, 'file-1', 'example.com');
+
+    const result = await repo.unapprove(created.id);
+
+    expect(result.unapproved).toBe(true);
+    const stored = await DataLakeProposalModel.findById(created.id);
+    expect(stored?.status).toBe('pending');
+    expect(stored?.priorDisposition).toBe('approved');
+    expect(stored?.reviewedByUserId).toBeNull();
+    expect(stored?.admittedFabFileId).toBeNull();
+    expect(stored?.autoAdmission ?? null).toBeNull();
+    if (result.unapproved) expect(result.previous.admittedFabFileId).toBe('file-1');
+  });
+
+  it('unapproves only an approved proposal', async () => {
+    const created = await create();
+
+    expect(await repo.unapprove(created.id)).toEqual({ unapproved: false, reason: 'not_approved' });
+  });
+
+  it('refuses to unapprove when a pending row for the same source appeared meanwhile', async () => {
+    const approved = await create();
+    await repo.claimForReview(approved.id, review());
+    await create({ textHash: 'hash-b' });
+
+    expect(await repo.unapprove(approved.id)).toEqual({ unapproved: false, reason: 'pending_exists' });
+    expect((await DataLakeProposalModel.findById(approved.id))?.status).toBe('approved');
+  });
+
+  it('rolls an unapprove back to the approved row it came from', async () => {
+    const created = await create();
+    await repo.claimForReview(created.id, review());
+    await repo.recordAdmission(created.id, 'file-1');
+    const result = await repo.unapprove(created.id);
+    if (!result.unapproved) throw new Error('expected unapprove to apply');
+
+    await repo.rollbackUnapprove(result.previous);
+
+    const stored = await DataLakeProposalModel.findById(created.id);
+    expect(stored?.status).toBe('approved');
+    expect(stored?.admittedFabFileId).toBe('file-1');
+    expect(stored?.reviewedByUserId).toBe('reviewer-1');
   });
 
   it('lists a lake queue newest first, and narrows by status', async () => {

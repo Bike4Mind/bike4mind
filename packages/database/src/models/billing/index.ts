@@ -15,6 +15,7 @@ export * from './UsageEventModel';
 export * from './ModelPriceModel';
 export * from './ProviderInvoiceModel';
 export * from './SpendReconciliationModel';
+export * from './SpokeBudgetModel';
 export * from './RevenueSnapshotModel';
 export * from './BillingEventModel';
 export * from './SpendRollupModel';
@@ -26,3 +27,7 @@ export * from './SpendFreezeModel';
 export * from './BillingMismatchModel';
 export * from './UserLimitEventModel';
 export * from './spendExplorerPipelines';
+export * from './spendFeaturePipelines';
+export * from './platformUsageReporting';
+
+export * from './PlatformAttemptModel';

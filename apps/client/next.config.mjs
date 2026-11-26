@@ -166,8 +166,6 @@ const nextConfig = {
     // ESM-only packages that need transpilation for API routes. An entry here can be retired
     // once check-api-routes-cjs-require.mjs reports the built route still loads without it; that
     // probe runs on the built standalone tree and is what proves the bundler inlined it.
-    'p-limit',
-    'yocto-queue',
     // sanitize-html require()s ESM-only htmlparser2. This entry bundles the pair; the
     // dual-published-htmlparser2 override in root package.json is the backstop. Dropping this
     // entry alone still loads (the override covers it); dropping both makes the two importing
@@ -175,11 +173,6 @@ const nextConfig = {
     // module load, which check-api-routes-cjs-require.mjs reproduces against the built standalone
     // tree, naming both.
     'sanitize-html',
-    // Nivo packages
-    '@nivo/pie',
-    '@nivo/line',
-    '@nivo/bar',
-
     // All D3 packages
     'd3-shape',
     'd3-scale',
@@ -319,6 +312,12 @@ const nextConfig = {
         source: '/a/:path*',
         destination: '/api/publish/serve/a/:path*',
       },
+      // Skill Market template pages: static HTML with link-preview tags, served by its own handler
+      // with its own CSP (pages/api/skills/template/serve.ts).
+      {
+        source: '/t/:slug',
+        destination: '/api/skills/template/serve?slug=:slug',
+      },
       // Public embeddable chat widget. Pretty `/embed/*` URLs (the iframe src on
       // customer sites) are served by the unauth embed serve handler, which sets
       // its own per-response CSP with frame-ancestors derived from the embed
@@ -327,6 +326,11 @@ const nextConfig = {
       {
         source: '/embed/:path*',
         destination: '/api/embed/serve',
+      },
+      // Share links: sets the referral cookie and redirects to signup (apps/client/server/referrals/shareLink.ts).
+      {
+        source: '/r/:code',
+        destination: '/api/referrals/visit/:code',
       },
     ];
   },

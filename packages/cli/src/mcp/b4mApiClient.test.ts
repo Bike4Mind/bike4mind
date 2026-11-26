@@ -221,32 +221,61 @@ describe('B4mApiClient', () => {
     });
   });
 
-  it('queues an image generation, mapping notebookId to sessionId and omitting unset fields', async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ quest: { id: 'q1' } }));
+  it('creates one image job with an idempotency key and returns it', async () => {
+    const job = {
+      id: 'j1',
+      object: 'image_generation',
+      state: 'pending',
+      model: 'gpt-image-1',
+      mode: 'generate',
+      prompt: 'a lighthouse',
+      group_id: 'g1',
+      source: 'api',
+      error: null,
+      output: null,
+      credits: { reserved: null, settled: null },
+      created_at: 'x',
+      updated_at: 'x',
+    };
+    mockFetch.mockResolvedValue(jsonResponse({ group_id: 'g1', data: [job] }, { status: 202 }));
 
-    await client.generateImage({ prompt: 'a lighthouse', model: 'gpt-image-1', notebookId: 'nb1' });
+    const created = await client.createImageJob({ prompt: 'a lighthouse', model: 'gpt-image-1' }, 'key-1');
 
+    expect(created.id).toBe('j1');
     expect(sent()).toMatchObject({
-      url: 'http://localhost:3000/api/v1/image-generations',
+      url: 'http://localhost:3000/api/v1/image-jobs',
       method: 'POST',
-      body: { prompt: 'a lighthouse', model: 'gpt-image-1', sessionId: 'nb1' },
+      body: { model: 'gpt-image-1', mode: 'generate', prompt: 'a lighthouse', count: 1 },
+    });
+    expect(new Headers(mockFetch.mock.calls[0][1]?.headers).get('idempotency-key')).toBe('key-1');
+  });
+
+  it('forwards size on an image job only when set', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ group_id: 'g1', data: [] }, { status: 202 }));
+
+    await client.createImageJob({ prompt: 'p', model: 'gpt-image-1', size: '1024x1024' }, 'k').catch(() => undefined);
+
+    expect(sent().body).toEqual({
+      model: 'gpt-image-1',
+      mode: 'generate',
+      prompt: 'p',
+      count: 1,
+      size: '1024x1024',
     });
   });
 
-  it('forwards size and projectId on an image generation', async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ quest: { id: 'q1' } }));
+  it('reads an image job by id', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'x' }));
 
-    await client.generateImage({ prompt: 'p', model: 'gpt-image-1', size: '1024x1024', projectId: 'p1' });
-
-    expect(sent().body).toEqual({ prompt: 'p', model: 'gpt-image-1', size: '1024x1024', projectId: 'p1' });
+    await expect(client.getImageJob('j1')).rejects.toThrow();
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/image-jobs/j1', method: 'GET' });
   });
 
-  it('sends prompt_resolution on an image generation when promptResolution is set', async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ quest: { id: 'q1' } }));
+  it('cancels an image job by POSTing to its cancel path', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'x' }));
 
-    await client.generateImage({ prompt: 'p', model: 'gpt-image-2', promptResolution: 'literal' });
-
-    expect(sent().body).toEqual({ prompt: 'p', model: 'gpt-image-2', prompt_resolution: 'literal' });
+    await expect(client.cancelImageJob('j1')).rejects.toThrow();
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/image-jobs/j1/cancel', method: 'POST' });
   });
 
   it('forwards dataLakeId on create only when set', async () => {
@@ -1114,6 +1143,37 @@ describe('mapApiError publish slug collisions', () => {
     expect(mapApiError(err, 'http://x', 'files:write')).toBe('Only the owner can republish this slug');
   });
 
+  it('surfaces the server message for a 403 that carries an errorCode', () => {
+    const err = axiosError(403, { data: { error: 'Spending is paused for this account', errorCode: 'spend_frozen' } });
+    expect(mapApiError(err, 'http://x', 'files:write')).toBe('Spending is paused for this account');
+  });
+
+  it('says the key owner needs manage rights for a research manage refusal', () => {
+    const err = axiosError(403, { data: { error: 'You do not have permission to manage this lake' } });
+    const message = mapApiError(err, 'http://x', 'datalake:write');
+    expect(message).toContain('manage rights');
+    expect(message).not.toContain('recommended scope');
+  });
+
+  it.each(['You do not have permission to review proposals for this data lake'])(
+    'gives the manage-rights hint for: %s',
+    error => {
+      const message = mapApiError(axiosError(403, { data: { error } }), 'http://x', 'datalake:read');
+      expect(message).toContain(error);
+      expect(message).toContain('manage rights');
+    }
+  );
+
+  it('passes a blocked-owner 403 through without a scope hint', () => {
+    const error = "This data lake's owner account cannot run research. Please contact support.";
+    expect(mapApiError(axiosError(403, { data: { error } }), 'http://x', 'datalake:write')).toBe(error);
+  });
+
+  it('keeps the scope hint when the 403 names required_scopes', () => {
+    const data = { error: 'Insufficient API key permissions', required_scopes: ['datalake:write'] };
+    expect(mapApiError(axiosError(403, { data }), 'http://x', 'datalake:write')).toContain('recommended scope');
+  });
+
   it('keeps the key-scope hint for any other 403', () => {
     expect(mapApiError(axiosError(403, { data: { error: 'nope' } }), 'http://x', 'files:write')).toContain(
       'recommended scope: files:write'
@@ -1238,5 +1298,89 @@ describe('mapBobApiError', () => {
     expect(
       mapBobApiError(axiosError(404, { data: { ok: false, error: 'Run not found.' } }), 'http://x', 'bob:read')
     ).toBe('Run not found.');
+  });
+});
+
+describe('B4mApiClient lake research routes', () => {
+  const BASE = 'http://localhost:3000/api/v1/data-lakes/l1';
+  let client: B4mApiClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_key');
+  });
+
+  it('lists configs with limit and cursor and maps next_cursor', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: [{ id: 'c1' }], next_cursor: 'n2' }));
+    const result = await client.listResearchConfigs('l1', { limit: 10, cursor: 'c0' });
+    expect(sent()).toMatchObject({ url: `${BASE}/research/configs?limit=10&cursor=c0`, method: 'GET' });
+    expect(result).toEqual({ data: [{ id: 'c1' }], nextCursor: 'n2' });
+  });
+
+  it('creates a config with the body as given and unwraps data', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: { id: 'c1' } }, { status: 201 }));
+    const result = await client.createResearchConfig('l1', { name: 'n', query: 'q', min_relevance: 0.6 });
+    expect(sent()).toMatchObject({ url: `${BASE}/research/configs`, method: 'POST' });
+    expect(sent().body).toEqual({ name: 'n', query: 'q', min_relevance: 0.6 });
+    expect(result).toEqual({ id: 'c1' });
+  });
+
+  it('patches a config', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: { id: 'c1' } }));
+    await client.updateResearchConfig('l1', 'c1', { schedule_paused: true });
+    expect(sent()).toMatchObject({ url: `${BASE}/research/configs/c1`, method: 'PATCH' });
+    expect(sent().body).toEqual({ schedule_paused: true });
+  });
+
+  it('deletes a config without following redirects', async () => {
+    mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    await client.deleteResearchConfig('l1', 'c1');
+    expect(sent()).toMatchObject({ url: `${BASE}/research/configs/c1`, method: 'DELETE', redirect: 'manual' });
+  });
+
+  it('starts a run from a config id and reads a run back', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: { id: 'r1', status: 'queued' } }, { status: 202 }));
+    await expect(client.startResearchRun('l1', 'c1')).resolves.toEqual({ id: 'r1', status: 'queued' });
+    expect(sent()).toMatchObject({ url: `${BASE}/research/runs`, method: 'POST' });
+    expect(sent().body).toEqual({ config_id: 'c1' });
+
+    mockFetch.mockResolvedValue(jsonResponse({ data: { id: 'r1' } }));
+    await client.getResearchRun('l1', 'r1');
+    expect(sent()).toMatchObject({ url: `${BASE}/research/runs/r1`, method: 'GET' });
+  });
+
+  it('lists runs and proposals with the status filter', async () => {
+    mockFetch.mockImplementation(async () => jsonResponse({ data: [], next_cursor: null }));
+    await client.listResearchRuns('l1', { limit: 5 });
+    expect(sent().url).toBe(`${BASE}/research/runs?limit=5`);
+    await expect(client.listProposals('l1', { limit: 5, status: 'pending' })).resolves.toEqual({
+      data: [],
+      nextCursor: null,
+    });
+    expect(sent().url).toBe(`${BASE}/proposals?limit=5&status=pending`);
+  });
+
+  it('decides a proposal and returns the file with the proposal', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: { id: 'p1' }, file: { id: 'f1', file_name: 'a.md' } }));
+    const result = await client.decideProposal('l1', 'p1', { decision: 'decline', reason: 'off topic' });
+    expect(sent()).toMatchObject({ url: `${BASE}/proposals/p1`, method: 'POST' });
+    expect(sent().body).toEqual({ decision: 'decline', reason: 'off topic' });
+    expect(result.file).toEqual({ id: 'f1', file_name: 'a.md' });
+  });
+
+  it('reads config history with an optional limit', async () => {
+    mockFetch.mockImplementation(async () => jsonResponse({ data: { entries: [] } }));
+    await expect(client.getConfigHistory('l1', 20)).resolves.toEqual({ entries: [] });
+    expect(sent().url).toBe(`${BASE}/config-history?limit=20`);
+    await client.getConfigHistory('l1');
+    expect(sent().url).toBe(`${BASE}/config-history`);
+    await client.getConfigHistory('l1', 20, true);
+    expect(sent().url).toBe(`${BASE}/config-history?limit=20&include=files`);
+  });
+
+  it('undoes a history row with a POST and returns the entry and notes', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: { event_id: 'e2' }, notes: ['n'] }));
+    await expect(client.undoConfigChange('l1', 'e1')).resolves.toEqual({ data: { event_id: 'e2' }, notes: ['n'] });
+    expect(sent()).toMatchObject({ url: `${BASE}/config-history/e1/undo`, method: 'POST' });
   });
 });

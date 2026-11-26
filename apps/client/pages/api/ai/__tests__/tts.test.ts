@@ -20,7 +20,12 @@ const { mocks } = vi.hoisted(() => ({
     orgFindById: vi.fn(),
     orgFindAccessibleById: vi.fn(),
     generationJobFindById: vi.fn(),
+    resolvePaidCallRun: vi.fn(),
   },
+}));
+
+vi.mock('@server/completionRuns/paidCallRun', () => ({
+  resolvePaidCallRun: (...a: unknown[]) => mocks.resolvePaidCallRun(...a),
 }));
 
 // Contract-adapter mock: runs the contract's own request schema into `req.validated` (so body validation stays
@@ -125,6 +130,7 @@ const createInput = (call = 0) => mocks.createSpeechJob.mock.calls[call][0];
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
+  mocks.resolvePaidCallRun.mockResolvedValue(undefined);
   mocks.createSpeechJob.mockResolvedValue(created);
   mocks.runAudioJobInline.mockResolvedValue(speechJob());
   mocks.readAudioJobOutput.mockResolvedValue(AUDIO);
@@ -388,6 +394,23 @@ describe('POST /api/ai/tts', () => {
       errorCode: 'provider_rejected',
     });
   });
+
+  it.each([401, 429])(
+    'answers an exhausted quota (as a %i) with 503 temporarily unavailable, at warn',
+    async status => {
+      const error = { code: 'provider_error', message: 'openai_speech_quota_exhausted', providerStatus: status };
+      mocks.runAudioJobInline.mockResolvedValue(speechJob({ state: 'failed', error }));
+      const { res, logger, promise } = run({ text: 'hi' });
+      await promise;
+      expect(res._getStatusCode()).toBe(503);
+      expect(res._getJSONData()).toEqual({
+        error: 'Text-to-speech is temporarily unavailable. Please try again later.',
+        provider: 'openai',
+      });
+      expect(logger.warn).toHaveBeenCalledWith('TTS synthesis failed', expect.objectContaining({ error }));
+      expect(logger.error).not.toHaveBeenCalled();
+    }
+  );
 
   it('passes a provider rate limit through as 429 with the Retry-After the job recorded', async () => {
     mocks.runAudioJobInline.mockResolvedValue(
@@ -682,6 +705,62 @@ describe('POST /api/ai/tts', () => {
       await promise;
       expect(res._getStatusCode()).toBe(413);
       expect(res._getJSONData()).toEqual({ error: GENERATED_AUDIO_TOO_LARGE_MESSAGE, provider: 'openai' });
+    });
+  });
+  describe('completion run', () => {
+    const runBody = { runId: '3f2b8c1e-9d4a-4e6b-8a1c-5d7e9f0a1b2c', role: 'root' };
+    const attribution = { ...runBody, purpose: 'tool' };
+    const body = { text: 'hi', run: runBody };
+
+    it('creates the job on the run, billing the account the run is bound to', async () => {
+      mocks.resolvePaidCallRun.mockResolvedValue({ attribution, billingOrganizationId: 'runOrg' });
+
+      const { res, promise } = run(body, { id: 'u1', organizationId: 'homeOrg' });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.resolvePaidCallRun).toHaveBeenCalledWith(expect.anything(), expect.objectContaining(runBody), undefined);
+      expect(createInput().run).toEqual(attribution);
+      expect(createInput().user.organizationId).toBe('runOrg');
+    });
+
+    it('bills personal credits when the run is bound to the user', async () => {
+      mocks.resolvePaidCallRun.mockResolvedValue({ attribution, billingOrganizationId: null });
+
+      const { promise } = run(body, { id: 'u1', organizationId: 'homeOrg' });
+      await promise;
+
+      expect(createInput().user.organizationId).toBeNull();
+    });
+
+    it("refuses another caller's run before creating a job", async () => {
+      mocks.resolvePaidCallRun.mockRejectedValue(Object.assign(new Error('run not found'), { statusCode: 404 }));
+
+      const { res, promise } = run(body);
+      await promise;
+
+      expect(res._getStatusCode()).toBe(404);
+      expect(mocks.createSpeechJob).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a run budget refusal from the job hold, without running the job', async () => {
+      mocks.resolvePaidCallRun.mockResolvedValue({ attribution, billingOrganizationId: null });
+      mocks.createSpeechJob.mockRejectedValue(
+        Object.assign(new Error('run spent'), { statusCode: 422, errorCode: 'run_budget_exhausted' })
+      );
+
+      const { res, promise } = run(body);
+      await promise;
+
+      expect(res._getStatusCode()).toBe(422);
+      expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+    });
+
+    it('creates the job without a run when none is sent', async () => {
+      const { promise } = run({ text: 'hi' });
+      await promise;
+
+      expect(createInput()).not.toHaveProperty('run');
     });
   });
 });

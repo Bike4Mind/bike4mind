@@ -7,6 +7,7 @@ import {
   buildDisallowList,
   buildSitemapPaths,
   buildSitemapUrl,
+  isCrawlableStage,
   normalizeOrigin,
 } from './crawlPolicy';
 
@@ -29,6 +30,7 @@ const EXPECTED_CORE_DISALLOWED = [
   '/verify-',
   '/auth',
   '/oauth',
+  '/r/',
   '/admin',
   '/agent',
   '/artifacts-demo',
@@ -72,6 +74,7 @@ describe('CORE_DISALLOWED_PATHS', () => {
     '/a/shareToken/asset.png',
     '/uc/abc123',
     '/embed/abc123',
+    '/t/article-bullets',
   ])('leaves the capability-token url %s crawlable', url => {
     const patterns = buildDisallowList([overlay({ disallowPaths: ['/widgets'] })]);
     const matched = patterns.filter(pattern => url.startsWith(pattern));
@@ -82,6 +85,7 @@ describe('CORE_DISALLOWED_PATHS', () => {
   // the list needs the missing siblings spelled out.
   it.each([
     ['/admin-emergency', '/admin'],
+    ['/admin/qa', '/admin'],
     ['/agents', '/agent'],
     ['/agent-executions', '/agent'],
     ['/verify-email', '/verify-'],
@@ -227,5 +231,16 @@ describe('buildSitemapUrl', () => {
 
   it('omits the line when the sitemap would be empty', () => {
     expect(buildSitemapUrl('https://example.test', [])).toBeUndefined();
+  });
+});
+
+describe('isCrawlableStage', () => {
+  it('treats production and an unstaged build as crawlable', () => {
+    expect(isCrawlableStage('production')).toBe(true);
+    expect(isCrawlableStage('')).toBe(true);
+  });
+
+  it.each(['dev', 'pr1234', 'shared-dev', 'Production'])('treats stage %j as not crawlable', stage => {
+    expect(isCrawlableStage(stage)).toBe(false);
   });
 });

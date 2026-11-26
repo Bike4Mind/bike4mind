@@ -6,7 +6,6 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { FileEvents } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { S3Storage } from '@bike4mind/fab-pipeline';
@@ -34,7 +33,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     if (!ext) throw new BadRequestError(`Invalid mime type ${data.mimeType}`);
 
     const storage = new S3Storage(Resource.appFilesBucket.name);
-    const fileKey = `profile-photos/${userId}/${uuidv4()}.${ext}`;
+    const fileKey = `profile-photos/${userId}/${crypto.randomUUID()}.${ext}`;
 
     // ACL not needed - bucket policy grants public read for profile-photos/* prefix
     // ContentType is bound so the PUT cannot carry a different type than the image mime validated above.

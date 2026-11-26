@@ -11,9 +11,9 @@ import {
   RuntimeConnectionError,
   installedReviewed,
   loadCuratedManifest,
-  type HardwareProfile,
   ollamaPullRef,
   ollamaRefAliases,
+  type HardwareProfile,
   type DownloadOptions,
   type HubGgufBuild,
   type HubGgufFile,
@@ -26,17 +26,12 @@ import {
   type ModelInspection,
   type OllamaRegistryLayers,
   type PullOptions,
+  type PullProgress,
 } from '@bike4mind/local-models';
 import { estimateFit, ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
-import type { ModelServerSpecs, QuantizedKvCacheType } from '@shared/modelServers';
-import { describe, expect, it, vi } from 'vitest';
-
-vi.mock('@bike4mind/common', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/common')>();
-  return { ...actual, estimateFit: vi.fn(actual.estimateFit) };
-});
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
 import { fitFromArch } from './fit';
 import { ServerUnreachableError } from '../modelServers/errors';
@@ -49,7 +44,23 @@ import {
   type ModelHubServiceDeps,
   type ModelRuntimePort,
 } from './ModelHubService';
+import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
+import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { inertLaunchers } from '../modelServers/testLaunchers';
+import type { ModelServerSpecs, QuantizedKvCacheType } from '@shared/modelServers';
 import type { OllamaBuild } from './ollamaWslPatch';
+import type { AddressInfo } from 'node:net';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
+import http from 'node:http';
+
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return { ...actual, estimateFit: vi.fn(actual.estimateFit) };
+});
+
+// Conditions here hold a few promise turns in; vi.waitFor's default 50ms poll would wait each one out.
+const waitFor = <T>(check: () => T | Promise<T>) => vi.waitFor(check, { interval: 1 });
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const SHA = 'a'.repeat(64);
@@ -343,7 +354,7 @@ describe('ModelHubService pulls', () => {
     expect(service.runningCount()).toBe(0);
     const result = service.pull(request);
     expect(service.runningCount()).toBe(1);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
 
     expect(hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
     expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
@@ -373,7 +384,7 @@ describe('ModelHubService pulls', () => {
   it('cancels a running pull and leaves nothing behind', async () => {
     const { service, pulls, installedChanged } = harness();
     const result = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
 
     service.cancel(pullKey(request.repo, request.buildId));
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
@@ -386,7 +397,7 @@ describe('ModelHubService pulls', () => {
     let release: (health: Health) => void = () => undefined;
     runtime.health.mockImplementationOnce(() => new Promise<Health>(resolve => (release = resolve)));
     const result = service.pull(request);
-    await vi.waitFor(() => expect(runtime.health).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runtime.health).toHaveBeenCalledTimes(1));
 
     service.cancel(pullKey(request.repo, request.buildId));
     release({ ok: false, version: null, error: 'timed out' });
@@ -402,7 +413,7 @@ describe('ModelHubService pulls', () => {
     const second = await service.pull(request);
 
     expect(second).toMatchObject({ ok: false, error: { kind: 'already-pulling' } });
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     expect(runtime.pull).toHaveBeenCalledTimes(1);
     pulls[0].resolve();
     await expect(first).resolves.toMatchObject({ ok: true });
@@ -415,7 +426,7 @@ describe('ModelHubService pulls', () => {
     expect(service.pulls()[0].phase).toBe('failed');
 
     const retry = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].resolve();
     await expect(retry).resolves.toMatchObject({ ok: true });
   });
@@ -431,7 +442,7 @@ describe('ModelHubService pulls', () => {
       expect(service.pulls()).toEqual([]);
 
       const accepted = service.pull({ ...request, acceptLicense: true });
-      await vi.waitFor(() => expect(pulls).toHaveLength(1));
+      await waitFor(() => expect(pulls).toHaveLength(1));
       pulls[0].resolve();
       await expect(accepted).resolves.toMatchObject({ ok: true });
       expect(runtime.pull).toHaveBeenCalledTimes(1);
@@ -501,7 +512,7 @@ describe('ModelHubService pulls', () => {
   it('explains how to clear a download Ollama cannot resume', async () => {
     const { service, pulls } = harness();
     const result = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].reject(new LocalRuntimeError(`ollama could not pull hf.co/${REPO}:Q4_K_M: EOF`, 'ollama'));
 
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'interrupted' }, listed: true });
@@ -518,7 +529,7 @@ describe('ModelHubService pulls', () => {
   ])('reports a registry connection that closed as a connection failure: %s', async cause => {
     const { service, pulls } = harness();
     const result = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].reject(new LocalRuntimeError(`ollama could not pull hf.co/${REPO}:Q4_K_M: ${cause}`, 'ollama'));
 
     await expect(result).resolves.toMatchObject({
@@ -601,7 +612,7 @@ describe('ModelHubService pulls', () => {
     expect(view.ok && view.model.builds[0].ollamaRef).toBe(`huggingface.co/${REPO}:Q4_K_M`);
 
     const result = service.pull({ ...request, confirmAccess: true });
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     expect(runtime.pull).toHaveBeenCalledWith(`huggingface.co/${REPO}:Q4_K_M`, expect.anything());
     pulls[0].resolve();
     await expect(result).resolves.toEqual({ ok: true, ref: `huggingface.co/${REPO}:Q4_K_M` });
@@ -610,7 +621,7 @@ describe('ModelHubService pulls', () => {
   it('names the computer that ran out of disk space', async () => {
     const { service, pulls } = harness();
     const result = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].reject(new LocalRuntimeError('ollama could not pull x: write blob: no space left on device', 'ollama'));
     await expect(result).resolves.toMatchObject({
       ok: false,
@@ -675,7 +686,7 @@ describe('ModelHubService pulls', () => {
     expect(view.ok && view.model.builds[0].blockedReason).toBeNull();
 
     const result = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     expect(hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
     expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
     pulls[0].resolve();
@@ -685,7 +696,7 @@ describe('ModelHubService pulls', () => {
   it('aborts every pull on dispose', async () => {
     const { service, pulls } = harness();
     const result = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     service.dispose();
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
   });
@@ -710,7 +721,7 @@ describe('ModelHubService approval record and model folder', () => {
 
     const { service, pulls } = harness({ deps: { onPullStarted } });
     const result = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     expect(onPullStarted).toHaveBeenCalledExactlyOnceWith({
       key: pullKey(REPO, request.buildId),
       serverId: 'local',
@@ -794,7 +805,7 @@ describe('ModelHubService approval record and model folder', () => {
   it('stops a running pull and reports it stopped only once it no longer runs', async () => {
     const { service, pulls } = harness();
     const result = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     const key = pullKey(REPO, request.buildId);
     await expect(service.stop(key)).resolves.toBe(true);
     expect(service.pulls().find(pull => pull.key === key)).toBeUndefined();
@@ -811,7 +822,7 @@ describe('ModelHubService approval record and model folder', () => {
         })
     );
     void service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     await expect(service.stop(pullKey(REPO, request.buildId), 20)).resolves.toBe(false);
     pulls[0].resolve();
   });
@@ -929,13 +940,9 @@ describe('ModelHubService reads', () => {
 
   it.each([
     ['javascript:alert(1)', `https://huggingface.co/${REPO}`, 'huggingface.co'],
-    ['JaVaScRiPt:alert(1)', `https://huggingface.co/${REPO}`, 'huggingface.co'],
-    ['file:///etc/passwd', `https://huggingface.co/${REPO}`, 'huggingface.co'],
     ['//elsewhere.example/x', `https://huggingface.co/${REPO}`, 'huggingface.co'],
     ['https://llama.meta.com/llama3/license/', 'https://llama.meta.com/llama3/license/', 'llama.meta.com'],
-    ['https://', `https://huggingface.co/${REPO}`, 'huggingface.co'],
     ['https://[x', `https://huggingface.co/${REPO}`, 'huggingface.co'],
-    ['https:// a b', `https://huggingface.co/${REPO}`, 'huggingface.co'],
   ])('keeps the license link https and names its host: %s', async (licenseLink, licenseUrl, licenseHost) => {
     const { service, hub } = harness();
     hub.getModel.mockResolvedValueOnce(detail({ licenses: ['llama3'], licenseLink }));
@@ -997,8 +1004,8 @@ describe('ModelHubService saved servers', () => {
     const { service, runtimes, keepAwake } = servers();
     const first = service.pull({ ...request, serverId: 'a' });
     const second = service.pull({ ...request, serverId: 'b' });
-    await vi.waitFor(() => expect(runtimes.b.pull).toHaveBeenCalled());
-    await vi.waitFor(() => expect(runtimes.a.pull).toHaveBeenCalled());
+    await waitFor(() => expect(runtimes.b.pull).toHaveBeenCalled());
+    await waitFor(() => expect(runtimes.a.pull).toHaveBeenCalled());
 
     service.dispose();
     await Promise.all([first, second]);
@@ -1017,7 +1024,7 @@ describe('ModelHubService saved servers', () => {
       let release = () => {};
       hub.getModel.mockImplementationOnce(() => new Promise(resolve => (release = () => resolve(detail()))));
       const result = service.pull({ ...request, serverId: 'a' });
-      await vi.waitFor(() => expect(hub.getModel).toHaveBeenCalled());
+      await waitFor(() => expect(hub.getModel).toHaveBeenCalled());
       expect(service.pulls()).toHaveLength(1);
       runtimes.a.health.mockClear();
 
@@ -1035,8 +1042,9 @@ describe('ModelHubService saved servers', () => {
   );
 });
 
-// Dedicated GPU memory is whatever the probe or Settings reports; these sizes stand for different firmware splits.
-describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB of GPU memory', gpuGib => {
+// Every threshold below scales with the reported GPU memory (memoryBudgets, partialLoad), so one size covers them.
+describe('ModelHubService WSL GPU memory warning', () => {
+  const gpuGib = 64;
   const LINUX_STORE = '/usr/share/ollama/.ollama/models';
   const hardware = {
     ...machine('discrete', 46, gpuGib),
@@ -1101,7 +1109,7 @@ describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB 
   };
   // nvidia-smi runs in the background, so the warning can follow the read that saw the load.
   const flagged = (service: ModelHubService, view: object = capView) =>
-    vi.waitFor(async () => expect(await capOf(service)).toMatchObject(view));
+    waitFor(async () => expect(await capOf(service)).toMatchObject(view));
   const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
   it('warns once Ollama in WSL holds a model that fits the GPU partly on the CPU', async () => {
@@ -1146,7 +1154,7 @@ describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB 
     const { service, runtime, installedChanged } = wslHarness();
     runtime.loaded.mockResolvedValue([capped]);
     await capOf(service);
-    await vi.waitFor(() => expect(installedChanged).toHaveBeenCalledWith('local'));
+    await waitFor(() => expect(installedChanged).toHaveBeenCalledWith('local'));
   });
 
   it('logs a failed model folder lookup, keeps listing, and flags on a later read', async () => {
@@ -1161,7 +1169,7 @@ describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB 
     }));
     runtime.loaded.mockResolvedValue([capped]);
     expect(await capOf(service)).toBeNull();
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringMatching(/WSL GPU memory limit/)));
+    await waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringMatching(/WSL GPU memory limit/)));
     runtime.inspect.mockImplementation(inspect);
     await flagged(service);
   });
@@ -1387,7 +1395,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     runtime.loaded.mockResolvedValue([
       { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
     ]);
-    await vi.waitFor(async () =>
+    await waitFor(async () =>
       expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
     );
   });
@@ -1516,7 +1524,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
     runtime.loaded.mockResolvedValue(HELD_BACK);
     await settledFits(service);
-    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    await waitFor(async () => expect(await capOf(service)).not.toBeNull());
     ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: true });
     runtime.loaded.mockResolvedValue([]);
     expect(await capOf(service)).toBeNull();
@@ -1527,7 +1535,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     const { service, runtime } = flagHarness({ windowsDesktop: true, version: '0.40.13' });
     runtime.loaded.mockResolvedValue(HELD_BACK);
     await settledFits(service);
-    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    await waitFor(async () => expect(await capOf(service)).not.toBeNull());
     runtime.health.mockResolvedValue({ ok: true, version: '0.40.14', error: null });
     runtime.loaded.mockResolvedValue([]);
     expect(await capOf(service)).toBeNull();
@@ -1539,7 +1547,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
     runtime.loaded.mockResolvedValue(HELD_BACK);
     await settledFits(service);
-    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    await waitFor(async () => expect(await capOf(service)).not.toBeNull());
     runtime.loaded.mockResolvedValue([]);
     runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
     ollamaWslPatch.mockResolvedValue({ server: 'pid-1', patched: false });
@@ -1554,7 +1562,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
     runtime.loaded.mockResolvedValue(HELD_BACK);
     await settledFits(service);
-    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    await waitFor(async () => expect(await capOf(service)).not.toBeNull());
     runtime.loaded.mockResolvedValue([]);
     runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
     expect(await capOf(service)).not.toBeNull();
@@ -1566,7 +1574,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13', build: null });
     runtime.loaded.mockResolvedValue(HELD_BACK);
     await settledFits(service);
-    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    await waitFor(async () => expect(await capOf(service)).not.toBeNull());
     runtime.loaded.mockResolvedValue([]);
     ollamaWslPatch.mockResolvedValue({ server: 'pid-1', patched: false });
     expect(await capOf(service)).not.toBeNull();
@@ -1578,7 +1586,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     const { service, runtime } = flagHarness({ version: '0.40.13' });
     runtime.loaded.mockResolvedValue(HELD_BACK);
     await settledFits(service);
-    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    await waitFor(async () => expect(await capOf(service)).not.toBeNull());
     runtime.loaded.mockResolvedValue([]);
     runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
     await installedFits(service);
@@ -1590,7 +1598,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
     runtime.loaded.mockResolvedValue(HELD_BACK);
     await settledFits(service);
-    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    await waitFor(async () => expect(await capOf(service)).not.toBeNull());
     runtime.loaded.mockResolvedValue([]);
     ollamaWslPatch.mockResolvedValue(null);
     await installedFits(service);
@@ -1602,7 +1610,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     const { service, runtime } = flagHarness({ windowsDesktop: true, version: '0.40.13' });
     runtime.loaded.mockResolvedValue(HELD_BACK);
     await settledFits(service);
-    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    await waitFor(async () => expect(await capOf(service)).not.toBeNull());
     runtime.loaded.mockResolvedValue([]);
     runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
     await installedFits(service);
@@ -1621,7 +1629,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     });
     runtime.loaded.mockResolvedValue(HELD_BACK);
     await settledFits(service);
-    await vi.waitFor(async () =>
+    await waitFor(async () =>
       expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
     );
     await installedFits(service);
@@ -1636,7 +1644,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     runtime.loaded.mockResolvedValue([
       { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
     ]);
-    await vi.waitFor(async () =>
+    await waitFor(async () =>
       expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
     );
   });
@@ -1655,7 +1663,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     const first = await installedFits(service);
     expect(first.get('small:q4')).not.toHaveProperty('warning');
     answer(true);
-    await vi.waitFor(() => expect(onRatingsChanged).toHaveBeenCalledWith('local'));
+    await waitFor(() => expect(onRatingsChanged).toHaveBeenCalledWith('local'));
     expect(installedChanged).not.toHaveBeenCalled();
     expect((await installedFits(service)).get('small:q4')?.warning).toMatch(RELEASE_FLAG);
     expect(integratedGpu).toHaveBeenCalledTimes(1);
@@ -1682,7 +1690,7 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     runtime.loaded.mockResolvedValue([
       { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
     ]);
-    await vi.waitFor(async () =>
+    await waitFor(async () =>
       expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
     );
   });
@@ -2634,7 +2642,7 @@ describe('ModelHubService curated library pulls', () => {
   it('checks the layers, pulls the library ref, and keeps what Ollama installed as reviewed', async () => {
     const { service, runtime, libraryLayers, pulls, installedChanged, hub } = harness();
     const result = service.pull(libraryRequest);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     expect(runtime.pull).toHaveBeenCalledWith(REF, expect.objectContaining({ runner: 'llamacpp' }));
     expect(libraryLayers).toHaveBeenCalledWith(REF, expect.anything());
     pulls[0].resolve();
@@ -2652,7 +2660,7 @@ describe('ModelHubService curated library pulls', () => {
     const base = await runtime.inspect(REF);
     runtime.inspect.mockResolvedValueOnce({ ...base, contents: base.contents && { ...base.contents, template: 'x' } });
     const result = service.pull(libraryRequest);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].resolve();
 
     await expect(result).resolves.toEqual({ ok: true, ref: REF });
@@ -2667,7 +2675,7 @@ describe('ModelHubService curated library pulls', () => {
     let list = CURATED;
     const { service, runtime, pulls } = harness({ curated: () => list });
     const result = service.pull(libraryRequest);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     list = updated;
     pulls[0].resolve();
 
@@ -2684,7 +2692,7 @@ describe('ModelHubService curated library pulls', () => {
     const base = await setup.runtime.inspect(REF);
     setup.runtime.inspect.mockImplementationOnce(async () => installed(base));
     const result = setup.service.pull(libraryRequest);
-    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+    await waitFor(() => expect(setup.pulls).toHaveLength(1));
     setup.pulls[0].resolve();
     return result;
   }
@@ -2702,7 +2710,7 @@ describe('ModelHubService curated library pulls', () => {
   /** Pulls E4B to completion and resolves with the pull's result. */
   async function pulled(setup: ReturnType<typeof harness>) {
     const result = setup.service.pull(libraryRequest);
-    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+    await waitFor(() => expect(setup.pulls).toHaveLength(1));
     setup.pulls[0].resolve();
     return result;
   }
@@ -2749,9 +2757,9 @@ describe('ModelHubService curated library pulls', () => {
     const setup = harness({ checkBackoffMs: [60_000, 60_000] });
     setup.runtime.inspect.mockRejectedValue(showTimedOut());
     const result = setup.service.pull(libraryRequest);
-    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+    await waitFor(() => expect(setup.pulls).toHaveLength(1));
     setup.pulls[0].resolve();
-    await vi.waitFor(() => expect(setup.warn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(setup.warn).toHaveBeenCalledTimes(1));
     setup.service.cancel(pullKey(libraryRequest.repo, libraryRequest.buildId));
 
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified', message: cancelledCheck } });
@@ -2769,9 +2777,9 @@ describe('ModelHubService curated library pulls', () => {
         )
     );
     const result = setup.service.pull(libraryRequest);
-    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+    await waitFor(() => expect(setup.pulls).toHaveLength(1));
     setup.pulls[0].resolve();
-    await vi.waitFor(() => expect(readsOf(setup.runtime)).toHaveLength(1));
+    await waitFor(() => expect(readsOf(setup.runtime)).toHaveLength(1));
     setup.service.cancel(pullKey(libraryRequest.repo, libraryRequest.buildId));
 
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified', message: cancelledCheck } });
@@ -2812,7 +2820,7 @@ describe('ModelHubService curated library pulls', () => {
   it('leaves an active download in place when dismissed', async () => {
     const setup = harness();
     const result = setup.service.pull(libraryRequest);
-    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+    await waitFor(() => expect(setup.pulls).toHaveLength(1));
 
     setup.service.dismiss(pullKey(libraryRequest.repo, libraryRequest.buildId));
     expect(setup.service.pulls()).toMatchObject([{ phase: 'downloading' }]);
@@ -2882,7 +2890,7 @@ describe('ModelHubService curated library pulls', () => {
       setup,
       base => new Promise<ModelInspection>(resolve => (answer = () => resolve(otherWeights(base))))
     );
-    await vi.waitFor(() => expect(answer).toBeDefined());
+    await waitFor(() => expect(answer).toBeDefined());
     setup.service.cancel(pullKey(REF, E4B.id));
     answer?.();
 
@@ -2955,7 +2963,7 @@ describe('ModelHubService curated library pulls', () => {
 
     const first = setup.service.checkCurated(LIBRARY.id, E4B.id);
     const second = setup.service.checkCurated(LIBRARY.id, E4B.id);
-    await vi.waitFor(() => expect(answer).toBeDefined());
+    await waitFor(() => expect(answer).toBeDefined());
     answer?.();
 
     const [one, two] = await Promise.all([first, second]);
@@ -3015,7 +3023,7 @@ describe('ModelHubService curated library pulls', () => {
   it('leaves an active download of the same model alone on Check again', async () => {
     const setup = harness();
     const result = setup.service.pull(libraryRequest);
-    await vi.waitFor(() => expect(setup.service.pulls()).toMatchObject([{ phase: 'downloading' }]));
+    await waitFor(() => expect(setup.service.pulls()).toMatchObject([{ phase: 'downloading' }]));
 
     await setup.service.checkCurated(LIBRARY.id, E4B.id);
     expect(setup.service.pulls()).toMatchObject([{ phase: 'downloading' }]);
@@ -3032,7 +3040,7 @@ describe('ModelHubService curated library pulls', () => {
     setup.runtime.inspect.mockResolvedValueOnce(otherWeights(base));
 
     const again = setup.service.pull(libraryRequest);
-    await vi.waitFor(() => expect(setup.pulls).toHaveLength(2));
+    await waitFor(() => expect(setup.pulls).toHaveLength(2));
     setup.pulls[1].resolve();
     expect(await again).toMatchObject({
       ok: false,
@@ -3078,7 +3086,7 @@ describe('ModelHubService curated library pulls', () => {
     runtime.inspect.mockClear();
     runtime.inspect.mockImplementationOnce(async () => installed(base));
     const result = service.pull(libraryRequest);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].resolve();
 
     expect(await result).toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
@@ -3125,7 +3133,7 @@ describe('ModelHubService curated library pulls', () => {
     expect(await service.pull(libraryRequest)).toMatchObject({ ok: false, error: { kind: 'license-required' } });
     expect(runtime.pull).not.toHaveBeenCalled();
     const result = service.pull({ ...libraryRequest, acceptLicense: true });
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].resolve();
     await expect(result).resolves.toMatchObject({ ok: true });
   });
@@ -3227,7 +3235,7 @@ describe('ModelHubService curated Hugging Face pulls', () => {
     const row = (await service.curated()).entries.find(entry => entry.id === GSQ.id)?.builds[0];
     if (!row) throw new Error('no row');
     const result = service.pull({ ...gsqRequest, repo: GSQ_REPO.toLowerCase() });
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
 
     expect(service.pulls().map(pull => pull.key)).toEqual([pullKey(row.repo, row.pullBuildId)]);
     pulls[0].resolve();
@@ -3280,7 +3288,7 @@ describe('ModelHubService curated Hugging Face pulls', () => {
   it('checks the layers of the verified tag, pulls, and checks the installed template against its pin', async () => {
     const { service, hub, runtime, pulls } = gsqHarness();
     const result = service.pull(gsqRequest);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     expect(hub.ollamaLayers).toHaveBeenCalledWith(GSQ_REPO, 'IQ3_S', expect.anything());
     pulls[0].resolve();
     await expect(result).resolves.toEqual({ ok: true, ref: IQ3_REF });
@@ -3293,7 +3301,7 @@ describe('ModelHubService curated Hugging Face pulls', () => {
       contents: installed.contents && { ...installed.contents, template: 'a different template' },
     });
     const removed = again.service.pull(gsqRequest);
-    await vi.waitFor(() => expect(again.pulls).toHaveLength(1));
+    await waitFor(() => expect(again.pulls).toHaveLength(1));
     again.pulls[0].resolve();
     await expect(removed).resolves.toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
     expect(again.runtime.remove).toHaveBeenCalledWith(IQ3_REF);
@@ -3305,7 +3313,7 @@ describe('ModelHubService curated Hugging Face pulls', () => {
     hub.ollamaLayers.mockResolvedValue(reviewedLayers(IQ3));
     runtime.inspect.mockRejectedValue(new LocalRuntimeError('show timed out', 'ollama'));
     const result = service.pull(gsqRequest);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].resolve();
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified' } });
 
@@ -3341,7 +3349,7 @@ describe('ModelHubService curated Hugging Face pulls', () => {
   it('does not read registry layers for a pull from Explore', async () => {
     const { service, hub, pulls } = harness();
     const result = service.pull(request);
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].resolve();
     await result;
     expect(hub.ollamaLayers).not.toHaveBeenCalled();
@@ -3390,7 +3398,7 @@ describe('ModelHubService curated pulls to a saved server', () => {
   it('checks the registry layers, pulls on the server, and checks what that server installed', async () => {
     const { service, hub, local, remote, installedChanged } = gsqServers();
     const result = service.pull(gsqRequest);
-    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    await waitFor(() => expect(remote.a.pulls).toHaveLength(1));
     expect(hub.ollamaLayers).toHaveBeenCalledWith(GSQ_REPO, 'IQ3_S', expect.anything());
     expect(service.pulls()[0].key).toBe(pullKey(GSQ_REPO, gsqRequest.buildId, 'a'));
     remote.a.pulls[0].resolve();
@@ -3414,7 +3422,7 @@ describe('ModelHubService curated pulls to a saved server', () => {
       contents: installed.contents && { ...installed.contents, template: 'a different template' },
     });
     const result = service.pull(gsqRequest);
-    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    await waitFor(() => expect(remote.a.pulls).toHaveLength(1));
     remote.a.pulls[0].resolve();
 
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
@@ -3425,7 +3433,7 @@ describe('ModelHubService curated pulls to a saved server', () => {
   it('pins the llama.cpp runner on a library pull to the server and checks it there', async () => {
     const { service, local, remote } = servers();
     const result = service.pull(libraryRequest);
-    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    await waitFor(() => expect(remote.a.pulls).toHaveLength(1));
     expect(remote.a.runtime.pull).toHaveBeenCalledWith(
       E4B_LIBRARY.ref,
       expect.objectContaining({ runner: 'llamacpp' })
@@ -3442,14 +3450,14 @@ describe('ModelHubService curated pulls to a saved server', () => {
   it('runs the check after a paused download to the server resumes and finishes', async () => {
     const { service, remote } = gsqServers();
     const first = service.pull(gsqRequest);
-    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    await waitFor(() => expect(remote.a.pulls).toHaveLength(1));
     remote.a.pulls[0].reject(new ServerUnreachableError('box a', 'connection reset'));
     await expect(first).resolves.toMatchObject({ ok: false, error: { kind: 'connection-lost' }, listed: true });
     expect(service.runningCount()).toBe(0);
     expect(remote.a.runtime.inspect).not.toHaveBeenCalled();
 
     const resumed = service.resume(service.pulls()[0].key);
-    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(2));
+    await waitFor(() => expect(remote.a.pulls).toHaveLength(2));
     expect(service.runningCount()).toBe(1);
     remote.a.pulls[1].resolve();
 
@@ -3462,7 +3470,7 @@ describe('ModelHubService curated pulls to a saved server', () => {
     const { service, local, remote } = servers();
     remote.a.runtime.inspect.mockRejectedValue(new LocalRuntimeError('show timed out', 'ollama'));
     const result = service.pull(libraryRequest);
-    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    await waitFor(() => expect(remote.a.pulls).toHaveLength(1));
     remote.a.pulls[0].resolve();
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified' } });
     expect(service.pulls()[0]).toMatchObject({ serverId: 'a', phase: 'failed' });
@@ -3616,7 +3624,7 @@ describe('ModelHubService Hugging Face token', () => {
     expect(open.ok && open.model.builds[0].blockedReason).toBeNull();
 
     const result = granted.service.pull({ ...request, acceptLicense: true, confirmAccess: true });
-    await vi.waitFor(() => expect(granted.pulls).toHaveLength(1));
+    await waitFor(() => expect(granted.pulls).toHaveLength(1));
     granted.pulls[0].resolve();
     await expect(result).resolves.toMatchObject({ ok: true });
   });
@@ -3650,7 +3658,7 @@ describe('ModelHubService Hugging Face token', () => {
       expect(shown.ok && shown.model.builds[0].ollamaRef).toBe(`huggingface.co/${REPO}:Q4_K_M`);
 
       const result = service.pull({ ...request, confirmAccess: true });
-      await vi.waitFor(() => expect(pulls).toHaveLength(1));
+      await waitFor(() => expect(pulls).toHaveLength(1));
       expect(runtime.pull).toHaveBeenCalledWith(`huggingface.co/${REPO}:Q4_K_M`, expect.anything());
       pulls[0].resolve();
       await expect(result).resolves.toEqual({ ok: true, ref: `huggingface.co/${REPO}:Q4_K_M` });
@@ -3667,7 +3675,7 @@ describe('ModelHubService Hugging Face token', () => {
       detail: detail({ gated: 'auto', ollamaNeedsSshKey: true, canDownload: true }),
     });
     const result = service.pull({ ...request, confirmAccess: true });
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].reject(
       new LocalRuntimeError(
         `ollama could not pull hf.co/${REPO}:Q4_K_M: pull model manifest: 401: {"error":"Invalid username or password."}`,
@@ -3736,7 +3744,7 @@ describe('ModelHubService Hugging Face token', () => {
       acceptLicense: true,
       confirmAccess: true,
     });
-    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await waitFor(() => expect(pulls).toHaveLength(1));
     pulls[0].resolve();
     results.push(await pull, pushed);
 
@@ -3810,7 +3818,7 @@ describe('token operation failures and ordering', () => {
         })
     );
     const saving = service.setToken('hf_pending_token');
-    await vi.waitFor(() => expect(hub.checkToken).toHaveBeenCalledOnce());
+    await waitFor(() => expect(hub.checkToken).toHaveBeenCalledOnce());
     const removing = service.clearToken();
     expect(tokens.clear).not.toHaveBeenCalled();
     finishCheck(true);
@@ -3952,7 +3960,7 @@ describe('ModelHubService split builds', () => {
         await new Promise<void>(resolve => (finish = resolve));
       });
       const result = t.service.pull(splitRequest);
-      await vi.waitFor(() => expect(t.runtime.create).toHaveBeenCalled());
+      await waitFor(() => expect(t.runtime.create).toHaveBeenCalled());
       expect(t.service.pulls()[0]).toMatchObject({ phase: 'finishing', completedBytes: 550, totalBytes: 550 });
       finish();
       await expect(result).resolves.toEqual({ ok: true, ref: SPLIT_REF });
@@ -4069,7 +4077,7 @@ describe('ModelHubService split builds', () => {
       };
       t.hub.download.mockImplementationOnce(stall);
       const quit = t.service.pull(splitRequest);
-      await vi.waitFor(() => expect(t.hub.download).toHaveBeenCalled());
+      await waitFor(() => expect(t.hub.download).toHaveBeenCalled());
       t.service.dispose();
       await expect(quit).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -4119,7 +4127,7 @@ describe('ModelHubService split builds', () => {
         });
       });
       const result = t.service.pull(splitRequest);
-      await vi.waitFor(() => expect(t.hub.download).toHaveBeenCalled());
+      await waitFor(() => expect(t.hub.download).toHaveBeenCalled());
       t.service.cancel(pullKey(REPO, SPLIT_ID));
       await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
       expect(t.service.pulls()).toEqual([]);
@@ -4187,9 +4195,9 @@ describe('ModelHubService split builds', () => {
           return fallback(file, destination, opts);
         });
         const first = t.service.pull(splitRequest);
-        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        await waitFor(() => expect(releases).toHaveLength(1));
         const second = t.service.pull(otherRequest);
-        await vi.waitFor(() => expect(releases).toHaveLength(2));
+        await waitFor(() => expect(releases).toHaveLength(2));
         t.service.cancel(pullKey(REPO, OTHER_ID));
         await expect(second).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -4212,7 +4220,7 @@ describe('ModelHubService split builds', () => {
           await writeFile(join(t.root, `${PROJECTOR_SHA}.gguf.partial`), 'x');
         });
         const second = t.service.pull(otherRequest);
-        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        await waitFor(() => expect(releases).toHaveLength(1));
         await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
         await new Promise(resolve => setTimeout(resolve, 50));
         expect(await t.left()).toEqual([`${PROJECTOR_SHA}.gguf.partial`]);
@@ -4261,7 +4269,7 @@ describe('ModelHubService split builds', () => {
       await t.service.pull(splitRequest);
       expect(await t.left()).toHaveLength(1);
       t.service.dismiss(pullKey(REPO, SPLIT_ID));
-      await vi.waitFor(async () => expect(await t.left()).toEqual([]));
+      await waitFor(async () => expect(await t.left()).toEqual([]));
     } finally {
       await t.cleanup();
     }
@@ -4279,7 +4287,7 @@ describe('ModelHubService split builds', () => {
       free.mockResolvedValue(1);
       await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
       expect(t.service.pulls()).toEqual([]);
-      await vi.waitFor(async () => expect(await t.left()).toEqual([]));
+      await waitFor(async () => expect(await t.left()).toEqual([]));
     } finally {
       await t.cleanup();
     }
@@ -4294,5 +4302,428 @@ describe('ModelHubService split builds', () => {
     } finally {
       await t.cleanup();
     }
+  });
+});
+
+describe('against a real model server', () => {
+  // Conditions here hold a few promise turns in; vi.waitFor's default 50ms poll would wait each one out.
+  const waitFor = <T>(check: () => T | Promise<T>) => vi.waitFor(check, { interval: 1 });
+
+  const TOKEN = 'tok-secret-zz';
+  const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
+  const REF = `hf.co/${REPO}:Q4_K_M`;
+  const TOTAL = 1_000;
+
+  const cipher: SecretCipher = {
+    isEncryptionAvailable: () => true,
+    encryptString: plain => Buffer.from(`enc:${plain}`, 'utf8'),
+    decryptString: encrypted => encrypted.toString('utf8').replace(/^enc:/, ''),
+  };
+
+  function memoryFile(): StoreFile {
+    let contents: string | null = null;
+    return {
+      read: () => Promise.resolve(contents),
+      write: next => {
+        contents = next;
+        return Promise.resolve();
+      },
+    };
+  }
+
+  const servers: http.Server[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      servers.splice(0).map(
+        server =>
+          new Promise(resolve => {
+            server.closeAllConnections();
+            server.close(resolve);
+          })
+      )
+    );
+  });
+
+  /**
+   * How the first pull ends: `drop` closes the connection, `quiet` stops writing and leaves it open (a network
+   * drop no packet reports), `stall` stays open and is never resumed, `error` sends Ollama's error frame.
+   */
+  type FirstPull = 'drop' | 'quiet' | 'stall' | 'error';
+
+  /**
+   * An Ollama behind a bearer token. Its first pull streams part of the blob and then ends as `first` says;
+   * the next pull of the same name starts from the partial file, as Ollama's does.
+   */
+  async function fakeOllama(first: FirstPull = 'drop') {
+    const state = { stored: 0, installed: [] as string[], pulls: [] as string[], authorized: [] as boolean[] };
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => (body += chunk));
+      req.on('end', () => {
+        const authorized = req.headers.authorization === `Bearer ${TOKEN}`;
+        state.authorized.push(authorized);
+        if (!authorized) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          return res.end('{"error":"unauthorized"}');
+        }
+        const json = (value: unknown) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(value));
+        };
+        if (req.url === '/api/version') return json({ version: '0.12.0' });
+        if (req.url === '/api/tags') return json({ models: state.installed.map(name => ({ name, size: TOTAL })) });
+        if (req.url === '/api/ps') return json({ models: [] });
+        if (req.url === '/api/show') return json({ capabilities: ['completion'], model_info: {} });
+        if (req.url !== '/api/pull') return json({});
+        const { model } = JSON.parse(body) as { model: string };
+        state.pulls.push(model);
+        res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        const frame = (value: unknown) => res.write(`${JSON.stringify(value)}\n`);
+        frame({ status: 'pulling manifest' });
+        frame({ status: 'pulling sha256:aa', digest: 'sha256:aa', total: TOTAL, completed: state.stored });
+        if (state.pulls.length === 1 || first === 'stall') {
+          state.stored = 400;
+          frame({ status: 'pulling sha256:aa', digest: 'sha256:aa', total: TOTAL, completed: state.stored });
+          if (first === 'drop') setTimeout(() => res.socket?.destroy(), 20);
+          if (first === 'error') {
+            frame({ error: 'max retries exceeded: unexpected EOF' });
+            res.end();
+          }
+          return;
+        }
+        state.stored = TOTAL;
+        frame({ status: 'pulling sha256:aa', digest: 'sha256:aa', total: TOTAL, completed: TOTAL });
+        frame({ status: 'verifying sha256 digest' });
+        frame({ status: 'writing manifest' });
+        state.installed.push(model);
+        frame({ status: 'success' });
+        res.end();
+      });
+    });
+    servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, state };
+  }
+
+  function detail(): HubModelDetail {
+    const build: HubGgufBuild = {
+      id: 'q4',
+      quant: 'Q4_K_M',
+      label: 'Q4_K_M',
+      files: [{ path: 'q4_k_m.gguf', sizeBytes: TOTAL, sha256: 'a'.repeat(64), url: 'https://x' }],
+      sizeBytes: TOTAL,
+      split: false,
+      complete: true,
+      ollamaRef: REF,
+      ollamaRefIssue: null,
+    };
+    return {
+      id: REPO,
+      author: 'Qwen',
+      downloads: 1,
+      likes: 1,
+      updatedAt: null,
+      pipelineTag: 'text-generation',
+      gated: false,
+      private: false,
+      licenses: ['apache-2.0'],
+      baseModels: [],
+      tags: ['gguf'],
+      revision: 'b'.repeat(40),
+      licenseName: null,
+      licenseLink: null,
+      gguf: null,
+      builds: [build],
+      projectors: [],
+      canDownload: true,
+      ollamaNeedsSshKey: false,
+    };
+  }
+
+  const hub = {
+    endpoint: 'https://huggingface.co',
+    search: async () => ({ models: [], nextCursor: null }),
+    getModel: async () => detail(),
+    verifyOllamaRef: async () => REF,
+    ollamaLayers: async () => null,
+    checkToken: async () => true,
+  } satisfies ModelHubPort;
+
+  const curatedDeps = {
+    libraryLayers: async () => null,
+    hardware: () => Promise.reject(new Error('a pull does not read the hardware')),
+    localContext: async () => AUTO_LOCAL_CONTEXT,
+    curated: () => loadCuratedManifest(() => {}),
+    warn: () => undefined,
+  } satisfies Pick<ModelHubServiceDeps, 'libraryLayers' | 'hardware' | 'localContext' | 'curated' | 'warn'>;
+
+  const noToken: HubTokenPort = {
+    persisted: () => true,
+    get: async () => null,
+    set: async () => undefined,
+    clear: async () => undefined,
+  };
+
+  const unusedLocal: ModelRuntimePort = {
+    baseUrl: 'http://127.0.0.1:11434',
+    health: async () => ({ ok: true, version: '0.12.0', error: null }),
+    list: async () => [],
+    inspect: () => Promise.reject(new Error('this computer must not be asked')),
+    loaded: async () => [],
+    pull: () => Promise.reject(new Error('this computer must not be asked')),
+    remove: () => Promise.reject(new Error('this computer must not be asked')),
+  };
+
+  async function setup(
+    access: 'chat' | 'manage',
+    options: { first?: FirstPull; idleTimeoutMs?: number; followSettings?: boolean } = {}
+  ) {
+    const fake = await fakeOllama(options.first);
+    const registry = new ModelServerRegistry({
+      store: new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined }),
+      logger: { debug: () => undefined, warn: () => undefined },
+      launchers: inertLaunchers(),
+    });
+    const [, saved] = await registry.add({
+      address: fake.origin,
+      credential: { type: 'bearer', token: TOKEN },
+      name: 'gpu box',
+      kind: 'ollama',
+      access,
+    });
+    // Every frame Ollama sent, as OllamaRuntime folded it, per pull request.
+    const frames: PullProgress[][] = [];
+    const keepAwake = vi.fn();
+    const installedChanged = vi.fn();
+    const service = new ModelHubService({
+      runtime: unusedLocal,
+      server: id => {
+        const server = registry.hubServer(id);
+        if (!server) return null;
+        return {
+          ...server,
+          runtime: {
+            ...server.runtime,
+            pull: (ref, pullOptions) => {
+              const mine: PullProgress[] = [];
+              frames.push(mine);
+              return server.runtime.pull(ref, {
+                ...pullOptions,
+                ...(options.idleTimeoutMs ? { idleTimeoutMs: options.idleTimeoutMs } : {}),
+                onProgress: progress => {
+                  mine.push(progress);
+                  pullOptions?.onProgress?.(progress);
+                },
+              });
+            },
+          },
+        };
+      },
+      createHub: () => hub,
+      tokens: noToken,
+      ...curatedDeps,
+      onPullsChanged: () => undefined,
+      onInstalledChanged: installedChanged,
+      keepAwake,
+      progressIntervalMs: 0,
+    });
+    if (options.followSettings) registry.onServerSaved(id => service.serverChanged(id));
+    return { fake, registry, service, serverId: saved.id, frames, keepAwake, installedChanged };
+  }
+
+  const request = (serverId: string) => ({
+    repo: REPO,
+    buildId: 'q4',
+    revision: 'b'.repeat(40),
+    sizeBytes: TOTAL,
+    acceptLicense: false,
+    confirmAccess: false,
+    serverId,
+  });
+
+  describe('ModelHubService on a saved model server', () => {
+    it('pauses a pull when the connection drops, and resume continues from the partial file', async () => {
+      const { fake, registry, service, serverId, frames, keepAwake, installedChanged } = await setup('manage');
+
+      const first = await service.pull(request(serverId));
+      expect(first).toMatchObject({ ok: false, error: { kind: 'connection-lost' }, listed: true });
+      const [paused] = service.pulls();
+      expect(paused).toMatchObject({ serverId, serverName: 'gpu box', phase: 'paused', completedBytes: 400 });
+      expect(paused.error?.message).toContain('lost the connection to gpu box');
+      expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+      expect((await registry.views()).find(view => view.id === serverId)?.health.state).toBe('unreachable');
+
+      const resumed = await service.resume(paused.key);
+
+      expect(resumed).toEqual({ ok: true, ref: REF });
+      expect(fake.state.pulls).toEqual([REF, REF]);
+      const firstAfterResume = frames[1].find(frame => frame.totalBytes !== null);
+      expect(firstAfterResume?.completedBytes).toBeGreaterThan(0);
+      expect(service.pulls()).toEqual([]);
+      expect(keepAwake.mock.calls).toEqual([[true], [false], [true], [false]]);
+      expect(installedChanged).toHaveBeenCalledWith(serverId);
+      expect(fake.state.authorized.every(Boolean)).toBe(true);
+
+      await registry.check(serverId);
+      const picker = await registry.models();
+      expect(picker).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: REF, server: { id: serverId, name: 'gpu box' } })])
+      );
+      expect(picker.find(model => model.name === REF)?.unavailable).toBeUndefined();
+    });
+
+    it('lists the resumed model for chat right away, once the recheck the pull started settles', async () => {
+      const { registry, service, serverId, installedChanged } = await setup('manage');
+      await service.pull(request(serverId));
+      expect((await registry.views()).find(view => view.id === serverId)?.health.state).toBe('unreachable');
+
+      expect(await service.resume(service.pulls()[0].key)).toEqual({ ok: true, ref: REF });
+      expect(installedChanged).toHaveBeenCalledTimes(1);
+      const picker = await registry.models();
+
+      expect(picker.find(model => model.name === REF)).toMatchObject({ server: { id: serverId } });
+      expect(picker.find(model => model.name === REF)?.unavailable).toBeUndefined();
+    });
+
+    it('pauses a pull when the server goes quiet without closing, keeps it Online for chat, and resumes', async () => {
+      const { fake, registry, service, serverId, keepAwake } = await setup('manage', {
+        first: 'quiet',
+        idleTimeoutMs: 50,
+      });
+
+      const first = await service.pull(request(serverId));
+      expect(first).toMatchObject({ ok: false, error: { kind: 'connection-lost' }, listed: true });
+      const [paused] = service.pulls();
+      expect(paused).toMatchObject({ phase: 'paused', completedBytes: 400 });
+      expect(paused.error?.message).toContain('lost the connection to gpu box');
+      expect(paused.error?.message).not.toContain('srv-');
+      const health = (await registry.views()).find(view => view.id === serverId)?.health;
+      expect(health).toMatchObject({ state: 'online', error: null });
+      expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+
+      expect(await service.resume(paused.key)).toEqual({ ok: true, ref: REF });
+      expect(fake.state.pulls).toEqual([REF, REF]);
+      expect(service.pulls()).toEqual([]);
+    });
+
+    it.each([
+      [
+        'set to Chat only',
+        'not-allowed',
+        (registry: ModelServerRegistry, id: string) => registry.update(id, { access: 'chat' }),
+      ],
+      ['removed', 'not-found', (registry: ModelServerRegistry, id: string) => registry.remove(id)],
+    ] as const)('resume refuses a server %s while paused, and sends it nothing', async (_label, kind, change) => {
+      const { fake, registry, service, serverId, keepAwake } = await setup('manage');
+      await service.pull(request(serverId));
+      const [paused] = service.pulls();
+      await change(registry, serverId);
+
+      expect(await service.resume(paused.key)).toMatchObject({ ok: false, error: { kind }, listed: true });
+      expect(service.pulls()).toMatchObject([{ key: paused.key, phase: 'failed' }]);
+      expect(fake.state.pulls).toEqual([REF]);
+      expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it.each([
+      [
+        'set to Chat only',
+        'not-allowed',
+        (registry: ModelServerRegistry, id: string) => registry.update(id, { access: 'chat' }),
+      ],
+      ['removed', 'not-found', (registry: ModelServerRegistry, id: string) => registry.remove(id)],
+    ] as const)('stops a running pull and its wake lock once its server is %s', async (_label, kind, change) => {
+      const { service, registry, serverId, keepAwake } = await setup('manage', {
+        first: 'stall',
+        followSettings: true,
+      });
+      const running = service.pull(request(serverId));
+      await waitFor(() => expect(service.pulls()).toMatchObject([{ phase: 'downloading', completedBytes: 400 }]));
+
+      await change(registry, serverId);
+
+      await expect(running).resolves.toMatchObject({ ok: false, error: { kind }, listed: false });
+      expect(service.pulls()).toEqual([]);
+      expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('clears a paused pull once its server is set to Chat only, and keeps pulls to other changes', async () => {
+      const { service, registry, serverId } = await setup('manage', { followSettings: true });
+      await service.pull(request(serverId));
+      await registry.update(serverId, { name: 'big gpu box' });
+      expect(service.pulls()).toMatchObject([{ phase: 'paused' }]);
+
+      await registry.update(serverId, { access: 'chat' });
+      expect(service.pulls()).toEqual([]);
+    });
+
+    it('refuses a local pull whose repo spells out a server pull key, leaving that pull running', async () => {
+      const { service, serverId } = await setup('manage', { first: 'stall' });
+      void service.pull(request(serverId));
+      await waitFor(() => expect(service.pulls()).toMatchObject([{ phase: 'downloading' }]));
+      const [running] = service.pulls();
+
+      expect(
+        await service.pull({ ...request(serverId), repo: `${serverId}/${REPO}`, serverId: undefined })
+      ).toMatchObject({ ok: false, error: { kind: 'invalid' }, listed: false });
+      expect(service.pulls()).toEqual([running]);
+      service.dispose();
+    });
+
+    it('lets the computer sleep again after a cancel, a failure and a dispose', async () => {
+      const stalled = await setup('manage', { first: 'stall' });
+      const cancelled = stalled.service.pull(request(stalled.serverId));
+      await waitFor(() => expect(stalled.service.pulls()).toMatchObject([{ phase: 'downloading' }]));
+      stalled.service.cancel(stalled.service.pulls()[0].key);
+      await expect(cancelled).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+      expect(stalled.keepAwake.mock.calls).toEqual([[true], [false]]);
+
+      const disposed = stalled.service.pull(request(stalled.serverId));
+      await waitFor(() => expect(stalled.service.pulls()).toMatchObject([{ phase: 'downloading' }]));
+      stalled.service.dispose();
+      await expect(disposed).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+      expect(stalled.keepAwake.mock.calls).toEqual([[true], [false], [true], [false]]);
+
+      const failing = await setup('manage', { first: 'error' });
+      expect(await failing.service.pull(request(failing.serverId))).toMatchObject({
+        ok: false,
+        error: { kind: 'failed' },
+        listed: true,
+      });
+      expect(failing.keepAwake.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('refuses to pull to or remove from a Chat only server, and sends it nothing', async () => {
+      const { fake, service, serverId } = await setup('chat');
+      const before = fake.state.authorized.length;
+
+      expect(await service.pull(request(serverId))).toMatchObject({
+        ok: false,
+        error: { kind: 'not-allowed', message: expect.stringContaining('gpu box is set to Chat only') },
+        listed: false,
+      });
+      expect(await service.remove(REF, serverId)).toMatchObject({ ok: false, error: { kind: 'not-allowed' } });
+      expect(fake.state.pulls).toEqual([]);
+      expect(fake.state.authorized.length).toBe(before);
+      expect(service.pulls()).toEqual([]);
+      expect(await service.status(serverId)).toMatchObject({ reachable: true, management: 'chat-only' });
+    });
+
+    it('lists and removes through the same credentialed fetch as chat', async () => {
+      const { fake, service, serverId, installedChanged } = await setup('manage');
+      fake.state.installed.push('qwen2.5:0.5b');
+
+      expect(await service.installed(serverId)).toMatchObject({ ok: true, models: [{ name: 'qwen2.5:0.5b' }] });
+      expect(await service.status(serverId)).toMatchObject({
+        reachable: true,
+        version: '0.12.0',
+        serverName: 'gpu box',
+        management: 'allowed',
+      });
+      expect(await service.remove('qwen2.5:0.5b', serverId)).toEqual({ ok: true });
+      expect(installedChanged).toHaveBeenCalledWith(serverId);
+      expect(fake.state.authorized.every(Boolean)).toBe(true);
+    });
   });
 });

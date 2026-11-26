@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { AddToOrganizationDialog, ChangeOrgRoleDialog, RemoveFromOrganizationDialog } from './orgMembershipDialogs';
+import {
+  AddToOrganizationDialog,
+  ChangeOrgRoleDialog,
+  ClearHomeOrgDialog,
+  RemoveFromOrganizationDialog,
+} from './orgMembershipDialogs';
 import { ProfileTestWrapper, buildProfile } from '../profileTestUtils';
 
 const mocks = vi.hoisted(() => ({
@@ -127,6 +132,30 @@ describe('ChangeOrgRoleDialog', () => {
     );
   });
 
+  it('preselects the current billing manager role and moves them to member', async () => {
+    const onClose = vi.fn();
+    render(<ChangeOrgRoleDialog user={user} org={org({ billingManagerUserIds: [USER_ID] })} onClose={onClose} />, {
+      wrapper: ProfileTestWrapper,
+    });
+
+    pickReason('org-role-dialog');
+    expect(screen.getByTestId('org-role-dialog-hint')).toHaveTextContent('Pick a different role.');
+    fireEvent.click(screen.getByTestId('org-role-dialog-role-member'));
+    fireEvent.click(confirmButton('org-role-dialog'));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.patch).toHaveBeenCalledWith(`/api/admin/organizations/org-1/members/${USER_ID}`, {
+      role: 'member',
+      reason: 'Customer request',
+    });
+  });
+
+  it('offers Billing manager as a choice', () => {
+    render(<ChangeOrgRoleDialog user={user} org={org()} onClose={vi.fn()} />, { wrapper: ProfileTestWrapper });
+    fireEvent.click(screen.getByTestId('org-role-dialog-role-billingManager'));
+    expect(screen.getByTestId('org-role-dialog-preview-after')).toHaveTextContent('Billing manager');
+  });
+
   it("blocks changing the owner's role", () => {
     render(<ChangeOrgRoleDialog user={user} org={org({ userId: USER_ID, users: [] })} onClose={vi.fn()} />, {
       wrapper: ProfileTestWrapper,
@@ -146,7 +175,7 @@ describe('RemoveFromOrganizationDialog', () => {
       wrapper: ProfileTestWrapper,
     });
 
-    expect(screen.getByText(/active organization/)).toBeInTheDocument();
+    expect(screen.getByText(/their home org/)).toBeInTheDocument();
     pickReason('org-remove-dialog');
     fireEvent.click(confirmButton('org-remove-dialog'));
 
@@ -155,6 +184,19 @@ describe('RemoveFromOrganizationDialog', () => {
       data: { reason: 'Customer request' },
     });
     expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+  });
+
+  it('names the lost billing manager rights', () => {
+    render(
+      <RemoveFromOrganizationDialog
+        user={user}
+        org={org({ billingManagerUserIds: [USER_ID] })}
+        isActive={false}
+        onClose={vi.fn()}
+      />,
+      { wrapper: ProfileTestWrapper }
+    );
+    expect(screen.getByText(/billing manager rights are removed/)).toBeInTheDocument();
   });
 
   it('blocks removing the owner', () => {
@@ -189,5 +231,36 @@ describe('RemoveFromOrganizationDialog', () => {
 
     expect(confirmButton('org-remove-dialog')).toBeDisabled();
     expect(screen.getByTestId('org-remove-dialog-hint')).toHaveTextContent('Ada Lovelace is no longer in Acme.');
+  });
+});
+
+describe('ClearHomeOrgDialog', () => {
+  it('clears the home org with the reason, says what changes, and offers no undo', async () => {
+    const onClose = vi.fn();
+    render(<ClearHomeOrgDialog user={user} orgName="Acme" onClose={onClose} />, { wrapper: ProfileTestWrapper });
+
+    expect(screen.getByText(/billed to their personal balance instead of Acme/)).toBeInTheDocument();
+    expect(screen.getByText(/memberships and roles are not changed/)).toBeInTheDocument();
+    pickReason('org-clear-home-dialog');
+    fireEvent.click(confirmButton('org-clear-home-dialog'));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.delete).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/home-organization`, {
+      data: { reason: 'Customer request' },
+    });
+    expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+  });
+
+  it('stays open when the clear fails', async () => {
+    mocks.delete.mockRejectedValue(new Error('boom'));
+    const onClose = vi.fn();
+    render(<ClearHomeOrgDialog user={user} orgName={null} onClose={onClose} />, { wrapper: ProfileTestWrapper });
+
+    expect(screen.getByText(/instead of their home org/)).toBeInTheDocument();
+    pickReason('org-clear-home-dialog');
+    fireEvent.click(confirmButton('org-clear-home-dialog'));
+
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

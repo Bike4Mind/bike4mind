@@ -8,6 +8,7 @@
  * - Requires user to have update access on the organization
  * - Secret is encrypted at rest using AES-256-GCM
  * - Routing token is unique per organization
+ * - The plain secret is returned only by create (POST) and rotate-secret; GET and PUT always mask it
  *
  * @route POST /api/organizations/[id]/webhooks/github - Create webhook config
  * @route GET /api/organizations/[id]/webhooks/github - Get config (secret masked)
@@ -22,7 +23,7 @@ import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { generateWebhookToken, generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -54,7 +55,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      const org = await verifyOrgOwner(user, orgId);
+      const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (existingConfig) {
@@ -122,12 +123,11 @@ const handler = baseApi()
   )
   // GET - Get organization webhook config
   .get(
-    asyncHandler<{}, IOrgWebhookConfigResponse, unknown, { id?: string; revealSecret?: string }>(async (req, res) => {
+    asyncHandler<{}, IOrgWebhookConfigResponse, unknown, { id?: string }>(async (req, res) => {
       const orgId = req.query.id!;
       const user = req.user!;
-      const revealSecret = req.query.revealSecret === 'true';
 
-      await verifyOrgOwner(user, orgId);
+      await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (!webhookConfig) {
@@ -136,21 +136,10 @@ const handler = baseApi()
 
       const subscriberCount = await webhookSubscriptionRepository.countByOrganization(orgId);
 
-      // Decrypt and optionally reveal secret
-      let secretDisplay: string;
-      const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
-
-      if (revealSecret && encryptionKey) {
-        // Reveal the actual secret (for copying to GitHub)
-        const decryptedSecret = decryptStoredSecret(webhookConfig.secret);
-        secretDisplay = decryptedSecret;
-      } else if (encryptionKey) {
-        // Show masked version
-        const decryptedSecret = decryptStoredSecret(webhookConfig.secret);
-        secretDisplay = maskSecret(decryptedSecret);
-      } else {
-        secretDisplay = '****';
-      }
+      // The plain secret is never returned here; only the last-4 mask.
+      const secretDisplay = Config.SECRET_ENCRYPTION_KEY
+        ? maskSecret(decryptStoredSecret(webhookConfig.secret))
+        : '****';
 
       const response: IOrgWebhookConfigResponse = {
         id: webhookConfig.id,
@@ -164,8 +153,7 @@ const handler = baseApi()
         createdAt: webhookConfig.createdAt,
         updatedAt: webhookConfig.updatedAt,
         webhookUrl: getWebhookUrl(webhookConfig.routingToken),
-        secret: revealSecret ? secretDisplay : undefined,
-        secretMasked: revealSecret ? undefined : secretDisplay,
+        secretMasked: secretDisplay,
         subscriberCount,
       };
 
@@ -178,7 +166,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      const org = await verifyOrgOwner(user, orgId);
+      const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (!existingConfig) {
@@ -268,7 +256,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      const org = await verifyOrgOwner(user, orgId);
+      const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (!webhookConfig) {

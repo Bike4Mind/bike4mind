@@ -1,11 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
 import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
 import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
-import type { ModelInfo } from '@bike4mind/common';
+import { ApiKeyScope, type ModelInfo } from '@bike4mind/common';
 import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
 import { executedModelFields } from '@bike4mind/services/llm/shadowTier';
+import { logLlmUsageSettled } from '@bike4mind/services/llm/llmUsageSettledLog';
 import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
+import { batchAnthropicKeys, firstKeyHolding } from '@server/billing/batchAnthropicKeys';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
 import { settleHeldCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 
@@ -18,7 +20,12 @@ import { settleHeldCredits } from '@bike4mind/server-utils/billing/reserveReques
  * so the caller can recycle just those. Polling, no webhook (v1).
  */
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).get(async (req, res) => {
+  // Connected-app keys hold ai:generate but reach only the routes pinned in exchangeKeyRouteInventory.
+  if (refuseExchangeKey(req, res)) return;
   const anthropicBatchId = String(req.query.id ?? '');
   if (!anthropicBatchId) {
     throw new NotFoundError('Batch not found');
@@ -47,13 +54,14 @@ const handler = baseApi().get(async (req, res) => {
     });
   }
 
-  const apiKey = Config.ANTHROPIC_API_KEY;
-  if (!apiKey || apiKey === 'not-configured') {
+  const keys = await batchAnthropicKeys();
+  if (keys.length === 0) {
     return res.status(503).json({ error: 'Anthropic API key not configured', request_id: req.requestId });
   }
 
-  const service = AnthropicBatchService.fromApiKey(apiKey, req.logger);
-  const status = await service.getBatchResults(anthropicBatchId, batch.customIdMap);
+  const { key: apiKey, value: status } = await firstKeyHolding(keys, key =>
+    AnthropicBatchService.fromApiKey(key, req.logger).getBatchResults(anthropicBatchId, batch.customIdMap)
+  );
 
   if (status.processingStatus !== 'ended') {
     return res.json({ batch_id: anthropicBatchId, status: 'in_progress', counts: status.counts });
@@ -151,16 +159,30 @@ const handler = baseApi().get(async (req, res) => {
     let cacheWriteTokens = 0;
     const models = new Set<string>();
     const executed = new Set<string>();
+    // Provider cost and tokens per model that ran, for the spend metrics.
+    const ran = new Map<
+      string,
+      { usd: number; input: number; output: number; cacheRead: number; cacheWrite: number }
+    >();
     let substituted = false;
     for (const r of status.results ?? []) {
       const modelInfo = billedModels.get(r.customId);
       if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
       const u = r.tokenUsage;
       usd += anthropicBatchCost(modelInfo, u);
-      costUsd += anthropicBatchCost(costModels.get(r.customId) ?? modelInfo, u);
+      const itemCostUsd = anthropicBatchCost(costModels.get(r.customId) ?? modelInfo, u);
+      costUsd += itemCostUsd;
       const executedId = mappings.get(r.customId)?.executedModel;
       if (executedId) substituted = true;
-      executed.add(executedId ?? modelInfo.id);
+      const ranModel = executedId ?? modelInfo.id;
+      executed.add(ranModel);
+      const line = ran.get(ranModel) ?? { usd: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      line.usd += itemCostUsd;
+      line.input += u.inputTokens;
+      line.output += u.outputTokens;
+      line.cacheRead += u.cacheReadInputTokens ?? 0;
+      line.cacheWrite += u.cacheCreationInputTokens ?? 0;
+      ran.set(ranModel, line);
       inputTokens += u.inputTokens;
       outputTokens += u.outputTokens;
       cacheReadTokens += u.cacheReadInputTokens ?? 0;
@@ -190,6 +212,22 @@ const handler = baseApi().get(async (req, res) => {
     // must not count the same batch twice.
     const stamped = await transformBatchRepository.markCreditSettled(batch.id);
     if (stamped !== false) {
+      // Logged from the Next.js server, so it must stay a spend log source in infra/llmSpendLogGroups.ts.
+      for (const [ranModel, line] of ran) {
+        logLlmUsageSettled({
+          backend: 'anthropic',
+          model: ranModel,
+          inputTokens: line.input,
+          outputTokens: line.output,
+          cacheReadTokens: line.cacheRead,
+          cacheWriteTokens: line.cacheWrite,
+          usd: line.usd,
+          source: claimed.usageSource ?? 'api',
+          // The owner check above makes the polling user the batch owner.
+          userId: claimed.ownerUserId,
+          accountCreatedAt: req.user.createdAt,
+        });
+      }
       await usageEventRepository
         .record({
           requestId: anthropicBatchId,

@@ -74,6 +74,7 @@ export interface GitHubIssue {
   html_url: string;
   labels: Array<{ name: string; color: string }>;
   assignees: Array<{ login: string }>;
+  user: { login: string } | null;
   created_at: string;
   updated_at: string;
   closed_at?: string | null; // Available for closed issues
@@ -102,6 +103,10 @@ export interface GitHubRepository {
   description: string | null;
   archived?: boolean;
   has_issues?: boolean;
+  default_branch?: string;
+  updated_at?: string | null;
+  pushed_at?: string | null;
+  open_issues_count?: number;
 }
 
 /**
@@ -187,7 +192,8 @@ export interface GitHubCommit {
  * Options for listing merged pull requests
  */
 export interface ListMergedPRsOptions {
-  base: string;
+  /** Target branch; omit to include PRs merged into any branch. */
+  base?: string;
   since: Date;
   perPage?: number;
 }
@@ -196,7 +202,8 @@ export interface ListMergedPRsOptions {
  * Options for listing commits
  */
 export interface ListCommitsOptions {
-  sha: string;
+  /** Branch, tag or commit; omit to use the default branch. */
+  sha?: string;
   since: Date;
   perPage?: number;
 }
@@ -286,6 +293,7 @@ export interface GitHubPullRequestDetail extends GitHubPullRequest {
   commits: number;
   base_ref: string;
   head_ref: string;
+  requestedReviewers: Array<{ login: string; avatarUrl: string }>;
 }
 
 export interface GitHubUser {
@@ -328,6 +336,9 @@ export interface GitHubIssueOrPullItem {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  /** Null for issues and for pull requests that are not merged. */
+  mergedAt: string | null;
+  draft: boolean;
 }
 
 export interface SearchIssuesAndPullsResult {
@@ -924,6 +935,7 @@ export class GitHubService {
             color: typeof l === 'string' ? '' : l.color || '',
           })),
           assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
+          user: issue.user ? { login: issue.user.login } : null,
           created_at: issue.created_at,
           updated_at: issue.updated_at,
           closed_at: issue.closed_at ?? null,
@@ -981,6 +993,7 @@ export class GitHubService {
             color: typeof l === 'string' ? '' : l.color || '',
           })),
           assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
+          user: issue.user ? { login: issue.user.login } : null,
           created_at: issue.created_at,
           updated_at: issue.updated_at,
           closed_at: issue.closed_at ?? null,
@@ -1027,6 +1040,7 @@ export class GitHubService {
           color: typeof l === 'string' ? '' : l.color || '',
         })),
         assignees: result.data.assignees?.map(a => ({ login: a.login })) || [],
+        user: result.data.user ? { login: result.data.user.login } : null,
         created_at: result.data.created_at,
         updated_at: result.data.updated_at,
         closed_at: result.data.closed_at ?? null,
@@ -1064,6 +1078,7 @@ export class GitHubService {
             color: typeof l === 'string' ? '' : l.color || '',
           })),
           assignees: result.data.assignees?.map(a => ({ login: a.login })) || [],
+          user: result.data.user ? { login: result.data.user.login } : null,
           created_at: result.data.created_at,
           updated_at: result.data.updated_at,
           closed_at: result.data.closed_at ?? null,
@@ -1117,6 +1132,7 @@ export class GitHubService {
           color: typeof l === 'string' ? '' : l.color || '',
         })),
         assignees: result.data.assignees?.map(a => ({ login: a.login })) || [],
+        user: result.data.user ? { login: result.data.user.login } : null,
         created_at: result.data.created_at,
         updated_at: result.data.updated_at,
         closed_at: result.data.closed_at ?? null,
@@ -1371,6 +1387,60 @@ export class GitHubService {
   // ============================================
 
   /**
+   * Every issue across all pages, pull requests dropped after collection. Stops at maxPages
+   * and reports `truncated` when the response still links a next page. A denied repo and
+   * rate limits throw typed errors.
+   */
+  async listAllIssues(
+    repo: string,
+    params: { state: 'open' | 'closed' | 'all'; since?: string; maxPages?: number }
+  ): Promise<{ issues: GitHubIssue[]; truncated: boolean }> {
+    const perPage = 100;
+    const requested = Math.floor(params.maxPages ?? NaN);
+    const maxPages = Number.isFinite(requested) ? Math.max(1, requested) : 50;
+
+    return this.executeRead(async () => {
+      const { owner, repo: repoName } = this.assertRepoAllowed(repo);
+      let pages = 0;
+      let truncated = false;
+      const items = await this.octokit.paginate(
+        this.octokit.issues.listForRepo,
+        { owner, repo: repoName, state: params.state, since: params.since, per_page: perPage },
+        (response, done) => {
+          pages++;
+          if (pages >= maxPages) {
+            truncated = /rel="next"/.test(String(response.headers?.link ?? ''));
+            done();
+          }
+          return response.data;
+        }
+      );
+
+      const issues = items
+        .filter(item => !item.pull_request)
+        .map(issue => ({
+          number: issue.number,
+          title: issue.title,
+          body: issue.body ?? null,
+          state: issue.state,
+          html_url: issue.html_url,
+          labels: issue.labels.map(l => ({
+            name: typeof l === 'string' ? l : l.name || '',
+            color: typeof l === 'string' ? '' : l.color || '',
+          })),
+          assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
+          user: issue.user ? { login: issue.user.login } : null,
+          created_at: issue.created_at,
+          updated_at: issue.updated_at,
+          closed_at: issue.closed_at ?? null,
+          state_reason: issue.state_reason ?? null,
+        }));
+
+      return { issues, truncated };
+    });
+  }
+
+  /**
    * Get repository information
    */
   async getRepository(repo: string): Promise<GitHubRepository | null> {
@@ -1397,6 +1467,10 @@ export class GitHubService {
           description: result.data.description,
           archived: result.data.archived,
           has_issues: result.data.has_issues,
+          default_branch: result.data.default_branch,
+          updated_at: result.data.updated_at,
+          pushed_at: result.data.pushed_at,
+          open_issues_count: result.data.open_issues_count,
         };
       } catch (error) {
         if ((error as { status?: number }).status === 404) {
@@ -1467,7 +1541,7 @@ export class GitHubService {
         owner,
         repo: repoName,
         state: 'closed',
-        base: options.base,
+        ...(options.base ? { base: options.base } : {}),
         sort: 'updated',
         direction: 'desc',
         per_page: options.perPage || 100,
@@ -1665,7 +1739,7 @@ export class GitHubService {
       const allCommits = await this.octokit.paginate(this.octokit.repos.listCommits, {
         owner,
         repo: repoName,
-        sha: options.sha,
+        ...(options.sha ? { sha: options.sha } : {}),
         since: options.since.toISOString(),
         per_page: options.perPage || 100,
       });
@@ -1801,6 +1875,10 @@ export class GitHubService {
         commits: pr.commits,
         base_ref: pr.base.ref,
         head_ref: pr.head.ref,
+        requestedReviewers: (pr.requested_reviewers ?? []).map(r => ({
+          login: r.login,
+          avatarUrl: r.avatar_url,
+        })),
       };
     });
   }
@@ -1893,6 +1971,8 @@ export class GitHubService {
           createdAt: item.created_at,
           updatedAt: item.updated_at,
           closedAt: item.closed_at ?? null,
+          mergedAt: item.pull_request?.merged_at ?? null,
+          draft: item.draft ?? false,
         }));
 
       return { totalCount: result.data.total_count, items };

@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { isPrAttention } from '@shared/prAttention';
 import { isFinishedState, type PrBinding } from '@shared/pullRequest';
 
 /** Fingerprints kept per PR. Old ones only stop a re-trigger for a failure that cannot recur. */
@@ -7,7 +8,7 @@ const MAX_HANDLED = 200;
 
 function normalize(value: unknown): PrBinding | null {
   if (!value || typeof value !== 'object') return null;
-  const { finalSnapshot, autoFixMax, ...raw } = value as Partial<PrBinding>;
+  const { finalSnapshot, autoFixMax, lastAttention, lastBehind, lastAutoMerge, ...raw } = value as Partial<PrBinding>;
   if (typeof raw.owner !== 'string' || typeof raw.repo !== 'string' || typeof raw.number !== 'number') return null;
   if (typeof raw.url !== 'string') return null;
   return {
@@ -22,6 +23,10 @@ function normalize(value: unknown): PrBinding | null {
     // A damaged budget is dropped so the legacy fallback applies; any positive integer is kept so
     // a saved budget survives the Settings maximum changing.
     ...(typeof autoFixMax === 'number' && Number.isInteger(autoFixMax) && autoFixMax > 0 ? { autoFixMax } : {}),
+    // Optional and newer than the file format: an older file, or a damaged value, has none.
+    ...(isPrAttention(lastAttention) ? { lastAttention } : {}),
+    ...(lastBehind === true ? { lastBehind } : {}),
+    ...(lastAutoMerge === true ? { lastAutoMerge } : {}),
     // Dropped when it is not a finished read, so a damaged one costs a single re-read, not a broken bar.
     ...(finalSnapshot && isFinishedState(finalSnapshot.state) && Array.isArray(finalSnapshot.checks)
       ? { finalSnapshot }

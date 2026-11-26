@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Button, FormControl, FormHelperText, FormLabel, Input, Stack } from '@mui/joy';
+import { Button, FormControl, FormHelperText, FormLabel, Stack } from '@mui/joy';
 import dayjs from 'dayjs';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 import { AdminDialog, AdminDialogFooter } from '../shared/AdminDialog';
 
 const DAY_FORMAT = 'YYYY-MM-DD';
@@ -68,20 +69,30 @@ export function FeedbackCreatedRangeDialog({
         <Stack direction="row" gap={1.5} flexWrap="wrap">
           <FormControl sx={{ flex: '1 1 140px' }}>
             <FormLabel>From</FormLabel>
-            <Input
-              type="date"
+            <OptionalDateInput
               value={from}
-              onChange={event => setFrom(event.target.value)}
-              slotProps={{ input: { max: to || undefined, 'data-testid': 'feedback-created-range-from-input' } }}
+              onChange={setFrom}
+              emptyLabel="Any start"
+              setLabel="Set start date"
+              clearLabel="Remove start date"
+              initialDate={() => (to && to < today ? to : today)}
+              max={to || undefined}
+              aria-label="From"
+              testId="feedback-created-range-from-input"
             />
           </FormControl>
           <FormControl sx={{ flex: '1 1 140px' }} error={inverted}>
             <FormLabel>To</FormLabel>
-            <Input
-              type="date"
+            <OptionalDateInput
               value={to}
-              onChange={event => setTo(event.target.value)}
-              slotProps={{ input: { min: from || undefined, 'data-testid': 'feedback-created-range-to-input' } }}
+              onChange={setTo}
+              emptyLabel="Any end"
+              setLabel="Set end date"
+              clearLabel="Remove end date"
+              initialDate={() => (from && from > today ? from : today)}
+              min={from || undefined}
+              aria-label="To"
+              testId="feedback-created-range-to-input"
             />
             {inverted && <FormHelperText>Ends before it starts.</FormHelperText>}
           </FormControl>

@@ -28,6 +28,7 @@ import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analyti
 import { readVisitId } from '@server/analytics/visitSession';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { recordSignupLanding } from '@server/auth/signupLanding';
+import { creditShareLinkSignup } from '@server/referrals/shareLink';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { AuthEvents } from '@bike4mind/common';
 import {
@@ -123,7 +124,7 @@ const handler = baseApi({ auth: false })
     // start a new authorization flow from this callback URL instead of completing one.
     const { code, error: providerError } = req.query as { code?: unknown; error?: unknown };
     if (!code && !providerError) {
-      console.warn('OAuth callback without code or error', { strategy });
+      req.logger.warn('OAuth callback without code or error', { strategy });
       return res.redirect('/login?error=missing_code');
     }
 
@@ -148,8 +149,7 @@ const handler = baseApi({ auth: false })
         const email = (info as any)?.email || undefined;
 
         if (err) {
-          const logError = isExpectedOAuthError(err) ? console.warn : console.error;
-          logError('Passport Authenticate Error:', info, err);
+          req.logger[isExpectedOAuthError(err) ? 'warn' : 'error']('Passport authenticate error', { info, error: err });
           try {
             await authFailLogRepository.create({
               strategy,
@@ -161,7 +161,7 @@ const handler = baseApi({ auth: false })
               meta: { path: req.url, status: 500 },
             });
           } catch (logErr) {
-            console.error('Failed to write AuthFailLog (oauth err):', logErr);
+            req.logger.error('Failed to write AuthFailLog (oauth err)', { error: logErr });
           }
           const errorMessage = typeof err === 'string' ? err : 'Authentication failed';
           return res.redirect(`/login?error=${encodeURIComponent(errorMessage)}`);
@@ -177,8 +177,7 @@ const handler = baseApi({ auth: false })
             (req.query as { error?: unknown }).error === 'access_denied'
               ? 'access_denied'
               : resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
-          const logFailure = reason === 'internal' ? console.error : console.warn;
-          logFailure('Passport Authenticate User Not Found Info:', info);
+          req.logger[reason === 'internal' ? 'error' : 'warn']('Passport authenticate user not found', { info });
           // Counted by the OAuthSignupsRefused metric filter in infra/authAbuseAlarms.ts; keep the
           // message in sync with its pattern. Only registration_closed is logged on purpose: the alarm
           // tracks closed-registration waves, while the auto-block runner also counts the other reasons.
@@ -194,7 +193,7 @@ const handler = baseApi({ auth: false })
               meta: { path: req.url, status: 500 },
             });
           } catch (logErr) {
-            console.error('Failed to write AuthFailLog (oauth no user):', logErr);
+            req.logger.error('Failed to write AuthFailLog (oauth no user)', { error: logErr });
           }
           return res.redirect(`/login?error=${oauthFailureLoginErrorCode(reason)}`);
         }
@@ -215,7 +214,7 @@ const handler = baseApi({ auth: false })
               meta: { path: req.url, status: 403 },
             });
           } catch (logErr) {
-            console.error('Failed to write AuthFailLog (oauth banned):', logErr);
+            req.logger.error('Failed to write AuthFailLog (oauth banned)', { error: logErr });
           }
           // The category, never the detection signal, so the login page can name the rule.
           const reason = toSuspensionReasonCategory(user.suspensionReasonCategory);
@@ -258,7 +257,7 @@ const handler = baseApi({ auth: false })
               metadata: { strategy },
             });
           } catch (logError) {
-            console.error('Failed to log OAuth registration:', logError);
+            req.logger.error('Failed to log OAuth registration', { error: logError });
           }
           await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
           await recordSignupNetwork({ req, userId: user.id, method: strategy });
@@ -285,6 +284,14 @@ const handler = baseApi({ auth: false })
           // signup naming no product resolves here immediately, which is most of them.
           const signupFunnel = await recordSignupAcquisition({ req, user, method: strategy });
           isSyntheticSignup = signupFunnel.isSynthetic;
+          // The referral cookie is SameSite=Lax for this same cross-site GET (see shareLink.ts).
+          await creditShareLinkSignup({
+            req,
+            res,
+            userId: user.id,
+            method: strategy,
+            isSynthetic: isSyntheticSignup,
+          });
           const funnelUser = {
             id: user.id,
             acquisition: signupFunnel.acquisition,
@@ -350,7 +357,7 @@ const handler = baseApi({ auth: false })
             metadata: { strategy, ip, userAgent },
           });
         } catch (logError) {
-          console.error('Failed to log OAuth login:', logError);
+          req.logger.error('Failed to log OAuth login', { error: logError });
         }
 
         await logSignInSuccess(req, { userId: user.id, strategy, trustedDevice: secondFactor.trustedDevice });
@@ -362,7 +369,7 @@ const handler = baseApi({ auth: false })
         return res.redirect(redirectUrl);
       } catch (callbackError) {
         // Catch any unhandled errors in the callback to prevent unhandled promise rejections
-        console.error('Unhandled error in passport authenticate callback:', callbackError);
+        req.logger.error('Unhandled error in passport authenticate callback', { error: callbackError });
         return res.redirect(`/login?error=${oauthFailureLoginErrorCode('internal')}`);
       }
     })(req, res, next);

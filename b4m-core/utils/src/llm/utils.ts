@@ -49,7 +49,7 @@ import { escapeRegex } from '../escapeRegex';
 import { signedUrlExpiresAt } from '../signedUrlExpiry';
 import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
-import { ITokenizer } from '../tokenCounting';
+import { ITokenizer, TiktokenTokenizer } from '../tokenCounting';
 import { getFileType } from '../file';
 const MAX_FILE_SIZE = 6000;
 /** Cap on generated images surfaced to the model for editing (keeps the context note small). */
@@ -498,6 +498,54 @@ function replayableToolCalls(functionCalls: RecordedFunctionCall[] | undefined):
   return replayable.some(fc => fc.returnValue) ? replayable : [];
 }
 
+export type EmbeddingTokenCounter = (text: string) => Promise<number>;
+
+let embeddingTokenizer: TiktokenTokenizer | undefined;
+
+/**
+ * Counts with tiktoken under the embedding model's id (unknown ids fall back to cl100k_base, the
+ * OpenAI embedding encoding). If tiktoken cannot load, the UTF-8 byte length is used: every
+ * byte-level BPE token covers at least one byte, so it never undercounts. The chars/3.5 estimate
+ * used for prompt budgeting is NOT safe here - dense markup and code run well under that ratio.
+ */
+const defaultEmbeddingTokenCounter =
+  (model: string, logger: Logger): EmbeddingTokenCounter =>
+  async text => {
+    try {
+      embeddingTokenizer ??= new TiktokenTokenizer({ logger });
+      // The tokenizer is shared across requests; route its logs through this caller's logger.
+      return await embeddingTokenizer.countTokens(text, model, logger);
+    } catch (error) {
+      logger.warn(
+        'Embedding token count fell back to UTF-8 byte length',
+        error instanceof Error ? error.message : error
+      );
+      return new TextEncoder().encode(text).length;
+    }
+  };
+
+/**
+ * Halves `text` until every piece counts at most `maxTokens`, so no content is dropped. A split
+ * never lands between the halves of a surrogate pair.
+ */
+async function splitToTokenBudget(
+  text: string,
+  maxTokens: number,
+  countTokens: EmbeddingTokenCounter
+): Promise<string[]> {
+  if (text.length <= 1 || (await countTokens(text)) <= maxTokens) return [text];
+
+  let middle = Math.floor(text.length / 2);
+  const before = text.charCodeAt(middle - 1);
+  if (before >= 0xd800 && before <= 0xdbff) middle += 1;
+
+  const [head, tail] = await Promise.all([
+    splitToTokenBudget(text.slice(0, middle), maxTokens, countTokens),
+    splitToTokenBudget(text.slice(middle), maxTokens, countTokens),
+  ]);
+  return [...head, ...tail];
+}
+
 /**
  * Safely generate embeddings for text that might exceed token limits
  * Chunks large text and returns averaged embedding vector
@@ -505,36 +553,46 @@ function replayableToolCalls(functionCalls: RecordedFunctionCall[] | undefined):
 export async function generateSafeEmbedding(
   embeddingService: BoundEmbeddingModel,
   text: string,
-  logger: Logger
+  logger: Logger,
+  countTokens: EmbeddingTokenCounter = defaultEmbeddingTokenCounter(embeddingService.model, logger)
 ): Promise<number[]> {
   const modelInfo = { contextWindow: embeddingService.maxInputTokens };
   const maxTokens = Math.min(modelInfo.contextWindow - 100, EMBEDDING_TOKEN_LIMITS.MAX_EMBEDDING_TOKENS);
 
-  const estimatedTokens = estimateTokenLength(text);
+  // The character window is only a first cut sized for typical prose; splitToTokenBudget then
+  // re-counts each window and halves any that dense content pushed over the model's limit.
+  const maxChunkLength = Math.floor(maxTokens * CHARS_PER_TOKEN);
+
+  // Text over two windows would need more than 7 chars per token to fit one call, so skip counting
+  // it whole: BPE is quadratic within an unbroken run, and only bounded windows get encoded then.
+  const tokenCount = text.length > maxChunkLength * 2 ? undefined : await countTokens(text);
+  const needsChunking = tokenCount === undefined || tokenCount > maxTokens;
 
   logger.info('Safe embedding generation', {
     textLength: text.length,
-    estimatedTokens,
+    tokenCount,
     maxTokens,
-    needsChunking: estimatedTokens > maxTokens,
+    needsChunking,
   });
 
-  if (estimatedTokens <= maxTokens) {
+  if (!needsChunking) {
     logger.info(`Using embedder ${embeddingService.model} `);
     return await embedOne(embeddingService, text);
   }
 
   // Text is too large - chunk it and average the embeddings
-  logger.warn(`Text exceeds embedding token limit (${estimatedTokens} > ${maxTokens}), chunking...`);
+  logger.warn(
+    `Text exceeds embedding token limit (${tokenCount ?? `${text.length} chars`} > ${maxTokens}), chunking...`
+  );
 
-  const maxChunkLength = Math.floor(maxTokens * 3.5); // Convert tokens back to characters
   const chunks: string[] = [];
 
   // Create overlapping chunks
   for (let i = 0; i < text.length; i += maxChunkLength - EMBEDDING_TOKEN_LIMITS.CHUNK_OVERLAP) {
-    const chunk = text.slice(i, i + maxChunkLength);
-    if (chunk.trim().length > 0) {
-      chunks.push(chunk);
+    const window = text.slice(i, i + maxChunkLength);
+    if (window.trim().length === 0) continue;
+    for (const piece of await splitToTokenBudget(window, maxTokens, countTokens)) {
+      if (piece.trim().length > 0) chunks.push(piece);
     }
   }
 
@@ -655,8 +713,8 @@ export async function fetchAndProcessPreviousMessages(
      * a 400 error with Gemini 3 Pro". Revisit once thought_signature is persisted.
      *
      * Deliberately taken as the model id rather than a caller-computed boolean: the prior
-     * design made this an opt-out flag, and a second caller (QuestMasterFeature) went
-     * live without ever setting it. Pass the model here and this stays correct
+     * design made this an opt-out flag, and a second caller went live without ever
+     * setting it. Pass the model here and this stays correct
      * automatically for every caller instead of depending on each one remembering to opt in.
      */
     model?: string;

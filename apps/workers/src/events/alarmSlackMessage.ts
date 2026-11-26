@@ -44,7 +44,6 @@ export type AlarmLinkKey =
   | 'signup-activity'
   | 'waf-block-list'
   | 'dlq-replay'
-  | 'live-ops-triage'
   | 'agent-executions'
   | 'integration-health'
   | 'system-secrets'
@@ -103,7 +102,6 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'signup-activity': { label: 'Signup activity', path: '/admin?tab=users&signedUp=hour' },
   'waf-block-list': { label: 'WAF block list', path: '/admin?tab=security-dashboard' },
   'dlq-replay': { label: 'DLQ replay', path: adminDlqReplayPath() },
-  'live-ops-triage': { label: 'LiveOps triage', path: '/admin?tab=live-ops-triage' },
   'agent-executions': { label: 'Agent executions', path: '/admin?tab=agent-executions' },
   'integration-health': { label: 'Integration health', path: '/admin?tab=integration-health' },
   'system-secrets': { label: 'System secrets', path: '/admin?tab=system-secrets' },
@@ -238,33 +236,6 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     meaning: 'An agent hit the hard limit on self-handoffs and was stopped.',
     action: 'Review the session to see why it never finished.',
     links: ['agent-executions'],
-  },
-  'liveops-p0-issues': {
-    title: 'LiveOps found a blocker issue',
-    level: 'page',
-    category: 'infra',
-    unit: 'issues',
-    meaning: 'The automated triage created a P0 issue from production errors.',
-    action: 'Open the newest P0 issue in the tracker and respond.',
-    links: ['live-ops-triage'],
-  },
-  'liveops-p1-issues': {
-    title: 'LiveOps found a critical issue',
-    level: 'warn',
-    category: 'infra',
-    unit: 'issues',
-    meaning: 'The automated triage created a P1 issue from production errors.',
-    action: 'Open the newest P1 issue in the tracker.',
-    links: ['live-ops-triage'],
-  },
-  'liveops-high-error-volume': {
-    title: 'Production error volume is high',
-    level: 'page',
-    category: 'infra',
-    unit: 'errors',
-    meaning: 'Far more errors than usual were logged. Something may be broken for many users.',
-    action: 'Check the latest deploy and the error log for a common cause.',
-    links: ['live-ops-triage'],
   },
   'ecs-task-failed-to-start': {
     title: 'A background service cannot start',
@@ -523,6 +494,28 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       "The last hour's {provider} usage report includes output tokens from models our poller has no price for, above both the volume floor and the share floor, so the provider-reported spend alarm reads low.",
     action:
       'Open the usage poller Lambda log and find the WARN line "no price for <ids>". Add a price for each id on the admin model prices page (or as a ModelPrice row); it reaches the poller at the next model discovery run, within 6 hours. If the price snapshot is unavailable, the adapter table or USAGE_ONLY_PRICING in b4m-core/services/src/spendReconciliation/providerUsagePricing.ts is the fallback. Meanwhile, check the {provider} console usage for that hour by hand.',
+    links: ['model-prices'],
+  },
+  'model-price-snapshot-age': {
+    title: 'The model price snapshot is out of date',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'stale hours',
+    meaning:
+      'The model price snapshot the usage poller reads has not been refreshed for 48 hours or more. Usage is still priced from the stale and static prices, so reported spend may drift from the provider bill.',
+    action:
+      'Check whether model discovery ran and wrote the price snapshot: look at the model discovery Lambda log for the snapshot write, and at its schedule. Once it writes a fresh snapshot the next hourly poll clears this alarm.',
+    links: ['model-prices'],
+  },
+  'model-price-snapshot-missing': {
+    title: 'The model price snapshot is missing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'missing hours',
+    meaning:
+      'The usage poller could not use the model price snapshot on 48 hourly polls in a row (it was absent, unreadable or invalid). Usage is still priced from the static prices, so reported spend may drift from the provider bill.',
+    action:
+      'Check whether model discovery ran and wrote the price snapshot. Then check the poller can read the snapshot object: the bucket setting on the poller Lambda, its read permission, and the poller log line "model price snapshot unavailable".',
     links: ['model-prices'],
   },
   'provider-usage-poll-errors': {

@@ -59,6 +59,8 @@ export type WatchDeps = {
   /** Past the quit confirmation (main/index.ts quitState); a cancelled quit is not quitting. */
   isQuitting(): boolean;
   rendererDevUrl?: string;
+  /** The Orchestrate mini window (main/orchestrateMini), toggled from the menu-bar item too. */
+  orchestrateMini?: { isOpen(): boolean; toggle(): void; onOpenChanged(listener: (open: boolean) => void): void };
 };
 
 export type Watch = {
@@ -121,11 +123,12 @@ export function registerWatch(deps: WatchDeps): Watch {
       action: action => {
         if (action === 'open-tavern') openTavern();
         else if (action === 'toggle-mini') mini.toggle();
+        else if (action === 'toggle-orchestrate-mini') deps.orchestrateMini?.toggle();
         else void setPreferences({ showInMenuBar: false });
       },
       menuOpened: () => service.acknowledge(),
     });
-    tray.render(trayPresentation(service.snapshot(), mini.isOpen()));
+    tray.render(trayPresentation(service.snapshot(), mini.isOpen(), deps.orchestrateMini?.isOpen()));
   }
 
   service.onChange(snapshot => {
@@ -134,6 +137,7 @@ export function registerWatch(deps: WatchDeps): Watch {
     syncTray();
   });
   mini.onVisibilityChanged(() => syncTray());
+  deps.orchestrateMini?.onOpenChanged(() => syncTray());
 
   // The user looking at the app is the user having seen that work finished.
   app.on('browser-window-focus', (_event, window) => {

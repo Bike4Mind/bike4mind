@@ -175,17 +175,47 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
     id: 'credit-analytics-overview',
     title: 'Credit Analytics',
     summary:
-      'Credit Analytics groups the credit tools in tabs: Economy, User Credits, Margins, Org Usage, API Usage, Ledger and Adjustments. Model prices are in the Prices section of the Models page.',
+      'Credit Analytics groups the credit tools in tabs: Economy, User Credits, Margins, Org Usage, API Usage, Side apps, ElevenLabs, Ledger and Adjustments. Model prices are in the Prices section of the Models page.',
     views: ['admin.credit_analytics'],
     settings: [],
     howTo: [
       'User Credits lists users with balance, last login and status; use "Search users" and "Sort by Credits", then "Adjust Credits" or "Credits" on a row.',
       'Org Usage and API Usage show credit consumption by organization and by API use.',
+      'ElevenLabs estimates ElevenLabs plan credits and agent minutes used in a billing cycle on the platform key, by product, model, user and day, against the plan allowance; "Edit plan settings" opens the allowance and cycle start day in Admin Settings.',
       'Ledger lists credit transactions; Adjustments lists manual credit changes newest first with actor, delta, resulting balance and reason.',
       'Economy shows selected-period issuance, consumption, expiry, clawbacks, adjustments, refunds and transfers, with ownership/date filters, paginated transaction drill-downs and a JSON report export.',
       'Economy separates recorded usage funding and current lot remainder estimates. Historical opening/closing, held balances, reconciliation and 7/30-day cohort consumption are unavailable without immutable records; coverage is shown rather than inventing zeros.',
     ],
     keywords: ['credits', 'billing', 'usage', 'balance', 'transactions', 'credit ledger', 'adjustments log'],
+  },
+  {
+    id: 'spend-monitor',
+    title: 'Spend monitor',
+    summary:
+      'Live credit spend and the open spend incidents the spend monitor raised, with the accounts whose spending is frozen. Freezing stops new paid AI usage for a user, organization or API key until an admin lifts it.',
+    views: ['admin.spend_monitor'],
+    settings: [
+      'spendMonitorAutoPauseMode',
+      'spendMonitorAutoPauseStandardMinCredits',
+      'spendMonitorAutoPausePaidMinCredits',
+      'spendMonitorAutoPauseTrustedMinCredits',
+    ],
+    howTo: [
+      'The header tiles show platform credits in the last hour and 24 hours, open and critical incidents, frozen accounts and the automatic pause mode with its per-tier thresholds.',
+      'Open incidents list critical first. "Freeze spending" in a row\'s actions menu freezes that account; the "Freeze spending" button in the header freezes any user, organization or API key by id. Each needs a reason, and an Undo toast follows.',
+      'The Automatic pause column shows Paused or Frozen while the account is frozen, Would pause for a shadow decision, and Lifted once a pause was lifted.',
+      'Automatic pause runs in shadow mode by default; switch it to enforce and set per-tier thresholds (0 turns a tier off) on Admin settings.',
+      'Opening the tab needs support:read; freezing and lifting need credits:adjust.',
+    ],
+    keywords: [
+      'spend',
+      'spike',
+      'freeze spending',
+      'pause account',
+      'stop burning credits',
+      'spend incident',
+      'auto pause',
+    ],
   },
   {
     id: 'model-pricing-catalog',

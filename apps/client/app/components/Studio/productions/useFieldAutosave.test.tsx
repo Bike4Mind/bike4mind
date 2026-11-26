@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AxiosError, type AxiosResponse } from 'axios';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultStudioTimeline, type StudioBrief } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({ patch: vi.fn(), toastError: vi.fn() }));
@@ -10,7 +10,7 @@ const h = vi.hoisted(() => ({ patch: vi.fn(), toastError: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: h.patch } }));
 vi.mock('sonner', () => ({ toast: { error: h.toastError } }));
 
-import { useFieldAutosave } from './useFieldAutosave';
+import { FIELD_AUTOSAVE_DELAY_MS, useFieldAutosave } from './useFieldAutosave';
 
 const ID = 'c'.repeat(24);
 
@@ -52,10 +52,15 @@ const renderField = () => {
 };
 
 const sentSummaries = () => h.patch.mock.calls.map(([, body]: [string, { brief: StudioBrief }]) => body.brief.summary);
-const pause = (ms: number) => act(() => new Promise(resolve => setTimeout(resolve, ms)));
+const elapse = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('useFieldAutosave', () => {
@@ -65,7 +70,10 @@ describe('useFieldAutosave', () => {
 
     act(() => result.current.set({ summary: 'One' }));
     expect(result.current.status.kind).toBe('pending');
-    await waitFor(() => expect(result.current.status.kind).toBe('saved'));
+    await elapse(FIELD_AUTOSAVE_DELAY_MS - 1);
+    expect(h.patch).not.toHaveBeenCalled();
+    await elapse(1);
+    expect(result.current.status.kind).toBe('saved');
     expect(sentSummaries()).toEqual(['One']);
   });
 
@@ -76,13 +84,15 @@ describe('useFieldAutosave', () => {
     const { result } = renderField();
 
     act(() => result.current.set({ summary: 'One' }));
-    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(1));
+    await elapse(FIELD_AUTOSAVE_DELAY_MS);
+    expect(h.patch).toHaveBeenCalledTimes(1);
     act(() => result.current.set({ summary: 'Two' }));
-    await pause(1_000);
+    await elapse(1_000);
     expect(h.patch).toHaveBeenCalledTimes(1);
 
     await act(async () => first.resolve(savedResponse({ summary: 'One' })));
-    await waitFor(() => expect(result.current.status.kind).toBe('saved'));
+    await elapse(0);
+    expect(result.current.status.kind).toBe('saved');
     expect(sentSummaries()).toEqual(['One', 'Two']);
   });
 
@@ -92,12 +102,14 @@ describe('useFieldAutosave', () => {
     const { result, unmount } = renderField();
 
     act(() => result.current.set({ summary: 'One' }));
-    await waitFor(() => expect(result.current.status.kind).toBe('error'));
-    await pause(1_000);
+    await elapse(FIELD_AUTOSAVE_DELAY_MS);
+    expect(result.current.status.kind).toBe('error');
+    await elapse(1_000);
     expect(h.patch).toHaveBeenCalledTimes(1);
 
     unmount();
-    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(2));
+    await elapse(0);
+    expect(h.patch).toHaveBeenCalledTimes(2);
     expect(sentSummaries()).toEqual(['One', 'One']);
   });
 
@@ -107,7 +119,8 @@ describe('useFieldAutosave', () => {
 
     act(() => result.current.set({ summary: 'Last' }));
     unmount();
-    await waitFor(() => expect(h.toastError).toHaveBeenCalledTimes(1));
+    await elapse(0);
+    expect(h.toastError).toHaveBeenCalledTimes(1);
     expect(sentSummaries()).toEqual(['Last']);
   });
 });

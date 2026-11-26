@@ -51,6 +51,7 @@ public final class AuthController: AccessTokenProviding {
 
   @ObservationIgnored private var cachedAccessToken: AccessToken?
   @ObservationIgnored private var inFlightRefresh: Task<String, any Error>?
+  @ObservationIgnored private var inFlightUnlock: Task<Bool, Never>?
   /// Bumped whenever the session changes hands, so a refresh that lands after sign-out is discarded
   /// instead of writing a dead session's token back to the Keychain.
   @ObservationIgnored private var sessionGeneration = 0
@@ -307,12 +308,19 @@ public final class AuthController: AccessTokenProviding {
     state = .locked
   }
 
+  /// Callers that arrive while a prompt is up share its result instead of raising a second one.
   @discardableResult
   public func unlock(reason: String = "Unlock Bike4Mind") async -> Bool {
     guard state == .locked else { return state == .signedIn }
-    guard await biometricGate.evaluate(reason: reason) else { return false }
-    if state == .locked { state = .signedIn }
-    return state == .signedIn
+    if let inFlightUnlock { return await inFlightUnlock.value }
+    let attempt = Task { [biometricGate] in
+      defer { inFlightUnlock = nil }
+      guard await biometricGate.evaluate(reason: reason) else { return false }
+      if state == .locked { state = .signedIn }
+      return state == .signedIn
+    }
+    inFlightUnlock = attempt
+    return await attempt.value
   }
 
   public var canUseAppLock: Bool {

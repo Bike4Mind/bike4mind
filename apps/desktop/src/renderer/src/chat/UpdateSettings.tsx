@@ -4,6 +4,7 @@ import LinearProgress from '@mui/joy/LinearProgress';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { describeBusy, type UpdateBusyReport } from '@shared/update';
+import { ExternalLinkIcon } from './icons';
 import type { AppUpdateController } from './useAppUpdate';
 
 function lastChecked(at: number | null): string {
@@ -14,15 +15,14 @@ function lastChecked(at: number | null): string {
 /**
  * The version, and whatever can be done about it.
  *
- * A section of the Customize screen rather than a window of its own. It was a dialog because
+ * The About page of Settings rather than a window of its own. It was a dialog because
  * downloading megabytes and restarting the app are not things to put one click from a list -
- * a screen keeps that, because the actions still sit under the version, the last check and,
+ * a page keeps that, because the actions still sit under the version, the last check and,
  * when there is one, the warning naming what a restart would end. Nothing has moved closer to
  * a stray click; the window around it was all that went.
  *
- * Nothing here ever reports a failed check as an error. An unreachable feed renders as the
- * plain version with a "Check again" button, which is both honest and the only thing the user
- * could do about it anyway.
+ * A failed check is said plainly here, with a retry, but never raised as a chip or a notice:
+ * the user did not ask about a feed they cannot reach (see updateAttention).
  */
 export function UpdateSettings({ controller }: { controller: AppUpdateController }) {
   const { state, blockedBy, check, download, install, dismissBlock } = controller;
@@ -52,12 +52,15 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
         );
       case 'up-to-date':
         return <Typography level="body-sm">This is the newest version.</Typography>;
+      case 'unreachable':
+        return <Typography level="body-sm">Couldn't reach the update server.</Typography>;
       default:
         return <Typography level="body-sm">No update has been found yet.</Typography>;
     }
   })();
 
   const busy = state.status === 'checking' || state.status === 'downloading';
+  const releaseUrl = state.releaseUrl;
 
   return (
     <Stack spacing={1.5} data-testid="update-settings">
@@ -75,18 +78,31 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
         <UpdateRestartConfirm busy={blockedBy} onKeep={dismissBlock} onRestart={() => void install(true)} />
       )}
 
-      <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
-        {state.status !== 'unsupported' && !blockedBy && (
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ justifyContent: 'flex-end' }}>
+        {releaseUrl && (
           <Button
             size="sm"
             variant="plain"
+            color="neutral"
+            endDecorator={<ExternalLinkIcon />}
+            onClick={() => void window.b4m.shell.openExternal(releaseUrl)}
+            sx={{ mr: 'auto' }}
+            data-testid="update-release-notes-btn"
+          >
+            Release notes
+          </Button>
+        )}
+        {state.status !== 'unsupported' && !blockedBy && (
+          <Button
+            size="sm"
+            variant="outlined"
             color="neutral"
             loading={state.status === 'checking'}
             disabled={busy}
             onClick={check}
             data-testid="update-check-btn"
           >
-            Check again
+            {state.status === 'unreachable' ? 'Try again' : 'Check again'}
           </Button>
         )}
 
@@ -130,7 +146,7 @@ export function UpdateRestartConfirm({
       </Alert>
       {/* Wraps in the narrow update notice instead of overflowing it. */}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ justifyContent: 'flex-end' }}>
-        <Button size="sm" variant="plain" color="neutral" onClick={onKeep} data-testid="update-keep-btn">
+        <Button size="sm" variant="outlined" color="neutral" onClick={onKeep} data-testid="update-keep-btn">
           Keep working
         </Button>
         {/* The user has now been told exactly what this ends, so it says so. */}

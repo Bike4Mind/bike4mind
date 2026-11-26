@@ -1,3 +1,4 @@
+import { recordVerifiedView } from '@server/services/publish/recordVerifiedView';
 import {
   currentPublishedIndexKey,
   downloadPublishedIndex,
@@ -76,6 +77,8 @@ import {
   stripSignupGateHtml,
 } from '@client/app/utils/shareFooter';
 import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
+import { isCrawlerUserAgent } from '@server/utils/crawlerUserAgent';
+import { hasQualifyingSocialParty } from '@server/services/gears/socialParty';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -109,7 +112,8 @@ import {
   type ArtifactParseResult,
 } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
-import { WEBSITE_URL, getBrandName } from '@client/config/general';
+import { getBrandName } from '@client/config/general';
+import { publishedAuthorShareLink, publishMarketingUrl, type ShareLinkVia } from '@server/referrals/shareLink';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 
 /**
@@ -957,7 +961,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     const skipped = [...collected.oversized, ...collected.failed];
     if (skipped.length) {
       // No silent truncation - the download is missing bytes, so say which.
-      console.warn(`[publish] export ${artifact.publicId} dropped ${skipped.length} asset(s):`, skipped);
+      req.logger.warn('Publish export dropped assets', { publicId: artifact.publicId, skippedCount: skipped.length });
       res.setHeader('X-Publish-Dropped-Assets', String(skipped.length));
       res.setHeader('X-Publish-Dropped-Asset-Names', truncateHeaderList(skipped, 1024));
     }
@@ -1056,10 +1060,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   if (droppedAssets.length) {
     // No silent truncation - surface skipped assets to operators and reviewers, both the
     // count and the names (truncated to keep the header well under typical 8KB limits).
-    console.warn(
-      `[publish] bundle ${artifact.publicId} dropped ${droppedAssets.length} oversized/failed asset(s):`,
-      droppedAssets
-    );
+    req.logger.warn('Publish bundle dropped assets', {
+      publicId: artifact.publicId,
+      droppedCount: droppedAssets.length,
+    });
     res.setHeader('X-Publish-Dropped-Assets', String(droppedAssets.length));
     res.setHeader('X-Publish-Dropped-Asset-Names', truncateHeaderList(droppedAssets, 1024));
   }
@@ -1162,17 +1166,18 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           siteName: process.env.APP_NAME || '',
         })
       : null;
-  // Lead-gen targets, both runtime-derived (no hardcoded brand host): the marketing
-  // site with UTM attribution when configured, else a branded fallback. The embed
-  // pill falls back to the artifact's canonical page; the own-tab bar falls back to
-  // the app root (the viewer is already on the canonical page). The bar only renders
-  // for an own-tab open-public artifact.
-  const marketing = (medium: string) =>
-    WEBSITE_URL
-      ? `${WEBSITE_URL.replace(/\/+$/, '')}/?utm_source=shared-artifact&utm_medium=${medium}&utm_campaign=publish`
-      : '';
-  const pillHref = isEmbed ? marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
-  const barHref = !isEmbed && isOpenPublic ? marketing('share-bar') || `${docOrigin}/` : '';
+  // Lead-gen targets, both runtime-derived (no hardcoded brand host). The author's share
+  // link comes first: it lands on the same tagged marketing page (signup when none is
+  // configured), and a signup that follows credits the author (server/referrals/shareLink.ts).
+  // Without one, the marketing site with UTM attribution when configured, else a branded
+  // fallback. The embed pill falls back to the artifact's canonical page; the own-tab bar
+  // falls back to the app root (the viewer is already on the canonical page). The bar only
+  // renders for an own-tab open-public artifact.
+  const leadVia: ShareLinkVia | null = isEmbed ? 'embed-badge' : isOpenPublic ? 'share-bar' : null;
+  const authorLink = leadVia ? await publishedAuthorShareLink(artifact.ownerId, owner, leadVia) : null;
+  const marketing = (via: ShareLinkVia) => publishMarketingUrl(via) ?? '';
+  const pillHref = isEmbed ? authorLink || marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
+  const barHref = !isEmbed && isOpenPublic ? authorLink || marketing('share-bar') || `${docOrigin}/` : '';
   // "Save as HTML" on the wrapper - see `exportSelfAuthorizes`. Dropped in embed mode,
   // which is chrome-less by design.
   const exportHtmlHref =
@@ -1303,9 +1308,9 @@ function renderBundleWrapper(
   // Emitted for every non-embed render, not just commented ones: it also binds "Save as
   // PDF" (the mount node above stays conditional, and the widget no-ops without it).
   // `data-b4m-count-view` asks the widget to report a signed-in viewer to /api/publish/view,
-  // which this navigation cannot identify. Only until one external view lands: the Published
+  // which this navigation cannot identify. Only until one verified view lands: the Published
   // gear needs just one, and each report costs the viewer a refresh-token exchange.
-  const countView = (artifact.externalViewCount ?? 0) === 0 ? ' data-b4m-count-view' : '';
+  const countView = (artifact.verifiedExternalViewCount ?? 0) === 0 ? ' data-b4m-count-view' : '';
   const widgetScript = embed ? '' : `\n<script src="/api/publish/widget"${countView} defer></script>`;
   // Abuse-report affordance: a plain anchor floats over the iframe. It is a
   // top-level navigation (not blocked by the wrapper's script-src/form-action CSP) to
@@ -1611,6 +1616,7 @@ interface PublishedArtifactLean {
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
   externalViewCount?: number;
+  verifiedExternalViewCount?: number;
 }
 
 // -- Helpers -----------------------------------------------------------------
@@ -1640,35 +1646,13 @@ function cacheControlFor(visibility: PublishVisibility): string {
   return 'private, no-store, must-revalidate';
 }
 
-/** Link-preview crawlers and indexers fetch every pasted URL automatically -
- *  merely PASTING your own link into Slack must not count as "someone saw it".
- *  Substring match on the UA, lowercased; the generic bot/crawler/spider tail
- *  catches the long tail of unfurlers. */
-const CRAWLER_UA_RE =
-  /slackbot|discordbot|twitterbot|facebookexternalhit|linkedinbot|whatsapp|telegrambot|skypeuripreview|googlebot|bingbot|applebot|duckduckbot|yandex|baiduspider|petalbot|bot\b|crawler|spider|preview/i;
-
-/**
- * Best-effort, non-authoritative view counters. Never blocks the response.
- *
- * `viewCount` counts everything. `externalViewCount` feeds the Published gear
- * ("someone else saw your page") and MUST resist self-granting: a top-level
- * browser navigation to /p/... carries no Authorization header, so the serve
- * route cannot tell the owner apart from a stranger on an anonymous request -
- * counting anonymous views as external let every publisher pay themselves the
- * 5,000-credit reward by opening their own freshly-published link (verified
- * gate-bypass, PR #390 review). So externalViewCount increments ONLY for an
- * AUTHENTICATED, non-owner, non-crawler viewer - a request that actually
- * carries a credential we can attribute to a different user. Domain-gated
- * views satisfy this (the loader shell re-fetches with the viewer's Bearer);
- * purely-anonymous public views no longer count, and stronger proof-of-human
- * is tracked as strategy P1 (b4m-strategy#93).
- *
- * A browser navigation never carries that credential on an open-public page or an open share
- * link, so for bundles the wrapper widget reports a signed-in viewer separately through
- * /api/publish/view (see `data-b4m-count-view` in renderBundleWrapper).
+/** Record view analytics and verified reward evidence after page admission.
+ * Writes are best-effort so analytics failures do not interrupt serving a page.
+ * Bundle browser navigations also report their authenticated view via /api/publish/view.
+ * Anonymous views never count as external: without a credential the owner cannot be told apart.
  */
 function bumpViewCount(
-  artifact: { publicId: string; ownerId: string },
+  artifact: { publicId: string; ownerId: string; verifiedExternalViewCount?: number },
   viewer: { id?: string } | undefined,
   userAgent?: string,
   opts: {
@@ -1684,9 +1668,8 @@ function bumpViewCount(
   const { gateView, shareTokenEntryId } = opts;
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
-  const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
-  const countsAsExternal = isAuthed && !isOwner && !isCrawler;
-  const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+  const isCrawler = isCrawlerUserAgent(userAgent);
+  const signedInOther = isAuthed && !isOwner && !isCrawler;
   // The per-link counter needs its own definition, NOT externalViewCount's: a share link exists
   // so the viewer does NOT sign in, so requiring authentication would leave it at zero forever.
   // Anonymous-inclusive and crawler-excluded; owner-excluded only when the owner is
@@ -1695,8 +1678,13 @@ function bumpViewCount(
   // for externalViewCount, where it was a credit-reward bypass): a per-link count is a
   // vanity/diagnostic number that grants nothing.
   const countsAsShareView = !!shareTokenEntryId && !isOwner && !isCrawler;
-  void (
-    countsAsShareView
+  void (async () => {
+    const countsAsExternal =
+      signedInOther &&
+      (await hasQualifyingSocialParty(String(artifact.ownerId), [String(viewer!.id)]).catch(() => false));
+    if (countsAsExternal) void recordVerifiedView(artifact, String(viewer!.id), true).catch(() => undefined);
+    const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+    await (countsAsShareView
       ? PublishedArtifact.updateOne(
           { publicId: artifact.publicId },
           {
@@ -1705,8 +1693,8 @@ function bumpViewCount(
           },
           { arrayFilters: [{ 'entry._id': shareTokenEntryId }] }
         )
-      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc })
-  ).catch(() => undefined);
+      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }));
+  })().catch(() => undefined);
   // Audit non-owner authenticated gate views only: the point is who OTHER than the
   // owner reached a gated artifact, and the owner bypasses their own gate anyway.
   if (gateView && viewer?.id && !isOwner) {

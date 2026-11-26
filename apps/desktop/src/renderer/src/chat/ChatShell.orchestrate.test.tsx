@@ -11,17 +11,38 @@ import type {
   ChatSessionSummary,
 } from '@shared/chat';
 import type { AttentionOpenEvent } from '@shared/attention';
+import type { PrBarState } from '@shared/pullRequest';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
-import { inheritancePolicy } from '@shared/orchestration';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
 import { DOOR_POINT } from './orchestrator/tavern/scene';
+import { reloadReplyStatsPrefs } from './replyStatsPrefs';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // Screens and panels this test never opens, each with its own IPC to stub otherwise.
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+vi.mock('./BrowserPane', () => ({
+  BrowserPane: ({ sessionId }: { sessionId: string | null }) => (
+    <div data-testid="test-browser-pane" data-session-id={sessionId} />
+  ),
+}));
+vi.mock('./ArtifactLibraryPanel', () => ({ ArtifactLibraryPanel: () => null }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 
 const threadMounts = vi.hoisted(() => ({ count: 0 }));
 // The real thread, counting its mounts.
@@ -55,6 +76,14 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's autosizing textarea measures itself on every render, and jsdom resolves that against every
+// emotion sheet in the document and every ancestor, with no layout to measure in the end.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) =>
+  element instanceof HTMLTextAreaElement
+    ? element.style
+    : realGetComputedStyle(element, pseudo)) as typeof getComputedStyle;
 
 window.ResizeObserver ??= class {
   observe() {}
@@ -130,6 +159,7 @@ let statusSnapshot: ChatSessionStatusEvent[] = [];
 let statusListener: ((event: ChatSessionStatusEvent) => void) | null = null;
 let parentMessages: ChatMessage[] = [];
 let codeMessages: ChatMessage[] = [];
+let childMessages: ChatMessage[] = [];
 let attentionOpen: ((event: AttentionOpenEvent) => void) | null = null;
 let sessionsChanged: (() => void) | null = null;
 let catalogModels: ChatModelOption[] = [];
@@ -150,6 +180,7 @@ beforeEach(() => {
   statusListener = null;
   parentMessages = [];
   codeMessages = [];
+  childMessages = [];
   attentionOpen = null;
   sessionsChanged = null;
   Element.prototype.scrollIntoView = () => undefined;
@@ -166,13 +197,15 @@ beforeEach(() => {
   );
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
         onStreamEvent,
         listSessions: async () => listed,
         getSession: async (id: string) =>
           ({
             ...(listed.find(session => session.id === id) ?? PARENT),
-            messages: id === PARENT.id ? parentMessages : id === CODE.id ? codeMessages : [],
+            messages:
+              id === PARENT.id ? parentMessages : id === CODE.id ? codeMessages : id === CHILD.id ? childMessages : [],
           }) as unknown as ChatSession,
         setSessionOrchestrate,
         inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
@@ -222,7 +255,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const query = (testId: string) => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+const query = (testId: string) => document.body.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
 const el = (testId: string) => {
   const found = query(testId);
   if (!found) throw new Error(`no ${testId}`);
@@ -230,13 +263,18 @@ const el = (testId: string) => {
 };
 
 async function clickSessionRow(title: string) {
-  const row = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')).find(candidate =>
-    candidate.textContent?.includes(title)
+  const row = Array.from(document.body.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')).find(
+    candidate => candidate.textContent?.includes(title)
   );
   if (!row) throw new Error(`no row ${title}`);
   await act(async () => row.click());
   await act(async () => undefined);
 }
+
+const highlightedTitle = () =>
+  document.body
+    .querySelector('[data-testid="chat-session-item"][aria-current="true"]')
+    ?.querySelector('[data-testid="chat-session-title-text"]')?.textContent;
 
 async function openParent(title: string = PARENT.title, mode: 'chat' | 'code' = 'chat') {
   host = document.createElement('div');
@@ -249,7 +287,7 @@ async function openParent(title: string = PARENT.title, mode: 'chat' | 'code' = 
       </CssVarsProvider>
     );
   });
-  if (mode === 'code') await act(async () => el('mode-switch-code-btn').click());
+  if (mode === 'code') await act(async () => el('place-rail-code-btn').click());
   await clickSessionRow(title);
 }
 
@@ -262,14 +300,229 @@ async function relist(sessions: ChatSessionSummary[]) {
 }
 
 describe('orchestrate mode in the chat shell', () => {
-  it('offers the toggle only on a session that has spawned agents, and keeps the chat surface as before', async () => {
+  it('opens agent PR and CI links in the parent browser without changing its watch, scene or dialog', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    const ref = {
+      owner: 'example-org',
+      repo: 'widgets',
+      number: 611,
+      url: 'https://github.com/example-org/widgets/pull/611',
+    };
+    const state: PrBarState = {
+      sessionId: CHILD.id,
+      binding: { ...ref, source: 'shell', boundAt: '' },
+      snapshot: {
+        ...ref,
+        title: 'Widget change',
+        author: 'octo-dev',
+        state: 'OPEN',
+        isDraft: false,
+        headRefName: 'feat/widget',
+        headSha: 'head',
+        baseRefName: 'main',
+        baseSha: 'base',
+        additions: 1,
+        deletions: 0,
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        reviewDecision: 'REVIEW_REQUIRED',
+        autoMergeArmed: false,
+        checks: [],
+        repoSettings: { autoMergeAllowed: false, allowedMethods: ['squash'] },
+        viewer: 'octo-dev',
+        fetchedAt: 0,
+      },
+      gh: 'ok',
+      refreshing: false,
+      autoFix: { status: 'off', attempts: 0, max: 5 },
+      autoMerge: { mode: null },
+    };
+    const watch = vi.fn().mockResolvedValue(null);
+    const navigate = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.b4m.pullRequests, {
+      watch,
+      getSummaries: async () => [{ sessionId: CHILD.id, summary: { number: 611, state: 'open' } }],
+      getState: vi.fn().mockResolvedValue(state),
+    });
+    Object.assign(window.b4m, { browser: quietBridge({ navigate }) });
     await openParent();
+    await enterOrchestrate();
+    const stage = el('orchestrator-stage');
+    const scene = el('orchestrator-tavern');
+    await act(async () =>
+      el('orchestrator-pr-indicator').dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+    );
+    const dialog = el('orchestrator-pr-dialog');
+    watch.mockClear();
+    await act(async () => el('pr-bar-open-btn').click());
+    expect(navigate).toHaveBeenLastCalledWith({ sessionId: PARENT.id, url: ref.url });
+    expect(el('test-browser-pane').dataset.sessionId).toBe(PARENT.id);
+    await act(async () => el('pr-bar-ci-btn').click());
+    await act(async () => el('pr-ci-open-btn').click());
+    expect(navigate).toHaveBeenLastCalledWith({ sessionId: PARENT.id, url: `${ref.url}/checks` });
+    expect(watch).not.toHaveBeenCalled();
+    expect(el('orchestrator-stage')).toBe(stage);
+    expect(el('orchestrator-tavern')).toBe(scene);
+    expect(el('orchestrator-pr-dialog')).toBe(dialog);
+  });
+
+  it('offers the toggle only on a session that has spawned agents, and keeps the chat surface as before', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem('b4m.orchestrator.view.other-scope', 'board');
+    window.localStorage.setItem('b4m.orchestrator.surface.other-scope', 'orchestrate');
+    await openParent();
+    // Stored prefs for sessions outside the current listing are never dropped.
+    expect(window.localStorage.getItem('b4m.orchestrator.view.other-scope')).toBe('board');
+    expect(window.localStorage.getItem('b4m.orchestrator.surface.other-scope')).toBe('orchestrate');
     expect(el('chat-orchestrate-count').textContent).toBe('1');
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('chat-thread-empty-host')).not.toBeNull();
+    await enterOrchestrate();
+    expect(query('orchestrator-stage')).not.toBeNull();
+    // The composer's Orchestrate pill is a Code-mode control.
+    expect(query('composer-orchestrate-toggle')).toBeNull();
   });
 
-  it.each(['tavern', 'aquarium'] as const)(
+  it('keeps the active Office scene and parent conversation when the sidebar selects an agent repeatedly', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'office');
+    await openParent();
+    await enterOrchestrate();
+    const stage = el('orchestrator-stage');
+    const office = el('orchestrator-office');
+    const thread = el('orchestrator-dock').querySelector('[data-testid="chat-thread-empty-host"]');
+    const layout = window.localStorage.getItem(`b4m.orchestrator.layout.${PARENT.id}`);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await clickSessionRow(CHILD.title);
+      expect(el('orchestrator-stage')).toBe(stage);
+      expect(el('orchestrator-office')).toBe(office);
+      expect(el('orchestrator-dock-hidden').querySelector('[data-testid="chat-thread-empty-host"]')).toBe(thread);
+      expect(el('chat-session-title').textContent).toBe(PARENT.title);
+      expect(highlightedTitle()).toBe(CHILD.title);
+      expect(el('orchestrator-peek-drawer').textContent).toContain(CHILD.title);
+      await clickSessionRow(CHILD.title);
+      expect(el('orchestrator-peek-drawer').textContent).toContain(CHILD.title);
+      expect(window.localStorage.getItem(`b4m.orchestrator.view.${PARENT.id}`)).toBe('office');
+      expect(window.localStorage.getItem(`b4m.orchestrator.layout.${PARENT.id}`)).toBe(layout);
+      await act(async () => el('orchestrator-peek-close-btn').click());
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      expect(highlightedTitle()).toBe(PARENT.title);
+    }
+  });
+
+  it('keeps split panes and their sizes while sidebar and scene selections share the drawer', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    const layout = JSON.stringify({
+      split: 'row',
+      panes: [
+        { view: 'office', size: 0.65 },
+        { view: 'table', size: 0.35 },
+      ],
+    });
+    window.localStorage.setItem(`b4m.orchestrator.layout.${PARENT.id}`, layout);
+    await openParent();
+    await enterOrchestrate();
+    const office = el('orchestrator-office');
+    const tableRow = el(`orchestrator-table-row-${CHILD.id}`);
+    await clickSessionRow(CHILD.title);
+    expect(highlightedTitle()).toBe(CHILD.title);
+    expect(el('orchestrator-peek-drawer').textContent).toContain(CHILD.title);
+    await act(async () => el('orchestrator-peek-close-btn').click());
+    await act(async () => tableRow.click());
+    expect(highlightedTitle()).toBe(CHILD.title);
+    expect(el('orchestrator-office')).toBe(office);
+    expect(el(`orchestrator-table-row-${CHILD.id}`)).toBe(tableRow);
+    expect(window.localStorage.getItem(`b4m.orchestrator.layout.${PARENT.id}`)).toBe(layout);
+  });
+
+  // One scene stands for all: each view reports selection through the same stage callback.
+  it('syncs scene selection to the sidebar and clears it with Escape', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'tavern');
+    await openParent();
+    await enterOrchestrate();
+    const stage = el('orchestrator-stage');
+    await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
+    expect(highlightedTitle()).toBe(CHILD.title);
+    expect(el('chat-session-title').textContent).toBe(PARENT.title);
+    await act(async () =>
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    );
+    expect(highlightedTitle()).toBe(PARENT.title);
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+    expect(el('orchestrator-stage')).toBe(stage);
+  });
+
+  it('focuses a nested descendant through the sidebar keyboard shortcut without replacing the viewer', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'office');
+    const nested = {
+      ...CHILD,
+      id: 'nested-agent',
+      title: 'Nested agent',
+      origin: { parentSessionId: CHILD.id, seedPrompt: 'nested work' },
+    } as ChatSessionSummary;
+    listed = [...SESSIONS, nested];
+    await openParent();
+    await enterOrchestrate();
+    await clickSessionRow(CHILD.title);
+    const rows = Array.from(document.body.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]'));
+    const index = rows.findIndex(row => row.textContent?.includes(nested.title));
+    expect(index).toBeGreaterThanOrEqual(0);
+    await act(async () =>
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: String(index + 1),
+          code: `Digit${index + 1}`,
+          // The session chord off macOS; jsdom does not report a Mac.
+          altKey: true,
+          bubbles: true,
+        })
+      )
+    );
+    expect(el('chat-session-title').textContent).toBe(PARENT.title);
+    expect(query('orchestrator-office')).not.toBeNull();
+    expect(el('orchestrator-peek-drawer').textContent).toContain(nested.title);
+    expect(highlightedTitle()).toBe(nested.title);
+    await act(async () => el('orchestrator-peek-open-btn').click());
+    expect(el('chat-session-title').textContent).toBe(nested.title);
+    expect(query('orchestrator-stage')).toBeNull();
+  });
+
+  it('navigates normally to another roster or root while Show agents is visible', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    await clickSessionRow(CHILD_B.title);
+    expect(el('chat-session-title').textContent).toBe(CHILD_B.title);
+    expect(query('orchestrator-stage')).toBeNull();
+    await clickSessionRow(PARENT.title);
+    expect(query('orchestrator-stage')).not.toBeNull();
+    await clickSessionRow(PARENT_B.title);
+    expect(el('chat-session-title').textContent).toBe(PARENT_B.title);
+    expect(query('orchestrator-stage')).toBeNull();
+  });
+
+  it('navigates to descendants normally after Show agents is closed, and from another screen', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    await act(async () => el('chat-surface-toggle-chat').click());
+    await clickSessionRow(CHILD.title);
+    expect(el('chat-session-title').textContent).toBe(CHILD.title);
+    expect(query('orchestrator-stage')).toBeNull();
+
+    // Even when the parent has a remembered agents surface.
+    await clickSessionRow(PARENT.title);
+    await enterOrchestrate();
+    await act(async () => el('chat-artifacts-btn').click());
+    await clickSessionRow(CHILD.title);
+    expect(el('chat-session-title').textContent).toBe(CHILD.title);
+    expect(query('orchestrator-stage')).toBeNull();
+  });
+
+  it.each(['aquarium'] as const)(
     'overlays the single parent thread on the %s scene and gives agent details Escape priority',
     async view => {
       window.localStorage.setItem(INTRO_SEEN_KEY, '1');
@@ -282,9 +535,9 @@ describe('orchestrate mode in the chat shell', () => {
       expect(dock.hasAttribute('data-scene-conversation')).toBe(true);
       expect(getComputedStyle(dock).position).toBe('absolute');
       expect(query('orchestrator-dock-resize-handle')).toBeNull();
-      const scene = el(view === 'tavern' ? 'orchestrator-tavern' : 'orchestrator-aquarium');
+      const scene = el('orchestrator-aquarium');
       expect(getComputedStyle(scene).getPropertyValue('anchor-name')).toBe('--orchestrator-scene');
-      const agent = el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`);
+      const agent = el(`orchestrator-fish-${CHILD.id}`);
       await act(async () => agent.click());
       expect(el('orchestrator-stage').getAttribute('data-agent-details-open')).toBe('true');
       await act(async () => el('orchestrator-dock-toggle-btn').click());
@@ -307,64 +560,126 @@ describe('orchestrate mode in the chat shell', () => {
     }
   );
 
-  it('keeps the parent scene thread mounted through ambient settle and wake', async () => {
+  it('docks the conversation beside the stage, toggles and closes the dock, and keeps one thread mounted', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent();
+    const mountsBefore = threadMounts.count;
+    const chatSubscriptions = onStreamEvent.mock.calls.length;
     await enterOrchestrate();
-    const thread = el('chat-thread-empty-host');
-    const mounts = threadMounts.count;
-    vi.useFakeTimers();
-    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
-    await act(async () => vi.advanceTimersByTime(46000));
-    expect(query('orchestrator-dock-hidden')).not.toBeNull();
-    expect(el('chat-thread-empty-host')).toBe(thread);
-    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
-    expect(query('orchestrator-dock')).not.toBeNull();
-    expect(threadMounts.count).toBe(mounts);
-  });
-
-  it('shows the stage with the conversation docked beside it, and the dock toggles', async () => {
-    await openParent();
-    await enterOrchestrate();
-
+    // Agent activity is subscribed to only while orchestrating.
+    expect(onStreamEvent).toHaveBeenCalledTimes(chatSubscriptions + 1);
     expect(query('orchestrator-stage')).not.toBeNull();
     expect(el('orchestrator-dock').querySelector('[data-testid="chat-thread-empty-host"]')).not.toBeNull();
 
     act(() => el('orchestrator-dock-toggle-btn').click());
     expect(query('orchestrator-dock')).toBeNull();
     expect(query('orchestrator-stage')).not.toBeNull();
-
-    act(() => el('chat-surface-toggle-chat').click());
-    expect(query('orchestrator-stage')).toBeNull();
-    expect(query('chat-thread-empty-host')).not.toBeNull();
-  });
-
-  it("hides the dock from its own close button and hands focus to the header's dock toggle", async () => {
-    await openParent();
-    await enterOrchestrate();
-    expect(query('orchestrator-dock')).not.toBeNull();
-
-    act(() => el('orchestrator-dock-close-btn').click());
-    expect(query('orchestrator-dock')).toBeNull();
-    expect(query('orchestrator-dock-hidden')).not.toBeNull();
-    expect(document.activeElement).toBe(el('orchestrator-dock-toggle-btn'));
-  });
-
-  it('keeps the same thread mounted across surface and dock toggles', async () => {
-    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
-    await openParent();
-    const mountsBefore = threadMounts.count;
-
-    await enterOrchestrate();
-    act(() => el('orchestrator-dock-toggle-btn').click());
     // Hidden, not unmounted.
     expect(el('orchestrator-dock-hidden').querySelector('[data-testid="chat-thread-empty-host"]')).not.toBeNull();
+
     act(() => el('orchestrator-dock-toggle-btn').click());
+    // The dock's own close button hands focus to the header's dock toggle.
+    act(() => el('orchestrator-dock-close-btn').click());
+    expect(query('orchestrator-dock')).toBeNull();
+    expect(document.activeElement).toBe(el('orchestrator-dock-toggle-btn'));
+
+    const unsubscribedBefore = streamUnsubscribe.mock.calls.length;
     act(() => el('chat-surface-toggle-chat').click());
+    expect(streamUnsubscribe).toHaveBeenCalledTimes(unsubscribedBefore + 1);
+    expect(query('orchestrator-stage')).toBeNull();
+    expect(query('chat-thread-empty-host')).not.toBeNull();
     await enterOrchestrate();
     act(() => el('chat-surface-toggle-chat').click());
-
     expect(threadMounts.count).toBe(mountsBefore);
+  });
+
+  it('fills the window with the stage from the header button or F, and restores the layout on Escape or Exit', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    const hidden = (testId: string) => getComputedStyle(el(testId)).display === 'none';
+    const expectNormalLayout = () => {
+      expect(hidden('chat-shell-navigation')).toBe(false);
+      expect(hidden('chat-conversation-header')).toBe(false);
+      expect(hidden('chat-composer-region')).toBe(false);
+      expect(query('orchestrator-dock')).not.toBeNull();
+      expect(query('orchestrator-fill-window-btn')).not.toBeNull();
+      expect(query('orchestrator-fill-exit-btn')).toBeNull();
+    };
+    const expectFilled = () => {
+      expect(hidden('chat-shell-navigation')).toBe(true);
+      expect(hidden('chat-conversation-header')).toBe(true);
+      expect(hidden('chat-composer-region')).toBe(true);
+      expect(query('orchestrator-dock')).toBeNull();
+      expect(query('orchestrator-stage')).not.toBeNull();
+      expect(el('orchestrator-fill-view-name').textContent).toBe('Tavern');
+      expect(query('orchestrator-dock-toggle-btn')).toBeNull();
+    };
+    const press = (key: string, target: EventTarget = document.body) =>
+      act(() => {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      });
+    expectNormalLayout();
+
+    act(() => el('orchestrator-fill-window-btn').click());
+    expectFilled();
+    // The composer is hidden, not unmounted, so its draft survives.
+    expect(query('chat-composer-input')).not.toBeNull();
+    act(() => el('orchestrator-fill-exit-btn').click());
+    expectNormalLayout();
+
+    // A key typed into the composer is the composer's.
+    press('f', el('chat-composer-input'));
+    expectNormalLayout();
+
+    press('f');
+    expectFilled();
+    press('Escape');
+    expectNormalLayout();
+
+    // The dock counts as hidden while filled, so a scene click cannot close it behind the user's back.
+    press('f');
+    await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
+    act(() => el('orchestrator-fill-exit-btn').click());
+    expect(query('orchestrator-dock')).not.toBeNull();
+
+    // Opening the conversation from the scene leaves fill window rather than opening it out of sight.
+    press('f');
+    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    expectNormalLayout();
+    expect(document.activeElement).toBe(el('chat-composer-input'));
+
+    // Leaving the Agent view drops it, so coming back opens the normal layout.
+    press('f');
+    act(() => el('chat-surface-toggle-chat').click());
+    expect(hidden('chat-shell-navigation')).toBe(false);
+    await enterOrchestrate();
+    expect(hidden('chat-shell-navigation')).toBe(false);
+    expect(hidden('chat-composer-region')).toBe(false);
+    expect(query('orchestrator-fill-exit-btn')).toBeNull();
+
+    // The Agents place has no stage and so no Exit: going there leaves full window, for good.
+    const sessionPlace = document.querySelector('[data-testid^="place-rail-"][aria-current="page"]');
+    if (!(sessionPlace instanceof HTMLElement)) throw new Error('no current place on the rail');
+    press('f');
+    act(() => el('place-rail-agents-btn').click());
+    expect(query('agents-place')).not.toBeNull();
+    expect(hidden('chat-shell-navigation')).toBe(false);
+    await act(async () => sessionPlace.click());
+    expect(query('orchestrator-fill-exit-btn')).toBeNull();
+    expect(hidden('chat-shell-navigation')).toBe(false);
+  });
+
+  it('keeps the ambient settle off while the window is filled', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    act(() => el('orchestrator-fill-window-btn').click());
+    vi.useFakeTimers();
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
+    await act(async () => vi.advanceTimersByTime(46000));
+    expect(query('orchestrator-ambient-talk-btn')).toBeNull();
+    expect(query('orchestrator-fill-exit-btn')).not.toBeNull();
   });
 
   it('plays the tavern intro on the first entry only, then marks it seen', async () => {
@@ -407,19 +722,6 @@ describe('orchestrate mode in the chat shell', () => {
     expect(window.localStorage.getItem(INTRO_SEEN_KEY)).toBe('1');
   });
 
-  it('subscribes to agent activity only while orchestrating', async () => {
-    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
-    await openParent();
-    const chatSubscriptions = onStreamEvent.mock.calls.length;
-
-    await enterOrchestrate();
-    expect(onStreamEvent).toHaveBeenCalledTimes(chatSubscriptions + 1);
-
-    const unsubscribedBefore = streamUnsubscribe.mock.calls.length;
-    act(() => el('chat-surface-toggle-chat').click());
-    expect(streamUnsubscribe).toHaveBeenCalledTimes(unsubscribedBefore + 1);
-  });
-
   it('starts a fresh stage when switching between orchestrating parents', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     for (const parent of [PARENT, PARENT_B]) {
@@ -435,20 +737,6 @@ describe('orchestrate mode in the chat shell', () => {
     expect(el('orchestrator-table-sort-agent').getAttribute('aria-sort')).toBe('none');
   });
 
-  it('never drops stored prefs for sessions outside the current listing', async () => {
-    window.localStorage.setItem('b4m.orchestrator.view.other-scope', 'board');
-    window.localStorage.setItem('b4m.orchestrator.surface.other-scope', 'orchestrate');
-    await openParent();
-    expect(window.localStorage.getItem('b4m.orchestrator.view.other-scope')).toBe('board');
-    expect(window.localStorage.getItem('b4m.orchestrator.surface.other-scope')).toBe('orchestrate');
-  });
-
-  it('offers no toggle on a chat session with no agents', async () => {
-    listed = [...SESSIONS, { ...PARENT, id: 'plain-1', title: 'Plain chat' } as ChatSessionSummary];
-    await openParent('Plain chat');
-    expect(query('chat-surface-toggle-orchestrate')).toBeNull();
-  });
-
   it('turning Orchestrate on exposes an empty agents scene while starting in conversation', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     listed = [...SESSIONS, CODE];
@@ -457,6 +745,7 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrate-example-quests')).toBeNull();
 
     await act(async () => el('composer-orchestrate-toggle').click());
+    await act(async () => el('orchestrate-budget-start-btn').click());
     expect(setSessionOrchestrate).toHaveBeenCalledWith(CODE.id, true);
     expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
     expect(query('chat-surface-toggle')).not.toBeNull();
@@ -475,37 +764,6 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrate-example-quests')).toBeNull();
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('chat-surface-toggle')).toBeNull();
-  });
-
-  it('keeps the run policy off the composer and in the Orchestrate tooltip', async () => {
-    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
-    const orchestrating = {
-      ...CODE,
-      orchestrate: true,
-      orchestrationPolicy: {
-        rootSessionId: CODE.id,
-        rootRunId: 'run-1',
-        policy: {
-          ...inheritancePolicy(),
-          roles: { implementation: 'gone', exploration: 'inherit', review: 'inherit' },
-        },
-      },
-    } as ChatSessionSummary;
-    listed = [...SESSIONS, orchestrating];
-    catalogModels = [{ id: 'test-model', name: 'Test Model', supportsTools: true }];
-    await openParent(CODE.title, 'code');
-    expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
-    expect(query('orchestration-policy-summary')).toBeNull();
-    expect(query('composer-orchestrate-unavailable')).not.toBeNull();
-
-    await act(async () => {
-      el('composer-orchestrate-toggle').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      // Joy's Tooltip opens after its enter delay (100ms).
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
-    expect(el('orchestration-policy-summary').textContent).toContain(
-      'implementation: gone (unavailable; choose a replacement)'
-    );
   });
 
   it('does not offer example quests on an orchestrating session that already has a transcript', async () => {
@@ -567,11 +825,13 @@ describe('orchestrate mode in the chat shell', () => {
 
     setSessionOrchestrate.mockRejectedValueOnce(new Error('disk full'));
     await act(async () => el('composer-orchestrate-toggle').click());
+    await act(async () => el('orchestrate-budget-start-btn').click());
     expect(el('chat-notice').textContent).toContain('Could not change Orchestrate. disk full');
     expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('false');
 
     setSessionOrchestrate.mockResolvedValueOnce(null);
     await act(async () => el('composer-orchestrate-toggle').click());
+    await act(async () => el('orchestrate-budget-start-btn').click());
     expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('false');
   });
 
@@ -585,19 +845,14 @@ describe('orchestrate mode in the chat shell', () => {
     expect(window.localStorage.getItem(`b4m.orchestrator.surface.${CODE.id}`)).toBe('orchestrate');
   });
 
-  it('offers neither the toggle nor the switch on a code session whose model has no tools', async () => {
+  it('offers orchestrate controls below the spawn depth cap, but not at it or on a model with no tools, even with the flag on', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
-    window.localStorage.setItem(`b4m.orchestrator.surface.${CODE.id}`, 'orchestrate');
-    catalogModels = [{ id: 'no-tools', name: 'No tools', supportsTools: false } as ChatModelOption];
-    listed = [...SESSIONS, { ...CODE, model: 'no-tools', orchestrate: true } as ChatSessionSummary];
-    await openParent(CODE.title, 'code');
-    expect(query('chat-surface-toggle-orchestrate')).toBeNull();
-    expect(query('orchestrator-stage')).toBeNull();
-    expect(query('composer-orchestrate-toggle')).toBeNull();
-  });
-
-  it('offers no orchestrate controls on a code agent at the spawn depth cap, even with the flag on', async () => {
-    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    const shallow = {
+      ...CODE,
+      id: 'code-shallow',
+      title: 'Shallow agent',
+      origin: { parentSessionId: CODE.id, depth: 1, seedPrompt: 'shallow' },
+    } as ChatSessionSummary;
     const deep = {
       ...CODE,
       id: 'code-deep',
@@ -606,34 +861,35 @@ describe('orchestrate mode in the chat shell', () => {
       origin: { parentSessionId: CODE.id, depth: 2, seedPrompt: 'deep' },
     } as ChatSessionSummary;
     window.localStorage.setItem(`b4m.orchestrator.surface.${deep.id}`, 'orchestrate');
-    listed = [...SESSIONS, CODE, deep];
+    const noTools = {
+      ...CODE,
+      id: 'code-no-tools',
+      title: 'No tools thread',
+      model: 'no-tools',
+      orchestrate: true,
+    } as ChatSessionSummary;
+    window.localStorage.setItem(`b4m.orchestrator.surface.${noTools.id}`, 'orchestrate');
+    catalogModels = [
+      { id: 'test-model', name: 'Test Model', supportsTools: true },
+      { id: 'no-tools', name: 'No tools', supportsTools: false } as ChatModelOption,
+    ];
+    listed = [...SESSIONS, CODE, shallow, deep, noTools];
     await openParent(deep.title, 'code');
     expect(el('chat-session-title').textContent).toBe(deep.title);
     expect(query('chat-surface-toggle-orchestrate')).toBeNull();
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('composer-orchestrate-toggle')).toBeNull();
-  });
 
-  it('offers the Orchestrate pill on a code agent below the depth cap', async () => {
-    const shallow = {
-      ...CODE,
-      id: 'code-shallow',
-      title: 'Shallow agent',
-      origin: { parentSessionId: CODE.id, depth: 1, seedPrompt: 'shallow' },
-    } as ChatSessionSummary;
-    listed = [...SESSIONS, CODE, shallow];
-    await openParent(shallow.title, 'code');
+    await clickSessionRow(shallow.title);
     expect(el('chat-session-title').textContent).toBe(shallow.title);
     expect(query('composer-orchestrate-toggle')).not.toBeNull();
     // It has spawned nothing yet, so there is no agents view to switch to.
     expect(query('chat-surface-toggle')).toBeNull();
-  });
 
-  it('leaves the Orchestrate toggle out of a chat session', async () => {
-    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
-    await openParent();
-    await enterOrchestrate();
-    expect(query('orchestrator-stage')).not.toBeNull();
+    await clickSessionRow(noTools.title);
+    expect(el('chat-session-title').textContent).toBe(noTools.title);
+    expect(query('chat-surface-toggle-orchestrate')).toBeNull();
+    expect(query('orchestrator-stage')).toBeNull();
     expect(query('composer-orchestrate-toggle')).toBeNull();
   });
 
@@ -678,52 +934,45 @@ describe('orchestrate mode in the chat shell', () => {
     expect((el('chat-composer-input') as HTMLTextAreaElement).value).toBe('');
   });
 
-  it.each(['tavern', 'aquarium'] as const)(
-    'closes the %s conversation on outside clicks but preserves portals',
-    async view => {
-      window.localStorage.setItem(INTRO_SEEN_KEY, '1');
-      window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
-      await openParent();
-      await enterOrchestrate();
-      await act(async () => el('chat-thread-empty-host').click());
-      expect(query('orchestrator-dock')).not.toBeNull();
-      await act(async () => el('thread-portal-control').click());
-      expect(query('orchestrator-dock')).not.toBeNull();
-      await act(async () => el('chat-composer-input').click());
-      expect(query('orchestrator-dock')).not.toBeNull();
-      await act(async () => el('chat-header-tools').click());
-      expect(query('orchestrator-dock')).toBeNull();
-      await act(async () => el('orchestrator-dock-toggle-btn').click());
-      await act(async () => document.body.click());
-      expect(query('orchestrator-dock')).toBeNull();
-      await act(async () => el('orchestrator-dock-toggle-btn').click());
-      await act(async () => el(view === 'tavern' ? 'orchestrator-tavern' : 'orchestrator-aquarium').click());
-      expect(query('orchestrator-dock')).toBeNull();
-      await act(async () => el('orchestrator-dock-toggle-btn').click());
-      await act(async () =>
-        el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`).click()
-      );
-      expect(query('orchestrator-dock')).toBeNull();
-      expect(query('orchestrator-peek-drawer')).not.toBeNull();
-      await act(async () => el('orchestrator-peek-drawer').click());
-      expect(query('orchestrator-peek-drawer')).not.toBeNull();
-      await act(async () => el('orchestrator-peek-actions-menu-btn').click());
-      await act(async () => el('orchestrator-peek-actions-menu').click());
-      expect(query('orchestrator-peek-drawer')).not.toBeNull();
-      await act(async () => document.body.click());
-      expect(query('orchestrator-peek-drawer')).toBeNull();
-      await act(async () =>
-        el(view === 'tavern' ? `orchestrator-tavern-agent-${CHILD.id}` : `orchestrator-fish-${CHILD.id}`).click()
-      );
-      expect(query('orchestrator-peek-drawer')).not.toBeNull();
-      await act(async () => el('chat-composer-input').click());
-      expect(query('orchestrator-peek-drawer')).toBeNull();
-      await act(async () => el('chat-surface-toggle-chat').click());
-      await act(async () => el('chat-thread-region').click());
-      expect(query('chat-thread-empty-host')).not.toBeNull();
-      expect(query('orchestrator-dock-hidden')).toBeNull();
-    }
-  );
+  it.each(['tavern'] as const)('closes the %s conversation on outside clicks but preserves portals', async view => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
+    await openParent();
+    await enterOrchestrate();
+    await act(async () => el('chat-thread-empty-host').click());
+    expect(query('orchestrator-dock')).not.toBeNull();
+    await act(async () => el('thread-portal-control').click());
+    expect(query('orchestrator-dock')).not.toBeNull();
+    await act(async () => el('chat-composer-input').click());
+    expect(query('orchestrator-dock')).not.toBeNull();
+    await act(async () => el('chat-header-tools').click());
+    expect(query('orchestrator-dock')).toBeNull();
+    await act(async () => el('orchestrator-dock-toggle-btn').click());
+    await act(async () => document.body.click());
+    expect(query('orchestrator-dock')).toBeNull();
+    await act(async () => el('orchestrator-dock-toggle-btn').click());
+    await act(async () => el('orchestrator-tavern').click());
+    expect(query('orchestrator-dock')).toBeNull();
+    await act(async () => el('orchestrator-dock-toggle-btn').click());
+    await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
+    expect(query('orchestrator-dock')).toBeNull();
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    await act(async () => el('orchestrator-peek-drawer').click());
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    await act(async () => el('orchestrator-peek-actions-menu-btn').click());
+    await act(async () => el('orchestrator-peek-actions-menu').click());
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    await act(async () => document.body.click());
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+    await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    await act(async () => el('chat-composer-input').click());
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+    await act(async () => el('chat-surface-toggle-chat').click());
+    await act(async () => el('chat-thread-region').click());
+    expect(query('chat-thread-empty-host')).not.toBeNull();
+    expect(query('orchestrator-dock-hidden')).toBeNull();
+  });
 
   it('celebrates a quest_complete summary and reads the report by scrolling to it', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
@@ -772,77 +1021,144 @@ describe('orchestrate mode in the chat shell', () => {
     expect(scrolled.at(-1)?.hasAttribute('data-report-highlight')).toBe(false);
   });
 
-  it('holds the finale for a reply that settled the run but was not marked by quest_complete', async () => {
-    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
-    const at = '2026-10-01T00:00:00.000Z';
-    parentMessages = [
-      { id: 'a1', role: 'assistant', content: 'Spawning agents', createdAt: at },
-      { id: 'r1', role: 'user', content: 'Report from agent one', createdAt: at, system: true },
-      {
-        id: 'a2',
-        role: 'assistant',
-        content: 'Waiting for the install to finish',
-        createdAt: '2026-10-01T00:10:00.000Z',
-      },
-    ] as ChatMessage[];
-    statusSnapshot = [{ sessionId: CHILD.id, status: 'processing' }];
-    await openParent();
-    await enterOrchestrate();
-
-    vi.useFakeTimers();
-    await act(async () => statusListener?.({ sessionId: CHILD.id, status: 'done' }));
-    await act(async () => {
-      vi.advanceTimersByTime(5000);
-    });
-    expect(query('orchestrator-finale')).toBeNull();
-  });
-
-  it("opens a clicked notice's agent: selects its parent, orchestrates, and peeks the agent", async () => {
+  it('routes a clicked notice: ignores a deleted session, keeps a root on its view, and peeks an agent', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
-    await openParent(PARENT_B.title);
-    expect(query('orchestrator-stage')).toBeNull();
-
-    await act(async () => attentionOpen?.({ sessionId: CHILD.id, rootId: PARENT.id }));
-    await act(async () => undefined);
-    expect(el('chat-session-title').textContent).toBe(PARENT.title);
-    expect(query('orchestrator-stage')).not.toBeNull();
-    expect(query('orchestrator-peek-drawer')).not.toBeNull();
-  });
-
-  it("opens a session's own notice on the view it was on, never forcing the stage", async () => {
-    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     listed = [...SESSIONS, CODE];
-    await openParent(PARENT_B.title);
-
-    await act(async () => attentionOpen?.({ sessionId: CODE.id, rootId: CODE.id }));
-    await act(async () => undefined);
-    expect(el('chat-session-title').textContent).toBe(CODE.title);
-    expect(query('orchestrator-stage')).toBeNull();
-    expect(window.localStorage.getItem(`b4m.orchestrator.surface.${CODE.id}`)).toBeNull();
-  });
-
-  it('ignores a clicked notice whose session has since been deleted, staying on the open conversation', async () => {
-    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent(PARENT_B.title);
 
     await act(async () => attentionOpen?.({ sessionId: 'deleted-agent', rootId: 'deleted-parent' }));
     await act(async () => undefined);
     expect(el('chat-session-title').textContent).toBe(PARENT_B.title);
     expect(window.localStorage.getItem('b4m.orchestrator.surface.deleted-parent')).toBeNull();
+
+    // A session's own notice opens on the view it was on, never forcing the stage.
+    await act(async () => attentionOpen?.({ sessionId: CODE.id, rootId: CODE.id }));
+    await act(async () => undefined);
+    expect(el('chat-session-title').textContent).toBe(CODE.title);
+    expect(query('orchestrator-stage')).toBeNull();
+    expect(window.localStorage.getItem(`b4m.orchestrator.surface.${CODE.id}`)).toBeNull();
+
+    // An agent's notice selects its parent, orchestrates, and peeks the agent.
+    await act(async () => attentionOpen?.({ sessionId: CHILD.id, rootId: PARENT.id }));
+    await act(async () => undefined);
+    expect(el('chat-session-title').textContent).toBe(PARENT.title);
+    expect(query('orchestrator-stage')).not.toBeNull();
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
+  });
+});
+
+describe('the reply stats rail with the orchestrator', () => {
+  let restoreWidth: (() => void) | null = null;
+
+  afterEach(() => {
+    restoreWidth?.();
+    restoreWidth = null;
   });
 
-  it('opens an agent session from the stage', async () => {
+  const toggleTitle = async () => {
+    const trigger = el('chat-toggle-reply-stats-btn').parentElement!;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    const title = document.body.querySelector('[role="tooltip"]')?.textContent;
+    await act(async () => trigger.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })));
+    return title;
+  };
+
+  it('draws the rail beside the full-width thread, and keeps the stats under the reply in the dock', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
+    reloadReplyStatsPrefs();
+    const at = '2026-10-01T00:00:00.000Z';
+    parentMessages = [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: at },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'An answer',
+        createdAt: at,
+        stats: { totalMs: 4000, modelMs: 4000, toolMs: 0, generation: { tokens: 119, ms: 3000 } },
+        usage: { outputTokens: 120 },
+      },
+    ] as ChatMessage[];
+    const width = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 1400 } as DOMRect);
+    restoreWidth = () => width.mockRestore();
+    await openParent();
+    expect(el('chat-thread').contains(el('chat-reply-stats-rail'))).toBe(true);
+    expect(query('chat-message-cost')).toBeNull();
+
+    await enterOrchestrate();
+    expect(query('orchestrator-dock')).not.toBeNull();
+    expect(query('chat-reply-stats-rail')).toBeNull();
+    expect(el('orchestrator-dock').contains(el('chat-message-cost'))).toBe(true);
+    expect(el('chat-message-cost').textContent).toContain('4.0s total');
+    // The other titles are replyStatsToggleTitle's own tests; this proves the orchestrator state reaches it.
+    expect(await toggleTitle()).toBe(
+      'Hide reply stats beside the conversation; while orchestrating they show under each reply on hover'
+    );
+
+    act(() => el('chat-surface-toggle-chat').click());
+    expect(el('chat-thread').contains(el('chat-reply-stats-rail'))).toBe(true);
+  });
+
+  const statsThread = (): ChatMessage[] => {
+    const at = '2026-10-01T00:00:00.000Z';
+    return [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: at },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'An answer',
+        createdAt: at,
+        stats: { totalMs: 4000, modelMs: 4000, toolMs: 0, generation: { tokens: 119, ms: 3000 } },
+        usage: { outputTokens: 120 },
+      },
+    ] as ChatMessage[];
+  };
+
+  const wideWindow = () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 1400 } as DOMRect);
+    restoreWidth = () => width.mockRestore();
+  };
+
+  // The rail hides for any shown orchestrator whatever the view; the tavern stands in for the scene
+  // overlays, and the table for the side dock in the first test above.
+  it.each([['Focus mode on the tavern', 'tavern', true]] as const)(
+    'keeps the stats under the reply in the conversation docked over %s',
+    async (_label, view, focus) => {
+      window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+      window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
+      if (focus) window.localStorage.setItem('b4m.orchestrator.focus', '1');
+      reloadReplyStatsPrefs();
+      parentMessages = statsThread();
+      wideWindow();
+      await openParent();
+      expect(el('chat-thread').contains(el('chat-reply-stats-rail'))).toBe(true);
+
+      await enterOrchestrate();
+      expect(query('orchestrator-focus-panel') !== null).toBe(focus);
+      expect(query('chat-reply-stats-rail')).toBeNull();
+      expect(el('orchestrator-dock').contains(el('chat-message-cost'))).toBe(true);
+      expect(el('chat-message-cost').textContent).toContain('4.0s total');
+    }
+  );
+
+  it("keeps the stats under the reply in an agent's details over a scene", async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'tavern');
+    reloadReplyStatsPrefs();
+    childMessages = statsThread();
+    wideWindow();
     await openParent();
     await enterOrchestrate();
-
-    await act(async () => el('orchestrator-table-row-child-1').click());
-    await act(async () => el('orchestrator-peek-open-btn').click());
+    await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
     await act(async () => undefined);
-    expect(el('chat-session-title').textContent).toBe(CHILD.title);
-    // The agent has spawned nothing itself, so its own session is plain chat.
-    expect(query('orchestrator-stage')).toBeNull();
+
+    const drawer = el('orchestrator-peek-drawer');
+    expect(drawer.querySelector('[data-testid="chat-message-cost"]')?.textContent).toContain('4.0s total');
+    expect(query('chat-reply-stats-rail')).toBeNull();
   });
 });

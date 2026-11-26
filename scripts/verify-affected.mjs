@@ -14,6 +14,7 @@
 // (e.g. --concurrency=4).
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, matchesGlob, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,7 +34,6 @@ const FULL_LINT_GLOBS = [
   'eslint.config.mjs',
   'eslint-suppressions.json',
   'eslint-rules/**',
-  'packages/eslint-config/**',
 ];
 
 const LINTABLE = /\.(?:[cm]?js|jsx|[cm]?ts|tsx)$/;
@@ -159,10 +159,23 @@ export function readPackageDirs(filters = []) {
   return Object.fromEntries(packages.items.map(({ name, path }) => [name, path]));
 }
 
+// Worktrees on one machine share a content-addressed turbo cache; a per-worktree one rebuilds every
+// upstream package in each fresh worktree. An explicit TURBO_CACHE_DIR wins.
+function turboEnv() {
+  return { ...process.env, TURBO_CACHE_DIR: process.env.TURBO_CACHE_DIR || join(homedir(), '.cache', 'turbo-b4m') };
+}
+
+// Turbo's default is 10 concurrent multi-threaded tasks, which oversubscribes the host when several
+// sessions push at once. TURBO_CONCURRENCY is this script's own override, not a turbo variable.
+function concurrencyArgs(turboArgs) {
+  if (turboArgs.some(arg => arg === '--concurrency' || arg.startsWith('--concurrency='))) return [];
+  return [`--concurrency=${process.env.TURBO_CONCURRENCY || '25%'}`];
+}
+
 function run(command, args, dry) {
   console.log(`\n$ ${[command, ...args].join(' ')}`);
   if (dry) return;
-  const { status, error } = spawnSync(command, args, { cwd: repoRoot, stdio: 'inherit' });
+  const { status, error } = spawnSync(command, args, { cwd: repoRoot, stdio: 'inherit', env: turboEnv() });
   if (error) throw error;
   if (status !== 0) process.exit(status ?? 1);
 }
@@ -199,7 +212,7 @@ function main() {
       }
     }
     if (fullRun || filters.length) {
-      run('pnpm', ['exec', 'turbo', 'run', ...options.tasks, ...filters, ...options.turboArgs], options.dry);
+      run('pnpm', ['exec', 'turbo', 'run', ...options.tasks, ...filters, ...concurrencyArgs(options.turboArgs), ...options.turboArgs], options.dry);
     } else {
       console.log('\nverify: no workspace package changed; skipping turbo.');
     }

@@ -100,7 +100,7 @@ const spendAlarm = (provider: string, threshold: number) => ({
   alarmDescription: expect.any(String),
   comparisonOperator: 'GreaterThanOrEqualToThreshold',
   evaluationPeriods: 1,
-  metricName: 'ProviderReportedUsd',
+  metricName: 'ProviderReportedOrgUsd',
   namespace: 'test-app/production/LLMSpend',
   dimensions: { Provider: provider },
   period: 3600,
@@ -201,6 +201,45 @@ describe('provider-reported spend alarms', () => {
       treatMissingData: 'notBreaching',
       dimensions: { FunctionName: 'poller-function' },
       alarmActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it('warns when the model price snapshot is 48 hours old', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('modelPriceSnapshotAge', {
+      name: 'test-app-production-model-price-snapshot-age',
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ModelPriceSnapshotAgeHours',
+      namespace: 'test-app/production/LLMSpend',
+      period: 3600,
+      statistic: 'Maximum',
+      threshold: 48,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic', 'email-topic'],
+      okActions: ['alarm-topic', 'email-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
+  it('warns when the model price snapshot was missing on 48 consecutive polls', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('modelPriceSnapshotMissing', {
+      name: 'test-app-production-model-price-snapshot-missing',
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 48,
+      datapointsToAlarm: 48,
+      metricName: 'ModelPriceSnapshotMissing',
+      namespace: 'test-app/production/LLMSpend',
+      period: 3600,
+      statistic: 'Maximum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic', 'email-topic'],
+      okActions: ['alarm-topic', 'email-topic'],
       tags: { Application: 'LLMSpend', Severity: 'Medium' },
     });
   });
@@ -330,11 +369,14 @@ describe('provider spend dashboard', () => {
     expect(widgets.map(w => w.properties.title)).toEqual([
       'Provider-reported USD per hour',
       'Unpriced output tokens per hour',
+      'Model price snapshot age (hours)',
     ]);
     for (const widget of widgets) expect(widget.properties.period).toBe(3600);
     expect(widgets[0].properties.metrics).toEqual([
       ['test-app/production/LLMSpend', 'ProviderReportedUsd', 'Provider', 'anthropic', expect.any(Object)],
       ['test-app/production/LLMSpend', 'ProviderReportedUsd', 'Provider', 'openai', expect.any(Object)],
+      ['test-app/production/LLMSpend', 'ProviderReportedOrgUsd', 'Provider', 'anthropic', expect.any(Object)],
+      ['test-app/production/LLMSpend', 'ProviderReportedOrgUsd', 'Provider', 'openai', expect.any(Object)],
     ]);
   });
 });
@@ -342,7 +384,7 @@ describe('provider spend dashboard', () => {
 describe('provider spend stage gating', () => {
   it.each(['dev', 'production'])('creates resources on %s', async stage => {
     await load(stage);
-    expect(resources.alarm).toHaveBeenCalledTimes(10);
+    expect(resources.alarm).toHaveBeenCalledTimes(12);
     expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
 
@@ -360,6 +402,8 @@ describe('provider spend stage gating', () => {
     expect(callFor(resources.alarm, 'providerUsagePollErrors')).toBeUndefined();
     expect(callFor(resources.alarm, 'providerUsagePollSkipped-anthropic')).toBeUndefined();
     expect(callFor(resources.alarm, 'providerUsagePollSkipped-openai')).toBeUndefined();
+    expect(callFor(resources.alarm, 'modelPriceSnapshotAge')).toBeUndefined();
+    expect(callFor(resources.alarm, 'modelPriceSnapshotMissing')).toBeUndefined();
     expect(resources.alarm).toHaveBeenCalledTimes(4);
     expect(callFor(resources.alarm, 'providerReportedSpendHourly-anthropic')).toBeDefined();
     expect(callFor(resources.alarm, 'providerReportedSpendHourly-openai')).toBeDefined();

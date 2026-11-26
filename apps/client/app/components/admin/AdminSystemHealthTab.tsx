@@ -1,4 +1,5 @@
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
+import { SELF_HOST_SETTINGS_HINT } from '@bike4mind/common';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -239,7 +240,7 @@ const getEmailErrorGuidance = (error: string): string | null => {
 
   // Auth failed
   if (error.includes('authentication') || error.includes('535') || error.includes('Invalid login')) {
-    return 'SMTP authentication failed. Verify MAIL_USERNAME and MAIL_PASSWORD are correct.';
+    return 'SMTP authentication failed. Verify MAIL_USERNAME and MAIL_PASSWORD are correct, or set both if they are unset and the server requires auth.';
   }
 
   // Timeout
@@ -295,6 +296,19 @@ const getOAuthErrorGuidance = (provider: OAuthProvider, error: string): string |
   }
 
   return null;
+};
+
+const MAIL_DELIVERY_LABELS: Record<SystemHealthResponse['email']['transport'], string> = {
+  ses: 'Amazon SES',
+  smtp: 'SMTP server',
+};
+
+const MAIL_SETTING_LABELS: Record<string, { label: string; help: string }> = {
+  MAIL_FROM: { label: 'Sender address', help: 'the address system emails are sent from' },
+  MAIL_HOST: { label: 'SMTP host', help: 'the mail server to connect to' },
+  MAIL_PORT: { label: 'SMTP port', help: 'the port on the mail server' },
+  MAIL_USERNAME: { label: 'SMTP username', help: 'the login for the mail server' },
+  MAIL_PASSWORD: { label: 'SMTP password', help: 'the password for the mail server' },
 };
 
 const ConfigStatusChip = ({ configured, testId }: { configured: boolean; testId?: string }) => (
@@ -625,7 +639,7 @@ const AdminSystemHealthTab = () => {
     );
   }
 
-  const { email, database, oauth } = systemHealth.data || {};
+  const { email, database, oauth, selfHost, plaintextSecretsOptOut } = systemHealth.data || {};
   const integrations = integrationHealth.data?.integrations ?? [];
 
   const renderBreakerChip = (
@@ -648,6 +662,20 @@ const AdminSystemHealthTab = () => {
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-system-health-tab">
       {header}
 
+      {plaintextSecretsOptOut && (
+        <Alert color="warning" variant="outlined" data-testid="system-health-plaintext-secrets-warning">
+          <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+            <Typography level="body-sm" fontWeight="bold">
+              Secrets are stored unencrypted
+            </Typography>
+            <Typography level="body-xs">
+              B4M_ALLOW_PLAINTEXT_SECRETS is set and there is no valid SECRET_ENCRYPTION_KEY. Set a 64-character hex key
+              to encrypt stored secrets (see SELF_HOST.md).
+            </Typography>
+          </Stack>
+        </Alert>
+      )}
+
       <SectionCard
         title="Email"
         body="custom"
@@ -668,24 +696,35 @@ const AdminSystemHealthTab = () => {
           )}
 
           <Typography level="title-sm" sx={{ color: 'admin.ink' }}>
-            Required secrets
+            Mail settings
           </Typography>
 
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 1 }}>
+          {email?.transport && (
+            <Typography level="body-sm" sx={{ color: 'admin.ink' }} data-testid="system-health-email-delivery">
+              Sent through {MAIL_DELIVERY_LABELS[email.transport]}
+            </Typography>
+          )}
+
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 1.5 }}>
             {email?.secrets &&
               Object.entries(email.secrets).map(([key, configured]) => (
-                <Stack
-                  key={key}
-                  data-testid={`system-health-email-secret-${key}`}
-                  direction="row"
-                  alignItems="center"
-                  gap={1}
-                  sx={{ minWidth: 0 }}
-                >
-                  <Typography level="body-sm" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
-                    {key}
-                  </Typography>
-                  {!configured && <StatusChip tone="warn" label="Missing" />}
+                <Stack key={key} data-testid={`system-health-email-secret-${key}`} gap={0.25} sx={{ minWidth: 0 }}>
+                  <Stack direction="row" alignItems="center" gap={1}>
+                    <Typography level="body-sm" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
+                      {MAIL_SETTING_LABELS[key]?.label ?? key}
+                    </Typography>
+                    {!configured &&
+                      (email.optionalSecrets?.some(name => name === key) ? (
+                        <StatusChip tone="neutral" label="Optional" />
+                      ) : (
+                        <StatusChip tone="warn" label="Missing" />
+                      ))}
+                  </Stack>
+                  {MAIL_SETTING_LABELS[key] && (
+                    <Typography level="body-xs" sx={{ color: 'admin.inkMuted', overflowWrap: 'anywhere' }}>
+                      {key}: {MAIL_SETTING_LABELS[key].help}
+                    </Typography>
+                  )}
                 </Stack>
               ))}
           </Box>
@@ -694,19 +733,27 @@ const AdminSystemHealthTab = () => {
             <Alert color="warning" variant="outlined">
               <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
                 <Typography level="body-sm" fontWeight="bold">
-                  Missing secrets
+                  Missing settings
                 </Typography>
                 <Typography level="body-xs">{email.missingSecrets.join(', ')}</Typography>
-                <Typography level="body-xs">
-                  Set {email.missingSecrets.length === 1 ? 'it' : 'each one'} using:
-                </Typography>
-                {email.missingSecrets.map(name => (
-                  <Typography key={name} level="body-xs">
-                    <code data-testid={`system-health-email-secret-hint-${name}`}>
-                      ./for-env {'<stage>'} npx sst secret set {name} {'<value>'}
-                    </code>
+                {selfHost ? (
+                  <Typography level="body-xs" data-testid="system-health-email-hint">
+                    {SELF_HOST_SETTINGS_HINT}
                   </Typography>
-                ))}
+                ) : (
+                  <>
+                    <Typography level="body-xs">
+                      Set {email.missingSecrets.length === 1 ? 'it' : 'each one'} using:
+                    </Typography>
+                    {email.missingSecrets.map(name => (
+                      <Typography key={name} level="body-xs">
+                        <code data-testid={`system-health-email-secret-hint-${name}`}>
+                          ./for-env {'<stage>'} npx sst secret set {name} {'<value>'}
+                        </code>
+                      </Typography>
+                    ))}
+                  </>
+                )}
               </Stack>
             </Alert>
           )}

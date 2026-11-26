@@ -328,7 +328,7 @@ function HostedSwitchDialog({
           <Button color="warning" onClick={onConfirm} data-testid="model-picker-hosted-confirm-btn">
             Switch to {to.name}
           </Button>
-          <Button variant="plain" onClick={onCancel} data-testid="model-picker-hosted-cancel-btn">
+          <Button variant="outlined" color="neutral" onClick={onCancel} data-testid="model-picker-hosted-cancel-btn">
             Stay local
           </Button>
         </DialogActions>

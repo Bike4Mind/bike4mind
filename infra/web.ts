@@ -1,3 +1,4 @@
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 import {
   appFilesBucket,
   fabFileBucket,
@@ -15,7 +16,7 @@ import {
   TEST_DECISION_PROVIDER_ENVIRONMENT,
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
-import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
+import { attackSimulationFunction, modelDiscoveryFunction, cloudSecurityScanFunction } from './cron';
 // web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
 // not import agentExecutor (the agent_execute route is declared the other way
 // round to break exactly that cycle).
@@ -39,6 +40,7 @@ import {
 import {
   eventBus,
   telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
@@ -76,6 +78,7 @@ import {
   agentProactiveMessageQueue,
   slackExportQueue,
   githubWebhookQueue,
+  callableFunctionCallQueue,
   questExportQueue,
   accountDataExportQueue,
   accountErasureQueue,
@@ -106,7 +109,6 @@ import {
   whatsNewGenerationQueue,
   notebookCurationQueue,
   webhookDeliveryQueue,
-  liveOpsTriageQueue,
   // DLQ exports used by the dlqUrls Linkable (not directly linked to avoid IAM bloat).
   fabFileChunkQueueDLQ,
   fabFileModerationDLQ,
@@ -123,10 +125,10 @@ import {
   slackExportQueueDLQ,
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
   accountErasureQueueDLQ,
-  liveOpsTriageQueueDLQ,
   tavernHeartbeatQueue,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueue,
@@ -161,6 +163,7 @@ import {
   slackExportQueueSubscription,
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
+  callableFunctionCallQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
   accountErasureQueueSubscription,
@@ -175,7 +178,6 @@ import {
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
   githubLakeRevokeQueueSubscription,
-  liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
   sreJobQueueSubscription,
@@ -195,6 +197,8 @@ import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
+import { callableFunctionDataForWeb } from './callableFunctionData';
 
 // Every queue this stage creates, by SST's physical-name prefix. SST keeps `${app}-${stage}-`
 // in front of a queue name only while app + stage + logical name + 2 fit in 71 characters (SQS's
@@ -228,6 +232,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     ...stageScopedQueueUrls({
       // Contributed entries go first so a core key always wins.
       ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
+      'cloud-security-scan': cloudSecurityScanDeadLetter.queue.url,
       'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
       'fab-file-chunk': fabFileChunkQueueDLQ.url,
       'generation-callback': generationCallbackQueueDLQ.url,
@@ -242,10 +247,10 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       'slack-export': slackExportQueueDLQ.url,
       'github-webhook': githubWebhookQueueDLQ.url,
       'webhook-delivery': webhookDeliveryQueueDLQ.url,
+      'callable-function-call': callableFunctionCallQueueDLQ.url,
       'quest-export': questExportQueueDLQ.url,
       'account-data-export': accountDataExportQueueDLQ.url,
       'account-erasure': accountErasureQueueDLQ.url,
-      'liveops-triage': liveOpsTriageQueueDLQ.url,
       'email-ingestion': emailIngestionQueueDLQ.url,
       'email-analysis': emailAnalysisQueueDLQ.url,
       'email-batch': emailBatchQueueDLQ.url,
@@ -274,6 +279,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       'generated-media-purge': generatedMediaPurgeQueueDLQ.url,
       'fab-file-moderation': fabFileModerationDLQ.url,
       'telemetry-alert-rule': telemetryAlertDeadLetter.queue.url,
+      'moderation-alerts': moderationAlertsDeadLetter.queue.url,
       'session-enrichment': sessionEnrichmentDeadLetter.queue.url,
       'billing-events': billingEventsDeadLetter.queue.url,
       'email-events': emailEventsDeadLetter.queue.url,
@@ -313,6 +319,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
 const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
   properties: {
     attackSimulation: attackSimulationFunction.name,
+    cloudSecurityScan: cloudSecurityScanFunction.name,
     // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
     // function the discovery cron targets, with { trigger: 'manual' }.
     modelDiscovery: modelDiscoveryFunction.name,
@@ -340,11 +347,11 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     agentProactiveMessageQueue: agentProactiveMessageQueue.url,
     slackExportQueue: slackExportQueue.url,
     githubWebhookQueue: githubWebhookQueue.url,
+    callableFunctionCallQueue: callableFunctionCallQueue.url,
     questExportQueue: questExportQueue.url,
     accountDataExportQueue: accountDataExportQueue.url,
     accountErasureQueue: accountErasureQueue.url,
     whatsNewGenerationQueue: whatsNewGenerationQueue.url,
-    liveOpsTriageQueue: liveOpsTriageQueue.url,
     notebookCurationQueue: notebookCurationQueue.url,
     webhookDeliveryQueue: webhookDeliveryQueue.url,
     emailBatchQueue: emailBatchQueue.url,
@@ -452,6 +459,7 @@ export const web = new sst.aws.Nextjs(
       riskEvidenceQueue,
     ],
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:*'],
         resources: ['*'],
@@ -496,6 +504,7 @@ export const web = new sst.aws.Nextjs(
         resources: [
           attackSimulationFunction.arn,
           modelDiscoveryFunction.arn,
+          cloudSecurityScanFunction.arn,
           agentExecutor.arn,
           emailSendSubscription.nodes.function.apply(fn => fn.arn),
         ],
@@ -596,8 +605,13 @@ export const web = new sst.aws.Nextjs(
         ],
       },
       ...providerFederation.permissions,
+      // The dispatcher for callable functions: it stores data files and signs the runtime's read links. The bucket
+      // policy refuses these to every other principal (infra/callableFunctionDataPolicy.ts).
+      ...callableFunctionDataForWeb.permissions,
     ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
+      ...callableFunctionDataForWeb.environment,
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
@@ -757,7 +771,7 @@ export const web = new sst.aws.Nextjs(
 // them, and '*' would expose every function's env vars. A managed policy keeps the ARN list out
 // of the server role's inline policy size budget. Consumers subscribed outside core (premium
 // overlays) are not listed; their queues show no logs link.
-const dlqConsumerFunctionArns = [
+export const dlqConsumerFunctionArns = [
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
   generationCallbackQueueSubscription,
@@ -771,6 +785,7 @@ const dlqConsumerFunctionArns = [
   slackExportQueueSubscription,
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
+  callableFunctionCallQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
   accountErasureQueueSubscription,
@@ -785,7 +800,6 @@ const dlqConsumerFunctionArns = [
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
   githubLakeRevokeQueueSubscription,
-  liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
   sreJobQueueSubscription,
@@ -800,7 +814,7 @@ const dlqConsumerFunctionArns = [
   emailParserQueueSubscription,
   emailAnalyzerQueueSubscription,
   agentContinuationQueueSubscription,
-].map(subscription => subscription.nodes.function.arn);
+].flatMap(subscription => (subscription ? [subscription.nodes.function.arn] : []));
 
 if (web.nodes.server) {
   const dlqConsumerLogsPolicy = new aws.iam.Policy('WebDlqConsumerLogsPolicy', {

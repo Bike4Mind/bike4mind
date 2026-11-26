@@ -62,6 +62,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     expectViewIds: ['admin.credit_analytics'],
   },
   {
+    id: 'where-elevenlabs-plan-usage',
+    category: 'where-is',
+    question: 'How much of our ElevenLabs plan have we used this billing cycle?',
+    expectViewIds: ['admin.credit_analytics'],
+  },
+  {
     id: 'where-legacy-api-keys',
     category: 'where-is',
     question: 'Where can I see who still uses legacy API keys before legacy access ends?',
@@ -138,6 +144,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     expectViewIds: ['admin.credit_analytics', 'admin.users'],
   },
   {
+    id: 'howto-stop-burning-credits',
+    category: 'how-to',
+    question: 'How do I stop an account that is burning credits right now?',
+    expectViewIds: ['admin.spend_monitor'],
+  },
+  {
     id: 'howto-release-grants',
     category: 'how-to',
     question: 'How do I release held signup credits in bulk?',
@@ -154,6 +166,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     category: 'how-to',
     question: 'How do I review image moderation incidents?',
     expectViewIds: ['admin.moderation_incidents'],
+  },
+  {
+    id: 'howto-text-moderation',
+    category: 'how-to',
+    question: 'Where do I review users who are pending suspension for flagged prompts?',
+    expectViewIds: ['admin.text_moderation_review'],
   },
   {
     id: 'howto-feedback',

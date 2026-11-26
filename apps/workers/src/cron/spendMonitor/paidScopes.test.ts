@@ -109,13 +109,14 @@ describe('resolvePaidScopes', () => {
     expect(paidDeps.findActiveSubscriptionsByOwners).toHaveBeenCalledTimes(2);
   });
 
-  it('grants org plans to owners, managers, and read/write seat holders only', async () => {
+  it('grants org plans to owners, managers, billing managers, and read/write seat holders only', async () => {
     const { scopeDeps, paidDeps } = createDeps();
     paidDeps.findPlanHolderOrganizations.mockResolvedValue([
       {
         id: 'team',
         userId: 'owner',
         adminUserIds: ['manager'],
+        billingManagerUserIds: ['billing-manager', 'manager', 'billing-manager'],
         users: [
           { userId: 'reader', permissions: ['read'] },
           { userId: 'writer', permissions: ['write'] },
@@ -131,6 +132,7 @@ describe('resolvePaidScopes', () => {
     const ids = [
       'owner',
       'manager',
+      'billing-manager',
       'reader',
       'writer',
       'no-seat',
@@ -140,7 +142,7 @@ describe('resolvePaidScopes', () => {
       'pointer-only',
     ];
     expect(await resolvePaidScopes(ids.map(userKey), scopeDeps, paidDeps)).toEqual(
-      new Set(['User:owner', 'User:manager', 'User:reader', 'User:writer'])
+      new Set(['User:owner', 'User:manager', 'User:billing-manager', 'User:reader', 'User:writer'])
     );
     expect(paidDeps.findPlanHolderOrganizations).toHaveBeenCalledExactlyOnceWith(ids);
     expect(paidDeps.findActiveSubscriptionsByOwners).toHaveBeenCalledWith(SubscriptionOwnerType.Organization, [
@@ -159,7 +161,7 @@ describe('resolvePaidScopes', () => {
 });
 
 describe('defaultPaidScopeDeps', () => {
-  it('queries owner, read/write member, and manager plan holders in one projected read', async () => {
+  it('queries owner, read/write member, manager and billing manager plan holders in one projected read', async () => {
     queryMocks.find.mockReturnValue({ select: queryMocks.select });
     queryMocks.select.mockReturnValue({ lean: queryMocks.lean });
     queryMocks.lean.mockResolvedValue([{ _id: 'team', userId: 'owner', users: [] }]);
@@ -171,9 +173,12 @@ describe('defaultPaidScopeDeps', () => {
         { userId: { $in: ['owner', 'member'] } },
         { users: { $elemMatch: { userId: { $in: ['owner', 'member'] }, permissions: { $in: ['read', 'write'] } } } },
         { adminUserIds: { $in: ['owner', 'member'] } },
+        { billingManagerUserIds: { $in: ['owner', 'member'] } },
       ],
     });
-    expect(queryMocks.select).toHaveBeenCalledWith('userId users.userId users.permissions adminUserIds');
+    expect(queryMocks.select).toHaveBeenCalledWith(
+      'userId users.userId users.permissions adminUserIds billingManagerUserIds'
+    );
     expect(queryMocks.lean).toHaveBeenCalledOnce();
   });
 });

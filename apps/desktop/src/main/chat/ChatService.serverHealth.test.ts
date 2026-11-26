@@ -12,12 +12,17 @@ import { ModelServerStore } from '../modelServers/ModelServerStore';
 import { inertLaunchers } from '../modelServers/testLaunchers';
 import { ChatService } from './ChatService';
 import type { McpManager } from './mcp/McpManager';
-import type { SecretCipher, StoreFile } from './mcp/McpServerStore';
+import type { StoreFile } from './mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import { MessageQueue } from './MessageQueue';
 import { ModelCatalog } from './ModelCatalog';
 import type { OllamaLocal } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 const ADDRESS = 'http://192.168.1.20:11434';
 const OTHER_ADDRESS = 'http://192.168.1.21:11434';
@@ -167,7 +172,7 @@ async function fixture(
   const start = async () => expect(await service.send(session.id, 'hello')).toMatchObject({ ok: true });
   /** Waits for the turn to end and returns the request it streamed, if any. */
   const finish = async () => {
-    await vi.waitUntil(() => !service.isSessionBusy(session.id), { timeout: 5_000 });
+    await vi.waitUntil(() => !service.isSessionBusy(session.id), { interval: 5, timeout: 5_000 });
     return turnRequest();
   };
   const sessionEvent = <T extends ChatStreamEvent['type']>(type: T) =>
@@ -197,7 +202,7 @@ async function fixture(
     check: async () => {
       changed.mockClear();
       await servers.check(id);
-      await vi.waitFor(() => expect(changed).toHaveBeenCalled(), { timeout: 5_000 });
+      await vi.waitFor(() => expect(changed).toHaveBeenCalled(), { interval: 5, timeout: 5_000 });
     },
     start,
     finish,
@@ -362,7 +367,9 @@ describe('a turn on a saved server that is still listing', () => {
     harness.holdListing(listing.gate);
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
+    const before = harness.listings();
     const sent = harness.start();
+    await vi.waitUntil(() => harness.listings() > before, { interval: 5, timeout: 5_000 });
     await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
     await sent;
     await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS);
@@ -403,9 +410,9 @@ describe('a turn on a saved server that is still listing', () => {
 
     const before = harness.listings();
     await harness.start();
-    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before), { timeout: 5_000 });
+    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before), { interval: 5, timeout: 5_000 });
     harness.stop();
-    await vi.waitUntil(() => !harness.busy(), { timeout: 5_000 });
+    await vi.waitUntil(() => !harness.busy(), { interval: 5, timeout: 5_000 });
     listing.fail(new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } }));
     await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -422,10 +429,10 @@ describe('a turn on a saved server that is still listing', () => {
 
     const before = harness.listings();
     await harness.start();
-    await vi.waitFor(() => expect(connect).toHaveBeenCalled(), { timeout: 5_000 });
+    await vi.waitFor(() => expect(connect).toHaveBeenCalled(), { interval: 5, timeout: 5_000 });
     harness.stop();
     connecting.release();
-    await vi.waitUntil(() => !harness.busy(), { timeout: 5_000 });
+    await vi.waitUntil(() => !harness.busy(), { interval: 5, timeout: 5_000 });
     await new Promise(resolve => setTimeout(resolve, 50));
 
     expect(harness.listings()).toBe(before);
@@ -442,7 +449,7 @@ describe('a turn on a saved server that is still listing', () => {
 
     const before = harness.listings();
     const sent = harness.start();
-    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before), { timeout: 5_000 });
+    await vi.waitFor(() => expect(harness.listings()).toBeGreaterThan(before), { interval: 5, timeout: 5_000 });
     await harness.rename('gpu renamed');
     await vi.advanceTimersByTimeAsync(PICKER_LIST_WAIT_MS * 2);
     await sent;

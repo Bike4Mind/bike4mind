@@ -49,10 +49,17 @@ public final class StudioCreateViewModel {
   @ObservationIgnored private var selectedModelIDs: [GenerationKind: String] = [:]
   @ObservationIgnored private let api: any StudioAPI
   @ObservationIgnored private let tracker: GenerationTracker
+  @ObservationIgnored private let catalog: StudioModelCatalog?
 
-  public init(api: any StudioAPI, tracker: GenerationTracker) {
+  /// - Parameter catalog: the session-wide model lists. Without one the lists load per instance.
+  public init(api: any StudioAPI, tracker: GenerationTracker, catalog: StudioModelCatalog? = nil) {
     self.api = api
     self.tracker = tracker
+    self.catalog = catalog
+    // Lists the catalog already holds are there on the first frame, before any task runs.
+    if let catalog {
+      for kind in GenerationKind.allCases { models[kind] = catalog.models(for: kind) }
+    }
   }
 
   /// The models for the kind. Video narrows to what the request needs: text-to-video models while nothing is
@@ -172,6 +179,7 @@ public final class StudioCreateViewModel {
   /// "Use these settings" from a finished item: its kind, model and values, with the same carry-over rules as a
   /// model switch so a model since removed falls back cleanly. Its prompt fills the bar only when nothing is typed.
   public func use(settingsOf handle: GenerationHandle) async {
+    guard GenerationKind.promptable.contains(handle.kind) else { return }
     kind = handle.kind
     await loadModels()
     let original = handle.modelID.flatMap { id in availableModels.first { $0.id == id } }
@@ -206,10 +214,21 @@ public final class StudioCreateViewModel {
       && trimmedPrompt.count <= Self.maximumPromptLength && inputIssue == nil
   }
 
-  /// Loads the model list for the current kind once. A failed load falls back to a known model where one exists,
-  /// so the bar still works offline-first; video and music have no safe default and stay disabled.
+  /// Loads the model list for the current kind: once per instance, or per catalog freshness when a catalog is set.
+  /// A failed load falls back to a known model where one exists, so the bar still works offline-first; video and
+  /// music have no safe default and stay disabled.
   public func loadModels() async {
     let kind = kind
+    if let catalog {
+      await catalog.refresh(kind)
+      if let shared = catalog.models(for: kind) {
+        models[kind] = shared
+      } else if models[kind] == nil, let fallback = GenerationModel.fallback(for: kind) {
+        // Not stored in the catalog, so the next open tries the server again.
+        models[kind] = [fallback]
+      }
+      return
+    }
     guard models[kind] == nil else { return }
     do {
       let loaded = try await api.models(for: kind)
@@ -227,11 +246,11 @@ public final class StudioCreateViewModel {
     error = nil
     defer { isSubmitting = false }
     do {
-      let handle = try await api.generate(
+      let handles = try await api.generate(
         GenerationRequest(
           kind: kind, prompt: trimmedPrompt, modelID: model.id, params: params,
           inputs: videoInputs.map { GenerationInput(role: $0.role.rawValue, fileID: $0.item.id) }))
-      tracker.track(handle)
+      handles.forEach(tracker.track)
       prompt = ""
       if kind == .video { inputs = [] }
       return true
@@ -253,17 +272,12 @@ public final class RegionEditViewModel {
   public private(set) var isSubmitting = false
   public var error: StudioSubmitError?
 
-  /// The notebook edits go to when the image names none.
-  static let fallbackSessionName = "Studio edits"
-
   @ObservationIgnored private let api: any StudioAPI
-  @ObservationIgnored private let media: any MediaAPI
   @ObservationIgnored private let tracker: GenerationTracker
 
-  public init(item: MediaItem, api: any StudioAPI, media: any MediaAPI, tracker: GenerationTracker) {
+  public init(item: MediaItem, api: any StudioAPI, tracker: GenerationTracker) {
     self.item = item
     self.api = api
-    self.media = media
     self.tracker = tracker
   }
 
@@ -294,8 +308,7 @@ public final class RegionEditViewModel {
     if selectedRegionID == id { selectedRegionID = regions.last?.id }
   }
 
-  /// Starts the edit. Re-signs the source URL first: the server reads it when the render runs, and a gallery URL
-  /// may be close to expiring.
+  /// Starts the edit of the image's Files entry.
   @discardableResult
   public func submit() async -> Bool {
     guard canSubmit else { return false }
@@ -303,16 +316,8 @@ public final class RegionEditViewModel {
     error = nil
     defer { isSubmitting = false }
     do {
-      let fresh = try await media.media(id: item.id)
-      guard let url = fresh.url else { throw APIError.notFound }
-      let sessionID: String
-      if let existing = fresh.sessionID ?? item.sessionID {
-        sessionID = existing
-      } else {
-        sessionID = try await api.createSession(name: Self.fallbackSessionName)
-      }
       let handle = try await api.editImage(
-        ImageEditRequest(imageURL: url, sessionID: sessionID, modelID: modelID, regions: regions))
+        ImageEditRequest(sourceFileID: item.id, modelID: modelID, regions: regions))
       tracker.track(handle)
       return true
     } catch {

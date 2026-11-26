@@ -25,6 +25,7 @@ import {
   eraseOrganizationRetentionForUser,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
+import { GENERATION_FALLBACK_FOLDERS } from '@bike4mind/services/generationJobs';
 import type { Logger } from '@bike4mind/observability';
 import { getGeneratedImageStorage, getPublishedArtifactsStorage } from '../utils/storage/index';
 import { publishThumbnailPrefix } from '../utils/publishThumbnails';
@@ -32,11 +33,6 @@ import { buildPublishS3KeyPrefix } from '../services/publish/paths';
 import { withdrawAuthorListings } from '../skillMarket/market';
 import { retainDeletedSignupTraces } from '../auth/signupNetworkLimits';
 import { purgeUserPublishedArtifacts } from '../services/publish/purgeUserPublishedArtifacts';
-import {
-  type CdnInvalidationBatch,
-  createCdnInvalidationBatch,
-  generatedCdnPath,
-} from '../services/cdn/invalidateRouterCdn';
 
 type PurgeOptions = { logger: Pick<Logger, 'info' | 'warn' | 'error'>; assertLease: () => Promise<void> };
 const BATCH_SIZE = 100;
@@ -50,6 +46,7 @@ type PurgeRecord = {
   users?: { userId?: string; sessionId?: string }[];
   sessionIds?: string[];
   adminUserIds?: string[];
+  billingManagerUserIds?: string[];
   userDetails?: { id: string }[];
   listingIds?: string[];
   tags?: { name: string }[];
@@ -68,7 +65,7 @@ const ownerFilter = (userId: string) => {
 };
 /**
  * A person's own content, not their organization's: owned with no organization, or in one of their
- * personal workspaces. Shared with the data subject walks (`server/dataSubject/subjectMatcher.ts`),
+ * personal workspaces. Shared with the data subject walks (`dataSubject/subjectMatcher.ts`),
  * which passes the owner path of its registry reference.
  */
 export const personalFilter = (userId: string, personalOrganizationIds: readonly string[], ownerPath = 'userId') => ({
@@ -90,8 +87,7 @@ async function purgeNotebookMedia(
   userId: string,
   personalOrganizationIds: readonly string[],
   sessionId: string,
-  assertLease: () => Promise<void>,
-  cdn: CdnInvalidationBatch
+  assertLease: () => Promise<void>
 ) {
   const quests = collectionFor(Quest.modelName);
   const cursor = quests.find({ sessionId }, { projection: { images: 1, videos: 1 } });
@@ -134,7 +130,20 @@ async function purgeNotebookMedia(
         continue;
       }
       await getGeneratedImageStorage().deletePermanently(key);
-      cdn.add(generatedCdnPath(key));
+    }
+  }
+}
+
+/** Generation-job outputs that fell back to the generated bucket live under `<folder>/<ownerId>/`. */
+async function purgeGenerationFallbackOutputs(
+  userId: string,
+  personalOrganizationIds: readonly string[],
+  assertLease: () => Promise<void>
+) {
+  for (const folder of GENERATION_FALLBACK_FOLDERS) {
+    for (const ownerId of [userId, ...personalOrganizationIds]) {
+      await assertLease();
+      await getGeneratedImageStorage().deletePrefixPermanently(`${folder}/${ownerId}/`);
     }
   }
 }
@@ -142,8 +151,7 @@ async function purgeNotebookMedia(
 async function purgeNotebooks(
   userId: string,
   personalOrganizationIds: readonly string[],
-  assertLease: () => Promise<void>,
-  cdn: CdnInvalidationBatch
+  assertLease: () => Promise<void>
 ) {
   const sessions = collectionFor(Session.modelName);
   while (true) {
@@ -155,7 +163,7 @@ async function purgeNotebooks(
     for (const notebook of batch) {
       await assertLease();
       const sessionId = String(notebook._id);
-      await purgeNotebookMedia(userId, personalOrganizationIds, sessionId, assertLease, cdn);
+      await purgeNotebookMedia(userId, personalOrganizationIds, sessionId, assertLease);
       // The parent survives every failure, so a retry retains the key to all dependent messages.
       await collectionFor(Quest.modelName).deleteMany({ sessionId });
       for (const model of ['SessionAgentConfig', 'SessionToolApproval']) {
@@ -367,6 +375,8 @@ export async function purgePersonalLakeById(
       'LakeMembershipRemoval',
       'LakeMembershipChangeEvent',
       'LakeConfigChangeEvent',
+      'LakeConfigSnapshot',
+      'LakeConfigUndoClaim',
       'LakeSkippedFile',
       'LakeAccessEvent',
       'LakeAccessQueryText',
@@ -544,13 +554,8 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await withdrawAuthorListings(userId);
   await purgePublishedOriginals(userId, personalOrganizationIds, assertLease);
   await purgePersonalSkills(userId, personalOrganizationIds, assertLease);
-  // Flushed even when a later notebook throws: the media already erased is gone either way.
-  const cdn = createCdnInvalidationBatch('account-notebook-media', logger);
-  try {
-    await purgeNotebooks(userId, personalOrganizationIds, assertLease, cdn);
-  } finally {
-    await cdn.flush();
-  }
+  await purgeNotebooks(userId, personalOrganizationIds, assertLease);
+  await purgeGenerationFallbackOutputs(userId, personalOrganizationIds, assertLease);
   await purgeArtifacts(userId, personalOrganizationIds, assertLease);
   await purgePersonalMemory(userId, personalOrganizationIds, assertLease);
   await purgeDeepAgentRecords(userId, assertLease);

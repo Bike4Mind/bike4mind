@@ -7,10 +7,16 @@ describe('ConfluenceApi Rate Limit Retry', () => {
   let confluenceApi: ConfluenceApi;
   let consoleSpy: ReturnType<typeof vi.spyOn>;
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const loggedCalls = () =>
+    [logger.info, logger.warn, logger.error]
+      .flatMap(fn => fn.mock.calls)
+      .map(c => `${c[0]} ${JSON.stringify(c[1] ?? '')}`);
   let mathRandomSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
+    for (const fn of Object.values(logger)) fn.mockClear();
     // Deterministic jitter for predictable delay assertions
     mathRandomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
 
@@ -23,7 +29,7 @@ describe('ConfluenceApi Rate Limit Retry', () => {
       apiBaseUrlV2: 'https://api.atlassian.com/ex/confluence/test-cloud-id/wiki/api/v2',
       authHeader: 'Bearer test-token',
     };
-    confluenceApi = new ConfluenceApi(mockConfig);
+    confluenceApi = new ConfluenceApi(mockConfig, { logger });
     global.fetch = vi.fn();
     consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -78,8 +84,9 @@ describe('ConfluenceApi Rate Limit Retry', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(result).toBeDefined();
 
-    // Verify rate limit error was logged
-    const logCalls = consoleSpy.mock.calls.map(c => String(c[0]));
+    // The injected logger receives the lines; nothing falls through to console
+    expect(consoleSpy).not.toHaveBeenCalled();
+    const logCalls = loggedCalls();
     const rateLimitErrorLog = logCalls.find(c => c.includes('RATE_LIMIT_ERROR'));
     expect(rateLimitErrorLog).toBeDefined();
   });
@@ -146,7 +153,7 @@ describe('ConfluenceApi Rate Limit Retry', () => {
     await promise;
 
     // Verify the delay was capped at 10s
-    const logCalls = consoleSpy.mock.calls.map(c => String(c[0]));
+    const logCalls = loggedCalls();
     const retryLog = logCalls.find(c => c.includes('retrying after'));
     expect(retryLog).toContain('10000ms');
   });
@@ -175,11 +182,11 @@ describe('ConfluenceApi Rate Limit Retry', () => {
 
     await confluenceApi.getPage({ pageId: '123' });
 
-    const logCalls = consoleSpy.mock.calls.map(c => String(c[0]));
+    const logCalls = loggedCalls();
     const rateLimitLog = logCalls.find(c => c.includes('"type":"RATE_LIMIT"'));
     expect(rateLimitLog).toBeDefined();
 
-    const parsed = JSON.parse(rateLimitLog!);
+    const parsed = JSON.parse(rateLimitLog!.slice(rateLimitLog!.indexOf('{')));
     expect(parsed.integration).toBe('confluence');
     expect(parsed.limit).toBe(100);
     expect(parsed.remaining).toBe(75);

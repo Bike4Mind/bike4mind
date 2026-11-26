@@ -14,6 +14,7 @@ import {
 } from 'react';
 import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
+import { AgentPrIndicator } from '../AgentPrIndicator';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import {
@@ -29,6 +30,7 @@ import { INNKEEPER_GREETING, ReplyBubble } from './InnkeeperDesk';
 import { useAgentAnnouncements } from './announcements';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import { NeedsYouBubble } from './NeedsYouBubble';
+import { TavernDialogue } from './TavernDialogue';
 import { OverflowStack, type StackedAgent } from './OverflowStack';
 import { PLAQUE_EDGE, PLAQUE_WOOD } from './plaque';
 import { QuestBoard } from './QuestBoard';
@@ -125,14 +127,26 @@ const twinkle = keyframes`
 
 const truncate = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}\u2026` : text);
 
-function bubbleText(agent: AgentView, needsYou: number): string | undefined {
+export function bubbleText(agent: AgentView, needsYou: number): string | undefined {
   if (agent.state === 'needs-you') {
     if (needsYou === 0) return undefined;
     return needsYou === 1 ? 'Needs you!' : `Needs you! \u00d7${needsYou}`;
   }
   if (agent.state === 'working' && agent.preparing) return `${SESSION_SETUP_LABEL[agent.preparing]}\u2026`;
   if (agent.state === 'working' && agent.activity) return truncate(activityLabel(agent.activity), BUBBLE_MAX);
+  if (agent.state === 'waiting' && agent.background) return truncate(waitingLabel(agent.background), BUBBLE_MAX);
+  if (agent.state === 'paused')
+    return truncate(agent.lastSnippet ? `Paused: ${agent.lastSnippet}` : 'Paused: turn budget', BUBBLE_MAX);
+  // A plain agent's Done only means its turn ended; what it last said (a question, "blocked: ...") is
+  // the part the user needs. A worker task's Done is an accepted result, so it stays quiet.
+  if (agent.state === 'done' && !agent.workerTask && agent.lastSnippet) return truncate(agent.lastSnippet, BUBBLE_MAX);
+  if (agent.state === 'idle' && agent.lastSnippet) return truncate(agent.lastSnippet, BUBBLE_MAX);
   return undefined;
+}
+
+/** "Waiting: pnpm test" for one background job, "Waiting: 3 jobs" for several. */
+export function waitingLabel(jobs: { running: number; label: string }): string {
+  return jobs.running === 1 ? `Waiting: ${jobs.label}` : `Waiting: ${jobs.running} jobs`;
 }
 
 function sparkKind(agent: AgentView): ToolKind {
@@ -387,6 +401,7 @@ function Sprite({
   visited,
   cheering,
   onSelect,
+  onOpenPr,
 }: {
   agent: AgentView;
   point: SlotPoint;
@@ -404,6 +419,7 @@ function Sprite({
   visited: boolean;
   cheering: boolean;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
 }) {
   const [start] = useState(walkFrom);
   const entered = useAfterFirstPaint(!start);
@@ -416,8 +432,13 @@ function Sprite({
   const tooltip = `${persona ? `${persona.label}: ${persona.shortTitle}` : agent.title}${viaSuffix}`;
   return (
     <Box
-      component="button"
-      type="button"
+      role="button"
+      tabIndex={0}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        onSelect(agent.id);
+      }}
       data-testid={`orchestrator-tavern-agent-${agent.id}`}
       data-agent-avatar={agent.id}
       aria-label={`${fullName}: ${AGENT_STATE_LABEL[agent.state]}`}
@@ -475,6 +496,11 @@ function Sprite({
         text={displayName}
         state={agent.state}
       />
+      {agent.pr && (
+        <Box sx={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)' }}>
+          <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
+        </Box>
+      )}
     </Box>
   );
 }
@@ -634,6 +660,7 @@ function Innkeeper({
 export function TavernView({
   agents,
   onSelect,
+  onOpenPr,
   selectedId,
   introPlaying,
   personas,
@@ -646,6 +673,8 @@ export function TavernView({
   settled = false,
   pause,
   answerFromBubble = true,
+  inSceneDecisions = false,
+  needsYouFocusRequest,
 }: OrchestratorViewProps & {
   /** When the scene holds still; the mini Tavern pauses as soon as it loses focus. */
   pause?: ScenePauseOptions;
@@ -709,9 +738,22 @@ export function TavernView({
       .map(({ agent, placement }) => ({ id: agent.id, zone: placement.zone, point: placement.point }))
   );
   const needsYou = new Map([...needsYouGroupsByCarrier].map(([id, group]) => [id, group.length]));
+  // One place to answer: with the dialogue box up, a waiting sprite keeps only its "Needs you!" marker.
+  // It stays up at last call too, when someone away from the keyboard is most likely to come back to it.
+  const dialogue = inSceneDecisions && answerFromBubble;
   // Until everyone is seated the bubble rides inside the walking sprite; after that it stands on its own with buttons.
-  const answerBubbles = answerFromBubble && arrived ? needsYouGroupsByCarrier : new Map<string, string[]>();
+  const answerBubbles =
+    answerFromBubble && arrived && !dialogue ? needsYouGroupsByCarrier : new Map<string, string[]>();
   const agentsById = new Map(agents.map(agent => [agent.id, agent]));
+  const [dialogueFront, setDialogueFront] = useState<string | undefined>(undefined);
+  const [dialogueFocus, setDialogueFocus] = useState(0);
+  // A waiting character, clicked, brings its request to the front of the box instead of opening its details.
+  const selectSprite = (id: string) => {
+    if (dialogue && agentsById.get(id)?.state === 'needs-you') {
+      setDialogueFront(id);
+      setDialogueFocus(value => value + 1);
+    } else onSelect(id);
+  };
   // The bar's bubble sits on the line of the Innkeeper's plate at every stage size, so the plate
   // steps aside while it is up; pointing at the Innkeeper still shows it (LIFTED).
   const barCalling = visible.some(({ agent, placement }) => placement.zone === 'bar' && needsYou.has(agent.id));
@@ -820,7 +862,7 @@ export function TavernView({
             transition: 'opacity 0.6s ease-in',
           }}
         />
-        <QuestBoard notes={quests} name={shortName} selectedId={selectedId} onSelect={onSelect} />
+        <QuestBoard notes={quests} name={shortName} selectedId={selectedId} onSelect={onSelect} onOpenPr={onOpenPr} />
         <TavernLight mood={mood} />
         {visible.map(({ agent, placement }) => (
           <Sprite
@@ -836,7 +878,8 @@ export function TavernView({
             selected={agent.id === selectedId}
             visited={reducedMotion && agent.id === visit}
             cheering={celebrating}
-            onSelect={onSelect}
+            onSelect={selectSprite}
+            onOpenPr={onOpenPr}
           />
         ))}
         {[...answerBubbles].map(([carrierId, group]) => {
@@ -881,8 +924,24 @@ export function TavernView({
             stacked={stack.stacked}
             selectedId={selectedId}
             onSelect={onSelect}
+            onOpenPr={onOpenPr}
           />
         ))}
+        {dialogue && (
+          <TavernDialogue
+            agents={agents}
+            nameOf={id => {
+              const agent = agentsById.get(id);
+              return agent ? shortName(agent) : id;
+            }}
+            portraitOf={id => characterSprite(characters.get(id) ?? 1, 'call')}
+            frontKey={dialogueFront}
+            onFrontChange={setDialogueFront}
+            onOpenDetails={onSelect}
+            focusRequest={dialogueFocus + (needsYouFocusRequest ?? 0)}
+            look={mode === 'dark' ? 'wood' : 'parchment'}
+          />
+        )}
         {sceneOverlay}
         {agentDetailsOverlay}
       </Box>

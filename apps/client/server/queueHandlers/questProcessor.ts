@@ -1,4 +1,5 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import {
   connectDB,
   questRepository,
@@ -9,7 +10,6 @@ import {
   mongoose,
   adminSettingsRepository,
   userRepository,
-  questMasterPlanRepository,
   Connection,
   fabFileRepository,
   fabFileChunkRepository,
@@ -43,7 +43,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { z } from 'zod';
-import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
+import { QuestStartBodySchema, ChatCompletionProcess, type ExampleRunMode } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
@@ -54,6 +54,7 @@ import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-gen
 import { coreTutorialTurns } from '@bike4mind/server-utils/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
@@ -62,21 +63,14 @@ import { createChatLiveActivity, publishChatCompletedPush } from './questProcess
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
-import { admitQuestStart, releaseQuestStart } from '@bike4mind/server-utils/entitlements/questStartAllowance';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
-import {
-  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
-  getQuestErrorCode,
-  IUserDocument,
-  Permission,
-  SPEND_FROZEN_ERROR_CODE,
-  isSpendFrozenError,
-} from '@bike4mind/common';
+import { IUserDocument, Permission, SPEND_FROZEN_ERROR_CODE, isSpendFrozenError } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   getSharedTokenizer,
+  publishModerationEscalation,
   publishTelemetryAlertCallback,
 } from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
@@ -95,10 +89,10 @@ import {
   getVideoJobDeps,
 } from '@bike4mind/server-utils/generationJobs/wiring';
 import { createImageJobs } from '@bike4mind/services/imageJobs';
-import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
+import { resolveImageJobFiles } from '@bike4mind/server-utils/generations/resolveImageJobFiles';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
-import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
-import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
+import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import {
   checkFreeTierDailySpendCap,
   isFreeTierDailyCapError,
@@ -129,7 +123,6 @@ export const getStaticOptions = () => {
     db: {
       sessions: sessionRepository,
       quests: questRepository,
-      questMasterPlans: questMasterPlanRepository,
       users: userRepository,
       apiKeys: apiKeyRepository,
       adminSettings: adminSettingsRepository,
@@ -208,10 +201,9 @@ export const getStaticOptions = () => {
     // (e.g. a tag-less, entitlement-only subscriber). Pure function ref - safe to cache; the
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
-    admitQuestStart,
-    releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
+    notifyModerationEscalation: publishModerationEscalation,
     invokeCreateMemento: async (
       questId: string,
       sessionId: string,
@@ -239,11 +231,12 @@ export const getStaticOptions = () => {
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,
-    customMcp: customMcpToolHost,
+    customMcp: functionAndConnectorToolHost('chat'),
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,
-    telemetryHmacSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+    telemetryHmacSecret: signingKey('telemetry-salt'),
+    imageUrlSigningSecret: signingKey('search-image-url'),
   };
 
   return cachedStaticOptions;
@@ -306,7 +299,15 @@ export const getImageJobsResolver = (apiKeyId: string | undefined) =>
  * `apps/client/server/chatCompletion/server.ts`). The caller has already validated
  * `params` against `QuestStartBodySchema` (= `LLMEvents.CompletionStart.schema`).
  */
-export async function processQuest(params: z.infer<typeof QuestStartBodySchema>, logger: Logger): Promise<void> {
+export async function processQuest(
+  params: z.infer<typeof QuestStartBodySchema>,
+  logger: Logger,
+  /**
+   * A skill template's platform-paid example run (server/skillMarket/templateExample.ts). Only the
+   * ChatCompletion's own template-example route passes it; it never rides in a QuestStartBody.
+   */
+  exampleRun?: ExampleRunMode
+): Promise<void> {
   const handlerStartTime = Date.now();
   logger.debug('Quest processor start');
 
@@ -365,6 +366,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     // quest with the reason instead of throwing into the route's generic-failure reply and metric.
     try {
       // Ahead of the cap and the turn: a frozen subject is refused before any context is assembled.
+      // An example run is checked too: the freeze is about the account, whoever pays.
       await assertSpendNotFrozen(
         spendFreezeSubjectForRequest(
           {
@@ -375,12 +377,15 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
         ),
         { db: { spendFreezes: spendFreezeRepository } }
       );
-      await checkFreeTierDailySpendCap({
-        user: storedUser,
-        billingOrganizationId: params.organizationId,
-        usageEventRepository,
-        logger,
-      });
+      // The free-tier cap limits the author's own spend; the platform pays for an example run.
+      if (!exampleRun) {
+        await checkFreeTierDailySpendCap({
+          user: storedUser,
+          billingOrganizationId: params.organizationId,
+          usageEventRepository,
+          logger,
+        });
+      }
     } catch (error) {
       const frozen = isSpendFrozenError(error);
       if (!frozen && !isFreeTierDailyCapError(error)) throw error;
@@ -433,15 +438,10 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       tokenizer: getSharedTokenizer(logger),
       sessionId: params.sessionId,
       user,
-      audioToolJobs: buildAudioToolJobs(),
+      // Generation jobs bill the requester when they are created, so an example run (platform-paid)
+      // starts none: images render in-process with credits off, video, music and audio jobs are unavailable.
+      audioToolJobs: exampleRun ? undefined : buildAudioToolJobs(),
       onStatusUpdate: liveActivity.onStatusUpdate,
-      createCompletionMeter: ({ organizationId, featureLabel }) =>
-        createCompletionMeter(user, logger, featureLabel, {
-          sessionId: params.sessionId,
-          organizationId,
-          apiKeyId: params.apiKeyId,
-          apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
-        }),
     });
     logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 
@@ -485,27 +485,21 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       body: requestBody,
       logger,
       externalTools,
-      videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
-      musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
-      imageJobsResolver: getImageJobsResolver(params.apiKeyId),
+      videoToolConfigResolver: exampleRun ? undefined : getVideoToolConfigResolver(params.apiKeyId, user.id),
+      musicToolConfigResolver: exampleRun ? undefined : getMusicToolConfigResolver(params.apiKeyId, user.id),
+      imageJobsResolver: exampleRun ? undefined : getImageJobsResolver(params.apiKeyId),
       imageJobFilesResolver: resolveImageJobFiles,
+      callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
+      exampleRun,
+      abortSignal: exampleRun?.abortSignal,
     });
   } catch (error) {
     await liveActivity.end('failed');
-    if (getQuestErrorCode(error) === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
-      const message = (error as Error).message;
-      await questRepository.settleIfUnfinished(params.questId, {
-        status: 'done',
-        type: 'error',
-        errorCode: FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
-        reply: message,
-        replies: [message],
-      });
-      return;
-    }
     throw error;
   }
   await liveActivity.end();
+  // An example run is the platform's, not a conversation of the author's.
+  if (exampleRun) return;
 
   await recordFirstChatValue({
     user,

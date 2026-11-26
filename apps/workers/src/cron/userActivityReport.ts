@@ -4,7 +4,6 @@ import { randomUUID } from 'crypto';
 import { counterService } from '@bike4mind/services';
 import { getSettingsMap } from '@bike4mind/utils';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
-import axios from 'axios';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import utc from 'dayjs/plugin/utc';
@@ -157,7 +156,12 @@ export async function handler(event: UserActivityReportEvent, context: Context) 
     }
 
     try {
-      await axios.post(slackWebhookUrl, { text: message });
+      const response = await fetch(slackWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: message }),
+      });
+      if (!response.ok) throw new Error(`Slack webhook responded with status ${response.status}`);
       logger.log(`${reportType} Slack report sent successfully`);
 
       return { status: 'success', reportType, date: displayDate };

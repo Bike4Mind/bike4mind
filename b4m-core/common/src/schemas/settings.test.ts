@@ -1396,7 +1396,6 @@ describe('SimulatorComputeCreditsPerRound', () => {
   it('sorts beside the Hardware Compute settings in the admin tab', () => {
     expect(setting.order).toBeGreaterThan(settingsMap.HardwareComputeMaxUsdPerUserPerDay.order);
     expect(setting.order).toBeLessThan(settingsMap.EnableDataLakeSlackAdd.order);
-    expect(setting.order).toBeLessThan(settingsMap.EnableQuestMaster.order);
   });
 });
 
@@ -1540,6 +1539,10 @@ describe('spend monitor settings', () => {
     spendMonitorMarginMinRatio: 1,
     spendMonitorMarginWindowHours: 24,
     spendMonitorMarginCostFloorUsd: 5,
+    spendMonitorAutoPauseStandardMinCredits: 10_000,
+    spendMonitorAutoPausePaidMinCredits: 0,
+    spendMonitorAutoPauseTrustedMinCredits: 0,
+    spendExplorerFeatureSpikeMultiple: 3,
   } as const;
 
   it.each(Object.entries(expectedDefaults))('%s defaults to %s and belongs to the CREDITS group', (key, expected) => {
@@ -1572,6 +1575,25 @@ describe('spend monitor settings', () => {
     expect(settingsMap.spendMonitorMarginWindowHours.schema.safeParse(1.5).success).toBe(false);
   });
 
+  it('defaults the automatic pause to shadow mode and accepts only the known modes', () => {
+    expect(settingsMap.spendMonitorAutoPauseMode.defaultValue).toBe('shadow');
+    expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === 'spendMonitorAutoPauseMode')).toBe(true);
+    const schema = settingsMap.spendMonitorAutoPauseMode.schema;
+    for (const mode of ['off', 'shadow', 'enforce']) expect(schema.parse(mode)).toBe(mode);
+    expect(schema.safeParse('on').success).toBe(false);
+  });
+
+  it.each([
+    'spendMonitorAutoPauseStandardMinCredits',
+    'spendMonitorAutoPausePaidMinCredits',
+    'spendMonitorAutoPauseTrustedMinCredits',
+  ] as const)('%s accepts 0 (tier off) and rejects negatives or fractions', key => {
+    const schema = settingsMap[key].schema;
+    expect(schema.parse(0)).toBe(0);
+    expect(schema.safeParse(-1).success).toBe(false);
+    expect(schema.safeParse(1.5).success).toBe(false);
+  });
+
   it('allows a zero paid-account minimum age and rejects negative or fractional days', () => {
     const schema = settingsMap.spendMonitorPaidAccountMinAgeDays.schema;
     expect(schema.parse(0)).toBe(0);
@@ -1591,6 +1613,7 @@ describe('spend monitor settings', () => {
     const readable = new Set(userReadableSettingKeys());
     for (const key of [
       ...Object.keys(expectedDefaults),
+      'spendMonitorAutoPauseMode',
       'spendMonitorTrustedEmailDomains',
       'spendMonitorTrustedAccountIds',
     ]) {
@@ -1676,7 +1699,7 @@ describe('broadcastSafeSettingKeys', () => {
 
   it('keeps the non-sensitive settings clients render live', () => {
     expect(broadcastSafeSettingKeys()).toEqual(
-      expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts', 'modelListRevision', 'modelAccessRevision'])
+      expect.arrayContaining(['EnableArtifacts', 'modelListRevision', 'modelAccessRevision'])
     );
   });
 
@@ -1710,5 +1733,20 @@ describe('changesCustomerPrice', () => {
     expect(settingsMap.freeTierDailySystemCostCapUsd.changesCustomerPrice).toBeUndefined();
     expect(settingsMap.lowCreditsThreshold.changesCustomerPrice).toBeUndefined();
     expect(settingsMap.teamPlanMaxSeats.changesCustomerPrice).toBeUndefined();
+  });
+});
+
+describe('ReferralMilestones', () => {
+  const { schema } = settingsMap.ReferralMilestones;
+
+  it('saves an empty value or friends:credits pairs', () => {
+    expect(schema.safeParse('').success).toBe(true);
+    expect(schema.safeParse('5:500, 10:1500').success).toBe(true);
+  });
+
+  it('refuses a value the reward could not read', () => {
+    expect(schema.safeParse('5 friends: 500').success).toBe(false);
+    expect(schema.safeParse('5:500, 5:900').success).toBe(false);
+    expect(schema.safeParse(500).success).toBe(false);
   });
 });

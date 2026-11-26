@@ -8,6 +8,8 @@ struct GenerationTilesView: View {
   var settings: StudioCreateViewModel?
   /// Share and save for a finished generation.
   var exporter: MediaExportPresenter?
+  /// Opens a finished generation's saved file (by Files id) in the media detail.
+  var onOpen: ((String) -> Void)?
   @State private var cancelError: String?
 
   var body: some View {
@@ -18,6 +20,7 @@ struct GenerationTilesView: View {
             ForEach(tracker.generations) { generation in
               GenerationTile(
                 generation: generation, summary: settings?.summary(of: generation.handle), exporter: exporter,
+                onOpen: generation.resultFileID.flatMap { fileID in onOpen.map { open in { open(fileID) } } },
                 onUseSettings: settings.map { create in { Task { await create.use(settingsOf: generation.handle) } } }
               ) {
                 Task {
@@ -49,6 +52,8 @@ private struct GenerationTile: View {
   /// The values it was made with that differ from the model defaults.
   let summary: String?
   let exporter: MediaExportPresenter?
+  /// Set once it succeeded with a saved file.
+  let onOpen: (() -> Void)?
   let onUseSettings: (() -> Void)?
   let onCancel: () -> Void
   let onDismiss: () -> Void
@@ -85,7 +90,10 @@ private struct GenerationTile: View {
         .frame(width: side, alignment: .leading)
     }
     .contentShape(Rectangle())
-    .onTapGesture { if case .failed = generation.phase { showsFailure = true } }
+    .onTapGesture {
+      if case .failed = generation.phase { showsFailure = true }
+      if generation.phase == .succeeded { onOpen?() }
+    }
     .contextMenu {
       if let exporter, let item = finishedItem {
         MediaExportButtons(item: item, presenter: exporter)
@@ -106,6 +114,8 @@ private struct GenerationTile: View {
     }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("\(generation.handle.kind.title): \(generation.handle.prompt), \(statusText)")
+    .accessibilityHint(onOpen == nil ? "" : "Opens it full screen")
+    .accessibilityAddTraits(onOpen == nil ? [] : .isButton)
     .accessibilityIdentifier("studio-generation-\(generation.id)")
   }
 
@@ -113,14 +123,8 @@ private struct GenerationTile: View {
   /// recorded expiry, so it is trusted until the download fails.
   private var finishedItem: MediaItem? {
     guard case .succeeded = generation.phase, let url = generation.resultURLs.first else { return nil }
-    let kind: MediaKind =
-      switch generation.handle.kind {
-      case .image: .image
-      case .video: .video
-      case .music: .audio
-      }
     return MediaItem(
-      id: generation.id, kind: kind, fileName: url.lastPathComponent, mimeType: "",
+      id: generation.id, kind: generation.handle.kind.mediaKind, fileName: url.lastPathComponent, mimeType: "",
       createdAt: generation.handle.startedAt,
       url: url, prompt: generation.handle.prompt)
   }
@@ -153,7 +157,7 @@ private struct GenerationTile: View {
   private var cornerButton: some View {
     if generation.phase.isTerminal {
       button("xmark", label: "Dismiss", action: onDismiss)
-    } else if generation.handle.isCancellable {
+    } else if (generation.handle.kind != .scene && generation.handle.kind != .image) || generation.phase == .queued {
       button("stop.fill", label: "Cancel", action: onCancel)
     }
   }
@@ -175,6 +179,7 @@ private struct GenerationTile: View {
     case .image: "photo"
     case .video: "play.rectangle.fill"
     case .music: "waveform"
+    case .scene: "music.note.tv"
     }
   }
 

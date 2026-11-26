@@ -55,7 +55,7 @@ vi.mock('@bike4mind/database', () => ({
   adminAiSuggestionRepository: { transition: h.transition },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
+vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import { Logger } from '@bike4mind/observability';
@@ -114,6 +114,15 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
       details: { aiSuggestionId: id },
     });
     expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
+    expect(h.logReplay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aiSuggestionId: id,
+        messageId: 'm1',
+        queueLabel: 'quest',
+        operation: 'replay',
+        status: 'success',
+      })
+    );
     await expect(invoke()).rejects.toThrow('already been decided');
     expect(h.sendToQueue).toHaveBeenCalledOnce();
   });

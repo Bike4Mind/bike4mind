@@ -6,6 +6,7 @@ import type {
   IDataLakeProposalDocument,
   IDataLakeProposalRepository,
   RestoreDataLakeProposalResult,
+  UnapproveDataLakeProposalResult,
   ReviewDataLakeProposalInput,
 } from '@bike4mind/common';
 import { DATA_LAKE_PROPOSAL_STATUSES } from '@bike4mind/common';
@@ -89,7 +90,7 @@ DataLakeProposalSchema.index(
   { unique: true, partialFilterExpression: { status: 'pending' } }
 );
 // The review queue: one lake's pending proposals, newest first.
-DataLakeProposalSchema.index({ dataLakeId: 1, status: 1, createdAt: -1 });
+DataLakeProposalSchema.index({ dataLakeId: 1, status: 1, createdAt: -1, _id: -1 });
 // The declined-text check a rule admission makes (hasDeclinedWithTextHash).
 DataLakeProposalSchema.index({ dataLakeId: 1, textHash: 1, status: 1 });
 
@@ -143,11 +144,18 @@ class DataLakeProposalRepository
 
   async listByLake(
     dataLakeId: string,
-    options?: { status?: DataLakeProposalStatus; limit?: number }
+    options?: { status?: DataLakeProposalStatus; limit?: number; after?: { createdAt: Date; id: string } }
   ): Promise<IDataLakeProposalDocument[]> {
+    const after = options?.after;
     const query = this.proposalModel
-      .find({ dataLakeId, ...(options?.status ? { status: options.status } : {}) })
-      .sort({ createdAt: -1 });
+      .find({
+        dataLakeId,
+        ...(options?.status ? { status: options.status } : {}),
+        ...(after
+          ? { $or: [{ createdAt: { $lt: after.createdAt } }, { createdAt: after.createdAt, _id: { $lt: after.id } }] }
+          : {}),
+      })
+      .sort({ createdAt: -1, _id: -1 });
     if (options?.limit) query.limit(options.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as IDataLakeProposalDocument);
@@ -203,6 +211,58 @@ class DataLakeProposalRepository
       if ((error as { code?: number }).code !== 11000) throw error;
       return { restored: false, reason: 'pending_exists' };
     }
+  }
+
+  async unapprove(id: string): Promise<UnapproveDataLakeProposalResult> {
+    try {
+      // update-validators-off: aggregation-pipeline update, which Mongoose cannot validate
+      const previous = await this.proposalModel.findOneAndUpdate(
+        { _id: id, status: 'approved' },
+        [
+          {
+            $set: {
+              status: 'pending',
+              priorDisposition: { $ifNull: ['$priorDisposition', 'approved'] },
+              reviewedByUserId: null,
+              reviewedAt: null,
+              declineReason: null,
+              admittedFabFileId: null,
+            },
+          },
+          { $unset: 'autoAdmission' },
+        ],
+        { new: false }
+      );
+      if (!previous) return { unapproved: false, reason: 'not_approved' };
+      const proposal = await this.proposalModel.findById(id);
+      return {
+        unapproved: true,
+        proposal: proposal!.toJSON() as IDataLakeProposalDocument,
+        previous: previous.toJSON() as IDataLakeProposalDocument,
+      };
+    } catch (error) {
+      // The pending-uniqueness index: a newer proposal for this source already holds the slot.
+      if ((error as { code?: number }).code !== 11000) throw error;
+      return { unapproved: false, reason: 'pending_exists' };
+    }
+  }
+
+  async rollbackUnapprove(previous: IDataLakeProposalDocument): Promise<void> {
+    await this.proposalModel.updateOne(
+      { _id: previous.id, status: 'pending' },
+      {
+        $set: {
+          status: 'approved',
+          priorDisposition: previous.priorDisposition ?? null,
+          reviewedByUserId: previous.reviewedByUserId ?? null,
+          reviewedAt: previous.reviewedAt ?? null,
+          declineReason: previous.declineReason ?? null,
+          admittedFabFileId: previous.admittedFabFileId ?? null,
+          ...(previous.autoAdmission ? { autoAdmission: previous.autoAdmission } : {}),
+        },
+      },
+      { runValidators: true }
+    );
   }
 
   async recordAdmission(id: string, fabFileId: string, trustedDomain?: string): Promise<void> {

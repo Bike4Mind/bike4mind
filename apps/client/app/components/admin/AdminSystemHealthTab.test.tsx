@@ -29,6 +29,7 @@ const HEALTH = {
     configured: false,
     secrets: { MAIL_HOST: true, MAIL_PASSWORD: false },
     missingSecrets: ['MAIL_PASSWORD'],
+    optionalSecrets: [],
   },
   database: { type: 'MongoDB', connected: true, readyState: 1 },
   oauth: {
@@ -127,11 +128,15 @@ describe('AdminSystemHealthTab', () => {
       transport: 'ses',
       secrets: { MAIL_FROM: false },
       missingSecrets: ['MAIL_FROM'],
+      optionalSecrets: [],
     };
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: sesEmail } }) });
     renderTab();
 
-    expect(await screen.findByTestId('system-health-email-secret-MAIL_FROM')).toBeInTheDocument();
+    const sender = await screen.findByTestId('system-health-email-secret-MAIL_FROM');
+    expect(sender).toHaveTextContent('Sender address');
+    expect(sender).toHaveTextContent('MAIL_FROM: the address system emails are sent from');
+    expect(screen.getByTestId('system-health-email-delivery')).toHaveTextContent('Sent through Amazon SES');
     expect(screen.queryByTestId('system-health-email-secret-MAIL_HOST')).not.toBeInTheDocument();
     expect(screen.getByTestId('system-health-email-secret-hint-MAIL_FROM')).toHaveTextContent(
       'sst secret set MAIL_FROM'
@@ -145,6 +150,7 @@ describe('AdminSystemHealthTab', () => {
       transport: 'smtp',
       secrets: { MAIL_HOST: false, MAIL_PORT: false, MAIL_USERNAME: true, MAIL_PASSWORD: false, MAIL_FROM: true },
       missingSecrets: ['MAIL_HOST', 'MAIL_PORT', 'MAIL_PASSWORD'],
+      optionalSecrets: [],
     };
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: smtpEmail } }) });
     renderTab();
@@ -155,6 +161,62 @@ describe('AdminSystemHealthTab', () => {
       );
     }
     expect(screen.queryByTestId('system-health-email-secret-hint-MAIL_FROM')).not.toBeInTheDocument();
+  });
+
+  it('points a self-host deploy at the env file and chart instead of sst secret set', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, selfHost: true } }) });
+    renderTab();
+
+    const hint = await screen.findByTestId('system-health-email-hint');
+    expect(hint).toHaveTextContent('.env.selfhost');
+    expect(hint).toHaveTextContent('runtime Secret');
+    expect(hint).not.toHaveTextContent('sst secret set');
+    expect(screen.queryByTestId('system-health-email-secret-hint-MAIL_PASSWORD')).not.toBeInTheDocument();
+  });
+
+  it('warns when the plaintext secrets opt-out is in effect', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, plaintextSecretsOptOut: true } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-health-plaintext-secrets-warning')).toHaveTextContent('unencrypted');
+  });
+
+  it('shows no plaintext secrets warning otherwise', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, plaintextSecretsOptOut: false } }) });
+    renderTab();
+
+    // Loaded-only element: the tab testid is also rendered while loading, before any data arrives.
+    await screen.findByTestId('system-health-database-status');
+    expect(screen.queryByTestId('system-health-plaintext-secrets-warning')).not.toBeInTheDocument();
+  });
+
+  it('keeps the sst hint when not self-hosted', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, selfHost: false } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-health-email-secret-hint-MAIL_PASSWORD')).toHaveTextContent(
+      'sst secret set MAIL_PASSWORD'
+    );
+    expect(screen.queryByTestId('system-health-email-hint')).not.toBeInTheDocument();
+  });
+
+  it('marks unset optional SMTP credentials Optional, not Missing', async () => {
+    const noAuthEmail = {
+      configured: true,
+      transport: 'smtp',
+      secrets: { MAIL_HOST: true, MAIL_PORT: true, MAIL_USERNAME: false, MAIL_PASSWORD: false, MAIL_FROM: true },
+      missingSecrets: [],
+      optionalSecrets: ['MAIL_USERNAME', 'MAIL_PASSWORD'],
+    };
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: noAuthEmail } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-health-email-delivery')).toHaveTextContent('Sent through SMTP server');
+    for (const name of noAuthEmail.optionalSecrets) {
+      const row = await screen.findByTestId(`system-health-email-secret-${name}`);
+      expect(row).toHaveTextContent('Optional');
+      expect(row).not.toHaveTextContent('Missing');
+    }
   });
 
   it('maps integration and breaker states to tones', async () => {

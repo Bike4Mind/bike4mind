@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { isAxiosError } from 'axios';
 import { IMAGE_MODEL_CATALOG, type ImageModels } from '@bike4mind/common';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { StudioCatalog } from '@shared/studioIpc';
@@ -7,24 +6,12 @@ import type { ModelCatalog } from '../ModelCatalog';
 import { MediaApiClient } from '../media/MediaApiClient';
 
 export async function readStudioCatalog(api: AuthenticatedApiClient, models: ModelCatalog): Promise<StudioCatalog> {
-  const [images, videos, music, audio, voices, imagesEnabled] = await Promise.all([
+  const [images, videos, music, audio, voices] = await Promise.all([
     api.get<unknown>('/api/v1/image-models'),
     models.listVideoModels(),
     new MediaApiClient(api).listMusicModels(),
     api.get<unknown>('/api/ai/audio-providers'),
     api.get<unknown>('/api/ai/elevenlabs-voices').catch(() => ({ voices: [] })),
-    api.get<unknown>('/api/studio/image-jobs?limit=1').then(
-      () => true,
-      (error: unknown) => {
-        if (
-          isAxiosError(error) &&
-          error.response?.status === 403 &&
-          z.object({ code: z.literal('FEATURE_DISABLED') }).safeParse(error.response.data).success
-        )
-          return false;
-        throw error;
-      }
-    ),
   ]);
   const imageList = z
     .object({
@@ -36,19 +23,18 @@ export async function readStudioCatalog(api: AuthenticatedApiClient, models: Mod
     .parse(audio);
   const voiceList = z.object({ voices: z.array(z.object({ id: z.string(), name: z.string() })) }).parse(voices);
   return {
-    images: !imagesEnabled
-      ? []
-      : imageList.models.flatMap(model =>
-          Object.hasOwn(IMAGE_MODEL_CATALOG, model.id)
-            ? [
-                {
-                  id: model.id,
-                  name: model.name ?? model.display_name ?? model.id,
-                  capabilities: IMAGE_MODEL_CATALOG[model.id as ImageModels],
-                },
-              ]
-            : []
-        ),
+    // Images submit to /api/v1/image-jobs, which has no Studio feature gate: the model list is the whole answer.
+    images: imageList.models.flatMap(model =>
+      Object.hasOwn(IMAGE_MODEL_CATALOG, model.id)
+        ? [
+            {
+              id: model.id,
+              name: model.name ?? model.display_name ?? model.id,
+              capabilities: IMAGE_MODEL_CATALOG[model.id as ImageModels],
+            },
+          ]
+        : []
+    ),
     videos,
     music,
     ...providers,

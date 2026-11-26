@@ -13,21 +13,13 @@ Create stunning images and edit existing ones using AI-powered tools. Bike4Mind 
 
 ### How to Generate
 
-**Using the Model Picker (Recommended):**
+**Using the Model Picker:**
 
 1. Click the **model picker** in the chat input area
 2. Select **Image Models** from the dropdown filter
 3. Choose an image model (e.g., FLUX Pro 1.1, GPT-Image-1)
 4. Type a description of the image you want
 5. Press Enter to generate
-
-**Using the Command:**
-
-You can also use the `/gen_image` command followed by your prompt:
-
-```
-/gen_image A serene mountain landscape at sunset with a lake reflection
-```
 
 Once the model generates your image, you can view, download, or edit the result.
 

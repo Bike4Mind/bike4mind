@@ -110,7 +110,9 @@ export const synthesizeSpeechContract = defineEndpoint({
       schema: ttsForbiddenResponseSchema,
     },
     404: {
-      description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',
+      description:
+        'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. A `run` that does ' +
+        'not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`).',
       schema: ttsErrorResponseSchema,
     },
     422: {
@@ -118,8 +120,9 @@ export const synthesizeSpeechContract = defineEndpoint({
         'Request body failed validation, the text exceeds the provider character limit, the provider ' +
         'cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), ' +
         'or the caller cannot afford the synthesis - the last of ' +
-        'those is the only one tagged `errorCode: "insufficient_credits"`, so match on the classifier ' +
-        'rather than the status to tell a billing failure from a bad request.',
+        'those is tagged `errorCode: "insufficient_credits"`, and a call whose `run` budget has no room for ' +
+        'it is tagged `errorCode: "run_budget_exhausted"`, so match on the classifier rather than the status ' +
+        'to tell a billing failure from a bad request.',
       schema: ttsErrorResponseSchema,
     },
     429: { description: 'The provider rate-limited the request.', schema: ttsErrorResponseSchema },
@@ -127,6 +130,10 @@ export const synthesizeSpeechContract = defineEndpoint({
       description:
         'The provider failed to generate speech. When the clip was generated but could not be read back, the body ' +
         'carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
+      schema: ttsErrorResponseSchema,
+    },
+    503: {
+      description: 'Every candidate provider is out of quota, so speech is temporarily unavailable.',
       schema: ttsErrorResponseSchema,
     },
     504: unretrievableAudioResponse({ noun: 'speech', schema: ttsErrorResponseSchema }),

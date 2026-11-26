@@ -40,6 +40,7 @@ import {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
   accountErasureQueueDLQ,
@@ -57,7 +58,6 @@ import {
   githubLakeRevokeQueueDLQ,
   generationJobDLQ,
   renderJobDLQ,
-  liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
   sreFixQueueDLQ,
@@ -72,6 +72,7 @@ import {
 } from './queues';
 import {
   telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
@@ -98,8 +99,9 @@ import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
-import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
 import { refusedRequestRuleName, type RefusedRequestRuleKind } from './refusedRequestRules';
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -167,7 +169,7 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         name => `arn:${partition}:cloudwatch:${region}:${accountId}:insight-rule/${name}`
       )
     );
-  dlqAlarmTopic!.subscribe(
+  const triageSubscription = dlqAlarmTopic!.subscribe(
     {
       vpc: lambdaVpc,
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
@@ -190,6 +192,7 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         ...mentionArgs.permissions,
         { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
         dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
         { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
         { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
         { actions: ['cloudwatch:GetInsightRuleReport'], resources: refusedRequestRuleArns },
@@ -203,6 +206,8 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
       },
     }
   );
+
+  dlqTriageRoleNames.push(triageSubscription.apply(subscription => subscription.nodes.function.nodes.role.name));
 
   // Out-of-band alarm for DlqAlarmHandlerDlq itself.
   // Cannot route to dlqAlarmTopic -- that would loop into the same failing Lambda.
@@ -372,6 +377,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: slackExportQueueDLQ,
   },
   {
+    label: 'callable-function-call',
+    displayName: 'Callable Function Call',
+    application: 'CallableFunctionCall',
+    sourceQueue: 'callableFunctionCallQueue',
+    queue: callableFunctionCallQueueDLQ,
+  },
+  {
     label: 'quest-export',
     displayName: 'Quest Export',
     application: 'QuestExport',
@@ -489,13 +501,6 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'GenerationJob',
     sourceQueue: 'renderJobQueue',
     queue: renderJobDLQ,
-  },
-  {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    queue: liveOpsTriageQueueDLQ,
   },
   // SRE Agent DLQs
   {
@@ -736,6 +741,13 @@ if (isMonitoredStage) {
     });
   }
 
+  createDlqAlarms({
+    label: 'cloud-security-scan',
+    displayName: 'Cloud Security Scan',
+    application: 'Security',
+    queue: cloudSecurityScanDeadLetter.queue,
+  });
+
   // S3 invokes the Lambda directly; the registry exposes this DLQ without a replay destination.
   createDlqAlarms({
     label: 'fab-file-moderation',
@@ -752,6 +764,12 @@ if (isMonitoredStage) {
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
     queue: telemetryAlertDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    queue: moderationAlertsDeadLetter.queue,
   });
   createDlqAlarms({
     label: 'session-enrichment',

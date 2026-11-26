@@ -62,6 +62,14 @@ beforeEach(() => {
 });
 
 describe('self-host ws bridge: connect', () => {
+  it('forwards live destination metadata with the authenticated ticket', async () => {
+    await callBridge('connect', { connectionId: 'c1', ticket: 't', handoffPlatform: 'desktop', handoffName: 'Mac' });
+    expect(connectFunc.mock.calls[0][0].queryStringParameters).toEqual({
+      ticket: 't',
+      handoffPlatform: 'desktop',
+      handoffName: 'Mac',
+    });
+  });
   it('forwards the browser ticket as queryStringParameters.ticket (not token)', async () => {
     await callBridge('connect', { connectionId: 'c1', ticket: 'single-use-ticket' });
 

@@ -8,6 +8,7 @@ import type {
   ISkillListingVersion,
   ISkillSnapshot,
   SkillListingReportReason,
+  SkillListingTemplateSummary,
   SkillListingVisibility,
   SkillReviewStatus,
   SkillRiskTier,
@@ -56,14 +57,20 @@ export type ListingDetail = {
 
 export type MarketFilters = {
   q: string;
-  scope: '' | 'public' | 'org';
+  scope: '' | 'public' | 'org' | 'space';
+  /** Narrows scope 'space' to one Space; ignored for other scopes. */
+  spaceId?: string;
   tools: '' | 'with' | 'without';
   minRating: number;
   sort: 'relevance' | 'top' | 'imports' | 'new' | 'updated';
   tags: string[];
 };
 
-export type MyListing = MarketListing & { versions: ISkillListingVersion[] };
+export type MyListing = MarketListing & {
+  versions: ISkillListingVersion[];
+  /** The listing's template page, if the author created one. */
+  template?: SkillListingTemplateSummary | null;
+};
 
 export type MarketMe = {
   organizations: Array<{ id: string; name: string }>;
@@ -92,6 +99,7 @@ export const useMarketListings = (filters: MarketFilters) =>
       const params = new URLSearchParams({ page: String(pageParam), limit: String(PAGE_SIZE), sort: filters.sort });
       if (filters.q.trim()) params.set('q', filters.q.trim());
       if (filters.scope) params.set('scope', filters.scope);
+      if (filters.scope === 'space' && filters.spaceId) params.set('spaceId', filters.spaceId);
       if (filters.tools) params.set('tools', filters.tools);
       if (filters.minRating) params.set('minRating', String(filters.minRating));
       if (filters.tags.length) params.set('tags', filters.tags.join(','));
@@ -203,6 +211,7 @@ export const usePublishSkill = () => {
       skillId: string;
       visibility: SkillListingVisibility;
       organizationId?: string;
+      spaceId?: string;
       tags: string[];
     }) => (await api.post<SubmitResult>('/api/skills/market/publish', input)).data,
     onSuccess: invalidate,
@@ -351,31 +360,43 @@ export type SkillBundlesView = {
 
 export type SkillBundleInput = { name: string; description: string; listingIds: string[] };
 
-const bundlesKey = (orgId: string) => ['skill-market', 'bundles', orgId];
+/** Who owns a bundle set: an org (a bare id string stays accepted) or a Space. */
+export type SkillBundleOwner = { orgId: string } | { spaceId: string };
 
-export const useSkillBundles = (orgId: string) =>
-  useQuery({
-    queryKey: bundlesKey(orgId),
-    queryFn: async () => (await api.get<SkillBundlesView>('/api/skills/market/bundles', { params: { orgId } })).data,
+const toBundleOwner = (owner: string | SkillBundleOwner): SkillBundleOwner =>
+  typeof owner === 'string' ? { orgId: owner } : owner;
+
+const bundlesKey = (owner: SkillBundleOwner) =>
+  'spaceId' in owner ? ['skill-market', 'bundles', 'space', owner.spaceId] : ['skill-market', 'bundles', owner.orgId];
+
+export const useSkillBundles = (ownerArg: string | SkillBundleOwner) => {
+  const owner = toBundleOwner(ownerArg);
+  return useQuery({
+    queryKey: bundlesKey(owner),
+    queryFn: async () => (await api.get<SkillBundlesView>('/api/skills/market/bundles', { params: owner })).data,
   });
+};
 
-export const useSaveSkillBundle = (orgId: string) => {
+export const useSaveSkillBundle = (ownerArg: string | SkillBundleOwner) => {
   const qc = useQueryClient();
+  const owner = toBundleOwner(ownerArg);
+  const ownerBody = 'spaceId' in owner ? { spaceId: owner.spaceId } : { organizationId: owner.orgId };
   return useMutation({
     mutationFn: async ({ id, ...input }: SkillBundleInput & { id?: string }) =>
       id
         ? (await api.put<ISkillBundle>(`/api/skills/market/bundles/${id}`, input)).data
-        : (await api.post<ISkillBundle>('/api/skills/market/bundles', { ...input, organizationId: orgId })).data,
-    onSuccess: () => qc.invalidateQueries({ queryKey: bundlesKey(orgId) }),
+        : (await api.post<ISkillBundle>('/api/skills/market/bundles', { ...input, ...ownerBody })).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: bundlesKey(owner) }),
   });
 };
 
-export const useDeleteSkillBundle = (orgId: string) => {
+export const useDeleteSkillBundle = (ownerArg: string | SkillBundleOwner) => {
   const qc = useQueryClient();
+  const owner = toBundleOwner(ownerArg);
   return useMutation({
     mutationFn: async (id: string) => {
       await api.delete(`/api/skills/market/bundles/${id}`);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: bundlesKey(orgId) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: bundlesKey(owner) }),
   });
 };

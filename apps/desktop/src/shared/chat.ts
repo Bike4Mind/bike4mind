@@ -11,7 +11,7 @@ import type { RootPolicy, ModelSelection, WorkerTask } from './orchestration';
  */
 
 import type { GithubRef } from './githubRefs';
-import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
+import type { GenerationJobState, PlanProgress, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ReasoningEffortSetting } from '@bike4mind/local-models/model-settings';
 import type { ChildOutcome } from './agentOutcome';
 import type { ChatImportOrigin } from './claudeImport';
@@ -188,6 +188,12 @@ export interface ChatToolCall {
   approvalId?: string;
   /** What the user is being asked to allow, ready to display. Set with `approvalId`. */
   approvalDetail?: string;
+  /**
+   * Set with `approvalId` on a shell call the model described: its own words on what the command
+   * does. Unchecked, so a surface shows it only next to `approvalDetail`, never in its place, and
+   * nothing decides on it (see isQuickApproval in watch.ts).
+   */
+  approvalDescription?: string;
   /**
    * Set with `approvalId` on a tool whose effect cannot be undone. The card must not offer
    * "always in this chat" for one of these, and main refuses to honour a standing approval
@@ -744,6 +750,29 @@ export type ChatAutomaticOrigin =
       summary: string;
     };
 
+/** The structured half of a settled child's report, for the thread's card. See ChatMessage.childReport. */
+export interface ChatChildReport {
+  sessionId: string;
+  title: string;
+  outcome: ChildOutcome;
+  /** The child's worktree branch; absent when it shared its parent's folder. */
+  branch?: string;
+  /** Short HEAD of that worktree; absent when git was slow, absent or the child has no worktree. */
+  headSha?: string;
+  /** The child's last reply, cut by childReport.ts cutReply (see replyTruncated). Untrusted text from another session. */
+  reply?: string;
+  /** The reply was cut at the cap; the rest is in the child's own session. */
+  replyTruncated?: boolean;
+}
+
+/** What a waiting child is blocked on, for its live card in the parent's thread. See ChatMessage.childWaiting. */
+export interface ChatChildWaiting {
+  sessionId: string;
+  reason?: 'approval' | 'decision' | 'message';
+  /** The parked call, e.g. "bash gh pr merge 12". Withheld when a device-local child reports to a hosted parent. */
+  summary?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -774,6 +803,8 @@ export interface ChatMessage {
    */
   requestId?: string;
   settled?: ChatSettledCharge;
+  /** How long the reply took and how much of it was thinking, on every assistant reply; absent on older ones. */
+  stats?: ChatReplyStats;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
   promptCache?: ChatPromptCacheStamp;
   contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
@@ -838,6 +869,21 @@ export interface ChatMessage {
    * branched from, so the thread can say so and link back. See ChatService.startSideChat.
    */
   sideChatOf?: { sessionId: string; title: string };
+  /**
+   * Set with `system` on the report a settled spawned session leaves in its parent, so the thread
+   * can draw it as a card without parsing `content` (the model's copy). See
+   * ChatService.reportSettledAgent; withheld whole from a hosted parent of a device-local child
+   * (flushChildReports). Absent on reports stored before this field existed, and on waiting notices.
+   */
+  childReport?: ChatChildReport;
+  /** The child this settled report is from. Set even when `childReport` is withheld from a hosted parent. */
+  reportedChildId?: string;
+  /**
+   * Set with `system` on the notice a spawned session leaves when it starts waiting on the user,
+   * so the thread can fold every notice from one child into its live card (ChildSessionCards).
+   * Absent on notices stored before this field existed. See ChatService.noteChildWaiting.
+   */
+  childWaiting?: ChatChildWaiting;
   /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
@@ -1195,6 +1241,13 @@ export interface ChatUsage {
   cacheReadInputTokens?: number;
   /** Input written to the prompt cache this request, billed above the input rate. */
   cacheCreationInputTokens?: number;
+  /** Thinking tokens the server reported; part of outputTokens, not on top of it. */
+  reasoningTokens?: number;
+  /**
+   * Of inputTokens, what a self-hosted server served from its prompt cache, from the usage details.
+   * Unset where llama-server's timings already put it in `rate.cachedPromptTokens`.
+   */
+  cachedPromptTokens?: number;
   /** Credits the server charged for these requests. */
   creditsUsed?: number;
   usdCost?: number;
@@ -1215,22 +1268,82 @@ export interface ChatTokenRate {
   promptMs?: number;
   /** Time spent loading the model into memory before the request ran. */
   loadMs?: number;
+  /** True where the server reports its load (Ollama): no loadMs is none. False for llama-server, which never does. */
+  loadReported?: boolean;
+  /** Prompt tokens the server reused from its cache instead of evaluating; not part of `promptTokens`. */
+  cachedPromptTokens?: number;
   /** Speculative decoding: tokens the draft proposed and how many the model accepted. */
   draftTokens?: number;
   draftAccepted?: number;
   /** Timed by this app from the first streamed token to the last, because the server reported no timings. */
   estimated?: boolean;
+  /** Output tokens an estimate left out of `evalTokens` on purpose: the first read's, whose time is the prompt's. */
+  untimedTokens?: number;
+}
+
+/** A model load or server wait at least this long is named apart from the reply's own time, in ms. */
+export const REPLY_STATS_SIGNIFICANT_WAIT_MS = 1000;
+
+/** A ChatReplyStats figure that is an estimate rather than a measurement or a server's report. */
+export type ChatReplyStatsEstimate = 'reasoningMs' | 'reasoningTokens';
+
+/**
+ * One reply's timing, measured by this app on every backend, in ms. Kept on the message rather
+ * than its rounds, because a plain reply stores no rounds.
+ */
+export interface ChatReplyStats {
+  /**
+   * Wall time from the reply's first request to its end, tools and approval waits included; on a
+   * continued reply, the pause before Continue is left out.
+   */
+  totalMs: number;
+  /** Waiting on the model, summed over the reply's requests. */
+  modelMs: number;
+  /** Running tools between requests, approval waits included. */
+  toolMs: number;
+  /** Of modelMs, each request's model load the server reported, where at least REPLY_STATS_SIGNIFICANT_WAIT_MS; left out of the displayed total. */
+  loadMs?: number;
+  /** Of firstTokenMs, the reported load of the request it was measured on. */
+  firstTokenLoadMs?: number;
+  /** Of modelMs, each request's wait derived from llama-server timings (load, queue or connection), where long enough; see roundLoad. Kept in the total. */
+  waitMs?: number;
+  /** Of firstTokenMs, the derived wait of the request it was measured on. */
+  firstTokenWaitMs?: number;
+  /**
+   * Of modelMs, from each request's first delta to its end: generation, with load, queueing and
+   * prompt processing left out. The thinking share's time base.
+   */
+  outputMs?: number;
+  /** From the first request that streamed anything to its first delta. */
+  firstTokenMs?: number;
+  /** Thinking, summed over the requests that thought. */
+  reasoningMs?: number;
+  /** Thinking tokens: the server's count, else on a self-hosted model the readable thinking frames. */
+  reasoningTokens?: number;
+  /**
+   * A hosted reply's output tokens over the time spent generating them, summed over the requests
+   * where that time can be told apart from latency; see roundGeneration. A self-hosted reply's speed
+   * is its usage's rate. `outputTokens` is the output of the reply's own requests, which leaves out
+   * sub-agents' that its usage includes.
+   */
+  generation?: { tokens: number; ms: number; untimedTokens?: number; outputTokens?: number };
+  /** The figures above that are estimates; the thread marks them approximate. */
+  derived?: ChatReplyStatsEstimate[];
 }
 
 /**
  * Chat is the default and is every conversation this client had before modes existed; Code
  * adds project grounding on top of it.
  *
- * Deliberately NOT a tool switch. Both modes carry the same tools - the difference is that a
- * Code session knows which directory it is about, so its tools run there and its conversations
- * group under that project in the sidebar.
+ * Chat and Code are deliberately NOT a tool switch. Both carry the same tools - the difference is
+ * that a Code session knows which directory it is about, so its tools run there and its
+ * conversations group under that project in the sidebar.
+ *
+ * Studio is the one mode that IS a tool switch: the Studio place's own conversation, offered only
+ * the generation tools, with no folder to run anything in. It is never listed in the Chat or Code
+ * sidebar. See tools/registry.ts toolsForRequest.
  */
-export type ChatSessionMode = 'chat' | 'code';
+export type ChatSessionMode = 'chat' | 'code' | 'studio';
 
 /**
  * How much the user has agreed to be asked before a tool that runs code or changes a file
@@ -1349,6 +1462,12 @@ interface ChatSessionMeta {
    * overwrites a title it did not put there; nothing in the renderer draws it.
    */
   titleLocked?: boolean;
+  /**
+   * Who put a locked title there: 'user' for a hand rename, 'agent' for session_rename. Absent on
+   * a title locked at creation (a spawn naming its child) and on files written before this field
+   * existed; see agentMayRetitle in SessionStore for how each case is read.
+   */
+  titleSource?: 'user' | 'agent';
   model: string;
   createdAt: string;
   updatedAt: string;
@@ -1441,6 +1560,8 @@ export interface ChatSessionSummary extends ChatSessionMeta {
   totalCredits?: number;
   /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
   githubRefs?: GithubRef[];
+  /** Progress of the thread's latest plan; absent when it has none. See todos.ts. */
+  plan?: PlanProgress;
 }
 
 export interface ChatSession extends ChatSessionMeta {
@@ -1448,17 +1569,6 @@ export interface ChatSession extends ChatSessionMeta {
   /** Local family ownership, independent of the server notebook identity. */
   studioWorkspaceId?: string;
   studioRootSessionId?: string;
-  /**
-   * The b4m notebook this conversation files its generations under, created lazily by the
-   * server on the first one.
-   *
-   * Desktop conversations are otherwise purely local (see the header). Image generation is the
-   * exception: `POST /api/ai/generate-image` is notebook-scoped and creates one when given no
-   * id, so without this every image would leave a separate stray notebook in the web app - and
-   * the server's prompt resolver, which reads that notebook's history, could never bind a
-   * follow-up like "make it darker" to the image before it.
-   */
-  remoteSessionId?: string;
   /**
    * Tasks the model suggested handing to a new session; see ChatSpawnSuggestion. Kept off
    * ChatSessionSummary so the sidebar listing never carries them.
@@ -1472,6 +1582,11 @@ export interface ChatSession extends ChatSessionMeta {
   replyInFlight?: { messageId: string; startedAt: number };
   /** The worktree being cut right now, added the same way; see the 'workspace' stream event. */
   preparingWorkspace?: WorkspacePreparation;
+  /**
+   * The last stream event this read already reflects, added by ChatService.getSession. A client
+   * applies only events with a higher `seq` on top of it, so none is lost or applied twice.
+   */
+  eventCursor?: EventCursor;
 }
 
 /** What exporting a conversation did; `saved` is false when the user dismissed the save dialog. */
@@ -1518,9 +1633,22 @@ export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
 /** A newer context notice of the same kind replaces the older one for a conversation. */
-export type ContextNoticeKind = 'context-size' | 'no-tools';
+export type ContextNoticeKind = 'context-size' | 'no-tools' | 'run-budget';
 
-export type ChatStreamEvent =
+/**
+ * Where a client stands in one session's event stream. `epoch` names the host process lifetime
+ * that numbered the events, so a cursor from before a restart is recognisably stale; `seq` is
+ * the last event the client has. See main/chat/SessionEventLog.ts.
+ */
+export type EventCursor = { epoch: string; seq: number };
+
+/**
+ * A stream event as it leaves the host: `seq` numbers it within its session (SessionEventLog).
+ * Optional only so an event can be built before it is stamped.
+ */
+export type ChatStreamEvent = ChatStreamEventBody & { seq?: number };
+
+type ChatStreamEventBody =
   | {
       type: 'start';
       sessionId: string;
@@ -1563,6 +1691,7 @@ export type ChatStreamEvent =
       promptCache?: ChatPromptCacheStamp;
       /** See ChatMessage.questComplete. */
       questComplete?: true;
+      stats?: ChatReplyStats;
     }
   | {
       type: 'error';
@@ -1571,6 +1700,8 @@ export type ChatStreamEvent =
       message: string;
       stopReason?: string;
       contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
+      /** What was measured before it failed; absent when the reply was already stored whole. */
+      stats?: ChatReplyStats;
     }
   | {
       type: 'background-output';
@@ -1601,6 +1732,8 @@ export type ChatStreamEvent =
   | { type: 'context-trimmed'; sessionId: string; dropped: number }
   /** Auto changed a local model's context mid-turn in a way that affects its replies (slower, or smaller). */
   | { type: 'context-notice'; sessionId: string; message: string; kind?: ContextNoticeKind }
+  /** Withdraws the notice of `kind` that no longer holds, such as a budget warning after a raise. */
+  | { type: 'context-notice-cleared'; sessionId: string; kind: ContextNoticeKind }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`
@@ -1640,8 +1773,31 @@ export type ChatSessionStatus = 'processing' | 'needs-action' | 'done';
 export interface ChatSessionStatusEvent {
   sessionId: string;
   status: ChatSessionStatus;
+  /** Attention for a finished reply, not a turn waiting on an answer. */
+  unreadReply?: boolean;
   /** A 'processing' session that is still being prepared, not yet replying: the step it is on. */
   preparing?: SessionSetupStep;
+  /**
+   * Background commands the agent started that are still running and will wake it when they end.
+   * Absent when there are none. Independent of `status`: a 'done' session can still be waiting on them.
+   */
+  background?: SessionBackgroundJobs;
+}
+
+/** A session's running wake-on-exit background commands, as the Tavern shows them. */
+export interface SessionBackgroundJobs {
+  running: number;
+  /** The newest one's command, cut short for a bubble. */
+  label: string;
+}
+
+export const BACKGROUND_LABEL_MAX = 40;
+
+/** One line of a background command for a bubble: whitespace collapsed, cut with a trailing '...'. */
+export function backgroundJobLabel(command: string): string {
+  const collapsed = command.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= BACKGROUND_LABEL_MAX) return collapsed;
+  return `${collapsed.slice(0, BACKGROUND_LABEL_MAX - 3)}...`;
 }
 
 /**
@@ -1665,6 +1821,14 @@ export interface SendMessageRequest {
    * e.g. the part a point-and-edit request in the 3D pane is about.
    */
   notes?: string[];
+}
+
+/** An edit of a sent prompt; see ChatService.editMessage. */
+export interface EditMessageRequest {
+  sessionId: string;
+  /** The persisted id of the user message being replaced. */
+  messageId: string;
+  text: string;
 }
 
 /**
@@ -1782,7 +1946,15 @@ export type SendMessageResult =
       notice?: string;
     }
   | { ok: true; queued: true; message: ChatQueuedMessage }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /**
+       * Continue or Retry refused because a turn is already running or queued, most likely
+       * started by the same click on another surface; a card can drop itself rather than alarm.
+       */
+      busy?: true;
+    };
 
 /**
  * The answer to `/clear` and `/compact`.
@@ -1969,6 +2141,8 @@ export interface ChatSpawnSuggestion {
   dismissedBy?: 'user' | 'assistant';
   /** A user outcome the model has not been told yet; cleared when the next turn carries it. */
   unreported?: boolean;
+  /** Why the automatic start Settings asked for did not happen; the card shows it and waits. */
+  autoStartError?: string;
 }
 
 /** 'here' runs the task as the user's own next message in the suggesting conversation. */
@@ -1986,6 +2160,8 @@ interface SpawnSuggestionStartBase {
   title: string;
   /** The user changed the prompt or title before starting. */
   edited: boolean;
+  /** Started by the Settings location with no card; the model heard it in the tool result. */
+  auto?: boolean;
 }
 
 export type ChatSpawnSuggestionStart =
@@ -2069,6 +2245,11 @@ export interface ChatRoundTiming {
   startedAt: number;
   /** The first streamed delta of any kind; absent when the stream produced nothing. */
   firstTokenAt?: number;
+  /** The first and last thinking frames, readable or a bare marker around omitted thinking. */
+  firstReasoningAt?: number;
+  lastReasoningAt?: number;
+  /** The first delta with visible text. */
+  firstTextAt?: number;
   endedAt: number;
 }
 
@@ -2151,10 +2332,20 @@ export const SESSION_EXPIRED_STOP = 'session_expired';
 export const SERVER_CREDENTIALS_STOP = 'server_credentials';
 
 /**
+ * The stop reason of a turn the server refused because its orchestration run's credit budget is
+ * used up. Resumable: refused before the provider ran, so the transcript ends on a request
+ * boundary, and raising the budget continues every session the run paused.
+ */
+export const RUN_BUDGET_STOP = 'run_budget_exhausted';
+
+/** What raising a run budget did: how many paused sessions it continued, or why it was refused. */
+export type RaiseRunBudgetResult = { ok: true; resumed: number } | { ok: false; error: string };
+
+/**
  * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at
  * a request boundary - before any of that request streamed - so its transcript ends where a
  * budget-stopped one does, or on the user's own prompt.
  */
 export function isResumableStop(reason?: string): boolean {
-  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP;
+  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP || reason === RUN_BUDGET_STOP;
 }

@@ -1,4 +1,10 @@
-import { ApiKeyType, IAdminSettings, IAdminSettingsRepository, IApiKeyDocument } from '@bike4mind/common';
+import {
+  ApiKeyType,
+  IAdminSettings,
+  IAdminSettingsRepository,
+  IApiKeyDocument,
+  type UsageKeySource,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import {
   getApiKey,
@@ -133,32 +139,39 @@ export const getFmpApiKey = async (adapters: GetEffectiveApiKeyAdapters) => {
   return settings?.settingValue;
 };
 
+/** A resolved provider key and whose it is: the caller's own stored key, or the platform's (admin setting or self-host env). */
+export type EffectiveApiKey = { key: string; source: UsageKeySource };
+
+/**
+ * getEffectiveApiKey, also reporting whether the key is the user's own or the platform's, so a
+ * usage record can tell platform-quota consumption apart from calls billed to a user's own account.
+ */
+export const getEffectiveApiKeyWithSource = async (
+  userId: string,
+  params: GetApiKeyParamters,
+  adapters: GetEffectiveApiKeyAdapters
+): Promise<EffectiveApiKey | undefined> => {
+  const { db } = adapters;
+  const userKey = (await getApiKey(userId, params, adapters))?.apiKey;
+  if (userKey) return { key: userKey, source: 'user' };
+
+  const demoKeyName = params.demoKeyName || DEMO_KEY_MAP[params.type as keyof typeof DEMO_KEY_MAP];
+  if (demoKeyName) {
+    const settings = await db.adminSettings.findBySettingName(demoKeyName as IAdminSettings['settingName']);
+    if (settings?.settingValue) return { key: settings.settingValue, source: 'platform' };
+  }
+
+  // envKey only answers under B4M_SELF_HOST, so hosted resolution is unchanged.
+  const envName = ENV_KEY_MAP[params.type as keyof typeof ENV_KEY_MAP];
+  const selfHostKey = envName ? envKey(envName) : null;
+  return selfHostKey ? { key: selfHostKey, source: 'platform' } : undefined;
+};
+
 export const getEffectiveApiKey = async (
   userId: string,
   params: GetApiKeyParamters,
   adapters: GetEffectiveApiKeyAdapters
-) => {
-  const { db } = adapters;
-  const apiKey = await getApiKey(userId, params, adapters);
-
-  let key = apiKey?.apiKey;
-
-  if (!key) {
-    const demoKeyName = params.demoKeyName || DEMO_KEY_MAP[params.type as keyof typeof DEMO_KEY_MAP];
-    if (demoKeyName) {
-      const settings = await db.adminSettings.findBySettingName(demoKeyName as IAdminSettings['settingName']);
-      key = settings?.settingValue;
-    }
-  }
-
-  // envKey only answers under B4M_SELF_HOST, so hosted resolution is unchanged.
-  if (!key) {
-    const envName = ENV_KEY_MAP[params.type as keyof typeof ENV_KEY_MAP];
-    if (envName) key = envKey(envName) ?? undefined;
-  }
-
-  return key;
-};
+): Promise<string | undefined> => (await getEffectiveApiKeyWithSource(userId, params, adapters))?.key;
 
 export interface SharedAdminKeyProviders {
   openai: boolean;

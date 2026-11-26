@@ -7,6 +7,7 @@ import type {
   ChatSessionSummary,
   ChatStreamEvent,
   ChatToolCall,
+  SessionBackgroundJobs,
 } from '@shared/chat';
 import { pendingCallsIn } from '@shared/needsYou';
 import { EMPTY_WATCH_SNAPSHOT, buildWatchSnapshot, type WatchDecision, type WatchSnapshot } from '@shared/watch';
@@ -34,6 +35,8 @@ export const STREAM_THROTTLE_MS = 250;
 export class WatchService {
   private sessions: ChatSessionSummary[] = [];
   private readonly statuses = new Map<string, ChatSessionStatus>();
+  /** Running wake-on-exit background jobs per session; every status event carries the full current value. */
+  private readonly background = new Map<string, SessionBackgroundJobs>();
   private activity: ReadonlyMap<string, AgentActivity> = new Map();
   private readonly pending = new Map<string, ChatToolCall[]>();
   private readonly needsYouSince = new Map<string, number>();
@@ -162,6 +165,8 @@ export class WatchService {
   private applyStatus(event: ChatSessionStatusEvent): void {
     const previous = this.statuses.get(event.sessionId);
     this.statuses.set(event.sessionId, event.status);
+    if (event.background) this.background.set(event.sessionId, { ...event.background });
+    else this.background.delete(event.sessionId);
     if (event.status === 'processing' || event.status === 'needs-action') this.busySinceRebuild.add(event.sessionId);
     if (event.status === 'needs-action' && previous !== 'needs-action')
       this.needsYouSince.set(event.sessionId, this.now());
@@ -198,6 +203,7 @@ export class WatchService {
     const input = {
       sessions: this.sessions,
       statuses: this.statuses,
+      background: this.background,
       activity: this.activity,
       pending: this.pending,
       needsYouSince: this.needsYouSince,
@@ -206,9 +212,10 @@ export class WatchService {
     // Done is a transition: a root that was busy and now is not finished since the user last looked.
     const probe = buildWatchSnapshot({ ...input, unacknowledgedDone: new Set() });
     for (const orchestration of probe.orchestrations) {
+      // An agent waiting on its background jobs is still busy, so the root does not count as done yet.
       const busyNow = orchestration.sessions.some(session => {
         const status = this.statuses.get(session.id);
-        return status === 'processing' || status === 'needs-action';
+        return status === 'processing' || status === 'needs-action' || this.background.has(session.id);
       });
       const workedSinceLast = orchestration.sessions.some(session => this.busySinceRebuild.has(session.id));
       if (busyNow) {

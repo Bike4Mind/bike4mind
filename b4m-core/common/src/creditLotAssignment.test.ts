@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { assignConsumptionFIFO, attributeChargeToFundingSources, computeConsumption } from './creditLotAssignment';
+import {
+  assignConsumptionFIFO,
+  attributeChargeToFundingSources,
+  computeConsumption,
+  pendingCreditExpiries,
+} from './creditLotAssignment';
 
 describe('creditLotAssignment', () => {
   describe('computeConsumption', () => {
@@ -160,6 +165,34 @@ describe('creditLotAssignment', () => {
         subscription: 0,
         unknown: 0,
       });
+    });
+  });
+
+  describe('pendingCreditExpiries', () => {
+    const at = (day: number) => new Date(Date.UTC(2026, 0, day));
+
+    it("lists each lot's unspent remainder, soonest first, after soonest-first consumption", () => {
+      const lots = [
+        { amount: 100, expiresAt: at(1) },
+        { amount: 200, expiresAt: at(2) },
+        { amount: 300, expiresAt: at(3) },
+      ];
+      expect(pendingCreditExpiries(lots, 450)).toEqual([
+        { amount: 150, expiresAt: at(2) },
+        { amount: 300, expiresAt: at(3) },
+      ]);
+    });
+
+    it('leaves out a settled lot even when a refund reopened it in the live assignment', () => {
+      const lots = [
+        { amount: 100, expiresAt: at(1), settledAt: at(1) },
+        { amount: 100, expiresAt: at(2) },
+      ];
+      expect(pendingCreditExpiries(lots, 200)).toEqual([{ amount: 100, expiresAt: at(2) }]);
+    });
+
+    it('lists nothing for a holder in debt', () => {
+      expect(pendingCreditExpiries([{ amount: 100, expiresAt: at(1) }], -5)).toEqual([]);
     });
   });
 });

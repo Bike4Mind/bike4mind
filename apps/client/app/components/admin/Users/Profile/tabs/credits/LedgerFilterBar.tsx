@@ -1,5 +1,7 @@
 import React from 'react';
-import { Autocomplete, Button, Input, Option, Select, Stack, Typography } from '@mui/joy';
+import { Autocomplete, Button, Option, Select, Stack, Typography } from '@mui/joy';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import {
   EMPTY_LEDGER_FILTER,
   SOURCE_FILTER_OPTIONS,
@@ -63,38 +65,36 @@ export const LedgerFilterBar: React.FC<LedgerFilterBarProps> = ({ value, onChang
           </Option>
         ))}
       </Select>
-      <Input
+      <OptionalDateInput
         size="sm"
-        type="date"
         value={value.from}
-        onChange={event => patch({ from: event.target.value })}
+        onChange={from => patch({ from })}
+        emptyLabel="From any day"
+        setLabel="Set start date"
+        clearLabel="Remove start date"
+        initialDate={() => (value.to && value.to < todayUtc() ? value.to : todayUtc())}
+        min={MIN_DAY}
+        max={value.to || MAX_DAY}
+        aria-label="From (UTC)"
         error={inverted}
-        slotProps={{
-          input: {
-            'aria-label': 'From (UTC)',
-            min: MIN_DAY,
-            max: value.to || MAX_DAY,
-            'data-testid': 'user-credits-from',
-          },
-        }}
+        testId="user-credits-from"
       />
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
         to
       </Typography>
-      <Input
+      <OptionalDateInput
         size="sm"
-        type="date"
         value={value.to}
-        onChange={event => patch({ to: event.target.value })}
+        onChange={to => patch({ to })}
+        emptyLabel="To any day"
+        setLabel="Set end date"
+        clearLabel="Remove end date"
+        initialDate={() => (value.from && value.from > todayUtc() ? value.from : todayUtc())}
+        min={value.from || MIN_DAY}
+        max={MAX_DAY}
+        aria-label="To (UTC)"
         error={inverted}
-        slotProps={{
-          input: {
-            'aria-label': 'To (UTC)',
-            min: value.from || MIN_DAY,
-            max: MAX_DAY,
-            'data-testid': 'user-credits-to',
-          },
-        }}
+        testId="user-credits-to"
       />
       <Typography level="body-xs" sx={{ color: inverted ? 'admin.status.bad.foreground' : 'admin.inkMuted' }}>
         {inverted ? 'The start date is after the end date.' : 'UTC days, both included'}

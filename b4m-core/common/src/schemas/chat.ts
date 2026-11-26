@@ -4,7 +4,6 @@ import {
   ACCOUNT_SUSPENDED_ERROR_CODE,
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
-  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
@@ -15,6 +14,7 @@ import {
   SPEND_FROZEN_ERROR_CODE,
   END_USER_ID_NOT_ALLOWED_ERROR_CODE,
   INVALID_END_USER_ID_ERROR_CODE,
+  RUN_BUDGET_NOT_RAISED_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
@@ -106,10 +106,14 @@ export const SimplifiedChatRequestSchema = z.object({
         '`effectiveTools` (the mode discarded it) without being unrecognized. Both reported lists ' +
         'are deduplicated, and `unrecognizedTools` names at most the first 10 distinct ids.'
     ),
+  // Deprecated and ignored: the in-chat QuestMaster plan is retired. Kept so published SDK and
+  // mobile clients that still set it keep compiling against the contract; the turn runs as usual.
+  enableQuestMaster: z
+    .boolean()
+    .optional()
+    .describe('Deprecated and ignored. The in-chat QuestMaster plan this used to start has been retired.'),
   // Explicit overrides - when enableTools is true, these default to true but can be
-  // individually disabled (e.g., voice agent_request disables QuestMaster so replies
-  // aren't cleared and replaced with a plan document)
-  enableQuestMaster: z.boolean().optional(),
+  // individually disabled.
   enableMementos: z.boolean().optional(),
   enableAgents: z.boolean().optional(),
   // How much of the system stack to place in front of the model. Unset keeps today's behaviour.
@@ -441,6 +445,27 @@ export const RunNotFoundErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal(RUN_NOT_FOUND_ERROR_CODE),
 });
 
+/**
+ * The completions route's 422: a body that failed validation (no `errorCode`), a balance or member cap
+ * the caller cannot afford, or a `run` whose budget is used up (both QUEST_ERROR_CODES).
+ */
+export const CompletionsUnprocessableErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+});
+
+/**
+ * 403 on the completion-run routes' `organization_id`: an organization-billed API key naming another
+ * payer, or an organization the caller cannot use (apps/client/server/billing/resolveCompletionBillingOrgId.ts).
+ */
+export const CompletionRunForbiddenErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),
+});
+
+/** 409 when a run budget change would not raise it. */
+export const RunBudgetNotRaisedErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(RUN_BUDGET_NOT_RAISED_ERROR_CODE),
+});
+
 /** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */
 export const UnknownModelErrorSchema = CompletionsBadRequestErrorSchema;
 
@@ -524,6 +549,7 @@ export const ModelPolicyForbiddenErrorSchema = MeteredForbiddenErrorSchema.exten
   errorCode: z
     .enum([
       ACCOUNT_SUSPENDED_ERROR_CODE,
+      BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
       MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       SPEND_FROZEN_ERROR_CODE,
@@ -537,7 +563,6 @@ export const ChatForbiddenErrorSchema = MeteredForbiddenErrorSchema.extend({
     .enum([
       ACCOUNT_SUSPENDED_ERROR_CODE,
       MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
-      FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
       SPEND_FROZEN_ERROR_CODE,

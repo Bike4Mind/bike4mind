@@ -206,7 +206,8 @@ describe('getAnalyticsOverview', () => {
       internal: null,
     });
     expect(overview.activeUsers.days.find(day => day.day === '2026-06-10')).toMatchObject({ dau: 1 });
-    expect(warn).toHaveBeenCalledWith('analytics overview: live slice for today failed', liveFailure.error);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('analytics overview: live slice for today failed'));
+    expect(String(warn.mock.calls[0][0])).toContain(liveFailure.error.message);
     warn.mockRestore();
   });
 

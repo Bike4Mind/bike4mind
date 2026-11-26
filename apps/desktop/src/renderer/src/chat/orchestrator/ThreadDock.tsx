@@ -126,7 +126,7 @@ export function ThreadDock({
             border: '1px solid',
             borderColor: palette?.border ?? 'divider',
             bgcolor: palette?.background ?? 'background.surface',
-            borderRadius: 'md',
+            borderRadius: scene?.skin?.radius ?? 'md',
             boxShadow: 'md',
             overflow: 'hidden',
             opacity: 0.9,

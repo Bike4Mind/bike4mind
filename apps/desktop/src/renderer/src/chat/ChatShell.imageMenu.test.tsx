@@ -15,10 +15,24 @@ import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 
 window.matchMedia ??= ((query: string) => ({
   matches: false,
@@ -30,6 +44,14 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's autosizing textarea measures itself on every render, and jsdom resolves that against every
+// emotion sheet in the document and every ancestor, with no layout to measure in the end.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) =>
+  element instanceof HTMLTextAreaElement
+    ? element.style
+    : realGetComputedStyle(element, pseudo)) as typeof getComputedStyle;
 
 window.ResizeObserver ??= class {
   observe() {}
@@ -116,6 +138,7 @@ beforeEach(() => {
   );
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
         listSessions: async () => [ACTIVE, { ...ACTIVE, id: OTHER.id, title: OTHER.title }],
         getSession: async (sessionId: string) => (sessionId === OTHER.id ? OTHER : SESSION),
@@ -171,13 +194,33 @@ async function rightClick(element: HTMLElement) {
 }
 
 describe('the image menu in a conversation', () => {
-  it('attaches a thread image to the composer draft, whose own tiles offer no menu', async () => {
+  // Closed on a switch by the `opening` gate, which unmounts the provider for the render before the
+  // new transcript arrives. The provider's `key` is a backstop this test cannot reach: no switch
+  // skips that gate today.
+  it('closes on a conversation switch, then attaches a thread image to the composer draft, whose own tiles offer no menu', async () => {
     await openAssistantSession();
+    const thread = () => {
+      const image = el('chat-media-view-btn');
+      if (!image) throw new Error('the thread image did not render');
+      return image;
+    };
+    await rightClick(thread());
+    expect(el('image-menu-attach-btn')).not.toBeNull();
 
-    const image = el('chat-media-view-btn');
-    if (!image) throw new Error('the thread image did not render');
-    await rightClick(image);
+    const rows = () => Array.from(document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]'));
+    const other = rows().find(item => item.textContent?.includes(OTHER.title));
+    if (!other) throw new Error('the other conversation did not render');
+    await act(async () => other.click());
 
+    expect(el('chat-session-title')?.textContent).toBe(OTHER.title);
+    expect(el('image-context-menu')).toBeNull();
+    expect(el('image-menu-attach-btn')).toBeNull();
+    expect(attachImage).not.toHaveBeenCalled();
+
+    await act(async () => rows()[0].click());
+    await act(async () => undefined);
+    await act(async () => undefined);
+    await rightClick(thread());
     const attach = el('image-menu-attach-btn');
     if (!attach) throw new Error('the thread image has no attach item');
     await act(async () => attach.click());
@@ -194,27 +237,5 @@ describe('the image menu in a conversation', () => {
     if (!tile) throw new Error('the draft tile did not render');
     await rightClick(tile);
     expect(el('image-context-menu')).toBeNull();
-  });
-
-  // Closed by the `opening` gate, which unmounts the provider for the render before the new
-  // transcript arrives. The provider's `key` is a backstop this test cannot reach: no switch
-  // skips that gate today.
-  it('closes the image menu when another conversation is selected', async () => {
-    await openAssistantSession();
-    const image = el('chat-media-view-btn');
-    if (!image) throw new Error('the thread image did not render');
-    await rightClick(image);
-    expect(el('image-menu-attach-btn')).not.toBeNull();
-
-    const other = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')).find(item =>
-      item.textContent?.includes(OTHER.title)
-    );
-    if (!other) throw new Error('the other conversation did not render');
-    await act(async () => other.click());
-
-    expect(el('chat-session-title')?.textContent).toBe(OTHER.title);
-    expect(el('image-context-menu')).toBeNull();
-    expect(el('image-menu-attach-btn')).toBeNull();
-    expect(attachImage).not.toHaveBeenCalled();
   });
 });

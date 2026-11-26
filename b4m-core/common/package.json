@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/common",
-  "version": "28.0.0",
+  "version": "30.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -47,6 +47,16 @@
       "require": {
         "types": "./dist/utils/skillMd.d.cts",
         "default": "./dist/utils/skillMd.cjs"
+      }
+    },
+    "./utils/frontmatter": {
+      "import": {
+        "types": "./dist/utils/frontmatter.d.mts",
+        "default": "./dist/utils/frontmatter.mjs"
+      },
+      "require": {
+        "types": "./dist/utils/frontmatter.d.cts",
+        "default": "./dist/utils/frontmatter.cjs"
       }
     },
     "./modelHub": {

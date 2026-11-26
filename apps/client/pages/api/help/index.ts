@@ -88,7 +88,7 @@ const handler = baseApi({ auth: false })
 
       res.json(filteredIndex);
     } catch (error) {
-      console.error('[HelpIndex] Error loading index:', error);
+      req.logger.error('Error loading index', { error });
       res.status(500).json({
         error: 'Failed to load help index',
       });

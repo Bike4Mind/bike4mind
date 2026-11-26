@@ -327,10 +327,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
     section: 'admin',
     label: 'Credit Analytics',
     description:
-      'Credits per user and adjustments, margins against provider invoices, org and API usage, and the transaction ledger',
+      'Credits per user and adjustments, margins against provider invoices, org and API usage, ElevenLabs plan usage, and the transaction ledger',
     navigationType: 'tab',
     target: '15', // AdminTab.CreditAnalytics
-    keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost'],
+    keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost', 'elevenlabs', 'vendor plan'],
     requiresAdmin: true,
   },
   {
@@ -642,17 +642,6 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
-    id: 'admin.liveops_triage',
-    section: 'admin',
-    label: 'LiveOps Triage',
-    description:
-      'Triage configs that turn Slack error alerts into GitHub or Jira issues: dry run, run now, run history',
-    navigationType: 'tab',
-    target: '35', // AdminTab.LiveOpsTriage
-    keywords: ['liveops', 'triage', 'errors', 'incidents', 'production issues', 'monitoring'],
-    requiresAdmin: true,
-  },
-  {
     id: 'admin.dashboard',
     section: 'admin',
     label: 'Dashboard',
@@ -713,6 +702,24 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.text_moderation_review',
+    section: 'admin',
+    label: 'Text moderation review',
+    description:
+      'Review users throttled or pending suspension for flagged prompts, or with a severe-category hit; confirm the suspension, keep them throttled or return them to active',
+    navigationType: 'tab',
+    target: '84', // AdminTab.TextModerationReview
+    keywords: [
+      'text moderation',
+      'flagged prompts',
+      'moderation hits',
+      'suspend pending',
+      'throttled users',
+      'moderation appeal',
+    ],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.signup_risk_review',
     section: 'admin',
     label: 'Risk review',
@@ -756,6 +763,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '75', // AdminTab.StripeDisputes
     keywords: ['disputes', 'chargebacks', 'stripe', 'lost dispute', 'contain'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.spend_monitor',
+    section: 'admin',
+    label: 'Spend monitor',
+    description:
+      'Watch live credit spend and open spend incidents, freeze or lift spending for a user, organization or API key, and see what the automatic pause would do',
+    navigationType: 'tab',
+    target: '83', // AdminTab.SpendMonitor
+    keywords: ['spend', 'credits', 'spike', 'freeze', 'pause', 'incident'],
     requiresAdmin: true,
   },
   {
@@ -1254,18 +1272,121 @@ export const VIEW_REGISTRY: NavigableView[] = [
   },
 ];
 
+// --- Contributed views ---
+//
+// An extension package adds admin pages here instead of editing VIEW_REGISTRY. Registration is a side
+// effect of importing the generated contribution module (@bike4mind/server-utils:
+// premiumNavigableViews.generated.ts, via navigation/registerContributedViews.ts), so a process that
+// skips that import sees only the static registry. A contributed view is an admin-only route under a
+// reserved path, and the limits below bound what the set can add to the admin prompt.
+
+export const CONTRIBUTED_ADMIN_VIEW_PATH_PREFIX = '/admin/ext/';
+export const CONTRIBUTED_VIEW_ID_PREFIX = 'admin.ext.';
+export const MAX_CONTRIBUTED_VIEWS = 8;
+export const MAX_CONTRIBUTED_VIEW_ID_LENGTH = 60;
+export const MAX_CONTRIBUTED_VIEW_LABEL_LENGTH = 60;
+export const MAX_CONTRIBUTED_VIEW_DESCRIPTION_LENGTH = 160;
+export const MAX_CONTRIBUTED_VIEW_KEYWORDS = 6;
+export const MAX_CONTRIBUTED_VIEW_KEYWORD_LENGTH = 30;
+
+const contributedViews = new Map<string, NavigableView>();
+
+const CONTRIBUTED_VIEW_ID_PATTERN = /^admin\.ext\.[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
+// `%` and `\` are rejected with `..` so an encoded or backslash dot segment cannot leave the prefix.
+// eslint-disable-next-line no-control-regex -- rejecting control characters is the point
+const UNSAFE_TARGET_PATTERN = /[$?#%\\\s\u0000-\u001f\u007f-\u009f]|\.\./;
+// Control characters (tab, NUL, NEL, ...) and bidi overrides have no place in one-line prompt text.
+// eslint-disable-next-line no-control-regex -- rejecting control characters is the point
+const LINE_BREAK_PATTERN = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/;
+
+export interface ContributedViewsRegistration {
+  registered: string[];
+  /** Ids an earlier contribution already registered; the first one is kept. */
+  duplicates: string[];
+  /**
+   * Entries that are not objects, break a field rule (id, section, navigation type, admin flag, target,
+   * label, description or keywords), reuse a static view id, or arrive past the cap.
+   */
+  rejected: string[];
+}
+
+function isBoundedLine(value: unknown, max: number, mustBeTrimmed: boolean): value is string {
+  return (
+    typeof value === 'string' &&
+    value.trim() !== '' &&
+    value.length <= max &&
+    !LINE_BREAK_PATTERN.test(value) &&
+    (!mustBeTrimmed || value === value.trim())
+  );
+}
+
+function isValidContributedView(view: unknown): view is NavigableView {
+  if (typeof view !== 'object' || view === null || Array.isArray(view)) return false;
+  const { id, section, navigationType, requiresAdmin, target, label, description, keywords } = view as Record<
+    string,
+    unknown
+  >;
+  return (
+    typeof id === 'string' &&
+    id.length <= MAX_CONTRIBUTED_VIEW_ID_LENGTH &&
+    CONTRIBUTED_VIEW_ID_PATTERN.test(id) &&
+    !VIEW_REGISTRY.some(v => v.id === id) &&
+    section === 'admin' &&
+    navigationType === 'route' &&
+    requiresAdmin === true &&
+    typeof target === 'string' &&
+    target.startsWith(CONTRIBUTED_ADMIN_VIEW_PATH_PREFIX) &&
+    target.length > CONTRIBUTED_ADMIN_VIEW_PATH_PREFIX.length &&
+    !UNSAFE_TARGET_PATTERN.test(target) &&
+    isBoundedLine(label, MAX_CONTRIBUTED_VIEW_LABEL_LENGTH, true) &&
+    isBoundedLine(description, MAX_CONTRIBUTED_VIEW_DESCRIPTION_LENGTH, false) &&
+    Array.isArray(keywords) &&
+    keywords.length <= MAX_CONTRIBUTED_VIEW_KEYWORDS &&
+    keywords.every(keyword => isBoundedLine(keyword, MAX_CONTRIBUTED_VIEW_KEYWORD_LENGTH, false))
+  );
+}
+
+/** Adds contributed views. Never replaces an existing view. */
+export function registerContributedViews(views: readonly NavigableView[]): ContributedViewsRegistration {
+  const result: ContributedViewsRegistration = { registered: [], duplicates: [], rejected: [] };
+  for (const view of views) {
+    if (!isValidContributedView(view)) {
+      const id = (view as { id?: unknown } | null | undefined)?.id;
+      result.rejected.push(typeof id === 'string' ? id : '(no id)');
+      continue;
+    }
+    const existing = contributedViews.get(view.id);
+    if (existing) {
+      // The same module can be evaluated by more than one entrypoint; that is not a clash.
+      if (existing !== view) result.duplicates.push(view.id);
+    } else if (contributedViews.size >= MAX_CONTRIBUTED_VIEWS) {
+      result.rejected.push(view.id);
+    } else {
+      contributedViews.set(view.id, view);
+      result.registered.push(view.id);
+    }
+  }
+  return result;
+}
+
+/** @internal Tests only: drops every contributed view. */
+export function resetContributedViews(): void {
+  contributedViews.clear();
+}
+
 // Helpers
 
-/** Look up a view by its ID. */
+/** Look up a view by its ID, static views first. */
 export function getViewById(viewId: string): NavigableView | undefined {
-  return VIEW_REGISTRY.find(v => v.id === viewId);
+  return VIEW_REGISTRY.find(v => v.id === viewId) ?? contributedViews.get(viewId);
 }
 
 /**
  * Filter views by section and admin status.
  */
 export function getFilteredViews(options?: { section?: ViewSection; isAdmin?: boolean }): NavigableView[] {
-  return VIEW_REGISTRY.filter(v => {
+  const views = contributedViews.size === 0 ? VIEW_REGISTRY : [...VIEW_REGISTRY, ...contributedViews.values()];
+  return views.filter(v => {
     if (options?.section && v.section !== options.section) return false;
     if (v.requiresAdmin && !options?.isAdmin) return false;
     return true;
@@ -1332,7 +1453,7 @@ const adminViewLine = (view: NavigableView): string => {
  * deployment-wide cached prompt prefix; this appendix rides in the per-caller tail instead.
  */
 export function getAdminViewSummaryForLLM(): string {
-  const lines = VIEW_REGISTRY.filter(v => v.requiresAdmin).map(adminViewLine);
+  const lines = [...VIEW_REGISTRY.filter(v => v.requiresAdmin), ...contributedViews.values()].map(adminViewLine);
   return [
     '# Admin views for navigate_view',
     '',

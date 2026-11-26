@@ -408,7 +408,9 @@ describe('CreditsTab', () => {
       expect(mocks.ledger).toHaveBeenLastCalledWith('test-user-1', { model: 'gpt-x', source: 'cli' }, { enabled: true })
     );
 
+    fireEvent.click(screen.getByTestId('user-credits-from-set-btn'));
     fireEvent.change(screen.getByTestId('user-credits-from'), { target: { value: '2026-10-01' } });
+    fireEvent.click(screen.getByTestId('user-credits-to-set-btn'));
     fireEvent.change(screen.getByTestId('user-credits-to'), { target: { value: '2026-10-07' } });
     expect(mocks.ledger).toHaveBeenLastCalledWith(
       'test-user-1',
@@ -428,7 +430,9 @@ describe('CreditsTab', () => {
     mocks.ledger.mockReturnValue(ledgerResult({ data: undefined, hasNextPage: false }));
     renderTab();
 
+    fireEvent.click(screen.getByTestId('user-credits-from-set-btn'));
     fireEvent.change(screen.getByTestId('user-credits-from'), { target: { value: '2026-10-07' } });
+    fireEvent.click(screen.getByTestId('user-credits-to-set-btn'));
     fireEvent.change(screen.getByTestId('user-credits-to'), { target: { value: '2026-10-01' } });
 
     expect(mocks.ledger).toHaveBeenLastCalledWith(
@@ -446,6 +450,7 @@ describe('CreditsTab', () => {
     Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:url'), revokeObjectURL: vi.fn() });
     renderTab();
 
+    fireEvent.click(screen.getByTestId('user-credits-from-set-btn'));
     fireEvent.change(screen.getByTestId('user-credits-from'), { target: { value: '2026-10-01' } });
     fireEvent.click(screen.getByTestId('user-credits-export-btn'));
 

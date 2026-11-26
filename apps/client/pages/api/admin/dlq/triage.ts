@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { adminApi } from '@server/middlewares/adminApi';
-import { visibleDlqSuggestion } from '@server/admin/dlq/triage';
-import { adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
+import { visibleDlqSuggestion } from '@bike4mind/server-utils/admin/dlq/triage';
+import { adminAiSuggestionRepository, dlqReplayLogRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -9,7 +9,14 @@ const querySchema = z.object({ queue: z.string().min(1), message: z.string().min
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'support:read', POST: 'settings:manage' } })
   .get(async (req, res) => {
     const query = querySchema.parse(req.query);
-    return res.json({ suggestion: await visibleDlqSuggestion(query.queue, query.message) });
+    const suggestion = await visibleDlqSuggestion(query.queue, query.message);
+    const execution =
+      suggestion?.status === 'accepted'
+        ? await dlqReplayLogRepository
+            .findSuggestionOutcome(suggestion.id, query.queue, query.message)
+            .catch(() => null)
+        : null;
+    return res.json({ suggestion, execution });
   })
   .post(async (req, res) => {
     const body = z

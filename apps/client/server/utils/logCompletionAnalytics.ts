@@ -10,15 +10,15 @@ import {
   IAdminSettingsRepository,
   type CompletionSource,
   usdToCreditsExpected,
-  HTTPError,
+  SAFE_ERROR_CODE,
 } from '@bike4mind/common';
-import { getHttpStatus, getSettingsByNames } from '@bike4mind/utils';
+import { getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import { resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
-import { resolveQuestErrorCode } from '@bike4mind/services/llm';
 import { z } from 'zod';
+import { completionFailureCode } from './completionFailureCode';
 import type { CompletionRequestSchema } from '@bike4mind/common';
 
 interface BaseAnalyticsParams {
@@ -69,22 +69,6 @@ interface FailureAnalyticsParams extends BaseAnalyticsParams {
 }
 
 type LogCompletionAnalyticsParams = SuccessAnalyticsParams | FailureAnalyticsParams;
-
-const SAFE_ERROR_CODE = /^[A-Za-z0-9_.-]{1,64}$/;
-
-/**
- * Names a failure without its message: provider, validation and tool-argument errors can quote the
- * prompt, and this event is stored. A code that is not a short identifier is dropped.
- */
-function completionFailureCode(error: unknown): { errorCode: string; status?: number } {
-  const status =
-    error instanceof HTTPError ? error.statusCode : error instanceof Error ? getHttpStatus(error) : undefined;
-  const code = (error as { additionalInfo?: { errorCode?: unknown } } | null)?.additionalInfo?.errorCode;
-  const errorCode =
-    resolveQuestErrorCode(error) ??
-    (typeof code === 'string' && SAFE_ERROR_CODE.test(code) ? code : status ? `http_${status}` : 'unknown');
-  return { errorCode, ...(status ? { status } : {}) };
-}
 
 function completionFailureType(error: unknown): string {
   const name = error instanceof Error ? error.constructor.name : '';

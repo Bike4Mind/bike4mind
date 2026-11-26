@@ -19,16 +19,17 @@ import { appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WHOLE_REPO_TEST_PACKAGES } from './turbo-test-cache.mjs';
+import { planClientRelated } from './ci-related-tests.mjs';
 import { readPackageDirs, readTurboJson, selectAffected, turboFilters } from './verify-affected.mjs';
 
 export const TEST_TASKS = ['test', 'test:integration'];
 
 // Beyond verify's full-run files: the workflow and the selection code itself, so a change to how
 // legs are chosen is tested by every leg.
-const CI_FULL_RUN = [/^\.github\//, /^scripts\/(ci-affected-tests|verify-affected|turbo-test-cache)\.mjs$/];
+const CI_FULL_RUN = [/^\.github\//, /^scripts\/(ci-affected-tests|ci-related-tests|verify-affected|turbo-test-cache)\.mjs$/];
 
 export function planAffected({ changedFiles, turbo, packageDirs }) {
-  if (!Array.isArray(changedFiles)) return { full: true, reason: 'no changed-file list' };
+  if (!Array.isArray(changedFiles) || changedFiles.some(file => typeof file !== 'string')) return { full: true, reason: 'no changed-file list' };
   if (changedFiles.some(file => CI_FULL_RUN.some(pattern => pattern.test(file)))) {
     return { full: true, reason: 'CI or selection code changed' };
   }
@@ -136,7 +137,7 @@ function plan() {
     } else {
       const workspace = Object.keys(packageDirs).sort();
       const packages = affectedPackages(planned.selection, workspace);
-      result = { full: false, packages, workspace };
+      result = { full: false, packages, workspace, client: planClientRelated(changedFiles, process.env.RELATED_SAFE === 'true') };
       console.log(`changed: ${planned.selection.changed.join(', ') || '(none)'}`);
       console.log(`reached through turbo.json inputs: ${planned.selection.extra.join(', ') || '(none)'}`);
       console.log(`affected (${packages.length}/${workspace.length}): ${packages.join(', ')}`);
@@ -180,6 +181,7 @@ function shard() {
   writeOutputs({
     'unit-filter': result.unitFilter,
     'integration-filter': result.integrationFilter,
+    'client-related': JSON.stringify(parsePlan(process.env.AFFECTED ?? '')?.client ?? { mode: 'full' }),
     setup: String(result.setup),
   });
 }

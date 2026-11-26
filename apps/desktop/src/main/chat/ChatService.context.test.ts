@@ -11,6 +11,10 @@ import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 /**
  * What `/clear` and `/compact` do to a conversation, end to end through the service.
  *
@@ -139,7 +143,7 @@ describe('ChatService context boundaries', () => {
     expect(text).toContain('and now something else');
   });
 
-  it('keeps the conversation itself: its project, branch, approval mode and notebook binding', async () => {
+  it('keeps the conversation itself: its project, branch, and approval mode', async () => {
     const id = await started();
     await store.setProject(id, {
       directory: '/tmp/project',
@@ -150,7 +154,6 @@ describe('ChatService context boundaries', () => {
       contextDirectories: [],
     });
     await store.setApprovalMode(id, 'auto');
-    await store.setRemoteSessionId(id, 'notebook-42');
 
     const before = await store.get(id);
     const result = await service.clearContext(id);
@@ -160,9 +163,6 @@ describe('ChatService context boundaries', () => {
     expect(after?.id).toBe(before?.id);
     expect(after?.project).toEqual(before?.project);
     expect(after?.approvalMode).toBe('auto');
-    // The notebook binding most of all: dropping it would strand every image this conversation
-    // has generated. See ChatSession.remoteSessionId.
-    expect(after?.remoteSessionId).toBe('notebook-42');
   });
 
   it('deletes nothing - the cleared messages are still in the session file', async () => {
@@ -278,8 +278,8 @@ describe('ChatService context boundaries', () => {
       expect(messages[boundary + 1]).toMatchObject({ role: 'user', content: 'carry on' });
 
       expect(progress()).toEqual([
-        { type: 'auto-compact', sessionId: id, running: true },
-        { type: 'auto-compact', sessionId: id, running: false },
+        { type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: true },
+        { type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: false },
       ]);
     });
 

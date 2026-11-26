@@ -1,7 +1,6 @@
 import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import type {
   Message,
   Session,
@@ -360,7 +359,7 @@ export function isInjectedContinuity(message: Message): boolean {
  */
 export function injectHandoffMessage(messages: Message[], handoff: SessionHandoff): Message[] {
   const handoffMessage: Message = {
-    id: uuidv4(),
+    id: crypto.randomUUID(),
     role: 'user',
     content: buildHandoffSystemMessage(handoff),
     timestamp: new Date().toISOString(),
@@ -396,7 +395,7 @@ export function injectWorkflowStateMessage(messages: Message[], workflow: Workfl
   if (!text) return withoutPriorInjections;
 
   const stateMessage: Message = {
-    id: uuidv4(),
+    id: crypto.randomUUID(),
     role: 'user',
     content: `${WORKFLOW_STATE_MARKER}\n\n${text}`,
     timestamp: new Date().toISOString(),
@@ -450,7 +449,7 @@ export function buildLocalHandoff(
     `${decisions.length} decisions, ${openBlockers.length} open blockers, ${openTodos.length} open todos.`,
   ];
   if (currentTask) {
-    parts.push(`Current task: ${currentTask.description}.`);
+    parts.push(`Current task: ${currentTask.content}.`);
   }
   if (decisions.length > 0) {
     parts.push(`Latest decision: ${decisions[decisions.length - 1].summary}.`);
@@ -460,7 +459,7 @@ export function buildLocalHandoff(
   return {
     summary: parts.join(' '),
     keyFindings: decisions.map(d => `${d.summary} (rationale: ${d.rationale})`),
-    nextSteps: [...openTodos.map(t => t.description), ...openBlockers.map(b => `Resolve blocker: ${b.description}`)],
+    nextSteps: [...openTodos.map(t => t.content), ...openBlockers.map(b => `Resolve blocker: ${b.description}`)],
     pendingDecisions: [],
     blockers: openBlockers.map(b => b.description),
     generatedAt: new Date().toISOString(),

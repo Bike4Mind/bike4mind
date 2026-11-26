@@ -49,6 +49,20 @@ export const rootPolicySchema = z.strictObject({
    * stored before it existed. `rootRunId` stays the local identity; this one is the server's.
    */
   serverRunId: z.string().min(1).optional(),
+  /**
+   * The organization the server run was minted for, and so the payer of every call attached to it.
+   * Absent for a Personal run, and on runs stored before payers were bound.
+   */
+  serverRunOrganizationId: z.string().min(1).optional(),
+  /**
+   * The run's credit budget, sent when the server run is minted and raised in place after. Absent
+   * for a run without one. Every completion in the run, root and workers, is charged against it.
+   */
+  budgetCredits: z.number().int().positive().optional(),
+  /** Set when the server refused a completion for an exhausted budget; cleared by a raise. */
+  budgetPaused: z.literal(true).optional(),
+  /** The budget the 80% warning was last shown for, so it shows once per budget. */
+  budgetWarnedAt: z.number().int().positive().optional(),
   policy: rolePolicySchema,
 });
 export type RootPolicy = z.infer<typeof rootPolicySchema>;

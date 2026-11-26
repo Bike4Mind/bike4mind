@@ -5,6 +5,7 @@ import {
   ConflictError,
   ForbiddenError,
   INTEGRATION_CATALOG,
+  MCP_CONNECTION_LIMITS,
   McpConnectionCapError,
   McpConnectionSlugConflictError,
   NotFoundError,
@@ -39,6 +40,7 @@ import {
   type CustomMcpContext,
 } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { policyPresetHost } from '@bike4mind/server-utils/mcpConnections/policyPresetHost';
+import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
 import { discoverConnectionTools, type DiscoveryOutcome } from './discovery';
 import { revokeConnectionGrant } from './oauth/revoke';
 import {
@@ -47,6 +49,9 @@ import {
   describeRemoteMcpError,
   type InvokeRemoteMcpOptions,
 } from '@bike4mind/server-utils/mcpConnections/invokeRemoteMcp';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'connectionService' } });
 
 /**
  * The custom MCP connection operations behind pages/api/mcp-connections/** and
@@ -134,6 +139,10 @@ export function deriveMcpConnectionSlug(displayName: string, urlHost: string): s
   return 'connector';
 }
 
+/** The tool-text cleaning (control and invisible characters, markup, whitespace runs); empty means none. */
+const cleanConnectionDescription = (raw: string): string =>
+  cleanMcpToolText(raw, MCP_CONNECTION_LIMITS.descriptionLength);
+
 function buildAuth(body: McpConnectionCreateBody['auth']): IMcpConnectionAuth {
   if (body.kind === 'none') return { kind: 'none' };
   // No `oauth` subdocument yet: the start route discovers and writes it, and the 401 probe records the challenge.
@@ -220,7 +229,10 @@ async function probe(
         await mcpConnectionRepository.setStatus(connection.id, 'error', failure.lastError);
       }
     } catch (statusError) {
-      console.warn(`[connectionService] Could not record the probe failure on ${connection.id}:`, statusError);
+      logger.warn('[connectionService] Could not record the probe failure', {
+        connectionId: connection.id,
+        error: statusError,
+      });
     }
   }
 }
@@ -287,12 +299,14 @@ export async function createConnection(
   // String() first: the membership ids are strings, so an ObjectId pointer never matched them.
   const selectedOrgId = forUser && actor.organizationId ? String(actor.organizationId) : undefined;
   const organizationId = selectedOrgId && context.organizationIds.includes(selectedOrgId) ? selectedOrgId : undefined;
+  const description = cleanConnectionDescription(body.description ?? '');
   const base = {
     ...owner,
     userId: actor.id,
     ...(organizationId ? { organizationId } : {}),
     ...(body.presetId ? { presetId: body.presetId } : {}),
     displayName: body.displayName,
+    ...(description ? { description } : {}),
     urlEnc: prepared.urlEnc,
     displayUrl: prepared.displayUrl,
     urlHost: prepared.urlHost,
@@ -387,10 +401,10 @@ export const getUserConnection = (
 ): Promise<IMcpConnectionPublic> => getConnection(userOwner(actor.id), context, id);
 
 /**
- * Rename, enable or disable, and save a tool review, in one write. Enabling a tool that is pending
- * review counts as reviewing it (it becomes `active`) unless the entry says otherwise. Each tool
- * entry names the `versionHash` it reviewed: an unknown tool is a 400 and a tool that changed
- * since is a 409, and either way nothing is written.
+ * Rename, describe, enable or disable, and save a tool review, in one write. Enabling a tool that
+ * is pending review counts as reviewing it (it becomes `active`) unless the entry says otherwise.
+ * Each tool entry names the `versionHash` it reviewed: an unknown tool is a 400 and a tool that
+ * changed since is a 409, and either way nothing is written. The description never touches a tool.
  */
 export async function updateConnection(
   owner: McpConnectionOwner,
@@ -416,12 +430,17 @@ export async function updateConnection(
     );
   }
 
+  const description = body.description === undefined ? undefined : cleanConnectionDescription(body.description);
   const connection = await mcpConnectionRepository.updateSettings(id, owner, {
     ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
+    ...(description !== undefined ? { description } : {}),
     ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
     ...(settings ? { tools: settings } : {}),
   });
   if (!connection) throw new NotFoundError('Connection not found');
+  if (description !== undefined && description !== (current.description ?? '')) {
+    audit(actor, 'description_changed', connection, { descriptionLength: description.length }).success();
+  }
   if (body.enabled !== undefined) {
     audit(actor, body.enabled ? 'connection_enabled' : 'connection_disabled', connection).success();
   }
@@ -546,7 +565,7 @@ async function revokeRemoteGrant(actor: ConnectionActor, connection: IMcpConnect
     const { network } = await resolveCustomMcpContext(actor.id);
     await revokeConnectionGrant(connection, network);
   } catch {
-    console.warn(`[connectionService] Could not revoke the grant of connection ${connection.id}`);
+    logger.warn('[connectionService] Could not revoke the grant of the connection', { connectionId: connection.id });
   }
 }
 

@@ -1,5 +1,3 @@
-import { isQuestMasterCompatible } from './questMasterEligibility';
-import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import {
   type EmbeddingCredential,
   type EmbeddingRuntime,
@@ -80,7 +78,9 @@ import {
   reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
+  type IUsageEventInput,
   readOrgModelPolicy,
+  createMutex,
 } from '@bike4mind/common';
 import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import { resolveUsageProject } from './usageProject';
@@ -246,9 +246,9 @@ import { logLlmUsageSettled } from './llmUsageSettledLog';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
-import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { exampleRunWiring, type ExampleRunMode } from './tools/exampleRunTools';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
@@ -256,7 +256,13 @@ import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import type { ImageToolConfig } from './tools/implementation/imageGeneration';
-import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
+import {
+  applyModerationHit,
+  MODERATION_POLICY,
+  moderationEscalationAlert,
+  moderationThrottleKey,
+  type ModerationEscalationAlert,
+} from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
 import { createStreamingStatusSender } from './streamingStatusSender';
@@ -270,7 +276,6 @@ import {
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
   ProjectFeature,
-  QuestMasterFeature,
   SlackFeature,
   SummarizeNotebookFeature,
   IChatCompletionServiceOptions,
@@ -328,6 +333,7 @@ import {
   getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
   checkNewAccountSpendCap,
+  assertInterventionSpendAllowed,
 } from '../creditService';
 import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
 import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
@@ -345,7 +351,12 @@ import {
   buildInjectedBlockDetails,
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
-import { buildArtifactEmissionMessages, resolveArtifactsEnabled, withArtifactDataOrigins } from './artifactGating';
+import {
+  buildArtifactEmissionMessages,
+  resolveArtifactsEnabled,
+  resolveCallableFunctionsSafely,
+  withArtifactDataOrigins,
+} from './artifactGating';
 import {
   resolveStickyAutoAddedTools,
   shouldOfferBlogTools,
@@ -362,6 +373,7 @@ import {
   sanitizeTelemetryError,
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
+  withCallableFunctions,
   HELP_CENTER_PROMPT,
   ABSTENTION_PROMPT,
   ELISION_WARNING,
@@ -602,8 +614,10 @@ export function resolveModelAwareHistoryCount({
  */
 const SESSION_LENGTH_WARNING_THRESHOLD = 100;
 
-const questSaveMutex = new Mutex();
+const questSaveMutex = createMutex();
 // Identity and server-owned keys; `deletedAt` belongs to soft delete, never to a turn's save.
+// `lakeSaveCount` moves only by claimLakeSaveSlot's atomic $inc; writing the in-memory copy back
+// would reset the count to what it was when the turn loaded the quest.
 const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
   'id',
   '_id',
@@ -611,13 +625,13 @@ const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
   'createdAt',
   'updatedAt',
   'deletedAt',
+  'lakeSaveCount',
 ]);
 
 interface ProcessInitContext {
   parsedBody: z.infer<typeof QuestStartBodySchema>;
   quest: IChatHistoryItemDocument;
   historyCount: number;
-  enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableAgents?: boolean;
   message: string;
@@ -627,7 +641,6 @@ interface ProcessInitContext {
   enabledTools: (z.infer<typeof b4mLLMTools> | string)[];
   projectId?: string;
   organizationId?: string | null;
-  questMaster?: z.infer<typeof QuestStartBodySchema>['questMaster'];
   toolPromptId?: string;
   researchMode?: z.infer<typeof QuestStartBodySchema>['researchMode'];
   embeddingModel?: string;
@@ -1134,10 +1147,10 @@ export class ChatCompletionProcess {
   public logEvent: IChatCompletionServiceOptions['logEvent'];
   public queue: IChatCompletionServiceOptions['queue'];
   public autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
+  public notifyModerationEscalation: IChatCompletionServiceOptions['notifyModerationEscalation'];
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
-  public createCompletionMeter: IChatCompletionServiceOptions['createCompletionMeter'];
   public features: Map<featureNames, ChatCompletionFeature>;
   public userAbility: MongoAbility | null = null;
   public sessionId: string;
@@ -1320,6 +1333,7 @@ export class ChatCompletionProcess {
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private customMcp: IChatCompletionServiceOptions['customMcp'];
+  private customMcpDeadline: IChatCompletionServiceOptions['customMcpDeadline'];
   private statusManager: StatusManager | null = null;
   private systemFilesCache: Map<string, [string[], string[]]> | null = null;
   private abortControllers: Map<string, AbortController> | null = null;
@@ -1330,6 +1344,7 @@ export class ChatCompletionProcess {
   private shadowSubstitution: { requested: ModelInfo; actual: ModelInfo; substituteIds: Set<string> } | null = null;
   private publishTelemetryAlert?: IChatCompletionServiceOptions['publishTelemetryAlert'];
   private telemetryHmacSecret?: string;
+  private imageUrlSigningSecret?: string;
   private gpcSignalDetected: boolean = false;
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
@@ -1395,6 +1410,7 @@ export class ChatCompletionProcess {
     this.logEvent = options.logEvent;
     this.queue = options.queue;
     this.autoNameSession = options.autoNameSession;
+    this.notifyModerationEscalation = options.notifyModerationEscalation;
     this.summarizeSession = options.summarizeSession;
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
@@ -1404,18 +1420,18 @@ export class ChatCompletionProcess {
     this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
-    this.admitQuestStart = options.admitQuestStart;
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
+    this.customMcpDeadline = options.customMcpDeadline;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
-    this.createCompletionMeter = options.createCompletionMeter;
     this.sessionId = options.sessionId;
     this.cacheRepository = options.cacheRepository;
     this.publishTelemetryAlert = options.publishTelemetryAlert;
     this.telemetryHmacSecret = options.telemetryHmacSecret;
+    this.imageUrlSigningSecret = options.imageUrlSigningSecret;
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
@@ -2001,7 +2017,6 @@ export class ChatCompletionProcess {
       tools: enabledTools = [],
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       embeddingModel,
@@ -2052,12 +2067,7 @@ export class ChatCompletionProcess {
       }
     }
 
-    const {
-      historyCount: requestedHistoryCount = DEFAULT_HISTORY_COUNT,
-      enableQuestMaster,
-      enableMementos,
-      enableAgents,
-    } = parsedBody;
+    const { historyCount: requestedHistoryCount = DEFAULT_HISTORY_COUNT, enableMementos, enableAgents } = parsedBody;
 
     // The one place the client's slider sentinel becomes the internal marker. Everything
     // downstream works in that vocabulary, so no later step has to know the wire value.
@@ -2069,7 +2079,6 @@ export class ChatCompletionProcess {
       parsedBody,
       quest,
       historyCount,
-      enableQuestMaster,
       enableMementos,
       enableAgents,
       message,
@@ -2079,7 +2088,6 @@ export class ChatCompletionProcess {
       enabledTools: finalEnabledTools,
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       embeddingModel,
@@ -2195,8 +2203,6 @@ export class ChatCompletionProcess {
     return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
   }
 
-  private admitQuestStart: IChatCompletionServiceOptions['admitQuestStart'];
-
   public async process({
     body,
     logger,
@@ -2208,7 +2214,9 @@ export class ChatCompletionProcess {
     musicToolConfigResolver,
     imageJobsResolver,
     imageJobFilesResolver,
+    callableFunctionsResolver,
     abortSignal,
+    exampleRun,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -2238,14 +2246,26 @@ export class ChatCompletionProcess {
       userId: string;
     }) => Promise<{ jobId: string; fileId: string }[]>;
     /**
+     * Whether callable functions are on for the requester; when true, the artifact prompt tells the model how to
+     * write one. Only invoked while artifacts are on; no resolver leaves the note out.
+     */
+    callableFunctionsResolver?: () => Promise<boolean>;
+    /**
      * Caller-side cancellation (e.g. the wait=true request deadline). Aborts the turn the same
      * way the cancel watcher does: process() releases or reconciles its own credit reservation,
      * but writes no further quest state, so the caller must settle the quest (see the wait path
      * in apps/client/pages/api/chat.ts).
      */
     abortSignal?: AbortSignal;
+    /**
+     * A skill template's example run (apps/client/server/skillMarket/templateExample.ts): platform
+     * keys, no credit reservation or settlement, no research mode, and every tool behind the dry-run
+     * policy (tools/exampleRunTools.ts). Server-set only; QuestStartBodySchema has no such field.
+     */
+    exampleRun?: ExampleRunMode;
   }) {
     const processStartTime = Date.now();
+    const example = exampleRunWiring(exampleRun);
     const timer = new PipelineTimer();
     timer.phase('init');
     logger.info('⏱️ === LLM COMPLETION PROCESS START ===');
@@ -2254,21 +2274,6 @@ export class ChatCompletionProcess {
     if (prefetchedQuest?.type === 'error') {
       logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
       return;
-    }
-
-    if (
-      body.enableQuestMaster &&
-      !body.questMaster &&
-      isQuestMasterCompatible(resolveSuccessorChain(body.params.model)) &&
-      (await this.db.adminSettings.getSettingsValue('EnableQuestMaster')) === true
-    ) {
-      // A message queued without admission (sent before this check shipped, or EnableQuestMaster turned on
-      // after invoke) is admitted here; the quest id stays the same across redelivery.
-      if (!body.questMasterStartId || !body.questAdmittedAs) {
-        await this.admitQuestStart(this.user, body.questId);
-      } else if (body.questAdmittedAs === 'free') {
-        await this.admitQuestStart(this.user, body.questMasterStartId);
-      }
     }
 
     // Started now so its reads overlap context assembly instead of delaying the first token.
@@ -2280,7 +2285,6 @@ export class ChatCompletionProcess {
       parsedBody,
       quest,
       historyCount: initialHistoryCount,
-      enableQuestMaster: initialEnableQuestMaster,
       enableMementos: initialEnableMementos,
       enableAgents: initialEnableAgents,
       message,
@@ -2290,7 +2294,6 @@ export class ChatCompletionProcess {
       enabledTools,
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       embeddingModel,
@@ -2301,7 +2304,6 @@ export class ChatCompletionProcess {
       userTimezone,
     } = initContext;
     let historyCount = initialHistoryCount;
-    let enableQuestMaster = initialEnableQuestMaster;
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
     const { questId, sessionId, promptMode } = parsedBody;
@@ -2402,7 +2404,7 @@ export class ChatCompletionProcess {
         case 'contextual':
           return [...baseFeatures, 'agentDetection']; // Add agent detection for contextual queries (includes @mentions)
         case 'complex':
-          return [...baseFeatures, 'mementos', 'questMaster', 'agentDetection']; // Full feature set
+          return [...baseFeatures, 'mementos', 'agentDetection']; // Full feature set
         default:
           return [...baseFeatures, 'agentDetection']; // Safe fallback
       }
@@ -2415,20 +2417,9 @@ export class ChatCompletionProcess {
       optimizedFeatureList = optimizedFeatureList.filter(feature => feature !== 'autoNameSession');
     }
 
-    // Honor explicit user enablement BEFORE any complexity-based optimizations.
-    // When a user explicitly enables QuestMaster (toggle or New Quest flow) they want a
-    // quest; user intent takes precedence over automatic optimization.
-    const userExplicitlyEnabledQuestMaster = enableQuestMaster;
+    // Honor explicit user enablement BEFORE any complexity-based optimizations: user intent
+    // takes precedence over automatic optimization.
     const userExplicitlyEnabledAgents = enableAgents;
-
-    // Add QuestMaster to feature list if user explicitly enabled it (regardless of query complexity)
-    if (userExplicitlyEnabledQuestMaster && !optimizedFeatureList.includes('questMaster')) {
-      optimizedFeatureList = [...optimizedFeatureList, 'questMaster'];
-      logger.info(`🎯 [EXPLICIT_ENABLEMENT] QuestMaster explicitly enabled by user - adding to feature list`, {
-        queryComplexity,
-        sessionId,
-      });
-    }
 
     // Reduce features for simple queries, but NEVER override explicit user settings
     if (isSimpleQuery) {
@@ -2436,11 +2427,6 @@ export class ChatCompletionProcess {
       // Note: Session agent attachment is already handled in classifyQueryComplexity
       // which receives session.agentIds and considers them when determining complexity
       const hasAgentMentions = message.includes('@');
-
-      // Only disable QuestMaster if user did NOT explicitly enable it
-      if (!userExplicitlyEnabledQuestMaster) {
-        enableQuestMaster = false;
-      }
 
       // Only disable agents if NOT explicitly enabled AND no @mentions
       // (attached agents are already handled by query complexity classification)
@@ -2450,9 +2436,7 @@ export class ChatCompletionProcess {
 
       // History is deliberately NOT reduced for simple queries: the count sets where the history
       // window starts, and one that changed with each turn's complexity rewrote the prompt cache.
-      logger.info(
-        `[SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`
-      );
+      logger.info(`[SIMPLE_QUERY] Optimizations: Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`);
     }
 
     // Conservative cap before model info is available; the model-aware adjustment happens after
@@ -2538,7 +2522,10 @@ export class ChatCompletionProcess {
               ? this.db.organizations.findById(organizationId)
               : Promise.resolve(null)
         ),
-        timeCall('apiKeys', getEffectiveLLMApiKeys(this.user.id, { db: this.db, getSettingsByNames }, { logger })),
+        timeCall(
+          'apiKeys',
+          getEffectiveLLMApiKeys(example.apiKeyOwner(this.user.id), { db: this.db, getSettingsByNames }, { logger })
+        ),
         // Never rejects (see resolveToolAvailability's doc comment), so it's safe alongside the
         // "essential" calls above that re-throw on failure. Fail-closed here (unlike the Tools
         // picker UI's fail-open default): a tool this lookup couldn't confirm works should not
@@ -2626,7 +2613,8 @@ export class ChatCompletionProcess {
       // the rule; the one site that cannot is the navigate_view auto-add, which runs in
       // initializeProcessContext before this exists and so calls the same helper directly.
       const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
-      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
+      const isResearchMode =
+        example.researchModeAllowed && !!researchMode?.enabled && researchMode.configurations?.length > 0;
       // Whether REPLY_CHOICES_GUIDANCE ships this turn. Decided here, ahead of the history fetch,
       // because history re-attaches stored choices only when the guidance is offered (see
       // fetchAndProcessPreviousMessages `includeReplyChoices`); voice reads the raw stream aloud.
@@ -2857,7 +2845,6 @@ export class ChatCompletionProcess {
       const vettedPreauthorizedLakeIds = this.turnPreauthorizedLakeIds;
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
-        enableQuestMaster || false,
         // Tri-state, deliberately NOT coerced: explicit false is the caller's memory
         // opt-out and must stay distinguishable from absence (#1319, resolveMementoGates).
         enableMementos,
@@ -2963,8 +2950,8 @@ export class ChatCompletionProcess {
           return keys;
         },
         models,
-        enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
-        freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
+        enforceCredits: example.enforceCredits(getSettingsValue('enforceCredits', defaultAdminSettings) === true),
+        freeTierAllowedModels: example.payerGates ? await loadFreeTierAllowedModels(this.db.adminSettings) : undefined,
         orgModelPolicy,
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
@@ -3041,11 +3028,16 @@ export class ChatCompletionProcess {
       // Schema-aware reads: an absent row takes the setting's default (enforceCredits is on for
       // hosted), not false, so a missing row can never switch billing off.
       const adminModerationEnabled = getSettingsValue('ModerationEnabled', defaultAdminSettings) === true;
-      const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', defaultAdminSettings) === true;
+      const adminSettingsEnforceCredits = example.enforceCredits(
+        getSettingsValue('enforceCredits', defaultAdminSettings) === true
+      );
       const enableMCPServer = getSettingsValue('EnableMCPServer', defaultAdminSettings) === true;
       if (adminSettingsEnforceCredits && !this.db.creditTransactions) {
         throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
       }
+      // An example run has credits off but still records its usage rows, re-owned to the platform.
+      const recordsChatUsage = adminSettingsEnforceCredits || example.recordsPlatformUsage;
+      const chatUsageEvents = example.usageEvents(this.db.usageEvents);
 
       // Context Telemetry: Initialize builder if telemetry is enabled
       // Fetch this setting fresh (bypass cache) to ensure immediate response to toggle changes
@@ -3224,8 +3216,8 @@ export class ChatCompletionProcess {
               historyCount,
               fabFileIds: sessionFabFileIds,
               questId,
-              questMaster,
               organizationId: organization?.id ?? null,
+              exampleRunSkill: example.pinnedSkill,
             });
 
             const elapsed = Date.now() - featureStartTime;
@@ -3755,7 +3747,7 @@ export class ChatCompletionProcess {
 
       const toolBuilder = new ToolBuilder({
         user: this.user,
-        db: this.db,
+        db: example.toolDb(this.db),
         entitlementKeys,
         getEntitlements: async () => {
           const { keys, resolved } = await this.resolveEntitlementKeys();
@@ -3787,6 +3779,7 @@ export class ChatCompletionProcess {
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
         customMcp: this.customMcp,
+        customMcpDeadline: this.customMcpDeadline,
         toolCreditsMap: this.toolCreditsMap,
         toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
@@ -3958,7 +3951,7 @@ export class ChatCompletionProcess {
           image_generation: imageToolConfig,
           edit_image: imageToolConfig,
           audio_generation: withAudioToolJobs(audioConfig, this.audioToolJobs),
-          web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
+          web_search: { imageUrlSigningSecret: this.imageUrlSigningSecret ?? this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
           music_generation: musicToolConfig ?? undefined,
         },
@@ -3985,6 +3978,7 @@ export class ChatCompletionProcess {
         agentStore,
         externalTools,
         toolAvailability,
+        wrapChildTools: example.childTools,
       };
       let allTools = toolBuilder.buildTools(buildToolsArgs);
 
@@ -4014,6 +4008,7 @@ export class ChatCompletionProcess {
       if (allTools && !isResearchMode) {
         allTools = toolFailureGuard.apply(webSearchBudget.apply(allTools));
       }
+      if (allTools) allTools = example.tools(allTools);
 
       // Local (Ollama) models are small and easily confused by tools they weren't
       // asked to use - they pick the wrong one or loop. Restrict them to the tools
@@ -4299,6 +4294,7 @@ export class ChatCompletionProcess {
           toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames, undeclarable);
         }
       }
+      removedToolDeclarations = example.tools(removedToolDeclarations);
       const loadedStartTools = toolTimeline?.loaded ?? new Set<string>();
       // Guidance for a tool a change adds rides with that addition, whether or not it is offered now. A
       // start-set tool keeps its guidance in the system prompt even after a removal, so the head holds.
@@ -4399,10 +4395,14 @@ export class ChatCompletionProcess {
       // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings); falls back
       // to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared, so a blank value can
       // never strip artifact guidance from completions.
-      // Names the admin-listed Python data origins when there are any; byte-identical otherwise.
-      const artifactEmissionContent = withArtifactDataOrigins(
-        getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
-        getSettingsValue('pythonArtifactDataOrigins', defaultAdminSettings)
+      // Names the admin-listed Python data origins when there are any, and says how to write a callable function
+      // when that is on for the requester; byte-identical otherwise.
+      const artifactEmissionContent = withCallableFunctions(
+        withArtifactDataOrigins(
+          getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
+          getSettingsValue('pythonArtifactDataOrigins', defaultAdminSettings)
+        ),
+        artifactsEnabled && (await resolveCallableFunctionsSafely(callableFunctionsResolver, logger))
       );
       // Admin-editable via the `HelpCenterPrompt` setting; a blank value falls back to the built-in
       // default so the nudge can never be silently stripped.
@@ -4468,7 +4468,6 @@ export class ChatCompletionProcess {
         toolPrompt: toolPromptMessages.guidance ? [toolPromptMessages.guidance] : [],
         toolContext: toolPromptMessages.context ? [toolPromptMessages.context] : [],
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
-        questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
         sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
         // Skills catalog (model-invocable `skill` tool discovery) + expanded `/skill-name`
@@ -5214,6 +5213,15 @@ export class ChatCompletionProcess {
           });
           throw new InsufficientCreditsError(errorMessage, 'insufficient_credits');
         }
+        try {
+          await assertInterventionSpendAllowed(
+            { userId: this.user.id, credits: requiredCredits },
+            { users: this.db.users, window: this.db.newAccountSpendCap.interventionSpendWindow }
+          );
+        } catch (refusal) {
+          await reservationMethods.incrementCredits(reservationOwnerId, requiredCredits);
+          throw refusal;
+        }
 
         // Update in-memory balance so mid-stream tool validation sees the reduced balance
         if (organization) {
@@ -5730,10 +5738,10 @@ export class ChatCompletionProcess {
       // The set keeps an error rethrown after its hop was recorded from being booked twice.
       const recordedTimeouts = new WeakSet<Error>();
       const recordTimedOutAttempt = (error: unknown, attemptModel: typeof currentModel) => {
-        if (!adminSettingsEnforceCredits || !isLlmTimeoutError(error) || !error.usage) return;
+        if (!recordsChatUsage || !isLlmTimeoutError(error) || !error.usage) return;
         if (recordedTimeouts.has(error)) return;
         recordedTimeouts.add(error);
-        this.db.usageEvents
+        chatUsageEvents
           ?.record({
             requestId: quest.id,
             userId: this.user.id,
@@ -6265,10 +6273,10 @@ export class ChatCompletionProcess {
             // A refused call throws rather than settles, so record it here, whether or not a
             // fallback then answers. Same enforceCredits gate as the settlement row. Not charged (the
             // user got no answer); what the provider billed before the refusal, if any, is kept as COGS.
-            if (adminSettingsEnforceCredits && isSafetyRefusalError(lastError)) {
+            if (recordsChatUsage && isSafetyRefusalError(lastError)) {
               const refusalLedgerModel = this.ledgerModel(currentModel);
               const refusedUsage = refusedUsageOf(lastError);
-              this.db.usageEvents
+              chatUsageEvents
                 ?.record({
                   requestId: quest.id,
                   userId: this.user.id,
@@ -7276,6 +7284,67 @@ export class ChatCompletionProcess {
           void this.recordModerationHit('provider', [], quest.id, logger);
         }
         const earlyStopStamp = buildEarlyStopStamp(providerStopReason);
+        // Same turns / tier basis the estimatedCost branches above priced on.
+        const priceStamp = buildUsagePriceStamp(currentModel, {
+          turns: hasProviderUsage ? actualTokenUsage.turnUsage : undefined,
+          tierBasisTokens: hasProviderUsage
+            ? settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
+            : localInputTokens,
+          localEstimate: !hasProviderUsage,
+          cacheWrite1hTokens: cacheWrite1hInputTokens,
+        });
+        // The settlement usage event, built when recorded so latency and request meta read the same
+        // moment they always have. Ties frozen COGS to credits debited for margin reporting.
+        const settledLedgerModel = this.ledgerModel(currentModel);
+        const settledUsageEvent = (): IUsageEventInput => {
+          const settledReasoning = chatReasoningOptionsFor(currentModel, explicitReasoningEffort, chatThinking);
+          return {
+            requestId: quest.id,
+            userId: this.user.id,
+            ownerId: this.reservedCreditsOwnerId || this.user.id,
+            ownerType: this.reservedCreditsOwnerType,
+            sessionId: quest.sessionId,
+            projectId: this.turnProjectId,
+            feature: 'chat',
+            provider: settledLedgerModel.backend,
+            model: settledLedgerModel.id,
+            ...executedModelFields(settledLedgerModel, currentModel),
+            // 'web' covers all callers of ChatCompletionProcess today (matches
+            // the paired ledger writes below); no API-key auth on this path.
+            source: 'web',
+            // inputTokens/outputTokens are ALWAYS the local estimate and the
+            // provider* fields ALWAYS the provider counts, so drift and invoice
+            // reconciliation stay comparable across rows; settledBasis says
+            // which basis priced costUsd/creditsCharged.
+            inputTokens,
+            outputTokens,
+            settledBasis,
+            cachedInputTokens: cacheReadInputTokens,
+            cacheWriteTokens: actualTokenUsage?.cacheCreationInputTokens ?? 0,
+            providerInputTokens: actualTokenUsage?.inputTokens,
+            providerOutputTokens: actualTokenUsage?.outputTokens,
+            costUsd: estimatedCost,
+            creditsCharged: textCreditsUsed,
+            ...priceStamp,
+            // Not always 'ok': a turn we aborted as degenerate is priced like any other
+            // (the provider tokens were really spent) but has to be findable for a refund.
+            status: usageEventStatusForFinish(providerStopReason),
+            latencyMs: Date.now() - processStartTime,
+            requestMeta: buildChatRequestMeta({
+              stopReason: providerStopReason,
+              maxOutputTokens: safeMaxTokens,
+              limiter: this.turnCreditLimiter,
+              reasoningEffort:
+                settledReasoning.reasoningEffort ?? (queryComplexity ? `auto:${queryComplexity}` : undefined),
+              thinkingBudgetTokens:
+                settledReasoning.thinking?.enabled && currentModel.can_think
+                  ? settledReasoning.thinking.budget_tokens
+                  : undefined,
+              functionCalls: quest.promptMeta?.functionCalls,
+              attachedFiles: quest.promptMeta?.context?.attachedFiles,
+            }),
+          };
+        };
 
         // P6: Credits reconciliation - settle the pre-reserved credits against actual usage.
         // The balance was already adjusted atomically at pre-reservation time; this step
@@ -7331,72 +7400,16 @@ export class ChatCompletionProcess {
             });
           }
 
-          // Same turns / tier basis the estimatedCost branches above priced on.
-          const priceStamp = buildUsagePriceStamp(currentModel, {
-            turns: hasProviderUsage ? actualTokenUsage.turnUsage : undefined,
-            tierBasisTokens: hasProviderUsage
-              ? settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
-              : localInputTokens,
-            localEstimate: !hasProviderUsage,
-            cacheWrite1hTokens: cacheWrite1hInputTokens,
-          });
-
-          // Dual-write usage event: ties frozen COGS to credits debited
-          // for margin reporting. Fire-and-forget - must never affect billing.
-          const settledLedgerModel = this.ledgerModel(currentModel);
-          const settledReasoning = chatReasoningOptionsFor(currentModel, explicitReasoningEffort, chatThinking);
+          // Dual-write usage event. Fire-and-forget - must never affect billing.
           this.db.usageEvents
             ?.record({
-              requestId: quest.id,
-              userId: this.user.id,
-              ownerId: this.reservedCreditsOwnerId || this.user.id,
-              ownerType: this.reservedCreditsOwnerType,
-              sessionId: quest.sessionId,
-              projectId: this.turnProjectId,
-              feature: 'chat',
-              provider: settledLedgerModel.backend,
-              model: settledLedgerModel.id,
-              ...executedModelFields(settledLedgerModel, currentModel),
-              // 'web' covers all callers of ChatCompletionProcess today (matches
-              // the paired ledger writes below); no API-key auth on this path.
-              source: 'web',
-              // inputTokens/outputTokens are ALWAYS the local estimate and the
-              // provider* fields ALWAYS the provider counts, so drift and invoice
-              // reconciliation stay comparable across rows; settledBasis says
-              // which basis priced costUsd/creditsCharged.
-              inputTokens,
-              outputTokens,
-              settledBasis,
-              cachedInputTokens: cacheReadInputTokens,
-              cacheWriteTokens: actualTokenUsage?.cacheCreationInputTokens ?? 0,
-              providerInputTokens: actualTokenUsage?.inputTokens,
-              providerOutputTokens: actualTokenUsage?.outputTokens,
-              costUsd: estimatedCost,
-              creditsCharged: textCreditsUsed,
-              ...priceStamp,
+              ...settledUsageEvent(),
               // Quest-level write-off (uncollected part of the settlement; text only on a
               // credit-capped personal turn), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
               // The hold this turn reserved, so a settlement far above it is findable per account.
               reservedCredits: reservedAtSettlement > 0 ? reservedAtSettlement : undefined,
-              // Not always 'ok': a turn we aborted as degenerate is priced like any other
-              // (the provider tokens were really spent) but has to be findable for a refund.
-              status: usageEventStatusForFinish(providerStopReason),
-              latencyMs: Date.now() - processStartTime,
-              requestMeta: buildChatRequestMeta({
-                stopReason: providerStopReason,
-                maxOutputTokens: safeMaxTokens,
-                limiter: this.turnCreditLimiter,
-                reasoningEffort:
-                  settledReasoning.reasoningEffort ?? (queryComplexity ? `auto:${queryComplexity}` : undefined),
-                thinkingBudgetTokens:
-                  settledReasoning.thinking?.enabled && currentModel.can_think
-                    ? settledReasoning.thinking.budget_tokens
-                    : undefined,
-                functionCalls: quest.promptMeta?.functionCalls,
-                attachedFiles: quest.promptMeta?.context?.attachedFiles,
-              }),
             })
             .catch((usageEventError: unknown) => {
               logger.warn('Failed to record usage event', usageEventError);
@@ -7509,6 +7522,11 @@ export class ChatCompletionProcess {
             // Do not re-throw: balance already adjusted at reservation time
             // Audit trail failure is logged above; request has already been served
           }
+        } else if (recordsChatUsage) {
+          // Credits are off for an example run, so nothing above wrote its row; the platform pays.
+          chatUsageEvents?.record(settledUsageEvent()).catch((usageEventError: unknown) => {
+            logger.warn('Failed to record platform-paid usage event', usageEventError);
+          });
         }
 
         const totalResponseTime = Date.now() - processStartTime;
@@ -7813,7 +7831,7 @@ export class ChatCompletionProcess {
           'summarizeNotebook', // Publishes event to EventBridge
           'contextSummarization', // Publishes event to EventBridge
         ];
-        const postSaveFeatures: Array<featureNames> = ['mementos', 'questMaster'];
+        const postSaveFeatures: Array<featureNames> = ['mementos'];
 
         // P5-a: Truly fire-and-forget the EventBridge features - don't await them.
         fireAndForgetFeatures.forEach(feature => {
@@ -7823,7 +7841,6 @@ export class ChatCompletionProcess {
               quest,
               session,
               messages,
-              questMaster,
               model: runModel,
               historyCount,
               oldestIncludedQuestId,
@@ -7839,7 +7856,7 @@ export class ChatCompletionProcess {
         // remains fire-and-forget since losing perf data is harmless.)
         await saveQuest(quest);
 
-        // P4-a: Post-save features (mementos, questMaster) create side-effect documents -
+        // P4-a: Post-save features (mementos) create side-effect documents -
         // they don't affect quest.reply/replies. Fire-and-forget to avoid blocking response.
         const postSavePromises = postSaveFeatures
           .map(feature =>
@@ -7847,7 +7864,6 @@ export class ChatCompletionProcess {
               quest,
               session,
               messages,
-              questMaster,
               model: runModel,
               historyCount,
               oldestIncludedQuestId,
@@ -8607,7 +8623,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   private getDefaultAdminSettings(): Partial<Record<SettingKey, string>> {
     return {
       // Feature toggles - default to enabled for best user experience
-      EnableQuestMaster: 'true',
       EnableMementos: 'true',
       EnableArtifacts: 'true',
       EnableAgents: 'true',
@@ -8698,7 +8713,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
 
   private async buildOptimizedFeatures(
     adminSettings: Record<string, string>,
-    enableQuestMaster: boolean,
     enableMementos: boolean | undefined,
     enableAgents: boolean,
     projectId?: string,
@@ -8717,7 +8731,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     includeLibraryFiles?: boolean
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
-    const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
     const adminSettingsEnableAgents = getSettingsValue('EnableAgents', adminSettings);
     const adminSettingsEnableLakeMemory = getSettingsValue('EnableLakeMemory', adminSettings);
     const adminSettingsAutoNameNotebook = getSettingsValue('AutoNameNotebook', adminSettings);
@@ -8769,11 +8782,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     if (optimizedFeatureList.includes('autoNameSession') && adminSettingsAutoNameNotebook) {
       this.logger.log('  - Enabling AutoNameSession feature');
       this.features.set('autoNameSession', new AutoNameSessionFeature(this, adminSettingsAutoNameNotebook));
-    }
-
-    if (optimizedFeatureList.includes('questMaster') && enableQuestMaster && adminSettingsEnableQuestMaster) {
-      this.logger.log('  - Enabling QuestMaster feature');
-      this.features.set('questMaster', new QuestMasterFeature(this));
     }
 
     // Agent feature initialization
@@ -9121,16 +9129,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     logger: Logger
   ): Promise<void> {
     try {
-      const decision = await applyModerationHit({
-        users: this.db.users,
-        userId: this.user.id,
-        hit: { at: new Date(), categories, source, questId },
-      });
+      const hit = { at: new Date(), categories, source, questId };
+      const decision = await applyModerationHit({ users: this.db.users, userId: this.user.id, hit });
       logger.warn(
         `[Moderation] User ${this.user.id} flagged by ${source}` +
           (categories.length ? ` (${categories.join(', ')})` : '') +
           `; ${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
       );
+      this.sendModerationEscalationAlert(moderationEscalationAlert(this.user.id, hit, decision), logger);
     } catch (recordError) {
       logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
@@ -9163,6 +9169,17 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       apiKeyId: this.turnApiKeyId,
     });
     return true;
+  }
+
+  /** Fire-and-forget: alert delivery never delays or fails the chat request. */
+  private sendModerationEscalationAlert(alert: ModerationEscalationAlert | null, logger: Logger): void {
+    const notify = this.notifyModerationEscalation;
+    if (!alert || !notify) return;
+    void Promise.resolve()
+      .then(() => notify(alert))
+      .catch(alertError =>
+        logger.warn(`[Moderation] Failed to send the escalation alert for user ${this.user.id}:`, alertError)
+      );
   }
 
   private getBedrockGuardrailsService(

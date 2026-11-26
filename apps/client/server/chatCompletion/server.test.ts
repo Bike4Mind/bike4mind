@@ -29,6 +29,13 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mockEm
 const mockProcessQuest = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProcessQuest }));
 
+// The example run's own module is covered by templateExampleRun.test.ts; here only its dispatch.
+const mockRunTemplateExample = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/skillMarket/templateExampleRun', () => ({
+  runTemplateExample: mockRunTemplateExample,
+  templateExampleRunDeps: (processQuest: unknown) => ({ processQuest }),
+}));
+
 // Scale-in protection is driven by the drain set's in-flight count (unit-tested in taskProtection.test.ts).
 const mockProtectionUpdate = vi.hoisted(() => vi.fn());
 vi.mock('./taskProtection', () => ({
@@ -159,6 +166,12 @@ import {
   DRAIN_TIMEOUT_MS,
 } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
+import {
+  QUEST_DISPATCH_MAX_SKEW_MS,
+  QUEST_DISPATCH_SIGNATURE_HEADER,
+  QUEST_DISPATCH_TIMESTAMP_HEADER,
+  signQuestDispatch,
+} from '@server/utils/questDispatchSignature';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
 const AUTH = `Bearer ${mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;
@@ -185,12 +198,29 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const post = (body: unknown, headers: Record<string, string> = {}) =>
-  fetch(`${baseUrl}/process`, {
+// Signs like dispatchQuest unless `signed` is false; explicit headers override the signed ones.
+const post = (
+  body: unknown,
+  headers: Record<string, string> = {},
+  { signed = true, signedAt }: { signed?: boolean; signedAt?: number } = {}
+) => {
+  const raw = JSON.stringify(body);
+  const fields = body as Partial<Record<'questId' | 'userId' | 'sessionId', string>>;
+  const signature = signQuestDispatch(
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+    { questId: fields.questId ?? '', userId: fields.userId ?? '', sessionId: fields.sessionId ?? '' },
+    raw,
+    signedAt
+  );
+  const signatureHeaders = signed
+    ? { [QUEST_DISPATCH_TIMESTAMP_HEADER]: signature.timestamp, [QUEST_DISPATCH_SIGNATURE_HEADER]: signature.signature }
+    : {};
+  return fetch(`${baseUrl}/process`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json', ...signatureHeaders, ...headers },
+    body: raw,
   });
+};
 
 describe('ChatCompletion /process', () => {
   it('returns 401 when the bearer token is missing', async () => {
@@ -220,6 +250,40 @@ describe('ChatCompletion /process', () => {
   it('returns 400 on a malformed payload (and does not process)', async () => {
     const res = await post({ questId: 'q1' }, { authorization: AUTH });
     expect(res.status).toBe(400);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the dispatch signature headers are missing', async () => {
+    const res = await post(VALID_BODY, { authorization: AUTH }, { signed: false });
+    expect(res.status).toBe(401);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the body names a different user than the one signed for', async () => {
+    const signed = signQuestDispatch(
+      mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+      { questId: 'q1', userId: 'u1', sessionId: 's1' },
+      JSON.stringify(VALID_BODY)
+    );
+    const res = await post(
+      { ...VALID_BODY, userId: 'u2' },
+      {
+        authorization: AUTH,
+        [QUEST_DISPATCH_TIMESTAMP_HEADER]: signed.timestamp,
+        [QUEST_DISPATCH_SIGNATURE_HEADER]: signed.signature,
+      }
+    );
+    expect(res.status).toBe(401);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the dispatch signature is outside the accepted window', async () => {
+    const res = await post(
+      VALID_BODY,
+      { authorization: AUTH },
+      { signedAt: Date.now() - QUEST_DISPATCH_MAX_SKEW_MS - 60_000 }
+    );
+    expect(res.status).toBe(401);
     expect(mockProcessQuest).not.toHaveBeenCalled();
   });
 
@@ -392,6 +456,79 @@ describe('ChatCompletion /process', () => {
 
     finishQuest();
     await vi.waitFor(() => expect(mockProtectionUpdate).toHaveBeenLastCalledWith(0));
+  });
+});
+
+describe('ChatCompletion /template-example', () => {
+  const EXAMPLE = {
+    listingId: 'l1',
+    userId: 'u1',
+    runAt: '2026-11-25T12:00:00.000Z',
+    prompt: 'Plan the launch',
+    versionId: 'v1',
+    takesFile: false,
+    sampleFile: null,
+    cap: { key: 'cap-key', expiresAt: '2026-11-26T00:00:00.000Z' },
+  };
+  const postExample = (body: unknown, headers: Record<string, string> = {}, signed = true) => {
+    const raw = JSON.stringify(body);
+    const fields = body as { listingId?: string; userId?: string; runAt?: string };
+    const signature = signQuestDispatch(
+      mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+      {
+        questId: `template-example:${fields.listingId ?? ''}`,
+        userId: fields.userId ?? '',
+        sessionId: fields.runAt ?? '',
+      },
+      raw
+    );
+    const signatureHeaders = signed
+      ? {
+          [QUEST_DISPATCH_TIMESTAMP_HEADER]: signature.timestamp,
+          [QUEST_DISPATCH_SIGNATURE_HEADER]: signature.signature,
+        }
+      : {};
+    return fetch(`${baseUrl}/template-example`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...signatureHeaders, ...headers },
+      body: raw,
+    });
+  };
+
+  it('returns 401 without the bearer token', async () => {
+    expect((await postExample(EXAMPLE)).status).toBe(401);
+    expect(mockRunTemplateExample).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 without a valid dispatch signature', async () => {
+    expect((await postExample(EXAMPLE, { authorization: AUTH }, false)).status).toBe(401);
+    const forged = await fetch(`${baseUrl}/template-example`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: AUTH,
+        [QUEST_DISPATCH_TIMESTAMP_HEADER]: String(Date.now()),
+        [QUEST_DISPATCH_SIGNATURE_HEADER]: 'a'.repeat(64),
+      },
+      body: JSON.stringify(EXAMPLE),
+    });
+    expect(forged.status).toBe(401);
+    expect(mockRunTemplateExample).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 on a malformed or extended payload', async () => {
+    expect((await postExample({ ...EXAMPLE, prompt: '' }, { authorization: AUTH })).status).toBe(400);
+    expect((await postExample({ ...EXAMPLE, exampleRun: true }, { authorization: AUTH })).status).toBe(400);
+    expect(mockRunTemplateExample).not.toHaveBeenCalled();
+  });
+
+  it('returns 202 and runs the example on a valid signed request', async () => {
+    const res = await postExample(EXAMPLE, { authorization: AUTH });
+    expect(res.status).toBe(202);
+    await vi.waitFor(() => expect(mockRunTemplateExample).toHaveBeenCalledTimes(1));
+    expect(mockRunTemplateExample).toHaveBeenCalledWith(EXAMPLE, expect.anything(), {
+      processQuest: mockProcessQuest,
+    });
   });
 });
 

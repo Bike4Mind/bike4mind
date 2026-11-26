@@ -69,6 +69,12 @@ public final class ApprovalNotificationHandler {
       await feedback.post(title: Self.failureTitle(for: decision), body: PendingActionFailure.unavailable.message)
       return true
     }
+    await answer(approval, decision: decision)
+    return true
+  }
+
+  /// Answers one approval and posts how it ended. Shared by the notification buttons and the Live Activity's.
+  public func answer(_ approval: PendingActionTarget, decision: PendingActionDecision) async {
     do {
       let result = try await api.respond(to: approval, decision: decision)
       let (title, body) = Self.success(for: result)
@@ -79,17 +85,16 @@ public final class ApprovalNotificationHandler {
       await feedback.post(
         title: Self.failureTitle(for: decision), body: PendingActionFailure.api(.malformedResponse).message)
     }
-    return true
   }
 
-  private static func failureTitle(for decision: PendingActionDecision) -> String {
+  static func failureTitle(for decision: PendingActionDecision) -> String {
     switch decision {
     case .approve: "Couldn't approve"
     case .deny: "Couldn't deny"
     }
   }
 
-  private static func success(for result: PendingActionResult) -> (title: String, body: String) {
+  static func success(for result: PendingActionResult) -> (title: String, body: String) {
     switch result.decision {
     case .deny: ("Denied", "The agent will not run that action.")
     case .approve:

@@ -96,9 +96,11 @@ export const markdownSx: SxProps = {
   '& img': { maxWidth: '100%', height: 'auto', borderRadius: 'var(--joy-radius-sm)' },
 };
 
-/** The container a fenced block is drawn in: its own surface, scrolling sideways on its own. */
+/**
+ * The container a fenced block is drawn in: its own surface, scrolling sideways on its own. Its
+ * vertical margin is on the wrapper ReplyMarkdown puts around it with the block's toolbar.
+ */
 export const codeBlockSx: SxProps = {
-  my: 1.5,
   p: 1.5,
   overflowX: 'auto',
   ...thinScrollbarSx,

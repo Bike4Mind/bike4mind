@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { CurationArtifactType } from '@bike4mind/common';
 import {
   generateExecutiveSummaryMarkdown,
   parseConsolidatedNarrative,
@@ -58,6 +59,27 @@ describe('generateExecutiveSummaryMarkdown - consolidated single call', () => {
     expect(tokenUsage.totalTokens).toBe(tokenUsage.inputTokens + tokenUsage.outputTokens);
   });
 
+  it('skips the LLM and returns a minimal summary for an empty notebook', async () => {
+    const { llm, prompts } = makeRecordingLLM(delimitedResponse);
+
+    const { markdown, tokenUsage } = await generateExecutiveSummaryMarkdown(session, [], [], llm, 'gpt-test');
+
+    expect(prompts).toHaveLength(0);
+    expect(markdown).toContain('## Executive Summary');
+    expect(markdown).toContain('This notebook has no messages.');
+    expect(tokenUsage.totalTokens).toBe(0);
+  });
+
+  it('samples a single-message notebook once', async () => {
+    const { llm, prompts } = makeRecordingLLM(delimitedResponse);
+    const one = [{ timestamp: new Date(0), prompt: 'How do I cache?', reply: 'Use a hash.' }];
+
+    await generateExecutiveSummaryMarkdown(session, one, [], llm, 'gpt-test');
+
+    expect(prompts[0].split('How do I cache?')).toHaveLength(2);
+    expect(prompts[0]).not.toContain('\n---\n');
+  });
+
   it('adds exactly one more call for artifact descriptions when artifacts exist', async () => {
     const { llm, prompts } = makeRecordingLLM(delimitedResponse);
     const artifacts = [
@@ -68,6 +90,26 @@ describe('generateExecutiveSummaryMarkdown - consolidated single call', () => {
 
     // 1 narrative call + 1 batched artifact-description call = 2 total.
     expect(prompts).toHaveLength(2);
+  });
+
+  it('resolves artifact context from _id when a message has no id', async () => {
+    const { llm, prompts } = makeRecordingLLM(delimitedResponse);
+    const rawMessages = [
+      { _id: { toString: () => 'oid1' }, timestamp: new Date(0), prompt: 'Reverse a string', reply: 'Done.' },
+    ];
+    const artifacts = [
+      {
+        type: CurationArtifactType.CODE,
+        content: 'const r = 1;',
+        language: 'ts',
+        messageId: 'oid1',
+        timestamp: new Date(0),
+      },
+    ];
+
+    await generateExecutiveSummaryMarkdown(session, rawMessages, artifacts, llm, 'gpt-test');
+
+    expect(prompts.find(p => p.includes('[ARTIFACT 1]'))).toContain('Context: User: Reverse a string');
   });
 });
 

@@ -265,7 +265,8 @@ public actor QuestActivityManager: QuestActivityTracking {
     await entry.handle.update(merged, staleDate: staleDate())
   }
 
-  /// A frame without a label keeps the stage the user was already shown while the quest is still running.
+  /// A frame without a label keeps the stage the user was already shown while the quest is still running, and
+  /// one without a pending-action `ts` (an agent-run poll) keeps the approval buttons of the same wait.
   static func merge(
     previous: QuestActivityContentState, incoming: QuestActivityContentState
   ) -> QuestActivityContentState {
@@ -275,6 +276,9 @@ public actor QuestActivityManager: QuestActivityTracking {
       merged.stageLabel = previous.stageLabel
     }
     merged.progress = incoming.progress ?? previous.progress
+    if merged.pendingActionTs == nil, incoming.phase == .approvalNeeded, previous.phase == .approvalNeeded {
+      merged.pendingActionTs = previous.pendingActionTs
+    }
     return merged
   }
 

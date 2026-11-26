@@ -1,9 +1,12 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, isPreviewStage } from './constants';
+import { subscribeUnlessPreview } from './previewQueueConsumers';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { appUrlForLambdaEnv } from './router';
+import { appFilesBucket } from './buckets';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 /**
  * Email Marketing Infrastructure
@@ -26,7 +29,10 @@ export const emailBatchQueue = new sst.aws.Queue('emailBatchQueue', {
 });
 
 // Subscribe Lambda to process email batches
-export const emailBatchQueueSubscription = emailBatchQueue.subscribe(
+export const emailBatchQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'emailBatchQueue',
+  emailBatchQueue,
   {
     handler: 'apps/workers/src/queueHandlers/emailBatch.dispatch',
     timeout: '2 minutes',
@@ -34,10 +40,12 @@ export const emailBatchQueueSubscription = emailBatchQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, eventBus],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // APP_URL is needed for tracking links in emails
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
+    permissions: [mailBodyPutPermission(appFilesBucket)],
   },
   {
     // Handler already loops event.Records; report per-record failures instead of
@@ -58,7 +66,10 @@ export const emailJobQueue = new sst.aws.Queue('emailJobQueue', {
   },
 });
 
-export const emailJobQueueSubscription = emailJobQueue.subscribe(
+export const emailJobQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'emailJobQueue',
+  emailJobQueue,
   {
     handler: 'apps/workers/src/queueHandlers/emailJobOrchestrator.dispatch',
     timeout: '5 minutes',

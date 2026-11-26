@@ -61,6 +61,41 @@ afterEach(async () => {
   await Subscription.deleteMany({});
 });
 
+describe('hasLapsedSubscriptionsByOwners', () => {
+  it.each(['canceled', 'past_due', 'unpaid', 'paused'] as const)('recognizes %s history', async status => {
+    await Subscription.create(row({ status }));
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.User, ['user_1'])
+    ).resolves.toBe(true);
+  });
+
+  it.each(['active', 'trialing', 'incomplete', 'incomplete_expired'] as const)(
+    'does not classify %s as lapsed',
+    async status => {
+      await Subscription.create(row({ status }));
+      await expect(
+        subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.User, ['user_1'])
+      ).resolves.toBe(false);
+    }
+  );
+
+  it('scopes history to the requested owner type and ids', async () => {
+    await Subscription.create(row({ status: 'canceled', ownerType: SubscriptionOwnerType.Organization }));
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.User, ['user_1'])
+    ).resolves.toBe(false);
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.Organization, ['other'])
+    ).resolves.toBe(false);
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.Organization, [])
+    ).resolves.toBe(false);
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.Organization, ['user_1'])
+    ).resolves.toBe(true);
+  });
+});
+
 describe('subscription acquisition', () => {
   it('persists touches and includes them in the admin owner-details projection', async () => {
     const acquisition = { firstTouch: { source: 'widgets' }, lastTouch: { source: 'email', medium: 'newsletter' } };
@@ -395,9 +430,31 @@ describe('payment failure notice claims', () => {
     expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_cancel')).toBe(true);
   });
 
+  it('claims a billing notice once per key, and again after a release', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_notice' }));
+
+    expect(await subscriptionRepository.claimBillingNotice('sub_notice', 'unpaid:in_1')).toBe(true);
+    expect(await subscriptionRepository.claimBillingNotice('sub_notice', 'unpaid:in_1')).toBe(false);
+    expect(await subscriptionRepository.claimBillingNotice('sub_notice', 'payment_action_required:in_1')).toBe(true);
+
+    await subscriptionRepository.releaseBillingNotice('sub_notice', 'unpaid:in_1');
+    expect(await subscriptionRepository.claimBillingNotice('sub_notice', 'unpaid:in_1')).toBe(true);
+  });
+
+  it('lets exactly one concurrent caller claim a billing notice key', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_notice_race' }));
+
+    const claims = await Promise.all([
+      subscriptionRepository.claimBillingNotice('sub_notice_race', 'unpaid:in_1'),
+      subscriptionRepository.claimBillingNotice('sub_notice_race', 'unpaid:in_1'),
+    ]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+  });
+
   it('claims nothing for a subscription this stage has no row for', async () => {
     expect(await subscriptionRepository.claimPaymentFailureNotice('sub_missing', 'in_1')).toBe(false);
     expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_missing')).toBe(false);
+    expect(await subscriptionRepository.claimBillingNotice('sub_missing', 'unpaid:in_1')).toBe(false);
   });
 });
 
@@ -551,5 +608,62 @@ describe('findNonTerminalStripeRows', () => {
     expect(found[0]).toHaveProperty('updatedAt');
     expect(found[0]).not.toHaveProperty('grantedReason');
     expect(found[0]).not.toHaveProperty('periodStartsAt');
+  });
+});
+
+describe('hasOtherGrantingUserSubscription', () => {
+  const ENDED = 'sub_ended';
+
+  it('is false when the ended subscription is the only row', async () => {
+    await Subscription.create(row({ subscriptionId: ENDED, status: 'canceled' }));
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(false);
+  });
+
+  it('does not count the ended subscription itself, even before its row is marked ended', async () => {
+    await Subscription.create(row({ subscriptionId: ENDED, status: 'active' }));
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(false);
+  });
+
+  // Spelled out rather than derived from PLAN_STORAGE_GRANTING_STATUSES, so narrowing the set fails a case.
+  it.each(['active', 'trialing'] as const)('is true for another %s row (plan switch)', async status => {
+    await Subscription.create(row({ subscriptionId: ENDED, status: 'canceled' }));
+    await Subscription.create(row({ subscriptionId: 'sub_new', status }));
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(true);
+  });
+
+  it('counts a real legacy admin grant with no subscription id or storage metadata', async () => {
+    const legacy = row({ status: 'active', source: 'admin_grant' });
+    const { subscriptionId: omitted, ...withoutSubscriptionId } = legacy;
+    expect(omitted).toBeTruthy();
+    await Subscription.collection.insertOne(withoutSubscriptionId);
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(true);
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_2', ENDED)).toBe(false);
+  });
+
+  it('counts an active admin grant', async () => {
+    await Subscription.create(row({ status: 'active', source: 'admin_grant', subscriptionId: 'admin_grant_abc' }));
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(true);
+  });
+
+  it.each(['past_due', 'unpaid', 'incomplete', 'paused', 'canceled', 'incomplete_expired'] as const)(
+    'ignores another %s row',
+    async status => {
+      await Subscription.create(row({ subscriptionId: 'sub_other', status }));
+
+      expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(false);
+    }
+  );
+
+  it("ignores another user's row and an org row with the same owner id", async () => {
+    await Subscription.create(row({ ownerId: 'user_2', subscriptionId: 'sub_u2' }));
+    await Subscription.create(
+      row({ ownerType: SubscriptionOwnerType.Organization, ownerId: 'user_1', subscriptionId: 'sub_org' })
+    );
+
+    expect(await subscriptionRepository.hasOtherGrantingUserSubscription('user_1', ENDED)).toBe(false);
   });
 });

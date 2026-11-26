@@ -57,6 +57,7 @@ vi.mock('@bike4mind/database/infra', async importOriginal => ({
   ...(await importOriginal<object>()),
   organizationRepository: { findMembershipOrgIds: async () => [], findIdsAdministeredBy: async () => [] },
 }));
+vi.mock('@server/utils/dispatchQuest', () => ({ dispatchSigned: vi.fn() }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
 }));
@@ -79,6 +80,8 @@ import { SkillListing, SkillListingTemplate, SkillListingVersion, skillRepositor
 import templateHandler from '../index';
 import draftHandler from '../draft';
 import publishHandler from '../publish';
+import exampleHandler from '../example';
+import { writeTemplateExample } from '@server/skillMarket/template';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -225,7 +228,15 @@ describe('access', () => {
 
   it('the author reads, updates and deletes the template', async () => {
     const listingId = await makeListing();
-    expect((await call(templateHandler, 'GET', listingId)).body).toEqual({ template: null });
+    expect((await call(templateHandler, 'GET', listingId)).body).toMatchObject({
+      template: null,
+      suggestedSlug: 'summarize',
+      currentApprovedVersionId: expect.any(String),
+      eligibility: { eligible: true },
+      listing: { id: listingId, name: 'summarize', visibility: 'public', live: true },
+      previewImageUrl: null,
+      previewImageStatus: null,
+    });
 
     const created = await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
     expect(created.status).toBe(200);
@@ -238,7 +249,7 @@ describe('access', () => {
     });
 
     expect((await call(templateHandler, 'DELETE', listingId)).status).toBe(204);
-    expect((await call(templateHandler, 'GET', listingId)).body).toEqual({ template: null });
+    expect((await call(templateHandler, 'GET', listingId)).body).toMatchObject({ template: null });
     expect((await call(templateHandler, 'DELETE', listingId)).status).toBe(404);
   });
 
@@ -308,7 +319,7 @@ describe('draft', () => {
 
     const res = await call(draftHandler, 'POST', listingId);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ draft: copy, generatedFromVersionId: approvedId });
+    expect(res.body).toEqual({ draft: { ...copy, takesFile: false }, generatedFromVersionId: approvedId });
     expect(llm.calls).toHaveLength(1);
     expect(llm.calls[0].user).toContain('APPROVED BODY');
     expect(llm.calls[0].user).not.toContain('PENDING BODY');
@@ -455,5 +466,204 @@ describe('scan on publish', () => {
     await publishedTemplate(listingId);
     expect(template(await call(publishHandler, 'DELETE', listingId)).status).toBe('draft');
     expect((await call(publishHandler, 'DELETE', listingId)).status).toBe(409);
+  });
+
+  it('refuses an edit that would blank the headline of a published template', async () => {
+    const listingId = await makeListing();
+    await publishedTemplate(listingId);
+    llm.calls.length = 0;
+    expect((await call(templateHandler, 'PUT', listingId, AUTHOR, { headline: '  ' })).status).toBe(400);
+    expect(llm.calls).toEqual([]);
+    expect(await stored(listingId)).toMatchObject({ status: 'published', headline: copy.headline });
+  });
+
+  it('refuses to publish or re-scan once the author has left the listing organization', async () => {
+    const listingId = await makeListing();
+    await SkillListing.updateOne({ _id: listingId }, { $set: { visibility: 'organization', organizationId: 'org-1' } });
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    expect((await call(publishHandler, 'POST', listingId)).status).toBe(403);
+    await SkillListingTemplate.updateOne({ listingId }, { $set: { status: 'published' } });
+    expect((await call(templateHandler, 'PUT', listingId, AUTHOR, { headline: 'Edited' })).status).toBe(403);
+    expect(llm.calls).toEqual([]);
+  });
+
+  it('answers the lifecycle error cases: no template, in review, duplicate create', async () => {
+    const listingId = await makeListing();
+    expect((await call(publishHandler, 'POST', listingId)).status).toBe(404);
+    expect((await call(publishHandler, 'DELETE', listingId)).status).toBe(404);
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await SkillListingTemplate.updateOne(
+      { listingId },
+      { $set: { status: 'in_review', scanStatus: 'scanning', scanClaimedAt: new Date() } }
+    );
+    expect((await call(publishHandler, 'POST', listingId)).status).toBe(409);
+  });
+
+  it('a second template for the same listing cannot be created', async () => {
+    const listingId = await makeListing();
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await expect(SkillListingTemplate.create({ listingId, slug: 'another' })).rejects.toMatchObject({ code: 11000 });
+  });
+});
+
+describe('example run scan', () => {
+  const example = (extra: Record<string, unknown> = {}) => ({
+    status: 'ready',
+    enabled: true,
+    prompt: 'Summarize this post about wind farms',
+    reply: 'Here are three bullets about the post.',
+    artifact: { type: 'markdown', title: 'Bullet summary', html: '<ul><li>Turbines are taller</li></ul>' },
+    sampleFile: { name: 'wind-post.md', mime: 'text/markdown', source: 'generated' },
+    steps: [{ label: 'Read the attached post', simulated: false }],
+    runAt: new Date(),
+    ...extra,
+  });
+  const seedExample = (listingId: string, extra: Record<string, unknown> = {}) =>
+    SkillListingTemplate.updateOne({ listingId }, { $set: { example: example(extra) } });
+  const scanned = () => llm.calls.filter(c => c.system.includes('security reviewer'));
+  const scanDeps = { getClassifier: async () => classifier };
+
+  it('publishing scans the trimmed reply, artifact text, steps and sample file with the copy', async () => {
+    const listingId = await makeListing();
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await seedExample(listingId, { reply: 'Here are three bullets. EVIL tail', replyTrimmedTo: 22 });
+    const res = await call(publishHandler, 'POST', listingId);
+    expect(template(res).status).toBe('published');
+    const user = scanned()[0].user;
+    expect(user).toContain('Example reply: Here are three bullets');
+    expect(user).not.toContain('EVIL tail');
+    expect(user).toContain('Example artifact: Turbines are taller');
+    expect(user).not.toContain('<li>');
+    expect(user).toContain('Example step: Read the attached post');
+    expect(user).toContain('Example sample file: wind-post.md');
+  });
+
+  it('a link in the example reply keeps the template in draft with an example finding', async () => {
+    const listingId = await makeListing();
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await seedExample(listingId, { reply: 'See https://evil.example/x for more' });
+    const res = await call(publishHandler, 'POST', listingId);
+    expect(template(res)).toMatchObject({ status: 'draft', scanStatus: 'failed' });
+    expect(template(res).scanFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ rule: 'example_external_url', message: expect.stringContaining('Example reply') }),
+      ])
+    );
+  });
+
+  it('an example switched off is not scanned or shown', async () => {
+    const listingId = await makeListing();
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await seedExample(listingId, { enabled: false, reply: 'See https://evil.example/x' });
+    expect(template(await call(publishHandler, 'POST', listingId)).status).toBe('published');
+    expect(scanned()[0].user).not.toContain('Example reply');
+  });
+
+  it('switching a failing example on for a published page re-scans and takes the page down', async () => {
+    const listingId = await makeListing();
+    await publishedTemplate(listingId);
+    await seedExample(listingId, { enabled: false, reply: 'EVIL reply' });
+    llm.calls.length = 0;
+    const res = await call(exampleHandler, 'PUT', listingId, AUTHOR, { enabled: true });
+    expect(template(res)).toMatchObject({ status: 'draft', scanStatus: 'failed' });
+    expect((await stored(listingId))?.example?.enabled).toBe(true);
+  });
+
+  it('a trim of a published example re-scans and stays published on a pass; switching off does not scan', async () => {
+    const listingId = await makeListing();
+    await publishedTemplate(listingId);
+    await seedExample(listingId);
+    llm.calls.length = 0;
+    const trimmed = await call(exampleHandler, 'PUT', listingId, AUTHOR, { replyTrimmedTo: 10 });
+    expect(template(trimmed)).toMatchObject({ status: 'published', example: { replyTrimmedTo: 10 } });
+    expect(scanned()).toHaveLength(1);
+
+    llm.calls.length = 0;
+    const off = await call(exampleHandler, 'PUT', listingId, AUTHOR, { enabled: false });
+    expect(template(off)).toMatchObject({ status: 'published', example: { enabled: false } });
+    expect(llm.calls).toEqual([]);
+  });
+
+  it('a finished run on a published page lands with a scan claim; a draft or hidden example lands as is', async () => {
+    const runAt = new Date('2026-11-25T12:00:00.000Z');
+    const running = { 'example.status': 'running', 'example.runAt': runAt };
+    const result = { $set: { 'example.status': 'ready', 'example.reply': 'EVIL new reply' } };
+
+    const listingId = await makeListing();
+    await publishedTemplate(listingId);
+    await seedExample(listingId, { status: 'running', runAt });
+    const landed = await writeTemplateExample(listingId, running, result, { 'example.enabled': true }, scanDeps);
+    expect(landed).toMatchObject({ status: 'draft', scanStatus: 'failed', example: { reply: 'EVIL new reply' } });
+
+    const hidden = await makeListing('hidden-one');
+    await publishedTemplate(hidden);
+    await seedExample(hidden, { status: 'running', runAt, enabled: false });
+    llm.calls.length = 0;
+    const quiet = await writeTemplateExample(hidden, running, result, { 'example.enabled': true }, scanDeps);
+    expect(quiet).toMatchObject({ status: 'published', example: { status: 'ready', reply: 'EVIL new reply' } });
+    expect(llm.calls).toEqual([]);
+
+    expect(await writeTemplateExample(hidden, running, result, { 'example.enabled': true }, scanDeps)).toBeNull();
+  });
+
+  it.each([
+    ['clean', { status: 'published', scanStatus: 'passed' }],
+    ['blocked', { status: 'draft', scanStatus: 'failed' }],
+    ['error', { status: 'draft', scanStatus: 'error' }],
+    [undefined, { status: 'draft', scanStatus: 'error' }],
+  ] as const)('a shown example image moderated %s lands with the matching verdict', async (moderation, expected) => {
+    const runAt = new Date('2026-11-25T12:00:00.000Z');
+    const listingId = await makeListing();
+    await publishedTemplate(listingId);
+    await seedExample(listingId, { status: 'running', runAt });
+    const item = { key: 'generated/one.png', mime: 'image/png', bytes: 10, ...(moderation ? { moderation } : {}) };
+    const landed = await writeTemplateExample(
+      listingId,
+      { 'example.status': 'running', 'example.runAt': runAt },
+      { $set: { 'example.status': 'ready', 'example.media': { kind: 'image', items: [item] } } },
+      { 'example.enabled': true },
+      scanDeps
+    );
+    expect(landed).toMatchObject(expected);
+    if (moderation === 'blocked') {
+      expect(landed?.scanFindings).toEqual(
+        expect.arrayContaining([expect.objectContaining({ rule: 'example_image_moderation', severity: 'critical' })])
+      );
+    }
+  });
+
+  it('publishing keeps the draft when the shown example has an image that was never moderated', async () => {
+    const listingId = await makeListing();
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await seedExample(listingId, {
+      media: { kind: 'image', items: [{ key: 'old.png', mime: 'image/png', bytes: 1 }] },
+    });
+    llm.calls.length = 0;
+    const res = await call(publishHandler, 'POST', listingId);
+    expect(template(res)).toMatchObject({ status: 'draft', scanStatus: 'error' });
+    expect(scanned()).toEqual([]);
+  });
+
+  it('a run that finishes during a publish scan takes over the claim, so the old verdict cannot publish it', async () => {
+    const runAt = new Date('2026-11-25T12:00:00.000Z');
+    const listingId = await makeListing();
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await seedExample(listingId, { status: 'running', runAt });
+    let landed: unknown;
+    llm.onComplete = async () => {
+      llm.onComplete = null;
+      // Keeps the takeover's claim time distinct from the publish claim at millisecond precision.
+      await new Promise(resolve => setTimeout(resolve, 5));
+      landed = await writeTemplateExample(
+        listingId,
+        { 'example.status': 'running', 'example.runAt': runAt },
+        { $set: { 'example.status': 'ready', 'example.reply': 'EVIL late reply' } },
+        { 'example.enabled': true },
+        scanDeps
+      );
+    };
+    await call(publishHandler, 'POST', listingId);
+    expect(landed).toMatchObject({ status: 'draft', scanStatus: 'failed' });
+    expect((await stored(listingId))?.status).toBe('draft');
   });
 });

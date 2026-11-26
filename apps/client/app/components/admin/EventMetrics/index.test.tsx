@@ -224,7 +224,9 @@ describe('EventMetricsTab filters', () => {
     await act(() => new Promise(resolve => setTimeout(resolve, SEARCH_TERM_URL_DEBOUNCE_MS + 50)));
     vi.useFakeTimers();
     try {
+      fireEvent.click(screen.getByTestId('event-metrics-date-from-set-btn'));
       fireEvent.change(screen.getByTestId('event-metrics-date-from'), { target: { value: '2026-10-01' } });
+      fireEvent.click(screen.getByTestId('event-metrics-date-to-set-btn'));
       fireEvent.change(screen.getByTestId('event-metrics-date-to'), { target: { value: '2026-10-31' } });
       act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS - 1));
       expect(lastFilters()?.dateFrom).toBeUndefined();
@@ -246,7 +248,9 @@ describe('EventMetricsTab filters', () => {
     await act(() => new Promise(resolve => setTimeout(resolve, SEARCH_TERM_URL_DEBOUNCE_MS + 50)));
     vi.useFakeTimers();
     try {
+      fireEvent.click(screen.getByTestId('event-metrics-date-from-set-btn'));
       fireEvent.change(screen.getByTestId('event-metrics-date-from'), { target: { value: '2026-10-31' } });
+      fireEvent.click(screen.getByTestId('event-metrics-date-to-set-btn'));
       fireEvent.change(screen.getByTestId('event-metrics-date-to'), { target: { value: '2026-10-01' } });
       act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
       expect(lastFilters()).toMatchObject({

@@ -14,6 +14,8 @@ import {
   type GenerationJobRef,
   type AgentGenerationSlotKind,
   QUEST_GENERATION_JOB_KINDS,
+  PENDING_ACTION_OUTCOMES,
+  type IPendingActionResolution,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -650,6 +652,8 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     agentImagesClaimed: { type: Number, required: false },
     agentSpeechClipsClaimed: { type: Number, required: false },
     agentSoundEffectsClaimed: { type: Number, required: false },
+    // Data lake saves claimed by this turn (see claimLakeSaveSlot). Declared so strict mode keeps the $inc.
+    lakeSaveCount: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -789,6 +793,17 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
         },
       },
       required: false,
+    },
+    // What became of the last pending action taken off this quest; written by claimPendingAction
+    // (packages/server-utils/src/utils/pendingActionExecutor.ts) and read by the brief serializer.
+    pendingActionResolution: {
+      type: {
+        ts: { type: Number, required: true },
+        outcome: { type: String, enum: PENDING_ACTION_OUTCOMES, required: true },
+        at: { type: Date, required: true },
+      },
+      required: false,
+      _id: false,
     },
     // Slack notification info for async message editing
     // Used by Quest Processor to edit status message with final response
@@ -1370,8 +1385,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
 
   /**
    * Approvals still waiting on the user in the given sessions: a `pendingAction` raised after
-   * `raisedAfterTs` (ms epoch; older ones have lapsed). Bounded by the caller's session list, so it
-   * needs no index of its own.
+   * `raisedAfterTs` (ms epoch; older ones have lapsed). Served by the partial `sessionId_pendingActionTs` index.
    */
   async findPendingActionsBySessionIds(sessionIds: string[], raisedAfterTs: number, limit: number) {
     if (sessionIds.length === 0) return [];
@@ -1394,6 +1408,135 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       ts: quest.pendingAction.ts,
       params: quest.pendingAction.params,
     }));
+  }
+
+  /**
+   * Questions an agent left open in the given sessions: the latest turn of each session when it ends on
+   * suggested choices the user has not picked, carries no pending action, and was asked at or after
+   * `since`. Newest first.
+   */
+  async findOpenQuestionsBySessionIds(sessionIds: string[], since: Date, limit: number) {
+    if (sessionIds.length === 0) return [];
+    const latest = await Promise.all(
+      sessionIds.map(sessionId =>
+        this.model
+          .findOne({ sessionId, deletedAt: null })
+          .sort({ timestamp: -1 })
+          .select('_id sessionId timestamp reply suggestedChoices pendingAction.ts')
+          .lean<{
+            _id: { toString(): string };
+            sessionId: string;
+            timestamp: Date;
+            reply?: string;
+            suggestedChoices?: { options: Array<{ label: string }>; selectedIndex?: number | null };
+            pendingAction?: { ts: number };
+          }>()
+      )
+    );
+    return latest
+      .filter((quest): quest is NonNullable<typeof quest> => quest !== null)
+      .filter(
+        quest =>
+          (quest.suggestedChoices?.options?.length ?? 0) > 0 &&
+          quest.suggestedChoices?.selectedIndex == null &&
+          quest.pendingAction == null &&
+          quest.timestamp >= since
+      )
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .slice(0, limit)
+      .map(quest => ({
+        questId: quest._id.toString(),
+        sessionId: quest.sessionId,
+        reply: quest.reply ?? '',
+        options: (quest.suggestedChoices?.options ?? []).map(option => option.label),
+      }));
+  }
+
+  /**
+   * What has become of each cited question: whether its choice was picked and whether it is still the
+   * latest turn of its session. A quest that no longer exists is absent from the result.
+   */
+  async findQuestionStates(questIds: string[]) {
+    const ids = questIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (ids.length === 0) return [];
+    const quests = await this.model
+      .find({ _id: { $in: ids } })
+      .select('_id sessionId suggestedChoices.selectedIndex')
+      .lean<
+        Array<{ _id: { toString(): string }; sessionId: string; suggestedChoices?: { selectedIndex?: number | null } }>
+      >();
+    const sessionIds = [...new Set(quests.map(quest => quest.sessionId))];
+    const latest = await Promise.all(
+      sessionIds.map(async sessionId => {
+        const newest = await this.model
+          .findOne({ sessionId, deletedAt: null })
+          .sort({ timestamp: -1 })
+          .select('_id')
+          .lean<{ _id: { toString(): string } }>();
+        return { sessionId, questId: newest?._id.toString() };
+      })
+    );
+    const latestBySession = new Map(latest.map(row => [row.sessionId, row.questId]));
+    return quests.map(quest => ({
+      questId: quest._id.toString(),
+      selected: quest.suggestedChoices?.selectedIndex != null,
+      isLatest: latestBySession.get(quest.sessionId) === quest._id.toString(),
+    }));
+  }
+
+  /** Records which suggested choice a reply picked, once and only within range. */
+  async selectSuggestedChoice(questId: string, index: number): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(questId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: questId,
+        'suggestedChoices.selectedIndex': null,
+        [`suggestedChoices.options.${index}`]: { $exists: true },
+      },
+      { $set: { 'suggestedChoices.selectedIndex': index } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * The current pending action and the last resolution of each quest, for reporting what became of an
+   * approval a brief cited. A quest that no longer exists is absent from the result.
+   */
+  async findPendingActionStates(questIds: string[]) {
+    const ids = questIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (ids.length === 0) return [];
+    const quests = await this.model
+      .find({ _id: { $in: ids } })
+      .select('_id pendingAction.ts pendingActionResolution')
+      .lean<
+        Array<{
+          _id: { toString(): string };
+          pendingAction?: { ts: number };
+          pendingActionResolution?: IPendingActionResolution;
+        }>
+      >();
+    return quests.map(quest => ({
+      questId: quest._id.toString(),
+      pendingActionTs: quest.pendingAction?.ts,
+      resolution: quest.pendingActionResolution
+        ? { ts: quest.pendingActionResolution.ts, outcome: quest.pendingActionResolution.outcome }
+        : undefined,
+    }));
+  }
+
+  /**
+   * How many approvals in the given sessions can still be answered: raised at or after `raisedSinceTs` (ms
+   * epoch), the bound the pending-actions endpoints accept. Served by the partial `sessionId_pendingActionTs` index.
+   */
+  async countPendingActionsBySessionIds(sessionIds: string[], raisedSinceTs: number): Promise<number> {
+    if (sessionIds.length === 0) return 0;
+    // countDocuments skips the soft-delete plugin's find hooks, so the tombstone filter is explicit.
+    return this.model.countDocuments({
+      sessionId: { $in: sessionIds },
+      'pendingAction.ts': { $gte: raisedSinceTs },
+      deletedAt: null,
+    });
   }
 
   /**
@@ -1443,6 +1586,23 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model.updateOne(
       { _id: convertId(questId), status: { $ne: 'stopped' } },
       { $inc: { agentVideoClipsClaimed: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Claim one of a turn's `limit` save_content_to_data_lake saves. Every tool build in the turn (the chat loop, research mode,
+   * subagents, agent continuations) shares this Quest, so the check and the increment are one atomic update.
+   */
+  async claimLakeSaveSlot(questId: string, limit: number): Promise<boolean> {
+    if (limit <= 0) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: convertId(questId),
+        $or: [{ lakeSaveCount: { $exists: false } }, { lakeSaveCount: { $lt: limit } }],
+      },
+      { $inc: { lakeSaveCount: 1 } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   }
@@ -1945,6 +2105,13 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { oauthClientId: 1, timestamp: -1 },
       { name: 'oauthClient_timestamp', partialFilterExpression: { oauthClientId: { $exists: true } } }
+    );
+
+    // Serves countPendingActionsBySessionIds and findPendingActionsBySessionIds. Partial, so it holds only
+    // quests parked on an approval. Pre-built by 20261120072518_ensure-quest-session-pending-action-index.
+    ChatHistoryItemSchema.index(
+      { sessionId: 1, 'pendingAction.ts': -1 },
+      { name: 'sessionId_pendingActionTs', partialFilterExpression: { 'pendingAction.ts': { $exists: true } } }
     );
   } catch (error) {
     // Plugin already applied, ignore error

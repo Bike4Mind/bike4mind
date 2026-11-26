@@ -49,6 +49,7 @@ import '../publish';
 function request(blogIntegration: unknown) {
   const { req, res } = createMocks({ method: 'POST', body: { title: 'T', content: 'C' } });
   (req as any).user = { name: 'Author', blogIntegration };
+  Object.assign(req, { logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } });
   return { req, res };
 }
 

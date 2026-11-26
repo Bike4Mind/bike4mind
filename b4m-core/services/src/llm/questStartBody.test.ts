@@ -1,4 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import {
+  ChatCompletionInvokeParamsSchema,
+  LLMApiRequestBodySchema,
+  SimplifiedChatRequestSchema,
+} from '@bike4mind/common';
 import { QuestStartBodySchema } from './questStartBody';
 
 const body = {
@@ -40,24 +45,27 @@ describe('QuestStartBodySchema.disableUserIntegrations', () => {
   });
 });
 
-describe('QuestStartBodySchema quest admission', () => {
-  it('preserves the subscriber admission across queue serialization', () => {
-    const sent = JSON.parse(
-      JSON.stringify({
-        ...body,
-        enableQuestMaster: true,
-        questMasterStartId: 'paid-start',
-        questAdmittedAs: 'subscriber',
-      })
-    );
-    expect(QuestStartBodySchema.parse(sent)).toMatchObject({
-      questMasterStartId: 'paid-start',
-      questAdmittedAs: 'subscriber',
-    });
+// Bodies queued by an older server still carry the retired QuestMaster fields; they must parse and
+// arrive at the worker without them.
+describe('QuestStartBodySchema retired QuestMaster fields', () => {
+  const legacy = {
+    ...body,
+    enableQuestMaster: true,
+    questMasterStartId: 'paid-start',
+    questAdmittedAs: 'unknown-classification',
+    questMaster: { questMasterPlanId: 'p1', questId: 'q1', subQuestId: 's1' },
+  };
+
+  it('parses a body queued with them', () => {
+    expect(() => QuestStartBodySchema.parse(JSON.parse(JSON.stringify(legacy)))).not.toThrow();
   });
 
-  it('rejects an unknown admission classification', () => {
-    expect(() => QuestStartBodySchema.parse({ ...body, questAdmittedAs: 'unknown' })).toThrow();
+  it('strips them from the parsed body', () => {
+    const parsed = QuestStartBodySchema.parse(legacy);
+    expect(parsed).not.toHaveProperty('enableQuestMaster');
+    expect(parsed).not.toHaveProperty('questMasterStartId');
+    expect(parsed).not.toHaveProperty('questAdmittedAs');
+    expect(parsed).not.toHaveProperty('questMaster');
   });
 });
 
@@ -84,5 +92,44 @@ describe('QuestStartBodySchema.deepResearchConfig', () => {
   it('keeps values within the ceilings', () => {
     const parsed = QuestStartBodySchema.parse({ ...body, deepResearchConfig: { maxDepth: 10, duration: 10 } });
     expect(parsed.deepResearchConfig).toMatchObject({ maxDepth: 10, duration: 10 });
+  });
+});
+
+// The example-run mode (ExampleRunMode in ChatCompletionProcess) is a server-only process() argument.
+// No body a client sends, nor the queued body the ChatCompletion `/process` route parses, may carry it.
+describe('the template example-run mode is never read from a request body', () => {
+  const smuggled = { exampleRun: { onStep: 'x' }, templateExampleRun: true };
+
+  it.each([
+    ['QuestStartBodySchema', () => QuestStartBodySchema.parse({ ...body, ...smuggled })],
+    [
+      'ChatCompletionInvokeParamsSchema',
+      () =>
+        ChatCompletionInvokeParamsSchema.parse({
+          sessionId: 's1',
+          message: 'hello',
+          historyCount: 0,
+          fabFileIds: [],
+          params: { model: 'gpt-4' },
+          ...smuggled,
+        }),
+    ],
+    [
+      'LLMApiRequestBodySchema',
+      () =>
+        LLMApiRequestBodySchema.parse({
+          sessionId: 's1',
+          message: 'hello',
+          historyCount: 0,
+          fabFileIds: [],
+          params: { model: 'gpt-4' },
+          ...smuggled,
+        }),
+    ],
+    ['SimplifiedChatRequestSchema', () => SimplifiedChatRequestSchema.parse({ message: 'hello', ...smuggled })],
+  ])('%s strips it', (_name, parse) => {
+    const parsed = parse() as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('exampleRun');
+    expect(parsed).not.toHaveProperty('templateExampleRun');
   });
 });

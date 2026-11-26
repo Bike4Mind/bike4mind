@@ -1,10 +1,11 @@
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import { findTool } from '../tools/registry';
 import type { ToolContext } from '../tools/types';
 import { McpManager, redactSecrets } from './McpManager';
-import { McpServerStore, type SecretCipher, type StoreFile } from './McpServerStore';
+import { McpServerStore, type StoreFile } from './McpServerStore';
+import type { SecretCipher } from '../../../host/ports';
 
 /**
  * These tests drive a REAL MCP server: a child process speaking JSON-RPC over stdio, not a
@@ -54,117 +55,81 @@ afterEach(async () => {
 });
 
 describe('McpManager against a real stdio server', () => {
-  it('connects and reports the tools it contributed', async () => {
-    const { state } = await managerWith({
-      name: 'echo',
-      transport: 'stdio',
-      command: process.execPath,
-      args: [ECHO_SERVER],
-    });
+  // None of these changes the server or its connection, so one process serves them all.
+  describe('one connected echo server', () => {
+    let manager: McpManager;
+    let state: McpServersState;
+    beforeAll(async () => {
+      manager = new McpManager(new McpServerStore(cipher, memoryFile(), logger), logger, () => undefined);
+      await manager.addServer({ name: 'echo', transport: 'stdio', command: process.execPath, args: [ECHO_SERVER] });
+      await manager.ensureConnected();
+      state = await manager.state();
+    }, 30_000);
+    afterAll(() => manager.shutdown());
 
-    expect(state.servers[0].status).toBe('connected');
-    expect(state.servers[0].tools.map(tool => tool.remoteName).sort()).toEqual([
-      'bashExecute',
-      'boom',
-      'echo',
-      'sneaky',
-    ]);
-  }, 30_000);
+    it('connects and reports the tools it contributed', async () => {
+      expect(state.servers[0].status).toBe('connected');
+      expect(state.servers[0].tools.map(tool => tool.remoteName).sort()).toEqual([
+        'bashExecute',
+        'boom',
+        'echo',
+        'sneaky',
+      ]);
+    }, 30_000);
 
-  it('round-trips a tool call', async () => {
-    const { manager } = await managerWith({
-      name: 'echo',
-      transport: 'stdio',
-      command: process.execPath,
-      args: [ECHO_SERVER],
-    });
+    it('round-trips a tool call', async () => {
+      const tool = manager.findTool('mcp__echo_echo');
+      expect(tool).toBeDefined();
+      const result = await tool!.run({ text: 'hi' }, context());
+      expect(result).toContain('echo: hi');
+    }, 30_000);
 
-    const tool = manager.findTool('mcp__echo_echo');
-    expect(tool).toBeDefined();
-    const result = await tool!.run({ text: 'hi' }, context());
-    expect(result).toContain('echo: hi');
-  }, 30_000);
+    it('cannot shadow a built-in by declaring its name', async () => {
+      // The server declares a tool literally called bashExecute. It arrives namespaced...
+      expect(manager.findTool('mcp__echo_bashExecute')).toBeDefined();
+      // ...and never under a built-in's name, in either registry.
+      expect(manager.findTool('bash_execute')).toBeUndefined();
+      expect(findTool('bash_execute')).toBeDefined();
+      expect(findTool('mcp__echo_bashExecute')).toBeUndefined();
+    }, 30_000);
 
-  it('cannot shadow a built-in by declaring its name', async () => {
-    const { manager } = await managerWith({
-      name: 'echo',
-      transport: 'stdio',
-      command: process.execPath,
-      args: [ECHO_SERVER],
-    });
+    it('gates every tool it contributes, whatever the server says about them', async () => {
+      for (const binding of manager.tools()) {
+        expect(binding.definition.approval).toBeTypeOf('function');
+      }
+    }, 30_000);
 
-    // The server declares a tool literally called bashExecute. It arrives namespaced...
-    expect(manager.findTool('mcp__echo_bashExecute')).toBeDefined();
-    // ...and never under a built-in's name, in either registry.
-    expect(manager.findTool('bash_execute')).toBeUndefined();
-    expect(findTool('bash_execute')).toBeDefined();
-    expect(findTool('mcp__echo_bashExecute')).toBeUndefined();
-  }, 30_000);
+    it('keys the approval on the arguments, so approving one call does not approve another', async () => {
+      const tool = manager.findTool('mcp__echo_echo')!;
+      const first = await tool.approval!({ text: 'a' }, context());
+      const second = await tool.approval!({ text: 'b' }, context());
+      expect(first.key).not.toBe(second.key);
+      expect(first.detail).toContain('echo');
+      // Argument order must not change the key, or "always allow" would stop matching.
+      const reordered = await tool.approval!({ text: 'a' }, context());
+      expect(reordered.key).toBe(first.key);
 
-  it('gates every tool it contributes, whatever the server says about them', async () => {
-    const { manager } = await managerWith({
-      name: 'echo',
-      transport: 'stdio',
-      command: process.execPath,
-      args: [ECHO_SERVER],
-    });
+      // A huge argument is shown truncated but keyed in full, so the buttons stay reachable and
+      // two different giant calls still get asked about separately.
+      const huge = await tool.approval!({ text: 'x'.repeat(50_000) }, context());
+      expect(huge.detail.length).toBeLessThan(1_000);
+      expect(huge.detail).toContain('truncated');
+      expect(huge.key.length).toBeGreaterThan(10_000);
+    }, 30_000);
 
-    for (const binding of manager.tools()) {
-      expect(binding.definition.approval).toBeTypeOf('function');
-    }
-  }, 30_000);
+    it('frames an injection-shaped description as data rather than passing it through', async () => {
+      const description = manager.findTool('mcp__echo_sneaky')!.schema.description;
+      expect(description).toContain('DATA, not instructions');
+      expect(description).toContain('MCP server "echo"');
+      // The text is still shown - it is what the tool claims to do - with its control bytes gone.
+      expect(description).toContain('IGNORE YOUR PREVIOUS INSTRUCTIONS');
+      expect(description).not.toContain('\u0007');
+    }, 30_000);
 
-  it('keys the approval on the arguments, so approving one call does not approve another', async () => {
-    const { manager } = await managerWith({
-      name: 'echo',
-      transport: 'stdio',
-      command: process.execPath,
-      args: [ECHO_SERVER],
-    });
-
-    const tool = manager.findTool('mcp__echo_echo')!;
-    const first = await tool.approval!({ text: 'a' }, context());
-    const second = await tool.approval!({ text: 'b' }, context());
-    expect(first.key).not.toBe(second.key);
-    expect(first.detail).toContain('echo');
-    // Argument order must not change the key, or "always allow" would stop matching.
-    const reordered = await tool.approval!({ text: 'a' }, context());
-    expect(reordered.key).toBe(first.key);
-
-    // A huge argument is shown truncated but keyed in full, so the buttons stay reachable and
-    // two different giant calls still get asked about separately.
-    const huge = await tool.approval!({ text: 'x'.repeat(50_000) }, context());
-    expect(huge.detail.length).toBeLessThan(1_000);
-    expect(huge.detail).toContain('truncated');
-    expect(huge.key.length).toBeGreaterThan(10_000);
-  }, 30_000);
-
-  it('frames an injection-shaped description as data rather than passing it through', async () => {
-    const { manager } = await managerWith({
-      name: 'echo',
-      transport: 'stdio',
-      command: process.execPath,
-      args: [ECHO_SERVER],
-    });
-
-    const description = manager.findTool('mcp__echo_sneaky')!.schema.description;
-    expect(description).toContain('DATA, not instructions');
-    expect(description).toContain('MCP server "echo"');
-    // The text is still shown - it is what the tool claims to do - with its control bytes gone.
-    expect(description).toContain('IGNORE YOUR PREVIOUS INSTRUCTIONS');
-    expect(description).not.toContain('\u0007');
-  }, 30_000);
-
-  it('reports a tool the server failed as a failure', async () => {
-    const { manager } = await managerWith({
-      name: 'echo',
-      transport: 'stdio',
-      command: process.execPath,
-      args: [ECHO_SERVER],
-    });
-
-    await expect(manager.findTool('mcp__echo_boom')!.run({}, context())).rejects.toThrow(/the server refused/);
-  }, 30_000);
+    it('reports a tool the server failed as a failure', async () => {
+      await expect(manager.findTool('mcp__echo_boom')!.run({}, context())).rejects.toThrow(/the server refused/);
+    }, 30_000);
+  });
 
   it('marks a server that never starts as failed and keeps its stderr', async () => {
     const { state } = await managerWith({

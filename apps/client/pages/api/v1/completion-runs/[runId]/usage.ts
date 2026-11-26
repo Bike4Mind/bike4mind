@@ -8,15 +8,22 @@ import { getCompletionRunUsageContract, type CompletionRunUsage } from '@bike4mi
 import { creditTransactionRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { findCallerCompletionRun } from '@server/completionRuns/callerCompletionRun';
+import {
+  findCallerCompletionRun,
+  resolveCompletionRunCaller,
+  toCompletionRunBudgetState,
+} from '@server/completionRuns/callerCompletionRun';
 
 export default nextRouteForContract(getCompletionRunUsageContract, {
   rateLimit: perUserRateLimit('GET /api/v1/completion-runs/[runId]/usage'),
 }).get(async (req, res) => {
-  const run = await findCallerCompletionRun(req.validatedParams.runId, {
-    userId: req.user.id,
-    billingOrganizationId: req.apiKeyInfo?.organizationId,
-  });
+  const run = await findCallerCompletionRun(
+    req.validatedParams.runId,
+    await resolveCompletionRunCaller(
+      { userId: req.user.id, apiKeyInfo: req.apiKeyInfo },
+      req.validatedQuery.organization_id
+    )
+  );
   const spend = await creditTransactionRepository.completionRunSpend(run.runId, {
     ownerId: run.ownerId,
     ownerType: run.ownerType,
@@ -28,6 +35,8 @@ export default nextRouteForContract(getCompletionRunUsageContract, {
     createdAt: run.createdAt.toISOString(),
     ...spend,
   };
+  const budget = toCompletionRunBudgetState(run, spend.settled);
+  if (budget) body.budget = budget;
   return res.status(200).json(body);
 });
 

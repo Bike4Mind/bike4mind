@@ -67,6 +67,10 @@ export interface ILakeMembershipChangeEvent {
   fabFileId: string;
   action: LakeMembershipChangeAction;
   origin: LakeMembershipChangeOrigin;
+  /** This row reverses that event. */
+  undoesEventId?: string;
+  /** This row is a side effect of that event (for example the file removal an unapprove causes). */
+  causedByEventId?: string;
   /** Computed at write time from the fixed retention; TTL-indexed. */
   expiresAt: Date;
 }
@@ -82,6 +86,10 @@ export interface RecordLakeMembershipChangeInput {
   fabFileId: string;
   action: LakeMembershipChangeAction;
   origin: LakeMembershipChangeOrigin;
+  undoesEventId?: string;
+  causedByEventId?: string;
+  /** A pre-minted id for the row, for a writer that must name it before the row is written. */
+  eventId?: string;
 }
 
 /**

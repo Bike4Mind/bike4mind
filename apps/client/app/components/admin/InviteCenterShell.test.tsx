@@ -8,6 +8,15 @@ import { InviteCenterShell } from './InviteCenterShell';
 const routerMock = vi.hoisted(() => ({
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
+  isAdmin: true,
+}));
+
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { isAdmin: routerMock.isAdmin, adminPermissions: ['credits:adjust'] } }),
+}));
+
+vi.mock('./InviteCenter/Pending/HeldGrantActions', () => ({
+  default: () => <div data-testid="held-grant-actions-stub" />,
 }));
 
 vi.mock('./InviteCenter/Packages/GrantPackagesTab', () => ({
@@ -16,7 +25,7 @@ vi.mock('./InviteCenter/Packages/GrantPackagesTab', () => ({
   ),
 }));
 
-vi.mock('./PartnerSignupRulesTab', () => ({
+vi.mock('./InviteCenter/Partners/PartnerRulesSection', () => ({
   default: () => <div data-testid="partner-signup-rules-tab-stub" />,
 }));
 
@@ -50,6 +59,7 @@ const renderShell = () =>
 describe('InviteCenterShell', () => {
   beforeEach(() => {
     routerMock.search = {};
+    routerMock.isAdmin = true;
     routerMock.navigate.mockClear();
   });
 
@@ -57,6 +67,19 @@ describe('InviteCenterShell', () => {
     renderShell();
     expect(screen.getByText('Invite Center')).toBeInTheDocument();
     expect(screen.getByTestId('invite-center-section-waitlist')).toContainElement(screen.getByTestId('waitlist-child'));
+  });
+
+  it('mounts only the retained held controls for a delegated credits admin', () => {
+    routerMock.isAdmin = false;
+    routerMock.search = { inviteSection: 'packages' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-pending')).toContainElement(
+      screen.getByTestId('held-grant-actions-stub')
+    );
+    expect(screen.queryByTestId('waitlist-child')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('grant-packages-tab-stub')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-section-stub')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invite-center-sections')).not.toBeInTheDocument();
   });
 
   it('falls back to the waitlist for an unknown section', () => {

@@ -19,8 +19,11 @@ export * from './vpc';
 export * from './websocket';
 export * from './searxng';
 export * from './renderWorker';
+export * from './callableFunctionData';
+export * from './callableFunctionRuntime';
 export * from './chatCompletion';
 export * from './web';
+export * from './callableFunctionDataPolicy';
 export * from './llm';
 // agentExecutor must come after websocket (it adds a route to websocketApi)
 export * from './agentExecutor';
@@ -51,6 +54,7 @@ export * from './wafPolicy';
 export * from './waf';
 
 export * from './webDlqFunctionLogs';
+export * from './dlqTriageFunctionLogs';
 
 // logMonitor must be last
 export * from './logMonitor';

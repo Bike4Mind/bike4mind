@@ -55,7 +55,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
 
       # The keystore exists only in the runner's temp dir for this job; app/build.gradle.kts reads it from the env.
       - name: Install the upload keystore

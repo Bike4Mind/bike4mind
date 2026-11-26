@@ -57,6 +57,8 @@ export const LAKE_ACCESS_SURFACES = [
   // `runLakeSemanticSearch` with the SPA route above but recorded under its own value so an
   // integrator's traffic can be told apart from the product UI's in the access history.
   'data-lake-api-v1-search',
+  // The public v1 proposals list; the SPA reads the same rows under 'data-lake-proposals'.
+  'data-lake-api-v1-proposals',
   'data-lake-articles',
   'data-lake-public-browse',
   'data-lake-sync-delta',

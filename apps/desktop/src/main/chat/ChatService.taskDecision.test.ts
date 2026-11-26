@@ -9,6 +9,7 @@ import {
   type PendingTaskDecision,
   type TaskContract,
   type TaskDecisionAnswer,
+  type WorkerTask,
 } from '@shared/orchestration';
 import type { ChatModelOption, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { ChatService } from './ChatService';
@@ -18,6 +19,10 @@ import { SessionStore } from './SessionStore';
 import { MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import type { ModelCatalog } from './ModelCatalog';
 import type { AccessStore } from './tools/AccessStore';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 const contractFor = (outcome: string): TaskContract => ({
   version: 1,
@@ -280,6 +285,7 @@ describe('a worker decision that only the user can make', () => {
     finish(siblingStream, 'Sibling done');
     await idle(sibling.id);
     await vi.waitUntil(async () => (await stored(root.id)).messages.some(m => String(m.content).includes(SIBLING)), {
+      interval: 5,
       timeout: 5000,
     });
     // A sibling settling does not wake the root while the asking worker waits on the user.
@@ -363,10 +369,13 @@ describe('a worker decision that only the user can make', () => {
     expect(task.state).not.toHaveProperty('decision');
     expect(task.decisions).toEqual([expect.objectContaining({ outcome: 'skipped' })]);
     expect(post.mock.calls.some((_call, index) => wireText(index).includes('The user answered'))).toBe(false);
+    expect(activity.runtimeStatusOf(asker.id)).toBe('done');
+    expect(activity.statusOf(asker.id)).toBe('needs-action');
+    await service.getSession(asker.id, true);
     expect(activity.statusOf(asker.id)).toBe('done');
     await vi.waitUntil(
       async () => (await stored(root.id)).messages.some(m => String(m.content).includes('The user skipped')),
-      { timeout: 5000 }
+      { interval: 5, timeout: 5000 }
     );
     await expect(
       service.answerTaskDecision(asker.id, decision.decision.id, { status: 'skipped' })
@@ -400,6 +409,19 @@ describe('a worker decision that only the user can make', () => {
     } finally {
       restarted.dispose();
     }
+  });
+
+  it.each<WorkerTask['state']>([
+    { status: 'escalation-requested', reason: 'Need a stronger model', evidence: ['Proof'], decisionId: 'upgrade' },
+    { status: 'budget-paused', reason: 'Budget reached' },
+  ])('keeps a $status task needing the user after a restart and a view', async state => {
+    const { asker } = await ask();
+    await store.updateWorkerTask(asker.id, task => ({ ...task, state }));
+    restart();
+    await service.listTaskDecisions();
+    expect(activity.runtimeStatusOf(asker.id)).toBe('needs-action');
+    await service.getSession(asker.id, true);
+    expect(activity.statusOf(asker.id)).toBe('needs-action');
   });
 
   it.each(['skip', 'cancel', 'delete', 'model change'] as const)(
@@ -513,7 +535,7 @@ describe('a worker decision that only the user can make', () => {
     await idle(sibling.id);
     await vi.waitUntil(
       async () => (await stored(root.id)).messages.some(message => String(message.content).includes(SIBLING)),
-      { timeout: 5000 }
+      { interval: 5, timeout: 5000 }
     );
     expect(plannerCalls()).toBe(before);
     const workerCalls = () => post.mock.calls.filter((_call, index) => wire(index).model === 'worker').length;
@@ -529,6 +551,8 @@ describe('a worker decision that only the user can make', () => {
     expect((await stored(asker.id)).workerTask?.state).toEqual({ status: 'canceled', reason: 'Canceled by user' });
     expect(await service.listTaskDecisions()).toEqual([]);
     expect(decisionPushes.at(-1)).toEqual([]);
+    expect(activity.runtimeStatusOf(asker.id)).toBe('done');
+    await service.getSession(asker.id, true);
     expect(activity.statusOf(asker.id)).toBe('done');
     finish(wake);
     await idle(root.id);

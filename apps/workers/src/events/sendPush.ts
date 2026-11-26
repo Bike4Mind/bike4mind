@@ -17,6 +17,7 @@ import {
   type PushTokenPlatform,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
 import { withEventContext } from '@workers/utils/eventContext';
 import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { truncateForPush } from '@bike4mind/server-utils/utils/pushNotifications';
@@ -98,6 +99,7 @@ export const REDACTED_PUSH_COPY: Record<PushNotificationCategory, { title: strin
   chat_completed: { title: 'Reply ready', body: 'A new reply is ready.' },
   generation_ready: { title: 'Generation ready', body: 'Your generated media is ready.' },
   agent_message: { title: 'New message', body: 'An agent sent you a message.' },
+  session_handoff: { title: 'Continue your conversation', body: 'Tap to open the conversation you sent here.' },
   brief_ready: { title: 'Brief ready', body: 'Your assistant has a new brief.' },
 };
 
@@ -106,13 +108,28 @@ export type PushRecipient = {
   redactContent: boolean;
 };
 
+export const APPROVAL_RESOLVED_COPY: Record<
+  NonNullable<PushNotificationEvent['approvalResolved']>,
+  { title: string; body: string }
+> = {
+  approved: { title: 'Approval handled', body: 'This request was approved.' },
+  denied: { title: 'Approval handled', body: 'This request was denied.' },
+  lapsed: { title: 'Approval expired', body: 'This request expired before it was answered.' },
+};
+
 export type SendPushDeps = {
   tokens: {
     findByUser(
       userId: string,
       kind: 'device'
     ): Promise<
-      ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment; platform: PushTokenPlatform }>
+      ReadonlyArray<{
+        id?: string;
+        token: string;
+        sid: string;
+        environment: PushTokenEnvironment;
+        platform: PushTokenPlatform;
+      }>
     >;
     /** `sid` is the read-time session: a token re-registered under another session meanwhile is kept. */
     removeByToken(token: string, options: { sid: string }): Promise<boolean>;
@@ -138,9 +155,17 @@ export type PushDeliveryResult =
 export async function deliverPush(
   event: PushNotificationEvent,
   deps: SendPushDeps,
-  logger: Pick<Logger, 'info' | 'warn' | 'error'>
+  logger: Pick<Logger, 'info' | 'warn' | 'error'>,
+  nowMs: number = Date.now()
 ): Promise<PushDeliveryResult> {
-  const storedTokens = await deps.tokens.findByUser(event.userId, 'device');
+  const candidates = await deps.tokens.findByUser(event.userId, 'device');
+  const storedTokens =
+    event.category === 'session_handoff'
+      ? candidates.filter(
+          token =>
+            event.destinationId !== undefined && token.id === event.destinationId && token.sid === event.destinationSid
+        )
+      : candidates;
   const { tokens, pruned: orphansPruned } = await dropTokensOfEndedSessions(storedTokens, deps, logger);
   if (tokens.length === 0) {
     logger.info('[Push] user has no device tokens; nothing to send', { category: event.category });
@@ -169,6 +194,7 @@ export async function deliverPush(
         'apns-push-type': 'alert',
         'apns-priority': '10',
         'apns-collapse-id': collapseId,
+        ...apnsExpirationHeader(event, nowMs),
       };
       const payload = JSON.stringify(buildPayload(event, recipient.redactContent, deps.appUrl));
       outcomes.push(
@@ -539,6 +565,27 @@ async function dropTokensOfEndedSessions<T extends { sid: string }>(
   }
 }
 
+/**
+ * An actionable `approval_needed` push expires at the pending action's own deadline,
+ * `pendingActionTs + TOKEN_EXPIRATION_MS`: the executors refuse a confirm older than that, so a phone that
+ * comes back online later would otherwise be handed an approval whose buttons can only fail. Without a
+ * `pendingActionTs` the window starts now. The clearing push gets a fresh window from now instead: a
+ * `lapsed` resolution is only published after the original deadline, so reusing it would send the
+ * replacement already expired and leave the stale notification on the lock screen. Other categories send
+ * no header, leaving APNs' default store-and-forward behaviour. The value is absolute epoch seconds.
+ */
+function apnsExpirationHeader(event: PushNotificationEvent, nowMs: number): Record<string, string> {
+  if (event.category !== 'approval_needed') return {};
+  const startMs = event.approvalResolved ? nowMs : (event.pendingActionTs ?? nowMs);
+  return { 'apns-expiration': String(Math.floor((startMs + TOKEN_EXPIRATION_MS) / 1000)) };
+}
+
+function copyFor(event: PushNotificationEvent, redact: boolean): { title: string; body: string } {
+  // Resolution copy names no tool, params or session, so there is nothing to redact.
+  if (event.approvalResolved) return APPROVAL_RESOLVED_COPY[event.approvalResolved];
+  return redact ? REDACTED_PUSH_COPY[event.category] : event;
+}
+
 function collapseIdFor(event: PushNotificationEvent): string {
   const id =
     event.collapseId ?? `${event.category}:${event.questId ?? event.sessionId ?? event.briefId ?? event.userId}`;
@@ -546,19 +593,23 @@ function collapseIdFor(event: PushNotificationEvent): string {
 }
 
 function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: string | undefined) {
-  const copy = redact ? REDACTED_PUSH_COPY[event.category] : event;
+  const copy = copyFor(event, redact);
   // Identifiers only, so redaction leaves them: the server re-authorizes the user on every answer.
   const approval = approvalActionsFor(event);
+  const resolved = event.approvalResolved !== undefined;
+  const briefCategory = briefCategoryFor(event);
   return {
     aps: {
       alert: {
         title: truncateForPush(copy.title, MAX_TITLE_LENGTH),
         body: truncateForPush(copy.body, MAX_BODY_LENGTH),
       },
-      sound: 'default',
+      // The clearing push only replaces the delivered approval, so it must not buzz or break through Focus.
+      ...(resolved ? { 'interruption-level': 'passive' } : { sound: 'default' }),
       ...(event.sessionId && { 'thread-id': event.sessionId }),
       // Selects the client's registered notification category, whose buttons are PENDING_ACTION_DECISIONS.
       ...(approval && { category: event.category }),
+      ...(briefCategory && { category: briefCategory }),
     },
     category: event.category,
     deepLink: resolveDeepLink(event.deepLink, appUrl),
@@ -566,6 +617,7 @@ function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: str
     ...(event.sessionId && { sessionId: event.sessionId }),
     ...(event.briefId && { briefId: event.briefId }),
     ...(approval && { approval }),
+    ...(resolved && { approvalResolved: event.approvalResolved }),
   };
 }
 
@@ -576,7 +628,7 @@ function buildFcmMessage(
   appUrl: string | undefined,
   collapseId: string
 ): FcmMessage {
-  const copy = redact ? REDACTED_PUSH_COPY[event.category] : event;
+  const copy = copyFor(event, redact);
   return {
     notification: {
       title: truncateForPush(copy.title, MAX_TITLE_LENGTH),
@@ -588,6 +640,7 @@ function buildFcmMessage(
       ...(event.questId && { questId: event.questId }),
       ...(event.sessionId && { sessionId: event.sessionId }),
       ...(event.briefId && { briefId: event.briefId }),
+      ...(event.approvalResolved && { approvalResolved: event.approvalResolved }),
     },
     android: {
       priority: 'HIGH',
@@ -599,8 +652,19 @@ function buildFcmMessage(
 }
 
 function approvalActionsFor(event: PushNotificationEvent) {
-  if (event.category !== 'approval_needed' || !event.questId || !event.pendingActionTs) return undefined;
+  if (event.category !== 'approval_needed' || event.approvalResolved) return undefined;
+  if (!event.questId || !event.pendingActionTs) return undefined;
   return { questId: event.questId, pendingActionTs: event.pendingActionTs, actions: PENDING_ACTION_DECISIONS };
+}
+
+// Must stay in sync with BriefNotificationCategory in apps/ios B4MKit Briefs/BriefNotificationAction.swift.
+const BRIEF_ACTION_CATEGORIES = { approval: 'brief_ready_approval', question: 'brief_ready_reply' } as const;
+const BRIEF_LISTEN_CATEGORY = 'brief_ready_listen';
+
+// A brief with no single answerable decision still gets the Listen button; older app builds ignore the category.
+function briefCategoryFor(event: PushNotificationEvent): string | undefined {
+  if (event.category !== 'brief_ready' || !event.briefId) return undefined;
+  return event.briefAction ? BRIEF_ACTION_CATEGORIES[event.briefAction] : BRIEF_LISTEN_CATEGORY;
 }
 
 function resolveDeepLink(deepLink: string, appUrl: string | undefined): string {

@@ -1,6 +1,7 @@
 import {
   ACCOUNT_SEGMENTS,
   type AccountSegment,
+  type AssignableOrgRole,
   getMemberCreditPeriodStart,
   IOrganizationDocument,
   IOrganizationRepository,
@@ -18,6 +19,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from '../../content/SharableDocumentModel';
 import User from '../../auth/UserModel';
+import { Logger } from '@bike4mind/observability';
 
 export interface IOrganizationObject extends HydratedDocument<IOrganizationDocument> {}
 
@@ -117,8 +119,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     // See IOrganization.accountSegment. No default: absent reads as customer.
     accountSegment: { type: String, required: false, enum: [...ACCOUNT_SEGMENTS] },
     // Org managers appointed by the billing owner / platform admin (not a Permission verb). Each also
-    // holds a users[] row, which the authority checks require (isOrgOwnerOrCurrentAdmin).
+    // holds a users[] row, which the authority checks require (hasOrgPermission, orgRoles.ts).
     adminUserIds: { type: [String], default: [] },
+    // Billing managers (orgRoles.ts). Same users[]-row requirement; adminUserIds wins on overlap.
+    billingManagerUserIds: { type: [String], default: [] },
     // `users[]` (the shareable ACL, from IShareableDocument) is AUTHORITATIVE for org membership -
     // every membership check reads it. `userDetails[]` below is a per-member credit side-table
     // (usedCredits / lastCreditUsedAt), NOT a membership list; keep the two in sync but never treat
@@ -296,6 +300,8 @@ OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCu
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
 OrganizationSchema.index({ 'users.userId': 1 });
 OrganizationSchema.index({ adminUserIds: 1 });
+// Keeps the account-erasure `$or` (purgeAccountContent) index-unioned now that it has a billing-manager arm.
+OrganizationSchema.index({ billingManagerUserIds: 1 });
 OrganizationSchema.index(
   { personal: 1, retentionLastSweptAt: 1, _id: 1 },
   { name: 'retention_opted_in_sweep', partialFilterExpression: { retentionVersion: { $gt: 0 } } }
@@ -651,6 +657,14 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return docs.map(d => String(d._id));
   }
 
+  /** Whether some live organization counts both users as members, by the findMembershipOrgIds predicate. */
+  async sharesMembership(userId: string, otherUserId: string): Promise<boolean> {
+    const shared = await this.organizationModel.exists({
+      $and: [orgMembershipFilter(userId), orgMembershipFilter(otherUserId)],
+    });
+    return shared !== null;
+  }
+
   /**
    * Membership (owner + users[] ACL) widened with adminUserIds, so an org manager without a member
    * row still resolves the org plan. Plan resolution only: deliberately a
@@ -715,7 +729,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
-   * Atomically drop a member from `users`, `userDetails` and `adminUserIds` in one pipeline update, so a concurrent add or credit `$inc` on
+   * Atomically drop a member from `users`, `userDetails` and both role lists in one pipeline update, so a concurrent add or credit `$inc` on
    * another member survives. A pipeline rather than `$pull` because `$pull` rejects the whole
    * update when a field is stored as `null`; `$ifNull` heals that like the old whole-doc write did.
    * Ids compare via `$toString` (pipelines skip Mongoose casting) so a legacy ObjectId entry still
@@ -734,50 +748,41 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           users: without('users', '$$this.userId'),
           userDetails: without('userDetails', '$$this.id'),
           adminUserIds: without('adminUserIds', '$$this'),
+          billingManagerUserIds: without('billingManagerUserIds', '$$this'),
         },
       },
     ]);
   }
 
   /**
-   * Pipelines for the same reasons as `removeMember`: a stored `null` breaks `$addToSet`/`$pull`, and ids
-   * compare via `$toString` so a legacy ObjectId entry still matches. One targeted write, so two owners'
-   * concurrent edits of different managers both survive (the full-replace PUT /admins would drop one).
-   * The filter re-checks that the appointee's row confers membership (MEMBER_PERMISSIONS, as
-   * `orgMembershipFilter`), so a row downgraded after the caller's read refuses the appointment.
+   * Give one member one assignable role: drop them from both role lists, then add them to the list the
+   * role is stored in, in a single pipeline update, so the lists stay disjoint and two concurrent edits
+   * of different members both survive. Pipelines for the same reasons as `removeMember`: a stored `null`
+   * breaks `$addToSet`/`$pull`, and ids compare via `$toString` so a legacy ObjectId entry still matches.
+   * For Manager and Billing manager the filter re-checks that the member's row confers membership
+   * (MEMBER_PERMISSIONS, as `orgMembershipFilter`), so a row downgraded after the caller's read refuses
+   * the appointment. Returns false when nothing matched.
    */
-  async addAdmin(organizationId: string, userId: string): Promise<boolean> {
-    const current = { $ifNull: ['$adminUserIds', []] };
-    const filter = { _id: organizationId, users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } };
+  async setMemberRole(organizationId: string, userId: string, role: AssignableOrgRole): Promise<boolean> {
+    const listWithRole = (field: 'adminUserIds' | 'billingManagerUserIds', holds: boolean) => {
+      const without = {
+        $filter: { input: { $ifNull: [`$${field}`, []] }, cond: { $ne: [{ $toString: '$$this' }, userId] } },
+      };
+      return holds ? { $concatArrays: [without, [userId]] } : without;
+    };
+    const filter =
+      role === 'member'
+        ? { _id: organizationId }
+        : { _id: organizationId, users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } };
     const result = await this.organizationModel.updateOne(filter, [
       {
         $set: {
-          adminUserIds: {
-            $cond: [
-              { $in: [userId, { $map: { input: current, in: { $toString: '$$this' } } }] },
-              current,
-              { $concatArrays: [current, [userId]] },
-            ],
-          },
+          adminUserIds: listWithRole('adminUserIds', role === 'manager'),
+          billingManagerUserIds: listWithRole('billingManagerUserIds', role === 'billingManager'),
         },
       },
     ]);
     return result.matchedCount > 0;
-  }
-
-  async removeAdmin(organizationId: string, userId: string): Promise<void> {
-    await this.organizationModel.updateOne({ _id: organizationId }, [
-      {
-        $set: {
-          adminUserIds: {
-            $filter: {
-              input: { $ifNull: ['$adminUserIds', []] },
-              cond: { $ne: [{ $toString: '$$this' }, userId] },
-            },
-          },
-        },
-      },
-    ]);
   }
 
   /**
@@ -909,9 +914,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     ]);
 
     if (result.matchedCount === 0) {
-      console.warn(
-        `updateUserDetails: No userDetails entry found for user ${userId} in organization ${organizationId}. ` +
-          'Credits were deducted from the org but usage was not tracked for this user.'
+      Logger.warn(
+        'updateUserDetails: No userDetails entry found; credits were deducted from the org but usage was not tracked for this user',
+        { userId, organizationId }
       );
     }
   }

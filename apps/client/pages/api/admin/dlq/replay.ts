@@ -16,8 +16,8 @@ import {
 } from '@bike4mind/server-utils/utils/sqs';
 import type { Message } from '@aws-sdk/client-sqs';
 import { dlqReplayLogRepository, adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
-import { visibleDlqSuggestion } from '@server/admin/dlq/triage';
-import { triageActionSchema } from '@server/admin/dlq/triagePolicy';
+import { visibleDlqSuggestion } from '@bike4mind/server-utils/admin/dlq/triage';
+import { triageActionSchema } from '@bike4mind/server-utils/admin/dlq/triagePolicy';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
@@ -175,7 +175,10 @@ const handler = adminApi({
 
   const safeLogReplay = async (data: Omit<Parameters<typeof dlqReplayLogRepository.logReplay>[0], never>) => {
     try {
-      await dlqReplayLogRepository.logReplay(data);
+      await dlqReplayLogRepository.logReplay({
+        ...data,
+        ...(aiSuggestionId ? { aiSuggestionId, operation: 'replay' as const } : {}),
+      });
     } catch (logError) {
       Logger.error(`[DLQ Replay] Failed to write audit log for message ${data.messageId}`, {
         error: logError instanceof Error ? logError.message : String(logError),

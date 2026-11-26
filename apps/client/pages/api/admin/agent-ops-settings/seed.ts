@@ -79,7 +79,7 @@ const handler = adminApi({
       settings: updatedSettings,
     });
   } catch (error) {
-    console.error('Error seeding AgentOps settings:', error);
+    req.logger.error('Error seeding AgentOps settings', { error });
     res.status(500).json({
       success: false,
       message: 'Failed to seed AgentOps settings',

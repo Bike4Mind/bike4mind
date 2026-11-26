@@ -3,6 +3,9 @@ import { connectDB, adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataOriginReservedHosts } from '@bike4mind/services/llm/artifactGating';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'pythonArtifactDataOrigins' } });
 
 // The sandbox shell must not hang on a slow database; past this it is served with no data origins.
 const READ_TIMEOUT_MS = 3000;
@@ -39,13 +42,11 @@ export async function loadPythonArtifactDataOrigins(
     const stored = await Promise.race([read, timeout]);
     const origins = resolvePythonArtifactDataOrigins(stored, appReservedHosts());
     if (origins.length === 0 && Array.isArray(stored) && stored.length > 0) {
-      console.warn('[pyodide-sandbox] ignoring pythonArtifactDataOrigins: the stored list has an invalid entry');
+      logger.warn('[pyodide-sandbox] ignoring pythonArtifactDataOrigins: the stored list has an invalid entry');
     }
     return { origins, degraded: false };
   } catch (error) {
-    console.warn(
-      `[pyodide-sandbox] serving without data origins: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.warn('[pyodide-sandbox] serving without data origins', { error });
     return { origins: [], degraded: true };
   } finally {
     if (timer) clearTimeout(timer);

@@ -11,12 +11,12 @@ describe('useSendMessage - skipRapidReply reaches both dispatch paths', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
 
   it('derives skipRapidReply from a non-empty toolsOverride', () => {
-    expect(source).toMatch(/const skipRapidReply = \(options\?\.toolsOverride\?\.length \?\? 0\) > 0 \|\|/);
+    expect(source).toMatch(/const skipRapidReply = \(toolsOverride\?\.length \?\? 0\) > 0 \|\|/);
   });
 
   it('also derives skipRapidReply from a present (trimmed) systemContext, which the ack never sees', () => {
     expect(source).toMatch(
-      /const skipRapidReply = \(options\?\.toolsOverride\?\.length \?\? 0\) > 0 \|\| systemContext !== undefined;/
+      /const skipRapidReply = \(toolsOverride\?\.length \?\? 0\) > 0 \|\| systemContext !== undefined;/
     );
     // The flag must read the trimmed value, so whitespace-only context does not suppress the ack.
     expect(source.indexOf('const systemContext = options?.systemContext?.trim() || undefined;')).toBeLessThan(
@@ -25,7 +25,7 @@ describe('useSendMessage - skipRapidReply reaches both dispatch paths', () => {
   });
 
   it.each([
-    ['/llm command-map dispatch', 'return await handleCommand(commandHandlers,'],
+    ['/llm command-map dispatch', 'return await dispatchSend(commandHandlers, imageSendMode,'],
     ['direct handleLLMCommand dispatch', 'return await handleLLMCommand({'],
   ])('forwards skipRapidReply on the %s', (_label, anchor) => {
     const handlerIdx = source.indexOf(anchor);

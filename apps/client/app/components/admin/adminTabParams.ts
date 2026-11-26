@@ -7,6 +7,7 @@ import { EVENTS_TAB_PARAMS } from './EventMetrics/eventsTabSearch';
 import { CAMPAIGN_WATCH_SEARCH_PARAM, SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
 import { STRIPE_DISPUTE_TAB_PARAMS } from './stripeDisputeSearch';
 import { ADMIN_RATE_LIMITS_TAB_SLUG, RATE_LIMITS_TAB_PARAMS } from './RateLimits/rateLimitsSearch';
+import { CREDIT_TAB_PARAM, CREDIT_TAB_SEARCH_PARSERS, type CreditTabSearch } from './CreditAnalysis/creditTabSearch';
 import { MODEL_METRICS_TAB_PARAMS } from './ModelMetrics/modelMetricsSearch';
 import { ADMIN_SPEND_EXPLORER_TAB_SLUG, SPEND_EXPLORER_TAB_PARAMS } from './SpendExplorer/spendExplorerSearch';
 import {
@@ -108,7 +109,7 @@ export const ADMIN_GLOBAL_PARAMS = [EMERGENCY_ACCESS_PARAM, ADMIN_TAB_PARAM] as 
  */
 export const ADMIN_TAB_PARAMS = {
   [ADMIN_SPEND_EXPLORER_TAB_SLUG]: SPEND_EXPLORER_TAB_PARAMS,
-  'credit-analytics': ['creditView', 'economyFrom', 'economyTo', 'economyOwner', 'economyFlow'],
+  'credit-analytics': ['creditView', CREDIT_TAB_PARAM, 'economyFrom', 'economyTo', 'economyOwner', 'economyFlow'],
   [ADMIN_USERS_TAB_SLUG]: USERS_TAB_PARAMS,
   [ADMIN_FEEDBACK_TAB_SLUG]: FEEDBACK_TAB_PARAMS,
   [ADMIN_AUDIT_LOG_TAB_SLUG]: [...AUDIT_LOG_FILTER_PARAMS, AUDIT_ENTRY_ID_PARAM, AUDIT_SUMMARY_WINDOW_PARAM],
@@ -162,7 +163,8 @@ type TypedAdminSearch = UsersSearch &
   RevenueSearch &
   SecurityDashboardSearch &
   InviteCenterSearch &
-  ModelsSearch;
+  ModelsSearch &
+  CreditTabSearch;
 
 /** Params with a typed parser; every other registered param is an optional string. */
 export type AdminSearch = Partial<Record<Exclude<AdminSearchParam, keyof TypedAdminSearch>, string>> & TypedAdminSearch;
@@ -180,6 +182,7 @@ const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<s
     ...SECURITY_DASHBOARD_SEARCH_PARSERS,
     ...INVITE_CENTER_SEARCH_PARSERS,
     ...MODELS_SEARCH_PARSERS,
+    ...CREDIT_TAB_SEARCH_PARSERS,
     ...RECORD_ID_SEARCH_PARSERS,
   })
 );
