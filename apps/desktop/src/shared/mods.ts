@@ -142,7 +142,8 @@ export const sceneSkinSchema = z
     backdrop: imagePath,
     cast: z
       .strictObject({
-        spriteHeight: z.number().positive().max(100),
+        // Bounded so a skin cannot shrink agents, needs-you ones included, out of sight.
+        spriteHeight: z.number().min(4).max(40),
         faceY: percent,
         sheets: z
           .array(

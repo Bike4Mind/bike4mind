@@ -114,6 +114,7 @@ describe('skinTokensSchema', () => {
     ['an empty slot list', { scenes: { tavern: { map: { zones: { bar: { slots: [] } } } } } }],
     ['a reply with no side', { scenes: { tavern: { map: { reply: { top: 3 } } } } }],
     ['an empty sheet list', { scenes: { tavern: { cast: { sheets: [] } } } }],
+    ['sprites too small to see', { scenes: { tavern: { cast: { spriteHeight: 0.01 } } } }],
     ['an unknown host pose', { scenes: { tavern: { cast: { host: { sprites: { dancing: 'sprites/a.png' } } } } } }],
     ['an empty copy line', { scenes: { tavern: { copy: { hostName: '' } } } }],
     ['copy that tries to change the needs-you look', { scenes: { tavern: { copy: { needsYou: 'x' } } } }],
