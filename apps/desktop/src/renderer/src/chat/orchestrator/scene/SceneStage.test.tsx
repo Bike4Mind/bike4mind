@@ -279,9 +279,10 @@ describe('SceneStage features on any definition', () => {
   });
 
   it('keeps answers out of the bubbles where another card answers', async () => {
-    mount.render(
+    await mount.render(
       <SceneStage {...props([agentFixture('n1', 'needs-you')])} scene={TEST_SCENE} answerFromBubble={false} />
     );
+    expect(el('orchestrator-test-yard-bubble-n1').textContent).toBe('Needs you!');
     expect(query('orchestrator-test-yard-bubble-n1-open')).toBeNull();
   });
 
