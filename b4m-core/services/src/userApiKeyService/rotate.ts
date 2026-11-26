@@ -36,6 +36,8 @@ interface RotateUserApiKeyAdapters {
    * nothing from a rotation. See the no-escalation rule below.
    */
   callerScopes?: ApiKeyScopeValue[];
+  /** Expiry of the calling API key, when it has one. Same containment rule as createUserApiKey. */
+  callerExpiresAt?: Date;
   /** See resolveOwnedApiKey: only the org key rotate route passes it. */
   includeOrgOwned?: boolean;
 }
@@ -109,6 +111,12 @@ export const rotateUserApiKey = async (
     apiKey.scopes ?? [],
     'Cannot rotate a key holding scopes the calling key does not have'
   );
+
+  // The rotated secret is handed to the caller, so a key may only rotate one that does not outlive it.
+  const { callerExpiresAt } = adapters;
+  if (callerExpiresAt && (!apiKey.expiresAt || new Date(apiKey.expiresAt) > callerExpiresAt)) {
+    throw new ForbiddenError('Cannot rotate a key that outlives the calling key');
+  }
 
   const previousOwnerUserId = apiKey.userId?.toString();
   // An org-owned key stays with the org's service account: re-owning it to the rotating admin
