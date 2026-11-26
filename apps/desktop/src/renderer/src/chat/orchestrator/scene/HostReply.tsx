@@ -1,7 +1,5 @@
 import Box from '@mui/joy/Box';
-import { QUEST_BOARD } from './scene';
-
-export const INNKEEPER_GREETING = "What'll it be?";
+import type { SceneDefinition } from './sceneDefinition';
 
 const PARCHMENT = 'rgba(255, 250, 240, 0.96)';
 const INK = '#2a1d10';
@@ -52,14 +50,22 @@ export const PARCHMENT_CONTROLS = {
 } as const;
 
 /**
- * The Innkeeper's latest reply as a speech bubble beside the bar, for while the conversation is out
- * of sight: its opening line or two, and the way to the whole reply.
+ * The host's latest reply as a speech bubble beside it, for while the conversation is out of sight:
+ * its opening line or two, and the way to the whole reply.
  */
 export function ReplyBubble({
+  testId,
+  anchor,
+  board,
   snippet,
   onReadAll,
   onDismiss,
 }: {
+  /** Prefixes the test ids: `<testId>-reply-bubble`, `-reply-text`, `-reply-read-btn`, `-reply-dismiss-btn`. */
+  testId: string;
+  anchor: SceneDefinition['map']['reply'];
+  /** Kept clear of on a narrow scene. */
+  board: SceneDefinition['map']['board'];
   snippet: string;
   onReadAll(): void;
   onDismiss(): void;
@@ -78,17 +84,17 @@ export function ReplyBubble({
   } as const;
   return (
     <Box
-      data-testid="orchestrator-tavern-reply-bubble"
+      data-testid={`${testId}-reply-bubble`}
       role="status"
       sx={{
         position: 'absolute',
-        top: '3%',
-        // Ends just left of the Innkeeper behind the bar (INNKEEPER_POINT), its tail pointing at him.
-        right: '42%',
+        top: `${anchor.top}%`,
+        // Ends just left of the host, its tail pointing at it.
+        right: `${anchor.right}%`,
         zIndex: 250,
         width: 'clamp(180px, 34%, 320px)',
         // On a narrow scene the 180px floor would reach back over the quest board; shrink instead.
-        maxWidth: `calc(58% - ${QUEST_BOARD.left + QUEST_BOARD.width}%)`,
+        maxWidth: `calc(${100 - anchor.right}% - ${board.left + board.width}%)`,
         px: '0.75em',
         py: '0.5em',
         boxShadow: pixelFrame(2),
@@ -108,19 +114,13 @@ export function ReplyBubble({
       }}
     >
       <Box
-        data-testid="orchestrator-tavern-reply-text"
+        data-testid={`${testId}-reply-text`}
         sx={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
       >
         {snippet}
       </Box>
       <Box sx={{ display: 'flex', gap: '1em', mt: '0.35em', fontWeight: 700 }}>
-        <Box
-          component="button"
-          type="button"
-          onClick={onReadAll}
-          sx={action}
-          data-testid="orchestrator-tavern-reply-read-btn"
-        >
+        <Box component="button" type="button" onClick={onReadAll} sx={action} data-testid={`${testId}-reply-read-btn`}>
           Read all
         </Box>
         <Box
@@ -128,7 +128,7 @@ export function ReplyBubble({
           type="button"
           onClick={onDismiss}
           sx={{ ...action, ml: 'auto', fontWeight: 500 }}
-          data-testid="orchestrator-tavern-reply-dismiss-btn"
+          data-testid={`${testId}-reply-dismiss-btn`}
         >
           Dismiss
         </Box>

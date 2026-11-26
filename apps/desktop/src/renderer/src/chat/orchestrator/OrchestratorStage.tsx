@@ -26,7 +26,7 @@ import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
-import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher } from './ViewSwitcher';
+import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher, sceneStageCopy } from './ViewSwitcher';
 import { useApplySkin, useSkinTheme } from './skins';
 import { SKIN_STAGE_VARIABLE } from './statePalette';
 import { useQuickApprovals } from './quickApprovals';
@@ -333,14 +333,16 @@ export function OrchestratorStage({
   }, [finale.shown]);
   useAgentSoundEvents(agents, parentNeedsYou);
 
-  const parentScene = !split && (view === 'tavern' || view === 'office');
+  const sceneInfo = ORCHESTRATOR_VIEW_INFO[view].scene;
+  const stageCopy = sceneStageCopy(view);
+  const parentScene = !split && sceneInfo?.host === true;
   const bannerInScene = parentScene && renderView !== undefined && agents.length > 0 && !focused;
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
       spend={presenting ? undefined : spend}
       placement={bannerInScene ? 'scene' : 'inline'}
-      look={view === 'office' ? 'office' : 'tavern'}
+      look={sceneInfo?.finale}
       onRead={() => {
         finale.dismiss();
         onReadReport?.(report.id);
@@ -349,13 +351,17 @@ export function OrchestratorStage({
     />
   );
 
-  // The Tavern asks its requests in a dialogue box of its own (tavern/TavernDialogue.tsx). Presenter mode keeps
-  // the strip off and the bubbles' Open-only answers, since the box would show the real requests.
+  // A scene that answers in place asks its requests in a dialogue box of its own (scene/SceneDialogue.tsx).
+  // Presenter mode keeps the strip off and the bubbles' Open-only answers, since the box would show the real requests.
   const inSceneDecisions =
-    !split && view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused && !presenting;
+    !split &&
+    sceneInfo?.inSceneDecisions === true &&
+    renderView !== undefined &&
+    agents.length > 0 &&
+    !focused &&
+    !presenting;
 
-  const detailsInScene =
-    (parentScene || (!split && view === 'aquarium')) && renderView !== undefined && agents.length > 0 && !focused;
+  const detailsInScene = !split && sceneInfo !== undefined && renderView !== undefined && agents.length > 0 && !focused;
   const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
   const detailsOverlay = selected && (
     // Stay mounted while settled so waking restores the draft and selection.
@@ -468,19 +474,13 @@ export function OrchestratorStage({
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
-  // An agent's request is the Tavern dialogue box's to show; the card keeps the parent's.
+  // An agent's request is the scene dialogue box's to show; the card keeps the parent's.
   const askingAgent = parentNeedsYou || inSceneDecisions ? undefined : firstNeedsYou;
   const needsYouCard = settled && (parentNeedsYou || askingAgent) && (
     <NeedsYouCard
       key={askingAgent?.id ?? 'parent'}
       agent={askingAgent}
-      name={
-        askingAgent
-          ? (personas.get(askingAgent.id)?.label ?? askingAgent.title)
-          : view === 'office'
-            ? 'The orchestrator'
-            : 'The Innkeeper'
-      }
+      name={askingAgent ? (personas.get(askingAgent.id)?.label ?? askingAgent.title) : stageCopy.host}
       onOpen={() => {
         ambient?.wake();
         if (askingAgent) setSelectedId(askingAgent.id);
@@ -519,7 +519,7 @@ export function OrchestratorStage({
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5, minWidth: 0 }}>
           {presenting && <PresentingBadge />}
           <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="orchestrator-ambient-status">
-            {summary || (view === 'office' ? 'The office is quiet' : 'The tavern is quiet')}
+            {summary || stageCopy.quiet}
           </Typography>
         </Box>
       ) : (
@@ -639,7 +639,7 @@ export function OrchestratorStage({
           {agents.length === 0 ? (
             <EmptyStage
               scene={parentScene && renderView ? renderView(view, viewProps) : null}
-              office={view === 'office'}
+              prompt={stageCopy.empty}
             />
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
@@ -689,7 +689,7 @@ function PresentingBadge() {
   );
 }
 
-function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
+function EmptyStage({ scene, prompt }: { scene: ReactNode; prompt: string }) {
   if (scene) {
     return (
       <Box
@@ -699,9 +699,7 @@ function EmptyStage({ scene, office }: { scene: ReactNode; office: boolean }) {
         {scene}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            {office
-              ? 'No agents yet. Describe the work and it will be split across agents.'
-              : 'No quests yet. Describe the work and the Innkeeper will split it across agents.'}
+            {prompt}
           </Typography>
         </Box>
       </Box>

@@ -5,8 +5,8 @@ import { assignPersonas } from '@shared/agentPersona';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { QUEST_DONE_LINGER_MS } from './quests';
-import { QUEST_BOARD } from './scene';
-import { TavernView } from './TavernView';
+import { QUEST_BOARD } from '../tavern/scene';
+import { TavernView } from '../tavern/TavernView';
 
 const onSelect = vi.fn();
 const onOpenPr = vi.fn();

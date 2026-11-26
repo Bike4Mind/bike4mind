@@ -6,7 +6,7 @@ import type { PendingDecision } from '@shared/orchestration';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { assignPersonas } from '@shared/agentPersona';
-import { TavernView } from './TavernView';
+import { TavernView } from '../tavern/TavernView';
 
 const themed = createThemedMount();
 const onSelect = vi.fn();

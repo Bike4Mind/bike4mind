@@ -1,19 +1,14 @@
 import Box from '@mui/joy/Box';
 import { keyframes } from '@mui/system';
 import type { CSSProperties } from 'react';
-import { TAVERN_LAYOUT } from './tavernLayout';
+import type { SceneDefinition } from './sceneDefinition';
 
 /**
  * The room's mood: `day` for the light theme, `night` for the dark one, and `last-call` while the
  * chrome has settled out (ambient.ts), when the lamps burn low over an empty-looking room.
  */
-export type TavernMood = 'day' | 'night' | 'last-call';
+export type SceneMood = 'day' | 'night' | 'last-call';
 
-// Picked for backdrop.png, in assets/orchestrator/tavern/layout.json beside it.
-export const TAVERN_LIGHTS = TAVERN_LAYOUT.lights;
-
-const WINDOW = TAVERN_LAYOUT.window;
-const HEARTH = TAVERN_LAYOUT.hearthGlow;
 const EMBERS = 7;
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
 const MOOD_FADE = 'opacity 2.4s ease-in-out';
@@ -33,7 +28,7 @@ const rise = keyframes`
 `;
 
 /** How much each layer shows per mood: the room's shade, the lamps' glow and the moonlight at the window. */
-const MOOD: Record<TavernMood, { shade: number; vignette: number; glow: number; moon: number }> = {
+const MOOD: Record<SceneMood, { shade: number; vignette: number; glow: number; moon: number }> = {
   day: { shade: 0, vignette: 0.25, glow: 0.45, moon: 0 },
   night: { shade: 0.55, vignette: 0.55, glow: 0.85, moon: 0.7 },
   'last-call': { shade: 1, vignette: 0.9, glow: 1, moon: 1 },
@@ -51,10 +46,19 @@ const layer = { position: 'absolute', inset: 0, pointerEvents: 'none' } as const
  * The light over the backdrop, under the sprites: a mood shade with warm pools where the lamps are,
  * flickering glows, and embers off the hearth. Purely decorative; under reduced motion the light holds still.
  */
-export function TavernLight({ mood }: { mood: TavernMood }) {
+export function SceneLight({
+  testId,
+  mood,
+  map,
+}: {
+  testId: string;
+  mood: SceneMood;
+  map: Pick<SceneDefinition['map'], 'lights' | 'moon' | 'embers'>;
+}) {
   const level = MOOD[mood];
+  const { lights, moon, embers } = map;
   return (
-    <Box aria-hidden data-testid="orchestrator-tavern-light" data-mood={mood} sx={layer}>
+    <Box aria-hidden data-testid={testId} data-mood={mood} sx={layer}>
       <Box
         data-light-shade
         sx={{
@@ -64,7 +68,7 @@ export function TavernLight({ mood }: { mood: TavernMood }) {
           mixBlendMode: 'multiply',
           // Deep blue dusk with the lamps' pools left warm, so the dim reads as night, not as a grey overlay.
           background: [
-            ...TAVERN_LIGHTS.map(
+            ...lights.map(
               light =>
                 `radial-gradient(circle ${light.size * 1.6}cqw at ${light.x}% ${light.y}%, rgba(255, 214, 160, 1), rgba(255, 214, 160, 0) 70%)`
             ),
@@ -81,18 +85,20 @@ export function TavernLight({ mood }: { mood: TavernMood }) {
           background: 'radial-gradient(ellipse 75% 70% at 55% 45%, rgba(8, 4, 2, 0) 55%, rgba(8, 4, 2, 0.85) 100%)',
         }}
       />
-      <Box
-        data-light-moon
-        sx={{
-          ...layer,
-          opacity: level.moon,
-          transition: MOOD_FADE,
-          mixBlendMode: 'screen',
-          background: `radial-gradient(ellipse 9cqw 10cqh at ${WINDOW.x}% ${WINDOW.y}%, rgba(120, 150, 255, 0.55), rgba(120, 150, 255, 0) 100%)`,
-        }}
-      />
+      {moon && (
+        <Box
+          data-light-moon
+          sx={{
+            ...layer,
+            opacity: level.moon,
+            transition: MOOD_FADE,
+            mixBlendMode: 'screen',
+            background: `radial-gradient(ellipse 9cqw 10cqh at ${moon.x}% ${moon.y}%, rgba(120, 150, 255, 0.55), rgba(120, 150, 255, 0) 100%)`,
+          }}
+        />
+      )}
       <Box sx={{ ...layer, opacity: level.glow, transition: MOOD_FADE, mixBlendMode: 'screen' }}>
-        {TAVERN_LIGHTS.map((light, index) => {
+        {lights.map((light, index) => {
           const timing = flickerTiming(index);
           const fire = light.kind === 'fire';
           return (
@@ -115,33 +121,35 @@ export function TavernLight({ mood }: { mood: TavernMood }) {
           );
         })}
       </Box>
-      <Box sx={{ ...layer, [NO_MOTION]: { display: 'none' } }}>
-        {Array.from({ length: EMBERS }, (_, index) => (
-          <Box
-            key={index}
-            data-light-ember
-            style={
-              {
-                left: `${HEARTH.x - 3 + ((index * 1.9) % 6)}%`,
-                top: `${HEARTH.y}%`,
-                '--ember-drift': `${((index % 3) - 1) * 1.2}cqw`,
-                animationDuration: `${(2.4 + ((index * 0.61) % 1.8)).toFixed(2)}s`,
-                animationDelay: `-${((index * 0.83) % 3).toFixed(2)}s`,
-              } as CSSProperties
-            }
-            sx={{
-              position: 'absolute',
-              // A square, not a dot: the backdrop is pixel art.
-              width: 'max(2px, 0.25cqw)',
-              aspectRatio: '1',
-              bgcolor: index % 2 ? '#ffb347' : '#ff7a2a',
-              boxShadow: '0 0 4px rgba(255, 140, 40, 0.9)',
-              // Duration and delay come per ember from the inline style, which wins over this shorthand.
-              animation: `${rise} 3s ease-out infinite`,
-            }}
-          />
-        ))}
-      </Box>
+      {embers && (
+        <Box sx={{ ...layer, [NO_MOTION]: { display: 'none' } }}>
+          {Array.from({ length: EMBERS }, (_, index) => (
+            <Box
+              key={index}
+              data-light-ember
+              style={
+                {
+                  left: `${embers.x - 3 + ((index * 1.9) % 6)}%`,
+                  top: `${embers.y}%`,
+                  '--ember-drift': `${((index % 3) - 1) * 1.2}cqw`,
+                  animationDuration: `${(2.4 + ((index * 0.61) % 1.8)).toFixed(2)}s`,
+                  animationDelay: `-${((index * 0.83) % 3).toFixed(2)}s`,
+                } as CSSProperties
+              }
+              sx={{
+                position: 'absolute',
+                // A square, not a dot: the backdrop is pixel art.
+                width: 'max(2px, 0.25cqw)',
+                aspectRatio: '1',
+                bgcolor: index % 2 ? '#ffb347' : '#ff7a2a',
+                boxShadow: '0 0 4px rgba(255, 140, 40, 0.9)',
+                // Duration and delay come per ember from the inline style, which wins over this shorthand.
+                animation: `${rise} 3s ease-out infinite`,
+              }}
+            />
+          ))}
+        </Box>
+      )}
     </Box>
   );
 }

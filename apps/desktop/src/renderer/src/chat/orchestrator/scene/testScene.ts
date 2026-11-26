@@ -33,7 +33,10 @@ export const TEST_SCENE: SceneDefinition = parseSceneDefinition({
     door: { x: 95, y: 90 },
     board: { left: 70, top: 5, width: 20, height: 25, notes: 3 },
     host: { x: 50, y: 30 },
-    lights: [{ x: 20, y: 20, size: 8, color: '#ffd27f', flicker: true }],
+    reply: { top: 3, right: 55 },
+    occluders: [{ left: 40, right: 60, top: 26, front: 34 }],
+    lights: [{ x: 20, y: 20, size: 8, kind: 'candle' }],
+    moon: { x: 30, y: 10 },
   },
   cast: {
     spriteHeight: 15,
@@ -72,11 +75,29 @@ export const TEST_SCENE: SceneDefinition = parseSceneDefinition({
       idle: 'rest',
     },
   },
-  ambience: { frame: '#0b0603', floor: '#1b241d', settledDrift: true },
+  ambience: { frame: '#0b0603', floor: '#1b241d', settledDrift: true, settledShadow: 'none' },
+  look: {
+    plate: { background: '#33402f', edge: 'none', ink: '#f1f5e8' },
+    finale: 'office',
+  },
   copy: {
     name: 'Test yard',
     hostName: 'Warden',
     hostTitle: 'the conversation that posts the work',
-    boardTitle: 'Jobs',
+    hostGreeting: 'Anything for me?',
+    hostPoses: {
+      idle: 'Watching the yard',
+      writing: 'Posting jobs',
+      reading: 'Reading reports',
+      walking: 'Checking on someone',
+      cheering: 'Cheering',
+    },
+    board: { title: 'Jobs', name: 'Job board', item: 'job', items: 'jobs', empty: 'No jobs posted' },
+    stage: {
+      host: 'The Warden',
+      quiet: 'The yard is quiet',
+      talk: 'Type to talk to the Warden',
+      empty: 'No jobs yet. Describe the work and the Warden will split it across agents.',
+    },
   },
 });

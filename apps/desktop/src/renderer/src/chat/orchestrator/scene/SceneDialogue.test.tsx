@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatToolCall } from '@shared/chat';
 import type { PendingDecision } from '@shared/pendingDecisions';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
-import { TavernDialogue } from './TavernDialogue';
-import { inTavernDialogue } from './dialogue';
+import { SceneDialogue } from './SceneDialogue';
+import { inSceneDialogue } from './dialogue';
 
 const decisions = vi.hoisted(() => ({ byId: new Map<string, PendingDecision[]>() }));
 vi.mock('../useTreeDecisions', () => ({
@@ -35,7 +35,7 @@ const approval = (sessionId: string, id: string, extra: Partial<ChatToolCall> = 
 
 const render = (frontKey?: string, focusRequest?: number) =>
   themed.render(
-    <TavernDialogue
+    <SceneDialogue
       agents={[agentFixture('a', 'needs-you'), agentFixture('b', 'needs-you')]}
       nameOf={id => `Agent ${id}`}
       portraitOf={() => 'data:image/png;base64,'}
@@ -49,7 +49,7 @@ const render = (frontKey?: string, focusRequest?: number) =>
 
 const press = async (key: string) =>
   act(async () => {
-    el('tavern-dialogue').dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    el('scene-dialogue').dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
   });
 
 const button = (testId: string) => el(testId) as HTMLButtonElement;
@@ -69,18 +69,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('TavernDialogue', () => {
+describe('SceneDialogue', () => {
   it('renders nothing with no open decision', async () => {
     decisions.byId = new Map();
     await render();
-    expect(query('tavern-dialogue')).toBeNull();
+    expect(query('scene-dialogue')).toBeNull();
   });
 
   it('shows the front request with its full command and the queue position', async () => {
     await render();
-    expect(el('tavern-dialogue-name').textContent).toContain('Agent a');
-    expect(el('tavern-dialogue-code').textContent).toContain('echo p1');
-    expect(el('tavern-dialogue-position').textContent).toBe('1 of 2');
+    expect(el('scene-dialogue-name').textContent).toContain('Agent a');
+    expect(el('scene-dialogue-code').textContent).toContain('echo p1');
+    expect(el('scene-dialogue-position').textContent).toBe('1 of 2');
   });
 
   it('answers by key: A once, C for the chat, D deny', async () => {
@@ -88,7 +88,7 @@ describe('TavernDialogue', () => {
     await press('a');
     expect(chat.respondToApproval).toHaveBeenLastCalledWith('p1', { decision: 'once' });
     // The answered request leaves at once and the next comes forward.
-    expect(el('tavern-dialogue-code').textContent).toContain('echo p2');
+    expect(el('scene-dialogue-code').textContent).toContain('echo p2');
     await press('c');
     expect(chat.respondToApproval).toHaveBeenLastCalledWith('p2', { decision: 'always' });
   });
@@ -109,19 +109,19 @@ describe('TavernDialogue', () => {
     vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(400);
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(100);
     await render();
-    expect(button('tavern-dialogue-allow-once').disabled).toBe(true);
-    expect(button('tavern-dialogue-allow-chat').disabled).toBe(true);
-    expect(button('tavern-dialogue-deny').disabled).toBe(false);
-    expect(query('tavern-dialogue-read-gate')).not.toBeNull();
+    expect(button('scene-dialogue-allow-once').disabled).toBe(true);
+    expect(button('scene-dialogue-allow-chat').disabled).toBe(true);
+    expect(button('scene-dialogue-deny').disabled).toBe(false);
+    expect(query('scene-dialogue-read-gate')).not.toBeNull();
     await press('a');
     expect(chat.respondToApproval).not.toHaveBeenCalled();
 
-    const code = el('tavern-dialogue-code');
+    const code = el('scene-dialogue-code');
     await act(async () => {
       code.scrollTop = 300;
       code.dispatchEvent(new Event('scroll'));
     });
-    expect(button('tavern-dialogue-allow-once').disabled).toBe(false);
+    expect(button('scene-dialogue-allow-once').disabled).toBe(false);
     await press('a');
     expect(chat.respondToApproval).toHaveBeenCalledWith('p1', { decision: 'once' });
   });
@@ -129,7 +129,7 @@ describe('TavernDialogue', () => {
   it('hides Allow in this chat for a once-only approval', async () => {
     decisions.byId = new Map([['a', [approval('a', 'p1', { approvalOnceOnly: true })]]]);
     await render();
-    expect(query('tavern-dialogue-allow-chat')).toBeNull();
+    expect(query('scene-dialogue-allow-chat')).toBeNull();
     await press('c');
     expect(chat.respondToApproval).not.toHaveBeenCalled();
   });
@@ -137,8 +137,8 @@ describe('TavernDialogue', () => {
   it('keeps the full card for an approval it does not restyle', async () => {
     decisions.byId = new Map([['a', [approval('a', 'p1', { approvalIrreversible: true })]]]);
     await render();
-    expect(query('tavern-dialogue-command')).toBeNull();
-    expect(query('tavern-dialogue-card')).not.toBeNull();
+    expect(query('scene-dialogue-command')).toBeNull();
+    expect(query('scene-dialogue-card')).not.toBeNull();
     await press('a');
     expect(chat.respondToApproval).not.toHaveBeenCalled();
   });
@@ -148,35 +148,35 @@ describe('TavernDialogue', () => {
     await press('o');
     expect(onOpenDetails).toHaveBeenCalledWith('a');
     await press('Escape');
-    expect(query('tavern-dialogue')).toBeNull();
-    expect(query('tavern-dialogue-minimized')).not.toBeNull();
+    expect(query('scene-dialogue')).toBeNull();
+    expect(query('scene-dialogue-minimized')).not.toBeNull();
   });
 
   it('comes back from the minimized tab and takes focus on a focus request', async () => {
     await render();
     await press('Escape');
-    expect(query('tavern-dialogue')).toBeNull();
+    expect(query('scene-dialogue')).toBeNull();
     await render(undefined, 1);
-    expect(document.activeElement).toBe(el('tavern-dialogue'));
+    expect(document.activeElement).toBe(el('scene-dialogue'));
   });
 
   it('keeps the front request among the queue portraits when it is past the first five', async () => {
     decisions.byId = new Map([['a', ['1', '2', '3', '4', '5', '6', '7'].map(id => approval('a', `q${id}`))]]);
     await render('a:approval:q6');
-    expect(el('tavern-dialogue-position').textContent).toBe('6 of 7');
-    const queue = el('tavern-dialogue-queue');
+    expect(el('scene-dialogue-position').textContent).toBe('6 of 7');
+    const queue = el('scene-dialogue-queue');
     expect(queue.querySelectorAll('button[aria-current="true"]')).toHaveLength(1);
     expect(queue.textContent).toContain('+2');
   });
 
   it('marks the box so the settle-key handler leaves its keys alone', async () => {
     await render();
-    expect(inTavernDialogue(el('tavern-dialogue-code'))).toBe(true);
-    expect(inTavernDialogue(document.body)).toBe(false);
+    expect(inSceneDialogue(el('scene-dialogue-code'))).toBe(true);
+    expect(inSceneDialogue(document.body)).toBe(false);
   });
 
   it('brings a clicked character forward by session id', async () => {
     await render('b');
-    expect(el('tavern-dialogue-code').textContent).toContain('echo p2');
+    expect(el('scene-dialogue-code').textContent).toContain('echo p2');
   });
 });

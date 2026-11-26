@@ -6,7 +6,7 @@ import type { ApprovalPendingDecision, PendingDecision, PendingDecisionKind } fr
 import { summarizeInput } from '../../toolRows';
 
 /*
- * The Tavern's dialogue box (TavernDialogue.tsx): what it queues, what a plain command approval shows,
+ * A scene's dialogue box (SceneDialogue.tsx): what it queues, what a plain command approval shows,
  * when its Allow choices unlock, and which key does what. Kept free of React so each rule is tested alone.
  */
 
@@ -160,7 +160,7 @@ export function dialogueKeyAction(event: {
 }
 
 /** Marks the dialogue box so the ambient settle-key handler (ChatShell) leaves its answer keys alone. */
-export const TAVERN_DIALOGUE_ATTR = 'data-tavern-dialogue';
+export const SCENE_DIALOGUE_ATTR = 'data-scene-dialogue';
 
-export const inTavernDialogue = (target: EventTarget | null): boolean =>
-  target instanceof Element && target.closest(`[${TAVERN_DIALOGUE_ATTR}]`) !== null;
+export const inSceneDialogue = (target: EventTarget | null): boolean =>
+  target instanceof Element && target.closest(`[${SCENE_DIALOGUE_ATTR}]`) !== null;

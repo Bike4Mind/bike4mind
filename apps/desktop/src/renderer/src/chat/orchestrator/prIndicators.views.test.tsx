@@ -10,7 +10,7 @@ import { ORCHESTRATOR_VIEWS } from './orchestratorViews';
 import { StageLayout } from './StageLayout';
 import { agentFixture, createThemedMount, el, viewAgentFixture, snapshotFixture } from './testUtils';
 import { renderOrchestratorView } from './viewRegistry';
-import { OverflowStack } from './tavern/OverflowStack';
+import { OverflowStack } from './scene/OverflowStack';
 
 const themed = createThemedMount();
 const onSelect = vi.fn();
@@ -145,9 +145,11 @@ describe('PR indicators across Show agents views', () => {
   it('the overflow menu shows PRs without changing agent selection', async () => {
     await themed.render(
       <OverflowStack
+        testId="orchestrator-tavern"
         zone="workbench"
+        place="at the workbenches"
         point={{ x: 50, y: 50 }}
-        stacked={[{ agent: agents[0], character: 1, name: 'Worker' }]}
+        stacked={[{ agent: agents[0], sprite: 'worker.png', name: 'Worker' }]}
         selectedId={null}
         onSelect={onSelect}
         onOpenPr={onOpenPr}

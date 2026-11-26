@@ -26,33 +26,32 @@ import {
   type ParentView,
 } from '../roster';
 import type { AgentPersona } from '@shared/agentPersona';
-import { INNKEEPER_GREETING, ReplyBubble } from './InnkeeperDesk';
-import { useAgentAnnouncements } from './announcements';
-import { innkeeperAct, innkeeperBubble } from './innkeeper';
-import { NeedsYouBubble } from './NeedsYouBubble';
-import { TavernDialogue } from './TavernDialogue';
-import { OverflowStack, type StackedAgent } from './OverflowStack';
+import { ReplyBubble } from '../scene/HostReply';
+import { useAgentAnnouncements } from '../scene/announcements';
+import { hostAct as innkeeperAct, hostBubble as innkeeperBubble } from '../scene/host';
+import { NeedsYouBubble } from '../scene/NeedsYouBubble';
+import { SceneDialogue } from '../scene/SceneDialogue';
+import { OverflowStack, type StackedAgent } from '../scene/OverflowStack';
 import { PLAQUE_EDGE, PLAQUE_WOOD } from './plaque';
-import { QuestBoard } from './QuestBoard';
-import { useQuestNotes } from './quests';
+import { QuestBoard } from '../scene/QuestBoard';
+import { useQuestNotes } from '../scene/quests';
+import { TAVERN_LAYOUT } from './tavernLayout';
+import { LABEL_SPAN, nameLabelLayout, needsYouGroups, type NameLabel } from '../scene/stageGeometry';
 import {
   DOOR_POINT,
+  QUEST_BOARD,
   INNKEEPER_POINT,
-  LABEL_SPAN,
   assignCharacters,
-  nameLabelLayout,
-  needsYouGroups,
   hiddenByCounter,
   placeAgents,
   poseFor,
-  type NameLabel,
   type Placement,
   type SlotPoint,
   type TavernZone,
 } from './scene';
 import { useSkinTheme } from '../skins';
 import { stateLampColor } from '../statePalette';
-import { TavernLight, type TavernMood } from './TavernLight';
+import { SceneLight, type SceneMood as TavernMood } from '../scene/SceneLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type CharacterId, type InnkeeperPose } from './tavernArt';
 import { useScenePause, type ScenePauseOptions } from '../scene/useScenePause';
 import { VISUALLY_HIDDEN } from '../../../visuallyHidden';
@@ -78,6 +77,22 @@ const NO_PARENT: ParentView = {};
 // Not a session id shape, so it never collides with an agent in the label layout.
 const INNKEEPER_KEY = ' innkeeper';
 const INNKEEPER_NAME = 'Innkeeper';
+const INNKEEPER_GREETING = "What'll it be?";
+const ZONE_PLACE: Record<TavernZone, string> = {
+  workbench: 'at the workbenches',
+  bar: 'at the bar',
+  hearth: 'by the hearth',
+  benches: 'on the benches',
+};
+const PLATE = { background: PLAQUE_WOOD, edge: PLAQUE_EDGE, ink: '#fbe9c8' };
+const BOARD_COPY = {
+  title: 'Quests',
+  name: 'Quest board',
+  item: 'quest',
+  items: 'quests',
+  empty: 'No quests posted',
+};
+const LIGHT_MAP = { lights: TAVERN_LAYOUT.lights, moon: TAVERN_LAYOUT.window, embers: TAVERN_LAYOUT.hearthGlow };
 const withPersona = (persona: { label: string } | undefined, title: string) =>
   persona ? `${persona.label}: ${title}` : title;
 const STACK_KEY = ' stack-';
@@ -710,7 +725,7 @@ export function TavernView({
     const persona = personas.get(agent.id);
     stack.stacked[placement.index] = {
       agent,
-      character: characters.get(agent.id) ?? 1,
+      sprite: characterSprite(characters.get(agent.id) ?? 1, poseFor(agent.state)),
       name: withPersona(persona, agent.title),
     };
     stacks.set(placement.zone, stack);
@@ -862,8 +877,18 @@ export function TavernView({
             transition: 'opacity 0.6s ease-in',
           }}
         />
-        <QuestBoard notes={quests} name={shortName} selectedId={selectedId} onSelect={onSelect} onOpenPr={onOpenPr} />
-        <TavernLight mood={mood} />
+        <QuestBoard
+          testId="orchestrator-tavern-quest"
+          board={QUEST_BOARD}
+          plate={PLATE}
+          copy={BOARD_COPY}
+          notes={quests}
+          name={shortName}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          onOpenPr={onOpenPr}
+        />
+        <SceneLight testId="orchestrator-tavern-light" mood={mood} map={LIGHT_MAP} />
         {visible.map(({ agent, placement }) => (
           <Sprite
             key={agent.id}
@@ -908,6 +933,9 @@ export function TavernView({
         />
         {desk && reply && (
           <ReplyBubble
+            testId="orchestrator-tavern"
+            anchor={{ top: 3, right: 42 }}
+            board={QUEST_BOARD}
             snippet={reply.snippet}
             onReadAll={() => {
               setDismissedReply(reply.id);
@@ -919,7 +947,9 @@ export function TavernView({
         {[...stacks].map(([zone, stack]) => (
           <OverflowStack
             key={zone}
+            testId="orchestrator-tavern"
             zone={zone}
+            place={ZONE_PLACE[zone]}
             point={stack.point}
             stacked={stack.stacked}
             selectedId={selectedId}
@@ -928,7 +958,7 @@ export function TavernView({
           />
         ))}
         {dialogue && (
-          <TavernDialogue
+          <SceneDialogue
             agents={agents}
             nameOf={id => {
               const agent = agentsById.get(id);

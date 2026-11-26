@@ -8,9 +8,9 @@ import MenuItem from '@mui/joy/MenuItem';
 import { keyframes } from '@mui/system';
 import type { AgentView } from '../roster';
 import { AgentPrIndicator } from '../AgentPrIndicator';
-import { PLAQUE_EDGE, PLAQUE_WOOD } from './plaque';
 import { QUEST_DONE_LINGER_MS, questTitle, type QuestNote } from './quests';
-import { QUEST_BOARD, noteCapacity, pinNotes } from './scene';
+import { noteCapacity, pinNotes } from './boardFit';
+import type { SceneDefinition } from './sceneDefinition';
 import { stateLampColor } from '../statePalette';
 
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
@@ -58,12 +58,14 @@ function Pin() {
 
 /** A pinned note: who is on the quest and what it is; checked off and faded once it is done. */
 function Note({
+  testId,
   note,
   name,
   selected,
   onSelect,
   onOpenPr,
 }: {
+  testId: string;
   note: QuestNote;
   name: string;
   selected: boolean;
@@ -76,7 +78,7 @@ function Note({
     <Box
       role="button"
       tabIndex={0}
-      data-testid={`orchestrator-tavern-quest-${agent.id}`}
+      data-testid={`${testId}-${agent.id}`}
       data-done={done || undefined}
       aria-label={noteLabel(name, note)}
       aria-pressed={selected}
@@ -144,12 +146,16 @@ function Note({
 
 /** The "+N" note: every quest the board has no room for, in a menu, so none is out of reach. */
 function MoreNotes({
+  testId,
+  items,
   hidden,
   name,
   selectedId,
   onSelect,
   onOpenPr,
 }: {
+  testId: string;
+  items: string;
   hidden: readonly QuestNote[];
   name(agent: AgentView): string;
   selectedId: string | null;
@@ -160,8 +166,8 @@ function MoreNotes({
   return (
     <Dropdown>
       <MenuButton
-        data-testid="orchestrator-tavern-quest-more"
-        aria-label={`${hidden.length} more quests; list them`}
+        data-testid={`${testId}-more`}
+        aria-label={`${hidden.length} more ${items}; list them`}
         variant="plain"
         sx={{
           position: 'relative',
@@ -185,13 +191,13 @@ function MoreNotes({
       <Menu
         size="sm"
         placement="bottom"
-        data-testid="orchestrator-tavern-quest-more-list"
+        data-testid={`${testId}-more-list`}
         sx={{ maxHeight: 280, overflowY: 'auto', minWidth: 220, zIndex: 'var(--joy-zIndex-popup)' }}
       >
         {hidden.map(note => (
           <MenuItem
             key={note.agent.id}
-            data-testid={`orchestrator-tavern-quest-more-item-${note.agent.id}`}
+            data-testid={`${testId}-more-item-${note.agent.id}`}
             selected={note.agent.id === selectedId}
             onClick={() => onSelect(note.agent.id)}
             aria-label={noteLabel(name(note.agent), note)}
@@ -229,12 +235,21 @@ function MoreNotes({
  * selects its agent, which opens the peek drawer.
  */
 export function QuestBoard({
+  testId,
+  board,
+  plate,
+  copy,
   notes,
   name,
   selectedId,
   onSelect,
   onOpenPr,
 }: {
+  /** Prefixes every test id: `<testId>-board`, `<testId>-<agent id>`, `<testId>-more`. */
+  testId: string;
+  board: SceneDefinition['map']['board'];
+  plate: SceneDefinition['look']['plate'];
+  copy: SceneDefinition['copy']['board'];
   notes: readonly QuestNote[];
   name(agent: AgentView): string;
   selectedId: string | null;
@@ -253,7 +268,7 @@ export function QuestBoard({
     return () => observer.disconnect();
   }, []);
   // Unmeasured (first paint, or no layout) falls back to the layout's nominal count.
-  const capacity = boardHeight ? noteCapacity(boardHeight, notes.length) : QUEST_BOARD.notes;
+  const capacity = boardHeight ? noteCapacity(boardHeight, notes.length, board) : board.notes;
   const { pinned, hidden } = pinNotes(notes, capacity);
   // A board too small for even the "+N" note is left undrawn rather than clipped; an empty one has
   // nothing to fit and keeps its "No quests posted" note.
@@ -262,14 +277,14 @@ export function QuestBoard({
   return (
     <Box
       ref={boardRef}
-      data-testid="orchestrator-tavern-quest-board"
+      data-testid={`${testId}-board`}
       role="group"
-      aria-label={open === 1 ? 'Quest board: 1 open quest' : `Quest board: ${open} open quests`}
+      aria-label={`${copy.name}: ${open} open ${open === 1 ? copy.item : copy.items}`}
       style={{
-        left: `${QUEST_BOARD.left}%`,
-        top: `${QUEST_BOARD.top}%`,
-        width: `${QUEST_BOARD.width}%`,
-        height: `${QUEST_BOARD.height}%`,
+        left: `${board.left}%`,
+        top: `${board.top}%`,
+        width: `${board.width}%`,
+        height: `${board.height}%`,
       }}
       sx={{
         position: 'absolute',
@@ -281,8 +296,8 @@ export function QuestBoard({
         gap: '0.9cqh',
         p: '0.7cqh',
         pt: '0.4cqh',
-        background: PLAQUE_WOOD,
-        boxShadow: PLAQUE_EDGE,
+        background: plate.background,
+        boxShadow: plate.edge,
         overflow: 'hidden',
         ...(tooSmall && { visibility: 'hidden' }),
       }}
@@ -291,7 +306,7 @@ export function QuestBoard({
         aria-hidden
         sx={{
           flex: '0 0 auto',
-          color: '#fbe9c8',
+          color: plate.ink,
           textShadow: '0 1px 0 #1f1208',
           fontSize: NOTE_FONT,
           fontWeight: 700,
@@ -301,7 +316,7 @@ export function QuestBoard({
           lineHeight: 1.3,
         }}
       >
-        Quests
+        {copy.title}
       </Box>
       <Box
         sx={{
@@ -319,16 +334,17 @@ export function QuestBoard({
       >
         {notes.length === 0 ? (
           <Box
-            data-testid="orchestrator-tavern-quest-empty"
+            data-testid={`${testId}-empty`}
             sx={{ m: 'auto', color: 'rgba(42, 29, 16, 0.75)', fontSize: NOTE_FONT, fontStyle: 'italic' }}
           >
-            No quests posted
+            {copy.empty}
           </Box>
         ) : (
           <>
             {pinned.map(note => (
               <Note
                 key={note.agent.id}
+                testId={testId}
                 note={note}
                 name={name(note.agent)}
                 selected={note.agent.id === selectedId}
@@ -337,7 +353,15 @@ export function QuestBoard({
               />
             ))}
             {hidden.length > 0 && (
-              <MoreNotes hidden={hidden} name={name} selectedId={selectedId} onSelect={onSelect} onOpenPr={onOpenPr} />
+              <MoreNotes
+                testId={testId}
+                items={copy.items}
+                hidden={hidden}
+                name={name}
+                selectedId={selectedId}
+                onSelect={onSelect}
+                onOpenPr={onOpenPr}
+              />
             )}
           </>
         )}

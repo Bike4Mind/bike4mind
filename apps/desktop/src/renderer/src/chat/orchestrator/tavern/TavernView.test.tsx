@@ -5,7 +5,7 @@ import type { InnkeeperDesk, OrchestratorViewProps } from '../OrchestratorStage'
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { assignPersonas } from '@shared/agentPersona';
-import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
+import { ANNOUNCE_DEBOUNCE_MS } from '../scene/announcements';
 import { BAR_COUNTER, DOOR_POINT, INNKEEPER_POINT, OVERFLOW_POINTS, TAVERN_SLOTS, hiddenByCounter } from './scene';
 import { UNFOCUSED_PAUSE_MS } from '../scene/useScenePause';
 import { TavernView, bubbleText, waitingLabel } from './TavernView';
@@ -43,10 +43,10 @@ describe('bubbleText for settled and waiting agents', () => {
   });
 });
 
-type SceneModule = typeof import('./scene');
+type SceneModule = typeof import('../scene/stageGeometry');
 // Lets one test squeeze a label below the minimum, which no real seat pair does.
 const labelLayoutOverride = vi.hoisted(() => ({ current: null as SceneModule['nameLabelLayout'] | null }));
-vi.mock('./scene', async importOriginal => {
+vi.mock('../scene/stageGeometry', async importOriginal => {
   const actual = await importOriginal<SceneModule>();
   return {
     ...actual,

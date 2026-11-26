@@ -11,6 +11,7 @@ const percent = z.number().min(0).max(100);
 const point = z.object({ x: percent, y: percent });
 const name = z.string().regex(/^[a-z][a-z0-9-]*$/, 'lower-case kebab name');
 const asset = z.string().min(1);
+const text = z.string().min(1);
 const box = z.object({ left: percent, top: percent, width: percent, height: percent });
 
 // Keyed by every AgentState; sceneDefinition.test.ts holds this list to AGENT_STATE_LABEL's keys.
@@ -31,6 +32,12 @@ export type HostPose = (typeof HOST_POSES)[number];
 
 const EPITHETS = ['Warden', 'Scribe', 'Tinkerer', 'Cartographer', 'Seeker', 'Wanderer'] as const;
 
+/** The framework's light looks; SceneLight.tsx draws each. */
+export const LIGHT_KINDS = ['fire', 'candle'] as const;
+export type LightKind = (typeof LIGHT_KINDS)[number];
+
+const SKIN_BACKDROPS = ['tavernBackdrop', 'aquariumBackdrop'] as const;
+
 const zoneSchema = z.object({
   slots: z.array(point).min(1),
   /** Where the zone stacks the agents it has no seat for. */
@@ -46,19 +53,33 @@ const mapSchema = z.object({
   zones: z.record(name, zoneSchema),
   /** Where a needs-you agent borrows a seat once its own zone is full, most preferred first. */
   borrowOrder: z.array(name),
+  /** Where newcomers walk in from during the intro, and where an agent first seen mid-run enters. */
   door: point,
   board: box.extend({ notes: z.number().int().min(2) }),
+  /** Where the host stands when it is not visiting an agent. */
   host: point,
+  /** Where the host's reply bubble hangs, its right edge as a percent of the scene width from the right. */
+  reply: z.object({ top: percent, right: percent }),
+  /**
+   * Furniture drawn in the backdrop that a sprite can stand behind (a counter): from `top` down to `front`
+   * between `left` and `right`, the part of the sprite below `top` is cut away.
+   */
+  occluders: z.array(z.object({ left: percent, right: percent, top: percent, front: percent })),
   lights: z.array(
     z.object({
       x: percent,
       y: percent,
       /** Glow radius, in percent of the scene width. */
       size: z.number().positive(),
-      color: z.string().min(1),
-      flicker: z.boolean(),
+      kind: z.enum(LIGHT_KINDS),
     })
   ),
+  /** Where moonlight falls at night, if the room has a window. */
+  moon: point.optional(),
+  /** Where embers rise from, if the room has a fire. */
+  embers: point.optional(),
+  /** The skin token (statePalette SkinTheme sprites) that replaces the backdrop when a skin sets it. */
+  skinBackdrop: z.enum(SKIN_BACKDROPS).optional(),
 });
 
 const castSchema = z.object({
@@ -96,13 +117,42 @@ export const sceneDefinitionSchema = z
       floor: z.string().min(1),
       /** The quiet room's slow camera once the chrome has settled. */
       settledDrift: z.boolean(),
+      /** The glow the settled picture throws into the letterbox around it. */
+      settledShadow: z.string().min(1),
+    }),
+    look: z.object({
+      /** Name plates and the board's frame. */
+      plate: z.object({ background: z.string().min(1), edge: z.string().min(1), ink: z.string().min(1) }),
+      /** How the stage dresses the finale banner over this scene (FinaleBanner.tsx). */
+      finale: z.enum(['tavern', 'office']),
     }),
     copy: z.object({
       /** The scene's accessible name, e.g. "Tavern". */
       name: z.string().min(1),
       hostName: z.string().min(1),
+      /** Completes the host's tooltip, "<hostName>: <hostTitle>". */
       hostTitle: z.string().min(1),
-      boardTitle: z.string().min(1),
+      /** What the host says when nothing else is on its mind. */
+      hostGreeting: z.string().min(1),
+      /** What the host is doing in each pose, for its accessible name. */
+      hostPoses: z.object({ idle: text, writing: text, reading: text, walking: text, cheering: text }),
+      board: z.object({
+        title: text,
+        /** The board's accessible name, e.g. "Quest board". */
+        name: text,
+        item: text,
+        items: text,
+        empty: text,
+      }),
+      /** Lines the stage and shell say about this scene. */
+      stage: z.object({
+        /** Names the parent on the settled Needs-you card, e.g. "The Innkeeper". */
+        host: text,
+        quiet: text,
+        talk: text,
+        /** Under the empty scene, before any agent has started. */
+        empty: text,
+      }),
     }),
   })
   .superRefine((scene, context) => {

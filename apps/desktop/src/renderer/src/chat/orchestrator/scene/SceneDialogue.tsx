@@ -12,7 +12,7 @@ import {
   dialogueQueue,
   queueIndex,
   reachedEnd,
-  TAVERN_DIALOGUE_ATTR,
+  SCENE_DIALOGUE_ATTR,
   type CommandApproval,
   type DialogueKeyAction,
 } from './dialogue';
@@ -76,7 +76,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export interface TavernDialogueProps {
+export interface SceneDialogueProps {
   agents: readonly AgentView[];
   nameOf(sessionId: string): string;
   portraitOf(sessionId: string): string | undefined;
@@ -90,8 +90,8 @@ export interface TavernDialogueProps {
 }
 
 /**
- * Every request the Tavern's agents are waiting on, asked by the agent itself in a dialogue box over the
- * lower part of the scene. It replaces the stage's Needs-you strip and the answer bubbles while the Tavern
+ * Every request the scene's agents are waiting on, asked by the agent itself in a dialogue box over the
+ * lower part of the scene. It replaces the stage's Needs-you strip and the answer bubbles while the scene
  * is the only view, so each request has exactly one place to be answered. Every answer goes through the
  * same first-wins IPC as the conversation's own cards (respondToApproval and DecisionBody's calls).
  *
@@ -99,7 +99,7 @@ export interface TavernDialogueProps {
  * (a diff, a choice, an irreversible call, a question, a relay, a failed turn) keeps the thread's own card
  * inside the box, so nothing that card says is restyled away.
  */
-export function TavernDialogue({
+export function SceneDialogue({
   agents,
   nameOf,
   portraitOf,
@@ -108,7 +108,7 @@ export function TavernDialogue({
   onOpenDetails,
   focusRequest,
   look,
-}: TavernDialogueProps) {
+}: SceneDialogueProps) {
   const { byId, loadError, refresh } = useTreeDecisions(agents);
   // Answered here and gone at once, rather than waiting on the refetch.
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
@@ -135,7 +135,7 @@ export function TavernDialogue({
 
   if (!front) {
     return loadError ? (
-      <Box data-testid="tavern-dialogue-error" role="alert" sx={tabSx(look)}>
+      <Box data-testid="scene-dialogue-error" role="alert" sx={tabSx(look)}>
         {loadError}
       </Box>
     ) : null;
@@ -157,7 +157,7 @@ export function TavernDialogue({
       <Box
         component="button"
         type="button"
-        data-testid="tavern-dialogue-minimized"
+        data-testid="scene-dialogue-minimized"
         onClick={() => setMinimized(false)}
         sx={{ ...tabSx(look), cursor: 'pointer', font: 'inherit' }}
       >
@@ -174,8 +174,8 @@ export function TavernDialogue({
       aria-label={`${name} needs you`}
       aria-keyshortcuts="A C D O E ArrowLeft ArrowRight Escape"
       tabIndex={-1}
-      {...{ [TAVERN_DIALOGUE_ATTR]: '' }}
-      data-testid="tavern-dialogue"
+      {...{ [SCENE_DIALOGUE_ATTR]: '' }}
+      data-testid="scene-dialogue"
       data-look={look}
       data-kind={front.kind}
       onKeyDown={event => {
@@ -223,7 +223,7 @@ export function TavernDialogue({
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: '0.6em', flexWrap: 'wrap' }}>
           <Box
             component="span"
-            data-testid="tavern-dialogue-name"
+            data-testid="scene-dialogue-name"
             sx={{ font: '700 1.15em/1.2 Georgia, serif', color: colors.name }}
           >
             {name}
@@ -297,7 +297,7 @@ function Portrait({ src, colors }: { src: string | undefined; colors: Look }) {
   return (
     <Box
       aria-hidden
-      data-testid="tavern-dialogue-portrait"
+      data-testid="scene-dialogue-portrait"
       sx={{
         width: 'clamp(48px, 13cqh, 96px)',
         aspectRatio: '1',
@@ -337,7 +337,7 @@ function QueueNav({
   const arrowSx = { ...choiceSx(colors), px: '0.45em' };
   return (
     <Box
-      data-testid="tavern-dialogue-queue"
+      data-testid="scene-dialogue-queue"
       sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: '0.3em', fontSize: '0.85em', color: colors.muted }}
     >
       <Box component="button" type="button" aria-label="Previous request" onClick={() => onMove(-1)} sx={arrowSx}>
@@ -372,7 +372,7 @@ function QueueNav({
         );
       })}
       {queue.length > shown.length && <span>{`+${queue.length - shown.length}`}</span>}
-      <span data-testid="tavern-dialogue-position">{`${index + 1} of ${queue.length}`}</span>
+      <span data-testid="scene-dialogue-position">{`${index + 1} of ${queue.length}`}</span>
       <Box component="button" type="button" aria-label="Next request" onClick={() => onMove(1)} sx={arrowSx}>
         {'\u203a'}
       </Box>
@@ -456,7 +456,7 @@ function FrontBody({
     );
   }
   return (
-    <Box data-testid="tavern-dialogue-card" sx={{ mt: '0.5em' }}>
+    <Box data-testid="scene-dialogue-card" sx={{ mt: '0.5em' }}>
       <DecisionBody
         decision={decision}
         asker={{ name, path: [name] }}
@@ -468,7 +468,7 @@ function FrontBody({
         <Box
           component="button"
           type="button"
-          data-testid="tavern-dialogue-open"
+          data-testid="scene-dialogue-open"
           onClick={() => onOpenDetails(decision.sessionId)}
           sx={choiceSx(colors)}
         >
@@ -552,10 +552,10 @@ function CommandAsk({
   );
 
   return (
-    <Box data-testid="tavern-dialogue-command">
+    <Box data-testid="scene-dialogue-command">
       {command.description && (
         <Box
-          data-testid="tavern-dialogue-description"
+          data-testid="scene-dialogue-description"
           sx={{ font: 'italic 1em/1.35 Georgia, serif', mt: '0.2em', overflowWrap: 'anywhere' }}
         >
           {`"${command.description}"`}
@@ -566,7 +566,7 @@ function CommandAsk({
         tabIndex={0}
         role="region"
         aria-label="Command"
-        data-testid="tavern-dialogue-code"
+        data-testid="scene-dialogue-code"
         onScroll={checkRead}
         sx={{
           mt: '0.4em',
@@ -611,7 +611,7 @@ function CommandAsk({
         <Box
           component="button"
           type="button"
-          data-testid="tavern-dialogue-expand"
+          data-testid="scene-dialogue-expand"
           onClick={() => setExpanded(value => !value)}
           sx={{ font: 'inherit', color: 'inherit', bgcolor: 'transparent', border: 0, p: 0, cursor: 'pointer' }}
         >
@@ -619,7 +619,7 @@ function CommandAsk({
         </Box>
       </Box>
       {error && (
-        <Box data-testid="tavern-dialogue-error" role="alert" sx={{ mt: '0.3em', color: '#e0705a' }}>
+        <Box data-testid="scene-dialogue-error" role="alert" sx={{ mt: '0.3em', color: '#e0705a' }}>
           {error}
         </Box>
       )}
@@ -629,7 +629,7 @@ function CommandAsk({
           type="button"
           disabled={!canAllow}
           onClick={() => run('once')}
-          data-testid="tavern-dialogue-allow-once"
+          data-testid="scene-dialogue-allow-once"
           sx={choiceSx(colors, 'primary')}
         >
           Allow once <Key colors={colors}>A</Key>
@@ -640,7 +640,7 @@ function CommandAsk({
             type="button"
             disabled={!canAllow}
             onClick={() => run('chat')}
-            data-testid="tavern-dialogue-allow-chat"
+            data-testid="scene-dialogue-allow-chat"
             sx={choiceSx(colors)}
           >
             Allow in this chat <Key colors={colors}>C</Key>
@@ -651,27 +651,23 @@ function CommandAsk({
           type="button"
           disabled={sending}
           onClick={() => run('deny')}
-          data-testid="tavern-dialogue-deny"
+          data-testid="scene-dialogue-deny"
           sx={choiceSx(colors, 'deny')}
         >
           {"Don't run"} <Key colors={colors}>D</Key>
         </Box>
-        <Box component="button" type="button" onClick={onOpen} data-testid="tavern-dialogue-open" sx={choiceSx(colors)}>
+        <Box component="button" type="button" onClick={onOpen} data-testid="scene-dialogue-open" sx={choiceSx(colors)}>
           Open session <Key colors={colors}>O</Key>
         </Box>
         {!read && (
-          <Box
-            component="span"
-            data-testid="tavern-dialogue-read-gate"
-            sx={{ fontSize: '0.85em', color: colors.muted }}
-          >
+          <Box component="span" data-testid="scene-dialogue-read-gate" sx={{ fontSize: '0.85em', color: colors.muted }}>
             Read to the end to allow
           </Box>
         )}
       </Box>
       {command.allowInChat && (
         <Box
-          data-testid="tavern-dialogue-scope"
+          data-testid="scene-dialogue-scope"
           sx={{ mt: '0.35em', fontSize: '0.8em', color: colors.muted, overflowWrap: 'anywhere' }}
         >
           {command.scope

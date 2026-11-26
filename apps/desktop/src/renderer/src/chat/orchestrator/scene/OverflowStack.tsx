@@ -7,23 +7,16 @@ import MenuItem from '@mui/joy/MenuItem';
 import { useLayoutEffect, useRef } from 'react';
 import { AGENT_STATE_LABEL, type AgentView } from '../roster';
 import { AgentPrIndicator } from '../AgentPrIndicator';
-import { poseFor, type SlotPoint, type TavernZone } from './scene';
 import { stateLampColor } from '../statePalette';
-import { characterSprite, type CharacterId } from './tavernArt';
+import type { ScenePoint } from './sceneDefinition';
 
-const ZONE_PLACE: Record<TavernZone, string> = {
-  workbench: 'at the workbenches',
-  bar: 'at the bar',
-  hearth: 'by the hearth',
-  benches: 'on the benches',
-};
-
-/** Above seated sprites (at most 100), below a lifted one (TavernView's LIFTED_Z). */
+/** Above seated sprites (at most 100), below a lifted one (SceneStage's LIFTED_Z). */
 const STACK_Z = 101;
 /** Tokens drawn on the stack; the count pill covers the rest. */
 const STACK_TOKENS = 3;
 
-export type StackedAgent = { agent: AgentView; character: CharacterId; name: string };
+/** `sprite` is the agent's art in its current pose, cropped to head and shoulders on the token. */
+export type StackedAgent = { agent: AgentView; sprite: string; name: string };
 
 /**
  * A full zone's extra agents, stacked in place as small tokens with a count. The whole stack is one
@@ -31,15 +24,21 @@ export type StackedAgent = { agent: AgentView; character: CharacterId; name: str
  * agent is out of reach however crowded the room gets.
  */
 export function OverflowStack({
+  testId,
   zone,
+  place,
   point,
   stacked,
   selectedId,
   onSelect,
   onOpenPr,
 }: {
-  zone: TavernZone;
-  point: SlotPoint;
+  /** Prefixes the test ids: `<testId>-overflow-<zone>`, its `-count` and `-list`. */
+  testId: string;
+  zone: string;
+  /** Completes "3 more ...", e.g. "at the bar". */
+  place: string;
+  point: ScenePoint;
   stacked: readonly StackedAgent[];
   selectedId: string | null;
   onSelect(id: string): void;
@@ -66,10 +65,10 @@ export function OverflowStack({
     <Dropdown>
       <MenuButton
         ref={buttonRef}
-        data-testid={`orchestrator-tavern-overflow-${zone}`}
+        data-testid={`${testId}-overflow-${zone}`}
         data-agent-avatar={holdsSelection ? selectedId : undefined}
         data-urgent={urgent || undefined}
-        aria-label={`${count} more ${ZONE_PLACE[zone]}${needsYou}; list them`}
+        aria-label={`${count} more ${place}${needsYou}; list them`}
         variant="plain"
         style={{ left: `${point.x}%`, top: `${point.y}%` }}
         sx={{
@@ -89,7 +88,7 @@ export function OverflowStack({
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'flex-end' }}>
-          {stacked.slice(0, STACK_TOKENS).map(({ agent, character }, index) => (
+          {stacked.slice(0, STACK_TOKENS).map(({ agent, sprite }, index) => (
             <Box
               key={agent.id}
               component="span"
@@ -114,7 +113,7 @@ export function OverflowStack({
             >
               <Box
                 component="img"
-                src={characterSprite(character, poseFor(agent.state))}
+                src={sprite}
                 alt=""
                 draggable={false}
                 sx={{
@@ -132,7 +131,7 @@ export function OverflowStack({
         </Box>
         <Box
           component="span"
-          data-testid={`orchestrator-tavern-overflow-${zone}-count`}
+          data-testid={`${testId}-overflow-${zone}-count`}
           sx={{
             px: '0.5em',
             borderRadius: '999px',
@@ -152,13 +151,13 @@ export function OverflowStack({
         ref={menuRef}
         size="sm"
         placement="bottom"
-        data-testid={`orchestrator-tavern-overflow-${zone}-list`}
+        data-testid={`${testId}-overflow-${zone}-list`}
         sx={{ maxHeight: 280, overflowY: 'auto', minWidth: 200, zIndex: 'var(--joy-zIndex-popup)' }}
       >
         {stacked.map(({ agent, name }) => (
           <MenuItem
             key={agent.id}
-            data-testid={`orchestrator-tavern-overflow-item-${agent.id}`}
+            data-testid={`${testId}-overflow-item-${agent.id}`}
             selected={agent.id === selectedId}
             onClick={() => onSelect(agent.id)}
             aria-label={`${name}: ${AGENT_STATE_LABEL[agent.state]}`}

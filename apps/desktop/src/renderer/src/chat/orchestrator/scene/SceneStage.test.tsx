@@ -1,16 +1,17 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assignPersonas } from '@shared/agentPersona';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import type { AgentView } from '../roster';
 import { stateLampColor } from '../statePalette';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
+import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
 import { SceneStage, sceneView } from './SceneStage';
 import { TEST_SCENE } from './testScene';
 
 const mount = createThemedMount('dark');
-const sprite = (id: string) => el(`scene-stage-agent-${id}`);
+const sprite = (id: string) => el(`orchestrator-test-yard-agent-${id}`);
 
 function props(agents: AgentView[], extra: Partial<OrchestratorViewProps> = {}): OrchestratorViewProps {
   return {
@@ -30,22 +31,34 @@ const press = (target: HTMLElement, key: string) =>
     target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
   });
 
+beforeEach(() => {
+  (window as unknown as { b4m: unknown }).b4m = {
+    chat: {
+      getSession: vi.fn().mockResolvedValue(null),
+      getHeldRelays: vi.fn().mockResolvedValue([]),
+      onStreamEvent: vi.fn(() => () => undefined),
+      onQueueChanged: vi.fn(() => () => undefined),
+    },
+  };
+});
+
 afterEach(() => {
   mount.unmount();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe('SceneStage', () => {
   it('draws each seated agent at its slot, in its state pose, from data alone', async () => {
     await render(props([agentFixture('a', 'working'), agentFixture('b', 'done')]));
-    expect(el('scene-stage').getAttribute('aria-label')).toBe('Test yard');
-    expect(el('scene-stage-frame').dataset.scene).toBe('test-yard');
+    expect(el('orchestrator-test-yard').getAttribute('aria-label')).toBe('Test yard');
+    expect(el('orchestrator-test-yard-frame').dataset.scene).toBe('test-yard');
     const desk = TEST_SCENE.map.zones.desk.slots[0];
     expect(sprite('a').style.left).toBe(`${desk.x}%`);
     expect(sprite('a').style.top).toBe(`${desk.y}%`);
     const sheets = TEST_SCENE.cast.sheets.map(sheet => sheet.sprites.busy);
     expect(sheets).toContain(sprite('a').querySelector('img')?.getAttribute('src'));
-    expect(el('scene-stage-summary').textContent).toBe('2 agents: 1 working, 1 done');
+    expect(el('orchestrator-test-yard-summary').textContent).toBe('2 agents: 1 working, 1 done');
   });
 
   it('labels each sprite with its name and state, and marks the selected one pressed', async () => {
@@ -71,10 +84,14 @@ describe('SceneStage', () => {
     expect(view.onSelect).toHaveBeenCalledWith('a');
   });
 
-  it('colours each sprite lamp from the shared state palette', async () => {
-    await render(props([agentFixture('a', 'failed')]));
-    const lamp = sprite('a').querySelector<HTMLElement>('[data-scene-lamp]');
-    expect(lamp?.style.getPropertyValue('--lamp')).toBe(stateLampColor('failed'));
+  it('names each sprite on a plate lit in its state colour from the shared palette', async () => {
+    const agents = [agentFixture('a', 'failed')];
+    const view = props(agents);
+    await render(view);
+    const plate = el('orchestrator-test-yard-name-a');
+    expect(plate.textContent).toBe(view.personas.get('a')?.label);
+    expect(plate.style.getPropertyValue('--lamp')).toBe(stateLampColor('failed'));
+    expect(el('orchestrator-test-yard-host-name').textContent).toBe('Warden');
   });
 
   it('shows the PR indicator for an agent with a PR, and opens it without selecting the agent', async () => {
@@ -101,22 +118,22 @@ describe('SceneStage', () => {
     const agents = ['a', 'b', 'c', 'd', 'e'].map(id => agentFixture(id, 'working'));
     const view = props(agents);
     await render(view);
-    expect(query('scene-stage-agent-d')).toBeNull();
-    const pile = el('scene-stage-overflow-desk');
+    expect(query('orchestrator-test-yard-agent-d')).toBeNull();
+    const pile = el('orchestrator-test-yard-overflow-desk');
     expect(pile.textContent).toBe('+2');
     expect(pile.getAttribute('aria-label')).toBe('2 more at the desks; list them');
     await act(async () => pile.click());
-    await act(async () => el('scene-stage-overflow-item-e').click());
+    await act(async () => el('orchestrator-test-yard-overflow-item-e').click());
     expect(view.onSelect).toHaveBeenCalledWith('e');
   });
 
   it('keeps focus in the scene when a focused stack goes away', async () => {
     const agents = ['a', 'b', 'c', 'd'].map(id => agentFixture(id, 'working'));
     await render(props(agents));
-    el('scene-stage-overflow-desk').focus();
+    el('orchestrator-test-yard-overflow-desk').focus();
     await render(props(agents.slice(1)));
-    expect(query('scene-stage-overflow-desk')).toBeNull();
-    expect(document.activeElement).toBe(el('scene-stage'));
+    expect(query('orchestrator-test-yard-overflow-desk')).toBeNull();
+    expect(document.activeElement).toBe(el('orchestrator-test-yard'));
   });
 
   it('says how many in a stack need you', async () => {
@@ -124,7 +141,7 @@ describe('SceneStage', () => {
       agentFixture(id, 'needs-you')
     );
     await render(props(agents));
-    const pile = el('scene-stage-overflow-porch');
+    const pile = el('orchestrator-test-yard-overflow-porch');
     expect(pile.getAttribute('aria-label')).toBe('1 more on the porch, 1 needs you; list them');
     expect(pile.dataset.urgent).toBe('true');
   });
@@ -132,19 +149,19 @@ describe('SceneStage', () => {
   it('opens the host conversation from the host, and keeps the host out of the tab order without one', async () => {
     const onInnkeeperSelect = vi.fn();
     await render(props([], { onInnkeeperSelect }));
-    const host = el('scene-stage-host') as HTMLButtonElement;
-    expect(host.getAttribute('aria-label')).toBe('Warden');
+    const host = el('orchestrator-test-yard-host') as HTMLButtonElement;
+    expect(host.getAttribute('aria-label')).toBe('Warden: Watching the yard');
     await act(async () => host.click());
     expect(onInnkeeperSelect).toHaveBeenCalledTimes(1);
     await render(props([]));
-    expect((el('scene-stage-host') as HTMLButtonElement).disabled).toBe(true);
-    expect(el('scene-stage-host').tabIndex).toBe(-1);
+    expect((el('orchestrator-test-yard-host') as HTMLButtonElement).disabled).toBe(true);
+    expect(el('orchestrator-test-yard-host').tabIndex).toBe(-1);
   });
 
   it('cheers at the finale', async () => {
     await render(props([agentFixture('a', 'done')], { celebrating: true }));
-    expect(el('scene-stage-host').dataset.pose).toBe('cheering');
-    expect(el('scene-stage-host').querySelector('img')?.getAttribute('src')).toBe(
+    expect(el('orchestrator-test-yard-host').dataset.pose).toBe('cheering');
+    expect(el('orchestrator-test-yard-host').querySelector('img')?.getAttribute('src')).toBe(
       TEST_SCENE.cast.host.sprites.cheering
     );
   });
@@ -156,18 +173,18 @@ describe('SceneStage', () => {
         sceneOverlay: <div data-testid="overlay" />,
       })
     );
-    expect(el('details').parentElement).toBe(el('scene-stage'));
-    expect(el('overlay').parentElement).toBe(el('scene-stage'));
+    expect(el('details').parentElement).toBe(el('orchestrator-test-yard'));
+    expect(el('overlay').parentElement).toBe(el('orchestrator-test-yard'));
   });
 
   it('pauses every looping animation while the window is hidden', async () => {
     await render(props([agentFixture('a', 'working')]));
-    expect(el('scene-stage-frame').dataset.paused).toBeUndefined();
+    expect(el('orchestrator-test-yard-frame').dataset.paused).toBeUndefined();
     await act(async () => {
       vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    expect(el('scene-stage-frame').dataset.paused).toBe('hidden');
+    expect(el('orchestrator-test-yard-frame').dataset.paused).toBe('hidden');
   });
 
   it('turns off walks and loops under reduced motion', async () => {
@@ -180,8 +197,94 @@ describe('SceneStage', () => {
   it('draws hundreds of agents with every seat used once and the rest stacked', async () => {
     const agents = Array.from({ length: 300 }, (_, index) => agentFixture(`a${index}`, 'working'));
     await render(props(agents));
-    expect(document.querySelectorAll('[data-testid^="scene-stage-agent-"]')).toHaveLength(3);
-    expect(el('scene-stage-overflow-desk').textContent).toBe('+297');
+    expect(document.querySelectorAll('[data-testid^="orchestrator-test-yard-agent-"]')).toHaveLength(3);
+    expect(el('orchestrator-test-yard-overflow-desk').textContent).toBe('+297');
+  });
+});
+
+// Every feature, on a scene that is only data: a definition can move and restyle these, never remove them.
+describe('SceneStage features on any definition', () => {
+  it("pins open work on the board, in the scene's own words and at its anchor", async () => {
+    await render(props([agentFixture('a', 'working')]));
+    const board = el('orchestrator-test-yard-quest-board');
+    expect(board.getAttribute('aria-label')).toBe('Job board: 1 open job');
+    expect(board.style.left).toBe(`${TEST_SCENE.map.board.left}%`);
+    expect(board.textContent).toContain('Jobs');
+    expect(query('orchestrator-test-yard-quest-a')).not.toBeNull();
+  });
+
+  it('gathers a zone of waiting agents under one answerable bubble', async () => {
+    await render(props([agentFixture('n1', 'needs-you'), agentFixture('n2', 'needs-you')]));
+    const bubble = el('orchestrator-test-yard-bubble-n1');
+    expect(bubble.textContent).toContain('Needs you! \u00d72');
+    expect(query('orchestrator-test-yard-bubble-n1-open')).not.toBeNull();
+  });
+
+  it('asks in the dialogue box instead of the bubbles when the stage hands it the requests', async () => {
+    await render(props([agentFixture('n1', 'needs-you')], { inSceneDecisions: true }));
+    expect(query('orchestrator-test-yard-bubble-n1-open')).toBeNull();
+    expect(el('orchestrator-test-yard-bubble-n1').textContent).toBe('Needs you!');
+  });
+
+  it('keeps answers out of the bubbles where another card answers', async () => {
+    mount.render(
+      <SceneStage {...props([agentFixture('n1', 'needs-you')])} scene={TEST_SCENE} answerFromBubble={false} />
+    );
+    expect(query('orchestrator-test-yard-bubble-n1-open')).toBeNull();
+  });
+
+  it("greets from the host and hangs its reply at the definition's anchor while the conversation is hidden", async () => {
+    const onReadReply = vi.fn();
+    await render(
+      props([], { desk: { reply: { id: 'r1', snippet: 'All done.' }, onReadReply, conversationHidden: true } })
+    );
+    const reply = el('orchestrator-test-yard-reply-bubble');
+    expect(reply.textContent).toContain('All done.');
+    await act(async () => el('orchestrator-test-yard-reply-read-btn').click());
+    expect(onReadReply).toHaveBeenCalledWith('r1');
+    expect(query('orchestrator-test-yard-reply-bubble')).toBeNull();
+    expect(el('orchestrator-test-yard-host-greeting').textContent).toBe('Anything for me?');
+  });
+
+  it('walks the host over to an agent the parent is reading, and cuts it behind the scene furniture at rest', async () => {
+    await render(props([agentFixture('a', 'working')]));
+    // Feet 4% below the counter top on a 15%-tall sprite.
+    expect(el('orchestrator-test-yard-host-art').style.clipPath).toBe('inset(0 0 26.666666666666668% 0)');
+    const parent = {
+      status: 'processing' as const,
+      activity: { kind: 'tool' as const, tool: 'session_read', detail: '', target: 'a' },
+    };
+    await render(props([agentFixture('a', 'working')], { parent }));
+    const host = el('orchestrator-test-yard-host');
+    expect(host.dataset.pose).toBe('walking');
+    expect(host.style.left).not.toBe(`${TEST_SCENE.map.host.x}%`);
+  });
+
+  it('lights the room by theme and dims it to last call once settled', async () => {
+    await render(props([agentFixture('a', 'working')]));
+    expect(el('orchestrator-test-yard-light').dataset.mood).toBe('night');
+    await render(props([agentFixture('a', 'working')], { settled: true }));
+    expect(el('orchestrator-test-yard-light').dataset.mood).toBe('last-call');
+    expect(el('orchestrator-test-yard-frame').dataset.settled).toBe('true');
+  });
+
+  it('walks everyone in from the door during the intro', async () => {
+    await render(props([agentFixture('a', 'working')], { introPlaying: true }));
+    expect(sprite('a').style.left).toBe(`${TEST_SCENE.map.door.x}%`);
+  });
+
+  it('cheers every agent at the finale', async () => {
+    await render(props([agentFixture('a', 'working')], { celebrating: true }));
+    expect(sprite('a').dataset.cheering).toBe('true');
+  });
+
+  it('speaks arrivals that need attention in its live region', async () => {
+    vi.useFakeTimers();
+    const view = props([agentFixture('a', 'working')]);
+    await render(view);
+    await render({ ...view, agents: [agentFixture('a', 'needs-you')] });
+    await act(async () => vi.advanceTimersByTime(ANNOUNCE_DEBOUNCE_MS));
+    expect(el('orchestrator-test-yard-announcer').textContent).toBe(`${view.personas.get('a')?.label} needs you.`);
   });
 });
 

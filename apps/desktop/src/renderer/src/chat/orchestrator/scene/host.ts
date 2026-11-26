@@ -1,18 +1,18 @@
 import { activityLabel } from '../activity';
 import { isParentBusy, type AgentState, type AgentView, type ParentView } from '../roster';
-import type { InnkeeperPose } from './tavernArt';
+import type { HostPose } from './sceneDefinition';
 
-export type InnkeeperAct = { pose: Exclude<InnkeeperPose, 'walking'> } | { pose: 'walking'; target: string };
+export type HostAct = { pose: Exclude<HostPose, 'walking' | 'cheering'> } | { pose: 'walking'; target: string };
 
-/** Tools whose `session_id` is a child the parent is checking on, so the Innkeeper walks over to it. */
+/** Tools whose `session_id` is a child the parent is checking on, so the host walks over to it. */
 const VISIT_TOOLS: ReadonlySet<string> = new Set(['session_read', 'session_send']);
 const SETTLED: ReadonlySet<AgentState> = new Set(['done', 'failed', 'paused', 'stopped', 'idle']);
 
 /**
- * What the Innkeeper is doing, from the parent's live activity: checking on an agent, posting quests,
- * combining results once every agent has settled, or polishing the bar.
+ * What the host is doing, from the parent's live activity: checking on an agent, posting work,
+ * combining results once every agent has settled, or idling.
  */
-export function innkeeperAct(parent: ParentView, agents: readonly AgentView[]): InnkeeperAct {
+export function hostAct(parent: ParentView, agents: readonly AgentView[]): HostAct {
   if (!isParentBusy(parent)) return { pose: 'idle' };
   const activity = parent.activity;
   if (activity?.kind === 'tool') {
@@ -27,7 +27,7 @@ export function innkeeperAct(parent: ParentView, agents: readonly AgentView[]): 
   return { pose: 'idle' };
 }
 
-export function innkeeperBubble(parent: ParentView): string | undefined {
+export function hostBubble(parent: ParentView): string | undefined {
   if (parent.status === 'needs-action') return 'Needs you!';
   if (parent.status === 'processing' && parent.activity) return activityLabel(parent.activity);
   return undefined;
