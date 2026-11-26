@@ -19,7 +19,7 @@ On production and `dev`, two critical alarms cover the key. Previews have no ala
 - A `Decrypt` on the key was refused.
 - The key policy, a grant or the key lifecycle changed (`PutKeyPolicy`, `CreateGrant`, `ScheduleKeyDeletion`, `DisableKey`, `DisableKeyRotation`).
 
-Both rules match `AWS API Call via CloudTrail` events, which EventBridge receives only from a CloudTrail trail that is logging management events (read events included, KMS not excluded). This stack does not create a trail; the account must have one for the alarms to fire.
+Both rules match `AWS API Call via CloudTrail` events, which EventBridge receives only from a CloudTrail trail that is logging management events; the refused-Decrypt rule also needs read events, with KMS events not excluded. This stack does not create a trail; the account must have one for the alarms to fire.
 
 ## Minting the blob
 

@@ -311,6 +311,16 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
+  hostedOnly(
+    'eventRule:infra/secretsAtRestKeyAccess.ts:createMonitoring()',
+    '3bd6eca39f72a0dccd39945c826fe89c883382f1e6189725397e66b75a60d853',
+    'Records refused Decrypts and changes of the hosted KMS key that wraps the stage data key; self-host has no KMS key.'
+  ),
+  hostedOnly(
+    'function:infra/secretsAtRestKeyAccess.ts:SecretsAtRestUnwrapProbe',
+    '55e63d020abbe89054763b16c8e0a549073956db57e4f56779a37fc425f7a4a7',
+    'Manual check that a VPC function reaches KMS; self-host has no KMS key or VPC.'
+  ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
     '61cc1dd56ad310c15e1c92b912845dab751a421b1342e43d17c2a4d258c0a421',
@@ -1319,7 +1329,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'c1f4e7cdb3ffd85316ea918cda0b0ba6c950e512143539c2539f146a36213a58',
+    '9e847b73021376718441c015057ecd8599e2beca62960c464de16be4068d0827',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(

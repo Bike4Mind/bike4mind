@@ -99,6 +99,55 @@ describe('key policy', () => {
   });
 });
 
+describe('key policy statements', () => {
+  it('pins every statement of the dedicated policy', async () => {
+    const { secretsAtRestKeyPolicy } = await load('production');
+    const contextActions = ['kms:Decrypt', 'kms:GenerateDataKeyWithoutPlaintext'];
+    expect(secretsAtRestKeyPolicy(policyInput).Statement).toEqual([
+      {
+        Sid: 'EnableAccountAdministration',
+        Effect: 'Allow',
+        Principal: { AWS: 'arn:test:iam::123456789012:root' },
+        Action: 'kms:*',
+        Resource: '*',
+      },
+      {
+        Sid: 'DenyWithoutPurposeContext',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: contextActions,
+        Resource: '*',
+        Condition: { StringNotEquals: { 'kms:EncryptionContext:purpose': 'secrets-at-rest' } },
+      },
+      {
+        Sid: 'DenyWithoutStageContext',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: contextActions,
+        Resource: '*',
+        Condition: { StringNotEquals: { 'kms:EncryptionContext:stage': 'production' } },
+      },
+      {
+        Sid: 'DenyChosenOrPlaintextDataKey',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: ['kms:GenerateDataKey', 'kms:Encrypt'],
+        Resource: '*',
+        Condition: { StringEquals: { 'kms:EncryptionContext:purpose': 'secrets-at-rest' } },
+      },
+      { Sid: 'DenyReEncrypt', Effect: 'Deny', Principal: '*', Action: ['kms:ReEncrypt*'], Resource: '*' },
+      {
+        Sid: 'DenyDecryptOutsideApp',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: ['kms:Decrypt'],
+        Resource: '*',
+        Condition: { StringNotEquals: { 'aws:PrincipalTag/b4m:secrets-at-rest-stage': 'production' } },
+      },
+    ]);
+  });
+});
+
 describe('shared preview key policy', () => {
   const previewStatements = async () => {
     const { secretsAtRestPreviewKeyPolicy } = await load('production');
@@ -121,6 +170,17 @@ describe('shared preview key policy', () => {
     // StringNotLike is true when the tag is absent, so an untagged principal is denied.
     expect(tagDeny).toMatchObject({ Effect: 'Deny', Principal: '*', Action: ['kms:Decrypt'] });
     expect(statements.map(s => s.Sid)).toEqual((await statementsOfDedicated()).map(s => s.Sid));
+  });
+
+  it('equals the dedicated policy with only the stage conditions swapped for the pr glob', async () => {
+    const swap = { StringNotLike: { 'kms:EncryptionContext:stage': 'pr*' } };
+    const tagSwap = { StringNotLike: { 'aws:PrincipalTag/b4m:secrets-at-rest-stage': 'pr*' } };
+    const expected = (await statementsOfDedicated()).map(s => {
+      if (s.Sid === 'DenyWithoutStageContext') return { ...s, Condition: swap };
+      if (s.Sid === 'DenyDecryptOutsideApp') return { ...s, Condition: tagSwap };
+      return s;
+    });
+    expect(await previewStatements()).toEqual(expected);
   });
 
   async function statementsOfDedicated() {
