@@ -12,6 +12,7 @@ import type { ApiKeyInfo } from '../cli/auth';
 import { requestTurnAuth, type TurnAuth } from '../auth/turnAuth';
 import { adminRoleWithheldFor } from '../auth/apiKeyAdminScope';
 import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '../middlewares/apiKeyScopeGate';
+import { fileToolsDeniedFor } from '../files/fileScopes';
 
 /**
  * The `requiredScopes` lists every `/api/data-lakes` route declares, and the
@@ -89,7 +90,7 @@ export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
 
 /**
  * The persisted run fields derived from the request's credential (`req.apiKeyInfo`, undefined for a
- * signed-in session): always the turn auth, plus the scope denials and the withheld admin role when
+ * signed-in session): always the turn auth, plus the data-lake and file tool denials and the withheld admin role when
  * the key calls for them.
  */
 export function credentialExecutionFields(apiKeyInfo: ApiKeyCredential | undefined): TurnAuth & {
@@ -97,7 +98,7 @@ export function credentialExecutionFields(apiKeyInfo: ApiKeyCredential | undefin
   adminRoleWithheld?: boolean;
   oauthClientId?: string;
 } {
-  const scopeDeniedTools = dataLakeToolsDeniedFor({ apiKeyInfo });
+  const scopeDeniedTools = [...dataLakeToolsDeniedFor({ apiKeyInfo }), ...fileToolsDeniedFor({ apiKeyInfo })];
   return {
     ...(scopeDeniedTools.length ? { scopeDeniedTools } : {}),
     ...(adminRoleWithheldFor(apiKeyInfo) ? { adminRoleWithheld: true } : {}),

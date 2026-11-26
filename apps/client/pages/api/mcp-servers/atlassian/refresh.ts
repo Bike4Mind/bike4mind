@@ -12,7 +12,7 @@ interface TokenResponse {
   token_type: string;
 }
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const user = await userRepository.findById(req.user.id);
 
   if (!user || !user.atlassianConnect) {
