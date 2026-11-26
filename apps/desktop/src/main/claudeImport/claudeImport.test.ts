@@ -673,15 +673,15 @@ describe('web session sync', () => {
         const since = changeFeed ? parsed.searchParams.get('updated_since') : null;
         const listed = Object.entries(notebooks)
           .filter(([, notebook]) => (since ? notebook.updatedAt >= since : !notebook.deletedAt))
+          .sort(([aId, a], [bId, b]) =>
+            since ? `${a.updatedAt}|${aId}`.localeCompare(`${b.updatedAt}|${bId}`) : idOrder.compare(bId, aId)
+          )
           .map(([id, { updatedAt, deletedAt, ...rest }]) => ({
             id,
             ...rest,
             ...(changeFeed ? { updatedAt, lastUpdated: updatedAt } : { lastUpdated: updatedAt }),
             ...(deletedAt ? { deletedAt } : {}),
-          }))
-          .sort((a, b) =>
-            since ? `${a.updatedAt}|${a.id}`.localeCompare(`${b.updatedAt}|${b.id}`) : idOrder.compare(b.id, a.id)
-          );
+          }));
         const cursor = parsed.searchParams.get('cursor');
         const start = cursor ? listed.findIndex(row => row.id === cursor) + 1 : 0;
         const rows = listed.slice(start, start + Number(parsed.searchParams.get('limit')));
@@ -1526,7 +1526,7 @@ describe('web session sync', () => {
           ])
         );
         const changes = await listWebNotebookChanges({ get } as unknown as WebApi, MARK);
-        const url = new URL(get.mock.calls[0][0] as string, 'https://web.test');
+        const url = new URL((get.mock.calls[0] as unknown as [string])[0], 'https://web.test');
         expect(url.searchParams.get('updated_since')).toBe(
           new Date(Date.parse(MARK) - CHANGE_OVERLAP_MS).toISOString()
         );
