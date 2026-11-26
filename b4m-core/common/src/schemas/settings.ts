@@ -3787,7 +3787,7 @@ export const settingsMap = {
     min: 1,
     max: CALLABLE_FUNCTION_DATA_LIMITS.cacheMb,
     int: true,
-    description: `The most data, in MB, all the files pinned to one saved function can add up to (at most ${CALLABLE_FUNCTION_DATA_LIMITS.cacheMb}, the runtime's data cache). Checked when a file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.`,
+    description: `The most data, in MB, all the files pinned to one saved function and the most its sources can fetch add up to (at most ${CALLABLE_FUNCTION_DATA_LIMITS.cacheMb}, the runtime's data cache). Checked when a file is pinned or the sources are saved. Can be overridden per organization; a member of several organizations gets the lowest.`,
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 24.8,

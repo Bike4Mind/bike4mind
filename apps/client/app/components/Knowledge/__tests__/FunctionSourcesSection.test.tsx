@@ -87,6 +87,12 @@ describe('FunctionSourcesSection', () => {
     expect(addButton()).toBeDisabled();
   });
 
+  it('counts the sources against their own limit, not the data files', () => {
+    const dataPins = Array.from({ length: 4 }, (_, i) => ({ name: `f${i}.csv` }));
+    renderSection(tool({ dataPins: dataPins as never, sources: [RATES, BASE] as never }));
+    expect(screen.getByText(/2 of 10 used\./)).toBeInTheDocument();
+  });
+
   it('keeps Add open when the data files are full, because sources have their own count', () => {
     const dataPins = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}.csv` }));
     renderSection(tool({ dataPins: dataPins as never, sources: [RATES] as never }));

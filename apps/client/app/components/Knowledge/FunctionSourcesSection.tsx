@@ -34,7 +34,8 @@ export default function FunctionSourcesSection({ tool }: { tool: ICallableFuncti
       <Typography level="title-sm">Sources</Typography>
       <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
         Read outside the sandbox from the data origins an administrator listed. Live sources are fetched on every call;
-        pinned ones are fetched once at promotion. Changing them returns the tool to draft.
+        pinned ones are fetched once at promotion. Changing them returns the tool to draft. {sources.length} of{' '}
+        {CALLABLE_FUNCTION_DATA_LIMITS.maxSources} used.
       </Typography>
       {sources.map(entry => (
         <Stack key={entry.name} direction="row" spacing={1} alignItems="center" data-testid="python-function-source">

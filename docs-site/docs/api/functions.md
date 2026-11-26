@@ -96,6 +96,7 @@ curl https://app.bike4mind.com/api/v1/functions/calls/<call-id> \
 ## Limits
 
 - The input may be up to 5 MB, and so may the output. An output too large to return answers `502` with `outcome` set to `output_too_large`.
+- A saved function can read up to 10 data files and, separately, up to 10 sources, so a call sees at most 20 under `/data`. Together they stay within the size an administrator sets as **Callable Functions: Data Per Function (MB)**, where each source counts at the most it can fetch.
 - The function runs for at most 30 seconds unless your organization sets a longer **Callable Function Time Limit** (up to 795 seconds). A call that waits for its result still has 45 seconds to finish; use `"mode": "async"` to run to the full limit.
 - Requests are rate limited per user and per route, at your account's per-minute limit. Each response carries the rate-limit headers.
 
