@@ -104,10 +104,17 @@ describe('restrictToolsToKeyScopes', () => {
     ['projects:write', ['list_projects', 'get_project']],
     ['notebooks:write', ['list_notebooks', 'get_notebook', 'search_knowledge_base']],
     ['datalake:query', ['list_lakes']],
-    ['files:write', ['list_files', 'get_file']],
     ['ai:generate', ['get_file']],
   ])('keeps the read tools listed for a key that holds only %s', async (scope, tools) => {
     expect(await listedTools([scope])).toEqual(expect.arrayContaining(tools));
+  });
+
+  it.each([['files:write'], ['ai:generate']])('hides list_files from a key that holds only %s', async scope => {
+    expect(await listedTools([scope])).not.toContain('list_files');
+  });
+
+  it('hides get_file from a key that holds only files:write', async () => {
+    expect(await listedTools(['files:write'])).not.toContain('get_file');
   });
 
   it.each([

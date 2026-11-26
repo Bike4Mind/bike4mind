@@ -249,8 +249,12 @@ const KEY_SCOPES_TIMEOUT_MS = 5 * 1000;
 const SCOPE_ALTERNATES: Record<string, readonly string[]> = {
   'notebooks:read': ['notebooks:write'],
   'projects:read': ['projects:write'],
-  'files:read': ['files:write', 'ai:generate'],
   'datalake:read': ['datalake:write', 'datalake:query'],
+};
+
+/** Per-tool alternates that override the scope's: get_file's route also admits ai:generate keys, list_files' does not. */
+const TOOL_ALTERNATES: Record<string, readonly string[]> = {
+  get_file: ['ai:generate'],
 };
 
 /** The tools registerTools put on each server, by name, so they can be taken back off the list. */
@@ -274,7 +278,8 @@ export async function restrictToolsToKeyScopes(server: McpServer, client: B4mApi
   const wanted = new Map(TOOL_META.map(t => [t.name, t.scope]));
   for (const [name, handle] of toolHandles.get(server) ?? []) {
     const scope = wanted.get(name);
-    if (scope && ![scope, ...(SCOPE_ALTERNATES[scope] ?? [])].some(accepted => scopes.includes(accepted))) {
+    const alternates = TOOL_ALTERNATES[name] ?? SCOPE_ALTERNATES[scope ?? ''] ?? [];
+    if (scope && ![scope, ...alternates].some(accepted => scopes.includes(accepted))) {
       handle.disable();
     }
   }
