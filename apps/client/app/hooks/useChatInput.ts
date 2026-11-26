@@ -12,6 +12,8 @@ import type { IResolvedPromptDispatch } from '@bike4mind/common';
 // sessionStorage or a tab-scoped suffix.
 export const NEW_NOTEBOOK_DRAFT_KEY = '__new_notebook__';
 
+export const CHAT_INPUT_DRAFTS_STORAGE_KEY = 'chat-input-drafts';
+
 interface ChatInputStore {
   // Current active session's input value (for real-time editing)
   chatInputValue: string;
@@ -112,7 +114,7 @@ export const useChatInput = create<ChatInputStore>()(
       },
     }),
     {
-      name: 'chat-input-drafts',
+      name: CHAT_INPUT_DRAFTS_STORAGE_KEY,
       // Only persist the drafts, not the transient state
       partialize: state => ({ drafts: state.drafts }),
     }

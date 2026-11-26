@@ -4,6 +4,7 @@ import type { Request, Response } from 'express';
 const h = vi.hoisted(() => ({
   isApiKey: false,
   revokeSession: vi.fn(),
+  findActiveByUserId: vi.fn(),
   updateLogoutTime: vi.fn(),
   clearSessionCookies: vi.fn(),
   logEvent: vi.fn(),
@@ -12,7 +13,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
-  authSessionRepository: {},
+  authSessionRepository: { findActiveByUserId: h.findActiveByUserId },
   realtimeConnectionRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -43,6 +44,24 @@ describe('signOutBrowserSession', () => {
     expect(h.revokeSession).toHaveBeenCalledWith('sid-1', expect.anything());
     expect(h.logEvent).toHaveBeenCalledWith({ userId: 'user-1', type: expect.any(String) }, expect.anything());
     expect(h.logAuthAudit).toHaveBeenCalledWith(req, { userId: 'user-1', event: 'logout' });
+  });
+
+  it('ends the web sessions Desktop opened when the Desktop session signs out', async () => {
+    h.revokeSession.mockResolvedValueOnce({ sid: 'sid-1', clientId: 'b4m-desktop' });
+    h.findActiveByUserId.mockResolvedValueOnce([
+      { sid: 'web-handoff', createdVia: 'desktop-handoff' },
+      { sid: 'web-other', createdVia: 'otc' },
+    ]);
+    await signOutBrowserSession(reqFor({ id: 'user-1', sid: 'sid-1' }), res);
+    expect(h.findActiveByUserId).toHaveBeenCalledWith('user-1');
+    expect(h.revokeSession.mock.calls.map(call => call[0])).toEqual(['sid-1', 'web-handoff']);
+  });
+
+  it('leaves other sessions alone when a web session signs out', async () => {
+    h.revokeSession.mockResolvedValueOnce({ sid: 'sid-1', clientId: null });
+    await signOutBrowserSession(reqFor({ id: 'user-1', sid: 'sid-1' }), res);
+    expect(h.findActiveByUserId).not.toHaveBeenCalled();
+    expect(h.revokeSession).toHaveBeenCalledTimes(1);
   });
 
   it('records the relying party on the audit row', async () => {

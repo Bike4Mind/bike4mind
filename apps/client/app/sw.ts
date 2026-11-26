@@ -4,7 +4,7 @@
 import { defaultCache } from '@serwist/turbopack/worker';
 import type { PrecacheEntry, SerwistGlobalConfig } from 'serwist';
 import { Serwist, StaleWhileRevalidate, NetworkOnly } from 'serwist';
-import { bypassesServiceWorker, isApiPath } from './swRoutes';
+import { bypassesServiceWorker, isNeverCached } from './swRoutes';
 
 // TypeScript declaration for the precache-manifest injection point
 // (`self.__SW_MANIFEST`), replaced with the actual manifest at build time.
@@ -26,13 +26,11 @@ const serwist = new Serwist({
   // filtered by the main-thread console-override in suppressSerwistWarnings.
   disableDevLogs: true,
   runtimeCaching: [
-    // Same-origin Next.js API routes (/api/*) are dynamic and per-request - never serve them from
-    // the SW cache. Registered BEFORE defaultCache because defaultCache's broad `.js`/
-    // catch-all matchers would otherwise grab HTML API routes (e.g. /api/react-artifact-sandbox),
-    // serving a returning user the stale shell for a load after every deploy. First matching route
-    // wins, so this must come first.
+    // API routes, published artifact pages and cross-origin media are never cached (see isNeverCached).
+    // Registered BEFORE defaultCache because its broad `.js`/catch-all matchers would otherwise grab
+    // them. First matching route wins, so this must come first.
     {
-      matcher: ({ url, sameOrigin }) => sameOrigin && isApiPath(url.pathname),
+      matcher: ({ url, sameOrigin }) => isNeverCached(url, sameOrigin),
       handler: new NetworkOnly(),
     },
     ...defaultCache,
