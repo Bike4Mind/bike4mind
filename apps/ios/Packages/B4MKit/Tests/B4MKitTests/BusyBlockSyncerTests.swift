@@ -6,15 +6,32 @@ private actor FakeBusyBlocksAPI: BusyBlocksAPI {
   var stored: BusyBlocksState
   private(set) var saves: [(enabled: Bool, blocks: [BusyBlock])] = []
   private(set) var reads = 0
+  var stateError: (any Error)?
+  var saveError: (any Error)?
+  /// While set, `state()` suspends until `release()` so a test can overlap two syncs.
+  private var gate: CheckedContinuation<Void, Never>?
+  private var holdsState = false
 
   init(enabled: Bool) { stored = BusyBlocksState(enabled: enabled, blocks: []) }
 
+  func failState(with error: any Error) { stateError = error }
+  func failSave(with error: (any Error)?) { saveError = error }
+  func holdState() { holdsState = true }
+  func release() {
+    holdsState = false
+    gate?.resume()
+    gate = nil
+  }
+
   func state() async throws -> BusyBlocksState {
     reads += 1
+    if holdsState { await withCheckedContinuation { gate = $0 } }
+    if let stateError { throw stateError }
     return stored
   }
 
   func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
+    if let saveError { throw saveError }
     saves.append((enabled, blocks))
     stored = BusyBlocksState(enabled: enabled, blocks: blocks)
     return stored
@@ -110,6 +127,128 @@ final class BusyBlockSyncerTests: XCTestCase {
 
     let saves = await api.saves
     XCTAssertEqual(saves.count, 2)
+  }
+
+  func testOutcomeIsSyncedWhenBlocksAreSaved() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized, events: events()))
+
+    let outcome = await syncer.sync()
+
+    XCTAssertEqual(outcome, .synced)
+  }
+
+  func testRevokedAccessReportsSyncedWithAnEmptyPut() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .denied, events: events()))
+
+    let outcome = await syncer.sync()
+
+    XCTAssertEqual(outcome, .synced)
+    let saves = await api.saves
+    XCTAssertEqual(saves.map(\.blocks), [[]])
+  }
+
+  func testNeverAskedSkipsWithoutCallingTheServer() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .notDetermined))
+
+    let outcome = await syncer.sync(force: true)
+
+    XCTAssertEqual(outcome, .skipped(.neverAsked))
+    let reads = await api.reads
+    XCTAssertEqual(reads, 0)
+  }
+
+  func testServerOptInOffSkipsAsDisabledWithoutSaving() async {
+    let api = FakeBusyBlocksAPI(enabled: false)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized, events: events()))
+
+    let outcome = await syncer.sync(force: true)
+
+    XCTAssertEqual(outcome, .skipped(.disabled))
+    let saves = await api.saves
+    XCTAssertTrue(saves.isEmpty)
+  }
+
+  func testThrottledSyncReportsSkipped() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+
+    await syncer.sync()
+    let outcome = await syncer.sync()
+
+    XCTAssertEqual(outcome, .skipped(.throttled))
+  }
+
+  func testForcedSyncInsideTheIntervalStillSyncs() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+
+    await syncer.sync()
+    let outcome = await syncer.sync(force: true)
+
+    XCTAssertEqual(outcome, .synced)
+  }
+
+  func testFailedSaveReportsFailedAndDoesNotThrottleTheRetry() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+    await api.failSave(with: APIError.server(status: 503))
+
+    let failed = await syncer.sync()
+    await api.failSave(with: nil)
+    let retried = await syncer.sync()
+
+    XCTAssertEqual(failed, .failed)
+    XCTAssertEqual(retried, .synced)
+  }
+
+  func testOfflineStateReadFailsAndKeepsTheServerBlocks() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized, events: events()))
+    await api.failState(with: APIError.offline)
+
+    let outcome = await syncer.sync(force: true)
+
+    XCTAssertEqual(outcome, .failed)
+    let saves = await api.saves
+    XCTAssertTrue(saves.isEmpty)
+  }
+
+  func testCancelledRunReportsFailed() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized))
+    await api.failState(with: CancellationError())
+
+    let outcome = await syncer.sync(force: true)
+
+    XCTAssertEqual(outcome, .failed)
+  }
+
+  func testEndedSessionSkipsAsSignedOut() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized))
+    await api.failState(with: APIError.signedOut)
+
+    let outcome = await syncer.sync(force: true)
+
+    XCTAssertEqual(outcome, .skipped(.signedOut))
+  }
+
+  func testSecondSyncWhileOneIsRunningSkipsAsInFlight() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized))
+    await api.holdState()
+
+    let first = Task { await syncer.sync(force: true) }
+    while await api.reads == 0 { await Task.yield() }
+    let second = await syncer.sync(force: true)
+    await api.release()
+
+    XCTAssertEqual(second, .skipped(.inFlight))
+    let firstOutcome = await first.value
+    XCTAssertEqual(firstOutcome, .synced)
   }
 
   func testEnablingWithDeniedAccessRevertsTheToggleAndWritesNothing() async {
