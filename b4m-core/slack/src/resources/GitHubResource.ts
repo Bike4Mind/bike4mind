@@ -1,12 +1,9 @@
-import type { IUserDocument } from '@bike4mind/common';
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { BaseResource, ConnectionStatus } from './BaseResource';
 import { McpServerName } from '@bike4mind/common';
 import {
   buildMappingContext,
   extractSlackUserIdsFromText,
   mapSlackUserIdsToGithubUsernames,
-  SlackGitHubMapping,
 } from '../handlers/slack-github-mapper';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 import type { EnvVariable } from '../di/types';
@@ -298,7 +295,7 @@ export class GitHubResource extends BaseResource {
     }
 
     if (slackUserIds.size > 0) {
-      const mappings = await mapSlackUserIdsToGithubUsernames([...slackUserIds]);
+      const mappings = await mapSlackUserIdsToGithubUsernames([...slackUserIds], this.user.slackSettings?.slackTeamId);
       hasMappings = mappings.some(m => m.githubUsername !== null);
       if (hasMappings) {
         prompt += buildMappingContext(mappings) + '\n';
@@ -374,64 +371,6 @@ If the user provides table data (markdown tables, formatted tables, or tabular d
     } catch (error) {
       this.logger.warn('[GitHubResource] Failed to load channel default repository', { error, channelId });
       return null;
-    }
-  }
-
-  /**
-   * Maps a single Slack User ID to GitHub username
-   * @param slackUserId - The Slack User ID (e.g., "U09JUQJ2KHC")
-   * @returns GitHub username if found, null otherwise
-   */
-  async mapSlackUserIdToGithubUsername(slackUserId: string): Promise<SlackGitHubMapping> {
-    try {
-      const { User, McpServer } = getSlackDb();
-      // Find user by Slack User ID
-      const user = await (User as { findOne(filter: Record<string, unknown>): Promise<IUserDocument | null> }).findOne({
-        'slackSettings.slackUserId': slackUserId,
-        ...VERIFIED_SLACK_IDENTITY_FILTER,
-      });
-
-      if (!user) {
-        this.logger.debug(`[slack-github-mapper] No user found for Slack User ID: ${slackUserId}`);
-        return {
-          slackUserId,
-          githubUsername: null,
-        };
-      }
-
-      this.logger.debug(`[slack-github-mapper] Found user for Slack ID ${slackUserId}:`, {
-        userId: user.id,
-        userName: user.name,
-      });
-
-      // Find GitHub MCP server for this user
-      const githubMcpServer = await (McpServer as any).findOne({
-        userId: user.id,
-        name: McpServerName.Github,
-        enabled: true,
-      });
-
-      if (!githubMcpServer || !githubMcpServer.metadata?.githubLogin) {
-        this.logger.debug(`[slack-github-mapper] User ${user.id} does not have GitHub connected`);
-        return {
-          slackUserId,
-          githubUsername: null,
-          userDisplayName: user.name,
-        };
-      }
-
-      this.logger.debug(`[slack-github-mapper] ✅ Mapped ${slackUserId} → ${githubMcpServer.metadata.githubLogin}`);
-      return {
-        slackUserId,
-        githubUsername: githubMcpServer.metadata.githubLogin,
-        userDisplayName: user.name,
-      };
-    } catch (error) {
-      this.logger.error(`[slack-github-mapper] Error mapping Slack User ID ${slackUserId}:`, error);
-      return {
-        slackUserId,
-        githubUsername: null,
-      };
     }
   }
 }

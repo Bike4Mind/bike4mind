@@ -21,6 +21,7 @@ import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateSceneCompositionJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
+import { limitInputFilesForKey } from '@bike4mind/server-utils/files/generateKeyInputs';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
@@ -66,6 +67,8 @@ const createRouter = nextRouteForContract(createSceneCompositionContract, {
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
   // Nothing is billed; the owner only scopes the idempotency key, by the same rule as the other generation kinds.
   const organizationId = await resolveMediaBillingOrgId(req, undefined);
+  const deps = getCreateSceneCompositionJobDeps();
+  const sceneDeps = { ...deps, loadInputFile: limitInputFilesForKey(req, deps.loadInputFile) };
   const result = await createSceneCompositionJob(
     {
       user: { id: req.user.id, organizationId },
@@ -74,7 +77,7 @@ const createRouter = nextRouteForContract(createSceneCompositionContract, {
       apiKeyId: req.apiKeyInfo?.keyId,
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),
     },
-    getCreateSceneCompositionJobDeps()
+    sceneDeps
   );
   if (!result.ok) throw toHttpError(result);
   return res.status(202).json(await toPublicGenerationJob(result.job, mapperDeps, SCENE_COMPOSITION_PROJECTION));

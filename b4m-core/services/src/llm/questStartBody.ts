@@ -79,6 +79,8 @@ export const QuestStartBodySchema = z
      * on the user it reloads. Server-set like `apiKeyId`; absent means not withheld.
      */
     adminRoleWithheld: z.boolean().optional(),
+    /** Server-derived files:read admission; legacy queued key turns fail closed when absent. */
+    fileInputsAllowed: z.boolean().optional(),
     /**
      * The visit the turn was asked in, read from the visit cookie by the chat route, so the worker's
      * first_value names it. Server-set like `apiKeyId`, never from a client body; absent for a key or
@@ -145,3 +147,12 @@ export const QuestStartBodySchema = z
     ...b,
     authOrigin: b.authOrigin ?? (b.apiKeyId ? 'apiKey' : 'internal'),
   }));
+
+/** Private file inputs require affirmative admission on every known API-key turn. */
+export function admitsPrivateFileInputs(turn: {
+  authOrigin?: AuthOrigin;
+  apiKeyId?: string;
+  fileInputsAllowed?: boolean;
+}): boolean {
+  return turn.authOrigin === 'apiKey' || turn.apiKeyId !== undefined ? turn.fileInputsAllowed === true : true;
+}
