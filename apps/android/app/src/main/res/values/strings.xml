@@ -157,6 +157,12 @@
     <string name="settings_notifications_intro">Choose what Bike4Mind tells you about. This applies to every device you\'re signed in on.</string>
     <string name="settings_notifications_off">Notifications are off for Bike4Mind on this device.</string>
     <string name="settings_notifications_open_system">Open notification settings</string>
+    <string name="settings_busy_block_title">Brief after busy blocks</string>
+    <string name="settings_busy_block_detail">Hold run updates while a calendar event marks you busy, then get one brief of what happened when it ends. Only event start and end times leave this device.</string>
+    <string name="settings_busy_block_denied">Bike4Mind needs calendar access for this. Allow calendar access in system settings, then turn it on again.</string>
+    <string name="settings_busy_block_open_settings">Open settings</string>
+    <string name="settings_busy_block_load_failed">Couldn\'t load your busy-block setting. Try again later.</string>
+    <string name="settings_busy_block_save_failed">Couldn\'t save your busy-block setting. Try again.</string>
     <string name="settings_save_failed">Couldn\'t save that change. Try again.</string>
     <string name="settings_account">Account</string>
     <string name="settings_credits">Credits</string>
