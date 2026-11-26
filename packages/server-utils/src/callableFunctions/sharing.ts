@@ -202,6 +202,16 @@ export async function shareCallableFunction(
 }
 
 /**
+ * Lower than the general address lookup, since this one reaches every account rather than the caller's
+ * organizations. Shared by the app and public recipient routes, so one bucket counts both.
+ */
+export const CALLABLE_FUNCTION_RECIPIENT_RATE_LIMIT = {
+  limit: 20,
+  windowMs: 60 * 1000,
+  bucket: 'callable-functions-recipient',
+} as const;
+
+/**
  * The account holding exactly `email`, for the owner of function `id` to name in a share: any account, not only one
  * in the owner's organizations. An address with no account answers null, as the general lookup does.
  */

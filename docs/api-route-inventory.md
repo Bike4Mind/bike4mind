@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1302 routes: 146 contracted, 11 aliases of another route, 368 with no static caller in `apps/client/app`.
+1314 routes: 158 contracted, 11 aliases of another route, 380 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -153,7 +153,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 27 | 9 | 0 | 0 | 5 |
-| v1 | 144 | 140 | 121 | 16 | 0 | 7 | 131 |
+| v1 | 156 | 152 | 133 | 16 | 0 | 7 | 143 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 6 | 1 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1927,11 +1927,23 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/files/bulk-delete` | POST | jwt+key | `files:write` | - | yes | - | 0 |
 | `/api/v1/files/by-ids` | GET | jwt+key | `files:read` | - | yes | - | 0 |
 | `/api/v1/files/search` | GET | jwt+key | `files:read` | - | yes | - | 0 |
-| `/api/v1/functions` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
-| `/api/v1/functions/[id]` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
+| `/api/v1/functions` | GET, POST | jwt+key | GET: `functions:invoke`; POST: `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]` | GET, PATCH, DELETE | jwt+key | GET: `functions:invoke`; PATCH, DELETE: `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/calls` | GET | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/code` | PUT | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/data` | POST | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/data/[name]` | DELETE | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/examples` | PUT | jwt+key | `functions:author` | - | yes | - | 0 |
 | `/api/v1/functions/[id]/invoke` | POST | jwt+key | `functions:invoke` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/promote` | POST | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/recipient` | GET | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/share` | GET, PUT, DELETE | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/source` | GET | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/sources` | PUT | jwt+key | `functions:author` | - | yes | - | 0 |
+| `/api/v1/functions/[id]/test-runs` | POST | jwt+key | `functions:author` | - | yes | - | 0 |
 | `/api/v1/functions/calls/[call_id]` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/functions/calls/[call_id]/cancel` | POST | jwt+key | `functions:invoke` | - | yes | - | 0 |
+| `/api/v1/functions/mine` | GET | jwt+key | `functions:author` | - | yes | - | 0 |
 | `/api/v1/handoff-devices` | GET | jwt | - | - | yes | - | 1: `components/Session/SessionHandoff.tsx` |
 | `/api/v1/image-edits` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |

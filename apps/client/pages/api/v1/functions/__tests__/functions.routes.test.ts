@@ -59,6 +59,8 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
+  methodNotAllowedHandler: () => async (_req: unknown, res: { status: (code: number) => { end: () => void } }) =>
+    res.status(405).end(),
   baseApi: (options?: Record<string, unknown>) => {
     h.baseApiOptions.push(options);
     type Mw = (req: unknown, res: unknown, next: (error?: unknown) => void) => unknown;
@@ -117,6 +119,10 @@ vi.mock('@bike4mind/database', async () => ({
   mongoose: (await import('mongoose')).default,
   adminSettingsRepository: {},
   artifactContentRepository: {},
+  // Read at load by the artifact access table the authoring routes in the same files import.
+  artifactVersionRepository: {},
+  questRepository: {},
+  sessionRepository: {},
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: async (key: string, limit: number, windowMs: number) => {
       const count = (h.buckets.get(key) ?? 0) + 1;
@@ -355,11 +361,15 @@ describe('scopes and limits', () => {
     expect(decideScopeGate(contract.scopes, [ApiKeyScope.FUNCTIONS_INVOKE], new Set())).toEqual({ outcome: 'allow' });
   });
 
-  it('hands functions:invoke to the API-key chain for every route', () => {
+  // The collection and [id] files also build the create, PATCH, and DELETE authoring routers.
+  it('hands functions:invoke to the API-key chain for every calling route, and functions:author to the rest', () => {
     const required = h.baseApiOptions.map(o => o?.requiredScopes);
     expect(required).toEqual([
       [ApiKeyScope.FUNCTIONS_INVOKE],
+      [ApiKeyScope.FUNCTIONS_AUTHOR],
       [ApiKeyScope.FUNCTIONS_INVOKE],
+      [ApiKeyScope.FUNCTIONS_AUTHOR],
+      [ApiKeyScope.FUNCTIONS_AUTHOR],
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
@@ -367,7 +377,7 @@ describe('scopes and limits', () => {
   });
 
   it('takes a body as large as the input cap on invoke only', () => {
-    const [list, get, post] = h.baseApiOptions;
+    const [list, , get, , , post] = h.baseApiOptions;
     expect(list?.maxBodySize).toBeUndefined();
     expect(get?.maxBodySize).toBeUndefined();
     expect(post?.maxBodySize).toBe(FUNCTION_INVOKE_MAX_BODY_BYTES);
@@ -377,7 +387,10 @@ describe('scopes and limits', () => {
   it('uses one stable per-user rate-limit bucket per route, with no id in it', () => {
     expect(rateLimitBuckets).toEqual([
       '/api/v1/functions',
+      'POST /api/v1/functions',
       '/api/v1/functions/[id]',
+      'PATCH /api/v1/functions/[id]',
+      'DELETE /api/v1/functions/[id]',
       '/api/v1/functions/[id]/invoke',
       '/api/v1/functions/calls/[call_id]',
       '/api/v1/functions/calls/[call_id]/cancel',

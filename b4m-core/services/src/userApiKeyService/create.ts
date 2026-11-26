@@ -13,6 +13,7 @@ import {
   isAgentOwnedByEmbedKey,
   IUserApiKeyDocument,
   isBuiltInApiKeyScope,
+  isMintableConfinedScopeSet,
   isWellFormedApiKeyScope,
   IUserApiKeyRepository,
   OrgApiKeyGrant,
@@ -264,12 +265,10 @@ const mintUserApiKey = async (
   // but risk. Checked before the embed-specific rules below so a mixed request like
   // ['embed:chat','notebooks:read'] reports this real reason, not a downstream missing
   // agentId. Same constant the runtime gate reads, so mint and runtime state one rule.
-  if (
-    params.scopes.length > 1 &&
-    params.scopes.some(scope => CONFINED_API_KEY_SCOPES.some(confined => confined === scope))
-  ) {
+  // The one exception is a family of confined scopes that serve one flow (CONFINED_API_KEY_SCOPE_FAMILIES).
+  if (!isMintableConfinedScopeSet(params.scopes)) {
     throw new BadRequestError(
-      `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key`
+      `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key, except functions:invoke with functions:author`
     );
   }
 

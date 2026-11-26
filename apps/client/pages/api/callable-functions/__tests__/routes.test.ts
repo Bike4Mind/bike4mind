@@ -33,7 +33,17 @@ const h = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@bike4mind/server-utils/callableFunctions/registry', () => h.registry);
+vi.mock('@bike4mind/server-utils/callableFunctions/registry', () => ({
+  ...h.registry,
+  updateCallableFunctionSettings: (
+    actor: { id: string },
+    id: string,
+    settings: { enabled: boolean } | { approval: string }
+  ) =>
+    'approval' in settings
+      ? h.registry.setCallableFunctionApproval(actor, id, settings.approval)
+      : h.registry.setCallableFunctionEnabled(actor, id, settings.enabled),
+}));
 vi.mock('@bike4mind/server-utils/callableFunctions/access', async () => {
   const { ForbiddenError } = await import('@bike4mind/common');
   return {

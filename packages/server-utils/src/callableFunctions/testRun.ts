@@ -133,10 +133,7 @@ export async function prepareServerRun(
   id: string,
   options: CallableFunctionServerRunOptions = {}
 ): Promise<CallableFunctionServerRunTarget> {
-  const budgetMs = Math.min(
-    options.budgetMs ?? CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS,
-    CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS
-  );
+  const budgetMs = Math.min(options.budgetMs ?? callableFunctionTestRunBudget(), CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS);
   const deadline = Date.now() + budgetMs;
   const left = () => deadline - Date.now();
 

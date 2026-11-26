@@ -1,16 +1,19 @@
-/**
- * GET /api/v1/functions/{id} - one live function with its contract (`getFunctionContract`).
- */
-import { getFunctionContract } from '@bike4mind/common';
+import { deleteFunctionContract, getFunctionContract, updateFunctionContract } from '@bike4mind/common';
+import {
+  deleteCallableFunction,
+  updateCallableFunctionSettings,
+} from '@bike4mind/server-utils/callableFunctions/registry';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import {
   assertFunctionsEnabled,
   functionsRateLimit,
   loadLiveFunction,
   toPublicFunctionDetail,
 } from '@server/callableFunctions/publicFunctions';
+import { toAuthoredFunction } from '@server/callableFunctions/authoredFunctions';
 
-const handler = nextRouteForContract(getFunctionContract, {
+const getRoute = nextRouteForContract(getFunctionContract, {
   rateLimit: functionsRateLimit('/api/v1/functions/[id]'),
 }).get(async (req, res) => {
   await assertFunctionsEnabled(req.user);
@@ -18,7 +21,23 @@ const handler = nextRouteForContract(getFunctionContract, {
   return res.json({ data: toPublicFunctionDetail(fn) });
 });
 
-export default handler;
+const updateRoute = nextRouteForContract(updateFunctionContract, {
+  rateLimit: functionsRateLimit('PATCH /api/v1/functions/[id]'),
+}).patch(async (req, res) => {
+  await assertFunctionsEnabled(req.user);
+  const fn = await updateCallableFunctionSettings(req.user, req.validatedParams.id, req.validated);
+  return res.json({ data: toAuthoredFunction(fn) });
+});
+
+const deleteRoute = nextRouteForContract(deleteFunctionContract, {
+  rateLimit: functionsRateLimit('DELETE /api/v1/functions/[id]'),
+}).delete(async (req, res) => {
+  await assertFunctionsEnabled(req.user);
+  await deleteCallableFunction(req.user, req.validatedParams.id);
+  return res.status(204).end();
+});
+
+export default dispatchByMethod({ GET: getRoute, PATCH: updateRoute, DELETE: deleteRoute });
 
 export const config = {
   api: { externalResolver: true },
