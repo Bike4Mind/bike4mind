@@ -11,7 +11,7 @@
  * resolve nor a completion. Asserting only on `sessionUpdate` cannot see either.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   sessionUpdate: vi.fn(),
@@ -76,6 +76,8 @@ const expectNoOperationalSpend = () => {
 };
 
 describe('sessionTagging', () => {
+  afterEach(() => vi.useRealTimers());
+
   beforeEach(() => {
     vi.clearAllMocks();
     h.completionText = [];
@@ -142,12 +144,19 @@ describe('sessionTagging', () => {
 
   it('bills once for a completion with no usable tags', async () => {
     h.completionText = ['not json'];
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const completedAt = Date.now();
+    h.sessionUpdate.mockImplementationOnce(async (_user: unknown, data: unknown) => {
+      vi.setSystemTime(completedAt + 5_000);
+      return data;
+    });
 
     await run();
 
     expect(h.recordUsage).toHaveBeenCalledTimes(1);
     // latencyMs must time the model call only, not the session write that follows it.
-    expect(h.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ endTime: expect.any(Number) }));
+    expect(h.recordUsage.mock.calls[0][0].endTime).toBe(completedAt);
+    expect(Date.now()).toBeGreaterThan(completedAt);
   });
 
   it('bills once when a failed attempt stamp is replayed', async () => {
@@ -291,9 +300,10 @@ describe('sessionTagging', () => {
     expect(written.taggedAt).toBeInstanceOf(Date);
   });
 
-  // The four inputs below all land in the same failure branch. The completion is billed after the
-  // write, parse failure included, so it stamps the retry backoff - but it must stamp ONLY that: none of these
-  // is a verdict that the notebook has no tags, so none may clear tags or close the spider gate.
+  // The four inputs below all land in the same failure branch. A parse failure still spends (and
+  // bills) a completion, so it stamps the retry backoff - but it must stamp ONLY that: none of
+  // these is a verdict that the notebook has no tags, so none may clear tags or close the spider
+  // gate.
   // Asserting on the payload rather than on `h.session.tags`: the fixture object is what the
   // mocked `findById` handed back, so asserting it still holds its tags cannot fail.
   it.each([

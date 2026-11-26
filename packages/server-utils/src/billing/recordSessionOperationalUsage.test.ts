@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const recordOperationalUsage = vi.fn().mockResolvedValue(undefined);
 vi.mock('@bike4mind/services', () => ({
@@ -43,6 +43,7 @@ const run = (completionInfo: object) =>
 
 describe('recordSessionOperationalUsage', () => {
   beforeEach(() => recordOperationalUsage.mockClear());
+  afterEach(() => vi.useRealTimers());
 
   it('prices each request on its own long-context tier when the backend reports per-request usage', async () => {
     const turnUsage = [
@@ -84,6 +85,35 @@ describe('recordSessionOperationalUsage', () => {
       20_000 * 0.000006 + 190_000 * 0.000006 * 0.1 + 100 * 0.0000225,
       12
     );
+  });
+
+  describe('latency', () => {
+    const runAt = (times: { startTime: number; endTime?: number }) =>
+      recordSessionOperationalUsage({
+        user,
+        operation: 'notebook_tagging',
+        sessionId: 's1',
+        modelId: 'tiered-model',
+        modelInfo,
+        completionInfo: { inputTokens: 1_000, outputTokens: 100 } as never,
+        logger,
+        ...times,
+      });
+
+    it('times the model call from startTime to the endTime the caller passes', async () => {
+      await runAt({ startTime: 1_000, endTime: 1_500 });
+
+      expect(recordOperationalUsage.mock.calls[0][0].latencyMs).toBe(500);
+    });
+
+    it('times to now when the caller passes no endTime', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(10_000);
+
+      await runAt({ startTime: 4_000 });
+
+      expect(recordOperationalUsage.mock.calls[0][0].latencyMs).toBe(Date.now() - 4_000);
+    });
   });
 
   describe('price stamp', () => {
