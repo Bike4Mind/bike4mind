@@ -313,6 +313,34 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(outcome, .synced)
   }
 
+  func testResetLetsTheNextSyncRunInsideTheInterval() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+
+    await syncer.sync()
+    syncer.reset()
+    let outcome = await syncer.sync()
+
+    XCTAssertEqual(outcome, .synced)
+    let saves = await api.saves
+    XCTAssertEqual(saves.count, 2)
+  }
+
+  func testSyncInFlightAtResetDoesNotThrottleTheNextOne() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+    await api.holdState()
+
+    let first = Task { await syncer.sync() }
+    while await api.reads == 0 { await Task.yield() }
+    syncer.reset()
+    await api.release()
+    _ = await first.value
+    let next = await syncer.sync()
+
+    XCTAssertEqual(next, .synced)
+  }
+
   func testEnablingWithDeniedAccessRevertsTheToggleAndWritesNothing() async {
     let api = FakeBusyBlocksAPI(enabled: false)
     let reader = FakeReader(access: .notDetermined, grants: false)

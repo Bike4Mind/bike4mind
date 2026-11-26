@@ -169,6 +169,7 @@ struct RootView: View {
     Task { await mediaFirstPages.invalidate() }
     services.push.sessionDidEnd()
     services.voiceCatalog.reset()
+    services.busyBlockSyncer.reset()
     // A session that ended on its own cannot unregister tokens; the activities still must not linger.
     services.questActivities.sessionDidEnd()
     let monitor = services.agentRunMonitor

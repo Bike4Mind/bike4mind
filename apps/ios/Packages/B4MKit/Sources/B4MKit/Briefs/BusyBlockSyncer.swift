@@ -37,6 +37,8 @@ public final class BusyBlockSyncer {
   private let reader: any BusyBlockReader
   private let now: @Sendable () -> Date
   private var lastSync: Date?
+  /// Bumped by `reset()` so a sync still running for the previous account does not stamp `lastSync`.
+  private var generation = 0
   /// One lock for background syncs and user saves, so a sync that read the opt-in before a toggle-off cannot
   /// write it back on afterwards.
   private var isBusy = false
@@ -66,19 +68,26 @@ public final class BusyBlockSyncer {
     if !force, let lastSync, now().timeIntervalSince(lastSync) < Self.minInterval { return .skipped(.throttled) }
     isBusy = true
     defer { release() }
+    let startedIn = generation
     do {
       guard try await api.state().enabled else {
-        lastSync = now()
+        if generation == startedIn { lastSync = now() }
         return .skipped(.disabled)
       }
       _ = try await api.save(enabled: true, blocks: currentBlocks())
-      lastSync = now()
+      if generation == startedIn { lastSync = now() }
       return .synced
     } catch APIError.signedOut {
       return .skipped(.signedOut)
     } catch {
       return .failed
     }
+  }
+
+  /// Clears the throttle on sign-out, so the next account's first sync is not skipped.
+  public func reset() {
+    lastSync = nil
+    generation += 1
   }
 
   /// Saves the user's opt-in, waiting for any sync in flight to finish first.
