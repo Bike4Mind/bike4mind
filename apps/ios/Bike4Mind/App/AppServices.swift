@@ -56,6 +56,8 @@ final class AppServices {
   let busyBlocks: any BusyBlocksAPI
   let busyBlockReader: any BusyBlockReader
   let busyBlockSyncer: BusyBlockSyncer
+  /// Re-syncs busy blocks from a system background refresh while the app is not opened.
+  let busyBlockRefresh: BusyBlockBackgroundRefresh
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
   /// How many decisions wait on the user, for the lock-screen widget.
@@ -164,7 +166,11 @@ final class AppServices {
     }
     busyBlocks = busyBlocksAPI
     busyBlockReader = EventKitBusyBlockReader()
-    busyBlockSyncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
+    let syncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
+    busyBlockSyncer = syncer
+    busyBlockRefresh = BusyBlockBackgroundRefresh(
+      identifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, scheduler: SystemBackgroundRefreshScheduler()
+    ) { await syncer.sync(force: true) }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG

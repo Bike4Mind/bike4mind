@@ -398,7 +398,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Bike4Mind;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_UIBackgroundModes = audio;
+				INFOPLIST_KEY_UIBackgroundModes = "audio fetch";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bike4Mind uses Face ID to unlock the app when App Lock is on.";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Bike4Mind reads when your calendar events start and end so it can hold non-urgent notifications while you are busy and brief you afterwards. Event titles and details stay on your device.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Bike4Mind uses the camera to scan documents and capture photos you choose to save or ask about.";
@@ -438,7 +438,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Bike4Mind;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_UIBackgroundModes = audio;
+				INFOPLIST_KEY_UIBackgroundModes = "audio fetch";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bike4Mind uses Face ID to unlock the app when App Lock is on.";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Bike4Mind reads when your calendar events start and end so it can hold non-urgent notifications while you are busy and brief you afterwards. Event titles and details stay on your device.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Bike4Mind uses the camera to scan documents and capture photos you choose to save or ask about.";

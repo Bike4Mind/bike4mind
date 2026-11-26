@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails when the App Group id or keychain group drifts between the three entitlements files and the
+# Fails when the App Group id, keychain group or background refresh id drifts between the plists and the
 # B4MKit constants. The ids are duplicated by necessity (plists cannot import Swift), so this is the guard.
 set -euo pipefail
 
@@ -25,6 +25,8 @@ readonly SIGNING_CONFIG=Config/Signing.xcconfig
 readonly LOCAL_CONFIG_EXAMPLE=Config/Local.xcconfig.example
 readonly CONTAINER_SOURCE=Packages/B4MKit/Sources/B4MKit/Capture/SharedContainer.swift
 readonly SNAPSHOT_SOURCE=Packages/B4MKit/Sources/B4MKit/Widgets/WidgetSnapshot.swift
+readonly REFRESH_SOURCE=Packages/B4MKit/Sources/B4MKit/Briefs/BusyBlockBackgroundRefresh.swift
+readonly APP_INFO_PLIST=AppSupport/Info.plist
 
 failures=0
 fail() {
@@ -97,6 +99,13 @@ for pair in "B4M_APP_ENTITLEMENTS:${APP_ENTITLEMENTS[0]}" "B4M_SHARE_ENTITLEMENT
   example=$(xcconfig_value "$LOCAL_CONFIG_EXAMPLE" "$variable")
   [ -f "$example" ] || fail "$LOCAL_CONFIG_EXAMPLE $variable points at '$example', which does not exist"
 done
+
+# BGTaskScheduler refuses an identifier the Info.plist does not permit, so the app's id must match B4MKit's suffix.
+refresh_suffix=$(swift_constant "$REFRESH_SOURCE" identifierSuffix)
+[ -n "$refresh_suffix" ] || fail "identifierSuffix not found in $REFRESH_SOURCE"
+permitted=$(plist_values "$APP_INFO_PLIST" BGTaskSchedulerPermittedIdentifiers)
+[ "$permitted" = "\$(PRODUCT_BUNDLE_IDENTIFIER)$refresh_suffix" ] ||
+  fail "$APP_INFO_PLIST BGTaskSchedulerPermittedIdentifiers is '$permitted', expected '\$(PRODUCT_BUNDLE_IDENTIFIER)$refresh_suffix'"
 
 if [ "$failures" -gt 0 ]; then
   exit 1
