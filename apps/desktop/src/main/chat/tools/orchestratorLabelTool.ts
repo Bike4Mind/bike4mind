@@ -8,8 +8,9 @@ export const SESSION_ORCHESTRATOR_LABEL_TOOL_NAME = 'session_orchestrator_label'
  * menu writes (orchestratorLabel, read by orchestratorLabels in the renderer). This conversation
  * only: there is no session argument, so it cannot relabel anything else.
  *
- * Ungated in every mode, like session_rename: it changes only what the sidebar shows and the user
- * can undo it from the row menu. It never touches Orchestrate, the spawn gate or any permission.
+ * Needs no approval, like session_rename: it changes only what the sidebar shows and the user can
+ * undo it from the row menu. It never touches Orchestrate, the spawn gate or any permission. It is
+ * bound only in a turn the user typed, because 'off' hides the Agents button even while agents run.
  */
 export const sessionOrchestratorLabel: ToolDefinition = {
   schema: {
@@ -43,7 +44,7 @@ export const sessionOrchestratorLabel: ToolDefinition = {
     const label = input.label;
     if (!isOrchestratorLabel(label)) throw new Error('The "label" argument must be "on", "off" or "auto".');
     const target = context.orchestratorLabel;
-    if (!target) throw new Error('This conversation has no sidebar row to label.');
+    if (!target) throw new Error('The orchestrator mark can only be changed in a turn the user typed.');
     context.beginWrite?.();
     const updated = await target.set(label);
     if (!updated) throw new Error('This conversation no longer exists.');

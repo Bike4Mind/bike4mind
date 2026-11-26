@@ -6424,13 +6424,18 @@ export class ChatService {
                 },
               }
             : {}),
-          orchestratorLabel: {
-            set: async label => {
-              const updated = await this.deps.store.setOrchestratorLabel(sessionId, label);
-              if (updated) this.emitSummary(updated);
-              return updated !== null;
-            },
-          },
+          // Attended only, like pullRequests: 'off' hides the Agents button even while agents run.
+          ...(attended
+            ? {
+                orchestratorLabel: {
+                  set: async (label: OrchestratorLabel) => {
+                    const updated = await this.deps.store.setOrchestratorLabel(sessionId, label);
+                    if (updated) this.emitSummary(updated);
+                    return updated !== null;
+                  },
+                },
+              }
+            : {}),
           ...(ask
             ? {
                 loop: {

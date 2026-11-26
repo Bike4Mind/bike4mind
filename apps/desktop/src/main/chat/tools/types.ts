@@ -461,8 +461,8 @@ export interface ToolContext {
   /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
   pullRequests?: PullRequestContext;
   /**
-   * The calling session's sidebar orchestrator label, bound to that session alone. Absent in tests;
-   * session_orchestrator_label then refuses.
+   * The calling session's sidebar orchestrator label, bound to that session alone. Absent in tests
+   * and in a turn the user did not type; session_orchestrator_label then refuses.
    */
   orchestratorLabel?: OrchestratorLabelContext;
   /** The calling session's /loop. Absent when no user is present; the `loop` tool then refuses. */

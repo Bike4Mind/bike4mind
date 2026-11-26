@@ -7,6 +7,7 @@ import type { ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -62,6 +63,7 @@ describe('ChatService app-control tools', () => {
       access: { list: async () => [] } as unknown as AccessStore,
       approvals,
       logger: { debug: vi.fn(), warn: vi.fn() },
+      queue: new MessageQueue(() => undefined),
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
@@ -469,6 +471,26 @@ describe('ChatService app-control tools', () => {
       expect(stored).not.toHaveProperty('orchestrator');
       expect(stored?.approvalMode).toBe(approvalMode);
       expect(outcomeOf(0)).toMatch(/Orchestrate mode and spawn approvals are unchanged/);
+    });
+
+    it('refuses in a turn the user did not type and leaves the label alone', async () => {
+      const mine = await codeSession(projectA);
+      await store.setOrchestratorLabel(mine.id, 'on');
+      const setLabel = vi.spyOn(store, 'setOrchestratorLabel');
+
+      const started = await service.startAutomaticTurn(mine.id, 'the build finished', {
+        kind: 'background-exit',
+        processIds: ['aaaa1111'],
+        summary: 'build exited 0',
+      });
+      expect(started).toEqual({ ok: true });
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      callTool(streams[0], 'c1', 'session_orchestrator_label', { label: 'off' });
+      await vi.waitUntil(() => settled('session_orchestrator_label').length === 1, { timeout: 5000, interval: 5 });
+
+      expect(outcomeOf(0)).toMatch(/only be changed in a turn the user typed/);
+      expect(setLabel).not.toHaveBeenCalled();
+      expect(await store.get(mine.id)).toMatchObject({ orchestratorLabel: 'on' });
     });
 
     it('refuses an unknown label', async () => {
