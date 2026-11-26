@@ -44,11 +44,13 @@ export function TaskDecisionCard({
   title,
   decision,
   onOpenSession,
+  onAnswered,
 }: {
   sessionId: string;
   title: string;
   decision: PendingDecision;
   onOpenSession?: (sessionId: string) => void;
+  onAnswered?(): void;
 }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +60,7 @@ export function TaskDecisionCard({
     setError(null);
     try {
       await hostChat.answerTaskDecision(sessionId, decision.id, value);
+      onAnswered?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setSending(false);

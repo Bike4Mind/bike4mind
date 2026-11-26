@@ -159,7 +159,7 @@ export function MiniTavern({ api = miniApi() }: { api?: MiniTavernApi }) {
               sx={{
                 position: 'absolute',
                 inset: 0,
-                // TavernView's frame is a flex: 1 size container.
+                // The scene's frame is a flex: 1 size container.
                 display: 'flex',
                 flexDirection: 'column',
                 animation: prefersReducedMotion() ? 'none' : `${fadeIn} 300ms ease-out`,

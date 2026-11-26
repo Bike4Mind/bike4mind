@@ -6,7 +6,7 @@ import Menu, { type MenuProps } from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Typography from '@mui/joy/Typography';
-import { Fragment, useEffect, useRef, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   AquariumIcon,
   BoardIcon,
@@ -37,8 +37,42 @@ import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
 import { SoundPackMenuSection } from './SoundPackMenuSection';
 import { PaneSessionMenu, type PaneSessionChoices } from './PaneSessionMenu';
+import type { FinaleHostArt, FinaleLook } from './FinaleBanner';
+import type { SceneDefinition } from './scene/sceneDefinition';
+import { skinScene } from './scene/sceneSkin';
+import { useSkinTheme } from './skins';
+import { OFFICE_SCENE } from './office/officeScene';
+import { TAVERN_SCENE } from './tavern/tavernScene';
+import { AQUARIUM_SCENE } from './aquarium/aquariumScene';
 
 type ViewGroup = 'scene' | 'layout';
+
+/** What the stage and shell need to know about a scene view, so neither checks a view id. */
+export interface SceneStageInfo {
+  /** Draws the parent as a host character, so the finale banner and the empty prompt sit in the scene. */
+  host: boolean;
+  /** Answers every agent request in its own dialogue box, so the stage and composer leave theirs out. */
+  inSceneDecisions: boolean;
+  finale: FinaleLook;
+  /** The host's portrait on the finale banner; the Innkeeper if unset. */
+  hostArt?: FinaleHostArt;
+  /** The scene's lines for the settled Needs-you card, quiet header, talk button, empty stage and finale. */
+  copy: SceneDefinition['copy']['stage'];
+  /** The scene as it ships; useSceneStageInfo reads the active skin's version of it. */
+  definition: SceneDefinition;
+}
+
+/** A scene on the framework (scene/SceneStage) has every feature, so its info is read off its definition. */
+const frameworkScene = (scene: SceneDefinition): SceneStageInfo => ({
+  host: true,
+  inSceneDecisions: true,
+  finale: scene.look.finale,
+  hostArt: scene.cast.host.sprites,
+  copy: scene.copy.stage,
+  definition: scene,
+});
+
+const TAVERN_STAGE_COPY = TAVERN_SCENE.copy.stage;
 
 interface ViewInfo {
   label: string;
@@ -48,6 +82,8 @@ interface ViewInfo {
   /** Settles into a quiet scene when idle (ambient.ts), so the menu offers "Quiet when idle". */
   ambient: boolean;
   detailsSkin?: AgentDetailsSkin;
+  /** Set for every `scene` view. */
+  scene?: SceneStageInfo;
 }
 
 /** Every view's menu entry; typed by id so adding a view to ORCHESTRATOR_VIEWS fails until it has one. */
@@ -62,6 +98,7 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
       light: { background: '#f2ece1', border: '#c4b8a5' },
       dark: { background: '#29251f', border: '#5d5345' },
     },
+    scene: frameworkScene(TAVERN_SCENE),
   },
   aquarium: {
     label: 'Aquarium',
@@ -73,6 +110,7 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
       light: { background: '#e7eff0', border: '#a9bec3' },
       dark: { background: '#1d2c31', border: '#49616a' },
     },
+    scene: frameworkScene(AQUARIUM_SCENE),
   },
   office: {
     label: 'Office',
@@ -85,6 +123,7 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
       dark: { background: '#222d2a', border: '#4c5f58' },
       radius: '2px',
     },
+    scene: frameworkScene(OFFICE_SCENE),
   },
   board: {
     label: 'Board',
@@ -557,4 +596,24 @@ function LayoutIcon({ split, panes = 2 }: { split: 'row' | 'column'; panes?: num
       ))}
     </Box>
   );
+}
+
+/**
+ * A scene view's info as the active skin dresses it (copy, host art); undefined for a layout. The feature
+ * flags and `definition` stay the view's own, so a skinned scene has exactly the features of the bare one.
+ */
+export function useSceneStageInfo(view: OrchestratorViewId): SceneStageInfo | undefined {
+  const theme = useSkinTheme();
+  const info = ORCHESTRATOR_VIEW_INFO[view].scene;
+  const block = info && theme.scenes[info.definition.id];
+  return useMemo(() => {
+    if (!info || !block) return info;
+    const skinned = skinScene(info.definition, block, theme.id);
+    return { ...info, hostArt: skinned.cast.host.sprites, copy: skinned.copy.stage };
+  }, [info, block, theme.id]);
+}
+
+/** A view's stage lines under the active skin; a layout, which never settles or hosts, falls back to the Tavern's. */
+export function useSceneStageCopy(view: OrchestratorViewId): SceneStageInfo['copy'] {
+  return useSceneStageInfo(view)?.copy ?? TAVERN_STAGE_COPY;
 }

@@ -3,7 +3,7 @@ import layoutJson from '../../../assets/orchestrator/tavern/layout.json';
 
 /**
  * Where things stand in backdrop.png, read from the layout.json kept beside the art so a regenerated
- * backdrop ships with its own coordinates. The schema is enforced by scene.test.ts against the shipped
+ * backdrop ships with its own coordinates. The schema is enforced by tavernScene.test.ts against the shipped
  * file rather than at load, so a bad file fails CI instead of the chat screen.
  */
 const percent = z.number().min(0).max(100);

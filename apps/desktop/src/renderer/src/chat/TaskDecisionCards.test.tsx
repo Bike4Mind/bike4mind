@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { PendingTaskDecision } from '@shared/orchestration';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TASK_DECISION_LIST_MAX_HEIGHT, TaskDecisionCards, decisionsFor } from './TaskDecisionCards';
+import { TASK_DECISION_LIST_MAX_HEIGHT, TaskDecisionCard, TaskDecisionCards, decisionsFor } from './TaskDecisionCards';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -122,6 +122,35 @@ describe('TaskDecisionCards', () => {
     expect(answerTaskDecision).toHaveBeenCalledWith('w1', 'd1', { status: 'skipped' });
     expect(one('task-decision-error').textContent).toContain('no longer pending');
     expect(one('chat-question-card')).toBeTruthy();
+  });
+
+  it('reports an answer that went through, and stays silent when it was refused', async () => {
+    const onAnswered = vi.fn();
+    const renderCard = () => {
+      host = document.createElement('div');
+      document.body.appendChild(host);
+      root = createRoot(host);
+      act(() => {
+        root?.render(
+          <CssVarsProvider>
+            <TaskDecisionCard
+              sessionId="w1"
+              title="Agent w1"
+              decision={decisions[0].decision}
+              onAnswered={onAnswered}
+            />
+          </CssVarsProvider>
+        );
+      });
+    };
+    answerTaskDecision.mockRejectedValueOnce(new Error('This decision is no longer pending.'));
+    renderCard();
+    await click(one('chat-question-skip'));
+    expect(one('task-decision-error')).toBeTruthy();
+    expect(onAnswered).not.toHaveBeenCalled();
+
+    await click(one('chat-question-skip'));
+    expect(onAnswered).toHaveBeenCalledTimes(1);
   });
 
   it('opens the asking agent from the root card', async () => {

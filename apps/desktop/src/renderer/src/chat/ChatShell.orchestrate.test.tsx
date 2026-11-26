@@ -16,7 +16,9 @@ import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
-import { DOOR_POINT } from './orchestrator/tavern/scene';
+import { TAVERN_SCENE } from './orchestrator/tavern/tavernScene';
+
+const DOOR_POINT = TAVERN_SCENE.map.door;
 import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
@@ -542,7 +544,7 @@ describe('orchestrate mode in the chat shell', () => {
       expect(query('orchestrator-dock-resize-handle')).toBeNull();
       const scene = el('orchestrator-aquarium');
       expect(getComputedStyle(scene).getPropertyValue('anchor-name')).toBe('--orchestrator-scene');
-      const agent = el(`orchestrator-fish-${CHILD.id}`);
+      const agent = el(`orchestrator-aquarium-agent-${CHILD.id}`);
       await act(async () => agent.click());
       expect(el('orchestrator-stage').getAttribute('data-agent-details-open')).toBe('true');
       await act(async () => el('orchestrator-dock-toggle-btn').click());
@@ -650,7 +652,7 @@ describe('orchestrate mode in the chat shell', () => {
 
     // Opening the conversation from the scene leaves fill window rather than opening it out of sight.
     press('f');
-    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    await act(async () => el('orchestrator-tavern-host').click());
     expectNormalLayout();
     expect(document.activeElement).toBe(el('chat-composer-input'));
 
@@ -905,16 +907,16 @@ describe('orchestrate mode in the chat shell', () => {
     act(() => el('orchestrator-dock-toggle-btn').click());
     expect(query('orchestrator-dock')).toBeNull();
 
-    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    await act(async () => el('orchestrator-tavern-host').click());
     expect(query('orchestrator-tavern-order-slip')).toBeNull();
     expect(query('orchestrator-dock')).not.toBeNull();
     expect(document.activeElement).toBe(el('chat-composer-input'));
-    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    await act(async () => el('orchestrator-tavern-host').click());
     expect(query('orchestrator-dock')).toBeNull();
-    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    await act(async () => el('orchestrator-tavern-host').click());
     await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
-    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    await act(async () => el('orchestrator-tavern-host').click());
     expect(query('orchestrator-peek-drawer')).toBeNull();
     expect(query('orchestrator-dock')).not.toBeNull();
     expect(document.activeElement).toBe(el('chat-composer-input'));

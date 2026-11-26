@@ -148,7 +148,7 @@ export function PendingRequests({
   /** The session the calls belong to. */
   sessionId: string;
   calls: ChatToolCall[];
-  onAnswered?(): void;
+  onAnswered?(answer: ChatApprovalAnswer): void;
 }) {
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
@@ -157,14 +157,17 @@ export function PendingRequests({
   const respond = (approvalId: string, answer: ChatApprovalAnswer) => {
     setError(null);
     setAnswered(current => new Set(current).add(approvalId));
-    hostChat.respondToApproval(sessionId, approvalId, answer).then(onAnswered, (caught: unknown) => {
-      setAnswered(current => {
-        const next = new Set(current);
-        next.delete(approvalId);
-        return next;
-      });
-      setError(errorText(caught));
-    });
+    hostChat.respondToApproval(sessionId, approvalId, answer).then(
+      () => onAnswered?.(answer),
+      (caught: unknown) => {
+        setAnswered(current => {
+          const next = new Set(current);
+          next.delete(approvalId);
+          return next;
+        });
+        setError(errorText(caught));
+      }
+    );
   };
 
   if (open.length === 0 && !error) return null;

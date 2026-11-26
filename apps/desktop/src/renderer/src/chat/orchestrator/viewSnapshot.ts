@@ -8,7 +8,7 @@ import {
 import { hostChat } from '../../host/hostChat';
 import { agentNowText } from './activity';
 import type { AgentView, ParentView } from './roster';
-import { isOneClickDecision } from './tavern/bubbleAnswer';
+import { isOneClickDecision } from './scene/bubbleAnswer';
 
 function rootState(parent: ParentView): ViewSnapshot['root']['state'] {
   if (parent.status === 'needs-action') return 'needs-you';
