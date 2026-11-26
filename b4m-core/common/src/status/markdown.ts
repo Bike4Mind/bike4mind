@@ -400,7 +400,11 @@ export function serializeMarkdown(blocks: MarkdownBlock[], swap = false): string
 
 /** Normalizes and re-serializes, so a stored body parses to exactly what the public page shows. */
 export function sanitizeMarkdown(source: string, options: LinkPolicyOptions): string {
-  const blocks = parseMarkdown(source, options);
+  return sanitizeParsedMarkdown(parseMarkdown(source, options), options);
+}
+
+/** The serializing half of `sanitizeMarkdown`, for callers that already hold the parsed blocks. */
+export function sanitizeParsedMarkdown(blocks: MarkdownBlock[], options: LinkPolicyOptions): string {
   return stableSerialization(blocks, options) ?? serializeMarkdown(blocks);
 }
 

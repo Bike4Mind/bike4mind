@@ -268,3 +268,27 @@ describe('status belongs to the kind', () => {
     });
   });
 });
+
+describe('support address in the summary page', () => {
+  const without = () => {
+    const summary = structuredClone(makeSummary()) as { page: Record<string, unknown> };
+    delete summary.page.supportEmail;
+    return summary;
+  };
+
+  it('parses a summary without the key and outputs null, strict and lenient', () => {
+    for (const parse of [parseSummaryStrict, parseSummaryLenient]) {
+      const result = parse(without());
+      expect(result.ok && result.data.page.supportEmail).toBeNull();
+    }
+  });
+
+  it('accepts a well-formed address and rejects a malformed one', () => {
+    const withEmail = (value: unknown) => ({ ...makeSummary(), page: { ...makeSummary().page, supportEmail: value } });
+    expect(parseSummaryStrict(withEmail('support@example.com')).ok).toBe(true);
+    for (const bad of ['nope', 'Support@Example.com', 'a@b', `${'a'.repeat(250)}@example.com`]) {
+      expect(parseSummaryStrict(withEmail(bad)).ok).toBe(false);
+      expect(parseSummaryLenient(withEmail(bad)).ok).toBe(false);
+    }
+  });
+});

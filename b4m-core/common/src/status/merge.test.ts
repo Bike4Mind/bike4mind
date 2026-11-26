@@ -201,7 +201,7 @@ describe('incidents', () => {
     expect(mergeStatusSources(summary, null, null, NOW).components[0].state).toBe('operational');
   });
 
-  it('incidents listing unknown slugs show in the list only', () => {
+  it('incidents listing unknown slugs show in the list and the headline, not on rows', () => {
     const summary = summaryAged(10, {
       components: [comp('chat')],
       activeIncidents: [makeHead({ components: [{ slug: 'ghost', impact: 'major_outage' }] })],
@@ -209,7 +209,7 @@ describe('incidents', () => {
     const merged = mergeStatusSources(summary, null, null, NOW);
     expect(merged.incidents).toHaveLength(1);
     expect(merged.components[0].state).toBe('operational');
-    expect(merged.headline).toEqual({ kind: 'state', state: 'operational', text: null });
+    expect(merged.headline).toEqual({ kind: 'state', state: 'partial_outage', text: null });
   });
 
   it('unions summary heads, the 90-day index and break-glass by id', () => {
@@ -899,5 +899,56 @@ describe('break-glass file with a bad entry', () => {
   it('reports zero dropped entries for other files', () => {
     const result = parseSourceFile('summary', { status: 200, body: JSON.stringify(makeSummary()) });
     expect(result.ok && result.droppedEntries).toBe(0);
+  });
+});
+
+describe('headline for an incident that touches no component on the page', () => {
+  const rows = { components: [comp('web-app'), comp('chat')] };
+  const noComponents = (overrides: Parameters<typeof makeHead>[0] = {}) =>
+    makeHead({ id: 'bg00000020', impact: 'critical', components: [], ...overrides });
+
+  it('a break-glass incident with no components raises a fresh headline', () => {
+    const summary = summaryAged(10, { ...rows, breakglassAppliedSeq: 12 });
+    const merged = mergeStatusSources(summary, makeBreakglass([entry(noComponents())]), null, NOW);
+    expect(merged.headline).toEqual({ kind: 'state', state: 'major_outage', text: null });
+    expect(merged.components.every(row => row.state === 'operational')).toBe(true);
+  });
+
+  it('an incident that lists a component on the page adds nothing beyond the row', () => {
+    const head = noComponents({ components: [{ slug: 'chat', impact: 'degraded' }] });
+    const merged = mergeStatusSources(summaryAged(10, { ...rows, activeIncidents: [head] }), null, null, NOW);
+    expect(merged.headline.state).toBe('degraded');
+  });
+
+  it('a resolved incident or a maintenance without components adds nothing', () => {
+    const resolved = noComponents({ id: 'res0000001', status: 'resolved', resolvedAt: secondsAgo(60) });
+    const maintenance = noComponents({
+      id: 'mnt0000002',
+      kind: 'maintenance',
+      status: 'in_progress',
+      scheduledStartAt: secondsAgo(600),
+      scheduledEndAt: isoSeconds(new Date(NOW.getTime() + 3_600_000)),
+    });
+    const summary = summaryAged(10, { ...rows, activeIncidents: [maintenance, resolved] });
+    expect(mergeStatusSources(summary, null, null, NOW).headline.state).toBe('operational');
+  });
+
+  it('the maintenance headline gives way when an uncovered incident raised the state', () => {
+    const window = makeHead({
+      id: 'mnt0000001',
+      kind: 'maintenance',
+      status: 'in_progress',
+      impact: 'none',
+      components: [{ slug: 'web-app', impact: 'degraded' }],
+      scheduledStartAt: secondsAgo(600),
+      scheduledEndAt: isoSeconds(new Date(NOW.getTime() + 3_600_000)),
+      updatedAt: secondsAgo(3_000),
+    });
+    const pinned = comp('web-app', { state: 'degraded', baseState: 'degraded' });
+    const summary = (extra: PublicSummary['activeIncidents']) =>
+      summaryAged(10, { components: [pinned], activeIncidents: [window, ...extra] });
+    expect(mergeStatusSources(summary([]), null, null, NOW).headline.kind).toBe('maintenance');
+    const raised = mergeStatusSources(summary([noComponents({ id: 'inc0000001' })]), null, null, NOW).headline;
+    expect(raised).toEqual({ kind: 'state', state: 'major_outage', text: null });
   });
 });

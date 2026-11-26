@@ -263,6 +263,7 @@ export const PUBLIC_SNAPSHOT_KEY_PATHS: readonly string[] = [
   'summary.page',
   'summary.page.appUrl',
   'summary.page.linkHosts',
+  'summary.page.supportEmail',
   'summary.page.title',
   'summary.probesAsOf',
   'summary.probesTrigger',

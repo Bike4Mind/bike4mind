@@ -12,6 +12,8 @@ import {
   PublicIncidentsIndexSchema,
   PublicSummarySchema,
   PublicUptimeSchema,
+  SUPPORT_EMAIL_MAX_LENGTH,
+  SUPPORT_EMAIL_PATTERN,
   type PublicArchive,
   type PublicComponent,
   type PublicIncidentDetail,
@@ -33,6 +35,7 @@ import {
   displayedBaseState,
   displayedState,
   impactSeverity,
+  uncoveredIncidentState,
   vendorIndicatorToState,
   worstState,
   type ComponentImpact,
@@ -66,7 +69,7 @@ export interface ProjectionInput {
   probesTrigger: ProbesTrigger | null;
   breakglassAppliedSeq: number;
   externalIgnoredUntil: Date | null;
-  page: { title: string; appUrl: string; linkHosts: readonly string[] };
+  page: { title: string; appUrl: string; linkHosts: readonly string[]; supportEmail?: string | null };
   notice?: 'offline' | null;
   groups: readonly StatusGroupDef[];
   components: readonly StatusComponentRuntime[];
@@ -152,6 +155,14 @@ function cleanLinkHosts(raw: unknown, warnings: string[]): string[] {
   return hosts.slice(0, MAX_LINK_HOSTS);
 }
 
+function cleanSupportEmail(raw: unknown, warnings: string[]): string | null {
+  if (raw === undefined || raw === null) return null;
+  const email = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (email.length <= SUPPORT_EMAIL_MAX_LENGTH && SUPPORT_EMAIL_PATTERN.test(email)) return email;
+  warnings.push('support_email_invalid');
+  return null;
+}
+
 /** Fixed codes only: error text can carry internal values. Top-level projection errors keep propagating. */
 function dropReason(error: unknown): string {
   if (error instanceof StatusProjectionError) throw error;
@@ -193,7 +204,8 @@ export function projectPublicSnapshot(input: ProjectionInput): ProjectedSnapshot
     if (!Number.isFinite(value.getTime())) throw new StatusProjectionError(`${name} is not a valid date`);
   }
   const linkHosts = cleanLinkHosts(input.page.linkHosts, warnings);
-  const linkOptions: LinkPolicyOptions = { linkHosts };
+  const supportEmail = cleanSupportEmail(input.page.supportEmail, warnings);
+  const linkOptions: LinkPolicyOptions = { linkHosts, supportEmail };
   const sink: DropSink = { dropped, warnings };
 
   const pageTitle = validatePublicText('label', input.page.title, linkOptions);
@@ -219,8 +231,15 @@ export function projectPublicSnapshot(input: ProjectionInput): ProjectedSnapshot
   // The public set is settled once, before anything refers to a slug: a row that is dropped here
   // (bad text, unknown group, missing or nested parent) is absent from incidents and uptime too.
   const candidates = new Map<string, PublicComponent>();
+  const componentText = new Map<StatusComponentRuntime, ComponentText>();
   for (const runtime of visible) {
-    const row = guarded(() => projectComponent(runtime, groupBySlug, new Map(), new Map(), linkOptions));
+    const row = guarded(() => {
+      if (!groupBySlug.has(runtime.component.group)) return { reason: 'unknown_group' };
+      const text = validateComponentText(runtime.component, linkOptions);
+      if ('reason' in text) return text;
+      componentText.set(runtime, text);
+      return projectComponent(runtime, text, new Map(), new Map());
+    });
     if ('reason' in row) dropped.push({ file: 'summary', ref: runtime.component.key, reason: row.reason });
     else candidates.set(runtime.component.key, row);
   }
@@ -274,9 +293,9 @@ export function projectPublicSnapshot(input: ProjectionInput): ProjectedSnapshot
 
   const rows = new Map<string, PublicComponent>();
   for (const runtime of publicRuntimes) {
-    const row = guarded(() =>
-      projectComponent(runtime, groupBySlug, activeImpactsByKey, maintenanceByKey, linkOptions)
-    );
+    const text = componentText.get(runtime);
+    if (!text) continue;
+    const row = guarded(() => projectComponent(runtime, text, activeImpactsByKey, maintenanceByKey));
     if ('reason' in row) dropped.push({ file: 'summary', ref: runtime.component.key, reason: row.reason });
     else rows.set(runtime.component.key, row);
   }
@@ -310,6 +329,8 @@ export function projectPublicSnapshot(input: ProjectionInput): ProjectedSnapshot
 
   const upcomingCutoff = now.getTime() + UPCOMING_MAINTENANCE_DAYS * DAY_MS;
   const active = projections.filter(p => isActive(activityFacts(p.doc), now)).map(p => p.head);
+  const pageSlugs = new Set(topLevel.flatMap(row => [row.slug, ...row.children.map(child => child.slug)]));
+  const uncovered = uncoveredIncidentState(active, pageSlugs);
   const upcoming = projections
     .filter(({ doc }) => {
       if (doc.kind !== 'maintenance' || doc.status === 'cancelled' || doc.cancelledAt) return false;
@@ -330,8 +351,8 @@ export function projectPublicSnapshot(input: ProjectionInput): ProjectedSnapshot
     hardStaleAfterSeconds: input.hardStaleAfterSeconds ?? STATUS_HARD_STALE_AFTER_SECONDS,
     breakglassAppliedSeq: input.breakglassAppliedSeq,
     externalIgnoredUntil: isoOrNull(input.externalIgnoredUntil),
-    page: { title: pageTitle.normalized.trim(), appUrl: input.page.appUrl, linkHosts },
-    overall: { state: worstState(allStates), notice: input.notice ?? null },
+    page: { title: pageTitle.normalized.trim(), appUrl: input.page.appUrl, linkHosts, supportEmail },
+    overall: { state: worstState([...allStates, uncovered]), notice: input.notice ?? null },
     groups,
     components: topLevel,
     activeIncidents: active.sort(severityOrder),
@@ -418,16 +439,15 @@ function toChildRow(row: PublicComponent) {
   return child;
 }
 
-function projectComponent(
-  runtime: StatusComponentRuntime,
-  groups: Map<string, StatusGroupDef>,
-  activeImpacts: Map<string, ComponentImpact[]>,
-  maintenance: Map<string, { incidentId: string; endsAtMs: number }>,
-  linkOptions: LinkPolicyOptions
-): PublicComponent | { reason: string } {
-  const { component } = runtime;
-  if (!groups.has(component.group)) return { reason: 'unknown_group' };
+interface ComponentText {
+  name: string;
+  description: string | null;
+}
 
+function validateComponentText(
+  component: StatusComponentRuntime['component'],
+  linkOptions: LinkPolicyOptions
+): ComponentText | { reason: string } {
   const name = validatePublicText('label', component.name, linkOptions);
   if (!name.ok) return { reason: 'text_policy' };
   let description: string | null = null;
@@ -436,6 +456,17 @@ function projectComponent(
     if (!checked.ok) return { reason: 'text_policy' };
     description = checked.normalized.trim();
   }
+  return { name: name.normalized.trim(), description };
+}
+
+function projectComponent(
+  runtime: StatusComponentRuntime,
+  text: ComponentText,
+  activeImpacts: Map<string, ComponentImpact[]>,
+  maintenance: Map<string, { incidentId: string; endsAtMs: number }>
+): PublicComponent | { reason: string } {
+  const { component } = runtime;
+  const { name, description } = text;
 
   let vendor: PublicComponent['vendor'] = null;
   let automatic = runtime.automaticState;
@@ -461,7 +492,7 @@ function projectComponent(
 
   const row = {
     slug: component.publicSlug,
-    name: name.normalized.trim(),
+    name,
     group: component.group,
     order: component.order,
     description,
@@ -489,7 +520,8 @@ function projectUpdate(
   const prefix = overLimit
     ? checked.normalized.slice(0, TEXT_LIMITS.updateBody * 4).replace(/[\uD800-\uDBFF]$/, '')
     : checked.normalized;
-  const fitted = truncateToSchemaCap(sanitizeMarkdown(prefix, linkOptions), TEXT_LIMITS.updateBody);
+  const sanitized = overLimit || checked.stored === undefined ? sanitizeMarkdown(prefix, linkOptions) : checked.stored;
+  const fitted = truncateToSchemaCap(sanitized, TEXT_LIMITS.updateBody);
   const truncated = fitted.truncated || prefix.length < checked.normalized.length;
   if (overLimit) {
     const recheck = validatePublicText('updateBody', fitted.text, linkOptions);
@@ -533,7 +565,7 @@ function projectIncident(
     if (doc.postmortem.body) {
       const checked = validatePublicText('postmortemBody', doc.postmortem.body, linkOptions);
       if (!checked.ok && !lengthOnly(checked)) return { reason: 'text_policy' };
-      const stored = checked.ok ? sanitizeMarkdown(checked.normalized, linkOptions) : null;
+      const stored = checked.ok ? (checked.stored ?? sanitizeMarkdown(checked.normalized, linkOptions)) : null;
       if (stored !== null && stored.length <= TEXT_LIMITS.postmortemBody) {
         body = stored;
         postmortemParts.push(body);

@@ -23,6 +23,31 @@ export const STATE_SEVERITY: Record<ComponentState, number> = {
 
 const OVERALL_SEVERITY: Record<OverallImpact, number> = { none: 0, minor: 1, major: 2, critical: 3 };
 
+const OVERALL_IMPACT_STATE: Record<OverallImpact, ComponentState> = {
+  none: 'operational',
+  minor: 'degraded',
+  major: 'partial_outage',
+  critical: 'major_outage',
+};
+
+export function overallImpactToState(impact: OverallImpact): ComponentState {
+  return OVERALL_IMPACT_STATE[impact];
+}
+
+/**
+ * Worst state over the given active incident-kind entries that list no component on the page, or null
+ * when there is none: no row can show an incident that touches no listed component.
+ */
+export function uncoveredIncidentState(
+  incidents: readonly { kind: string; impact: OverallImpact; components: readonly { slug: string }[] }[],
+  pageSlugs: ReadonlySet<string>
+): DisplayState | null {
+  const states = incidents
+    .filter(incident => incident.kind === 'incident' && !incident.components.some(c => pageSlugs.has(c.slug)))
+    .map(incident => overallImpactToState(incident.impact));
+  return states.length === 0 ? null : worstState(states);
+}
+
 export function isComponentState(value: unknown): value is ComponentState {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(STATE_SEVERITY, value);
 }

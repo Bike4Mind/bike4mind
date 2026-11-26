@@ -17,7 +17,7 @@ import {
   type PublicUpdate,
   type ParsedPublicFile,
 } from './schemas.public';
-import { worstImpact, worstState, type ComponentImpact, type DisplayState } from './stateOrder';
+import { uncoveredIncidentState, worstImpact, worstState, type ComponentImpact, type DisplayState } from './stateOrder';
 
 export const EXTERNAL_MAX_AGE_SECONDS = 180;
 const BREAKGLASS_BACKWARD_MS = 15 * 60 * 1000;
@@ -405,10 +405,19 @@ export function mergeStatusSources(
       lastConfirmedAt: S.probesAsOf,
     };
   } else {
-    const state = worstState(visibleStates.map(row => row.state));
+    const pageSlugs = new Set(visibleStates.map(row => row.slug));
+    const uncovered = uncoveredIncidentState(
+      incidents.filter(incident => incident.active),
+      pageSlugs
+    );
+    const rowsState = worstState(visibleStates.map(row => row.state));
+    const state = worstState([rowsState, uncovered, floorToSummary ? S.overall.state : null]);
     const degraded = visibleStates.filter(row => row.state !== 'operational');
     headline =
-      degraded.length > 0 && degraded.every(row => row.maintenance !== null)
+      degraded.length > 0 &&
+      degraded.every(row => row.maintenance !== null) &&
+      (uncovered === null || uncovered === 'operational') &&
+      state === rowsState
         ? { kind: 'maintenance', state, text: 'Maintenance in progress' }
         : { kind: 'state', state, text: null };
   }

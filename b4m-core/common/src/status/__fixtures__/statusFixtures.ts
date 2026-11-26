@@ -186,7 +186,12 @@ export function makeSummary(overrides: Partial<PublicSummary> = {}): PublicSumma
     hardStaleAfterSeconds: 900,
     breakglassAppliedSeq: 12,
     externalIgnoredUntil: null,
-    page: { title: 'Example Status', appUrl: 'https://app.example.com', linkHosts: ['app.example.com'] },
+    page: {
+      title: 'Example Status',
+      appUrl: 'https://app.example.com',
+      linkHosts: ['app.example.com'],
+      supportEmail: null,
+    },
     overall: { state: 'operational', notice: null },
     groups: [{ slug: 'platform', name: 'Platform', order: 0 }],
     components: [

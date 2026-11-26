@@ -15,6 +15,9 @@ import {
   TEXT_LIMITS,
 } from './types';
 
+export const SUPPORT_EMAIL_MAX_LENGTH = 254;
+export const SUPPORT_EMAIL_PATTERN = /^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
+
 export type PublicSchemaMode = 'strict' | 'lenient';
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
@@ -132,6 +135,7 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
       title: z.string().min(1).max(TEXT_LIMITS.title),
       appUrl: httpsUrl,
       linkHosts: z.array(z.string().min(1).max(253)).max(200),
+      supportEmail: z.string().max(SUPPORT_EMAIL_MAX_LENGTH).regex(SUPPORT_EMAIL_PATTERN).nullable().default(null),
     }),
     overall: obj({ state: componentState, notice: z.literal('offline').nullable() }),
     groups: z.array(obj({ slug, name: z.string().min(1).max(TEXT_LIMITS.title), order: z.number().int() })),

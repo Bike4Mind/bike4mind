@@ -2,7 +2,7 @@ import { classifyLink, type LinkPolicyOptions } from './linkPolicy';
 import {
   normalizePublicText,
   parseMarkdown,
-  sanitizeMarkdown,
+  sanitizeParsedMarkdown,
   type MarkdownBlock,
   type MarkdownInline,
 } from './markdown';
@@ -27,6 +27,8 @@ export interface TextPolicyResult {
   /** No hard errors. */
   ok: boolean;
   normalized: string;
+  /** Sanitized form of a markdown field; absent when over the limit before formatting, or not markdown. */
+  stored?: string;
   errors: TextIssue[];
   warnings: TextIssue[];
   /** Warnings not covered by `acknowledged`; the write needs these acknowledged in the audit entry. */
@@ -195,17 +197,22 @@ export function validatePublicText(
   const limit = FIELD_LIMITS[field];
   const markdown = MARKDOWN_FIELDS.has(field);
   const length = Array.from(normalized).length;
-  const tooLong = (count: number, suffix = ''): TextPolicyResult => ({
+  const tooLong = (count: number, suffix = '', stored?: string): TextPolicyResult => ({
     ok: false,
     normalized,
+    ...(stored === undefined ? {} : { stored }),
     errors: [{ code: 'too_long', message: `Text is ${count} characters${suffix}, the limit is ${limit}` }],
     warnings: [],
     unacknowledged: [],
   });
   if (length > limit) return tooLong(length);
+  let stored: string | undefined;
+  let blocks: MarkdownBlock[] = [];
   if (markdown) {
-    const stored = Array.from(sanitizeMarkdown(normalized, options)).length;
-    if (stored > limit) return tooLong(stored, ' once formatted');
+    blocks = parseMarkdown(normalized, options);
+    stored = sanitizeParsedMarkdown(blocks, options);
+    const storedLength = Array.from(stored).length;
+    if (storedLength > limit) return tooLong(storedLength, ' once formatted', stored);
   }
 
   const errors: TextIssue[] = [];
@@ -232,7 +239,7 @@ export function validatePublicText(
       warnings.push({ code: 'heading', message: 'Headings are not supported and are shown as text' });
     }
     const written = countLinkLikes(normalized);
-    const rendered = collectLinks(parseMarkdown(normalized, options));
+    const rendered = collectLinks(blocks);
     if (rendered < written.total) {
       const lost = written.hrefs.filter(href => !classifyLink(href, options).allowed);
       warnings.push({
@@ -258,6 +265,7 @@ export function validatePublicText(
   return {
     ok: errors.length === 0,
     normalized,
+    ...(stored === undefined ? {} : { stored }),
     errors,
     warnings,
     unacknowledged: warnings.filter(warning => !acknowledged.has(warning.code)),

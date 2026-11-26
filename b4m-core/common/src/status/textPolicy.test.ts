@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sanitizeMarkdown } from './markdown';
 import { findUnfilledPlaceholders, incidentPublicTextLength, validatePublicText } from './textPolicy';
 import { TEXT_LIMITS } from './types';
 
@@ -177,5 +178,24 @@ describe('lint patterns stay linear on adversarial input', () => {
     expect(find('Mail a@b and x@y.z')).toEqual(['x@y.z']);
     expect(find('ok\n    at run (/srv/app.js:10:5)\nok')).toEqual(['at run (/srv/app.js:10:5)']);
     expect(find('plain text at (home:1:1)')).toEqual([]);
+  });
+});
+
+describe('stored form', () => {
+  it('returns the sanitized form of a markdown field', () => {
+    const body = 'Some *text*, and [a link](https://app.example.com/x) plus [bad](https://evil.example.org/).';
+    const result = validatePublicText('updateBody', body, options);
+    expect(result.stored).toBe(sanitizeMarkdown(result.normalized, options));
+  });
+
+  it('is absent for a plain-text field and for a text over the limit before formatting', () => {
+    expect(validatePublicText('title', 'Chat is slow', options).stored).toBeUndefined();
+    expect(validatePublicText('updateBody', 'x'.repeat(TEXT_LIMITS.updateBody + 1), options).stored).toBeUndefined();
+  });
+
+  it('is returned with the once-formatted rejection', () => {
+    const result = validatePublicText('updateBody', 'a_b '.repeat(1000).trim(), options);
+    expect(result.ok).toBe(false);
+    expect(result.stored).toBe(sanitizeMarkdown(result.normalized, options));
   });
 });

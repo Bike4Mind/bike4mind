@@ -1374,3 +1374,90 @@ describe('summary update bodies are cut at a token boundary', () => {
     expect(snapshot.incidentFiles.k3v9q2m7xa.incident.updates[0].body).toContain('[status page](');
   });
 });
+
+describe('headline for an incident that touches no component on the page', () => {
+  const overallFor = (incidents: StatusIncidentDoc[], components = [makeRuntime()]) => {
+    const summary = projectPublicSnapshot(makeProjectionInput({ incidents, components })).summary;
+    return { overall: summary.overall.state, rows: summary.components.map(row => row.state) };
+  };
+  const critical = (overrides: Partial<StatusIncidentDoc> = {}) =>
+    makeIncident({ impact: 'critical', components: [], ...overrides });
+
+  it('an active critical incident with no components raises the headline, not the rows', () => {
+    expect(overallFor([critical()])).toEqual({ overall: 'major_outage', rows: ['operational'] });
+  });
+
+  it('an incident listing only a component that is not public counts as touching none', () => {
+    const hidden = makeRuntime({ component: { key: 'secret', publicSlug: 'secret', visibility: 'admin' } });
+    const incident = critical({ components: [{ componentKey: 'secret', impact: 'major_outage' }] });
+    expect(overallFor([incident], [makeRuntime(), hidden])).toEqual({
+      overall: 'major_outage',
+      rows: ['operational'],
+    });
+  });
+
+  it('an incident that lists a component on the page contributes only that impact', () => {
+    const incident = critical({ components: [{ componentKey: 'chat', impact: 'degraded' }] });
+    expect(overallFor([incident])).toEqual({ overall: 'degraded', rows: ['degraded'] });
+  });
+
+  it('a resolved incident or an active maintenance with no components changes nothing', () => {
+    const resolved = critical({ status: 'resolved', resolvedAt: minutesAgo(5) });
+    const maintenance = makeIncident({
+      publicId: 'mnt0000001',
+      kind: 'maintenance',
+      status: 'in_progress',
+      impact: 'critical',
+      components: [],
+      scheduledStartAt: minutesAgo(10),
+      scheduledEndAt: new Date(NOW.getTime() + 3_600_000),
+    });
+    expect(overallFor([resolved, maintenance])).toEqual({ overall: 'operational', rows: ['operational'] });
+  });
+});
+
+describe('support address', () => {
+  const body = 'Write to [email us](mailto:Support@Example.com) for help.';
+  const detailBody = (page: ProjectionPage) =>
+    Object.values(
+      projectPublicSnapshot(
+        makeProjectionInput({
+          page,
+          incidents: [
+            makeIncident({
+              updates: [{ ...makeIncident().updates[0], body }],
+            }),
+          ],
+        })
+      ).incidentFiles
+    )[0].incident.updates[0].body;
+  type ProjectionPage = ReturnType<typeof makeProjectionInput>['page'];
+  const page = (supportEmail?: string | null): ProjectionPage => ({
+    title: 'Example Status',
+    appUrl: 'https://app.example.com',
+    linkHosts: ['app.example.com'],
+    ...(supportEmail === undefined ? {} : { supportEmail }),
+  });
+
+  it('keeps a mailto link to the support address, normalized to lowercase', () => {
+    expect(detailBody(page('support@example.com'))).toContain('[email us](mailto:support@example.com)');
+  });
+
+  it('shows any other mailto, or any mailto without a support address, as plain text', () => {
+    expect(detailBody(page('help@example.com'))).not.toContain('](mailto:');
+    expect(detailBody(page(null))).not.toContain('](mailto:');
+    expect(detailBody(page())).not.toContain('](mailto:');
+  });
+
+  it('publishes the cleaned address, or null with a warning when it is invalid', () => {
+    const clean = projectPublicSnapshot(makeProjectionInput({ page: page('  Support@Example.com ') }));
+    expect(clean.summary.page.supportEmail).toBe('support@example.com');
+    expect(clean.warnings).not.toContain('support_email_invalid');
+    for (const bad of ['nope', 'a@b', 'a@@b.com', `${'a'.repeat(65)}@example.com`, 42 as never]) {
+      const out = projectPublicSnapshot(makeProjectionInput({ page: page(bad) }));
+      expect(out.summary.page.supportEmail).toBeNull();
+      expect(out.warnings).toContain('support_email_invalid');
+    }
+    expect(projectPublicSnapshot(makeProjectionInput()).summary.page.supportEmail).toBeNull();
+  });
+});
