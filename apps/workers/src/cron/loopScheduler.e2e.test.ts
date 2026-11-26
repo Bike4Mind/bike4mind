@@ -1874,6 +1874,39 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
     expect((await reload(loop.id)).idleStreak).toBe(0);
   });
 
+  it.each(['interval', 'tickets'])(
+    'keeps a Run now that lands after the tick read the loop (%s mode)',
+    async wakeMode => {
+      const memory = { notes: 'same', nextAction: '' };
+      const loop = await createLoop({
+        nextRunAt: LATER,
+        idleStreak: 2,
+        memory,
+        wakeMode,
+        activeExecutionIds: ['raced'],
+      });
+      executions.raced = { status: 'completed', result: { answer: 'same' }, createdAt: PAST, completedAt: NOW };
+      const runNowAt = new Date(NOW.getTime() + 60_000);
+      // The last read before the fold: a Run now lands here, after reconcile read the loop.
+      vi.spyOn(workItemRepository, 'countTouchedForLoop').mockImplementationOnce(async () => {
+        await loopRepository.updateForUser(
+          loop.id,
+          'user-1',
+          { nextRunAt: runNowAt, idleStreak: 0, idleResetAt: NOW },
+          'live'
+        );
+        return 0;
+      });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      const after = await reload(loop.id);
+      expect(after).toMatchObject({ idleStreak: 0, nextRunAt: runNowAt, runCount: 1 });
+      expect(after.activeExecutionIds ?? []).toEqual([]);
+      expect(outcomes.raced).toBe('done');
+    }
+  );
+
   it('does not back off a run that changed memory or touched a ticket', async () => {
     const memory = { notes: 'same', nextAction: '' };
     const loop = await createLoop({ nextRunAt: LATER, idleStreak: 2, memory, activeExecutionIds: ['touched'] });

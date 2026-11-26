@@ -356,11 +356,13 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return results.map(doc => doc.toJSON());
   }
 
+  /** With `unchangedSince`, folds only when `idleResetAt` (a Run now, an owner edit) is not after it. */
   async foldRun(
     id: string,
     executionId: string,
     update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> },
-    memory?: LoopRunMemory
+    memory?: LoopRunMemory,
+    unchangedSince?: Date
   ): Promise<boolean> {
     // One pipeline write, so a crash can never fold the lane without its memory: run values are $literal, and the
     // classic $inc/$unset map to $add/$$REMOVE. A lane just freed, so the loop-lane hold goes; another lane's
@@ -370,7 +372,11 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     for (const [key, by] of Object.entries(update.$inc ?? {})) set[key] = { $add: [{ $ifNull: [`$${key}`, 0] }, by] };
     for (const key of Object.keys(update.$unset ?? {})) set[key] = '$$REMOVE';
     const result = await this.loopModel.updateOne(
-      { _id: id, activeExecutionIds: executionId },
+      {
+        _id: id,
+        activeExecutionIds: executionId,
+        ...(unchangedSince && { $nor: [{ idleResetAt: { $gt: unchangedSince } }] }),
+      },
       [
         {
           $set: {

@@ -585,7 +585,7 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
   }
 
   if (execution?.status === 'completed') {
-    const folded = ticket
+    const ticketFolded = ticket
       ? await foldTicket(loop, ticket, executionId, advancePatch(loop, ticket, execution.createdAt))
       : false;
     const answer = (execution.result as { answer?: unknown } | undefined)?.answer;
@@ -606,34 +606,48 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
     // A tickets-mode loop never backs off: with nextRunAt unset it costs nothing until a ticket makes it due.
     const ticketsOnly = loop.wakeMode === 'tickets';
     const backsOff = idle && !ticketsOnly;
-    const idleStreak = backsOff ? (loop.idleStreak ?? 0) + 1 : 0;
-    await stampOutcome(executionId, ticket ? completedOutcome(ticket, folded) : idle ? 'idle' : 'done');
     const runMemory = {
       ...memory,
       startedAt: new Date(execution.createdAt),
       updatedAt: now,
       ...(ticket && { ticketTitle: ticket.title }),
     };
-    await loopRepository.foldRun(
-      loop.id,
-      executionId,
-      {
+    const foldUpdate = (idleRun: boolean, schedule: boolean) => {
+      const idleStreak = idleRun && !ticketsOnly ? (loop.idleStreak ?? 0) + 1 : 0;
+      return {
         $set: {
           lastRunAt,
           consecutiveFailures: 0,
           idleStreak,
-          ...(backsOff && {
-            nextRunAt: new Date(
-              new Date(lastRunAt).getTime() + backoffMinutes(loop.intervalMinutes, idleStreak) * MINUTE_MS
-            ),
-          }),
+          ...(schedule &&
+            idleRun &&
+            !ticketsOnly && {
+              nextRunAt: new Date(
+                new Date(lastRunAt).getTime() + backoffMinutes(loop.intervalMinutes, idleStreak) * MINUTE_MS
+              ),
+            }),
         },
         $inc: { runCount: 1 },
         // A ticket arriving mid-run made it due; makeDueAfterFold sets that again if the ticket is still ready.
-        $unset: { statusReason: '', ...(ticketsOnly && { nextRunAt: '' as const }) },
-      },
-      triage ? undefined : runMemory
+        $unset: { statusReason: '' as const, ...(schedule && ticketsOnly && { nextRunAt: '' as const }) },
+      };
+    };
+    // `loop` was read at tick start: a Run now or owner edit landing since then (idleResetAt) must keep its
+    // nextRunAt and end the idle streak, so the scheduling fold is conditional and falls back to one without it.
+    const guarded = backsOff || ticketsOnly;
+    let idleFolded = idle;
+    const folded = await loopRepository.foldRun(
+      loop.id,
+      executionId,
+      foldUpdate(idle, true),
+      triage ? undefined : runMemory,
+      guarded ? new Date(execution.createdAt) : undefined
     );
+    if (!folded && guarded) {
+      idleFolded = false;
+      await loopRepository.foldRun(loop.id, executionId, foldUpdate(false, false), triage ? undefined : runMemory);
+    }
+    await stampOutcome(executionId, ticket ? completedOutcome(ticket, ticketFolded) : idleFolded ? 'idle' : 'done');
     // After the idle check, so a triage run that set nothing still backs off.
     if (triage) await workItemRepository.defaultUntriaged(execution.triageWorkItemIds ?? [], now);
     await makeDueAfterFold(loop, ticket, now);
