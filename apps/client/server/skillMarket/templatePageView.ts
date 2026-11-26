@@ -200,6 +200,7 @@ export async function buildTemplatePageView(args: {
     inputs: template.inputs,
     authorName: listing.authorName ?? null,
     rating: { sum: listing.ratingSum ?? 0, count: listing.ratingCount ?? 0 },
+    metrics: { views: template.viewCount ?? 0, downloads: listing.importCount ?? 0 },
     connectors,
     takesFile: Boolean(template.takesFile),
     example,

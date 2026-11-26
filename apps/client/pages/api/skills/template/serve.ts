@@ -3,6 +3,7 @@ import { SKILL_TEMPLATE_SLUG_MAX, SKILL_TEMPLATE_SLUG_PATTERN } from '@bike4mind
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveDocOrigin } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 import { audienceIdsFor, canSeeListing } from '@bike4mind/server-utils/skillMarket/market';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { baseApi } from '@server/middlewares/baseApi';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
 import { renderNotFoundPage } from '@server/services/publish/renderNotFoundPage';
@@ -68,7 +69,7 @@ const userIdOf = (req: Request): string | undefined => (req.user as { id?: strin
 const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
   .use(rateLimit({ limit: 120, windowMs: 60_000, bucket: 'GET /t' }))
   .get(async (req: Request, res: Response) => {
-    // no-store so an unpublish or withdrawal takes effect at once and every view is counted.
+    // no-store so an unpublish or withdrawal takes effect at once and every visit reaches the view counter.
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -108,7 +109,8 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     const html = renderTemplatePage(view);
 
     if (!isCrawlerUserAgent(req.headers['user-agent'])) {
-      await recordTemplateView(template).catch(error =>
+      const visitor = { userId: userIdOf(req), ip: getClientIp(req), userAgent: req.headers['user-agent'] };
+      await recordTemplateView(template, visitor).catch(error =>
         req.logger?.warn('template page: view count update failed', error)
       );
     }

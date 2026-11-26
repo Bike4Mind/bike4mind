@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { SkillListingTemplate } from '@bike4mind/database';
+import { createHash, createHmac } from 'node:crypto';
+import { SkillListingTemplate, cacheRepository } from '@bike4mind/database';
 import {
   TURNSTILE_ACTION_SKILL_FREE_RUN,
   skillTemplateFreeRunInputKey,
@@ -9,6 +9,7 @@ import {
   type ISkillTemplateInput,
 } from '@bike4mind/common';
 import { findListing } from '@bike4mind/server-utils/skillMarket/market';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { escapeHtml } from '@bike4mind/utils/escapeHtml';
 import { prepareShareMeta } from '@server/services/publish/prepareShareMeta';
 import { isLive } from './template';
@@ -41,10 +42,11 @@ export type ServableTemplate = Pick<
   | 'freeRunEnabled'
   | 'takesFile'
   | 'example'
+  | 'viewCount'
 > & { _id: unknown };
 
 export const SERVABLE_TEMPLATE_FIELDS =
-  'listingId slug headline inputs previewImage examplePrompt freeRunEnabled takesFile example';
+  'listingId slug headline inputs previewImage examplePrompt freeRunEnabled takesFile example viewCount';
 
 /** A published template whose listing the market still serves, or null (the page 404s). */
 export async function findServableTemplate(
@@ -59,8 +61,37 @@ export async function findServableTemplate(
   return { template, listing };
 }
 
-export async function recordTemplateView(template: ServableTemplate): Promise<void> {
+export interface TemplatePageVisitor {
+  userId?: string;
+  ip: string;
+  userAgent?: string;
+}
+
+const VIEW_MARK_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The Cache key marking one visitor's view of one page on one UTC day. An HMAC, so the stored key
+ * holds no IP or user id and cannot be matched across pages or days without the secret.
+ */
+export function templateViewMarkKey(templateId: string, visitor: TemplatePageVisitor, now: Date): string {
+  const day = now.toISOString().slice(0, 10);
+  const who = visitor.userId ? `u:${visitor.userId}` : `a:${visitor.ip}|${visitor.userAgent ?? ''}`;
+  const digest = createHmac('sha256', Config.JWT_SECRET)
+    .update(`skill-template-view:${templateId}:${day}:${who}`)
+    .digest('base64url');
+  return `skill-template-view:${digest}`;
+}
+
+/** Counts a view once per visitor per page per UTC day; true when this request was counted. */
+export async function recordTemplateView(
+  template: ServableTemplate,
+  visitor: TemplatePageVisitor,
+  now: Date = new Date()
+): Promise<boolean> {
+  const key = templateViewMarkKey(String(template._id), visitor, now);
+  if (!(await cacheRepository.claimDedup(key, {}, VIEW_MARK_TTL_MS)).claimed) return false;
   await SkillListingTemplate.updateOne({ _id: template._id }, { $inc: { viewCount: 1 } }, { runValidators: true });
+  return true;
 }
 
 export async function recordTemplateTry(template: ServableTemplate): Promise<void> {
@@ -76,6 +107,8 @@ export interface TemplatePageView {
   authorName?: string | null;
   /** Null or a zero count renders no rating. */
   rating?: { sum: number; count: number } | null;
+  /** Downloads are listing imports. A zero count is left out; both zero renders no line. */
+  metrics?: { views: number; downloads: number } | null;
   /** Display names of the connectors the skill needs, e.g. "GitHub". */
   connectors?: string[];
   /** The skill works on a file: the input bar shows a paperclip. */
@@ -114,6 +147,7 @@ const PAGE_STYLE = `
   main{max-width:44rem;margin:0 auto;padding:3rem 1rem 4rem}
   h1{font-size:clamp(1.6rem,4vw,2.25rem);line-height:1.2;margin:0 0 .75rem}
   .byline{color:var(--muted);margin:0 0 1rem}
+  .metrics{color:var(--muted);font-size:.9rem;margin:-.75rem 0 1rem}
   .needs{display:flex;align-items:center;gap:.45rem;font-size:.9rem;font-weight:600;margin:0 0 .5rem}
   .needs::before{content:"";flex:none;width:.5rem;height:.5rem;border-radius:50%;background:var(--accent)}
   .lead .cta{margin-top:1rem}
@@ -152,6 +186,32 @@ function bylineBlock(view: TemplatePageView): string {
     ? ` \u00b7 <span data-testid="template-page-rating">\u2605 ${(rating.sum / rating.count).toFixed(1)} (${rating.count})</span>`
     : '';
   return `<p class="byline" data-testid="template-page-byline">by ${escapeHtml(author)}${stars}</p>`;
+}
+
+/** 1234 -> "1.2k", 3_456_789 -> "3.4M". Rounds down, so a count never reads higher than it is. */
+export function compactCount(n: number): string {
+  const units: [number, string][] = [
+    [1e9, 'B'],
+    [1e6, 'M'],
+    [1e3, 'k'],
+  ];
+  for (const [size, suffix] of units) {
+    if (n >= size) return `${Math.floor((n / size) * 10) / 10}${suffix}`;
+  }
+  return String(Math.max(0, Math.floor(n)));
+}
+
+const countPhrase = (n: number, noun: string): string => `${compactCount(n)} ${noun}${n === 1 ? '' : 's'}`;
+
+function metricsBlock(view: TemplatePageView): string {
+  const views = view.metrics?.views ?? 0;
+  const downloads = view.metrics?.downloads ?? 0;
+  const parts = [
+    views > 0 ? countPhrase(views, 'view') : '',
+    downloads > 0 ? countPhrase(downloads, 'download') : '',
+  ].filter(Boolean);
+  if (!parts.length) return '';
+  return `<p class="metrics" data-testid="template-page-metrics">${parts.join(' \u00b7 ')}</p>`;
 }
 
 function connectorsBlock(connectors: readonly string[] | undefined): string {
@@ -469,6 +529,7 @@ export function renderTemplatePage(view: TemplatePageView): string {
   const lead = [
     `<h1 data-testid="template-page-headline">${headline}</h1>`,
     bylineBlock(view),
+    metricsBlock(view),
     connectorsBlock(view.connectors),
   ]
     .filter(Boolean)
