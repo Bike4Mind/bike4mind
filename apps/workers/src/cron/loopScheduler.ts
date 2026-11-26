@@ -640,7 +640,9 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
     return;
   }
 
-  if (execution?.failureReason === 'credit_cap' || execution?.failureReason === 'spend_cap') {
+  // Older runs stored the member cap as insufficient_credits; both pause the loop.
+  const memberCap = execution?.error?.message === creditService.MEMBER_CREDIT_CAP_MESSAGE;
+  if (execution?.failureReason === 'credit_cap' || (execution?.failureReason === 'spend_cap' && !memberCap)) {
     // Not the ticket's fault either, and not a failure. Not made due now: the interval and the pacing defer
     // decide the next run, or a paced cap would turn into a one-iteration run every tick. A new account's
     // spend cap is a rolling window, so the next run past it simply goes ahead.
@@ -664,7 +666,7 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
     return;
   }
 
-  if (execution?.failureReason === 'insufficient_credits') {
+  if (execution?.failureReason === 'insufficient_credits' || execution?.failureReason === 'spend_cap') {
     // Not the ticket's fault: it goes back to open (uncounted), and the loop pauses.
     if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' }, true);
     await stampOutcome(executionId, 'budget_stopped');
@@ -673,8 +675,7 @@ async function reconcileRun(loop: ILoop, executionId: string, now: Date): Promis
     });
     // Conditional on 'live' so an owner's pause during the run stays an owner pause (no autoResume).
     // The credit auto-resume also waits for an org member's cap to clear, so only the label differs.
-    const statusReason =
-      execution.error?.message === creditService.MEMBER_CREDIT_CAP_MESSAGE ? MEMBER_CAP_PAUSE_REASON : 'Out of credits';
+    const statusReason = memberCap ? MEMBER_CAP_PAUSE_REASON : 'Out of credits';
     if (folded) {
       await loopRepository.updateForUser(
         loop.id,

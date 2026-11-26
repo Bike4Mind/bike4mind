@@ -503,10 +503,11 @@ export interface IAgentExecution {
    * Coarse classifier for failures that operators / dashboards filter on.
    * `'abandoned'` is set by the scheduled / admin-triggered sweep on stale
    * executions so they can be distinguished from real executor errors.
-   * `'insufficient_credits'` is set when the executor refuses to start a run for
-   * credits (balance or org member cap), or stops one mid-run because the payer's balance cannot cover
-   * the next iteration; the loop scheduler pauses on it. `'credit_cap'` is set when a run stops before
-   * an iteration that would cross its `creditCap`.
+   * `'insufficient_credits'` is set when the executor refuses to start a run because the payer's balance
+   * cannot cover it, or stops one mid-run because it cannot cover the next iteration; the loop scheduler pauses
+   * on it. `'credit_cap'` is set when a run stops before an iteration that would cross its `creditCap`.
+   * `'spend_cap'` is set when a new account's spend cap stops a run, or the org's per-member cap refuses one
+   * (error message `MEMBER_CREDIT_CAP_MESSAGE`; the loop scheduler pauses only on the latter).
    * Schema is untyped at the Mongoose level so future variants can be added
    * without a migration; the TS union is the source of truth.
    */

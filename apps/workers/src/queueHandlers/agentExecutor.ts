@@ -1547,9 +1547,9 @@ async function runExecution(
       });
       await agentExecutionRepository.markFailed(executionId, {
         message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
-        failureReason: 'insufficient_credits',
+        failureReason: 'spend_cap',
       });
-      // The member has credits; the org's per-member cap stopped the run, so the live frame is not "out of credits".
+      // The member has credits; the org's per-member cap stopped the run, so it is not "out of credits".
       await sendWs('failed', { executionId, reason: 'spend_cap', message: creditService.MEMBER_CREDIT_CAP_MESSAGE });
       return;
     }

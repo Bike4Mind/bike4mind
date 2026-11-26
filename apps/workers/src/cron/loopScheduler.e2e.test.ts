@@ -189,22 +189,25 @@ describe('runLoopSchedulerTick', () => {
     expect(after.activeExecutionIds ?? []).toEqual([]);
   });
 
-  it("labels a pause for the org member's credit limit as that, not out of credits", async () => {
-    const loop = await createLoop({ activeExecutionIds: ['exec-0'] });
-    executions['exec-0'] = {
-      status: 'failed',
-      failureReason: 'insufficient_credits',
-      error: { message: 'Organization member credit limit reached' },
-    };
+  it.each(['spend_cap', 'insufficient_credits'])(
+    "pauses for the org member's credit limit (%s) with that label, not out of credits",
+    async failureReason => {
+      const loop = await createLoop({ activeExecutionIds: ['exec-0'] });
+      executions['exec-0'] = {
+        status: 'failed',
+        failureReason,
+        error: { message: 'Organization member credit limit reached' },
+      };
 
-    await runLoopSchedulerTick(NOW, logger);
+      await runLoopSchedulerTick(NOW, logger);
 
-    expect(await reload(loop.id)).toMatchObject({
-      status: 'paused',
-      statusReason: MEMBER_CAP_PAUSE_REASON,
-      autoResume: 'credits',
-    });
-  });
+      expect(await reload(loop.id)).toMatchObject({
+        status: 'paused',
+        statusReason: MEMBER_CAP_PAUSE_REASON,
+        autoResume: 'credits',
+      });
+    }
+  );
 
   it('keeps a failing loop live until the failure limit, then moves it to error', async () => {
     const loop = await createLoop({
