@@ -49,7 +49,7 @@ function CoreTutorialHostInner() {
 
   useEffect(() => {
     setHostState({ hostMounted: true });
-    return () => setHostState({ hostMounted: false, walkOnScreen: false });
+    return () => setHostState({ hostMounted: false, walkOnScreen: false, walkPrompt: null });
   }, [setHostState]);
 
   // A track an entry point asked for continues where the user stands in it.
@@ -86,9 +86,10 @@ function CoreTutorialHostInner() {
   const pickedUpFor = useRef<string | null>(null);
   useEffect(() => {
     if (!currentSessionId || pickedUpFor.current === currentSessionId) return;
-    // A walk already running here counts as picked up, so leaving it does not restart it.
+    // A walk already running here counts as picked up, so leaving it does not restart it. One running on another
+    // notebook is left alone, and this notebook is looked at again once it ends.
     if (active) {
-      pickedUpFor.current = currentSessionId;
+      if (active.sessionId === currentSessionId) pickedUpFor.current = currentSessionId;
       return;
     }
     if (!modulesQuery.isSuccess || !progressQuery.data) return;
@@ -122,13 +123,18 @@ function CoreTutorialHostInner() {
   }, [activeModuleId, modulesQuery.isSuccess, modules, store, queryClient]);
 
   const onTutorialSession = Boolean(active && active.sessionId === currentSessionId);
-  useEffect(() => setHostState({ walkOnScreen: onTutorialSession }), [onTutorialSession, setHostState]);
   const questsQuery = useGetSessionQuests(onTutorialSession ? currentSessionId : null);
   const quests = useMemo(
     () => (questsQuery.data?.pages ?? []).flatMap(page => page.data) as unknown as TutorialQuest[],
     [questsQuery.data]
   );
   const script = onTutorialSession ? modules.find(m => m.id === active?.moduleId) : undefined;
+  const step = script?.steps.find(s => s.id === active?.stepId);
+  const walkPrompt = step?.type === 'prompt' ? (step.prompt ?? null) : null;
+  useEffect(
+    () => setHostState({ walkOnScreen: onTutorialSession, walkPrompt }),
+    [onTutorialSession, walkPrompt, setHostState]
+  );
 
   return (
     <>

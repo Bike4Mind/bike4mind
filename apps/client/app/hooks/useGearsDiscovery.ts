@@ -8,7 +8,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
-import { isCoreTutorialWalkActive } from '@client/app/components/tutorial/core/walkActive';
+import { isCoreTutorialOfferWaiting, isCoreTutorialWalkActive } from '@client/app/components/tutorial/core/walkActive';
 import { markGearsDiscoveryShown, wasWhatsNewShown } from '@client/app/components/modals/whatsNewSession';
 import {
   DISCOVERY_MAX_CARDS,
@@ -62,8 +62,14 @@ export function useGearsDiscovery(): GearsDiscovery {
       return;
     }
     // The campaign hold expires, so it waits like an open dialog instead of ending the decision.
-    // A running tutorial walk waits like an open dialog, so the modal can still come once it ends.
-    if (isStreaming || isAnyModalDialogOpen() || isCoreTutorialWalkActive() || isDiscoveryHeldForCampaign(Date.now())) {
+    // A running tutorial walk, or a tour offer still waiting for an answer, waits like an open dialog.
+    if (
+      isStreaming ||
+      isAnyModalDialogOpen() ||
+      isCoreTutorialWalkActive() ||
+      isCoreTutorialOfferWaiting() ||
+      isDiscoveryHeldForCampaign(Date.now())
+    ) {
       const t = setTimeout(() => setTick(n => n + 1), DISCOVERY_RECHECK_MS);
       return () => clearTimeout(t);
     }

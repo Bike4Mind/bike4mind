@@ -87,6 +87,14 @@ const specProjects = [
     auth: './e2e/.auth/teams-user.json',
     skipWarmup: true,
   },
+  // Plays recorded replies only, so it makes no model call.
+  {
+    name: 'tutorial-basics',
+    setupMatch: /(?:^|\/)tutorial-basics\.setup\.ts$/,
+    testMatch: /(?:^|\/)tutorial-basics\.spec\.ts$/,
+    auth: './e2e/.auth/tutorial-basics-user.json',
+    skipWarmup: true,
+  },
   // Generates only cheap audio (one short speech clip, one sound effect); video and music stay at
   // form level. Makes no chat-model call, so it skips the AI warmup.
   {

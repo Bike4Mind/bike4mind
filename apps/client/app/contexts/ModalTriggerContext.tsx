@@ -8,7 +8,7 @@ import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useFirstSignupSession } from '@client/app/hooks/useFirstSignupSession';
 import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
 import { markWhatsNewShown, wasGearsDiscoveryShown } from '@client/app/components/modals/whatsNewSession';
-import { isCoreTutorialWalkActive } from '@client/app/components/tutorial/core/walkActive';
+import { isCoreTutorialOfferWaiting, isCoreTutorialWalkActive } from '@client/app/components/tutorial/core/walkActive';
 
 type ModalType = 'WhatsNewSlider';
 type TriggerSource = 'manual' | 'auto';
@@ -147,6 +147,7 @@ export const ModalTriggerProvider: React.FC<{ children: ReactNode }> = ({ childr
                 isComposing ||
                 anyDialogOpen ||
                 isCoreTutorialWalkActive() ||
+                isCoreTutorialOfferWaiting() ||
                 wasGearsDiscoveryShown()
               ) {
                 if (process.env.NODE_ENV === 'development') {

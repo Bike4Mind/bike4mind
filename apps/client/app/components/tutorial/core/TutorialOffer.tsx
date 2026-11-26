@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Button, Link, Stack, Typography } from '@mui/joy';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
 import type { TutorialTrack } from '@bike4mind/common';
@@ -19,9 +20,19 @@ const TRACK_BUTTONS: readonly { track: TutorialTrack; label: string }[] = [
 export function TutorialOffer() {
   const enabled = useTutorialsEnabled();
   const calm = useCalmMoment(enabled);
-  const { data: modules } = useTutorialRunModules({ enabled, apiBase: CORE_TUTORIALS_API_BASE });
+  const { data: modules, isPending } = useTutorialRunModules({ enabled, apiBase: CORE_TUTORIALS_API_BASE });
   const requestTrack = useTutorialPicker(s => s.requestTrack);
   const openPicker = useTutorialPicker(s => s.setOpen);
+  const answered = useTutorialPicker(s => s.offerAnswered);
+  const answerOffer = useTutorialPicker(s => s.answerOffer);
+  const setOfferWaiting = useTutorialPicker(s => s.setOfferWaiting);
+
+  // Waiting starts before the calm moment, so a surface that settles sooner cannot take the first screen first.
+  const waiting = enabled && !answered && (isPending || Boolean(modules?.length));
+  useEffect(() => {
+    setOfferWaiting(waiting);
+    return () => setOfferWaiting(false);
+  }, [waiting, setOfferWaiting]);
 
   const tracks = TRACK_BUTTONS.filter(({ track }) => modules?.some(m => m.track === track));
   if (!enabled || !calm || !modules?.length) return null;
@@ -41,7 +52,10 @@ export function TutorialOffer() {
             key={track}
             size="sm"
             variant={index === 0 ? 'solid' : 'outlined'}
-            onClick={() => requestTrack(track)}
+            onClick={() => {
+              answerOffer();
+              requestTrack(track);
+            }}
             data-testid={`tutorial-offer-${track}`}
           >
             {label}
@@ -50,7 +64,10 @@ export function TutorialOffer() {
         <Link
           component="button"
           level="body-sm"
-          onClick={() => openPicker(true)}
+          onClick={() => {
+            answerOffer();
+            openPicker(true);
+          }}
           data-testid="tutorial-offer-all"
           sx={{ alignSelf: { xs: 'center', sm: 'auto' } }}
         >

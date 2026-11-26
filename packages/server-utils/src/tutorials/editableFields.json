@@ -5,7 +5,22 @@
       "body",
       "prompt"
     ],
-    "first-steps-composer": [
+    "first-steps-follow-up": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "first-steps-attach": [
+      "title",
+      "body",
+      "doneBody"
+    ],
+    "first-steps-ask-file": [
+      "title",
+      "body",
+      "prompt"
+    ],
+    "first-steps-notebooks": [
       "title",
       "body"
     ],
