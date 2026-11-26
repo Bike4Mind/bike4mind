@@ -30,6 +30,7 @@ const h = vi.hoisted(() => ({
   functions: [] as Record<string, unknown>[],
   artifacts: [] as { id: string; userId: string; version: number; deletedAt: Date | null }[],
   calls: [] as Record<string, unknown>[],
+  recordFails: { value: false },
   runner: vi.fn(),
   runnerConfigured: { value: true },
   limitMs: { value: 30_000 },
@@ -136,6 +137,7 @@ vi.mock('@bike4mind/database', async () => ({
   },
   callableFunctionCallRepository: {
     record: async (row: Record<string, unknown>) => {
+      if (h.recordFails.value) throw new Error('db down');
       h.calls.push(row);
       // A 24-hex id, as Mongo would give, so the poll route reads it.
       return { ...row, id: `6c${String(h.calls.length).padStart(22, '0')}` };
@@ -285,6 +287,7 @@ beforeEach(() => {
   h.sent = [];
   h.sendFails.value = false;
   h.calls = [];
+  h.recordFails.value = false;
   h.functions = [
     fnDoc(LIVE_ID),
     fnDoc(DRAFT_ID, { slug: 'beam_draft', state: 'draft', trustLabel: undefined }),
@@ -465,6 +468,13 @@ describe('not found', () => {
       [DRAFT_ID, 'not_live', 'u1'],
       ['unknown', 'not_found', undefined],
     ]);
+  });
+
+  it('still answers the 404 when the refusal row cannot be written', async () => {
+    h.recordFails.value = true;
+    const res = await invoke(DRAFT_ID, { input: { load: 1, span: 2 } });
+    expect(res).toEqual({ status: 404, body: { error: 'Function not found' } });
+    expect(logger.warn).toHaveBeenCalledWith('[functions] refusal row not written', { message: 'db down' });
   });
 
   it('writes no row for a read of a function the caller cannot see', async () => {
