@@ -5,6 +5,7 @@ import { archivedAgentsOf } from '@shared/spawnTree';
 import { agentStates } from './roster';
 import { agentsSurfaceAvailable } from './agentsSurface';
 import { readSurface } from './orchestratorPrefs';
+import { orchestratorLabels } from '../orchestratorIds';
 
 const NOW = '2026-11-26T00:00:00.000Z';
 
@@ -90,6 +91,36 @@ describe('agentsSurfaceAvailable', () => {
 
   it('gives no empty stage to an orchestrator that could start no agent', () => {
     expect(surfaceFor([session('root', { orchestrator: true })], 'root', false)).toBe(false);
+  });
+
+  it("offers it to a session labelled 'on' before any agent exists, even with no spawn capability", () => {
+    expect(surfaceFor([session('root', { orchestratorLabel: 'on' })], 'root', false)).toBe(true);
+  });
+
+  it("takes it away from a session labelled 'off', live agents and all", () => {
+    const sessions = [session('root', { orchestrator: true, orchestratorLabel: 'off' }), child('a', 'root')];
+    expect(surfaceFor(sessions, 'root')).toBe(false);
+  });
+
+  it('matches the sidebar orchestrator icon for every label', () => {
+    const cases: ChatSessionSummary[][] = [
+      [session('root')],
+      [session('root', { orchestrator: true })],
+      [session('root'), child('a', 'root')],
+      [session('root'), child('a', 'root', { archived: true })],
+      [
+        session('root'),
+        child('side', 'root', { origin: { parentSessionId: 'root', depth: 1, seedPrompt: 'q', kind: 'side-chat' } }),
+      ],
+    ];
+    for (const base of cases) {
+      for (const orchestratorLabel of [undefined, 'on', 'off'] as const) {
+        const sessions = base.map(entry => (entry.id === 'root' ? { ...entry, orchestratorLabel } : entry));
+        expect(surfaceFor(sessions, 'root'), `${JSON.stringify(sessions)}`).toBe(
+          orchestratorLabels(sessions).shown.has('root')
+        );
+      }
+    }
   });
 
   it('is false with no session', () => {
