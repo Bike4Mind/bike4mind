@@ -298,7 +298,7 @@ aws iam create-open-id-connect-provider \
 #### Create IAM Roles
 Create the IAM roles in both accounts with the trust policies below. **Replace the account IDs** with your actual AWS account IDs, and `YOUR_ORG` / `YOUR_REPO` with your repository.
 
-Each environment is listed twice because GitHub issues one of two subject formats depending on when the repository was created or last renamed: `repo:ORG/REPO:...` or `repo:ORG@<id>/REPO@<id>:...`. Keep both lines.
+Each environment is listed twice because GitHub issues one of two subject formats depending on when the repository was created or last renamed: `repo:ORG/REPO:...` or `repo:ORG@<owner-id>/REPO@<repo-id>:...`. Replace `<owner-id>` and `<repo-id>` with your numeric ids: `gh api repos/YOUR_ORG/YOUR_REPO --jq '.owner.id, .id'` prints the owner id, then the repository id. Use the real ids, not `*`: they are what keep the policy pointing at your repository if a name is later reused. A repository only gets one of the two formats, so once you know which one yours gets, you can delete the other line.
 
 **Dev Account Trust Policy:**
 ```json
@@ -318,9 +318,9 @@ Each environment is listed twice because GitHub issues one of two subject format
         "StringLike": {
           "token.actions.githubusercontent.com:sub": [
             "repo:YOUR_ORG/YOUR_REPO:environment:staging",
-            "repo:YOUR_ORG@*/YOUR_REPO@*:environment:staging",
+            "repo:YOUR_ORG@<owner-id>/YOUR_REPO@<repo-id>:environment:staging",
             "repo:YOUR_ORG/YOUR_REPO:environment:preview",
-            "repo:YOUR_ORG@*/YOUR_REPO@*:environment:preview"
+            "repo:YOUR_ORG@<owner-id>/YOUR_REPO@<repo-id>:environment:preview"
           ]
         }
       }
@@ -347,7 +347,7 @@ Each environment is listed twice because GitHub issues one of two subject format
         "StringLike": {
           "token.actions.githubusercontent.com:sub": [
             "repo:YOUR_ORG/YOUR_REPO:environment:production",
-            "repo:YOUR_ORG@*/YOUR_REPO@*:environment:production"
+            "repo:YOUR_ORG@<owner-id>/YOUR_REPO@<repo-id>:environment:production"
           ]
         }
       }
