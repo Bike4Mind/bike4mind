@@ -189,7 +189,7 @@ import {
   generatedMediaPurgeQueueSubscription,
 } from './queues';
 import { imageProcessor } from './functions';
-import { chatCompletion } from './chatCompletion';
+import { chatCompletion, chatCompletionSharedOriginUrl } from './chatCompletion';
 import { searxngUrl } from './searxng';
 import { router, routerDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv, originVerifySecret } from './router';
 import { allSecrets } from './secrets';
@@ -669,6 +669,8 @@ export const web = new sst.aws.Nextjs(
       // block). Hosted deploys leave it empty (CloudFront routes the same-origin path);
       // self-host operators set CHAT_COMPLETION_PUBLIC_URL to the service's published origin.
       CHAT_COMPLETION_PUBLIC_URL: $dev ? 'http://localhost:8788' : process.env.CHAT_COMPLETION_PUBLIC_URL || '',
+      // Previews on the shared load balancer: the linked Resource.ChatCompletion.url is empty there.
+      ...(chatCompletionSharedOriginUrl ? { CHAT_COMPLETION_ORIGIN_URL: chatCompletionSharedOriginUrl } : {}),
       // Brand name + marketing URL inlined into the client bundle at build time; no brand
       // fallback (issue #9310). Empty == client renders without a product name / external links.
       NEXT_PUBLIC_APP_NAME: process.env.APP_NAME || '',

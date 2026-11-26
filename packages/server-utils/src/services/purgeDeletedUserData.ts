@@ -8,6 +8,7 @@ import {
   abuseEvalSetRepository,
   shadowDetectionRepository,
   campaignWatchRepository,
+  oauthClientSignInRepository,
 } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
 import { retainDeletedSignupTraces } from '../auth/signupNetworkLimits';
@@ -119,6 +120,15 @@ export async function purgeDeletedUserData(
     logger.info(`Deleted ${deleted} auth event(s) of deleted user ${userId}`);
   } catch (err) {
     logger.error(`Failed to delete auth events for deleted user ${userId}: ${String(err)}`);
+  }
+
+  // Which apps the account signed in to. The registry erasure removes these too, but not every
+  // deletion path runs it.
+  try {
+    const deleted = await oauthClientSignInRepository.deleteAllForUser(userId);
+    logger.info(`Deleted ${deleted} app sign-in record(s) of deleted user ${userId}`);
+  } catch (err) {
+    logger.error(`Failed to delete app sign-in records for deleted user ${userId}: ${String(err)}`);
   }
 
   // Limit hits feed only the admin timeline of this account.

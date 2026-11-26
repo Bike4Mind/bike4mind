@@ -1,5 +1,5 @@
 import StudioGallery from '@client/app/components/Studio/StudioGallery';
-import { useStudioImageJobs } from '@client/app/hooks/data/studioImageJobs';
+import { useGenerationJobs } from '@client/app/hooks/data/generationJobs';
 import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
 import ImageJobCard from './ImageJobCard';
 
@@ -8,7 +8,7 @@ const ImageGallery = ({ onRestore }: { onRestore?: StudioTrailRestore }) => (
   <StudioGallery
     testId="image-gallery"
     noun="images"
-    query={useStudioImageJobs()}
+    query={useGenerationJobs('image')}
     variant="takes"
     renderCard={job => <ImageJobCard job={job} onRestore={onRestore} />}
   />

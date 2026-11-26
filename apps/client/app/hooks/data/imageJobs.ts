@@ -1,15 +1,7 @@
 import { isAxiosError } from 'axios';
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import type { GenerationJobSource, GenerationJobState } from '@bike4mind/common';
-import { api } from '@client/app/contexts/ApiContext';
-import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
-import { hasGenerationCreditSettlementChanged, invalidateGenerationCreditBalances } from './generationCreditBalances';
-import {
-  generationJobPollInterval,
-  movesLiveStateBackwards,
-  isTerminalGenerationState,
-  shouldReplaceGenerationJob,
-} from './generationJobPolling';
+import { movesLiveStateBackwards, isTerminalGenerationState } from './generationJobPolling';
 
 /** One image job a chat tool call started, as GET /api/image-jobs/:id returns it. */
 export type ChatImageJob = {
@@ -61,7 +53,7 @@ const MAX_RATE_LIMITED_RETRIES = 5;
 const MAX_RETRY_DELAY_MS = 30_000;
 /** A card whose first load failed retries this slowly, for at most MAX_ERRORED_RELOADS failed loads (~10 min). */
 export const ERRORED_RELOAD_MS = 60_000;
-const MAX_ERRORED_RELOADS = 10;
+export const MAX_ERRORED_RELOADS = 10;
 
 /** 404 is final (no such job, or not the caller's to read); a 429 backs off longer than other errors. */
 export const shouldRetryImageJob = (failureCount: number, error: unknown): boolean => {
@@ -72,33 +64,3 @@ export const shouldRetryImageJob = (failureCount: number, error: unknown): boole
 
 export const imageJobRetryDelay = (failureCount: number): number =>
   Math.min(1000 * 2 ** failureCount, MAX_RETRY_DELAY_MS);
-
-export function useImageJob(jobId: string) {
-  const { readyState } = useWebsocket();
-  const queryClient = useQueryClient();
-  const socketOpen = readyState === ReadyState.OPEN;
-  return useQuery({
-    queryKey: chatImageJobKeys.detail(jobId),
-    queryFn: async () => {
-      const previous = queryClient.getQueryData<ChatImageJob>(chatImageJobKeys.detail(jobId));
-      const job = (await api.get<ChatImageJob>(`/api/image-jobs/${encodeURIComponent(jobId)}`)).data;
-      if (hasGenerationCreditSettlementChanged(previous, job)) {
-        void invalidateGenerationCreditBalances(queryClient);
-      }
-      // A read taken before a websocket frame landed must not step the cached state back.
-      return previous && !shouldReplaceGenerationJob(previous, job) ? previous : job;
-    },
-    enabled: jobId.length > 0,
-    // Websocket patches keep this fresh; a remount right after one must not refetch.
-    staleTime: 30_000,
-    refetchInterval: query => {
-      const { data, error, errorUpdateCount } = query.state;
-      if (!data && error) {
-        return statusOf(error) !== 404 && errorUpdateCount < MAX_ERRORED_RELOADS ? ERRORED_RELOAD_MS : false;
-      }
-      return generationJobPollInterval(data, socketOpen, Date.now());
-    },
-    retry: shouldRetryImageJob,
-    retryDelay: imageJobRetryDelay,
-  });
-}

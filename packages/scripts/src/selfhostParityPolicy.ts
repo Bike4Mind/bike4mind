@@ -1319,7 +1319,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'b08c9b818a3d536e3ce9315a70f3cbe6d02ffacec1657516eb291853cdb9f2bc',
+    'c1f4e7cdb3ffd85316ea918cda0b0ba6c950e512143539c2539f146a36213a58',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(
@@ -1330,7 +1330,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
   gap(
     'service:infra/subscriberFanout.ts:subscriberFanoutV2',
-    'f22fd878b4415013dafdb60fd0699f5d6c10695f02eccb2450ff66d0388323d6'
+    '93a5312a4a0ff8b50927169d7801ec022068b8f1c7aa5f6b75afff7f1c3451ba'
   ),
   gap(
     'sesRule:infra/emailIngestion.ts:emailReceiptRule',
