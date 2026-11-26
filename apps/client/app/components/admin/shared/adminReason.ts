@@ -181,6 +181,7 @@ export const ADMIN_REASON_PRESETS = {
   ],
   moderationManualReport: ['Report filed on the web form', 'Filed after the second review'],
   moderationEscalation: ['Needs a second opinion', 'Unsure which verdict applies', 'Outside my review remit'],
+  modalDelete: ['Outdated announcement', 'Created in error', 'Replaced by a newer modal'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
