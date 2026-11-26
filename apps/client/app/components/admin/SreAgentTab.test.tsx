@@ -1,11 +1,17 @@
 import type { ReactNode } from 'react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SreAgentConfigSchema, SreSourceType } from '@bike4mind/common';
-import SreAgentTab, { AutoDispatchSourcesField } from './SreAgentTab';
+import { api } from '@client/app/contexts/ApiContext';
+import SreAgentTab, {
+  AutoDispatchSourcesField,
+  PatternLibraryPanel,
+  PipelineTrackingCard,
+  type TrackingDocSummary,
+} from './SreAgentTab';
 
 const mocks = vi.hoisted(() => ({
   settings: {} as Record<string, unknown>,
@@ -24,20 +30,24 @@ vi.mock('@tanstack/react-router', async () => ({
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: [] }) }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: vi.fn(() => new Promise(() => {})), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
+  api: { get: vi.fn(() => new Promise(() => {})), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-function renderTab() {
+function renderWithClient(ui: ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
     </QueryClientProvider>
   );
-  return render(<SreAgentTab />, { wrapper: Wrapper });
+  return render(ui, { wrapper: Wrapper });
+}
+
+function renderTab() {
+  return renderWithClient(<SreAgentTab />);
 }
 
 describe('SreAgentTab', () => {
@@ -146,5 +156,128 @@ describe('AutoDispatchSourcesField', () => {
     const { onChange, checkbox } = renderField([SreSourceType.CLOUDWATCH, SreSourceType.GITHUB_ISSUE]);
     fireEvent.click(checkbox(SreSourceType.CLOUDWATCH));
     expect(onChange).toHaveBeenCalledWith([SreSourceType.GITHUB_ISSUE]);
+  });
+});
+
+describe('PipelineTrackingCard dismiss', () => {
+  const doc = {
+    id: 'doc1',
+    errorFingerprint: 'fp-0123456789abcdef',
+    source: 'CLOUDWATCH',
+    status: 'failed',
+    errorMessage: 'TypeError: boom',
+    createdAt: new Date('2026-01-01'),
+    updatedAt: new Date('2026-01-02'),
+  } as unknown as TrackingDocSummary;
+
+  afterEach(() => {
+    vi.mocked(api.post).mockReset();
+  });
+
+  it('dismisses with the entered reason and closes the dialog on success', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { success: true, fingerprint: doc.errorFingerprint } });
+    renderWithClient(<PipelineTrackingCard doc={doc} />);
+
+    expect(screen.getByTestId('sre-tracking-card-doc1')).toHaveTextContent('TypeError: boom');
+    fireEvent.click(screen.getByTestId('sre-tracking-dismiss-doc1'));
+    expect(screen.getByTestId('sre-dismiss-confirm-doc1')).toBeDisabled();
+    fireEvent.change(screen.getByTestId('sre-dismiss-reason-doc1'), { target: { value: 'flaky staging run' } });
+    fireEvent.click(screen.getByTestId('sre-dismiss-confirm-doc1'));
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/api/sre/tracking/doc1/dismiss', {
+        reason: expect.stringContaining('flaky staging run'),
+      })
+    );
+    await waitFor(() => expect(screen.queryByTestId('sre-dismiss-doc1')).not.toBeInTheDocument());
+  });
+
+  it('keeps the dialog and the reason open when the dismiss fails', async () => {
+    vi.mocked(api.post).mockRejectedValue(new Error('nope'));
+    renderWithClient(<PipelineTrackingCard doc={doc} />);
+
+    fireEvent.click(screen.getByTestId('sre-tracking-dismiss-doc1'));
+    fireEvent.change(screen.getByTestId('sre-dismiss-reason-doc1'), { target: { value: 'flaky staging run' } });
+    fireEvent.click(screen.getByTestId('sre-dismiss-confirm-doc1'));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId('sre-dismiss-confirm-doc1')).not.toBeDisabled());
+    expect(screen.getByTestId('sre-dismiss-reason-doc1')).toHaveValue('flaky staging run');
+  });
+});
+
+describe('PatternLibraryPanel', () => {
+  const pattern = {
+    id: 'p1',
+    errorFingerprint: 'fp1',
+    name: 'Null config on boot',
+    isActive: true,
+    matchCount: 4,
+    successCount: 3,
+    failureCount: 1,
+    diagnosis: { confidence: 80 },
+    createdAt: '2026-01-01T00:00:00Z',
+  };
+  const toggleButton = () => within(screen.getByTestId('sre-pattern-toggle-p1')).getByRole('button');
+
+  afterEach(() => {
+    vi.mocked(api.get).mockReset();
+    vi.mocked(api.get).mockImplementation(() => new Promise(() => {}));
+    vi.mocked(api.patch).mockReset();
+  });
+
+  it('sends one toggle while the first is still pending', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [pattern] });
+    vi.mocked(api.patch).mockReturnValue(new Promise(() => {}));
+    renderWithClient(<PatternLibraryPanel repoSlugs={[]} />);
+
+    await screen.findByText('Null config on boot');
+    fireEvent.click(toggleButton());
+    await waitFor(() => expect(toggleButton()).toBeDisabled());
+    fireEvent.click(toggleButton());
+
+    expect(api.patch).toHaveBeenCalledTimes(1);
+    expect(api.patch).toHaveBeenCalledWith('/api/sre/patterns/p1', { isActive: false });
+  });
+
+  it('keeps the loaded rows when the refetch after a toggle fails', async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ data: [pattern] })
+      .mockRejectedValue(new Error('down'));
+    vi.mocked(api.patch).mockResolvedValue({ data: {} });
+    renderWithClient(<PatternLibraryPanel repoSlugs={[]} />);
+
+    await screen.findByText('Null config on boot');
+    fireEvent.click(toggleButton());
+
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(toggleButton()).not.toBeDisabled());
+    expect(screen.getByText('Null config on boot')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  // A retry with no cached rows puts the query back to pending, so the table's skeleton is the busy state.
+  it('shows the error state on a failed first load and the loading table while Retry refetches', async () => {
+    let calls = 0;
+    vi.mocked(api.get).mockImplementation(() => {
+      calls += 1;
+      return calls === 1 ? Promise.reject(new Error('down')) : new Promise(() => {});
+    });
+    renderWithClient(<PatternLibraryPanel repoSlugs={[]} />);
+
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('Patterns failed to load.');
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('sre-patterns-table')).toHaveAttribute('aria-busy', 'true'));
+    expect(calls).toBe(2);
+  });
+
+  it('lists every pattern the endpoint returns, paged in the table footer', async () => {
+    const many = Array.from({ length: 30 }, (_, index) => ({ ...pattern, id: `p${index}`, name: `Pattern ${index}` }));
+    vi.mocked(api.get).mockResolvedValue({ data: many });
+    renderWithClient(<PatternLibraryPanel repoSlugs={[]} />);
+
+    await screen.findByText('Pattern 0');
+    expect(screen.getByTestId('admin-table-range')).toHaveTextContent('1 to 25 of 30');
   });
 });

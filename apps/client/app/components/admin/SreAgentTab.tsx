@@ -27,7 +27,6 @@ import {
   Link,
   Option,
   Select,
-  Sheet,
   Stack,
   Switch,
   Tab,
@@ -74,12 +73,13 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
+  SectionCard,
   SegmentedControl,
   SettingsSection,
   StatStrip,
   StatTile,
 } from './shared';
-import { ADMIN_REGION_GAP, adminSurface } from './shared/adminStyles';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
 import type { ISreErrorTracking } from '@bike4mind/database/infra';
@@ -1341,122 +1341,127 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
   });
 
   return (
-    <Sheet variant="outlined" sx={{ ...adminSurface, borderRadius: 'lg' }} data-testid={`sre-tracking-card-${docId}`}>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', p: 1 }}>
-        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-          Status:
-        </Typography>
-        <Chip size="sm" variant="soft" color={STATUS_COLORS[doc.status] || 'neutral'}>
-          {doc.status}
-        </Chip>
-        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-          Source:
-        </Typography>
-        <Chip size="sm" variant="soft">
-          {{ CLOUDWATCH: 'CW', GITHUB_ISSUE: 'GH' }[doc.source] ?? doc.source}
-        </Chip>
-        {doc.repoSlug && (
-          <>
-            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-              Repo:
-            </Typography>
-            <Chip size="sm" variant="soft" color="primary">
-              {doc.repoSlug}
+    <SectionCard
+      title={doc.errorMessage?.slice(0, 120) || doc.errorFingerprint.slice(0, 12)}
+      body="custom"
+      data-testid={`sre-tracking-card-${docId}`}
+      action={
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+            Status:
+          </Typography>
+          <Chip size="sm" variant="soft" color={STATUS_COLORS[doc.status] || 'neutral'}>
+            {doc.status}
+          </Chip>
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+            Source:
+          </Typography>
+          <Chip size="sm" variant="soft">
+            {{ CLOUDWATCH: 'CW', GITHUB_ISSUE: 'GH' }[doc.source] ?? doc.source}
+          </Chip>
+          {doc.repoSlug && (
+            <>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                Repo:
+              </Typography>
+              <Chip size="sm" variant="soft" color="primary">
+                {doc.repoSlug}
+              </Chip>
+            </>
+          )}
+          {doc.diagnosisResult?.confidence != null && (
+            <Chip size="sm" variant="soft" color={doc.diagnosisResult.confidence >= 70 ? 'success' : 'warning'}>
+              Confidence: {doc.diagnosisResult.confidence}%
             </Chip>
-          </>
-        )}
-        <Typography level="body-xs" sx={{ flex: 1, minWidth: 0 }} noWrap>
-          {doc.errorMessage?.slice(0, 120) || doc.errorFingerprint.slice(0, 12)}
-        </Typography>
-        {doc.diagnosisResult?.confidence != null && (
-          <Chip size="sm" variant="soft" color={doc.diagnosisResult.confidence >= 70 ? 'success' : 'warning'}>
-            Confidence: {doc.diagnosisResult.confidence}%
-          </Chip>
-        )}
-        {doc.fixPrNumber && (
-          <Chip size="sm" variant="soft" color="primary">
-            PR #{doc.fixPrNumber}
-          </Chip>
-        )}
-        {isIssueClosed && (
-          <Chip size="sm" variant="soft" color="success" data-testid={`sre-tracking-issue-closed-${docId}`}>
-            Issue Closed
-          </Chip>
-        )}
-        {isRetryable && (
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            disabled={isIssueClosed || retryMutation.isPending}
-            onClick={e => {
-              e.stopPropagation();
-              retryMutation.mutate();
-            }}
-            data-testid={`sre-tracking-retry-${docId}`}
-            aria-label="Retry analysis"
+          )}
+          {doc.fixPrNumber && (
+            <Chip size="sm" variant="soft" color="primary">
+              PR #{doc.fixPrNumber}
+            </Chip>
+          )}
+          {isIssueClosed && (
+            <Chip size="sm" variant="soft" color="success" data-testid={`sre-tracking-issue-closed-${docId}`}>
+              Issue Closed
+            </Chip>
+          )}
+          {isRetryable && (
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={isIssueClosed || retryMutation.isPending}
+              onClick={e => {
+                e.stopPropagation();
+                retryMutation.mutate();
+              }}
+              data-testid={`sre-tracking-retry-${docId}`}
+              aria-label="Retry analysis"
+            >
+              {retryMutation.isPending ? <CircularProgress size="sm" /> : <ReplayIcon fontSize="small" />}
+            </IconButton>
+          )}
+          {isDismissable && (
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={dismissMutation.isPending}
+              onClick={e => {
+                e.stopPropagation();
+                setDismissOpen(true);
+              }}
+              data-testid={`sre-tracking-dismiss-${docId}`}
+              aria-label="Dismiss tracking doc"
+            >
+              <CancelIcon fontSize="small" />
+            </IconButton>
+          )}
+          {isRerunable && (
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="warning"
+              disabled={rerunMutation.isPending}
+              onClick={e => {
+                e.stopPropagation();
+                rerunMutation.mutate();
+              }}
+              data-testid={`sre-tracking-rerun-${docId}`}
+              aria-label={'Rerun from scratch \u2014 dispatches a fresh event'}
+            >
+              {rerunMutation.isPending ? <CircularProgress size="sm" /> : <RestartAltIcon fontSize="small" />}
+            </IconButton>
+          )}
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted', whiteSpace: 'nowrap' }}>
+            Updated: {formatDate(doc.updatedAt)}
+          </Typography>
+        </Stack>
+      }
+    >
+      <Box sx={{ px: 2, py: 1 }}>
+        <JoyAccordion expanded={expanded} onChange={(_e, val) => setExpanded(val)}>
+          <JoyAccordionSummary
+            indicator={<ExpandMoreIcon />}
+            data-testid={`sre-tracking-expand-${docId}`}
+            aria-label={`Details for error ${doc.errorFingerprint.slice(0, 12)}`}
           >
-            {retryMutation.isPending ? <CircularProgress size="sm" /> : <ReplayIcon fontSize="small" />}
-          </IconButton>
-        )}
-        {isDismissable && (
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            disabled={dismissMutation.isPending}
-            onClick={e => {
-              e.stopPropagation();
-              setDismissOpen(true);
-            }}
-            data-testid={`sre-tracking-dismiss-${docId}`}
-            aria-label="Dismiss tracking doc"
-          >
-            <CancelIcon fontSize="small" />
-          </IconButton>
-        )}
-        {isRerunable && (
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="warning"
-            disabled={rerunMutation.isPending}
-            onClick={e => {
-              e.stopPropagation();
-              rerunMutation.mutate();
-            }}
-            data-testid={`sre-tracking-rerun-${docId}`}
-            aria-label="Rerun from scratch — dispatches a fresh event"
-          >
-            {rerunMutation.isPending ? <CircularProgress size="sm" /> : <RestartAltIcon fontSize="small" />}
-          </IconButton>
-        )}
-        <Typography level="body-xs" sx={{ color: 'admin.inkMuted', whiteSpace: 'nowrap' }}>
-          Updated: {formatDate(doc.updatedAt)}
-        </Typography>
-      </Stack>
-      <JoyAccordion expanded={expanded} onChange={(_e, val) => setExpanded(val)}>
-        <JoyAccordionSummary
-          indicator={<ExpandMoreIcon />}
-          data-testid={`sre-tracking-expand-${docId}`}
-          aria-label={`Details for error ${doc.errorFingerprint.slice(0, 12)}`}
-        >
-          Details
-        </JoyAccordionSummary>
-        <JoyAccordionDetails>
-          {isError ? (
-            <Alert variant="soft" color="danger">
-              Failed to load details{error instanceof Error ? `: ${error.message}` : ''}
-            </Alert>
-          ) : isLoading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
-              <CircularProgress size="sm" />
-            </Box>
-          ) : fullDoc ? (
-            <TrackingDetailContent doc={fullDoc} />
-          ) : null}
-        </JoyAccordionDetails>
-      </JoyAccordion>
+            Details
+          </JoyAccordionSummary>
+          <JoyAccordionDetails>
+            {isError ? (
+              <Alert variant="soft" color="danger">
+                Failed to load details{error instanceof Error ? `: ${error.message}` : ''}
+              </Alert>
+            ) : isLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                <CircularProgress size="sm" />
+              </Box>
+            ) : fullDoc ? (
+              <TrackingDetailContent doc={fullDoc} />
+            ) : null}
+          </JoyAccordionDetails>
+        </JoyAccordion>
+      </Box>
 
       <ActionDialog
         open={dismissOpen}
@@ -1476,7 +1481,7 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
         data-testid={`sre-dismiss-${docId}`}
         testIds={{ reason: `sre-dismiss-reason-${docId}`, confirm: `sre-dismiss-confirm-${docId}` }}
       />
-    </Sheet>
+    </SectionCard>
   );
 }
 
@@ -2196,7 +2201,7 @@ function PatternActiveCell({ p, onPatched }: { p: PatternSummary; onPatched: () 
       size="sm"
       variant="soft"
       color={p.isActive ? 'success' : 'neutral'}
-      sx={{ cursor: 'pointer' }}
+      disabled={patchMutation.isPending}
       onClick={() => {
         if (p.workaroundIneffective && !p.isActive) {
           patchMutation.mutate({ isActive: true, workaroundIneffective: false, confirmReactivate: true });
@@ -2257,7 +2262,7 @@ function patternSuccessRate(p: PatternSummary): { rate: number | null; total: nu
   return { rate: total > 0 ? Math.round((p.successCount / total) * 100) : null, total };
 }
 
-function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
+export function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
   const [selectedRepo, setSelectedRepo] = useState<string>('');
   const queryClient = useQueryClient();
   const {
@@ -2332,7 +2337,8 @@ function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
       {
         id: 'rootCause',
         label: 'Root cause',
-        width: '8rem',
+        // The edit state is an 80 px input, a 4 px gap and a 32 px button inside the cell's 12 px padding.
+        width: '9rem',
         render: p => (
           <PatternRootCauseCell key={`${p.id}:${p.rootCauseTrackingIssue ?? ''}`} p={p} onPatched={onPatched} />
         ),
@@ -2374,10 +2380,10 @@ function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
         label="Patterns"
         testId="sre-patterns-table"
         loading={isLoading}
-        error={isError ? 'Patterns failed to load.' : undefined}
+        error={isError && !patterns ? 'Patterns failed to load.' : undefined}
         onRetry={() => void refetch()}
         pageResetKey={selectedRepo}
-        minWidth="52rem"
+        minWidth="53rem"
         empty={
           <EmptyState
             title="No patterns yet"
