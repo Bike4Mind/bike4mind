@@ -175,8 +175,9 @@ export class ImportStateStore {
         if (typeof state.webChangeMark !== 'string' || Number.isNaN(Date.parse(state.webChangeMark))) {
           state.webChangeMark = null;
         }
-        if (typeof state.webFullListAt !== 'number' || !Number.isFinite(state.webFullListAt))
+        if (typeof state.webFullListAt !== 'number' || !Number.isFinite(state.webFullListAt)) {
           state.webFullListAt = null;
+        }
         this.loaded.set(scopeKey, state);
         return state;
       });

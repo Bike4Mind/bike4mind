@@ -9,7 +9,7 @@ import { type MigrationFile } from './index';
  * differ from the schema, and the resulting conflict would fail the deploy. Idempotent: createIndex
  * is a no-op for an identical index that already exists.
  */
-export const isChangeFeedIndex = (fields: Record<string, unknown>): boolean =>
+const isChangeFeedIndex = (fields: Record<string, unknown>): boolean =>
   Object.keys(fields).join(',') === 'userId,updatedAt,_id';
 
 const migration: MigrationFile = {

@@ -1097,12 +1097,12 @@ function pendingCursor(cursor: FileCursor): FileCursor {
   };
 }
 
-/** One lookup per run: a sync while offline would otherwise wait out a timeout per transcript. */
 /** The later of two ISO timestamps; a mark never moves backwards. */
 function laterOf(current: string | null, next: string): string {
   return current && Date.parse(current) > Date.parse(next) ? current : next;
 }
 
+/** One lookup per run: a sync while offline would otherwise wait out a timeout per transcript. */
 function once<T>(load: () => Promise<T>): () => Promise<T> {
   let loading: Promise<T> | null = null;
   return () => (loading ??= load());
