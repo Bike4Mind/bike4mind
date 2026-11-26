@@ -11,10 +11,8 @@ const h = vi.hoisted(() => ({
   setOpen: vi.fn(),
 }));
 
-vi.mock('@client/app/hooks/data/musicGenerations', () => ({
-  useMusicGeneration: () => h.query,
-  useCancelMusicGeneration: () => h.cancel,
-}));
+vi.mock('@client/app/hooks/data/generationJobs', () => ({ useGenerationJob: () => h.query }));
+vi.mock('@client/app/hooks/data/musicGenerations', () => ({ useCancelMusicGeneration: () => h.cancel }));
 vi.mock('@client/app/components/Media/MediaPlayer', () => ({
   MediaPlayer: ({
     file,
