@@ -62,7 +62,7 @@ export async function validateGrantOrg({ ownerEmail, seats }: Pick<GrantOrgParam
 export async function grantOrg(req: Request, params: GrantOrgParams, approval?: AdminApproval) {
   const { name, seats, initialCredits, reason } = params;
   const owner = await validateGrantOrg(params);
-  if (!isApprovedSelfGrant(approval))
+  if (!isApprovedSelfGrant(approval, [owner.id]))
     await assertDelegateCanCreditUser(req.user!, owner.id, 'grant an organization to');
 
   const now = dayjs();
@@ -142,7 +142,8 @@ export async function grantOrg(req: Request, params: GrantOrgParams, approval?: 
       details: {
         ...approvalDetails(approval),
         ownerId: owner.id,
-        selfGrant: isSelfOrImpersonator(req.user!, owner.id) || (approval?.requestedBy.selfIds.includes(owner.id) ?? false),
+        selfGrant:
+          isSelfOrImpersonator(req.user!, owner.id) || (approval?.requestedBy.selfIds.includes(owner.id) ?? false),
         seats,
         initialCredits,
         credits: initialCredits,

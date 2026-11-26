@@ -90,7 +90,8 @@ export async function grantSubscription(req: Request, params: GrantSubscriptionP
   const selfGrant =
     isSelfOrImpersonator(req.user!, userId) || (approval?.requestedBy.selfIds.includes(userId) ?? false);
   const user = await validateGrantSubscription(params, teamPlan);
-  if (!isApprovedSelfGrant(approval)) await assertDelegateCanCreditUser(req.user!, user.id, 'grant a subscription to');
+  if (!isApprovedSelfGrant(approval, [user.id]))
+    await assertDelegateCanCreditUser(req.user!, user.id, 'grant a subscription to');
 
   const now = dayjs();
   const periodStartsAt = now.toDate();

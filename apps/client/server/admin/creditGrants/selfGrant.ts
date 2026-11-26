@@ -21,9 +21,9 @@ export const SELF_GRANT_APPROVAL = {
 } as const;
 
 /**
- * Whether an approval being executed is a held self-grant. Its approver may be a delegate, so the executors skip
- * the delegate target checks (own account, admin-access account, own organization) that would otherwise refuse it:
- * the requester was a full admin who passed the route's checks, and approving is the control.
+ * Whether an approval being executed is a held self-grant to one of `targetIds`, so its delegate approver skips
+ * the delegate target checks that would refuse it.
  */
-export const isApprovedSelfGrant = (approval: AdminApproval | undefined): boolean =>
-  approval?.requiredPermission === SELF_GRANT_APPROVAL.requiredPermission;
+export const isApprovedSelfGrant = (approval: AdminApproval | undefined, targetIds: readonly string[]): boolean =>
+  approval?.requiredPermission === SELF_GRANT_APPROVAL.requiredPermission &&
+  targetIds.some(id => id === approval.requestedBy.id || approval.requestedBy.selfIds.includes(id));

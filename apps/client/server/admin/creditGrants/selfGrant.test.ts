@@ -34,17 +34,27 @@ describe('SELF_GRANT_APPROVAL', () => {
 });
 
 describe('isApprovedSelfGrant', () => {
-  const approvalWith = (requiredPermission: string) => ({ requiredPermission }) as unknown as AdminApproval;
+  const approvalWith = (requiredPermission: string, requester = { id: 'req', selfIds: ['req', 'alt'] }) =>
+    ({ requiredPermission, requestedBy: requester }) as unknown as AdminApproval;
+  const SELF = 'credits:approve_self_grant';
 
-  it('is true for an approval requested with credits:approve_self_grant', () => {
-    expect(isApprovedSelfGrant(approvalWith('credits:approve_self_grant'))).toBe(true);
+  it('is true when a target is the requester', () => {
+    expect(isApprovedSelfGrant(approvalWith(SELF), ['x', 'req'])).toBe(true);
+  });
+
+  it('is true when a target is one of the requester selfIds', () => {
+    expect(isApprovedSelfGrant(approvalWith(SELF), ['alt'])).toBe(true);
+  });
+
+  it('is false when no target is the requester', () => {
+    expect(isApprovedSelfGrant(approvalWith(SELF), ['x', 'y'])).toBe(false);
   });
 
   it('is false for an ordinary credit approval', () => {
-    expect(isApprovedSelfGrant(approvalWith('credits:adjust'))).toBe(false);
+    expect(isApprovedSelfGrant(approvalWith('credits:adjust'), ['req'])).toBe(false);
   });
 
   it('is false when the executor runs without an approval', () => {
-    expect(isApprovedSelfGrant(undefined)).toBe(false);
+    expect(isApprovedSelfGrant(undefined, ['req'])).toBe(false);
   });
 });

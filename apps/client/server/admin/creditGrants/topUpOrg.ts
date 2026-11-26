@@ -14,7 +14,7 @@ import { Resource } from 'sst';
 
 import type { Request } from 'express';
 import { approvalDetails, notifyAfterCommit } from './approval';
-import { assertDelegateCanCreditOrganization, isOrganizationSelfGrant } from './delegateTargets';
+import { assertDelegateCanCreditOrganization, isOrganizationSelfGrant, organizationMemberIds } from './delegateTargets';
 import { isApprovedSelfGrant } from './selfGrant';
 
 // Cap protects against admin typo (e.g. an extra zero). 10M credits = ~6 years
@@ -48,7 +48,8 @@ export async function topUpOrg(req: Request, params: TopUpParams, approval?: Adm
 
   const organization = await organizationRepository.findById(id);
   if (!organization) throw new NotFoundError('Organization not found');
-  if (!isApprovedSelfGrant(approval)) await assertDelegateCanCreditOrganization(req.user!, organization, 'top up');
+  if (!isApprovedSelfGrant(approval, organizationMemberIds(organization)))
+    await assertDelegateCanCreditOrganization(req.user!, organization, 'top up');
 
   // A generic_add is deduped on transactionId, which createTransaction swallows into a silent
   // no-op rather than the E11000 the subscription path raises. Look the key up first so a

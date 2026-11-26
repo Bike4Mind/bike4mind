@@ -41,7 +41,7 @@ export async function assertDelegateCanCreditUsers(actor: CreditActor, userIds: 
   for (const user of users) assertCanActOnAdminTarget(actor, user, verb);
 }
 
-const organizationMemberIds = (organization: CreditedOrganization): string[] =>
+export const organizationMemberIds = (organization: CreditedOrganization): string[] =>
   [
     organization.userId,
     ...(organization.adminUserIds ?? []),
