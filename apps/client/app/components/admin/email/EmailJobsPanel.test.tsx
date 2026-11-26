@@ -26,7 +26,11 @@ vi.mock('@client/app/hooks/data/emailMarketing', () => ({
   useCloneEmailJob: () => ({ mutateAsync: mocks.clone, isPending: false }),
 }));
 vi.mock('./EmailJobDetail', () => ({
-  default: ({ jobId }: { jobId?: string }) => <div data-testid="email-job-detail-stub" data-job-id={jobId ?? 'new'} />,
+  default: ({ jobId, onBack }: { jobId?: string; onBack?: () => void }) => (
+    <div data-testid="email-job-detail-stub" data-job-id={jobId ?? 'new'}>
+      <button data-testid="email-job-detail-stub-back" onClick={onBack} />
+    </div>
+  ),
 }));
 
 import EmailJobsPanel from './EmailJobsPanel';
@@ -234,6 +238,7 @@ describe('EmailJobsPanel', () => {
     await screen.findByTestId('email-campaigns-action-error');
 
     fireEvent.click(screen.getByTestId('edit-job-j1'));
+    fireEvent.click(screen.getByTestId('email-job-detail-stub-back'));
 
     expect(screen.queryByTestId('email-campaigns-action-error')).toBeNull();
   });
