@@ -125,8 +125,8 @@ describe('help-docs job in ci.yml', () => {
       liftsNeedsSuccessGate(condition),
       'without a status-check function the implicit success() on needs makes a skipped core-build skip this job too'
     ).toBe(true);
-    // An allowlist of success/skipped drops the `cancelled` case (runner loss), and ci-complete
-    // only reddens on the literal `failure`, so the job would go missing on a green docs PR.
+    // An allowlist of success/skipped skips this job on a `cancelled` core-build (runner loss),
+    // so the help guards would never run on that docs change; the fallback build covers it.
     expect(condition).toContain("needs.core-build.result != 'failure'");
   });
 });
