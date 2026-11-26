@@ -105,6 +105,15 @@ curl https://app.bike4mind.com/api/v1/functions/calls/<call-id> \
 
 `status` is `queued`, then `running`, then `finished`. A finished call carries `outcome`. When `outcome` is `ok`, the answer has `output` and `stamp`, as a waiting call does. Any other outcome carries `error`, and `stamp` when the function ran. A call is readable only by the user who made it, for 24 hours. After that, or for any other id, the poll answers `404`. A call that stopped before it finished, or that was still queued 40 minutes after it was sent, reads `finished` with `outcome` set to `error` and an `error` asking you to send it again.
 
+To stop a call you no longer need, cancel it with the same key while it is `queued` or `running`:
+
+```bash
+curl -X POST https://app.bike4mind.com/api/v1/functions/calls/<call-id>/cancel \
+  -H 'Authorization: Bearer <your-api-key>'
+```
+
+The answer is the call as a poll reads it: `finished`, with `outcome` set to `cancelled`. A queued call never runs. A running call is left to end, but what it returns is discarded, so a later poll still reads `cancelled`. A call that already finished is returned unchanged. Only the user who made the call can cancel it; any other id answers `404`.
+
 ## Limits
 
 - The input may be up to 5 MB, and so may the output. An output too large to return answers `502` with `outcome` set to `output_too_large`.
@@ -117,7 +126,7 @@ curl https://app.bike4mind.com/api/v1/functions/calls/<call-id> \
 Errors use the shared error envelope described in [Errors](./errors.md).
 
 - `403`: the key does not hold `functions:invoke`, or callable functions are turned off for your account.
-- `404`: the function is not one of your live functions, or a polled call is not yours or has expired.
+- `404`: the function is not one of your live functions, or a polled or cancelled call is not yours or has expired.
 - `413`: the input is larger than 5 MB.
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
 - `429`: you passed the rate limit, or you already have as many asynchronous calls queued or running as your organization's **Callable Function Pending Call Limit** allows (10 unless it sets another). In the second case `errorCode` is `concurrency_limit_exceeded` and `limit` is the cap; send the call again when one finishes.

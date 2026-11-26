@@ -4,6 +4,7 @@ import { CALLABLE_FUNCTION_TRUST_LABELS } from '../types/entities/CallableFuncti
 import {
   CALLABLE_FUNCTION_CALL_OUTCOMES,
   CALLABLE_FUNCTION_CALL_SURFACES,
+  CALLABLE_FUNCTION_RESULT_OUTCOMES,
 } from '../types/entities/CallableFunctionCallTypes';
 import { ApiErrorSchema } from './chat';
 import { paginatedResponseSchema } from './pagination';
@@ -134,9 +135,12 @@ export const GetFunctionCallResponseSchema = z.object({
     .enum(['queued', 'running', 'finished'])
     .describe('`queued` and `running` carry nothing else; poll again. `finished` carries how the call ended.'),
   outcome: z
-    .enum(CALLABLE_FUNCTION_CALL_OUTCOMES)
+    .enum(CALLABLE_FUNCTION_RESULT_OUTCOMES)
     .optional()
-    .describe('How a finished call ended: `ok` carries `output`; any other outcome carries `error`.'),
+    .describe(
+      'How a finished call ended: `ok` carries `output`; any other outcome carries `error`. `cancelled` means ' +
+        'its caller cancelled it, and nothing it returned is kept.'
+    ),
   output: z.record(z.string(), z.unknown()).optional().describe('The outputs, checked against `output_schema`.'),
   stamp: FunctionStampSchema.optional(),
   error: z.string().optional(),

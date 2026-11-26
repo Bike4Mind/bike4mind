@@ -24,12 +24,16 @@ export const CALLABLE_FUNCTION_CALL_OUTCOMES = [
 ] as const;
 export type CallableFunctionCallOutcome = (typeof CALLABLE_FUNCTION_CALL_OUTCOMES)[number];
 
+/** How an asynchronous call can end: a run's outcomes, or `cancelled` by its caller, which no run answers. */
+export const CALLABLE_FUNCTION_RESULT_OUTCOMES = [...CALLABLE_FUNCTION_CALL_OUTCOMES, 'cancelled'] as const;
+export type CallableFunctionResultOutcome = (typeof CALLABLE_FUNCTION_RESULT_OUTCOMES)[number];
+
 /** An asynchronous call's row reads `queued`, then `running`, until it is overwritten with how the call ended. */
 export const CALLABLE_FUNCTION_CALL_PENDING_OUTCOMES = ['queued', 'running'] as const;
 export type CallableFunctionCallPendingOutcome = (typeof CALLABLE_FUNCTION_CALL_PENDING_OUTCOMES)[number];
 
 export const CALLABLE_FUNCTION_CALL_ROW_OUTCOMES = [
-  ...CALLABLE_FUNCTION_CALL_OUTCOMES,
+  ...CALLABLE_FUNCTION_RESULT_OUTCOMES,
   ...CALLABLE_FUNCTION_CALL_PENDING_OUTCOMES,
 ] as const;
 export type CallableFunctionCallRowOutcome = (typeof CALLABLE_FUNCTION_CALL_ROW_OUTCOMES)[number];
@@ -116,6 +120,14 @@ export interface CallableFunctionCallSummary {
     surface: CallableFunctionCallSurface;
     /** Made by someone the function is shared with, not the owner; who it was is not shown. */
     byRecipient: boolean;
+    /** The promotion that ran; absent when the call was refused before a pin was read. */
+    pinSeq?: number;
+    durationMs: number;
+    /**
+     * Only on the owner's own calls made with one of their API keys: the key's name, or null once it is deleted.
+     * Never on a recipient's call.
+     */
+    apiKey?: { name: string | null };
   }[];
 }
 
@@ -139,7 +151,7 @@ export interface ICallableFunctionResult {
   organizationId?: string;
   state: CallableFunctionResultState;
   input?: Record<string, unknown>;
-  outcome?: CallableFunctionCallOutcome;
+  outcome?: CallableFunctionResultOutcome;
   reason?: string;
   errorClass?: string;
   problems?: { path: string; message: string }[];

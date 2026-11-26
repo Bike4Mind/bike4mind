@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Alert, Box, Button, Chip, FormControl, FormLabel, Input, Stack, Table, Textarea, Typography } from '@mui/joy';
 import type {
   CallableFunctionCallRowOutcome,
+  CallableFunctionCallSummary,
   CallableFunctionExample,
   FunctionContract,
   FunctionContractProblem,
@@ -31,7 +32,27 @@ const OUTCOME_LABELS: Record<CallableFunctionCallRowOutcome, string> = {
   queued: 'Queued',
   running: 'Running',
   data_mismatch: 'Data file changed',
+  cancelled: 'Cancelled',
 };
+
+// A pending or cancelled call's row holds only the time its checks took, not a run.
+const NO_RUN_TIME: ReadonlySet<CallableFunctionCallRowOutcome> = new Set(['queued', 'running', 'cancelled']);
+
+type RecentCall = CallableFunctionCallSummary['recent'][number];
+
+function callDuration(call: RecentCall): string {
+  if (NO_RUN_TIME.has(call.outcome)) return '-';
+  if (call.durationMs < 1000) return `${call.durationMs} ms`;
+  if (call.durationMs < 60_000) return `${(call.durationMs / 1000).toFixed(1)} s`;
+  const seconds = Math.round(call.durationMs / 1000);
+  return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+}
+
+function callCaller(call: RecentCall): string {
+  if (call.byRecipient) return 'A recipient';
+  if (!call.apiKey) return 'You';
+  return call.apiKey.name === null ? 'You, with a deleted API key' : `You, with API key "${call.apiKey.name}"`;
+}
 
 const LABEL_HELP = {
   platform: 'Platform: curated and checked by Bike4Mind. A cited worked example passed on the server.',
@@ -338,6 +359,8 @@ export function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
                   <th>Time</th>
                   <th>Outcome</th>
                   <th>By</th>
+                  <th>Promotion</th>
+                  <th>Duration</th>
                 </tr>
               </thead>
               <tbody>
@@ -347,7 +370,9 @@ export function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
                       {new Date(call.startedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
                     </td>
                     <td>{OUTCOME_LABELS[call.outcome] ?? call.outcome}</td>
-                    <td>{call.byRecipient ? 'A recipient' : 'You'}</td>
+                    <td>{callCaller(call)}</td>
+                    <td>{call.pinSeq === undefined ? '-' : call.pinSeq}</td>
+                    <td>{callDuration(call)}</td>
                   </tr>
                 ))}
               </tbody>

@@ -502,5 +502,6 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/functions/:id',
     'POST /api/v1/functions/:id/invoke',
     'GET /api/v1/functions/calls/:call_id',
+    'POST /api/v1/functions/calls/:call_id/cancel',
   ],
 };

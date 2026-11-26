@@ -62,6 +62,8 @@ export const FUNCTION_ASYNC_UNAVAILABLE_MESSAGE = 'Asynchronous calls are not av
 
 export const FUNCTION_CALL_STOPPED_MESSAGE = 'The call stopped before it finished. Send it again.';
 
+export const FUNCTION_CALL_CANCELLED_MESSAGE = 'The call was cancelled.';
+
 /** The input cap plus room for the `{ "input": ... }` envelope and a pretty-printed body. */
 export const FUNCTION_INVOKE_MAX_BODY_BYTES = CALLABLE_FUNCTION_SURFACE_CAPS.rest.inputBytes + 64 * 1024;
 
@@ -225,6 +227,7 @@ export function functionCallAnswer(doc: ICallableFunctionResult): Record<string,
   if (doc.state !== 'finished' || !doc.outcome) return { call_id: doc.callId, status: doc.state };
   const base = { call_id: doc.callId, status: 'finished', outcome: doc.outcome };
   if (doc.outcome === 'ok') return { ...base, output: doc.outputs ?? {}, ...(doc.stamp ? { stamp: doc.stamp } : {}) };
+  if (doc.outcome === 'cancelled') return { ...base, error: FUNCTION_CALL_CANCELLED_MESSAGE };
   // These two reasons are written only by the queue worker, so they are not dispatcher reasons.
   if (doc.reason === 'worker_lost' || doc.reason === 'dispatch_failed') {
     return { ...base, error: FUNCTION_CALL_STOPPED_MESSAGE, ...(doc.stamp ? { stamp: doc.stamp } : {}) };

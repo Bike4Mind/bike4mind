@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1301 routes: 145 contracted, 11 aliases of another route, 367 with no static caller in `apps/client/app`.
+1302 routes: 146 contracted, 11 aliases of another route, 368 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -153,7 +153,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 27 | 9 | 0 | 0 | 5 |
-| v1 | 143 | 139 | 120 | 16 | 0 | 7 | 130 |
+| v1 | 144 | 140 | 121 | 16 | 0 | 7 | 131 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 6 | 1 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1931,6 +1931,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/functions/[id]` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/functions/[id]/invoke` | POST | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/functions/calls/[call_id]` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
+| `/api/v1/functions/calls/[call_id]/cancel` | POST | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/handoff-devices` | GET | jwt | - | - | yes | - | 1: `components/Session/SessionHandoff.tsx` |
 | `/api/v1/image-edits` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |

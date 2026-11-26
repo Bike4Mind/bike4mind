@@ -259,6 +259,61 @@ describe('PromoteFunctionSection', () => {
     expect(rows[0]!.textContent).toContain('2026');
   });
 
+  it('shows the promotion that ran, how long it took, and the API key the owner called with, never a recipient', () => {
+    const at = '2026-11-23T10:00:00.000Z';
+    h.calls = {
+      isError: false,
+      data: {
+        since: new Date(),
+        total: 6,
+        outcomes: { ok: 4, cancelled: 1, refused: 1 },
+        recent: [
+          {
+            id: 'c1',
+            startedAt: at,
+            outcome: 'ok',
+            surface: 'rest',
+            byRecipient: false,
+            pinSeq: 3,
+            durationMs: 42,
+            apiKey: { name: 'nightly-batch' },
+          },
+          { id: 'c2', startedAt: at, outcome: 'ok', surface: 'mcp', byRecipient: true, pinSeq: 3, durationMs: 2300 },
+          {
+            id: 'c3',
+            startedAt: at,
+            outcome: 'ok',
+            surface: 'rest',
+            byRecipient: false,
+            pinSeq: 2,
+            durationMs: 125_000,
+            apiKey: { name: null },
+          },
+          { id: 'c4', startedAt: at, outcome: 'ok', surface: 'chat', byRecipient: false, pinSeq: 2, durationMs: 900 },
+          { id: 'c5', startedAt: at, outcome: 'cancelled', surface: 'rest', byRecipient: false, durationMs: 4 },
+          { id: 'c6', startedAt: at, outcome: 'refused', surface: 'rest', byRecipient: false, durationMs: 1 },
+        ],
+      },
+    };
+    renderSection(live('verified'));
+    expect(screen.getByTestId('python-function-calls-total').textContent).toBe(
+      '6 calls: Returned 4, Cancelled 1, Refused 1.'
+    );
+    const cells = screen.getAllByTestId('python-function-call-row').map(row =>
+      within(row)
+        .getAllByRole('cell')
+        .map(cell => cell.textContent)
+    );
+    expect(cells.map(([, outcome, by, promotion, duration]) => [outcome, by, promotion, duration])).toEqual([
+      ['Returned', 'You, with API key "nightly-batch"', '3', '42 ms'],
+      ['Returned', 'A recipient', '3', '2.3 s'],
+      ['Returned', 'You, with a deleted API key', '2', '2 min 5 s'],
+      ['Returned', 'You', '2', '900 ms'],
+      ['Cancelled', 'You', '-', '-'],
+      ['Refused', 'You', '-', '1 ms'],
+    ]);
+  });
+
   it('says so when there are no calls', () => {
     renderSection(tool());
     expect(screen.getByTestId('python-function-calls-total').textContent).toBe('No calls.');

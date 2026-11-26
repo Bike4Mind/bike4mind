@@ -222,5 +222,6 @@ export {
   getFunctionContract,
   invokeFunctionContract,
   getFunctionCallContract,
+  cancelFunctionCallContract,
 } from './contracts/functions.contract';
 export { CONTRACTS } from './contracts';

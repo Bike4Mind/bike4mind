@@ -220,8 +220,9 @@ export function useCallableFunctionDetail(id: string | null) {
  * Runs the saved tool's declared tests on the server, against the pinned code, or only the named ones (those an
  * earlier run left not run); nothing is written but the call log.
  */
-export const useRunCallableFunctionTests = () =>
-  useMutation({
+export const useRunCallableFunctionTests = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
     mutationFn: async ({ id, tests }: { id: string; tests?: string[] }) =>
       (
         await api.post<CallableFunctionTestRun>(
@@ -229,9 +230,14 @@ export const useRunCallableFunctionTests = () =>
           tests ? { tests } : {}
         )
       ).data,
+    onSettled: (_run, _error, { id }) => queryClient.invalidateQueries({ queryKey: callsQueryKey(id) }),
   });
+};
 
 const callsQueryKey = (id: string) => [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, id, 'calls'] as const;
+
+/** How often an open calls panel re-reads, so calls made from chat, REST, or MCP show without a reload. */
+export const CALLABLE_FUNCTION_CALLS_REFRESH_MS = 15_000;
 
 /**
  * Promotes the saved tool to live once the server reads its contract and runs every declared test and worked example;
@@ -256,12 +262,16 @@ export const useSetCallableFunctionExamples = () => {
   });
 };
 
-/** The owner's calls of the saved tool over the last 30 days; refetched with the list after any change to the tool. */
+/**
+ * The owner's calls of the saved tool over the last 30 days; refetched with the list after any change to the tool,
+ * after a server test run, and every `CALLABLE_FUNCTION_CALLS_REFRESH_MS` while shown.
+ */
 export function useCallableFunctionCalls(id: string) {
   return useQuery({
     queryKey: callsQueryKey(id),
     queryFn: async () =>
       (await api.get<CallableFunctionCallSummary>(`${COLLECTION}/${encodeURIComponent(id)}/calls`)).data,
+    refetchInterval: CALLABLE_FUNCTION_CALLS_REFRESH_MS,
   });
 }
 

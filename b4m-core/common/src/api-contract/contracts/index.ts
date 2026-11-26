@@ -75,6 +75,7 @@ import {
 import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
 import { postSlackMessageContract } from './slackMessages.contract';
 import {
+  cancelFunctionCallContract,
   getFunctionCallContract,
   getFunctionContract,
   invokeFunctionContract,
@@ -408,4 +409,5 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getFunctionContract,
   invokeFunctionContract,
   getFunctionCallContract,
+  cancelFunctionCallContract,
 ];

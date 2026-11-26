@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  CALLABLE_FUNCTION_CALLS_REFRESH_MS,
   callableFunctionBreakingChanges,
   callableFunctionContractUnreadable,
   callableFunctionErrorCode,
@@ -11,7 +12,10 @@ import {
   callableFunctionSlugHolder,
   fetchCallableFunctionSources,
   useArtifactCallableFunction,
+  useCallableFunctionCalls,
   useCallableFunctionsEnabled,
+  usePromoteCallableFunction,
+  useRunCallableFunctionTests,
   useCreateCallableFunction,
   useCallableFunctionShare,
   useDeleteCallableFunction,
@@ -225,6 +229,50 @@ describe('callable function mutations', () => {
 
     expect(h.delete).toHaveBeenCalledWith('/api/callable-functions/fn-1');
     expect(listInvalidations(invalidate)).toBe(1);
+  });
+});
+
+describe('the calls panel query', () => {
+  let served = 0;
+  beforeEach(() => {
+    served = 0;
+    h.get.mockReset();
+    h.post.mockReset();
+    h.get.mockImplementation(async (url: string) => {
+      if (url !== '/api/callable-functions/fn-1/calls') throw new Error(`unexpected ${url}`);
+      served += 1;
+      return { data: { since: new Date(), total: served, outcomes: { ok: served }, recent: [] } };
+    });
+    h.post.mockResolvedValue({ data: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['a server test run', () => useRunCallableFunctionTests(), { id: 'fn-1' }],
+    ['a promotion', () => usePromoteCallableFunction(), 'fn-1'],
+  ] as const)('reads the calls again after %s, with no reload', async (_name, useAction, variables) => {
+    const { result } = renderWith(() => ({ calls: useCallableFunctionCalls('fn-1'), action: useAction() }));
+    await waitFor(() => expect(result.current.calls.data?.total).toBe(1));
+
+    await act(() => (result.current.action.mutateAsync as (v: unknown) => Promise<unknown>)(variables));
+
+    await waitFor(() => expect(result.current.calls.data?.total).toBe(2));
+  });
+
+  it('reads the calls again on its own while shown, so calls made elsewhere appear', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { result, unmount } = renderWith(() => useCallableFunctionCalls('fn-1'));
+    await waitFor(() => expect(result.current.data?.total).toBe(1));
+
+    await act(() => vi.advanceTimersByTimeAsync(CALLABLE_FUNCTION_CALLS_REFRESH_MS));
+    await waitFor(() => expect(result.current.data?.total).toBe(2));
+
+    unmount();
+    await act(() => vi.advanceTimersByTimeAsync(CALLABLE_FUNCTION_CALLS_REFRESH_MS * 2));
+    expect(served).toBe(2);
   });
 });
 
