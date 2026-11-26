@@ -37,7 +37,10 @@ public final class BusyBlockSyncer {
   private let reader: any BusyBlockReader
   private let now: @Sendable () -> Date
   private var lastSync: Date?
-  private var isSyncing = false
+  /// One lock for background syncs and user saves, so a sync that read the opt-in before a toggle-off cannot
+  /// write it back on afterwards.
+  private var isBusy = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
 
   public init(api: any BusyBlocksAPI, reader: any BusyBlockReader, now: @escaping @Sendable () -> Date = { Date() }) {
     self.api = api
@@ -58,11 +61,11 @@ public final class BusyBlockSyncer {
   /// the throttle untouched, so the next foreground or background run retries at once.
   @discardableResult
   public func sync(force: Bool = false) async -> BusyBlockSyncOutcome {
-    guard !isSyncing else { return .skipped(.inFlight) }
+    guard !isBusy else { return .skipped(.inFlight) }
     guard reader.access() != .notDetermined else { return .skipped(.neverAsked) }
     if !force, let lastSync, now().timeIntervalSince(lastSync) < Self.minInterval { return .skipped(.throttled) }
-    isSyncing = true
-    defer { isSyncing = false }
+    isBusy = true
+    defer { release() }
     do {
       guard try await api.state().enabled else {
         lastSync = now()
@@ -76,5 +79,21 @@ public final class BusyBlockSyncer {
     } catch {
       return .failed
     }
+  }
+
+  /// Saves the user's opt-in, waiting for any sync in flight to finish first.
+  public func save(enabled: Bool) async throws -> BusyBlocksState {
+    while isBusy { await withCheckedContinuation { waiters.append($0) } }
+    isBusy = true
+    defer { release() }
+    return try await api.save(enabled: enabled, blocks: enabled ? currentBlocks() : [])
+  }
+
+  /// Woken waiters re-check `isBusy`, since a sync can take the lock before they resume.
+  private func release() {
+    isBusy = false
+    let woken = waiters
+    waiters = []
+    woken.forEach { $0.resume() }
   }
 }

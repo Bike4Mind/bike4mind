@@ -48,7 +48,7 @@ public final class BusyBlockBriefViewModel {
     let previous = isEnabled
     isEnabled = isOn
     do {
-      isEnabled = try await api.save(enabled: isOn, blocks: isOn ? syncer.currentBlocks() : []).enabled
+      isEnabled = try await syncer.save(enabled: isOn).enabled
     } catch {
       isEnabled = previous
       errorMessage = "Couldn't save your busy-block setting. Try again."
