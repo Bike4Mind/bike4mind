@@ -39,7 +39,7 @@ type SharedItem = IShareableDocument & { id: string; userId: string };
 
 const projectParticipants = (project: Pick<IProjectDocument, 'userId' | 'users'>) => [
   project.userId,
-  ...project.users.map(u => u.userId),
+  ...(project.users ?? []).map(u => u.userId),
 ];
 
 /**
