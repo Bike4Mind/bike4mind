@@ -315,6 +315,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   const parseTestEmails = () => parseTestEmailAddresses(formData.testEmailAddresses);
 
   const handleSave = async () => {
+    setActionError(null);
     const recipientFilter = buildRecipientFilter();
     const testEmailAddresses = parseTestEmails();
 
@@ -463,11 +464,6 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   };
 
   const isSending = job?.overallStatus === EmailJobOverallStatus.SENDING;
-
-  // A send/cancel error is about the status it was raised in; drop it once a refetch moves the job on.
-  useEffect(() => {
-    setActionError(null);
-  }, [job?.status]);
   // overallStatus stays non-draft once a send went out, so gate on status: the schedule route accepts only drafts.
   const canSchedule = isEditing && job?.status === EmailJobStatus.DRAFT;
   // Reusable campaigns can be edited anytime except when actively sending

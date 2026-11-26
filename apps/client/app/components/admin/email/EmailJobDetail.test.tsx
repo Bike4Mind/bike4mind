@@ -356,7 +356,7 @@ describe('EmailJobDetail', () => {
       expect(m.send).not.toHaveBeenCalled();
     });
 
-    it('clears an action error once a refetch moves the job to another status', async () => {
+    it('keeps an action error when a refetch lands after it and moves the job to another status', async () => {
       m.job = { ...draftJob(), status: EmailJobStatus.SCHEDULED };
       m.cancel.mockRejectedValue(badRequest('Job is not scheduled'));
       const view = renderDetail('job1');
@@ -371,7 +371,7 @@ describe('EmailJobDetail', () => {
         </CssVarsProvider>
       );
 
-      expect(screen.queryByTestId('email-job-action-error')).toBeNull();
+      expect(screen.getByTestId('email-job-action-error')).toHaveTextContent('Job is not scheduled');
     });
 
     it('shows a rejected send as an action error', async () => {
