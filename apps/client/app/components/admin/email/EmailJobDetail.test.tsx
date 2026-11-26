@@ -265,4 +265,44 @@ describe('EmailJobDetail', () => {
     expect(m.create).not.toHaveBeenCalled();
     expect(m.update).not.toHaveBeenCalled();
   });
+
+  // jsdom's getComputedStyle ignores @media rules, so read the declarations emitted for the element's
+  // classes inside the `min-width` query for a breakpoint (0px is the phone-first base, 900px is md).
+  const declared = (testId: string, minWidth: string) => {
+    const classes = Array.from(screen.getByTestId(testId).classList);
+    const found: Record<string, string> = {};
+    for (const sheet of Array.from(document.styleSheets)) {
+      for (const rule of Array.from(sheet.cssRules)) {
+        if (!(rule instanceof CSSMediaRule) || !rule.conditionText.replace(/\s/g, '').includes(`(min-width:${minWidth})`)) {
+          continue;
+        }
+        for (const inner of Array.from(rule.cssRules)) {
+          if (!(inner instanceof CSSStyleRule) || !classes.some(c => inner.selectorText === `.${c}`)) continue;
+          for (const name of Array.from(inner.style)) found[name] = inner.style.getPropertyValue(name);
+        }
+      }
+    }
+    return found;
+  };
+
+  it('stacks the form and preview columns on a narrow window and keeps the 50/50 split from md up', () => {
+    renderDetail('job1');
+
+    expect(declared('email-job-detail-columns', '0px')['flex-direction']).toBe('column');
+    expect(declared('email-job-detail-form-column', '0px')).toMatchObject({ width: '100%' });
+    expect(declared('email-job-detail-preview-column', '0px')).toMatchObject({ width: '100%' });
+
+    expect(getComputedStyle(screen.getByTestId('email-job-detail-form-column')).minWidth).toBe('0px');
+    expect(getComputedStyle(screen.getByTestId('email-job-detail-preview-column')).minWidth).toBe('0px');
+
+    expect(declared('email-job-detail-columns', '900px')['flex-direction']).toBe('row');
+    expect(declared('email-job-detail-form-column', '900px')).toMatchObject({ width: '50%' });
+    expect(declared('email-job-detail-preview-column', '900px')).toMatchObject({ width: '50%' });
+  });
+
+  it('lets the preview header wrap so the recipient select cannot force a sideways scroll', () => {
+    renderDetail('job1');
+
+    expect(getComputedStyle(screen.getByTestId('email-job-detail-preview-header')).flexWrap).toBe('wrap');
+  });
 });
