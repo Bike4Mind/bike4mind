@@ -105,6 +105,8 @@ export type DataTableProps<Row> = {
 };
 /** One `sm` icon button (32 px) plus the cell's 12 px padding on each side. */
 export const ROW_ACTIONS_WIDTH = '3.5rem';
+/** Sized for an en-US `toLocaleString()` value at its longest character count (`12/28/2026, 12:58:58 PM`) plus the cell's 12 px padding on each side; locales with a longer rendering still ellipsize. */
+export const DATETIME_COLUMN_WIDTH = '13.5rem';
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
 
 function nextDirection(current: DataTableSort | undefined, columnId: string): DataTableSort {
@@ -265,6 +267,9 @@ export function DataTable<Row>({
     if (!event.currentTarget.contains(target) || target.closest(CELL_CONTROLS)) return;
     // A disabled checkbox input swallows the click, so it lands on the wrapper, which CELL_CONTROLS does not match.
     if (target.closest('[data-selection-cell]')) return;
+    // Drag-selecting cell text to copy it ends in a click; that must not open the row.
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && event.currentTarget.contains(selection.anchorNode)) return;
     onRowActivate?.(row);
   };
 
