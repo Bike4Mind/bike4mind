@@ -37,7 +37,9 @@ public final class BusyBlockSyncer {
   private let reader: any BusyBlockReader
   private let now: @Sendable () -> Date
   private var lastSync: Date?
-  private var isSyncing = false
+  private var current: Task<BusyBlockSyncOutcome, Never>?
+  /// The latest outcome that says something about the account or device; `inFlight` and `throttled` leave it alone.
+  public private(set) var lastOutcome: BusyBlockSyncOutcome?
 
   public init(api: any BusyBlocksAPI, reader: any BusyBlockReader, now: @escaping @Sendable () -> Date = { Date() }) {
     self.api = api
@@ -58,11 +60,33 @@ public final class BusyBlockSyncer {
   /// the throttle untouched, so the next foreground or background run retries at once.
   @discardableResult
   public func sync(force: Bool = false) async -> BusyBlockSyncOutcome {
-    guard !isSyncing else { return .skipped(.inFlight) }
-    guard reader.access() != .notDetermined else { return .skipped(.neverAsked) }
+    guard current == nil else { return .skipped(.inFlight) }
+    guard reader.access() != .notDetermined else { return record(.skipped(.neverAsked)) }
     if !force, let lastSync, now().timeIntervalSince(lastSync) < Self.minInterval { return .skipped(.throttled) }
-    isSyncing = true
-    defer { isSyncing = false }
+    let task = Task { await perform() }
+    current = task
+    defer { current = nil }
+    return record(
+      await withTaskCancellationHandler {
+        await task.value
+      } onCancel: {
+        task.cancel()
+      })
+  }
+
+  /// A forced sync, or the outcome of the one already running, so a caller that must report success waits for it.
+  /// Cancelling the caller does not cancel a sync it joined.
+  public func syncJoiningInFlight() async -> BusyBlockSyncOutcome {
+    if let current { return await current.value }
+    return await sync(force: true)
+  }
+
+  /// Records a toggle save made outside `sync`: turning it on pushed the current blocks, turning it off cleared them.
+  public func recordSave(enabled: Bool) {
+    lastOutcome = enabled ? .synced : .skipped(.disabled)
+  }
+
+  private func perform() async -> BusyBlockSyncOutcome {
     do {
       guard try await api.state().enabled else {
         lastSync = now()
@@ -76,5 +100,10 @@ public final class BusyBlockSyncer {
     } catch {
       return .failed
     }
+  }
+
+  private func record(_ outcome: BusyBlockSyncOutcome) -> BusyBlockSyncOutcome {
+    lastOutcome = outcome
+    return outcome
   }
 }

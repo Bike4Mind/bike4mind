@@ -63,7 +63,9 @@ struct RootView: View {
     .onChange(of: scenePhase, initial: true) { _, phase in
       // Lock on the way out so the app-switcher snapshot never shows content.
       if phase == .background {
-        if auth.state == .signedIn || auth.state == .locked { services.busyBlockRefresh.scheduleNext() }
+        if auth.state == .signedIn || auth.state == .locked {
+          services.busyBlockRefresh.scheduleNext(after: services.busyBlockSyncer.lastOutcome)
+        }
         auth.lockIfNeeded()
       }
       guard phase == .active else { return }

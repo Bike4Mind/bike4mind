@@ -170,7 +170,7 @@ final class AppServices {
     busyBlockSyncer = syncer
     busyBlockRefresh = BusyBlockBackgroundRefresh(
       identifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, scheduler: SystemBackgroundRefreshScheduler()
-    ) { await syncer.sync(force: true) }
+    ) { await syncer.syncJoiningInFlight() }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG

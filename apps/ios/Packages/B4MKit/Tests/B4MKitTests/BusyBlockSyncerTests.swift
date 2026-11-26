@@ -251,6 +251,61 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(firstOutcome, .synced)
   }
 
+  func testJoiningCallerGetsTheInFlightOutcomeWithoutASecondRead() async {
+    let cases: [((any Error)?, BusyBlockSyncOutcome)] = [(nil, .synced), (URLError(.notConnectedToInternet), .failed)]
+    for (stateError, expected) in cases {
+      let api = FakeBusyBlocksAPI(enabled: true)
+      let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized))
+      if let stateError { await api.failState(with: stateError) }
+      await api.holdState()
+
+      let first = Task { await syncer.sync(force: true) }
+      while await api.reads == 0 { await Task.yield() }
+      let joined = Task { await syncer.syncJoiningInFlight() }
+      await Task.yield()
+      await api.release()
+
+      let joinedOutcome = await joined.value
+      let firstOutcome = await first.value
+      XCTAssertEqual(joinedOutcome, expected)
+      XCTAssertEqual(firstOutcome, expected)
+      let reads = await api.reads
+      XCTAssertEqual(reads, 1)
+    }
+  }
+
+  func testJoiningWithNothingInFlightRunsAForcedSync() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+    await syncer.sync()
+
+    let outcome = await syncer.syncJoiningInFlight()
+
+    XCTAssertEqual(outcome, .synced)
+    let saves = await api.saves
+    XCTAssertEqual(saves.count, 2)
+  }
+
+  func testLastOutcomeIgnoresThrottledAndInFlightSkips() async {
+    let api = FakeBusyBlocksAPI(enabled: false)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+    XCTAssertNil(syncer.lastOutcome)
+
+    await syncer.sync()
+    XCTAssertEqual(syncer.lastOutcome, .skipped(.disabled))
+    await api.holdState()
+    let first = Task { await syncer.sync(force: true) }
+    while await api.reads < 2 { await Task.yield() }
+    let inFlight = await syncer.sync(force: true)
+    XCTAssertEqual(inFlight, .skipped(.inFlight))
+    XCTAssertEqual(syncer.lastOutcome, .skipped(.disabled))
+    await api.release()
+    _ = await first.value
+    let skipped = await syncer.sync()
+    XCTAssertEqual(skipped, .skipped(.throttled))
+    XCTAssertEqual(syncer.lastOutcome, .skipped(.disabled))
+  }
+
   func testEnablingWithDeniedAccessRevertsTheToggleAndWritesNothing() async {
     let api = FakeBusyBlocksAPI(enabled: false)
     let reader = FakeReader(access: .notDetermined, grants: false)
@@ -269,13 +324,15 @@ final class BusyBlockSyncerTests: XCTestCase {
   func testEnablingWithAccessSendsCurrentBlocksAndDisablingClearsThem() async {
     let api = FakeBusyBlocksAPI(enabled: false)
     let reader = FakeReader(access: .notDetermined, events: events())
-    let model = BusyBlockBriefViewModel(
-      api: api, reader: reader, syncer: BusyBlockSyncer(api: api, reader: reader, now: { [now] in now }))
+    let syncer = BusyBlockSyncer(api: api, reader: reader, now: { [now] in now })
+    let model = BusyBlockBriefViewModel(api: api, reader: reader, syncer: syncer)
     await model.load()
 
     await model.setEnabled(true)
     XCTAssertTrue(model.isEnabled)
+    XCTAssertEqual(syncer.lastOutcome, .synced)
     await model.setEnabled(false)
+    XCTAssertEqual(syncer.lastOutcome, .skipped(.disabled))
 
     XCTAssertFalse(model.isEnabled)
     let saves = await api.saves

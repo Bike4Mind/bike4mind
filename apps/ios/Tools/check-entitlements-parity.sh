@@ -27,6 +27,7 @@ readonly CONTAINER_SOURCE=Packages/B4MKit/Sources/B4MKit/Capture/SharedContainer
 readonly SNAPSHOT_SOURCE=Packages/B4MKit/Sources/B4MKit/Widgets/WidgetSnapshot.swift
 readonly REFRESH_SOURCE=Packages/B4MKit/Sources/B4MKit/Briefs/BusyBlockBackgroundRefresh.swift
 readonly APP_INFO_PLIST=AppSupport/Info.plist
+readonly PROJECT_FILE=Bike4Mind.xcodeproj/project.pbxproj
 
 failures=0
 fail() {
@@ -106,6 +107,12 @@ refresh_suffix=$(swift_constant "$REFRESH_SOURCE" identifierSuffix)
 permitted=$(plist_values "$APP_INFO_PLIST" BGTaskSchedulerPermittedIdentifiers)
 [ "$permitted" = "\$(PRODUCT_BUNDLE_IDENTIFIER)$refresh_suffix" ] ||
   fail "$APP_INFO_PLIST BGTaskSchedulerPermittedIdentifiers is '$permitted', expected '\$(PRODUCT_BUNDLE_IDENTIFIER)$refresh_suffix'"
+# Without the fetch background mode BGTaskScheduler.submit throws, and that is only logged.
+modes=$(grep 'INFOPLIST_KEY_UIBackgroundModes' "$PROJECT_FILE")
+[ "$(printf '%s\n' "$modes" | grep -c '[" ]fetch[" ;]')" -ge 2 ] ||
+  fail "$PROJECT_FILE INFOPLIST_KEY_UIBackgroundModes must include fetch in the Debug and Release app configs"
+[ -z "$(printf '%s\n' "$modes" | grep -v '[" ]fetch[" ;]')" ] ||
+  fail "$PROJECT_FILE has an INFOPLIST_KEY_UIBackgroundModes without fetch"
 
 if [ "$failures" -gt 0 ]; then
   exit 1

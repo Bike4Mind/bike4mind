@@ -98,8 +98,8 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
     XCTAssertEqual(scheduler.submits.count, 1)
   }
 
-  func testRunWithNothingToDoDoesNotRearm() async {
-    for outcome: BusyBlockSyncOutcome in [.skipped(.disabled), .skipped(.neverAsked), .skipped(.signedOut)] {
+  func testRunThatOnlyThisAppCanUnblockDoesNotRearm() async {
+    for outcome: BusyBlockSyncOutcome in [.skipped(.neverAsked), .skipped(.signedOut)] {
       let scheduler = FakeScheduler()
       let task = FakeTask()
 
@@ -108,6 +108,34 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
       XCTAssertEqual(task.completions, [true], "\(outcome)")
       XCTAssertTrue(scheduler.submits.isEmpty, "\(outcome)")
     }
+  }
+
+  func testRunWithTheOptInOffRearmsAtTheLongerInterval() async {
+    let scheduler = FakeScheduler()
+    let task = FakeTask()
+
+    await run(refresh(scheduler) { .skipped(.disabled) }, until: task)
+
+    XCTAssertEqual(task.completions, [true])
+    XCTAssertEqual(
+      scheduler.submits.map(\.earliestBegin), [now.addingTimeInterval(BusyBlockBackgroundRefresh.disabledInterval)])
+  }
+
+  func testBackgroundEdgeSchedulesForTheLastKnownOutcome() {
+    let scheduler = FakeScheduler()
+    let refresh = refresh(scheduler) { .synced }
+
+    refresh.scheduleNext(after: .skipped(.neverAsked))
+    refresh.scheduleNext(after: .skipped(.signedOut))
+    refresh.scheduleNext(after: .skipped(.disabled))
+    refresh.scheduleNext(after: nil)
+
+    XCTAssertEqual(
+      scheduler.submits.map(\.earliestBegin),
+      [
+        now.addingTimeInterval(BusyBlockBackgroundRefresh.disabledInterval),
+        now.addingTimeInterval(BusyBlockBackgroundRefresh.interval),
+      ])
   }
 
   func testExpirationCancelsTheSyncAndCompletesOnceUnsuccessfully() async {
@@ -134,10 +162,16 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
     XCTAssertNil(task.expirationHandler)
   }
 
-  func testRearmsOnlyForOutcomesThatCanChangeWithoutTheApp() {
-    XCTAssertTrue(BusyBlockBackgroundRefresh.rearms(after: .synced))
-    XCTAssertTrue(BusyBlockBackgroundRefresh.rearms(after: .failed))
-    XCTAssertTrue(BusyBlockBackgroundRefresh.rearms(after: .skipped(.throttled)))
-    XCTAssertFalse(BusyBlockBackgroundRefresh.rearms(after: .skipped(.disabled)))
+  func testDelayPerOutcome() {
+    let interval = BusyBlockBackgroundRefresh.interval
+    XCTAssertEqual(BusyBlockBackgroundRefresh.delay(after: nil), interval)
+    XCTAssertEqual(BusyBlockBackgroundRefresh.delay(after: .synced), interval)
+    XCTAssertEqual(BusyBlockBackgroundRefresh.delay(after: .failed), interval)
+    XCTAssertEqual(BusyBlockBackgroundRefresh.delay(after: .skipped(.inFlight)), interval)
+    XCTAssertEqual(BusyBlockBackgroundRefresh.delay(after: .skipped(.throttled)), interval)
+    XCTAssertEqual(
+      BusyBlockBackgroundRefresh.delay(after: .skipped(.disabled)), BusyBlockBackgroundRefresh.disabledInterval)
+    XCTAssertNil(BusyBlockBackgroundRefresh.delay(after: .skipped(.neverAsked)))
+    XCTAssertNil(BusyBlockBackgroundRefresh.delay(after: .skipped(.signedOut)))
   }
 }
