@@ -1,5 +1,29 @@
 # @bike4mind/services
 
+## 31.2.0
+
+### Minor Changes
+
+- [#8656](https://github.com/Bike4Mind/bike4mind/pull/8656) [`515eea3`](https://github.com/Bike4Mind/bike4mind/commit/515eea3b9edb3304ef88282cfd40d73ccc295410) Thanks [@vinchi777](https://github.com/vinchi777)! - reuse saved characters as shot references in Productions
+
+### Patch Changes
+
+- [#8512](https://github.com/Bike4Mind/bike4mind/pull/8512) [`1f3511b`](https://github.com/Bike4Mind/bike4mind/commit/1f3511bbf98ae6bba50295f687462199c0744273) Thanks [@jarlacut](https://github.com/jarlacut)! - allocate artifact version numbers atomically
+
+- [#8629](https://github.com/Bike4Mind/bike4mind/pull/8629) [`0c77e8a`](https://github.com/Bike4Mind/bike4mind/commit/0c77e8a5d935de1f4625c230b6cad45283922ec5) Thanks [@onoya](https://github.com/onoya)! - retry a reply that came back as hidden thinking only
+
+- [#8709](https://github.com/Bike4Mind/bike4mind/pull/8709) [`fee111c`](https://github.com/Bike4Mind/bike4mind/commit/fee111c3f3b31cab78eac80fab7d63589c72627f) Thanks [@vinchi777](https://github.com/vinchi777)! - grandfather only pre-cutoff keys and apply key scope to rotation, fanout and billing
+
+- Updated dependencies [[`1f3511b`](https://github.com/Bike4Mind/bike4mind/commit/1f3511bbf98ae6bba50295f687462199c0744273), [`0c77e8a`](https://github.com/Bike4Mind/bike4mind/commit/0c77e8a5d935de1f4625c230b6cad45283922ec5), [`515eea3`](https://github.com/Bike4Mind/bike4mind/commit/515eea3b9edb3304ef88282cfd40d73ccc295410), [`bc52a90`](https://github.com/Bike4Mind/bike4mind/commit/bc52a9071c39c82dad846a7c167c442035b34dd4), [`dd11de0`](https://github.com/Bike4Mind/bike4mind/commit/dd11de0152114690f0056afadab899ec83c4bc4c), [`fee111c`](https://github.com/Bike4Mind/bike4mind/commit/fee111c3f3b31cab78eac80fab7d63589c72627f)]:
+  - @bike4mind/common@31.2.0
+  - @bike4mind/llm-adapters@2.9.1
+  - @bike4mind/utils@13.1.1
+  - @bike4mind/agents@1.8.8
+  - @bike4mind/auth@1.5.4
+  - @bike4mind/db-core@0.9.7
+  - @bike4mind/fab-pipeline@3.3.1
+  - @bike4mind/mcp@2.2.11
+
 ## 31.1.0
 
 ### Minor Changes

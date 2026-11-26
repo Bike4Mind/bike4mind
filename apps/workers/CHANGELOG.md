@@ -1,5 +1,22 @@
 # @bike4mind/workers
 
+## 0.0.30
+
+### Patch Changes
+
+- Updated dependencies [[`1f3511b`](https://github.com/Bike4Mind/bike4mind/commit/1f3511bbf98ae6bba50295f687462199c0744273), [`0c77e8a`](https://github.com/Bike4Mind/bike4mind/commit/0c77e8a5d935de1f4625c230b6cad45283922ec5), [`515eea3`](https://github.com/Bike4Mind/bike4mind/commit/515eea3b9edb3304ef88282cfd40d73ccc295410), [`bc52a90`](https://github.com/Bike4Mind/bike4mind/commit/bc52a9071c39c82dad846a7c167c442035b34dd4), [`dd11de0`](https://github.com/Bike4Mind/bike4mind/commit/dd11de0152114690f0056afadab899ec83c4bc4c), [`fee111c`](https://github.com/Bike4Mind/bike4mind/commit/fee111c3f3b31cab78eac80fab7d63589c72627f)]:
+  - @bike4mind/common@31.2.0
+  - @bike4mind/llm-adapters@2.9.1
+  - @bike4mind/utils@13.1.1
+  - @bike4mind/agents@1.8.8
+  - @bike4mind/auth@1.5.4
+  - @bike4mind/db-core@0.9.7
+  - @bike4mind/fab-pipeline@3.3.1
+  - @bike4mind/slack@8.0.2
+  - @bike4mind/database@0.4.34
+  - @bike4mind/scripts@0.1.110
+  - @bike4mind/server-utils@0.0.24
+
 ## 0.0.29
 
 ### Patch Changes
