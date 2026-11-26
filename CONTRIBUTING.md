@@ -152,7 +152,7 @@ If all three pass on a clean checkout, you're ready. **Most contributions can be
 
 To run the application locally (needed for UI work), see the [README](./README.md) local development setup and the self-hosting documentation. `compose.yaml` provides a local MongoDB replica set (`docker compose up db`).
 
-The MongoDB version tests run against is pinned in the root `package.json` (`config.mongodbMemoryServer.version`); the CI binary cache follows it and `compose.yaml` tags the same major.minor. Change them together, on purpose (`packages/scripts/src/mongodbVersionPin.test.ts` enforces it). `MONGOMS_VERSION=<x.y.z>` overrides the pin for a one-off local run.
+The MongoDB version tests run against is pinned in the root `package.json` (`config.mongodbMemoryServer.version`); the CI binary cache follows it and `compose.yaml` tags the same major.minor. Change them together, on purpose (`packages/scripts/src/mongodbVersionPin.test.ts` enforces it). `MONGOMS_VERSION=<x.y.z>` overrides the pin for a one-off local run. If your local `./data/db` was created by the untagged `mongo` image at 8.1 or newer, `mongo:8.0` will not start on it: remove `./data/db` (or dump and restore) before `docker compose up db`.
 
 ### Useful commands
 

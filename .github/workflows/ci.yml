@@ -768,7 +768,10 @@ jobs:
       # and feeds the turbo test context (MONGOMS_* in scripts/turbo-test-cache.mjs).
       - name: Export pinned MongoDB version
         if: steps.select.outputs.setup == 'true'
-        run: echo "MONGOMS_VERSION=$(node -p "require('./package.json').config.mongodbMemoryServer.version")" >> "$GITHUB_ENV"
+        run: |
+          v=$(node -p "require('./package.json').config.mongodbMemoryServer.version")
+          test -n "$v"
+          echo "MONGOMS_VERSION=$v" >> "$GITHUB_ENV"
 
       # Persist the downloaded mongod binary across runs so the pre-warm below is usually a
       # no-op restore. restore-keys lets a lockfile bump reuse the prior binary for the same

@@ -6,7 +6,7 @@ import path from 'node:path';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const read = (file: string) => fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
 
-const pinned: string = JSON.parse(read('package.json')).config?.mongodbMemoryServer?.version;
+const pinned: string | undefined = JSON.parse(read('package.json')).config?.mongodbMemoryServer?.version;
 
 /**
  * Tests, the CI binary cache and the dev compose file must all run one deliberately chosen MongoDB
@@ -18,23 +18,30 @@ describe('MongoDB version pin', () => {
   });
 
   it('is tagged by major.minor on the compose db image', () => {
-    const [major, minor] = pinned.split('.');
+    expect(pinned).toMatch(/^\d+\.\d+\.\d+$/);
+    const [major, minor] = (pinned as string).split('.');
     expect(read('compose.yaml')).toMatch(new RegExp(`^\\s+image: mongo:${major}\\.${minor}\\s*$`, 'm'));
   });
 
-  it('keys the CI mongodb-binaries cache on the exported version', () => {
-    const keys = read('.github/workflows/ci.yml')
+  it('keys the CI mongodb-binaries cache and its restore-keys on the exported version', () => {
+    const lines = read('.github/workflows/ci.yml')
       .split('\n')
-      .filter(line => /key: .*-mongodb-binaries-\$\{\{/.test(line));
-    expect(keys.length).toBeGreaterThan(0);
-    for (const key of keys) {
-      expect(key).toContain('${{ env.MONGOMS_VERSION }}');
+      .filter(line => !line.trim().startsWith('#') && line.includes('-mongodb-binaries-'));
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line).toContain('${{ env.MONGOMS_VERSION }}');
     }
   });
 
-  it('exports MONGOMS_VERSION in CI from the root pin', () => {
-    expect(read('.github/workflows/ci.yml')).toContain(
-      `MONGOMS_VERSION=$(node -p "require('./package.json').config.mongodbMemoryServer.version")`
-    );
+  it('exports a non-empty MONGOMS_VERSION in CI from the root pin', () => {
+    const lines = read('.github/workflows/ci.yml')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => !line.startsWith('#'));
+    // Separate lines on purpose: under `bash -e`, a failure on the left of `&&` does not abort.
+    const at = lines.indexOf(`v=$(node -p "require('./package.json').config.mongodbMemoryServer.version")`);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(lines[at + 1]).toBe('test -n "$v"');
+    expect(lines).toContain('echo "MONGOMS_VERSION=$v" >> "$GITHUB_ENV"');
   });
 });
