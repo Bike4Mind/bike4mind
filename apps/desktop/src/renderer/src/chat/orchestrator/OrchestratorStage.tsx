@@ -26,7 +26,7 @@ import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
-import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher, sceneStageCopy } from './ViewSwitcher';
+import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher, useSceneStageCopy, useSceneStageInfo } from './ViewSwitcher';
 import { useApplySkin, useSkinTheme } from './skins';
 import { SKIN_STAGE_VARIABLE } from './statePalette';
 import { useQuickApprovals } from './quickApprovals';
@@ -333,8 +333,8 @@ export function OrchestratorStage({
   }, [finale.shown]);
   useAgentSoundEvents(agents, parentNeedsYou);
 
-  const sceneInfo = ORCHESTRATOR_VIEW_INFO[view].scene;
-  const stageCopy = sceneStageCopy(view);
+  const sceneInfo = useSceneStageInfo(view);
+  const stageCopy = useSceneStageCopy(view);
   const parentScene = !split && sceneInfo?.host === true;
   const bannerInScene = parentScene && renderView !== undefined && agents.length > 0 && !focused;
   const banner = finale.shown && report && (

@@ -39,8 +39,6 @@ export type LightKind = (typeof LIGHT_KINDS)[number];
 export const LAMP_TONES = ['white', 'blue'] as const;
 export type LampTone = (typeof LAMP_TONES)[number];
 
-const SKIN_BACKDROPS = ['tavernBackdrop', 'aquariumBackdrop'] as const;
-
 const zoneSchema = z.object({
   slots: z.array(point).min(1),
   /** Where the zone stacks the agents it has no seat for. */
@@ -86,8 +84,6 @@ const mapSchema = z.object({
   moon: point.optional(),
   /** Where embers rise from, if the room has a fire. */
   embers: point.optional(),
-  /** The skin token (statePalette SkinTheme sprites) that replaces the backdrop when a skin sets it. */
-  skinBackdrop: z.enum(SKIN_BACKDROPS).optional(),
 });
 
 const castSchema = z.object({

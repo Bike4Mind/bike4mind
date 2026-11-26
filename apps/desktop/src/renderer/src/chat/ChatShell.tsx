@@ -173,7 +173,7 @@ import {
 } from './orchestrator/orchestratorPrefs';
 import { singlePaneLayout, type OrchestratorLayout } from './orchestrator/orchestratorLayout';
 import { renderOrchestratorView } from './orchestrator/viewRegistry';
-import { ORCHESTRATOR_VIEW_INFO, sceneStageCopy } from './orchestrator/ViewSwitcher';
+import { ORCHESTRATOR_VIEW_INFO, useSceneStageCopy } from './orchestrator/ViewSwitcher';
 import { latestQuestReport } from './orchestrator/finale';
 import { agentStates, descendantIds } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
@@ -955,6 +955,7 @@ export function ChatShell({
   }, [introPhase, introEntry]);
   const orchestratorLayout = introPhase === 'off' ? orchestratorPrefs.layout : INTRO_LAYOUT;
   const orchestratorView = orchestratorLayout.panes[0].view;
+  const ambientTalkLabel = useSceneStageCopy(orchestratorView).talk;
   // The ambient settle and the in-scene conversation are a single scene's; a split stage has neither.
   const orchestratorSplit = orchestratorLayout.panes.length > 1;
   // A scene that answers in place asks its agents' questions in its own dialogue box (OrchestratorStage
@@ -2350,7 +2351,7 @@ export function ChatShell({
                     }}
                     data-testid="orchestrator-ambient-talk-btn"
                   >
-                    {sceneStageCopy(orchestratorView).talk}
+                    {ambientTalkLabel}
                   </Button>
                   {ambientHint && (
                     <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-ambient-hint">

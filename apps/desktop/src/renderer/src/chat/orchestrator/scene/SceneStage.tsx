@@ -25,7 +25,6 @@ import {
   type AgentView,
   type ParentView,
 } from '../roster';
-import { useSkinTheme } from '../skins';
 import { stateLampColor } from '../statePalette';
 import { VISUALLY_HIDDEN } from '../../../visuallyHidden';
 import { useAgentAnnouncements } from './announcements';
@@ -43,6 +42,7 @@ import { SceneDialogue } from './SceneDialogue';
 import { ASK_STATE_LABEL, sceneAskOf } from './sceneAsk';
 import { useAskStates } from './useAskStates';
 import type { HostPose, SceneDefinition, ScenePoint } from './sceneDefinition';
+import { useSkinnedScene } from './sceneSkin';
 import { SceneLight, type SceneMood } from './SceneLight';
 import { LABEL_SPAN, hiddenBehind, nameLabelLayout, needsYouGroups, type NameLabel } from './stageGeometry';
 import { useScenePause, type ScenePauseOptions } from './useScenePause';
@@ -710,7 +710,7 @@ export type SceneStageProps = OrchestratorViewProps & {
  * `orchestrator-<scene id>-...`, except the dialogue box's `scene-dialogue-*`.
  */
 export function SceneStage({
-  scene,
+  scene: definition,
   agents,
   onSelect,
   onOpenPr,
@@ -729,10 +729,10 @@ export function SceneStage({
   inSceneDecisions = false,
   needsYouFocusRequest,
 }: SceneStageProps) {
+  const scene = useSkinnedScene(definition);
   const { map, cast, states, copy, ambience, look } = scene;
   const testId = `orchestrator-${scene.id}`;
-  const skinSprites = useSkinTheme().sprites;
-  const backdrop = (map.skinBackdrop && skinSprites[map.skinBackdrop]) || map.backdrop;
+  const backdrop = map.backdrop;
   const mode = useTheme().palette.mode;
   const mood: SceneMood = settled ? 'last-call' : mode === 'dark' ? 'night' : 'day';
   const { placements, previous } = usePlacements(agents, scene);

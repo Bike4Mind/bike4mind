@@ -126,6 +126,40 @@ describe('toSummary', () => {
     expect(JSON.stringify(summary)).not.toContain('alarm');
   });
 
+  it('turns every scene sprite path into an asset URL and keeps positions and copy', async () => {
+    const { toSummary } = await import('./index');
+    const summary = toSummary({
+      ok: true,
+      skin: {
+        manifest: { manifest: 1, id: 'night', name: 'Night', version: '2.0.0', kind: 'skin', contract: 2 },
+        tokens: {
+          scenes: {
+            office: {
+              backdrop: 'sprites/office.png',
+              cast: { sheets: [{ look: 'night', sprites: { work: 'sprites/work.png' } }] },
+              map: { door: { x: 3, y: 80 } },
+              copy: { hostName: 'Night manager' },
+            },
+          },
+        },
+        assets: new Map(),
+      },
+    });
+
+    expect(summary).toMatchObject({
+      tokens: {
+        scenes: {
+          office: {
+            backdrop: 'b4m-skin://night/sprites/office.png',
+            cast: { sheets: [{ look: 'night', sprites: { work: 'b4m-skin://night/sprites/work.png' } }] },
+            map: { door: { x: 3, y: 80 } },
+            copy: { hostName: 'Night manager' },
+          },
+        },
+      },
+    });
+  });
+
   it('reports a colour too close to the needs-you amber as a warning naming its key', async () => {
     const { toSummary } = await import('./index');
     const summary = toSummary({

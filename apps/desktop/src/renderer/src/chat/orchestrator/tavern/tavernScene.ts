@@ -33,7 +33,6 @@ export const TAVERN_SCENE: SceneDefinition = {
     lights: TAVERN_LAYOUT.lights,
     moon: TAVERN_LAYOUT.window,
     embers: TAVERN_LAYOUT.hearthGlow,
-    skinBackdrop: 'tavernBackdrop',
   },
   cast: {
     spriteHeight: 15,
