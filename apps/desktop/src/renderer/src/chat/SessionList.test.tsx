@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary, OrchestratorLabel } from '@shared/chat';
 import type { WorkerTask } from '@shared/orchestration';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -57,10 +57,21 @@ let host: HTMLElement | null = null;
 let onSelect = vi.fn<(id: string) => void>();
 let statuses = new Map<string, ChatSessionStatus>();
 let renameSession = vi.fn<(id: string, title: string) => Promise<ChatSessionSummary | null>>();
+let setSessionOrchestratorLabel = vi.fn<(id: string, label: OrchestratorLabel) => Promise<ChatSessionSummary | null>>();
 
 /** The real sessions owner under the list, so a rename travels the same path it does in the app. */
 function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessionMode }) {
-  const { sessions, loading, rename, renameError, clearRenameError, remove, togglePin, toggleArchived } = useSessions();
+  const {
+    sessions,
+    loading,
+    rename,
+    renameError,
+    clearRenameError,
+    remove,
+    togglePin,
+    toggleArchived,
+    setOrchestratorLabel,
+  } = useSessions();
   return (
     <SessionList
       sessions={sessions}
@@ -79,6 +90,7 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
       onDelete={id => void remove(id)}
       onTogglePin={session => void togglePin(session)}
       onToggleArchived={session => void toggleArchived(session)}
+      onSetOrchestratorLabel={(session, label) => void setOrchestratorLabel(session, label)}
       onRename={(session, title) => void rename(session, title)}
       onDownload={() => {}}
       renameError={renameError}
@@ -102,6 +114,7 @@ async function mount(
       onSessionSummary: () => () => undefined,
       onStreamEvent: () => () => undefined,
       renameSession,
+      setSessionOrchestratorLabel,
     },
     ...extra,
   };
@@ -169,6 +182,7 @@ beforeEach(() => {
   onSelect = vi.fn();
   statuses = new Map();
   renameSession = vi.fn(async (id: string, title: string) => summary(id, title));
+  setSessionOrchestratorLabel = vi.fn(async () => null);
 });
 
 afterEach(() => {
@@ -472,12 +486,18 @@ describe('sub-sessions an agent spawned', () => {
     expect([hintOf('Kid A'), hintOf('Kid B'), hintOf('Grandkid')]).toEqual([null, null, null]);
   });
 
-  it('marks orchestrators, and not a parent of plain sub-sessions, with the orchestrator glyph', async () => {
-    const glyphOn = (title: string) =>
-      rowOf(title).closest('li')?.querySelector('[data-testid="chat-session-orchestrator-glyph"]') ?? null;
+  const glyphOn = (title: string) =>
+    rowOf(title).closest('li')?.querySelector('[data-testid="chat-session-orchestrator-glyph"]') ?? null;
+  const sideChat = (id: string, title: string, parentSessionId: string) =>
+    summary(id, title, { origin: { parentSessionId, depth: 1, seedPrompt: 'go', kind: 'side-chat' } });
+  const openMenuOf = (title: string) =>
+    act(() => rowOf(title).closest('li')?.querySelector<HTMLElement>('[data-testid="chat-session-menu-btn"]')?.click());
+
+  it('marks a session whose agent started sub-sessions, however it was started, with the orchestrator glyph', async () => {
     await mount([
       ...sessions(),
       summary('fresh', 'Fresh orchestrator', { orchestrate: true }),
+      summary('relaunched', 'Relaunched orchestrator', { orchestrator: true }),
       summary('lapsed', 'Lapsed orchestrator'),
       summary('worker', 'Worker', {
         origin: { parentSessionId: 'lapsed', depth: 1, seedPrompt: 'go' },
@@ -485,8 +505,59 @@ describe('sub-sessions an agent spawned', () => {
       }),
     ]);
     expect(glyphOn('Fresh orchestrator')?.getAttribute('aria-label')).toBe('Orchestrator');
+    expect(glyphOn('Relaunched orchestrator')).not.toBeNull();
     expect(glyphOn('Lapsed orchestrator')).not.toBeNull();
-    expect([glyphOn('Root'), glyphOn('Kid A'), glyphOn('Worker')]).toEqual([null, null, null]);
+    expect(glyphOn('Root')).not.toBeNull();
+    expect(glyphOn('Kid A')).not.toBeNull();
+    expect([glyphOn('Kid B'), glyphOn('Grandkid'), glyphOn('Worker')]).toEqual([null, null, null]);
+  });
+
+  it('leaves a parent of side chats only unmarked', async () => {
+    await mount([summary('root', 'Root'), sideChat('side', 'Side chat', 'root')]);
+    expect(glyphOn('Root')).toBeNull();
+  });
+
+  it("lets the user's override win in both directions", async () => {
+    await mount([
+      ...sessions(),
+      summary('hidden', 'Hidden orchestrator', { orchestrate: true, orchestratorLabel: 'off' }),
+      summary('shown', 'Shown plain', { orchestratorLabel: 'on' }),
+      summary('quiet', 'Quiet root', { orchestratorLabel: 'off' }),
+      spawned('quiet-kid', 'Quiet kid', 'quiet'),
+    ]);
+    expect(glyphOn('Hidden orchestrator')).toBeNull();
+    expect(glyphOn('Quiet root')).toBeNull();
+    expect(glyphOn('Shown plain')).not.toBeNull();
+    expect(glyphOn('Root')).not.toBeNull();
+  });
+
+  it('turns the label off from the row menu, and hands it back to the automatic rule when turned on again', async () => {
+    setSessionOrchestratorLabel = vi.fn(async (id: string, label: OrchestratorLabel) =>
+      summary(id, 'Root', label === 'auto' ? {} : { orchestratorLabel: label })
+    );
+    await mount(sessions());
+
+    openMenuOf('Root');
+    expect(el('chat-session-orchestrator-label-btn').textContent).toContain("Don't show as orchestrator");
+    act(() => el('chat-session-orchestrator-label-btn').click());
+    await settle();
+    expect(setSessionOrchestratorLabel).toHaveBeenLastCalledWith('root', 'off');
+    expect(glyphOn('Root')).toBeNull();
+
+    openMenuOf('Root');
+    expect(el('chat-session-orchestrator-label-btn').textContent).toContain('Show as orchestrator');
+    act(() => el('chat-session-orchestrator-label-btn').click());
+    await settle();
+    expect(setSessionOrchestratorLabel).toHaveBeenLastCalledWith('root', 'auto');
+    expect(glyphOn('Root')).not.toBeNull();
+  });
+
+  it('pins the label on for a session the automatic rule leaves unmarked', async () => {
+    await mount([summary('plain', 'Plain')]);
+    openMenuOf('Plain');
+    act(() => el('chat-session-orchestrator-label-btn').click());
+    await settle();
+    expect(setSessionOrchestratorLabel).toHaveBeenLastCalledWith('plain', 'on');
   });
 
   it('caps the indent at three levels and labels deeper sessions', async () => {

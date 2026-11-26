@@ -69,6 +69,7 @@ import type {
   ChatSessionMode,
   ChatSessionStatusEvent,
   ChatSessionSummary,
+  OrchestratorLabel,
   RaiseRunBudgetResult,
   ChatSpawnSuggestion,
   ChatStreamEvent,
@@ -2101,6 +2102,10 @@ export class ChatService {
 
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
     return this.liveSummary(this.deps.store.setPinned(sessionId, pinned));
+  }
+
+  setSessionOrchestratorLabel(sessionId: string, label: OrchestratorLabel): Promise<ChatSessionSummary | null> {
+    return this.liveSummary(this.deps.store.setOrchestratorLabel(sessionId, label));
   }
 
   /** Read at the start of each turn, so a change applies from the next one. */

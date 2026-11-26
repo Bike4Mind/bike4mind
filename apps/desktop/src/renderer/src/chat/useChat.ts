@@ -15,6 +15,7 @@ import type {
   ContextNoticeKind,
   CreateCodeSessionRequest,
   ModelPhase,
+  OrchestratorLabel,
   ReasoningEffortSetting,
   SendMessageResult,
   SessionBackgroundJobs,
@@ -80,6 +81,7 @@ export interface SessionsController {
     nestedWorktreeIds?: readonly string[]
   ) => Promise<string[]>;
   togglePin: (session: ChatSessionSummary) => Promise<void>;
+  setOrchestratorLabel: (session: ChatSessionSummary, label: OrchestratorLabel) => Promise<void>;
   toggleArchived: (session: ChatSessionSummary) => Promise<void>;
   /** Rename any listed session, shown at once and rolled back (with `renameError`) if main refuses. */
   rename: (session: ChatSessionSummary, title: string) => Promise<void>;
@@ -374,6 +376,13 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
     editSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
 
+  // Patched in place for the same reason as pinning: the label leaves `updatedAt` alone.
+  const setOrchestratorLabel = useCallback(async (session: ChatSessionSummary, label: OrchestratorLabel) => {
+    const updated = await window.b4m.chat.setSessionOrchestratorLabel(session.id, label);
+    if (!updated) return;
+    editSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
+  }, []);
+
   // Patched in place rather than moved, for the same reason pinning is: archiving does not
   // touch `updatedAt`, and the row is about to change section anyway.
   const toggleArchived = useCallback(async (session: ChatSessionSummary) => {
@@ -434,6 +443,7 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
     clearCodeError,
     remove,
     togglePin,
+    setOrchestratorLabel,
     toggleArchived,
     rename,
     renameError,

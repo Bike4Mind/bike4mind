@@ -38,6 +38,7 @@ import {
   type ChatSessionMode,
   type ChatSessionStatus,
   type ChatSessionSummary,
+  type OrchestratorLabel,
 } from '@shared/chat';
 import { useHasComposerDraft } from './composerDrafts';
 import { useLocalHistory } from './localHistory';
@@ -78,7 +79,7 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { foldedParents, toggleFolded, useFoldedParents, useNestedSessions } from './nestedSessions';
-import { orchestratorIds } from './orchestratorIds';
+import { orchestratorLabels, toggledOrchestratorLabel } from './orchestratorIds';
 import { matchSessionShortcut } from './rail/shortcuts';
 import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
@@ -363,6 +364,7 @@ interface RowActions {
   remove: (sessionId: string) => void;
   togglePin: (session: ChatSessionSummary) => void;
   toggleArchived: (session: ChatSessionSummary) => void;
+  setOrchestratorLabel: (session: ChatSessionSummary, label: OrchestratorLabel) => void;
   rename: (session: ChatSessionSummary, title: string) => void;
   download: (session: ChatSessionSummary) => void;
   /** Opens the dialog that sends a message into this session without opening it. */
@@ -386,8 +388,10 @@ interface RowProps extends NestProps {
   actions: RowActions;
   /** Set on a search result found by issue or PR number: what it matched, e.g. `PR #1234`. */
   refChip?: string;
-  /** Marks the session as an orchestrator (orchestratorIds), apart from one that only nests sub-sessions. */
+  /** Marks the session as an orchestrator (orchestratorLabels), apart from one that only nests sub-sessions. */
   orchestrator?: boolean;
+  /** What the automatic rule alone says, so the menu clears an override rather than setting a redundant one. */
+  orchestratorAutomatic?: boolean;
 }
 
 /** The right-aligned letter that runs a row menu item while the menu is open; see onRowMenuKeyDown. */
@@ -585,6 +589,7 @@ const SessionRow = memo(function SessionRow({
   hintTitle,
   refChip,
   orchestrator = false,
+  orchestratorAutomatic = false,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
@@ -713,6 +718,20 @@ const SessionRow = memo(function SessionRow({
                     >
                       <Box sx={{ flex: 1 }}>Download</Box>
                       <MenuShortcut letter="L" />
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() =>
+                        actions.setOrchestratorLabel(
+                          session,
+                          toggledOrchestratorLabel(orchestrator, orchestratorAutomatic)
+                        )
+                      }
+                      data-testid="chat-session-orchestrator-label-btn"
+                      data-shortcut="O"
+                      aria-keyshortcuts="O"
+                    >
+                      <Box sx={{ flex: 1 }}>{orchestrator ? "Don't show as orchestrator" : 'Show as orchestrator'}</Box>
+                      <MenuShortcut letter="O" />
                     </MenuItem>
                     {!session.pinned && !session.archived && (
                       <>
@@ -1154,6 +1173,7 @@ export function SessionList({
   onDelete,
   onTogglePin,
   onToggleArchived,
+  onSetOrchestratorLabel,
   onRename,
   onDownload,
   renameError,
@@ -1189,6 +1209,8 @@ export function SessionList({
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
   onToggleArchived: (session: ChatSessionSummary) => void;
+  /** Overrides the row's orchestrator label; 'auto' hands it back to the automatic rule. */
+  onSetOrchestratorLabel: (session: ChatSessionSummary, label: OrchestratorLabel) => void;
   onRename: (session: ChatSessionSummary, title: string) => void;
   onDownload: (session: ChatSessionSummary) => void;
   /** Set when a rename was refused and rolled back; cleared by clicking it. */
@@ -1281,7 +1303,7 @@ export function SessionList({
     () => (nested ? parentHints(sessions, sections.children) : new Map<string, string>()),
     [nested, sessions, sections.children]
   );
-  const orchestrators = useMemo(() => orchestratorIds(sessions), [sessions]);
+  const orchestrators = useMemo(() => orchestratorLabels(sessions), [sessions]);
 
   const descendants = useMemo(() => {
     const cache = new Map<string, ChatSessionSummary[]>();
@@ -1350,6 +1372,7 @@ export function SessionList({
     onDelete,
     onTogglePin,
     onToggleArchived,
+    onSetOrchestratorLabel,
     onRename,
     onDownload,
     sectionActions,
@@ -1362,6 +1385,7 @@ export function SessionList({
     onDelete,
     onTogglePin,
     onToggleArchived,
+    onSetOrchestratorLabel,
     onRename,
     onDownload,
     sectionActions,
@@ -1382,6 +1406,7 @@ export function SessionList({
       remove: sessionId => target.current.onDelete(sessionId),
       togglePin: session => target.current.onTogglePin(session),
       toggleArchived: session => target.current.onToggleArchived(session),
+      setOrchestratorLabel: (session, label) => target.current.onSetOrchestratorLabel(session, label),
       rename: (session, title) => target.current.onRename(session, title),
       download: session => target.current.onDownload(session),
       message: session => setMessageTarget(session),
@@ -1488,7 +1513,8 @@ export function SessionList({
         subFolded={folded}
         subFoldable={!searching}
         hintTitle={hints.get(session.id)}
-        orchestrator={orchestrators.has(session.id)}
+        orchestrator={orchestrators.shown.has(session.id)}
+        orchestratorAutomatic={orchestrators.automatic.has(session.id)}
       />,
       ...(folded
         ? []
@@ -1511,7 +1537,8 @@ export function SessionList({
       subFoldable={false}
       hintTitle={hints.get(session.id)}
       refChip={refLabel(match.ref)}
-      orchestrator={orchestrators.has(session.id)}
+      orchestrator={orchestrators.shown.has(session.id)}
+      orchestratorAutomatic={orchestrators.automatic.has(session.id)}
     />
   );
 

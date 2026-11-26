@@ -100,6 +100,7 @@ export function renderSidebar(
         onDelete={() => {}}
         onTogglePin={() => {}}
         onToggleArchived={() => {}}
+        onSetOrchestratorLabel={() => {}}
         onRename={() => {}}
         onDownload={() => {}}
         userSections={EMPTY_SIDEBAR_SECTIONS}

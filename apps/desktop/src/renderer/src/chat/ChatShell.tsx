@@ -324,6 +324,7 @@ export function ChatShell({
     clearCodeError,
     remove,
     togglePin,
+    setOrchestratorLabel,
     toggleArchived,
     rename,
     renameError,
@@ -1930,6 +1931,7 @@ export function ChatShell({
             onCreateInSection={sectionId => void onCreateInSection(sectionId)}
             onDelete={setDeleteSessionId}
             onTogglePin={session => void togglePin(session)}
+            onSetOrchestratorLabel={(session, label) => void setOrchestratorLabel(session, label)}
             onToggleArchived={session => void toggleArchived(session)}
             onRename={(session, title) => void rename(session, title)}
             onDownload={session => void exportSession(session)}

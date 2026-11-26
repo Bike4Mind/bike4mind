@@ -93,6 +93,7 @@ function render({
           onDelete={() => {}}
           onTogglePin={() => {}}
           onToggleArchived={() => {}}
+          onSetOrchestratorLabel={() => {}}
           onRename={() => {}}
           onDownload={() => {}}
           userSections={userSections}

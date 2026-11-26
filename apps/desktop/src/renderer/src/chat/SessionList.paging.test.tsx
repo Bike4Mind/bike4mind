@@ -85,6 +85,7 @@ function Harness() {
       onDelete={() => {}}
       onTogglePin={() => {}}
       onToggleArchived={() => {}}
+      onSetOrchestratorLabel={() => {}}
       onRename={() => {}}
       onDownload={() => {}}
       userSections={EMPTY_SIDEBAR_SECTIONS}

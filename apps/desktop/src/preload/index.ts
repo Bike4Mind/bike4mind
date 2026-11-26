@@ -18,6 +18,7 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionSummary,
   ChatStreamEvent,
+  OrchestratorLabel,
   ReasoningEffortSetting,
   EditMessageRequest,
   StartSpawnSuggestionRequest,
@@ -287,6 +288,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatGetModelLoadOffer, modelId, draftTokens),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
+    setSessionOrchestratorLabel: (sessionId: string, label: OrchestratorLabel) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionOrchestratorLabel, sessionId, label),
     setSessionOrchestrate: (sessionId: string, orchestrate: boolean, budgetCredits?: number) =>
       budgetCredits === undefined
         ? ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionOrchestrate, sessionId, orchestrate)
