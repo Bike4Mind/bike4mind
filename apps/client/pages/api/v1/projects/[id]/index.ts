@@ -13,6 +13,7 @@ import { fabFileRepository, projectRepository, sessionRepository, userRepository
 import { projectService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
@@ -106,6 +107,10 @@ const deleteRoute = nextRouteForContract(deleteProjectContract, {
   );
 
   await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
+  await rescopeUserSubscriptions(
+    cleanUpTargets.map(target => target.userId),
+    req.logger
+  );
 
   // Same analytics event DELETE /api/projects/[id] emits.
   await logEventSafe(

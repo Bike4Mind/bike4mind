@@ -11,7 +11,7 @@ import {
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { grantWrite } from './grantWrite';
-import { hasGrantorInProject, projectParticipants, SharedItem } from './projectGrantor';
+import { projectGrantorCheck, projectParticipants, SharedItem } from './projectGrantor';
 
 const revokeSharingSchema = z.object({
   id: z.string(),
@@ -58,18 +58,14 @@ const detachFromProjectsWithoutGrantor = async (
   );
   const detached: IProjectDocument[] = [];
   for (const project of projects) {
-    const participants = projectParticipants(project).filter(id => id !== userIdToRevoke);
+    if (await projectGrantorCheck(project, db, { exclude: userIdToRevoke })(document)) continue;
     const outsideProject = document.users.filter(u => u.projectId !== project.id);
-    if (await hasGrantorInProject(document, outsideProject, participants, db)) continue;
 
     if (type === 'files') {
       await db.projects.pullFileReferences([document.id], { projectId: project.id });
     } else {
       await db.projects.update({ id: project.id, sessionIds: project.sessionIds.filter(id => id !== document.id) });
-      await detachSessionKnowledgeWithoutGrantor(
-        { session: document as ISessionDocument, project, userIdToRevoke },
-        adapters
-      );
+      await detachSessionKnowledgeWithoutGrantor({ session: document as ISessionDocument, project }, adapters);
     }
     document.users = outsideProject;
     detached.push(project);
@@ -78,23 +74,19 @@ const detachFromProjectsWithoutGrantor = async (
 };
 
 const detachSessionKnowledgeWithoutGrantor = async (
-  parameters: { session: ISessionDocument; project: IProjectDocument; userIdToRevoke: string },
+  parameters: { session: ISessionDocument; project: IProjectDocument },
   adapters: RevokeSharingAdapters
 ) => {
-  const { session, project, userIdToRevoke } = parameters;
+  const { session, project } = parameters;
   const { db } = adapters;
   const knowledgeIds = new Set((session.knowledgeIds ?? []).map(String));
   const inProject = [...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)].map(String);
   const ids = [...new Set(inProject.filter(id => knowledgeIds.has(id)))];
   if (ids.length === 0) return;
-  // The revokee keeps the project and still counts as a grantor of the file, but not through the
-  // rows this session minted for them: revokeSessionKnowledgeFileGrants drops those next.
-  const participants = projectParticipants(project);
+  // The revokee keeps the project and still counts as a grantor of the file through their own rows.
+  const hasGrantor = projectGrantorCheck(project, db);
   for (const file of uniqueById(await db.fabFiles.findAllByIds(ids))) {
-    const outsideProject = file.users.filter(
-      u => u.projectId !== project.id && !(String(u.userId) === userIdToRevoke && u.sessionId === session.id)
-    );
-    if (await hasGrantorInProject(file as SharedItem, outsideProject, participants, db)) continue;
+    if (await hasGrantor(file as SharedItem)) continue;
     await db.projects.pullFileReferences([file.id], { projectId: project.id });
     const remaining = file.users.filter(u => u.projectId !== project.id);
     if (remaining.length === file.users.length) continue;
@@ -127,10 +119,11 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   if (!member) throw new NotFoundError(`User not found for id: ${userIdToRevoke}`);
   // A row without read (e.g. share only) is invisible to the target's own lookup, so fall back to
   // the revoker's: the owner must be able to remove every row on their document.
-  const revoker = userId === userIdToRevoke ? null : await db.users.findById(userId);
-  const document =
-    (await dbModel.shareable.findAccessibleById(member, id)) ??
-    (revoker ? await dbModel.shareable.findAccessibleById(revoker, id) : null);
+  const asRevoker = async () => {
+    const revoker = userId === userIdToRevoke ? null : await db.users.findById(userId);
+    return revoker ? dbModel.shareable.findAccessibleById(revoker, id) : null;
+  };
+  const document = (await dbModel.shareable.findAccessibleById(member, id)) ?? (await asRevoker());
   if (!document) throw new NotFoundError(`${type} not found for ${id}`);
 
   // Authorization: only the document owner or the user themselves can revoke sharing

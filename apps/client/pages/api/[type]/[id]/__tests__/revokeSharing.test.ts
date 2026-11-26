@@ -169,4 +169,22 @@ describe('/api/[type]/[id]/revokeSharing - live subscriptions', () => {
     expect(mockRescope).toHaveBeenCalledTimes(1);
     expect(mockRescope.mock.calls[0][0]).toEqual(expect.arrayContaining(['target-user', 'project-member']));
   });
+
+  it('cleans up the file references of every user a file revoke reports', async () => {
+    mockCleanUp.mockClear();
+    mockRevoke.mockImplementationOnce(
+      async (_caller: string, _params: unknown, adapters: { onAccessRemoved: (ids: string[]) => void }) => {
+        adapters.onAccessRemoved(['target-user', 'project-member']);
+        return { id: 'doc1' };
+      }
+    );
+    const { req, res } = request({ type: 'files', id: 'doc1' }, { userId: 'target-user' });
+
+    await mockRefs.useHandler!(req, res);
+
+    expect(mockCleanUp.mock.calls[0][0]).toEqual([
+      { userId: 'target-user', fileIds: ['doc1'] },
+      { userId: 'project-member', fileIds: ['doc1'] },
+    ]);
+  });
 });

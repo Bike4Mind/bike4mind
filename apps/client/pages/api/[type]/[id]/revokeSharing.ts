@@ -65,7 +65,8 @@ const handler = baseApi().use(
     // re-checked, so a user who still reads a file through another grant keeps it.
     const cleanUpTargets =
       type === 'files'
-        ? [{ userId: body.userId, fileIds: [id] }]
+        ? // lostAccess includes the participants of any project the file was detached from.
+          [...new Set([body.userId, ...lostAccess])].map(userId => ({ userId, fileIds: [id] }))
         : type === 'sessions' && !body.projectId
           ? // An unscoped session revoke also drops the grants it minted on the session's files.
             [{ userId: body.userId, fileIds: (document as ISessionDocument).knowledgeIds ?? [] }]

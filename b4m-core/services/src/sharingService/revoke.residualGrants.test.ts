@@ -16,6 +16,7 @@ type Project = {
   fileIds: string[];
   sessionIds: string[];
   systemPrompts: { fileId: string; enabled: boolean }[];
+  groups?: { groupId: string; permissions: string[] }[];
 };
 
 const readable = (doc: Doc | Project, userId: string) =>
@@ -97,6 +98,11 @@ const adaptersFor = (
         projects: p.repo,
         users: {
           findById: vi.fn(async (id: string) => ({ id, groups: groupsOf[id] ?? [] })),
+          findUserIdsByGroupIds: vi.fn(async (groupIds: string[]) =>
+            Object.fromEntries(
+              groupIds.map(groupId => [groupId, Object.keys(groupsOf).filter(id => groupsOf[id].includes(groupId))])
+            )
+          ),
         },
       },
       onAccessRemoved,
@@ -262,6 +268,31 @@ describe('revoke - residual grants', () => {
       await revoke('owner', { id: 'file-1', type: 'files', userId: 'sharee' }, env.adapters);
 
       expect(env.projects.get('project-1')!.fileIds).toEqual([]);
+    });
+
+    it('does not count share minted by another project as a grantor', async () => {
+      const env = adaptersFor(
+        [sharedFile([{ userId: 'member', permissions: ['read', 'share'], projectId: 'project-2' }])],
+        [],
+        [project({ users: [memberRow], fileIds: ['file-1'] })]
+      );
+
+      await revoke('owner', { id: 'file-1', type: 'files', userId: 'sharee' }, env.adapters);
+
+      expect(env.projects.get('project-1')!.fileIds).toEqual([]);
+    });
+
+    it('keeps the item when a member of a group the project is shared with holds share on it', async () => {
+      const env = adaptersFor(
+        [sharedFile([{ userId: 'carol', permissions: ['read', 'share'] }])],
+        [],
+        [project({ users: [memberRow], fileIds: ['file-1'], groups: [{ groupId: 'team', permissions: ['read'] }] })],
+        { carol: ['team'] }
+      );
+
+      await revoke('owner', { id: 'file-1', type: 'files', userId: 'sharee' }, env.adapters);
+
+      expect(env.projects.get('project-1')!.fileIds).toEqual(['file-1']);
     });
 
     it('detaches a session from the project the same way', async () => {

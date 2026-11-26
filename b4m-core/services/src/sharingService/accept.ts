@@ -12,6 +12,7 @@ import {
   IShareableDocument,
   ISpaceRepository,
   IUserDocument,
+  IUserRepository,
   Permission,
   ShareableAccessShape,
   isLinkOnlyInvite,
@@ -36,7 +37,7 @@ import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { assertContentInvitePolicy } from './organizationPolicy';
 import { grantCap } from '../projectService/addFiles';
-import { hasGrantorInProject, projectParticipants, SharedItem } from './projectGrantor';
+import { projectGrantorCheck, SharedItem } from './projectGrantor';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -61,6 +62,7 @@ interface AcceptInviteAdapters {
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
+      findUserIdsByGroupIds: IUserRepository['findUserIdsByGroupIds'];
       update: (data: Partial<IUserDocument>) => Promise<unknown>;
     };
     spaces: Pick<ISpaceRepository, 'findLiveById' | 'addMember'>;
@@ -519,15 +521,12 @@ const acceptProject = async (
   // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one. Passing it
   // on needs a grantor in the project: the inviter holding share, or the same grantor rule revoke uses
   // to keep an item attached (projectGrantor.ts).
-  const participants = projectParticipants(project);
+  const hasGrantor = projectGrantorCheck(project, db);
   const grantOn = async (item: SharedItem) => {
     if (!inviter) return null;
     let granted = reshareableBy(item, inviter, permissions).granted;
-    if (granted.length === 0) {
-      const outsideProject = (item.users ?? []).filter(u => u.projectId !== projectId);
-      if (await hasGrantorInProject(item, outsideProject, participants, db)) {
-        granted = grantCap(item as ShareableAccessShape, inviter)(permissions);
-      }
+    if (granted.length === 0 && (await hasGrantor(item))) {
+      granted = grantCap(item as ShareableAccessShape, inviter)(permissions);
     }
     return granted.length > 0 ? { add: [{ userId: user.id, permissions: granted, projectId }] } : null;
   };
