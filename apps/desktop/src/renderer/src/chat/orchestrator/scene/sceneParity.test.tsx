@@ -407,6 +407,14 @@ describe.each(CASES)('the $view scene with $skin', ({ view, summary }) => {
       expect(query(`${id}-reply-bubble`)).toBeNull();
     });
 
+    it('says the parent needs you over its head, and counts it in the room summary', async () => {
+      const agents = [agentFixture('a', 'working')];
+      await render(props(agents, { parent: { status: 'needs-action' } }));
+      expect(el(`${id}-host-bubble`).textContent).toBe('Needs you!');
+      const summary = document.getElementById(el(id).getAttribute('aria-describedby') ?? '');
+      expect(summary?.textContent).toBe(describeAgentStates(['working'], 1));
+    });
+
     it('walks over to an agent the parent is reading', async () => {
       const agents = [agentFixture('a', 'working')];
       const parent = {
