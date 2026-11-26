@@ -10,7 +10,7 @@ import { RANGE_DAYS, spendKpi, type DashboardRange } from './dashboardRange';
 
 type QueryState<T> = { data: T | undefined; isLoading: boolean; isError: boolean; refetch: () => unknown };
 
-const LOADING_VALUE = '…';
+const LOADING_VALUE = '\u2026';
 const FAILED = 'Could not load';
 
 function UsageStrip({ overview }: { overview: AnalyticsOverview }) {
@@ -119,7 +119,7 @@ function MoneyStrip({
             ? FAILED
             : perUser?.value != null && perUser.previous != null
               ? comparisonLine(perUser.value, perUser.previous, days)
-              : 'LLM cost divided by active users'
+              : 'All LLM cost divided by external active users'
         }
       />
       <StatTile

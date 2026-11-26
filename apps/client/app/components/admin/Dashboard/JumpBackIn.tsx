@@ -29,10 +29,9 @@ function useTabShortcuts(canOpenTab: (tab: AdminTab) => boolean): TabShortcut[] 
       if (tab === undefined || !item || tab === AdminTab.Dashboard || !canOpenTab(tab)) return [];
       return [{ kind: 'tab', slug, tab, label: item.label, Icon: item.Icon, pinned }];
     };
-    return [
-      ...usage.pins.flatMap(slug => toShortcut(slug, true)),
-      ...mostVisitedSlugs(usage, now, MOST_VISITED_LIMIT).flatMap(slug => toShortcut(slug, false)),
-    ];
+    // Rank every tracked page, then cut, so pages the viewer cannot open do not use up the row.
+    const visited = mostVisitedSlugs(usage, now, Number.POSITIVE_INFINITY).flatMap(slug => toShortcut(slug, false));
+    return [...usage.pins.flatMap(slug => toShortcut(slug, true)), ...visited.slice(0, MOST_VISITED_LIMIT)];
   }, [usage, canOpenTab, now]);
 }
 
@@ -83,8 +82,9 @@ export function JumpBackIn({
 }) {
   const userId = useUser(state => state.currentUser?.id);
   const togglePin = useAdminPageVisits(state => state.togglePin);
-  const pinCount = useAdminPageUsage(userId).pins.length;
   const tabs = useTabShortcuts(canOpenTab);
+  const shownPins = useMemo(() => new Set(tabs.filter(tab => tab.pinned).map(tab => tab.slug)), [tabs]);
+  const pinCount = shownPins.size;
 
   if (tabs.length === 0 && dashboardShortcuts.length === 0) {
     return (
@@ -126,7 +126,7 @@ export function JumpBackIn({
                   aria-label={pinLabel}
                   aria-pressed={shortcut.pinned}
                   disabled={pinDisabled || !userId}
-                  onClick={() => userId && togglePin(userId, shortcut.slug)}
+                  onClick={() => userId && togglePin(userId, shortcut.slug, pin => shownPins.has(pin))}
                   data-testid={`admin-dashboard-pin-${shortcut.slug}`}
                 >
                   {shortcut.pinned ? <PushPinIcon fontSize="small" /> : <PushPinOutlinedIcon fontSize="small" />}

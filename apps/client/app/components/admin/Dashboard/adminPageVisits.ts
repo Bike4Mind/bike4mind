@@ -27,10 +27,19 @@ export function withVisit(usage: AdminPageUsage, slug: string, now: number): Adm
   return { ...usage, visits: Object.fromEntries(kept) };
 }
 
-export function withPinToggled(usage: AdminPageUsage, slug: string): AdminPageUsage {
-  if (usage.pins.includes(slug)) return { ...usage, pins: usage.pins.filter(pin => pin !== slug) };
-  if (usage.pins.length >= MAX_PINNED_PAGES) return usage;
-  return { ...usage, pins: [...usage.pins, slug] };
+/**
+ * `isShown` drops pins the viewer can no longer see (a removed tab, a lost permission), so they
+ * stop counting against the cap; they could not be unpinned otherwise.
+ */
+export function withPinToggled(
+  usage: AdminPageUsage,
+  slug: string,
+  isShown: (slug: string) => boolean = () => true
+): AdminPageUsage {
+  const pins = usage.pins.filter(isShown);
+  if (usage.pins.includes(slug)) return { ...usage, pins: pins.filter(pin => pin !== slug) };
+  if (pins.length >= MAX_PINNED_PAGES) return pins.length === usage.pins.length ? usage : { ...usage, pins };
+  return { ...usage, pins: [...pins, slug] };
 }
 
 /** Most visited first, excluding pinned pages (they are listed separately). */
@@ -45,7 +54,7 @@ export function mostVisitedSlugs(usage: AdminPageUsage, now: number, limit: numb
 type AdminPageVisitsState = {
   byUser: Record<string, AdminPageUsage>;
   recordVisit: (userId: string, slug: string) => void;
-  togglePin: (userId: string, slug: string) => void;
+  togglePin: (userId: string, slug: string, isShown?: (slug: string) => boolean) => void;
 };
 
 /** Per-browser, per-admin page usage behind the dashboard's "Jump back in" row and the sidebar's Pinned group. */
@@ -57,9 +66,12 @@ export const useAdminPageVisits = create<AdminPageVisitsState>()(
         set(state => ({
           byUser: { ...state.byUser, [userId]: withVisit(state.byUser[userId] ?? EMPTY_PAGE_USAGE, slug, Date.now()) },
         })),
-      togglePin: (userId, slug) =>
+      togglePin: (userId, slug, isShown) =>
         set(state => ({
-          byUser: { ...state.byUser, [userId]: withPinToggled(state.byUser[userId] ?? EMPTY_PAGE_USAGE, slug) },
+          byUser: {
+            ...state.byUser,
+            [userId]: withPinToggled(state.byUser[userId] ?? EMPTY_PAGE_USAGE, slug, isShown),
+          },
         })),
     }),
     { name: 'admin-page-visits', version: 1, partialize: state => ({ byUser: state.byUser }) }

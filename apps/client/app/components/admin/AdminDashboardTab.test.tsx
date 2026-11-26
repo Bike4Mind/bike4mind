@@ -122,7 +122,12 @@ describe('AdminDashboardTab', () => {
     const [spendWindow] = useSpend.mock.lastCall as unknown as [{ dateFrom: string; dateTo: string }];
     const days = (Date.parse(spendWindow.dateTo) - Date.parse(spendWindow.dateFrom)) / 86_400_000;
     expect(days).toBe(28);
-    expect(useSpendFeatures).toHaveBeenLastCalledWith(expect.objectContaining({ audience: 'external' }));
+    const [{ range: featureRange, audience }] = useSpendFeatures.mock.lastCall as unknown as [
+      { range: { from: Date; to: Date }; audience: string },
+    ];
+    expect(audience).toBe('external');
+    expect(featureRange.from.toISOString()).toBe(spendWindow.dateFrom);
+    expect(featureRange.to.toISOString()).toBe(spendWindow.dateTo);
   });
 
   it('sends signup review to the Users tab', () => {

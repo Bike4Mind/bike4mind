@@ -7,7 +7,7 @@ import { AnalyticsTermHelp } from './EventMetrics/components/AnalyticsTermHelp';
 import { NewSignupsTile } from './Signups/NewSignupsTile';
 import { AiAdvisoryStrip } from './AiAdvisory/AiAdvisoryStrip';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
-import { AdminPageHeader, SectionCard, SegmentedControl } from './shared';
+import { AdminPageHeader, LoadingState, SectionCard, SegmentedControl } from './shared';
 import { MorningBriefCard } from './MorningBriefCard';
 import { ActiveUsersSection } from './Analytics/ActiveUsersSection';
 import { useAnalyticsOverview } from './Analytics/useAnalyticsOverview';
@@ -41,9 +41,12 @@ function Region({ title, help, children }: { title: string; help?: string; child
 
 function useDashboardData(range: DashboardRange) {
   const overview = useAnalyticsOverview({ ...ANALYTICS_DEFAULTS, range });
-  const window = useMemo(() => spendWindow(range), [range]);
-  const spend = useSpend(window);
-  const featureRange = useMemo(() => ({ from: new Date(window.dateFrom), to: new Date(window.dateTo) }), [window]);
+  const spendRange = useMemo(() => spendWindow(range), [range]);
+  const spend = useSpend(spendRange);
+  const featureRange = useMemo(
+    () => ({ from: new Date(spendRange.dateFrom), to: new Date(spendRange.dateTo) }),
+    [spendRange]
+  );
   const features = useSpendFeatures({ range: featureRange, audience: 'external' });
   const revenue = useAdminRevenueTrend();
   return { overview, spend, features, revenue };
@@ -94,7 +97,7 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
 
       <Region
         title="Pulse"
-        help="External accounts only. Each number compares the selected range with the one before it. Usage comes from the nightly analytics rollup (today is live); cost is the provider cost of LLM calls; MRR comes from the daily revenue snapshot."
+        help="Usage counts external accounts only; cost and credits cover every account, including internal accounts and platform jobs. Each number compares the selected range with the one before it. Usage comes from the nightly analytics rollup (today is live); cost is the provider cost of LLM calls; MRR comes from the daily revenue snapshot."
       >
         <PulseSection range={range} overview={overview} spend={spend} revenue={revenue} />
       </Region>
@@ -108,7 +111,9 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
         />
         <SectionCard title="LLM cost per day" body="custom" data-testid="admin-dashboard-cost-chart">
           <Box sx={{ p: 2 }}>
-            {spend.isError ? (
+            {spend.isLoading ? (
+              <LoadingState label="Loading daily cost" />
+            ) : spend.isError ? (
               <Typography level="body-sm" color="warning">
                 Daily cost could not be loaded.
               </Typography>

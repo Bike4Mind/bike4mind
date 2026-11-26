@@ -57,8 +57,8 @@ const formatSeconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 const formatRate = (rate: number) => `${(rate * 100).toFixed(1)}%`;
 
 function alarmCell(signals: ReturnType<typeof useSecurityIncidentSignals>) {
-  if (signals.isLoading) return { value: '…' };
-  if (signals.isError || !signals.data || signals.data.alarms.total === null)
+  if (signals.isLoading) return { value: '\u2026' };
+  if (signals.isError || !signals.data || signals.data.alarms.total === null || signals.data.alarms.error)
     return { value: '-', detail: 'Could not read alarms', tone: 'warning' as const };
   const firing = signals.data.alarms.inAlarm;
   return firing.length === 0
@@ -84,7 +84,7 @@ export function PlatformHealthCard({
   const p95 = spendKpi(spend.data, 'p95Latency');
   const deadLetters = counts.data?.deadLetters;
   const alarms = alarmCell(signals);
-  const spendValue = (render: () => string) => (spend.isLoading ? '…' : spend.isError ? '-' : render());
+  const spendValue = (render: () => string) => (spend.isLoading ? '\u2026' : spend.isError ? '-' : render());
   const rangeLabel = `last ${RANGE_DAYS[range]} days`;
 
   return (
@@ -104,7 +104,7 @@ export function PlatformHealthCard({
       }
     >
       <Box sx={cellGridSx}>
-        <Cell label="CloudWatch alarms (24h)" testId="admin-dashboard-health-alarms" {...alarms} />
+        <Cell label="CloudWatch alarms" testId="admin-dashboard-health-alarms" {...alarms} />
         <Cell
           label="LLM error rate"
           value={spendValue(() => formatRate(errorRate?.value ?? 0))}
@@ -132,15 +132,19 @@ export function PlatformHealthCard({
 /** Sums the daily snapshots over the range; `newMrr` and `churnedMrr` each cover one day. */
 export function revenueMovement(revenue: AdminRevenueTrendResponse | undefined, days: number) {
   if (!revenue?.stripeConfigured || revenue.trend.length === 0) return null;
-  const window = revenue.trend.slice(-days);
-  const latest = window[window.length - 1];
-  const sum = (pick: (point: (typeof window)[number]) => number) => window.reduce((total, p) => total + pick(p), 0);
+  const { trend } = revenue;
+  const snapshots = trend.slice(-days);
+  const latest = trend[trend.length - 1];
+  // Same baseline as the MRR tile: the snapshot `days` before the latest, or the oldest one there is.
+  const baseline = trend[trend.length - 1 - days] ?? trend[0];
+  const sum = (pick: (point: (typeof snapshots)[number]) => number) =>
+    snapshots.reduce((total, p) => total + pick(p), 0);
   return {
     newMrr: sum(point => point.newMrr),
     churnedMrr: sum(point => point.churnedMrr),
     pastDueMrr: latest.pastDueMrr,
     payingCount: latest.payingCount,
-    payingChange: latest.payingCount - window[0].payingCount,
+    payingChange: latest.payingCount - baseline.payingCount,
   };
 }
 
@@ -155,7 +159,7 @@ export function RevenueMovementCard({
 }) {
   const movement = revenueMovement(revenue.data, RANGE_DAYS[range]);
   const money = (minor: number) => formatMoney(minor, MRR_CURRENCY, { compact: true });
-  const placeholder = revenue.isLoading ? '…' : '-';
+  const placeholder = revenue.isLoading ? '\u2026' : '-';
   const change = movement?.payingChange ?? 0;
 
   return (

@@ -31,11 +31,21 @@ describe('admin page visits', () => {
 
   it('toggles a pin off and refuses one past the cap', () => {
     const full = Array.from({ length: MAX_PINNED_PAGES }, (_, i) => `tab-${i}`).reduce(
-      withPinToggled,
+      (usage, slug) => withPinToggled(usage, slug),
       EMPTY_PAGE_USAGE
     );
     expect(withPinToggled(full, 'one-more')).toBe(full);
     expect(withPinToggled(full, 'tab-0').pins).not.toContain('tab-0');
+  });
+
+  it('frees the slots of pins the viewer can no longer see', () => {
+    const full = Array.from({ length: MAX_PINNED_PAGES }, (_, i) => `tab-${i}`).reduce(
+      (usage, slug) => withPinToggled(usage, slug),
+      EMPTY_PAGE_USAGE
+    );
+    const pins = withPinToggled(full, 'one-more', slug => slug !== 'tab-3').pins;
+    expect(pins).not.toContain('tab-3');
+    expect(pins).toContain('one-more');
   });
 });
 
@@ -128,7 +138,7 @@ describe('revenueMovement', () => {
       churnedMrr: 10,
       pastDueMrr: 500,
       payingCount: 42,
-      payingChange: 2,
+      payingChange: 41,
     });
   });
 
