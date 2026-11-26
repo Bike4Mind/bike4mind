@@ -27,6 +27,7 @@ import { Resource } from 'sst';
 import { z } from 'zod';
 import { OrganizationAuditEventModel } from '@bike4mind/database/infra';
 import { claimAccountFilePurgeLease, type AccountFilePurgeLease } from './accountFilePurgeLease';
+import { purgeCallableFunctionDataForUser } from '../callableFunctions/dataPins';
 import {
   legacyOrganizationExportKey,
   legacyOrganizationExportLocator,
@@ -351,6 +352,8 @@ async function purgeAccountFilesWithLease(userId: string, options: PurgeOptions)
   await purgeLegacyEditBackups(owner, options);
   await options.assertLease();
   await new S3Storage(Resource.historyImportBucket.name).deletePrefixPermanently(`notebooks/${owner}/`);
+  await options.assertLease();
+  await purgeCallableFunctionDataForUser(userId);
 }
 
 /** Pre-edit copies written before `text-edit-backups/` existed; no lifecycle rule reaches them. */

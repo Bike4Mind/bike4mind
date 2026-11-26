@@ -97,6 +97,16 @@ describe('GenerationUpdatesListener', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
   });
 
+  it('refreshes the gallery for a chat card job the gallery does not list yet', async () => {
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob()]));
+    queryClient.setQueryData(videoGenerationKeys.detail('from-chat'), videoJob({ id: 'from-chat', state: 'pending' }));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'from-chat', kind: 'video', state: 'running' }));
+    expect(detail('from-chat')?.state).toBe('running');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
+  });
+
   it('ignores a frame for an unknown kind of job', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'pending' }));
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');

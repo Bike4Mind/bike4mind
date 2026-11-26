@@ -62,6 +62,9 @@ vi.mock('@server/integrations/jira/types', () => ({
 
 import { JiraWebhookDeliveryStatus } from '@bike4mind/common';
 import handler from '@pages/api/webhooks/jira/[token]';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 const routeHandler = handler as unknown as (req: unknown, res: unknown) => Promise<void>;
 

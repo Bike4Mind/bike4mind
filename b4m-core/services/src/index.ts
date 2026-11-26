@@ -95,7 +95,13 @@ export type { ServerToolExecutor, ServerToolExecutors } from './cliTools/types';
 export * from './latticeService';
 export * from './telemetry';
 export { safeCompareTokens } from '@bike4mind/auth/crypto';
-export { SreAgentService, type SrePatternLookup } from './sreAgentService';
+export {
+  SreAgentService,
+  SreAccountingError,
+  isSreAccountingError,
+  type SreAccountingContext,
+  type SrePatternLookup,
+} from './sreAgentService';
 export { RATE_LIMITED_SENTINEL } from './sreAgentService/tools';
 export * from './audienceVariants';
 // Flat exports for the client components/hooks (which import the contract types

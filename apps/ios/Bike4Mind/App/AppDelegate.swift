@@ -1,4 +1,5 @@
 import B4MKit
+import BackgroundTasks
 import UIKit
 import UserNotifications
 
@@ -16,7 +17,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     // The server selects these with `aps.category` on approval and brief pushes; they must exist before one arrives.
     UNUserNotificationCenter.current().setNotificationCategories(
       Set([ApprovalNotificationCategory.makeCategory()] + BriefNotificationCategory.makeCategories()))
+    registerBackgroundRefresh()
     return true
+  }
+
+  /// The system requires registration before launch finishes, and exactly once per process.
+  private func registerBackgroundRefresh() {
+    BGTaskScheduler.shared.register(
+      forTaskWithIdentifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, using: nil
+    ) { task in
+      let box = UncheckedSendableBox(task)
+      Task { @MainActor in
+        let refresh = SystemBackgroundRefreshTask(box.value)
+        guard let services = Self.services else { return refresh.setTaskCompleted(success: false) }
+        services.busyBlockRefresh.handle(refresh)
+      }
+    }
   }
 
   /// The system relaunched the app to deliver background upload events (a share-extension or app upload that

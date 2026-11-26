@@ -15,7 +15,7 @@ import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } fr
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
-  BadRequestError,
+  EmptyConversationError,
   ChatModels,
   estimateStreamedOutputTokens,
   ImageModels,
@@ -705,7 +705,7 @@ export class GeminiBackend implements ICompletionBackend {
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
     if (contents.length === 0) {
-      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
+      throw new EmptyConversationError();
     }
     const generationConfig = this.getGenerationConfig(modelInfo, options);
 

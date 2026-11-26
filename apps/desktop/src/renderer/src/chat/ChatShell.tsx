@@ -64,7 +64,7 @@ import {
 } from './rail/places';
 import { STUDIO_STARTING, useStudioSession } from './rail/studioSession';
 import { usePlaceShortcuts } from './rail/shortcuts';
-import { StudioMain, StudioSidebar } from './rail/StudioPlace';
+import { StudioMain } from './rail/StudioPlace';
 import { LibraryMain, LibrarySidebar } from './rail/LibraryPlace';
 import type { LibraryFilter } from './library/libraryFeed';
 import { readSidebarWidth } from './sidebarWidth';
@@ -79,6 +79,7 @@ import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
 import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
 import { StudioPane } from './studio/StudioPane';
+import { StudioProductions } from './studio/productions/StudioProductions';
 import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
@@ -165,6 +166,8 @@ import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orc
 import { inTavernDialogue } from './orchestrator/tavern/dialogue';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
+import { agentsSurfaceAvailable as isAgentsSurfaceAvailable } from './orchestrator/agentsSurface';
+import { archivedAgentsOf } from '@shared/spawnTree';
 import {
   readAmbientHintSeen,
   readIntroSeen,
@@ -915,7 +918,16 @@ export function ChatShell({
     modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
   const delegating = orchestrationSession?.orchestrate === true;
   const hasAgents = spawnedStates.length > 0;
-  const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
+  const hasArchivedAgents = useMemo(
+    () => activeId !== null && archivedAgentsOf(sessions, activeId).length > 0,
+    [sessions, activeId]
+  );
+  const agentsSurfaceAvailable = isAgentsSurfaceAvailable({
+    session: orchestrationSession,
+    hasAgents,
+    hasArchivedAgents,
+    orchestrateCapable,
+  });
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
   // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
   // "Orchestrator" without its project line, and the trays above the composer, which quote agents' questions
@@ -1885,27 +1897,8 @@ export function ChatShell({
           })}
         />
 
-        {inStudio ? (
-          !collapsed && (
-            <StudioSidebar
-              width={readSidebarWidth()}
-              area={studioArea}
-              kind={studioKind}
-              controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
-              unavailableReason={studioPlaceReason}
-              onSelectKind={kind => {
-                setScreen('conversation');
-                setStudioArea('create');
-                setStudioKind(kind);
-              }}
-              onSelectArea={area => {
-                setScreen('conversation');
-                setStudioArea(area);
-              }}
-              onToggleCollapsed={() => setCollapsed(current => !current)}
-            />
-          )
-        ) : inLibrary ? (
+        {/* Studio, like web's, carries its own areas and medium rail in the main pane: it has no sidebar. */}
+        {inStudio ? null : inLibrary ? (
           !collapsed && (
             <LibrarySidebar
               width={readSidebarWidth()}
@@ -2007,6 +2000,16 @@ export function ChatShell({
           controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
           ready={!!studioSession.sessionId}
           unavailableReason={studioPlaceReason}
+          productions={<StudioProductions />}
+          library={
+            <LibraryMain
+              filter="all"
+              accountKey={studioAccountKey}
+              api={window.b4m.library}
+              onOpenSession={selectSession}
+              onOpenStudio={() => setStudioArea('create')}
+            />
+          }
         />
       ) : inAgents ? (
         <AgentsPlace groups={board} onOpen={selectSession} onOpenMissionControl={() => setScreen('mission-control')} />
@@ -2062,7 +2065,7 @@ export function ChatShell({
                 </Box>
                 <OrchestrateToggle
                   states={spawnedStates}
-                  enabled={delegating && orchestrateCapable}
+                  enabled={agentsSurfaceAvailable}
                   parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
                   surface={orchestrating ? 'orchestrate' : 'chat'}
                   onSurfaceChange={orchestratorPrefs.setSurface}

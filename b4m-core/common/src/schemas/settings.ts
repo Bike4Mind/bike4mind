@@ -64,6 +64,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema } from '../types/entities/SreTypes';
 import { DEFAULT_FEATURE_SPIKE_MULTIPLE } from '../types/entities/SpendExplorerTypes';
+import { CALLABLE_FUNCTION_DATA_LIMITS } from '../types/entities/CallableFunctionTypes';
 import {
   hasNestedSecretValue,
   isValidNestedSecretGroups,
@@ -344,6 +345,8 @@ export const SettingKeySchema = z.enum([
   'EnableCallableFunctionsMcp',
   'CallableFunctionTimeLimitSeconds',
   'CallableFunctionPendingCallLimit',
+  'CallableFunctionDataFileMaxMb',
+  'CallableFunctionDataTotalMaxMb',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -592,6 +595,8 @@ export const SettingKeySchema = z.enum([
   'spendMonitorAutoPauseTrustedMinCredits',
   'youngAccountSpendPageUsdPerHour',
   'youngAccountSpendWarnUsdPerHour',
+  'providerSpendOpenaiUsdPerHour',
+  'providerSpendAnthropicUsdPerHour',
   'freeTierDailySystemCostCapUsd',
   'signupGrantSignupPoolDaily',
   'signupGrantTricklePoolDaily',
@@ -2047,6 +2052,9 @@ export const SIGNUP_RISK_SIGNALS = [
   'generatedLocalPart',
   'wafAnonIp',
   'wafBotSignal',
+  'emailSubdomainBurst',
+  'bannedEmailSubdomainSibling',
+  'instantApiKey',
 ] as const;
 export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
 
@@ -2070,11 +2078,23 @@ export const SignupRiskScoringSchema = z
         // Edge labels on signupMeta, recorded only where label forwarding is on. Off until a weight is set.
         wafAnonIp: signupRiskWeight(0),
         wafBotSignal: signupRiskWeight(0),
+        emailSubdomainBurst: signupRiskWeight(30),
+        bannedEmailSubdomainSibling: signupRiskWeight(30),
+        instantApiKey: signupRiskWeight(20),
       })
       .strict()
       .prefault({}),
     /** A first API key minted within this many minutes of signup counts as quick. */
     quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(60),
+    /** A first API key minted within this many seconds of signup counts as instant; it also counts as quick. */
+    instantApiKeySeconds: z.number().int().min(1).max(3600).prefault(120),
+    /**
+     * Accounts (this one included) on the same email subdomain within `emailSubdomainWindowHours` either
+     * side of signup at which emailSubdomainBurst applies. Only a subdomain host counts, never a bare
+     * registrable domain, so a shared mail provider cannot trip it.
+     */
+    emailSubdomainBurstAccounts: z.number().int().min(2).max(1000).prefault(3),
+    emailSubdomainWindowHours: z.number().int().min(1).max(720).prefault(24),
     /** Credits spent in the first 24h at which fastSpend reaches its full weight; less scales linearly. */
     fastSpendCredits: z.number().positive().prefault(1000),
     /** A score at or above this needs review. */
@@ -2697,6 +2717,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableCallableFunctionsMcp', order: 24 },
       { key: 'CallableFunctionTimeLimitSeconds', order: 24.5 },
       { key: 'CallableFunctionPendingCallLimit', order: 24.6 },
+      { key: 'CallableFunctionDataFileMaxMb', order: 24.7 },
+      { key: 'CallableFunctionDataTotalMaxMb', order: 24.8 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -2823,6 +2845,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorAutoPauseTrustedMinCredits', order: 19.4948 },
       { key: 'youngAccountSpendPageUsdPerHour', order: 19.495 },
       { key: 'youngAccountSpendWarnUsdPerHour', order: 19.496 },
+      { key: 'providerSpendOpenaiUsdPerHour', order: 19.497 },
+      { key: 'providerSpendAnthropicUsdPerHour', order: 19.498 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
@@ -3737,6 +3761,37 @@ export const settingsMap = {
     order: 24.6,
     dependsOn: 'EnableCallableFunctions',
     // Read through resolveCallableFunctionPendingCallLimit in packages/server-utils.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionDataFileMaxMb: makeNumberSetting({
+    key: 'CallableFunctionDataFileMaxMb',
+    name: 'Callable Functions: Largest Data File (MB)',
+    defaultValue: 100,
+    min: 1,
+    // The pin streams the file through the web API function in one request, which has 60 s; 512 MB leaves room at
+    // a conservative 20 MB/s for the pass and the server-side copy (packages/server-utils dataPins.ts).
+    max: 512,
+    int: true,
+    description:
+      'The largest file a person can pin to a saved function as data, in MB (at most 512). Checked when the file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.7,
+    dependsOn: 'EnableCallableFunctions',
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionDataTotalMaxMb: makeNumberSetting({
+    key: 'CallableFunctionDataTotalMaxMb',
+    name: 'Callable Functions: Data Per Function (MB)',
+    defaultValue: CALLABLE_FUNCTION_DATA_LIMITS.defaultTotalMb,
+    min: 1,
+    max: CALLABLE_FUNCTION_DATA_LIMITS.cacheMb,
+    int: true,
+    description: `The most data, in MB, all the files pinned to one saved function can add up to (at most ${CALLABLE_FUNCTION_DATA_LIMITS.cacheMb}, the runtime's data cache). Checked when a file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.`,
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.8,
+    dependsOn: 'EnableCallableFunctions',
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   EnableAgents: makeBooleanSetting({
@@ -6302,6 +6357,26 @@ export const settingsMap = {
     min: 0,
     description:
       'Estimated provider USD per rolling hour spent by accounts under 7 days old at which the young-account spend warning posts. 0 (default) stops managing the threshold and leaves its current value unchanged, including any previous override, until a deploy restores the deployed default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  providerSpendOpenaiUsdPerHour: makeNumberSetting({
+    key: 'providerSpendOpenaiUsdPerHour',
+    name: 'Provider Spend Alarm: OpenAI Hourly Ceiling (USD)',
+    defaultValue: 0,
+    min: 0,
+    description:
+      'OpenAI organization-wide spend per hour, from its own usage report priced with our model rates, at which the provider spend alarm pages. 0 or empty (default) keeps the deployed default and leaves the current threshold unchanged, including any previous override, until a deploy restores the default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  providerSpendAnthropicUsdPerHour: makeNumberSetting({
+    key: 'providerSpendAnthropicUsdPerHour',
+    name: 'Provider Spend Alarm: Anthropic Hourly Ceiling (USD)',
+    defaultValue: 0,
+    min: 0,
+    description:
+      'Anthropic organization-wide spend per hour, from its own usage report priced with our model rates, at which the provider spend alarm pages. 0 or empty (default) keeps the deployed default and leaves the current threshold unchanged, including any previous override, until a deploy restores the default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),

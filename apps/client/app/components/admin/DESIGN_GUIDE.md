@@ -337,7 +337,7 @@ A new admin tab or admin tool adds at least one question to `b4m-core/services/s
 1. **Tokens and toolkit.** Done: admin tokens in the Joy theme, the admin skin, and the components above in `components/admin/shared` with tests.
 2. **Users first.** Done: the users list and user profile run on the toolkit and are the reference implementation.
 3. **Shared frame.** Done: `AdminPage` gives every tab panel `adminPageFrame`, and `AdminPageHeader` renders the 24 px `h1`.
-4. **Every other admin tab.** Page headers: every admin tab opens with `AdminPageHeader` inside the shared frame for a full admin (Waitlist through the Invite Center header in `InviteCenterShell`; a delegated admin there sees only the held grants, which open with their section-level header and no `h1`); Dashboard, Migrate users and Tutorials moved last. Remaining: moving the legacy-exempt screens (the raw `Card`, `Modal` and `Table` imports listed in `eslint-rules/admin-joy-legacy.mjs`) onto the toolkit is #8328.
+4. **Every other admin tab.** Page headers: every admin tab opens with `AdminPageHeader` inside the shared frame for a full admin (Waitlist through the Invite Center header in `InviteCenterShell`; a delegated admin there sees only the held grants, which open with their section-level header and no `h1`); Dashboard, Migrate users and Tutorials moved last. Done: the last pre-toolkit screens (raw `Card`, `Modal` and `Table`), ending with the SRE agent tab, now run on `SectionCard`, `ActionDialog`/`AdminDialog` and `DataTable`, so no admin screen is exempt from the lint guard.
 5. **Lock it in.** The lint guard below, and the admin design-guide checkbox in the PR template.
 
 ### Lint guard
@@ -346,7 +346,7 @@ A new admin tab or admin tool adds at least one question to `b4m-core/services/s
 
 An exceptional import needs an immediately preceding comment: `// admin-toolkit-allow YYYY-MM-DD -- concrete reason the toolkit cannot serve this use case`. Keep exceptions local to one import; do not disable the rule for a file or directory.
 
-Pre-toolkit imports are recorded in `eslint-rules/admin-joy-legacy.mjs` (file, component, date, justification), each pinned to its line and a SHA-256 text fingerprint in `eslint-rules/admin-joy-legacy-imports.mjs`, so an allowance cannot pass to another import. New imports fail even in legacy files, and a changed, moved or removed import raises a stale-exception error until it is re-justified or its entry deleted. Remove entries when migrating; never add new screens.
+There is no legacy allowlist: every admin screen is on the toolkit, so a new raw import fails lint in any file outside `admin/shared/` unless it carries that comment.
 
 ## 10. AI suggestions
 

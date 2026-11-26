@@ -52,6 +52,7 @@ import {
 } from '@client/app/hooks/data/emailMarketing';
 import { EmailJobStatus, EmailJobOverallStatus, IEmailTemplateDocument } from '@bike4mind/common';
 import { APP_NAME } from '@client/config/general'; // brand externalized
+import { getErrorMessage } from '@client/app/utils/error';
 import EmailStatusSummary from './EmailStatusSummary';
 import EmailActivityHistory from './EmailActivityHistory';
 import EmailPreviewModal from './EmailPreviewModal';
@@ -153,6 +154,8 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [scheduleDate, setScheduleDate] = useState('');
   const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [recipientPreviewData, setRecipientPreviewData] = useState<{
     totalCount: number;
     eligibleCount: number;
@@ -312,6 +315,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   const parseTestEmails = () => parseTestEmailAddresses(formData.testEmailAddresses);
 
   const handleSave = async () => {
+    setActionError(null);
     const recipientFilter = buildRecipientFilter();
     const testEmailAddresses = parseTestEmails();
 
@@ -340,6 +344,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
       setHasUnsavedChanges(false);
     } catch (error) {
       console.error('Failed to save campaign:', error);
+      setActionError(getErrorMessage(error));
     }
   };
 
@@ -357,7 +362,13 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
     }
   };
 
+  const clearActionErrors = () => {
+    setActionError(null);
+    setScheduleError(null);
+  };
+
   const handleSend = async () => {
+    clearActionErrors();
     let targetJobId = jobId;
     const testEmailAddresses = parseTestEmails();
     const recipientFilter = buildRecipientFilter();
@@ -387,29 +398,43 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
       }
       setHasUnsavedChanges(false);
     } catch (error) {
-      console.error('Failed to save campaign before sending:', error);
+      setActionError(getErrorMessage(error));
       return;
     }
 
     if (!targetJobId) return;
 
-    await sendMutation.mutateAsync({
-      id: targetJobId,
-      testMode: formData.isTestMode,
-      testRecipients: formData.isTestMode ? testEmailAddresses : undefined,
-      testSubjectIndicator: formData.isTestMode, // Only add [TEST] prefix when in test mode
-      recipientFilter,
-    });
+    try {
+      await sendMutation.mutateAsync({
+        id: targetJobId,
+        testMode: formData.isTestMode,
+        testRecipients: formData.isTestMode ? testEmailAddresses : undefined,
+        testSubjectIndicator: formData.isTestMode, // Only add [TEST] prefix when in test mode
+        recipientFilter,
+      });
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
   const handleCancelPending = async () => {
     if (!jobId) return;
-    await cancelPendingMutation.mutateAsync({ jobId });
+    clearActionErrors();
+    try {
+      await cancelPendingMutation.mutateAsync({ jobId });
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
   const handleCancel = async () => {
     if (!jobId) return;
-    await cancelMutation.mutateAsync(jobId);
+    clearActionErrors();
+    try {
+      await cancelMutation.mutateAsync(jobId);
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
   // Filter recipients for View Users modal
@@ -422,11 +447,16 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
 
   const handleSchedule = async () => {
     if (!jobId || !scheduleDate) return;
-    await scheduleMutation.mutateAsync({
-      id: jobId,
-      scheduledAt: new Date(scheduleDate),
-    });
-    setShowSchedule(false);
+    clearActionErrors();
+    try {
+      await scheduleMutation.mutateAsync({
+        id: jobId,
+        scheduledAt: new Date(scheduleDate),
+      });
+      setShowSchedule(false);
+    } catch (error) {
+      setScheduleError(getErrorMessage(error));
+    }
   };
 
   const getProgress = () => {
@@ -435,6 +465,8 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   };
 
   const isSending = job?.overallStatus === EmailJobOverallStatus.SENDING;
+  // overallStatus stays non-draft once a send went out, so gate on status: the schedule route accepts only drafts.
+  const canSchedule = isEditing && job?.status === EmailJobStatus.DRAFT;
   // Reusable campaigns can be edited anytime except when actively sending
   const canEdit = !job || !isSending;
   const isSaving = createMutation.isPending || updateMutation.isPending;
@@ -495,10 +527,13 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
     <Box sx={{ pb: 4 }}>
       {/* Header */}
       <Box
+        data-testid="email-job-detail-header"
         sx={{
           display: 'flex',
+          flexWrap: 'wrap',
           justifyContent: 'space-between',
           alignItems: 'center',
+          gap: 1,
           p: 2,
           borderBottom: '1px solid',
           borderColor: 'divider',
@@ -509,8 +544,25 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
           Back to Campaigns
         </Button>
 
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography level="h4">{isEditing ? job?.name || 'Edit Campaign' : 'Create Campaign'}</Typography>
+        {/* Below sm the title gets its own row under Back and Save, so neither squeezes the other */}
+        <Stack
+          data-testid="email-job-detail-title"
+          direction="row"
+          alignItems="center"
+          useFlexGap
+          sx={{
+            flexWrap: 'wrap',
+            gap: 1,
+            minWidth: 0,
+            flex: { xs: '1 1 100%', sm: '1 1 0%' },
+            order: { xs: 1, sm: 0 },
+            justifyContent: { xs: 'flex-start', sm: 'center' },
+            '& .MuiChip-root': { flexShrink: 0 },
+          }}
+        >
+          <Typography level="h4" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+            {isEditing ? job?.name || 'Edit Campaign' : 'Create Campaign'}
+          </Typography>
           {job?.overallStatus && job.overallStatus !== EmailJobOverallStatus.DRAFT && (
             <Chip
               size="sm"
@@ -540,9 +592,10 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
           )}
         </Stack>
 
-        <Stack direction="row" spacing={1}>
+        <Stack data-testid="email-job-detail-actions" direction="row" spacing={1} sx={{ flexShrink: 0 }}>
           {canEdit && (
             <Button
+              data-testid="email-job-detail-save-btn"
               variant="solid"
               color="primary"
               startDecorator={<SaveIcon />}
@@ -556,14 +609,26 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
         </Stack>
       </Box>
 
-      {/* Main Content - Two Column Layout */}
-      <Box sx={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid', borderColor: 'divider' }}>
+      {/* Main Content - two columns from md up, stacked below so the editor never scrolls sideways */}
+      <Box
+        data-testid="email-job-detail-columns"
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', md: 'row' },
+          alignItems: 'stretch',
+          borderBottom: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
         {/* Left Column - Form */}
         <Box
+          data-testid="email-job-detail-form-column"
           sx={{
-            width: '50%',
-            p: 3,
-            borderRight: '1px solid',
+            width: { xs: '100%', md: '50%' },
+            minWidth: 0,
+            p: { xs: 2, md: 3 },
+            borderRight: { xs: 'none', md: '1px solid' },
+            borderBottom: { xs: '1px solid', md: 'none' },
             borderColor: 'divider',
           }}
         >
@@ -942,8 +1007,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                       </Button>
                     )}
 
-                    {/* Schedule - Only in edit mode and not sending */}
-                    {isEditing && job && !isSending && (
+                    {canSchedule && !isSending && (
                       <Button
                         variant="soft"
                         color="primary"
@@ -953,6 +1017,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                           defaultDate.setHours(defaultDate.getHours() + 1);
                           defaultDate.setMinutes(0, 0, 0);
                           setScheduleDate(defaultDate.toISOString().slice(0, 16));
+                          setScheduleError(null);
                           setShowSchedule(true);
                         }}
                       >
@@ -986,6 +1051,19 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                     )}
                   </Stack>
 
+                  {actionError && (
+                    <Alert color="danger" variant="soft" data-testid="email-job-action-error">
+                      {actionError}
+                    </Alert>
+                  )}
+
+                  {/* A rejected schedule refetches the job; if it is no longer a draft the form below is gone. */}
+                  {!canSchedule && scheduleError && (
+                    <Alert color="danger" variant="soft" data-testid="email-job-schedule-error">
+                      {scheduleError}
+                    </Alert>
+                  )}
+
                   {/* Recipient count reminder */}
                   {recipientPreviewData && (
                     <Alert color="primary" variant="soft">
@@ -995,8 +1073,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                     </Alert>
                   )}
 
-                  {/* Schedule Form - Only show in edit mode */}
-                  {isEditing && showSchedule && (
+                  {canSchedule && showSchedule && (
                     <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'md' }}>
                       <Stack spacing={2}>
                         <FormControl>
@@ -1012,6 +1089,11 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                             }}
                           />
                         </FormControl>
+                        {scheduleError && (
+                          <Alert color="danger" variant="soft" data-testid="email-job-schedule-error">
+                            {scheduleError}
+                          </Alert>
+                        )}
                         <Stack direction="row" spacing={1}>
                           <Button
                             variant="solid"
@@ -1023,7 +1105,14 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                           >
                             Schedule
                           </Button>
-                          <Button variant="plain" color="neutral" onClick={() => setShowSchedule(false)}>
+                          <Button
+                            variant="plain"
+                            color="neutral"
+                            onClick={() => {
+                              setShowSchedule(false);
+                              setScheduleError(null);
+                            }}
+                          >
                             Cancel
                           </Button>
                         </Stack>
@@ -1037,10 +1126,21 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
         </Box>
 
         {/* Right Column - Preview */}
-        <Box sx={{ width: '50%', display: 'flex', flexDirection: 'column', bgcolor: 'background.level1' }}>
+        <Box
+          data-testid="email-job-detail-preview-column"
+          sx={{
+            width: { xs: '100%', md: '50%' },
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            bgcolor: 'background.level1',
+          }}
+        >
           <Box
+            data-testid="email-job-detail-preview-header"
             sx={{
               display: 'flex',
+              flexWrap: 'wrap',
               justifyContent: 'space-between',
               alignItems: 'center',
               p: 2,
@@ -1056,6 +1156,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
 
             {/* Recipient Selection for Variable Testing */}
             <Select
+              data-testid="email-job-detail-recipient-select"
               size="sm"
               placeholder={
                 recipientPreviewData
@@ -1068,7 +1169,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                 const recipient = recipientPreviewData?.recipients.find(r => r.email === value);
                 setSelectedPreviewRecipient(recipient || null);
               }}
-              sx={{ minWidth: 250, flex: 1, maxWidth: 350 }}
+              sx={{ minWidth: { xs: '100%', sm: 250 }, flex: 1, maxWidth: 350 }}
             >
               {recipientPreviewData?.recipients.map(recipient => (
                 <Option key={recipient.email} value={recipient.email}>

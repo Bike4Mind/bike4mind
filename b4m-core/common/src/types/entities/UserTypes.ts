@@ -760,6 +760,11 @@ export interface IUser extends ICreditHolder {
   referralCode?: string | null;
   /** The invite this account signed up through; absent for uninvited and pre-existing accounts. */
   signupInvite?: SignupInvite;
+  /**
+   * The active OAuth client whose /oauth/authorize flow this account was created in. Written once at
+   * creation (immutable in UserModel); null for every other signup and for pre-existing accounts.
+   */
+  signupClientId?: string | null;
 
   /**
    * This field is used to store the current selected organization ID.
@@ -1345,6 +1350,11 @@ export interface IUserRepository
    * in id order; pass the last id back as `afterId` for the next page.
    */
   findRiskScoringCandidateIds: (since: Date, options: { afterId?: string; limit: number }) => Promise<string[]>;
+  /**
+   * Non-system users created within [from, to] whose email host is exactly `host` (case-insensitive,
+   * soft-deleted rows included), and how many of them are banned. Feeds the signup risk score.
+   */
+  countSignupsOnEmailHost: (host: string, from: Date, to: Date) => Promise<{ total: number; banned: number }>;
   /** Unbanned users whose risk review is pending, highest score first, at most `limit`. */
   findPendingRiskReviews: (limit: number) => Promise<IUserDocument[]>;
   /** Count of the users findPendingRiskReviews would return; `options.limit` stops counting there. */

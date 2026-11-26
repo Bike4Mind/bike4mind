@@ -23,6 +23,7 @@ import {
 import {
   FUNCTION_CONTRACT_GLOBAL,
   FUNCTION_ENTRY_POINT,
+  PYODIDE_VERSION,
   capFunctionProblems,
   compareFunctionOutput,
   parseFunctionContract,
@@ -34,6 +35,7 @@ import {
   type FunctionObjectField,
   type FunctionOutputMismatch,
   type FunctionTestCase,
+  type CallableFunctionStampData,
   type ICallableFunctionPublic,
   type McpToolApprovalMode,
   MAX_CALLABLE_FUNCTIONS_PER_TURN,
@@ -44,6 +46,7 @@ import {
   callableFunctionBreakingSincePromotion,
   callableFunctionContractUnreadable,
   callableFunctionErrorMessage,
+  fetchCallableFunctionDataFiles,
   useArtifactCallableFunction,
   useCallableFunctionsServerRuntime,
   useDeleteCallableFunction,
@@ -62,6 +65,7 @@ import ProblemList, { dangerAlertSx } from './FunctionProblemList';
 import BreakingChangeDialog from './BreakingChangeDialog';
 import { ContractTable, unitLabel } from './FunctionContractTable';
 import PromoteFunctionSection from './PromoteFunctionSection';
+import FunctionDataSection from './FunctionDataSection';
 import SaveFunctionDialog from './SaveFunctionDialog';
 
 /** Where saving this artifact as a tool would pin it, or why it cannot be saved yet. */
@@ -407,6 +411,7 @@ const SERVER_OUTCOME_TEXT: Record<Exclude<CallableFunctionTestCaseResult['outcom
   output_too_large: 'returned more than the output size limit',
   input_invalid: 'has inputs that do not match the contract',
   refused: 'was refused',
+  data_mismatch: 'read a data file whose bytes no longer match its pin',
 };
 
 function ServerTestFailure({ test, result }: { test: FunctionTestCase; result: CallableFunctionTestCaseResult }) {
@@ -482,6 +487,32 @@ interface BrowserTestsProps {
   running: boolean;
   disabled: boolean;
   onRun: () => void;
+  /** The data list of the last browser run's stamp. */
+  browserData?: CallableFunctionStampData[] | null;
+}
+
+interface BrowserStamp {
+  runtime: { kind: 'pyodide-browser'; version: string };
+  data: CallableFunctionStampData[];
+}
+
+const shortHash = (sha256: string) => `${sha256.slice(0, 12)}...`;
+
+/** What each run's stamp says it read, so the two can be compared by hash. */
+function StampData({ label, data, testId }: { label: string; data: CallableFunctionStampData[]; testId: string }) {
+  return (
+    <Stack spacing={0.25} data-testid={testId}>
+      <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+        {label}
+      </Typography>
+      {data.map(entry => (
+        <Typography key={entry.name} level="body-xs" title={entry.sha256}>
+          <code>/data/{entry.name}</code> sha256 <code>{shortHash(entry.sha256)}</code> {entry.bytes.toLocaleString()}{' '}
+          bytes
+        </Typography>
+      ))}
+    </Stack>
+  );
 }
 
 /**
@@ -495,8 +526,12 @@ function TestsSection({
   disabled,
   onRun,
   server,
+  browserData,
 }: BrowserTestsProps & { server?: ServerTests }) {
   const failedAt = outcomes.findIndex(outcome => outcome.status !== 'passed');
+  const serverData = server?.run?.results.flatMap(result =>
+    result.outcome !== 'not_run' && result.stamp ? [result.stamp.data] : []
+  )[0];
   const started = running || outcomes.length > 0;
   const statusOf = (index: number): keyof typeof TEST_STATUS => {
     if (index < outcomes.length) return outcomes[index].status;
@@ -603,6 +638,12 @@ function TestsSection({
         <Alert color="danger" variant="soft" data-testid="python-function-tests-server-error">
           <Typography level="body-sm">{server.error}</Typography>
         </Alert>
+      )}
+      {browserData && browserData.length > 0 && (
+        <StampData label="Browser run read" data={browserData} testId="python-function-tests-browser-data" />
+      )}
+      {serverData && serverData.length > 0 && (
+        <StampData label="Server run read" data={serverData} testId="python-function-tests-server-data" />
       )}
       {failureDetails && (
         <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'repeat(auto-fit, minmax(min(240px, 100%), 1fr))' }}>
@@ -940,6 +981,11 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
         )}
         {saved.status !== 'source_deleted' && (
           <Box sx={{ pt: 1 }}>
+            <FunctionDataSection tool={saved} />
+          </Box>
+        )}
+        {saved.status !== 'source_deleted' && (
+          <Box sx={{ pt: 1 }}>
             <PromoteFunctionSection
               tool={saved}
               contract={contract}
@@ -1069,6 +1115,16 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
   const [testOutcomes, setTestOutcomes] = useState<TestOutcome[]>([]);
   const describedCode = useRef<string | null>(null);
   const describeRequest = useRef(0);
+  const { data: savedTools } = useArtifactCallableFunction(
+    save?.artifactId ?? null,
+    save?.version ?? 0,
+    described.status === 'ready' ? described.contract.name : ''
+  );
+  const pinnedData = savedTools?.saved?.dataPins?.length ? savedTools.saved : null;
+  const [browserStamp, setBrowserStamp] = useState<BrowserStamp | null>(null);
+  // The saved tool's pinned files, each checked against its hash, so a browser run reads what the server run reads.
+  const loadDataFiles = async () =>
+    pinnedData ? fetchCallableFunctionDataFiles(pinnedData.id, pinnedData.dataPins) : [];
 
   const describe = useCallback(
     async (source: string, sourcePackages: string[]) => {
@@ -1121,7 +1177,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
     setCalling(true);
     setOutcome(null);
     try {
-      const result = await callFunction(source, params, packages);
+      const result = await callFunction(source, params, packages, await loadDataFiles());
       if (!result.success) {
         setOutcome({
           status: 'failed',
@@ -1145,9 +1201,14 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
     }
   };
 
-  const runTest = async (contract: FunctionContract, source: string, test: FunctionTestCase): Promise<TestOutcome> => {
+  const runTest = async (
+    contract: FunctionContract,
+    source: string,
+    test: FunctionTestCase,
+    files: { name: string; bytes: ArrayBuffer }[]
+  ): Promise<TestOutcome> => {
     try {
-      const result = await callFunction(source, test.input, packages);
+      const result = await callFunction(source, test.input, packages, files);
       const ms = result.executionTime;
       if (!result.success) return { status: 'failed', error: result.error ?? 'The call failed.', ms };
       const problems = outputProblems(contract.outputs, result.value, result.outputProblems ?? []);
@@ -1165,9 +1226,23 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
     setTestOutcomes([]);
     setOutcome(null);
     const outcomes: TestOutcome[] = [];
+    setBrowserStamp(null);
     try {
+      let files: { name: string; bytes: ArrayBuffer }[];
+      try {
+        files = await loadDataFiles();
+      } catch (error) {
+        setTestOutcomes([{ status: 'failed', error: errorMessage(error) }]);
+        return;
+      }
+      setBrowserStamp({
+        runtime: { kind: 'pyodide-browser', version: PYODIDE_VERSION },
+        data: (pinnedData?.dataPins ?? []).map(({ name, sha256, bytes }) => ({ name, mode: 'pinned', sha256, bytes })),
+      });
       for (const test of contract.tests ?? []) {
-        const next = await runTest(contract, source, test);
+        // Each case gets its own copies: a call transfers its buffers to the sandbox.
+        const caseFiles = files.map(file => ({ name: file.name, bytes: file.bytes.slice(0) }));
+        const next = await runTest(contract, source, test, caseFiles);
         // A newer read of the code replaced this contract; its results would describe other code.
         if (request !== describeRequest.current) return;
         outcomes.push(next);
@@ -1244,6 +1319,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
                   running={testing}
                   disabled={controlsDisabled}
                   onRun={() => void handleRunTests(contract, described.code)}
+                  browserData={browserStamp?.data ?? null}
                 />
               ) : (
                 <TestsSection
@@ -1252,6 +1328,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
                   running={testing}
                   disabled={controlsDisabled}
                   onRun={() => void handleRunTests(contract, described.code)}
+                  browserData={browserStamp?.data ?? null}
                 />
               ))}
 

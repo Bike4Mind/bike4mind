@@ -1,7 +1,7 @@
 // @vitest-environment node
 import crypto from 'crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
+import { encryptSecret, generateEncryptionKey, configureSecretsAtRest } from '@bike4mind/utils/security';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -46,6 +46,7 @@ describe('POST /api/organizations/[id]/webhooks/github/test with a secret stored
     const previousKey = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY = currentKey;
     h.config.SECRET_ENCRYPTION_KEY_PREVIOUS = previousKey;
+    configureSecretsAtRest(h.config.SECRET_ENCRYPTION_KEY, h.config.SECRET_ENCRYPTION_KEY_PREVIOUS);
     h.findByOrganizationId.mockResolvedValue({ id: 'cfg-1', secret: encryptSecret(secretFixture, previousKey) });
     h.fetchMock.mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
   });

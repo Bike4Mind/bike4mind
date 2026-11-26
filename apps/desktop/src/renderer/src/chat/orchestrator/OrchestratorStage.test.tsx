@@ -81,10 +81,15 @@ describe('OrchestratorStage', () => {
   });
 
   describe('empty stage', () => {
-    const renderEmpty = (view: 'tavern' | 'office') =>
+    const renderEmpty = (
+      view: 'tavern' | 'office',
+      extra: { archivedAgents?: Array<{ id: string; title: string }>; presenting?: boolean } = {}
+    ) =>
       themed.render(
         <OrchestratorStage
           agents={[]}
+          archivedAgents={extra.archivedAgents}
+          presenter={extra.presenting ? { on: true, onToggle: vi.fn() } : undefined}
           layout={singlePaneLayout(view)}
           onLayoutChange={onLayoutChange}
           actions={actions}
@@ -103,6 +108,29 @@ describe('OrchestratorStage', () => {
       expect(empty.textContent).toContain(
         'No quests yet. Describe the work and the Innkeeper will split it across agents.'
       );
+    });
+
+    it('keeps the Tavern once every agent is archived, with a way back to each one', async () => {
+      await renderEmpty('tavern', {
+        archivedAgents: [
+          { id: 'a2', title: 'Fix the parser' },
+          { id: 'a1', title: 'Write the docs' },
+        ],
+      });
+      const empty = el('orchestrator-empty-state');
+      expect(empty.querySelector('[data-testid="orchestrator-tavern"]')).not.toBeNull();
+      expect(empty.textContent).toContain('Every quest is done and its agent archived.');
+      expect(el('orchestrator-archived-agents').textContent).toContain('2 archived agents');
+      const buttons = empty.querySelectorAll<HTMLButtonElement>('[data-testid="orchestrator-archived-agent-open-btn"]');
+      expect([...buttons].map(button => button.textContent)).toEqual(['Fix the parser', 'Write the docs']);
+      act(() => buttons[1].click());
+      expect(actions.open).toHaveBeenCalledWith('a1');
+    });
+
+    it('lists no archived agent titles while presenting', async () => {
+      await renderEmpty('tavern', { archivedAgents: [{ id: 'a1', title: 'Secret task' }], presenting: true });
+      expect(el('orchestrator-archived-agents').textContent).toBe('1 archived agent');
+      expect(el('orchestrator-empty-state').textContent).not.toContain('Secret task');
     });
 
     it('renders the Office scene with zero agents and the plain empty line', async () => {
