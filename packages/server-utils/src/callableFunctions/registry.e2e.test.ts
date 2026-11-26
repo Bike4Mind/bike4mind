@@ -616,6 +616,8 @@ async function promoteDirectly(id: string, seq = 1) {
       sourcePins: [],
       trustLabel: 'verified',
       contract: fn!.contract,
+      pin: fn!.pin,
+      description: fn!.description,
     }
   );
   expect(promoted).toMatchObject({ state: 'live', trustLabel: 'verified', pin: { seq } });
@@ -863,6 +865,8 @@ describe('callableFunctionRepository.promote', () => {
         sourcePins: [],
         trustLabel: 'unverified',
         contract: read!.contract,
+        pin: read!.pin,
+        description: read!.description,
       }
     );
     expect(promoted).toBeNull();

@@ -327,9 +327,14 @@ export async function unpinCallableFunctionData(
   // for the prefix delete; the unpin itself has already happened.
   const fresh = await callableFunctionRepository.findByIdForOwner(fn.id, userOwner(actor));
   const latest = fresh?.pin ?? { dataPins: kept, sourcePins: fn.pin.sourcePins };
-  const stillNamed = [...(latest.dataPins ?? []), ...(latest.sourcePins ?? [])].some(
-    entry => entry.sha256 === removed.sha256
-  );
+  // Recipients keep calling the last promotion, so its files stay until a promotion moves them on.
+  const promoted = (fresh ?? fn).promoted?.pin;
+  const stillNamed = [
+    ...(latest.dataPins ?? []),
+    ...(latest.sourcePins ?? []),
+    ...(promoted?.dataPins ?? []),
+    ...(promoted?.sourcePins ?? []),
+  ].some(entry => entry.sha256 === removed.sha256);
   if (!stillNamed) {
     try {
       await (deps.storage ?? getCallableFunctionDataStorage()).delete(callableFunctionDataKey(fn.id, removed.sha256));

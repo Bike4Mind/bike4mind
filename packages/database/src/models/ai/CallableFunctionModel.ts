@@ -199,6 +199,10 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
           seq: { type: Number, required: true, min: 1 },
           contract: { type: Schema.Types.Mixed, required: true },
           at: { type: Date, required: true },
+          pin: { type: CallableFunctionPinSchema },
+          description: { type: String, maxlength: FUNCTION_CONTRACT_LIMITS.maxDescriptionLength },
+          trustLabel: { type: String, enum: CALLABLE_FUNCTION_TRUST_LABELS },
+          sources: { type: [CallableFunctionSourceSchema], default: undefined },
         },
         { _id: false }
       ),
@@ -234,6 +238,7 @@ type FunctionDoc = ICallableFunctionDocument & IMongoDocument;
 
 const SUMMARY_PROJECTION = { contract: 0, 'pin.source': 0, lastServerRun: 0, promoted: 0, caseResults: 0 };
 const OFFERABLE_PROJECTION = { 'pin.source': 0, lastServerRun: 0, promoted: 0, caseResults: 0 };
+const SHARED_PROJECTION = { 'pin.source': 0, 'promoted.pin.source': 0, lastServerRun: 0, caseResults: 0 };
 
 const newPin = (pin: CallableFunctionNewPin): CallableFunctionNewPin => ({
   artifactId: pin.artifactId,
@@ -496,7 +501,15 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
           'pin.sourcePins': update.sourcePins,
           lastServerRun: update.lastServerRun,
           trustLabel: update.trustLabel,
-          promoted: { seq: update.seq, contract: update.contract, at },
+          promoted: {
+            seq: update.seq,
+            contract: update.contract,
+            at,
+            pin: { ...update.pin, seq: update.seq, runtime: update.runtime, sourcePins: update.sourcePins },
+            description: update.description,
+            trustLabel: update.trustLabel,
+            ...(update.sources ? { sources: update.sources } : {}),
+          },
           state: 'live',
         },
       },
@@ -534,17 +547,22 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     const docs = await this.model
       .find(
         {
-          state: 'live',
+          // A draft with a kept promotion is still callable by recipients (`recipientCallableFunction`).
+          $and: [
+            { $or: [{ state: 'live' }, { 'promoted.pin': { $exists: true } }] },
+            {
+              $or: [
+                { 'grants.userIds': reach.userId },
+                { 'grants.visibility': 'project', 'grants.projectId': { $in: reach.projectIds } },
+                { 'grants.visibility': 'organization', 'grants.organizationId': { $in: reach.organizationIds } },
+              ],
+            },
+          ],
           enabled: true,
           ownerKey: { $ne: reach.userId },
-          $or: [
-            { 'grants.userIds': reach.userId },
-            { 'grants.visibility': 'project', 'grants.projectId': { $in: reach.projectIds } },
-            { 'grants.visibility': 'organization', 'grants.organizationId': { $in: reach.organizationIds } },
-          ],
         },
         // A recipient reviews the contract; the pinned code never leaves the server.
-        OFFERABLE_PROJECTION
+        SHARED_PROJECTION
       )
       .sort({ updatedAt: -1 })
       // Capped before the caller's membership filter drops stale project/organization grants, so the cap counts them too;

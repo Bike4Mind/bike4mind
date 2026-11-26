@@ -209,6 +209,9 @@ export async function promoteCallableFunction(
       trustLabel: callableFunctionTrustLabel(runCases),
       contract,
       sourcePins,
+      pin: fn.pin,
+      description: fn.description,
+      ...(fn.sources?.length ? { sources: fn.sources } : {}),
     }
   );
   // A repin, an examples edit, or another promotion landed while the cases ran.
