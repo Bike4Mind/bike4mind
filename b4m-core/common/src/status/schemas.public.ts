@@ -19,6 +19,8 @@ export type PublicSchemaMode = 'strict' | 'lenient';
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const CalendarTimestampSchema = z.iso.datetime();
+const CalendarDaySchema = z.iso.date();
 
 /**
  * Strict schemas reject unknown keys at every depth and are used by publishers and tests. Lenient
@@ -31,7 +33,11 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
   const timestamp = z
     .string()
     .regex(ISO_TIMESTAMP)
-    .refine(value => Number.isFinite(Date.parse(value)), 'must be a real calendar time');
+    .refine(value => CalendarTimestampSchema.safeParse(value).success, 'must be a real calendar time');
+  const day = z
+    .string()
+    .regex(ISO_DAY)
+    .refine(value => CalendarDaySchema.safeParse(value).success, 'must be a real calendar day');
   const nullableTimestamp = timestamp.nullable();
   const httpsUrl = z.string().max(2048).refine(isHttpsUrl, 'must be an https URL');
   const incidentId = z.string().regex(PUBLIC_INCIDENT_ID_PATTERN);
@@ -152,6 +158,7 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
 
   const incidentsIndex = obj({
     schemaVersion: z.literal(STATUS_SCHEMA_VERSION),
+    seq: count,
     generatedAt: timestamp,
     windowDays: z.literal(STATUS_UPTIME_WINDOW_DAYS),
     incidents: z.array(indexRow),
@@ -173,8 +180,8 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
   const uptime = obj({
     schemaVersion: z.literal(STATUS_SCHEMA_VERSION),
     generatedAt: timestamp,
-    from: z.string().regex(ISO_DAY),
-    to: z.string().regex(ISO_DAY),
+    from: day,
+    to: day,
     components: z.array(obj({ slug, uptime: z.number().min(0).max(1).nullable(), days: z.array(dayTuple) })),
   });
 

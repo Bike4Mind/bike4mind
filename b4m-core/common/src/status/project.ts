@@ -1,3 +1,4 @@
+import { floorUptimeFraction } from './uptimeDisplay';
 import { truncateToSchemaCap } from './bounds';
 import { cmpStr, cmpTime } from './compare';
 import { isActive, maintenanceEffectiveEndMs, toEpochMs, type ActivityFacts } from './isActive';
@@ -58,6 +59,7 @@ import {
 
 export interface ProjectionInput {
   now: Date;
+  /** Monotonic publish revision shared by the summary and complete incidents index. */
   seq: number;
   /** Finish time of the last tick that evaluated probes; non-tick publishes carry it forward. */
   probesAsOf: Date;
@@ -297,7 +299,8 @@ export function projectPublicSnapshot(input: ProjectionInput): ProjectedSnapshot
     .filter(({ doc }) => {
       if (doc.kind !== 'maintenance' || doc.status === 'cancelled' || doc.cancelledAt) return false;
       const start = toEpochMs(doc.scheduledStartAt);
-      return start !== null && start > now.getTime() && start <= upcomingCutoff;
+      const end = maintenanceEffectiveEndMs(doc);
+      return start !== null && end !== null && start > now.getTime() && start <= upcomingCutoff && end > start;
     })
     .map(p => p.head)
     .sort((a, b) => cmpTime(a.scheduledStartAt ?? '', b.scheduledStartAt ?? '') || cmpStr(a.id, b.id));
@@ -339,6 +342,7 @@ export function projectPublicSnapshot(input: ProjectionInput): ProjectedSnapshot
   const measureIndex = (rowsToMeasure: PublicIncidentIndexRow[]) =>
     jsonByteLength({
       schemaVersion: STATUS_SCHEMA_VERSION,
+      seq: input.seq,
       generatedAt: iso(now),
       windowDays: STATUS_UPTIME_WINDOW_DAYS,
       incidents: rowsToMeasure,
@@ -348,6 +352,7 @@ export function projectPublicSnapshot(input: ProjectionInput): ProjectedSnapshot
   if (fitted.overCap) warnings.push('incidents_index_over_cap');
   const indexCandidate = {
     schemaVersion: STATUS_SCHEMA_VERSION,
+    seq: input.seq,
     generatedAt: iso(now),
     windowDays: STATUS_UPTIME_WINDOW_DAYS,
     incidents: fitted.rows,
@@ -466,19 +471,23 @@ function projectUpdate(
   const checked = validatePublicText('updateBody', update.body, linkOptions);
   const overLimit = lengthOnly(checked);
   if (!checked.ok && !overLimit) return { reason: 'text_policy' };
-  const fitted = truncateToSchemaCap(sanitizeMarkdown(checked.normalized, linkOptions), TEXT_LIMITS.updateBody);
+  const prefix = overLimit
+    ? checked.normalized.slice(0, TEXT_LIMITS.updateBody * 4).replace(/[\uD800-\uDBFF]$/, '')
+    : checked.normalized;
+  const fitted = truncateToSchemaCap(sanitizeMarkdown(prefix, linkOptions), TEXT_LIMITS.updateBody);
+  const truncated = fitted.truncated || prefix.length < checked.normalized.length;
   if (overLimit) {
     const recheck = validatePublicText('updateBody', fitted.text, linkOptions);
     if (!recheck.ok && !lengthOnly(recheck)) return { reason: 'text_policy' };
   }
-  if (fitted.truncated) truncatedIds.push(update.updateId);
+  if (truncated) truncatedIds.push(update.updateId);
   return {
     id: update.updateId,
     at: iso(update.at),
     status: update.status,
     body: fitted.text,
     edited: update.editedAt !== undefined,
-    truncated: fitted.truncated,
+    truncated,
   };
 }
 
@@ -588,43 +597,65 @@ function projectUptime(
   const today = input.now.getTime();
   const windowFirst = utcDay(today - (STATUS_UPTIME_WINDOW_DAYS - 1) * DAY_MS);
   const windowLast = utcDay(today);
-  const components: PublicUptime['components'] = [];
+  type Component = PublicUptime['components'][number];
+  type Tuple = Component['days'][number];
+  const accepted: { component: Component; days: Map<string, Tuple> }[] = [];
   let from: string | null = null;
   let to: string | null = null;
 
   for (const row of input.uptime ?? []) {
     const slug = slugByKey.get(row.componentKey);
     if (!slug || !eligibleKeys.has(row.componentKey)) continue;
-    if (!Array.isArray(row.days) || row.days.some(day => !/^\d{4}-\d{2}-\d{2}$/.test(day.day))) {
+    const validDays =
+      Array.isArray(row.days) && row.days.every(day => PublicUptimeSchema.shape.from.safeParse(day.day).success);
+    const uniqueDays = validDays && new Set(row.days.map(day => day.day)).size === row.days.length;
+    if (!validDays || !uniqueDays || (row.uptime !== null && !Number.isFinite(row.uptime))) {
       dropped.push({ file: 'uptime', ref: row.componentKey, reason: 'schema' });
       continue;
     }
-    const days = row.days
+    const observations = row.days
       .filter(day => day.day >= windowFirst && day.day <= windowLast)
-      .sort((a, b) => cmpStr(a.day, b.day))
-      .slice(-STATUS_UPTIME_WINDOW_DAYS)
-      .map(day => {
-        if (from === null || day.day < from) from = day.day;
-        if (to === null || day.day > to) to = day.day;
-        const incidentCount = new Set(day.incidentIds.filter(id => publishedIds.has(id))).size;
-        return [day.barCode, day.uptimeBp, Math.round(day.downtimeMinutes), incidentCount] as const;
-      });
-    const entry = PublicUptimeSchema.shape.components.element.safeParse({
+      .sort((a, b) => cmpStr(a.day, b.day));
+    const tuples = observations.map(day => [
+      day.barCode,
+      day.uptimeBp,
+      Math.round(day.downtimeMinutes),
+      new Set(day.incidentIds.filter(id => publishedIds.has(id))).size,
+    ]);
+    const parsed = PublicUptimeSchema.shape.components.element.safeParse({
       slug,
-      uptime:
-        row.uptime === null ? null : row.uptime >= 1 ? 1 : Math.floor(Math.max(row.uptime, 0) * 100_000) / 100_000,
-      days: days.map(tuple => [...tuple]),
+      uptime: floorUptimeFraction(row.uptime),
+      days: tuples,
     });
-    if (entry.success) components.push(entry.data);
-    else dropped.push({ file: 'uptime', ref: row.componentKey, reason: 'schema' });
+    if (!parsed.success) {
+      dropped.push({ file: 'uptime', ref: row.componentKey, reason: 'schema' });
+      continue;
+    }
+    const days = new Map<string, Tuple>();
+    observations.forEach((day, index) => {
+      days.set(day.day, parsed.data.days[index]);
+      if (from === null || day.day < from) from = day.day;
+      if (to === null || day.day > to) to = day.day;
+    });
+    accepted.push({ component: parsed.data, days });
   }
-  components.sort((a, b) => cmpStr(a.slug, b.slug));
-
+  const first = from ?? windowFirst;
+  const last = to ?? windowLast;
+  const calendar: string[] = [];
+  for (let time = Date.parse(`${first}T00:00:00Z`); time <= Date.parse(`${last}T00:00:00Z`); time += DAY_MS) {
+    calendar.push(utcDay(time));
+  }
+  const components = accepted
+    .map(({ component, days }) => ({
+      ...component,
+      days: calendar.map<Tuple>(day => days.get(day) ?? ['n', null, 0, 0]),
+    }))
+    .sort((a, b) => cmpStr(a.slug, b.slug));
   const candidate = {
     schemaVersion: STATUS_SCHEMA_VERSION,
     generatedAt: iso(input.now),
-    from: from ?? windowFirst,
-    to: to ?? windowLast,
+    from: first,
+    to: last,
     components,
   };
   const parsed = PublicUptimeSchema.safeParse(candidate);

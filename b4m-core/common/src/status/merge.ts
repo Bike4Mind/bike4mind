@@ -3,6 +3,7 @@ import { cmpStr, cmpTime } from './compare';
 import { isActive, maintenanceEffectiveEndMs, toEpochMs, type ActivityFacts } from './isActive';
 import {
   LenientPublicBreakglassSchema,
+  LenientPublicIncidentsIndexSchema,
   parsePublicFile,
   type PublicBreakglass,
   type PublicBreakglassEntry,
@@ -11,6 +12,7 @@ import {
   type PublicFileKind,
   type PublicIncidentHead,
   type PublicIncidentIndexRow,
+  type PublicIncidentsIndex,
   type PublicSummary,
   type PublicUpdate,
   type ParsedPublicFile,
@@ -68,8 +70,8 @@ export function parseSourceFile<K extends PublicFileKind>(
 }
 
 export interface MergeOptions {
-  /** Rows of incidents.json, when it was fetched. */
-  incidentsIndex?: readonly PublicIncidentIndexRow[] | null;
+  /** Complete incidents.json envelope, including its shared publish revision. */
+  incidentsIndex?: PublicIncidentsIndex | null;
   /** The last good summary kept locally, shown greyed with its age when the live one fails. */
   lastGoodSummary?: { summary: PublicSummary; savedAt: string } | null;
 }
@@ -211,6 +213,25 @@ function activityOf(incident: Omit<PublicIncidentHead, 'latestUpdates'>): Activi
   };
 }
 
+function currentIndex(summary: PublicSummary | null, index: PublicIncidentsIndex | null, nowMs: number): boolean {
+  if (!summary || !index || index.seq < summary.seq) return false;
+  if (ms(index.generatedAt) > nowMs + FUTURE_TOLERANCE_MS) return false;
+  const rows = new Map(index.incidents.map(row => [row.id, row]));
+  if (rows.size !== index.incidents.length) return false;
+  if (index.seq > summary.seq) return true;
+  return [...summary.activeIncidents, ...summary.upcomingMaintenance].every(head => {
+    const parsed = LenientPublicIncidentsIndexSchema.shape.incidents.element.safeParse(headScalars(head));
+    return parsed.success && JSON.stringify(parsed.data) === JSON.stringify(rows.get(head.id));
+  });
+}
+
+function historicalRow(row: PublicIncidentIndexRow, nowMs: number): boolean {
+  if (isActive(activityOf(row), nowMs)) return false;
+  if (row.kind === 'incident' || row.status === 'cancelled') return true;
+  const end = maintenanceEffectiveEndMs(row);
+  return end !== null && end <= nowMs;
+}
+
 /**
  * One merge for the page, the in-app banner, the admin preview and tests. `S` is the summary or null
  * when it failed (non-2xx, non-JSON, schema failure, absent).
@@ -251,19 +272,35 @@ export function mergeStatusSources(
   const parseable = outageCandidates.filter(Number.isFinite);
   const outageStartMs = parseable.length > 0 ? Math.min(...parseable) : null;
 
-  const candidates: Candidate[] = [];
-  for (const head of [...(S?.activeIncidents ?? []), ...(S?.upcomingMaintenance ?? [])]) {
-    candidates.push({ origin: 'summary', scalars: headScalars(head), updates: head.latestUpdates });
-  }
-  for (const row of options.incidentsIndex ?? []) candidates.push({ origin: 'index', scalars: row, updates: [] });
+  const parsedIndex = options.incidentsIndex
+    ? LenientPublicIncidentsIndexSchema.safeParse(options.incidentsIndex)
+    : null;
+  const index = parsedIndex?.success ? parsedIndex.data : null;
+  const trustedIndex = currentIndex(S, index, nowMs);
+  const heads = [...(S?.activeIncidents ?? []), ...(S?.upcomingMaintenance ?? [])];
+  const breakglassCandidates: Candidate[] = [];
   const unreconciled = new Set<string>();
   for (const entry of B?.entries ?? []) {
     if (entry.writtenSeq <= appliedSeq) continue;
     const clamped = clampBreakGlassEntry(entry, { nowMs, outageStartMs });
     if (!clamped) continue;
     unreconciled.add(clamped.id);
-    candidates.push({ origin: 'breakglass', scalars: headScalars(clamped), updates: clamped.latestUpdates });
+    breakglassCandidates.push({ origin: 'breakglass', scalars: headScalars(clamped), updates: clamped.latestUpdates });
   }
+  const protectedIds = new Set([
+    ...heads.map(head => head.id),
+    ...breakglassCandidates.map(candidate => candidate.scalars.id),
+  ]);
+  const candidates: Candidate[] = heads.map(head => ({
+    origin: 'summary',
+    scalars: headScalars(head),
+    updates: head.latestUpdates,
+  }));
+  for (const row of index?.incidents ?? []) {
+    if (!trustedIndex && (protectedIds.has(row.id) || !historicalRow(row, nowMs))) continue;
+    candidates.push({ origin: 'index', scalars: row, updates: [] });
+  }
+  candidates.push(...breakglassCandidates);
 
   const byId = new Map<string, Candidate[]>();
   for (const candidate of candidates) {
@@ -272,8 +309,11 @@ export function mergeStatusSources(
 
   const incidents: MergedIncident[] = [];
   for (const [id, group] of byId) {
-    let winner = group[0];
-    for (const candidate of group.slice(1)) {
+    // A complete current index owns normal scalars; older summary bodies can still fill updates.
+    const scalarCandidates = trustedIndex ? group.filter(candidate => candidate.origin !== 'summary') : group;
+    let winner = scalarCandidates[0];
+    if (!winner) continue;
+    for (const candidate of scalarCandidates.slice(1)) {
       if (ms(candidate.scalars.updatedAt) > ms(winner.scalars.updatedAt)) winner = candidate;
     }
     const updates = new Map<string, UpdateEntry>();
@@ -324,8 +364,7 @@ export function mergeStatusSources(
 
   // Past the size ladder's last step the summary no longer lists every active head; with no index to
   // fill them in, its own computed state is the floor.
-  const floorToSummary =
-    S !== null && !hardStale && S.moreActiveIncidents > 0 && !(options.incidentsIndex?.length ?? 0);
+  const floorToSummary = S !== null && !hardStale && S.moreActiveIncidents > 0 && !trustedIndex;
   const externalDown = fresh === false && externalUsable && E?.state === 'down';
   const resolveRow = <R extends Omit<PublicComponent, 'children' | 'group'>>(row: R) => {
     let base: DisplayState = hardStale && row.monitoring === 'probed' ? 'unknown' : row.baseState;

@@ -820,7 +820,14 @@ describe('incidents.json, archive and uptime', () => {
     expect(uptime.components.map(c => c.slug)).toEqual(['chat', 'sign-in']);
     expect(uptime.components[0].uptime).toBe(0.99999);
     expect(uptime.components[1].uptime).toBeNull();
-    expect(uptime.components[0].days).toEqual([['o', 9_999, 0, 0]]);
+    expect(uptime.components[0].days).toEqual([
+      ['n', null, 0, 0],
+      ['o', 9_999, 0, 0],
+    ]);
+    expect(uptime.components[1].days).toEqual([
+      ['n', null, 0, 0],
+      ['n', null, 0, 0],
+    ]);
     expect(uptime.from).toBe('2026-11-22');
     expect(uptime.to).toBe('2026-11-23');
   });

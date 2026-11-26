@@ -224,7 +224,15 @@ describe('incidents', () => {
       makeBreakglass([entry({ id: 'bg00000002' })]),
       null,
       NOW,
-      { incidentsIndex: [row] }
+      {
+        incidentsIndex: {
+          schemaVersion: 1,
+          seq: 48210,
+          generatedAt: isoSeconds(NOW),
+          windowDays: 90,
+          incidents: [row],
+        },
+      }
     );
     expect(merged.incidents.map(i => i.id).sort()).toEqual(['bg00000002', 'idx0000001', 'sum0000001']);
   });
@@ -703,7 +711,9 @@ describe('summary rows survive a size-ladder cut', () => {
     const resolved = snapshot.incidentsIndex.incidents.map(row =>
       row.id === 'i000000020' ? { ...row, status: 'resolved' as const, resolvedAt: isoSeconds(minutesAgo(1)) } : row
     );
-    const merged = mergeStatusSources(snapshot.summary, null, null, NOW, { incidentsIndex: resolved });
+    const merged = mergeStatusSources(snapshot.summary, null, null, NOW, {
+      incidentsIndex: { ...snapshot.incidentsIndex, seq: snapshot.summary.seq + 1, incidents: resolved },
+    });
     expect(stateOf(merged, 'comp-20')).toBe('operational');
   });
 

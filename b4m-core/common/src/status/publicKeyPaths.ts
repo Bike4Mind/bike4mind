@@ -179,6 +179,7 @@ export const PUBLIC_SNAPSHOT_KEY_PATHS: readonly string[] = [
   'incidents.incidents[].updateCount',
   'incidents.incidents[].updatedAt',
   'incidents.schemaVersion',
+  'incidents.seq',
   'incidents.windowDays',
   'statusJson.page',
   'statusJson.page.name',

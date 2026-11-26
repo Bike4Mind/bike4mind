@@ -9,7 +9,11 @@ export type MarkdownInline =
   | { type: 'link'; href: string; host: string; children: MarkdownInline[] };
 
 export type MarkdownBlock =
-  { type: 'paragraph'; children: MarkdownInline[] } | { type: 'list'; ordered: boolean; items: MarkdownInline[][] };
+  | { type: 'paragraph'; children: MarkdownInline[] }
+  | { type: 'list'; ordered: false; items: MarkdownInline[][] }
+  | { type: 'list'; ordered: true; start: number; items: MarkdownInline[][] };
+
+type PendingList = { ordered: false; items: string[][] } | { ordered: true; start: number; items: string[][] };
 
 export const MAX_MARKDOWN_PARSE_CHARS = 200_000;
 const MAX_INLINE_DEPTH = 3;
@@ -26,7 +30,7 @@ export function normalizePublicText(input: string): string {
 const ESCAPABLE = new Set(['\\', '*', '_', '`', '[', ']', '(', ')', '-', '+', '.', '!', '#', '<', '>']);
 // The lookahead makes the run of spaces atomic, so a trailing line terminator cannot trigger backtracking.
 const UNORDERED_MARKER = /^[-*+] +(?=[^ ]|$)([\s\S]*)$/;
-const ORDERED_MARKER = /^\d{1,9}\. +(?=[^ ]|$)([\s\S]*)$/;
+const ORDERED_MARKER = /^(\d{1,9})\. +(?=[^ ]|$)([\s\S]*)$/;
 
 function text(value: string): MarkdownInline {
   return { type: 'text', value };
@@ -68,6 +72,19 @@ function findClosingDelimiter(source: string, from: number, delimiter: string): 
   return -1;
 }
 
+function closingParentheses(source: string): Map<number, number> {
+  const closes = new Map<number, number>();
+  const opens: number[] = [];
+  for (let index = 0; index < source.length; index++) {
+    if (source[index] === '(') opens.push(index);
+    else if (source[index] === ')') {
+      const open = opens.pop();
+      if (open !== undefined) closes.set(open, index);
+    }
+  }
+  return closes;
+}
+
 function parseInline(source: string, options: LinkPolicyOptions, depth: number, inLink: boolean): MarkdownInline[] {
   const out: MarkdownInline[] = [];
   if (depth >= MAX_INLINE_DEPTH) {
@@ -75,6 +92,7 @@ function parseInline(source: string, options: LinkPolicyOptions, depth: number, 
     return out;
   }
 
+  const closes = closingParentheses(source);
   let i = 0;
   while (i < source.length) {
     const ch = source[i];
@@ -95,7 +113,7 @@ function parseInline(source: string, options: LinkPolicyOptions, depth: number, 
     }
 
     if (ch === '!' && source[i + 1] === '[') {
-      const image = matchLink(source, i + 1);
+      const image = matchLink(source, i + 1, closes);
       if (image) {
         pushText(out, source.slice(i, image.end));
         i = image.end;
@@ -104,7 +122,7 @@ function parseInline(source: string, options: LinkPolicyOptions, depth: number, 
     }
 
     if (ch === '[' && !inLink) {
-      const link = matchLink(source, i);
+      const link = matchLink(source, i, closes);
       if (link) {
         const children = parseInline(link.label, options, depth + 1, true);
         const decision = classifyLink(link.href, options);
@@ -148,7 +166,11 @@ function encodeParens(href: string): string {
   return href.replace(/\(/g, '%28').replace(/\)/g, '%29');
 }
 
-function matchLink(source: string, start: number): { label: string; href: string; end: number } | null {
+function matchLink(
+  source: string,
+  start: number,
+  closes: ReadonlyMap<number, number>
+): { label: string; href: string; end: number } | null {
   let i = start + 1;
   for (; i < source.length; i++) {
     const ch = source[i];
@@ -160,13 +182,8 @@ function matchLink(source: string, start: number): { label: string; href: string
     if (ch === ']') break;
   }
   if (i >= source.length || source[i + 1] !== '(') return null;
-  let depth = 1;
-  let close = i + 2;
-  for (; close < source.length; close++) {
-    if (source[close] === '(') depth++;
-    else if (source[close] === ')' && --depth === 0) break;
-  }
-  if (depth !== 0) return null;
+  const close = closes.get(i + 1);
+  if (close === undefined) return null;
   const label = source.slice(start + 1, i);
   if (label === '') return null;
   return { label, href: source.slice(i + 2, close), end: close + 1 };
@@ -197,7 +214,7 @@ function parseBlocks(source: string, options: LinkPolicyOptions): MarkdownBlock[
   const lines = normalizePublicText(source.slice(0, MAX_MARKDOWN_PARSE_CHARS)).split('\n');
   const blocks: MarkdownBlock[] = [];
   let paragraph: string[] = [];
-  let list: { ordered: boolean; items: string[][] } | null = null;
+  let list: PendingList | null = null;
 
   const flushParagraph = () => {
     if (paragraph.length > 0) {
@@ -207,8 +224,7 @@ function parseBlocks(source: string, options: LinkPolicyOptions): MarkdownBlock[
     paragraph = [];
   };
   const flushList = () => {
-    if (list)
-      blocks.push({ type: 'list', ordered: list.ordered, items: list.items.map(item => joinLines(item, options)) });
+    if (list) blocks.push({ ...list, type: 'list', items: list.items.map(item => joinLines(item, options)) });
     list = null;
   };
 
@@ -222,11 +238,16 @@ function parseBlocks(source: string, options: LinkPolicyOptions): MarkdownBlock[
     const ordered = unordered ? null : ORDERED_MARKER.exec(line);
     const marker = unordered ?? ordered;
     if (marker) {
+      if (ordered && Number(ordered[1]) !== 1 && paragraph.length > 0) {
+        paragraph.push(line);
+        continue;
+      }
       flushParagraph();
       const isOrdered = ordered !== null;
       if (list && list.ordered !== isOrdered) flushList();
-      if (!list) list = { ordered: isOrdered, items: [] };
-      list.items.push([marker[1]]);
+      if (!list)
+        list = ordered ? { ordered: true, start: Number(ordered[1]), items: [] } : { ordered: false, items: [] };
+      list.items.push([ordered ? ordered[2] : marker[1]]);
       continue;
     }
     if (list) list.items[list.items.length - 1].push(line);
@@ -368,7 +389,10 @@ export function serializeMarkdown(blocks: MarkdownBlock[], swap = false): string
       block.type === 'paragraph'
         ? serializeInline(block.children, null, swap)
         : block.items
-            .map((item, index) => `${block.ordered ? `${index + 1}.` : '-'} ${serializeInline(item, null, swap)}`)
+            .map(
+              (item, index) =>
+                `${block.ordered ? `${Math.min(block.start + index, 999_999_999)}.` : '-'} ${serializeInline(item, null, swap)}`
+            )
             .join('\n')
     )
     .join('\n\n');
@@ -415,7 +439,8 @@ export function renderMarkdownHtml(blocks: MarkdownBlock[]): string {
     .map(block => {
       if (block.type === 'paragraph') return `<p>${renderInlineHtml(block.children)}</p>`;
       const tag = block.ordered ? 'ol' : 'ul';
-      return `<${tag}>${block.items.map(item => `<li>${renderInlineHtml(item)}</li>`).join('')}</${tag}>`;
+      const start = block.ordered && block.start !== 1 ? ` start="${block.start}"` : '';
+      return `<${tag}${start}>${block.items.map(item => `<li>${renderInlineHtml(item)}</li>`).join('')}</${tag}>`;
     })
     .join('');
 }
@@ -445,7 +470,7 @@ export function renderMarkdownText(blocks: MarkdownBlock[]): string {
       block.type === 'paragraph'
         ? renderInlineText(block.children)
         : block.items
-            .map((item, index) => `${block.ordered ? `${index + 1}.` : '-'} ${renderInlineText(item)}`)
+            .map((item, index) => `${block.ordered ? `${block.start + index}.` : '-'} ${renderInlineText(item)}`)
             .join('\n')
     )
     .join('\n\n');

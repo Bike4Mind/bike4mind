@@ -3,6 +3,7 @@ import {
   barCodeForState,
   formatBasisPoints,
   formatUptimePercent,
+  floorUptimeFraction,
   stateForBarCode,
   uptimeFraction,
   uptimeToBasisPoints,
@@ -66,5 +67,39 @@ describe('uptime display', () => {
     expect(stateForBarCode('p')).toBe('partial_outage');
     expect(stateForBarCode('x')).toBeNull();
     expect(stateForBarCode('n')).toBeNull();
+  });
+});
+
+describe('public fraction grid', () => {
+  it('preserves every canonical grid point, including repeated projection', () => {
+    for (let units = 0; units <= 100_000; units++) {
+      const value = units / 100_000;
+      if (floorUptimeFraction(value) !== value || floorUptimeFraction(floorUptimeFraction(value)) !== value) {
+        throw new Error(`Grid point changed: ${units}`);
+      }
+    }
+  });
+
+  it('floors the neighboring IEEE-754 values without rounding up', () => {
+    const bits = new DataView(new ArrayBuffer(8));
+    const adjacent = (value: number, direction: bigint) => {
+      bits.setFloat64(0, value);
+      bits.setBigUint64(0, bits.getBigUint64(0) + direction);
+      return bits.getFloat64(0);
+    };
+    for (const units of [1, 3, 10, 30, 100, 12345, 50000, 99999]) {
+      const value = units / 100_000;
+      expect(floorUptimeFraction(adjacent(value, -1n))).toBe((units - 1) / 100_000);
+      expect(floorUptimeFraction(adjacent(value, 1n))).toBe(value);
+    }
+    expect(floorUptimeFraction(adjacent(1, -1n))).toBe(0.99999);
+    expect(floorUptimeFraction(1)).toBe(1);
+  });
+
+  it('retains finite clamping and rejects non-finite values', () => {
+    expect(floorUptimeFraction(-0.1)).toBe(0);
+    expect(floorUptimeFraction(1.1)).toBe(1);
+    for (const value of [null, NaN, Infinity, -Infinity]) expect(floorUptimeFraction(value)).toBeNull();
+    expect(floorUptimeFraction(0.1234567)).toBe(0.12345);
   });
 });

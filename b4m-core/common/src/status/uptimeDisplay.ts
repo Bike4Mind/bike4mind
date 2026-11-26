@@ -44,6 +44,16 @@ export function uptimeFraction(downtimeSeconds: number, observedSeconds: number)
   return Math.min(Math.max(scaled, 0), FRACTION_SCALE - 1) / FRACTION_SCALE;
 }
 
+/** Floors to the public five-decimal grid without rounding a below-grid value upward. */
+export function floorUptimeFraction(value: number | null): number | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  if (value >= 1) return 1;
+  const bounded = Math.max(0, value);
+  const nearest = Math.round(bounded * FRACTION_SCALE);
+  const units = nearest / FRACTION_SCALE <= bounded ? nearest : nearest - 1;
+  return units / FRACTION_SCALE;
+}
+
 /**
  * Basis points (0..10000), floored; 10000 only for an exact 1. A value within float noise of a whole
  * basis point counts as that point, so 0.9995 reads 9995 and never one lower.
