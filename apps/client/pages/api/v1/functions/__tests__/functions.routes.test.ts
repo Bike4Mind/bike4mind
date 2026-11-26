@@ -12,6 +12,7 @@ import {
   invokeFunctionContract,
   isZodError,
   listFunctionsContract,
+  reviewHash,
   type FunctionContract,
 } from '@bike4mind/common';
 import { decideScopeGate } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
@@ -31,6 +32,7 @@ const h = vi.hoisted(() => ({
   artifacts: [] as { id: string; userId: string; version: number; deletedAt: Date | null }[],
   calls: [] as Record<string, unknown>[],
   recordFails: { value: false },
+  reviews: [] as Record<string, unknown>[],
   runner: vi.fn(),
   runnerConfigured: { value: true },
   limitMs: { value: 30_000 },
@@ -128,7 +130,25 @@ vi.mock('@bike4mind/database', async () => ({
     findByIdForOwner: async (id: string, owner: Owner) =>
       isHexId(id) ? (h.functions.find(fn => fn.id === id && owned(owner)(fn)) ?? null) : null,
     listForOwner: async (owner: Owner) => h.functions.filter(owned(owner)),
+    listLiveForOwner: async (owner: Owner) =>
+      h.functions.filter(fn => owned(owner)(fn) && fn.state === 'live' && fn.enabled),
+    listSharedWith: async ({ userId }: { userId: string }) =>
+      h.functions.filter(
+        fn =>
+          fn.ownerKey !== userId &&
+          fn.enabled &&
+          fn.state === 'live' &&
+          (fn.grants as { userIds: string[] } | undefined)?.userIds.includes(userId)
+      ),
   },
+  callableFunctionReviewRepository: {
+    findFor: async (functionId: string, userId: string) =>
+      h.reviews.find(r => r.functionId === functionId && r.userId === userId) ?? null,
+    findForUser: async (userId: string, ids: string[]) =>
+      h.reviews.filter(r => r.userId === userId && ids.includes(r.functionId as string)),
+  },
+  projectRepository: { find: async () => [] },
+  organizationRepository: { findMembershipOrgIds: async () => [] },
   artifactRepository: {
     find: async (filter: { id: { $in: string[] }; userId: string }) =>
       h.artifacts.filter(a => filter.id.$in.includes(a.id) && a.userId === filter.userId),
@@ -177,6 +197,7 @@ const {
   FUNCTION_INVOKE_BUDGET_MS,
   FUNCTION_CALL_STOPPED_MESSAGE,
   FUNCTION_INVOKE_MAX_BODY_BYTES,
+  FUNCTION_REVIEW_REQUIRED_MESSAGE,
   FUNCTION_SYNC_STOP_MESSAGE,
   FUNCTION_SYNC_STOP_SELF_HOST_MESSAGE,
   TIMEOUT_MESSAGE,
@@ -289,6 +310,7 @@ beforeEach(() => {
   h.sendFails.value = false;
   h.calls = [];
   h.recordFails.value = false;
+  h.reviews = [];
   h.functions = [
     fnDoc(LIVE_ID),
     fnDoc(DRAFT_ID, { slug: 'beam_draft', state: 'draft', trustLabel: undefined }),
@@ -492,6 +514,62 @@ describe('not found', () => {
     expect(await call(getRoute, { query: { id: LIVE_ID } })).toEqual(missing);
     expect(await invoke(LIVE_ID, { input: { load: 1, span: 2 } })).toEqual(missing);
     expect(h.runner).not.toHaveBeenCalled();
+  });
+});
+
+describe('a function shared with the caller', () => {
+  const RECIPIENT = 'u3';
+  const shareWithRecipient = () => {
+    h.functions[2] = fnDoc(OTHERS_ID, {
+      slug: 'beam_other',
+      ownerKey: 'u2',
+      userId: 'u2',
+      grants: { visibility: 'private', userIds: [RECIPIENT] },
+    });
+  };
+  const review = async () =>
+    h.reviews.push({
+      functionId: OTHERS_ID,
+      userId: RECIPIENT,
+      reviewHash: await reviewHash(CONTRACT),
+      approval: 'default',
+      enabled: true,
+    });
+  const as = { user: RECIPIENT, keyId: 'k3' };
+
+  it('is refused before review, listed and run as the recipient after it, and gone once revoked', async () => {
+    shareWithRecipient();
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([]);
+    expect(await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT })).toMatchObject({ status: 404 });
+    const before = await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as);
+    expect(before).toEqual({ status: 403, body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE } });
+    expect(h.runner).not.toHaveBeenCalled();
+    expect(h.calls.at(-1)).toMatchObject({ callerUserId: RECIPIENT, ownerUserId: 'u2', reason: 'review_required' });
+
+    await review();
+    const list = await call(listRoute, { user: RECIPIENT });
+    expect(list.body.data).toEqual([expect.objectContaining({ id: OTHERS_ID, slug: 'beam_other' })]);
+    const read = await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT });
+    expect((read.body.data as Record<string, unknown>).input_schema).toEqual(CONTRACT.inputs);
+    expect(JSON.stringify(read.body)).not.toContain('def run');
+    const after = await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as);
+    expect(after).toMatchObject({ status: 200, body: { output: { deflection: 0.0081 } } });
+    expect(h.calls.at(-1)).toMatchObject({
+      callerUserId: RECIPIENT,
+      ownerUserId: 'u2',
+      apiKeyId: 'k3',
+      surface: 'rest',
+      outcome: 'ok',
+    });
+    expect((await call(listRoute, {})).body.data).toEqual([expect.objectContaining({ id: LIVE_ID })]);
+
+    h.functions[2] = fnDoc(OTHERS_ID, { slug: 'beam_other', ownerKey: 'u2', userId: 'u2' });
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([]);
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual({
+      status: 404,
+      body: { error: 'Function not found' },
+    });
+    expect(h.runner).toHaveBeenCalledTimes(1);
   });
 });
 
