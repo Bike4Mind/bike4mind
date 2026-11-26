@@ -30,7 +30,7 @@ import {
   Cell,
 } from 'recharts';
 import { Box, Typography, Alert } from '@mui/joy';
-import { sanitizeChartConfig } from './sanitizeChartConfig';
+import { DEFAULT_CHART_COLORS, sanitizeChartConfig } from './sanitizeChartConfig';
 
 interface RechartsChartProps {
   /** Untrusted chart configuration; reduced by sanitizeChartConfig before anything reaches recharts. */
@@ -46,7 +46,7 @@ const RechartsChart: React.FC<RechartsChartProps> = ({ config, title, descriptio
     yAxis,
     width = 600,
     height = 400,
-    colors = ['#8884d8', '#82ca9d', '#ffc658', '#ff7c7c', '#8dd1e1'],
+    colors = DEFAULT_CHART_COLORS,
     legend = true,
     grid = true,
     tooltip = true,

@@ -66,7 +66,9 @@ const warnDroppedKey = (key: string) => {
 };
 
 const MAX_NESTING = 4;
-const COLOR = /^(?:#[0-9a-f]{3,8}|[a-z]+|(?:rgba?|hsla?)\([\d\s.,%/+-]+\))$/i;
+const COLOR =
+  /^(?:#[0-9a-f]{3,8}|[a-z]+|(?:rgba?|hsla?)\((?:[\d\s.,%/+-]|deg|turn|rad|grad)+\)|var\(--[\w-]+\)|url\(#[\w-]+\))$/i;
+export const DEFAULT_CHART_COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff7c7c', '#8dd1e1'];
 const DASHARRAY = /^[\d\s.,]+$/;
 const SERIES_TYPES = new Set(['Bar', 'Line', 'Area']);
 
@@ -179,7 +181,7 @@ export function sanitizeChartConfig(raw: unknown): SafeChartConfig {
   const source = isRecord(raw) ? raw : {};
   const options = isRecord(source.config) ? source.config : {};
   const colors = Array.isArray(options.colors)
-    ? options.colors.map(color).filter((value): value is string => value !== undefined)
+    ? options.colors.map((value, index) => color(value) ?? DEFAULT_CHART_COLORS[index % DEFAULT_CHART_COLORS.length])
     : undefined;
   const config: SafeChartConfig['config'] = {
     xAxis: text(options.xAxis),

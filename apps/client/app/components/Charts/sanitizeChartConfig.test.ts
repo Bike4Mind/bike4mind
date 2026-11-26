@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { sanitizeChartConfig } from './sanitizeChartConfig';
+import { DEFAULT_CHART_COLORS, sanitizeChartConfig } from './sanitizeChartConfig';
 
 describe('sanitizeChartConfig', () => {
   it('drops keys React rejects with a primitive value and warns once per key', () => {
@@ -80,6 +80,27 @@ describe('sanitizeChartConfig', () => {
     expect(sanitizeChartConfig({ chartType: 'BarChart', data: 'nope' }).data).toEqual([]);
   });
 
+  const colorsOf = (colors: unknown[]) =>
+    sanitizeChartConfig({ chartType: 'BarChart', config: { colors } }).config.colors;
+
+  it('accepts var(), angle-unit color functions and in-document gradient references', () => {
+    expect(colorsOf(['var(--brand)', 'hsl(210deg 50% 50%)', 'hsl(0.5turn 50% 50%)', 'url(#grad)'])).toEqual([
+      'var(--brand)',
+      'hsl(210deg 50% 50%)',
+      'hsl(0.5turn 50% 50%)',
+      'url(#grad)',
+    ]);
+  });
+
+  it.each(['url(https://x)', 'var(--a, url(https://x))', 'url(#a) url(https://x)'])('rejects the color %s', value => {
+    expect(colorsOf([value])).toEqual([DEFAULT_CHART_COLORS[0]]);
+  });
+
+  it('replaces an invalid color with the default at the same index instead of shifting', () => {
+    expect(colorsOf(['#111', 'url(https://x)', '#333'])).toEqual(['#111', DEFAULT_CHART_COLORS[1], '#333']);
+    expect(colorsOf([])).toBeUndefined();
+  });
+
   it('allow-lists series props and colors', () => {
     const { config } = sanitizeChartConfig({
       chartType: 'ComposedChart',
@@ -101,7 +122,7 @@ describe('sanitizeChartConfig', () => {
         ],
       },
     });
-    expect(config.colors).toEqual(['#8884d8', 'rgb(1, 2, 3)']);
+    expect(config.colors).toEqual(['#8884d8', DEFAULT_CHART_COLORS[1], 'rgb(1, 2, 3)', DEFAULT_CHART_COLORS[3]]);
     expect(config.axes).toEqual({
       x: { dataKey: 'a', label: undefined },
       y: [{ dataKey: 'a', label: undefined, orientation: undefined }],
