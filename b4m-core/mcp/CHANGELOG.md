@@ -1,5 +1,13 @@
 # @bike4mind/mcp
 
+## 2.2.13
+
+### Patch Changes
+
+- Updated dependencies [[`4dcc1f9`](https://github.com/Bike4Mind/bike4mind/commit/4dcc1f9cee9fdddb842c844617152106f11cd001)]:
+  - @bike4mind/common@31.3.1
+  - @bike4mind/fab-pipeline@3.3.3
+
 ## 2.2.12
 
 ### Patch Changes
