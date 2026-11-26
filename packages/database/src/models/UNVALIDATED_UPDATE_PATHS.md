@@ -101,7 +101,7 @@ The table below remains the literal-update inventory, not proof that all databas
 | AgentExecution | `dagSpec.tasks.agentType` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setDagSpec` | route-schema | `b4m-core/agents/src/dag/schemas.ts#DecomposedTaskSchema` | LLM decomposition goes through DecomposeTaskInputSchema.safeParse in coordinateTask before handoff |
 | AgentExecution | `dagSpec.tasks.onFailure` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setDagSpec` | route-schema | `b4m-core/agents/src/dag/schemas.ts#FailurePolicySchema` | LLM decomposition goes through DecomposeTaskInputSchema.safeParse in coordinateTask before handoff |
 | AgentExecution | `gateHistory.resolution` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.clearPendingGate` | route-schema | `apps/client/server/websocket/agentExecute.ts#handleGateResponse` | Only callers pass the literals "resumed" or "rejected" |
-| AgentExecution | `loopOutcome` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setLoopOutcome` | route-schema | `apps/workers/src/cron/loopScheduler.ts#stampOutcome` | Sole caller stampOutcome; every call site passes a literal or completedOutcome, which returns literals |
+| AgentExecution | `loopOutcome` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setLoopOutcome` | schema | `runValidators` | update call passes runValidators |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.cleanupStaleActive` | repository-check | `literal` | writes "aborted" |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.clearWaitingOnChild` | repository-check | `literal` | writes "running" |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.clearWaitingOnDagChildren` | repository-check | `literal` | writes "running" |
@@ -195,22 +195,22 @@ The table below remains the literal-update inventory, not proof that all databas
 | LiveopsTriageRun | `progress` | min,max | `infra/ops/LiveopsTriageRunModel.ts#LiveopsTriageRunRepository.updateProgress` | repository-check | `packages/database/src/models/infra/ops/LiveopsTriageRunModel.ts#updateProgress` | Writer clamps with Math.min(Math.max(progress,0),100) |
 | LiveopsTriageRun | `status` | enum | `infra/ops/LiveopsTriageRunModel.ts#LiveopsTriageRunRepository.markFailed` | repository-check | `literal` | writes "failed" |
 | LiveopsTriageRun | `status` | enum | `infra/ops/LiveopsTriageRunModel.ts#LiveopsTriageRunRepository.markStarted` | repository-check | `literal` | writes "processing" |
-| Loop | `alarm.kind` | enum | `ai/LoopModel.ts#LoopRepository.foldRun` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.foldRun` | alarm and hold are kept or removed by $cond, never new; the caller $set map does not name them |
-| Loop | `alarm.kind` | enum | `ai/LoopModel.ts#LoopRepository.markDispatched` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.markDispatched` | hold is $literal { kind: "capacity", limit: "loop" } or removed; alarm is kept or removed by $cond, never new |
-| Loop | `alarm.kind` | enum | `ai/LoopModel.ts#LoopRepository.setAlarm` | route-schema | `apps/workers/src/cron/loopScheduler.ts#raiseIdleAlarms` | Both callers pass a literal kind: raiseIdleAlarms "idle_with_work", raiseLongRun "long_run" |
-| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.deferUntil` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.deferUntil` | Sets hold to { kind, until, at }: kind defaults to "pacing", the one other caller passes "priority_budget"; no limit |
-| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.foldRun` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.foldRun` | alarm and hold are kept or removed by $cond, never new; the caller $set map does not name them |
-| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.holdForCapacity` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.holdForCapacity` | Writes the literal kind "capacity" |
-| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.markDispatched` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.markDispatched` | hold is $literal { kind: "capacity", limit: "loop" } or removed; alarm is kept or removed by $cond, never new |
-| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.setCapacityHolds` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.setCapacityHolds` | Writes the object literal { kind: "capacity", limit: "server" } |
-| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.deferUntil` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.deferUntil` | Sets hold to { kind, until, at }: kind defaults to "pacing", the one other caller passes "priority_budget"; no limit |
-| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.foldRun` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.foldRun` | alarm and hold are kept or removed by $cond, never new; the caller $set map does not name them |
-| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.holdForCapacity` | route-schema | `apps/workers/src/cron/loopScheduler.ts#dispatchLoop` | Every caller passes a literal limit: holdUnstarted "loop", admit and dispatchLoop "budget", dispatchLoop and settleDispatch "user" |
-| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.markDispatched` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.markDispatched` | hold is $literal { kind: "capacity", limit: "loop" } or removed; alarm is kept or removed by $cond, never new |
-| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.setCapacityHolds` | repository-check | `packages/database/src/models/ai/LoopModel.ts#LoopRepository.setCapacityHolds` | Writes the object literal { kind: "capacity", limit: "server" } |
-| Loop | `status` | enum | `ai/LoopModel.ts#LoopRepository.markErroredIfFailing` | repository-check | `literal` | writes "error" |
-| Loop | `status` | enum | `ai/LoopModel.ts#LoopRepository.pauseAllLiveForUser` | repository-check | `literal` | writes "paused" |
-| Loop | `status` | enum | `ai/LoopModel.ts#LoopRepository.resumeAutoPaused` | repository-check | `literal` | writes "live" |
+| Loop | `alarm.kind` | enum | `ai/LoopModel.ts#LoopRepository.foldRun` | schema | `runValidators` | update call passes runValidators |
+| Loop | `alarm.kind` | enum | `ai/LoopModel.ts#LoopRepository.markDispatched` | schema | `runValidators` | update call passes runValidators |
+| Loop | `alarm.kind` | enum | `ai/LoopModel.ts#LoopRepository.setAlarm` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.deferUntil` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.foldRun` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.holdForCapacity` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.markDispatched` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.kind` | enum | `ai/LoopModel.ts#LoopRepository.setCapacityHolds` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.deferUntil` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.foldRun` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.holdForCapacity` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.markDispatched` | schema | `runValidators` | update call passes runValidators |
+| Loop | `hold.limit` | enum | `ai/LoopModel.ts#LoopRepository.setCapacityHolds` | schema | `runValidators` | update call passes runValidators |
+| Loop | `status` | enum | `ai/LoopModel.ts#LoopRepository.markErroredIfFailing` | schema | `runValidators` | update call passes runValidators |
+| Loop | `status` | enum | `ai/LoopModel.ts#LoopRepository.pauseAllLiveForUser` | schema | `runValidators` | update call passes runValidators |
+| Loop | `status` | enum | `ai/LoopModel.ts#LoopRepository.resumeAutoPaused` | schema | `runValidators` | update call passes runValidators |
 | LoopDirective | `replies.by` | enum | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | schema | `runValidators` | update call passes runValidators |
 | LoopDirective | `replies.note` | maxlength | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | schema | `runValidators` | update call passes runValidators |
 | LoopDirective | `replies.outcome` | enum | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | schema | `runValidators` | update call passes runValidators |
