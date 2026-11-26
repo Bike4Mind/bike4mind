@@ -3,7 +3,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import React, { useMemo, useState } from 'react';
 import { useGetRecentActivities } from '@client/app/hooks/data/user';
-import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
+import { DATETIME_COLUMN_WIDTH, DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
 import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
 import { getErrorMessage } from '@client/app/utils/error';
 
@@ -50,7 +50,7 @@ const COLUMNS: DataColumn<IActivityLog>[] = [
     label: 'Endpoint',
     render: row => <Mono>{row.path}</Mono>,
   },
-  { id: 'datetime', label: 'Time', width: '12rem', render: row => formatTime(row.datetime) },
+  { id: 'datetime', label: 'Time', width: DATETIME_COLUMN_WIDTH, render: row => formatTime(row.datetime) },
 ];
 
 const getRowId = (row: IActivityLog) => row.id;
@@ -141,6 +141,7 @@ const RecentActivityView: React.FC<RecentActivityViewProps> = ({ limit = 10 }) =
       rows={activities}
       columns={COLUMNS}
       getRowId={getRowId}
+      minWidth="41.5rem"
       pagination={false}
       loading={isLoading}
       error={isError ? getErrorMessage(error) : undefined}

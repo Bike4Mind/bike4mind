@@ -131,7 +131,7 @@ const RateLimitsTab: React.FC = () => {
               testId="rate-limit-raw-table"
               stripe="odd"
               pagination={false}
-              minWidth="63rem"
+              minWidth="65.5rem"
             />
           </TabPanel>
         </Tabs>
