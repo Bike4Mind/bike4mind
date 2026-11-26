@@ -1541,6 +1541,51 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
         expect(calls.sessions).toStrictEqual([]);
       });
 
+      // A member (sharerId) attached an outsider's item; the owner holds only the project-minted
+      // read+update on it, and the member keeps share outside the project.
+      const memberAttachedItem = (id: string, memberHolds: Permission[]) => ({
+        id,
+        userId: itemOwnerId,
+        users: [
+          { userId: sharerId, permissions: memberHolds },
+          { userId: ownerId, permissions: memberAttached, projectId: docId },
+        ],
+        groups: [],
+      });
+
+      it('passes on an item a member attached while that member still holds share on it', async () => {
+        const calls = await acceptProjectInvite(
+          shareLink,
+          {
+            file: memberAttachedItem('file-1', fullLink),
+            prompt: memberAttachedItem('prompt-1', fullLink),
+            session: memberAttachedItem('session-1', fullLink),
+          },
+          { inviterId: ownerId }
+        );
+
+        expect(calls.files).toStrictEqual([
+          ['file-1', propagated(memberAttached)],
+          ['prompt-1', propagated(memberAttached)],
+        ]);
+        expect(calls.sessions).toStrictEqual([['session-1', propagated(memberAttached)]]);
+      });
+
+      it('skips an item a member attached once no participant holds share on it', async () => {
+        const calls = await acceptProjectInvite(
+          shareLink,
+          {
+            file: memberAttachedItem('file-1', [Permission.read]),
+            prompt: ownerHolds('prompt-1', 'owner'),
+            session: memberAttachedItem('session-1', [Permission.read]),
+          },
+          { inviterId: ownerId }
+        );
+
+        expect(calls.files).toStrictEqual([['prompt-1', propagated(fullLink)]]);
+        expect(calls.sessions).toStrictEqual([]);
+      });
+
       it('grants the project but no items when the owner account no longer exists', async () => {
         const calls = await acceptProjectInvite(
           shareLink,

@@ -1,19 +1,17 @@
 import {
-  heldPermissions,
   IFabFileRepository,
   IProjectDocument,
-  IShareableDocument,
   IProjectRepository,
   ISessionDocument,
   ISessionRepository,
   IUserRepository,
   IUserShare,
-  Permission,
   RepositoryUpdate,
 } from '@bike4mind/common';
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { grantWrite } from './grantWrite';
+import { hasGrantorInProject, projectParticipants, SharedItem } from './projectGrantor';
 
 const revokeSharingSchema = z.object({
   id: z.string(),
@@ -34,35 +32,6 @@ interface RevokeSharingAdapters {
   /** Told which users may have lost access, so live subscriptions can be rebuilt after the commit. */
   onAccessRemoved?: (userIds: string[]) => void;
 }
-
-type SharedItem = IShareableDocument & { id: string; userId: string };
-
-const projectParticipants = (project: Pick<IProjectDocument, 'userId' | 'users'>) => [
-  project.userId,
-  ...(project.users ?? []).map(u => u.userId),
-];
-
-/**
- * Whether some participant of `project` can still grant `item` there: the owner takes part, or a
- * participant holds share through `users` (the item's rows outside this project) or a group. Same
- * rule as grantCap on attach (projectService/addFiles.ts). Users are loaded only when no direct row
- * settles it.
- */
-const hasGrantorInProject = async (
-  item: SharedItem,
-  users: IUserShare[],
-  participants: string[],
-  db: RevokeSharingAdapters['db']
-): Promise<boolean> => {
-  if (participants.includes(item.userId)) return true;
-  const outsideProject = { ...item, users };
-  const holdsShare = (id: string, groups: string[] = []) =>
-    heldPermissions(outsideProject, id, groups).has(Permission.share);
-  if (participants.some(id => holdsShare(id))) return true;
-  if ((outsideProject.groups ?? []).length === 0) return false;
-  const participantUsers = await Promise.all(participants.map(id => db.users.findById(id)));
-  return participantUsers.some(user => user && holdsShare(user.id, user.groups ?? []));
-};
 
 /**
  * Project grants on an item are passed on from whoever attached it. Once `userIdToRevoke` loses the

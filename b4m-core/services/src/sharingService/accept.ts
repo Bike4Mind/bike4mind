@@ -36,6 +36,7 @@ import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { assertContentInvitePolicy } from './organizationPolicy';
 import { grantCap } from '../projectService/addFiles';
+import { hasGrantorInProject, projectParticipants, SharedItem } from './projectGrantor';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -516,23 +517,27 @@ const acceptProject = async (
 
   // Whoever minted the invite passes each attached item on, so the item grant is capped at what they
   // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one. Passing it
-  // on is a re-share, so it also needs share on the item, unless the item's owner takes part in the
-  // project and so is the grantor.
-  const participants = new Set([project.userId, ...project.users.map(member => member.userId)]);
-  const grantOn = (item: IShareableDocument & { userId: string }) => {
+  // on needs a grantor in the project: the inviter holding share, or the same grantor rule revoke uses
+  // to keep an item attached (projectGrantor.ts).
+  const participants = projectParticipants(project);
+  const grantOn = async (item: SharedItem) => {
     if (!inviter) return null;
-    const granted = participants.has(item.userId)
-      ? grantCap(item as ShareableAccessShape, inviter)(permissions)
-      : reshareableBy(item, inviter, permissions).granted;
+    let granted = reshareableBy(item, inviter, permissions).granted;
+    if (granted.length === 0) {
+      const outsideProject = (item.users ?? []).filter(u => u.projectId !== projectId);
+      if (await hasGrantorInProject(item, outsideProject, participants, db)) {
+        granted = grantCap(item as ShareableAccessShape, inviter)(permissions);
+      }
+    }
     return granted.length > 0 ? { add: [{ userId: user.id, permissions: granted, projectId }] } : null;
   };
 
   for (const file of files) {
-    const grant = grantOn(file);
+    const grant = await grantOn(file);
     if (grant) await db.fabFiles.shareable.updateUserShares(file.id, grant);
   }
   for (const session of sessions) {
-    const grant = grantOn(session);
+    const grant = await grantOn(session);
     if (grant) await db.sessions.shareable.updateUserShares(session.id, grant);
   }
 };
