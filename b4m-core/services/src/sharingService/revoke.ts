@@ -270,7 +270,7 @@ export const revokeFromProject = async (
   const revokeFromOthers = async (id: string, type: 'files' | 'sessions') => {
     for (const userId of othersInProject) {
       try {
-        await revoke(userId, { id, type, userId, projectId: project.id }, adapters);
+        await revoke(userIdToRevoke, { id, type, userId, projectId: project.id }, adapters);
       } catch (e) {
         if (!(e instanceof NotFoundError)) throw e;
       }
@@ -293,10 +293,7 @@ export const revokeFromProject = async (
         );
       }
     } catch (e) {
-      // Every NotFoundError, not just the 'not in document' one: a member holding update/share
-      // but not read is invisible to findAccessibleById's ['read','write'] predicate and lands on
-      // a different message. This cascade is best-effort, so a row it cannot reach is a row with
-      // nothing to revoke, never a reason to abort the whole revoke.
+      // Best-effort: a row it cannot reach is a row with nothing to revoke, never a reason to abort.
       if (!(e instanceof NotFoundError)) throw e;
     }
   }
@@ -316,10 +313,7 @@ export const revokeFromProject = async (
         );
       }
     } catch (e) {
-      // Every NotFoundError, not just the 'not in document' one: a member holding update/share
-      // but not read is invisible to findAccessibleById's ['read','write'] predicate and lands on
-      // a different message. This cascade is best-effort, so a row it cannot reach is a row with
-      // nothing to revoke, never a reason to abort the whole revoke.
+      // Best-effort: a row it cannot reach is a row with nothing to revoke, never a reason to abort.
       if (!(e instanceof NotFoundError)) throw e;
     }
   }
