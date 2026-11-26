@@ -802,7 +802,18 @@ export class B4mApiClient {
    * Also undefined when the key may not list keys (403: the list needs `api-keys:manage`), since that says
    * nothing about the key's other scopes; the route the caller is about to use still enforces its own.
    */
-  async getOwnKeyScopes(): Promise<string[] | undefined> {
+  getOwnKeyScopes(): Promise<string[] | undefined> {
+    // One lookup per client, shared by every tool group that asks at startup; a failure is not kept.
+    this.ownKeyScopes ??= this.readOwnKeyScopes().catch(error => {
+      this.ownKeyScopes = undefined;
+      throw error;
+    });
+    return this.ownKeyScopes;
+  }
+
+  private ownKeyScopes?: Promise<string[] | undefined>;
+
+  private async readOwnKeyScopes(): Promise<string[] | undefined> {
     const apiKey = this.apiKey;
     if (!apiKey) return undefined;
     let response: unknown;

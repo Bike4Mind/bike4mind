@@ -461,6 +461,19 @@ describe('function tools', () => {
       );
     });
 
+    it('422 carries the problems list in _meta, as the REST body does', async () => {
+      const problems = [
+        { path: 'span', message: 'must be a number' },
+        { path: 'load', message: 'is required' },
+      ];
+      const invokeFunction = vi
+        .fn()
+        .mockRejectedValue(apiError(422, { error: 'Input span must be a number.', problems }));
+      const result = await collect(mockClient({ invokeFunction })).call('call_function', { function: ID, input: {} });
+      expect(result.isError).toBe(true);
+      expect(result._meta).toEqual({ problems });
+    });
+
     it('429 says when to retry', async () => {
       expect(await refusal(apiError(429, { error: 'Too many requests' }, { 'retry-after': '12' }))).toBe(
         'Too many function requests for this account. Retry after 12s.'

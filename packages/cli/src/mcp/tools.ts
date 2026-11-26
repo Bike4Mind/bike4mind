@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import { basename, resolve, sep } from 'node:path';
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import {
   ApiKeyScope,
@@ -239,6 +239,33 @@ export const TOOL_META: ToolMeta[] = [
 ];
 
 export const TOOL_NAMES = TOOL_META.map(t => t.name);
+
+const KEY_SCOPES_TIMEOUT_MS = 5 * 1000;
+
+/** The tools registerTools put on each server, by name, so they can be taken back off the list. */
+const toolHandles = new WeakMap<McpServer, Map<string, RegisteredTool>>();
+
+/**
+ * Stops listing the tools the API key's scopes do not cover, so a functions-only key sees the function tools alone.
+ * Scopes come from the key list, which only a key that may manage keys can read: when they cannot be read, or the
+ * key cannot be told apart from another, every tool stays listed and each route still enforces its own scope.
+ */
+export async function restrictToolsToKeyScopes(server: McpServer, client: B4mApiClient): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // Axios timeouts do not cover credential loading or OAuth refresh in its interceptors.
+  const stalled = new Promise<undefined>(resolve => {
+    timer = setTimeout(() => resolve(undefined), KEY_SCOPES_TIMEOUT_MS);
+  });
+  const scopes = await Promise.race([client.getOwnKeyScopes().catch(() => undefined), stalled]).finally(() =>
+    clearTimeout(timer)
+  );
+  if (!scopes || scopes.length === 0 || scopes.includes(ApiKeyScope.ADMIN)) return;
+  const wanted = new Map(TOOL_META.map(t => [t.name, t.scope]));
+  for (const [name, handle] of toolHandles.get(server) ?? []) {
+    const scope = wanted.get(name);
+    if (scope && !scopes.includes(scope)) handle.disable();
+  }
+}
 
 const listNotebooksShape = {
   search: z.string().optional().describe('Filter notebooks by name/content'),
@@ -1370,7 +1397,22 @@ export async function bobRunsLeft(client: B4mApiClient, args: { organizationId?:
  * API failure becomes a structured `isError` result carrying a friendly message
  * (see {@link mapApiError}) rather than throwing across the transport.
  */
-export function registerTools(server: McpServer, client: B4mApiClient): void {
+export function registerTools(mcpServer: McpServer, client: B4mApiClient): void {
+  const handles = new Map<string, RegisteredTool>();
+  toolHandles.set(mcpServer, handles);
+  const server = new Proxy(mcpServer, {
+    get(target, prop) {
+      if (prop === 'registerTool') {
+        return (name: string, ...rest: unknown[]) => {
+          const handle = (target.registerTool as (...args: unknown[]) => RegisteredTool)(name, ...rest);
+          handles.set(name, handle);
+          return handle;
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
   const baseURL = client.baseURL;
   const meta = (name: string) => TOOL_META.find(t => t.name === name)!;
 
