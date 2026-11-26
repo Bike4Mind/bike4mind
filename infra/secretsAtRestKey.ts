@@ -18,8 +18,6 @@ export const SECRETS_AT_REST_PURPOSE = 'secrets-at-rest';
 /** Must match the KMS encryption context packages/scripts/src/createWrappedStageDataKey.ts mints with. */
 export const secretsAtRestEncryptionContext = (stage: string) => ({ purpose: SECRETS_AT_REST_PURPOSE, stage });
 
-export const SECRETS_AT_REST_PREVIEW_KEY_ENV = 'PREVIEW_SECRETS_AT_REST_KEY_ARN';
-
 export type SecretsAtRestKeyKind = 'dedicated' | 'shared' | 'none';
 
 export function secretsAtRestKeyKind(input: {
@@ -212,7 +210,7 @@ function createKey(): SecretsAtRestKey {
 }
 
 export function resolveSecretsAtRestKey(): SecretsAtRestKey | undefined {
-  const previewKeyArn = process.env[SECRETS_AT_REST_PREVIEW_KEY_ENV] || undefined;
+  const previewKeyArn = process.env.PREVIEW_SECRETS_AT_REST_KEY_ARN || undefined;
   const kind = secretsAtRestKeyKind({ runsScheduledJobs, isPreviewStage, previewKeyArn });
   if (kind === 'dedicated') return createKey();
   if (kind === 'shared') return { kind, arn: previewKeyArn! };

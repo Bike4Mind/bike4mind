@@ -56,6 +56,8 @@ For each variable, the system tries environment-specific variables first, then f
 
 - `PREVIEW_CHAT_SHARED_LISTENER_ARN`: Optional HTTPS listener of a load balancer that preview stages share for the ChatCompletion service instead of creating one each; see `infra/preview-shared-chat-origin-alb.md`
 
+- `PREVIEW_SECRETS_AT_REST_KEY_ARN`: Optional KMS key that preview stages share to wrap their secrets-at-rest data key. Unset means preview stages get no key; see `docs/architecture/secrets-at-rest-key.md`
+
 ## Required Secrets
 
 These secrets are sensitive and should be configured in your repository settings under Settings → Secrets and variables → Actions → Secrets.
