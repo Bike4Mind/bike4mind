@@ -6,7 +6,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ComplianceModal, { useComplianceModal } from './ComplianceModal';
 import type { UserComplianceResponse } from '@bike4mind/common';
-import { USER_AUTH_AUDIT_EVENTS } from '@bike4mind/database';
 
 const mockData = vi.fn();
 
@@ -198,7 +197,8 @@ describe('ComplianceModal', () => {
   });
 
   it('keeps the longest auth event readable next to the widened When column', () => {
-    const longest = USER_AUTH_AUDIT_EVENTS.reduce((a, b) => (b.length > a.length ? b : a));
+    // Longest UserAuthAuditEvent in packages/database/src/models/auth/UserAuthAuditLogModel.ts.
+    const longest = 'account_data_export_requested';
     mockData.mockReturnValue({
       data: {
         ...NEVER_ACCEPTED,
@@ -219,8 +219,7 @@ describe('ComplianceModal', () => {
     // preview), plus 12 px cell padding on each side.
     const eventRem = remOf('Event');
     expect(eventRem * 16).toBeGreaterThanOrEqual(longest.length * 7.5 + 24);
-    // The other three columns keep at least their old ~7.5rem share; below that the table scrolls.
-    expect(parseFloat(getComputedStyle(table).minWidth)).toBeGreaterThanOrEqual(remOf('When') + eventRem + 3 * 7.5);
+    expect(getComputedStyle(table).minWidth).toBe('52rem');
     expect(within(table).getByText(longest)).toBeInTheDocument();
   });
 

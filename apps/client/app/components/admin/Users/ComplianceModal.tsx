@@ -26,8 +26,10 @@ type AuthEvent = UserComplianceResponse['recentAuthEvents'][number] & { rowId: s
 const TABLE_MAX_HEIGHT = '40vh';
 // Fits the longest UserAuthAuditEvent (`account_data_export_requested`) at ~7.5 px a character, plus cell padding.
 const EVENT_COLUMN_WIDTH = '16rem';
-// When + Event + three wrap columns at their pre-widening share; narrower dialogs scroll the table sideways.
-const AUTH_EVENTS_MIN_WIDTH = `${parseFloat(DATETIME_COLUMN_WIDTH) + parseFloat(EVENT_COLUMN_WIDTH) + 3 * 7.5}rem`;
+// When (13.5rem) + Event + 7.5rem for each of the three wrap columns; below this the table scrolls sideways.
+const AUTH_EVENTS_MIN_WIDTH = '52rem';
+// Fits AUTH_EVENTS_MIN_WIDTH plus the dialog padding and a vertical scrollbar.
+const DIALOG_WIDTH = 900;
 
 const Mono = ({ children }: { children: string }) => (
   <Typography level="body-sm" sx={{ fontFamily: 'code', color: 'inherit' }}>
@@ -76,7 +78,7 @@ const ComplianceModal = () => {
       open={!!userId}
       onClose={() => setUserId(null)}
       title="User compliance"
-      width={720}
+      width={DIALOG_WIDTH}
       data-testid="compliance-modal"
     >
       {isError ? (

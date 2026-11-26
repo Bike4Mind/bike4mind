@@ -141,6 +141,7 @@ const RecentActivityView: React.FC<RecentActivityViewProps> = ({ limit = 10 }) =
       rows={activities}
       columns={COLUMNS}
       getRowId={getRowId}
+      minWidth="41.5rem"
       pagination={false}
       loading={isLoading}
       error={isError ? getErrorMessage(error) : undefined}

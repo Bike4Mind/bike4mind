@@ -76,6 +76,7 @@ describe('RecentActivityView', () => {
     const width = within(table).getByRole('columnheader', { name: 'Time' }).style.width;
     expect(width).toMatch(/^[\d.]+rem$/);
     expect(parseFloat(width)).toBeGreaterThanOrEqual(13.5);
+    expect(getComputedStyle(table).minWidth).toBe('41.5rem');
     expect(within(table).getByText(datetime.toLocaleString())).toBeInTheDocument();
   });
 
