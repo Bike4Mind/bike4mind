@@ -21,8 +21,10 @@ import {
   FORCE_STREAM_STALL_TEST_MARKER,
   SLOW_MODEL_ERROR_REPLY,
   PROVIDER_SPEND_LIMIT_REPLY,
+  EMPTY_CONVERSATION_REPLY,
   MODEL_UNAVAILABLE_ERROR_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_REPLY,
+  HIDDEN_REASONING_ONLY_EMPTY_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
 } from './ChatCompletionProcess';
 import { outOfCreditsNotice } from './chatCreditCap';
@@ -60,6 +62,7 @@ import {
   createAnthropicStreamTimeoutError,
   OutputBudgetExhaustedError,
   StreamEndedWithoutFinishError,
+  HiddenReasoningOnlyEmptyError,
   bedrockEmptyResponseMessage,
   type ICompletionBackend,
   type ICompletionOptions,
@@ -103,7 +106,7 @@ import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
-import { AiAccessRefusedError, insufficientCreditsError } from '@bike4mind/common';
+import { AiAccessRefusedError, EmptyConversationError, insufficientCreditsError } from '@bike4mind/common';
 import { FlaggedContentError, BedrockGuardrailsService, OpenaiModerationsService } from '@bike4mind/utils';
 import { applyModerationHit } from '../userService/moderationPolicy';
 
@@ -8743,6 +8746,115 @@ describe('ChatCompletionProcess', () => {
       });
     });
 
+    describe('a conversation with nothing readable', () => {
+      const setupTurn = (builtMessages: IMessage[], complete: ReturnType<typeof vi.fn>) => {
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({ messages: builtMessages, messageTruncation: null });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: '' });
+      };
+      const body = () => ({
+        ...startQuestParams,
+        message: '   ',
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      });
+      const emptyConversationErrorLogs = () =>
+        vi
+          .mocked(mockLogger.error)
+          .mock.calls.filter(args => args.some(arg => String(arg).includes('non-empty user or assistant message')));
+
+      // The prod shape: a blank prompt on a turn with no history and no attachments leaves only
+      // system context, which every backend sanitizer drops down to nothing.
+      it('refuses a blank prompt before the model call, at warn, with a readable reply', async () => {
+        const complete = vi.fn();
+        setupTurn(
+          [
+            { role: 'system', content: 'You are helpful.' },
+            { role: 'user', content: '   ' },
+          ],
+          complete
+        );
+        // enforceCredits refuses an unpriced model at admission, so price it to reach the credit hold.
+        mockedGetAvailableModels.mockResolvedValue([
+          { ...(await mockedGetAvailableModels())[0], pricing: { 200_000: { input: 1e-6, output: 2e-6 } } },
+        ]);
+        enableAdminFlags('enforceCredits');
+        mockedUsdToCredits.mockReturnValue(50);
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 500 });
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await expect(service.process({ body: body(), logger: mockLogger })).resolves.toBeUndefined();
+
+        expect(complete).not.toHaveBeenCalled();
+        expect(incrementCredits).not.toHaveBeenCalled();
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ reply: EMPTY_CONVERSATION_REPLY, type: 'error', status: 'done' })
+        );
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          '[Empty Conversation] Request refused: no readable user or assistant message',
+          expect.objectContaining({ questId: expect.anything() })
+        );
+        expect(emptyConversationErrorLogs()).toHaveLength(0);
+      });
+
+      it('settles the same way when a backend sanitizer refuses the conversation', async () => {
+        const complete = vi.fn().mockRejectedValue(new EmptyConversationError());
+        setupTurn(
+          [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'orphan', content: 'x' }] }],
+          complete
+        );
+        const releaseSpy = vi.spyOn(service, 'releaseReservedCredits');
+
+        await expect(service.process({ body: body(), logger: mockLogger })).resolves.toBeUndefined();
+
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ reply: EMPTY_CONVERSATION_REPLY, type: 'error', status: 'done' })
+        );
+        expect(emptyConversationErrorLogs()).toHaveLength(0);
+        expect(releaseSpy).toHaveBeenCalled();
+      });
+
+      it('still sends a blank prompt that carries an attached file', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Summary of the file']);
+        });
+        setupTurn(
+          [
+            { role: 'user', content: 'Attached file contents' },
+            { role: 'user', content: '' },
+          ],
+          complete
+        );
+
+        await service.process({ body: body(), logger: mockLogger });
+
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(mockDb.quests.update).not.toHaveBeenCalledWith(
+          expect.objectContaining({ reply: EMPTY_CONVERSATION_REPLY })
+        );
+      });
+    });
+
     // Exhaustion path + final-hop cross-provider wiring: every hop fails, so the loop runs the
     // full MAX_FALLBACK_HOPS budget and throws. Asserts the loop asks getLlmWithFallback for a
     // cross-provider (preferUntriedBackend) ONLY on the final hop, and settles as errored.
@@ -14422,6 +14534,96 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({ replies: ['Recovered'], status: 'done', type: 'message' })
       );
+    });
+
+    describe('a turn that finished after hidden reasoning only', () => {
+      const hiddenOnly = () => new HiddenReasoningOnlyEmptyError('Bedrock', 'test-model', 'empty after thinking');
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      it('retries once on the same model and succeeds when the second attempt answers', async () => {
+        setupStreamIdleTimeoutMocks();
+        let callCount = 0;
+        const complete = vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              callCount++;
+              if (callCount === 1) throw hiddenOnly();
+              await cb(['Recovered']);
+            }
+          );
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(complete).toHaveBeenCalledTimes(2);
+        expect(complete.mock.calls[1][0]).toBe(complete.mock.calls[0][0]);
+        expect(mockLogger.error).not.toHaveBeenCalledWith(expect.any(HiddenReasoningOnlyEmptyError));
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ replies: ['Recovered'], status: 'done', type: 'message' })
+        );
+      });
+
+      it('moves to the fallback model after the same-model retry fails too', async () => {
+        setupStreamIdleTimeoutMocks();
+        mockQuest.promptMeta.model = { name: modelInfo.id, backend: modelInfo.backend };
+        const primaryComplete = vi.fn().mockRejectedValue(hiddenOnly());
+        const fallbackComplete = vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['From fallback']);
+            }
+          );
+        const fallbackModel = { ...modelInfo, id: 'fallback-model', name: 'Fallback Model' };
+        mockedGetLlmByModel.mockReturnValue({
+          complete: primaryComplete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetLlmWithFallback
+          .mockResolvedValueOnce({
+            model: fallbackModel,
+            backend: {
+              complete: fallbackComplete,
+              getModelInfo: vi.fn().mockResolvedValue([]),
+              currentModel: fallbackModel.id,
+            },
+            attempt: 1,
+          })
+          .mockResolvedValue(null);
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(primaryComplete).toHaveBeenCalledTimes(2);
+        expect(fallbackComplete).toHaveBeenCalledTimes(1);
+        expect(fallbackComplete.mock.calls[0][0]).toBe('fallback-model');
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ replies: ['From fallback'], status: 'done', type: 'message' })
+        );
+      });
+
+      it('settles with the dedicated reply when every attempt returns only hidden reasoning', async () => {
+        setupStreamIdleTimeoutMocks();
+        const complete = vi.fn().mockRejectedValue(hiddenOnly());
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(complete).toHaveBeenCalledTimes(2);
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ reply: HIDDEN_REASONING_ONLY_EMPTY_REPLY, type: 'error', status: 'done' })
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('[Hidden Reasoning Only]'));
+      });
     });
 
     it('should succeed on stream idle timeout retry if second attempt works', async () => {

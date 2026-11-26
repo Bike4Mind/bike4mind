@@ -92,13 +92,17 @@ function fire(method: 'GET' | 'DELETE') {
   return { req: req as any, res: res as any };
 }
 
-function keyWithScopes(scopes: ApiKeyScope[]) {
+const LEGACY_CREATED_AT = new Date('2026-01-01T00:00:00Z');
+const POST_CUTOFF_CREATED_AT = new Date('2026-11-26T00:00:00Z');
+
+function keyWithScopes(scopes: ApiKeyScope[], createdAt: Date = LEGACY_CREATED_AT) {
   mockValidate.mockResolvedValue({
     isValid: true,
     keyId: 'k1',
     userId: 'user-1',
     scopes,
     rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    createdAt,
   });
 }
 
@@ -186,8 +190,7 @@ describe('/api/sessions API-key scopes', () => {
     expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
   });
 
-  // Every key is legacy until the legacy window's cutoff is set, so keys that miss the scopes still
-  // get through the door; the refusal they get after the window ends is pinned in apiKeyScopeGate.test.ts.
+  // A key created before the legacy cutoff that misses the scopes still gets through the door.
   it.each([
     ['an unscoped key', []],
     ['a non-notebook key', [ApiKeyScope.ME_READ]],
@@ -197,6 +200,15 @@ describe('/api/sessions API-key scopes', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('refuses GET for a non-notebook key created after the legacy cutoff', async () => {
+    keyWithScopes([ApiKeyScope.ME_READ], POST_CUTOFF_CREATED_AT);
+    const { req, res } = fire('GET');
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockSearchOwnSessions).not.toHaveBeenCalled();
   });
 
   it.each(['GET', 'DELETE'] as const)('refuses %s at the door for a confined key', async method => {

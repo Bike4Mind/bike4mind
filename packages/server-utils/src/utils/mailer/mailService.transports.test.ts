@@ -50,6 +50,9 @@ const configValues = vi.hoisted(() => ({
 
 vi.mock('../config', () => ({ Config: configValues }));
 
+const findSetting = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: { findOne: findSetting } }));
+
 const sesMock = mockClient(SESv2Client);
 
 interface TransportCase {
@@ -58,6 +61,7 @@ interface TransportCase {
   resolveSend: (messageId: string) => void;
   rejectSend: (error: Error) => void;
   sentRecipients: () => string[];
+  sentFrom: () => string[];
 }
 
 const cases: TransportCase[] = [
@@ -76,6 +80,7 @@ const cases: TransportCase[] = [
     resolveSend: messageId => mockSendMail.mockResolvedValue({ messageId }),
     rejectSend: error => mockSendMail.mockRejectedValue(error),
     sentRecipients: () => mockSendMail.mock.calls.map(([mail]) => mail.to),
+    sentFrom: () => mockSendMail.mock.calls.map(([mail]) => mail.from),
   },
   {
     kind: 'ses',
@@ -93,12 +98,14 @@ const cases: TransportCase[] = [
       sesMock
         .commandCalls(SendEmailCommand)
         .map(call => (call.args[0].input.Destination?.ToAddresses ?? []).join(', ')),
+    sentFrom: () => sesMock.commandCalls(SendEmailCommand).map(call => call.args[0].input.FromEmailAddress ?? ''),
   },
 ];
 
-describe.each(cases)('MailService over $kind', ({ kind, make, resolveSend, rejectSend, sentRecipients }) => {
+describe.each(cases)('MailService over $kind', ({ kind, make, resolveSend, rejectSend, sentRecipients, sentFrom }) => {
   beforeEach(() => {
     vi.clearAllMocks();
+    findSetting.mockResolvedValue(null);
     sesMock.reset();
     mockVerify.mockResolvedValue(true);
     configValues.MAIL_HOST = 'smtp.example.com';
@@ -125,6 +132,29 @@ describe.each(cases)('MailService over $kind', ({ kind, make, resolveSend, rejec
 
     expect(result).toEqual({ messageId: '<msg-1>' });
     expect(sentRecipients()).toEqual(['user@test.com']);
+  });
+
+  it('sends from the mailFrom admin setting when it holds a valid sender', async () => {
+    resolveSend('<msg-5>');
+    findSetting.mockResolvedValue({ settingName: 'mailFrom', settingValue: 'Ops Team <ops@example.com>' });
+    const mailer = await createMailService();
+
+    await mailer.sendEmail('user@test.com', { subject: 'Welcome', html: '<p>Hi</p>' });
+    await mailer.sendTestEmail('recipient@example.com');
+
+    const expected = kind === 'ses' ? '"Ops Team" <ops@example.com>' : 'Ops Team <ops@example.com>';
+    expect(sentFrom()).toEqual([expected, expected]);
+  });
+
+  it('sends from the MAIL_FROM secret when the setting is empty', async () => {
+    resolveSend('<msg-6>');
+    findSetting.mockResolvedValue({ settingName: 'mailFrom', settingValue: '' });
+    const mailer = await createMailService();
+
+    await mailer.sendEmail('user@test.com', { subject: 'Welcome', html: '<p>Hi</p>' });
+    await mailer.sendTestEmail('recipient@example.com');
+
+    expect(sentFrom()).toEqual(['noreply@example.com', 'noreply@example.com']);
   });
 
   it('joins array recipients', async () => {

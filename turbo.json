@@ -1,7 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": ["CI"],
-  "globalPassThroughEnv": ["NODE_OPTIONS"],
+  // Strict env mode hands tasks only declared vars, so without VITEST_MAX_WORKERS here a local
+  // `pnpm verify` gives every vitest pool all host cores (vitest.shared.ts reads it). Pass-through,
+  // not hashed: the worker count does not change results. CI runs --env-mode=loose either way.
+  "globalPassThroughEnv": ["NODE_OPTIONS", "VITEST_MAX_WORKERS"],
   // dataLakeSearchMetrics.test.ts reads infra/dataLakeSearchDashboard.ts to pin the metric names
   // the dashboard graphs, because infra/ cannot import the constants. That file sits outside every
   // package, so without it here a dashboard-only edit is a cache hit for the very test meant to

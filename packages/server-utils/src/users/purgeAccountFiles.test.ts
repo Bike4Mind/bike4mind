@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   generatedDelete: vi.fn(),
   deletePrefix: vi.fn(),
   importPrefixDelete: vi.fn(),
+  functionDataPurge: vi.fn(async () => 0),
   backupReferenced: vi.fn(),
   hardDelete: vi.fn(),
   indexModels: vi.fn(),
@@ -124,6 +125,7 @@ vi.mock('../services/cdn/invalidateRouterCdn', async importActual => ({
   createCdnInvalidationBatch: () => ({ add: h.cdnAdd, flush: h.cdnFlush }),
 }));
 vi.mock('sst', () => ({ Resource: { historyImportBucket: { name: 'imports' } } }));
+vi.mock('../callableFunctions/dataPins', () => ({ purgeCallableFunctionDataForUser: h.functionDataPurge }));
 
 import { findOrganizationFileIds, purgeAccountFiles } from './purgeAccountFiles';
 
@@ -182,6 +184,11 @@ describe('purgeAccountFiles', () => {
     expect(h.find).toHaveBeenCalledWith(
       expect.objectContaining({ $or: [{ userId: 'u1' }, { organizationId: { $in: [] } }] })
     );
+  });
+
+  it("purges the account's callable function data", async () => {
+    await purgeAccountFiles('u1', options);
+    expect(h.functionDataPurge).toHaveBeenCalledWith('u1');
   });
 
   it('looks up surviving references to legacy edit backups by an anchored path prefix', async () => {

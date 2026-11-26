@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import { promoteInlineLatexDollars } from './remarkPlugins';
+import { promoteInlineLatexDollars, replaceInlineSpans, unescapedDelimiter } from './remarkPlugins';
 
 describe('promoteInlineLatexDollars', () => {
   describe('math spans get promoted to $$...$$', () => {
@@ -197,6 +197,50 @@ describe('promoteInlineLatexDollars', () => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
     });
 
+    // A span runs from an unescaped opener to the first unescaped closer on its own line.
+    it.each([
+      ['closer on the next line', 'a \\( x^2\nb \\) c', 'a \\( x^2\nb \\) c'],
+      ['escaped closer inside the span', 'so \\( a \\\\) b^2 \\) end', 'so $$a \\\\) b^2$$ end'],
+      ['second opener inside the span', '\\( a \\( b^2 \\) c', '$$a \\( b^2$$ c'],
+      ['unclosed opener before a span on the next line', '\\( a\n\\(x^2\\)', '\\( a\n$$x^2$$'],
+      ['backslash ending the line before a span', 'a \\\n\\(x^2\\)', 'a \\\n$$x^2$$'],
+      ['bracket span inside a paren span', '\\( a \\[ x^2 \\] b \\)', '\\( a $$x^2$$ b \\)'],
+    ])('pairs delimiters: %s', (_label, input, expected) => {
+      expect(promoteInlineLatexDollars(input)).toBe(expected);
+    });
+
+    // The pairing must equal the lazy regexp it replaced, which is the reference here.
+    it('pairs delimiters exactly like the lazy regexp over random delimiter strings', () => {
+      const pieces = ['\\(', '\\)', '\\[', '\\]', '\\', '\\\\', '\n', '\r', 'a', ' ', '(', ')'];
+      let seed = 12345;
+      const next = () => (seed = (seed * 1664525 + 1013904223) >>> 0);
+      const tag = (match: string, inner: string, offset: number, whole: string) =>
+        `<${match}|${inner}|${offset}|${whole.length}>`;
+      for (const [open, close] of [
+        ['(', ')'],
+        ['[', ']'],
+      ]) {
+        const reference = new RegExp(
+          `${unescapedDelimiter('\\' + open)}([^\\n]*?)${unescapedDelimiter('\\' + close)}`,
+          'g'
+        );
+        for (let i = 0; i < 3000; i++) {
+          let text = '';
+          for (let n = next() % 14; n > 0; n--) text += pieces[next() % pieces.length];
+          expect(replaceInlineSpans(text, open, close, tag), JSON.stringify(text)).toBe(text.replace(reference, tag));
+        }
+      }
+    });
+
+    it('stays linear on a long line of unclosed openers', () => {
+      for (const opener of ['\\(', '\\[', '\\( ']) {
+        const text = 'see ' + opener.repeat(50_000);
+        const start = performance.now();
+        expect(promoteInlineLatexDollars(text)).toBe(text);
+        expect(performance.now() - start).toBeLessThan(500);
+      }
+    });
+
     it('stays linear on a long backslash run after an own-line opener', () => {
       // A per-character lookbehind in the block body took ~1s on 80k backslashes; linear is ~1ms.
       const text = '\\[ ' + '\\'.repeat(100_000);
@@ -205,11 +249,10 @@ describe('promoteInlineLatexDollars', () => {
       expect(performance.now() - start).toBeLessThan(500);
     });
 
-    // The timing above only holds while V8 optimizes the regexps, and V8 stops once an isolate has
-    // compiled about 10k of them: the inline spans then took ~30s here, intermittently, in whichever
-    // reused test worker got that far. A child process with the optimizer off makes that state
-    // deterministic without degrading this worker for the files after it.
-    it('stays linear on long backslash runs without the V8 regexp optimizer', () => {
+    // V8 stops optimizing regexps once an isolate has compiled about 10k of them (a long-lived tab, a
+    // reused test worker), and a pattern that is linear only when optimized then turns quadratic. A
+    // child process with the optimizer off pins that state without degrading this worker.
+    it('stays linear on long inputs without the V8 regexp optimizer', () => {
       const script = `
         const { promoteInlineLatexDollars, unescapedDelimiter } = await import(process.argv[1]);
         const run = '\\\\'.repeat(100_000);
@@ -219,6 +262,8 @@ describe('promoteInlineLatexDollars', () => {
           timed(() => promoteInlineLatexDollars('\\\\[ ' + run)),
           timed(() => promoteInlineLatexDollars('\\\\[ ' + run + ' \\\\]')),
           timed(() => promoteInlineLatexDollars('see \\\\( ' + run + '\\\\) here')),
+          timed(() => promoteInlineLatexDollars('see ' + '\\\\('.repeat(50_000))),
+          timed(() => promoteInlineLatexDollars('see ' + '\\\\['.repeat(50_000))),
           timed(() => [...(run + '\\\\(').matchAll(anyDelimiter)]),
         ]));`;
       const out = execFileSync(

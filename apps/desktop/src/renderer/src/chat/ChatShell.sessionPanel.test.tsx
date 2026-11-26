@@ -174,7 +174,12 @@ beforeEach(() => {
           ({ ...SESSIONS.find(entry => entry.id === id), messages: transcript }) as unknown as ChatSession,
         listBackgroundProcesses: async () => processes,
         getLoop: async () => loop,
-        inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
+        inspectProject: async (directory: string) => ({
+          directory,
+          isRepository: false,
+          currentBranch: 'main',
+          branches: [],
+        }),
         updateProject: () => updateProject(),
         sendMessage: () => sendMessage(),
         getQueuedMessages: async () => [],

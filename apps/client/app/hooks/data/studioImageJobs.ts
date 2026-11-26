@@ -1,21 +1,19 @@
 /**
  * Studio's image jobs (POST/GET /api/studio/image-jobs, apps/client/pages/api/studio/image-jobs). The route has no
- * per-job read, so the gallery list is the only cache: GenerationUpdatesListener patches its rows' state and refetches
- * it when a job finishes, which is what brings in the output file.
+ * per-job read, so the gallery list (useGenerationJobs('image'), generationJobs.ts) is the only cache: the live path
+ * patches its rows' state and refetches it when a job finishes, which is what brings in the output file.
  */
 import { isAxiosError } from 'axios';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { GenerationJobState, ImageJobRequest, PublicImageModel } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { invalidateGenerationCreditBalances } from './generationCreditBalances';
 import { MODEL_CATALOG_QUERY_KEY } from './useModelInfo';
 import { GENERATION_RATE_LIMITED_MESSAGE } from './generationErrors';
-import { SOCKET_DOWN_POLL_MS, isTerminalGenerationState, movesLiveStateBackwards } from './generationJobPolling';
+import { isTerminalGenerationState, movesLiveStateBackwards } from './generationJobPolling';
 
 const STUDIO_IMAGE_JOBS_URL = '/api/studio/image-jobs';
-export const IMAGE_GALLERY_PAGE_SIZE = 12;
 // The route's own bounds on "make N".
 export const STUDIO_IMAGE_COUNT_MAX = 4;
 
@@ -51,24 +49,6 @@ export function useImageModels() {
     queryKey: IMAGE_MODELS_QUERY_KEY,
     queryFn: async () => (await api.get<{ models: PublicImageModel[] }>('/api/v1/image-models')).data.models,
     staleTime: 5 * 60_000,
-  });
-}
-
-/** The gallery: the caller's image jobs, newest first. Polls only while the socket is down and a job is live. */
-export function useStudioImageJobs() {
-  const { readyState } = useWebsocket();
-  const socketOpen = readyState === ReadyState.OPEN;
-  return useInfiniteQuery({
-    queryKey: studioImageJobKeys.list,
-    queryFn: async ({ pageParam }) =>
-      (
-        await api.get<StudioImageJobPage>(STUDIO_IMAGE_JOBS_URL, {
-          params: { limit: IMAGE_GALLERY_PAGE_SIZE, ...(pageParam && { cursor: pageParam }) },
-        })
-      ).data,
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: lastPage => lastPage.next_cursor ?? undefined,
-    refetchInterval: query => (shouldPollStudioImageJobs(socketOpen, query.state.data) ? SOCKET_DOWN_POLL_MS : false),
   });
 }
 

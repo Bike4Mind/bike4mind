@@ -7,6 +7,7 @@ import {
   notifyApprovalSubmitted,
   type ApprovalPendingResponse,
 } from '@client/app/hooks/data/adminApprovals';
+import { randomUuid } from '@bike4mind/common';
 
 export const ADMIN_GRANTS_KEY = ['admin', 'organizations', 'grants'] as const;
 
@@ -79,10 +80,7 @@ export function useTopUpOrganization() {
       const { organizationId, ...body } = params;
       // Generate a fresh idempotency key for each mutation so the API can
       // safely no-op on double-clicks / retries.
-      const idempotencyKey =
-        typeof crypto !== 'undefined' && 'randomUUID' in crypto
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const idempotencyKey = randomUuid();
       const res = await api.post(`/api/admin/organizations/${organizationId}/top-up`, {
         ...body,
         idempotencyKey,

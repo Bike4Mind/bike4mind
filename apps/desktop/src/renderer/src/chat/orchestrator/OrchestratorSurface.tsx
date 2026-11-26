@@ -1,9 +1,14 @@
 import type { ChatSessionStatus, ChatSessionSummary, SessionBackgroundJobs, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
+import { archivedAgentsOf } from '@shared/spawnTree';
+import { useMemo } from 'react';
 import { OrchestratorStage, type OrchestratorStageProps } from './OrchestratorStage';
 import { useOrchestratorRoster } from './useOrchestrator';
 
-interface OrchestratorSurfaceProps extends Omit<OrchestratorStageProps, 'agents' | 'parent' | 'rootId'> {
+interface OrchestratorSurfaceProps extends Omit<
+  OrchestratorStageProps,
+  'agents' | 'archivedAgents' | 'parent' | 'rootId'
+> {
   rootId: string;
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;
@@ -26,6 +31,19 @@ export function OrchestratorSurface({
   ...stageProps
 }: OrchestratorSurfaceProps) {
   const { agents, parent } = useOrchestratorRoster(rootId, sessions, statuses, prSummaries, preparing, background);
+  const archivedAgents = useMemo(
+    () => archivedAgentsOf(sessions, rootId).map(({ id, title }) => ({ id, title })),
+    [sessions, rootId]
+  );
   const rootTitle = sessions.find(session => session.id === rootId)?.title;
-  return <OrchestratorStage agents={agents} parent={parent} rootId={rootId} rootTitle={rootTitle} {...stageProps} />;
+  return (
+    <OrchestratorStage
+      agents={agents}
+      archivedAgents={archivedAgents}
+      parent={parent}
+      rootId={rootId}
+      rootTitle={rootTitle}
+      {...stageProps}
+    />
+  );
 }

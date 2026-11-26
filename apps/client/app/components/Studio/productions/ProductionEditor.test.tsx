@@ -103,7 +103,7 @@ const composition = (): StudioCompositionResponse => ({
   title: 'Spring ad',
   template: 'ad_campaign',
   brief: {},
-  brandKit: { colors: [], productFileIds: [] },
+  brandKit: { colors: [], productFileIds: [], characters: [] },
   shots: [],
   timeline: defaultStudioTimeline('ad_campaign'),
   createdAt: new Date(),

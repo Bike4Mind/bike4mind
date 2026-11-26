@@ -4,6 +4,7 @@ import { isAxiosError } from 'axios';
 import {
   directTwinId,
   getLlmByModel,
+  isHiddenReasoningOnlyEmptyError,
   isLlmTimeoutError,
   isStreamEndedWithoutFinishError,
   type ApiKeyTable,
@@ -154,6 +155,11 @@ export function shouldTriggerFallback(error: Error): boolean {
 
   // A stream that closed with no finish reason and no output is a provider blip, not a bad request.
   if (isStreamEndedWithoutFinishError(error)) {
+    return true;
+  }
+
+  // A turn that finished after only hidden reasoning is a one-off sampling outcome, not a bad request.
+  if (isHiddenReasoningOnlyEmptyError(error)) {
     return true;
   }
 

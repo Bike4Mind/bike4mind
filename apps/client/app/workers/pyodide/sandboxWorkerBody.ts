@@ -42,6 +42,18 @@ export function pyodideSandboxWorkerBody(): void {
       set: (name: string, value: unknown) => void;
       delete: (name: string) => void;
     };
+    FS: {
+      analyzePath: (path: string) => { exists: boolean };
+      mkdir: (path: string) => void;
+      readdir: (path: string) => string[];
+      lstat: (path: string) => { mode: number };
+      isDir: (mode: number) => boolean;
+      writeFile: (path: string, data: Uint8Array) => void;
+      chmod: (path: string, mode: number) => void;
+      lchmod: (path: string, mode: number) => void;
+      unlink: (path: string) => void;
+      rmdir: (path: string) => void;
+    };
   }
 
   let pyodideBaseUrl = DEFAULT_PYODIDE_BASE_URL;
@@ -299,7 +311,8 @@ _result
     code: string,
     packages: string[],
     paramsJson: string | null,
-    nonce: string
+    nonce: string,
+    files: { name: string; bytes: ArrayBuffer }[]
   ): Promise<void> {
     const startTime = performance.now();
     const fail = (error: string): void =>
@@ -325,6 +338,46 @@ _result
         fail('Execution cancelled');
         return;
       }
+      // One Pyodide serves every call, so /data is emptied first; files and directory are then made read-only.
+      const fs = pyodide.FS;
+      // lstat and lchmod so a guest's symlink is removed itself, never followed out of /data.
+      const empty = (dir: string) => {
+        for (const entry of fs.readdir(dir)) {
+          if (entry === '.' || entry === '..') continue;
+          const path = `${dir}/${entry}`;
+          if (fs.isDir(fs.lstat(path).mode)) {
+            fs.lchmod(path, 0o755);
+            empty(path);
+            fs.rmdir(path);
+          } else {
+            fs.lchmod(path, 0o644);
+            fs.unlink(path);
+          }
+        }
+      };
+      const lstatOrNull = (path: string) => {
+        try {
+          return fs.lstat(path);
+        } catch {
+          return null;
+        }
+      };
+      // A guest may have replaced /data with a file or a symlink; the link itself goes, its target is never touched.
+      const existing = lstatOrNull('/data');
+      if (existing && !fs.isDir(existing.mode)) fs.unlink('/data');
+      if (existing && fs.isDir(existing.mode)) {
+        fs.chmod('/data', 0o755);
+        empty('/data');
+      } else if (files.length > 0) {
+        fs.mkdir('/data');
+      }
+      for (const file of files) {
+        // Must stay in sync with CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN, which this serialized body cannot import.
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(file.name)) throw new Error('Invalid data file name');
+        fs.writeFile(`/data/${file.name}`, new Uint8Array(file.bytes));
+        fs.chmod(`/data/${file.name}`, 0o444);
+      }
+      if (lstatOrNull('/data')) fs.chmod('/data', 0o555);
       post({ type: 'executing', message: 'Running...' });
 
       pyodide.globals.set('_fn_code', code);
@@ -484,7 +537,7 @@ _b4m_call_function(_fn_code, _fn_params_json)
         break;
 
       case 'call':
-        await callFunction(msg.code, msg.packages, msg.paramsJson, msg.nonce);
+        await callFunction(msg.code, msg.packages, msg.paramsJson, msg.nonce, msg.files ?? []);
         break;
 
       case 'cancel':

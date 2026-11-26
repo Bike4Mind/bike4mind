@@ -1,6 +1,6 @@
-import { mkdtemp, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   AuthenticatedApiClient,
@@ -13,14 +13,7 @@ import { composeHeadlessHost, HEADLESS_HOST_CAPABILITIES, type HeadlessHost } fr
 
 // Any import of electron, direct or transitive, fails the suite: the host runs without it.
 vi.mock('electron', () => {
-  return new Proxy(
-    {},
-    {
-      get(_target, property) {
-        throw new Error(`electron.${String(property)} accessed from the headless host`);
-      },
-    }
-  );
+  throw new Error('the headless host loaded electron');
 });
 
 const POSIX = process.platform !== 'win32';
@@ -47,14 +40,16 @@ const deviceFlowResponse: DeviceFlowResponse = {
 };
 
 const hosts: HeadlessHost[] = [];
+const roots: string[] = [];
 
 // The build bakes the default server in the same way (see vite.host.config.ts).
 beforeEach(() => {
   vi.stubEnv('B4M_DEFAULT_API_URL', 'https://b4m.example.com');
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const host of hosts.splice(0)) host.dispose();
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
   vi.unstubAllEnvs();
 });
 
@@ -67,7 +62,7 @@ async function compose(dataDirectory: string) {
   const get = vi.fn().mockResolvedValue({ user: { id: 'user-1', email: 'rider@example.com' } });
   const host = await composeHeadlessHost({
     dataDirectory,
-    homeDirectory: tmpdir(),
+    homeDirectory: join(dirname(dataDirectory), 'home'),
     version: '9.9.9-test',
     logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
     auth: {
@@ -89,7 +84,9 @@ function client(host: HeadlessHost) {
 }
 
 async function dataDirectory(): Promise<string> {
-  return join(await mkdtemp(join(tmpdir(), 'headless-host-compose-')), 'host');
+  const root = await mkdtemp(join(tmpdir(), 'headless-host-compose-'));
+  roots.push(root);
+  return join(root, 'host');
 }
 
 describe('composeHeadlessHost', () => {

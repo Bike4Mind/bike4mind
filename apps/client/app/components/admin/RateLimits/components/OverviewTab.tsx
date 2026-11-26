@@ -131,7 +131,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ chartData, snapshots, 
             framed={false}
             stripe="odd"
             pagination={false}
-            minWidth="38rem"
+            minWidth="42.5rem"
           />
         </SectionCard>
       )}

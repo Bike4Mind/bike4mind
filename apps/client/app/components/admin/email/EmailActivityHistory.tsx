@@ -18,7 +18,7 @@ import { OptionalDateInput } from '@client/app/components/common/OptionalDateInp
 import { todayUtc } from '@client/app/utils/dateUtils';
 import { useEmailJobHistory } from '@client/app/hooks/data/emailMarketing';
 import { EmailSendStatus, IEmailSendAttemptDocument } from '@bike4mind/common';
-import { DataTable, type DataColumn, EmptyState } from '../shared';
+import { DATETIME_COLUMN_WIDTH, DataTable, type DataColumn, EmptyState } from '../shared';
 
 interface EmailActivityHistoryProps {
   jobId: string;
@@ -110,7 +110,7 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
     {
       id: 'time',
       label: 'Time',
-      width: '11rem',
+      width: DATETIME_COLUMN_WIDTH,
       render: attempt => <Typography level="body-xs">{new Date(attempt.createdAt).toLocaleString()}</Typography>,
     },
     {
@@ -272,7 +272,7 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
       <DataTable<IEmailSendAttemptDocument>
         label="Email activity"
         testId="email-activity-table"
-        minWidth="72rem"
+        minWidth="74.5rem"
         rows={attempts}
         columns={columns}
         getRowId={attempt => attempt.id}

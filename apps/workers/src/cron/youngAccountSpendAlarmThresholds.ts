@@ -17,12 +17,12 @@ export const YOUNG_ACCOUNT_ALARM_SETTING_KEYS = {
 export type YoungAccountAlarmTier = keyof typeof YOUNG_ACCOUNT_ALARM_SETTING_KEYS;
 export type YoungAccountAlarmThresholds = Partial<Record<YoungAccountAlarmTier, number>>;
 
-type ReconcileLogger = {
+export type ReconcileLogger = {
   log(message: string, data?: Record<string, unknown>): void;
   error(message: string, data?: Record<string, unknown>): void;
 };
 
-function positiveNumber(raw: unknown): number | undefined {
+export function positiveAlarmThreshold(raw: unknown): number | undefined {
   if (typeof raw !== 'number' && typeof raw !== 'string') return undefined;
   if (typeof raw === 'string' && raw.trim() === '') return undefined;
   const value = Number(raw);
@@ -33,14 +33,14 @@ function positiveNumber(raw: unknown): number | undefined {
 export function desiredYoungAccountAlarmThresholds(settings: Record<string, unknown>): YoungAccountAlarmThresholds {
   const desired: YoungAccountAlarmThresholds = {};
   for (const tier of Object.keys(YOUNG_ACCOUNT_ALARM_SETTING_KEYS) as YoungAccountAlarmTier[]) {
-    const value = positiveNumber(settings[YOUNG_ACCOUNT_ALARM_SETTING_KEYS[tier]]);
+    const value = positiveAlarmThreshold(settings[YOUNG_ACCOUNT_ALARM_SETTING_KEYS[tier]]);
     if (value !== undefined) desired[tier] = value;
   }
   return desired;
 }
 
 /** PutMetricAlarm replaces the whole alarm, so every field the deploy set is carried over. */
-function putWithThreshold(alarm: MetricAlarm, threshold: number): PutMetricAlarmCommand {
+export function putWithThreshold(alarm: MetricAlarm, threshold: number): PutMetricAlarmCommand {
   return new PutMetricAlarmCommand({
     AlarmName: alarm.AlarmName,
     AlarmDescription: alarm.AlarmDescription,

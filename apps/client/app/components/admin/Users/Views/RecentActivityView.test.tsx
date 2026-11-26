@@ -68,6 +68,18 @@ describe('RecentActivityView', () => {
     expect(screen.queryByTestId('admin-table-footer')).toBeNull();
   });
 
+  it('sizes the Time column for the full locale timestamp', () => {
+    const datetime = new Date(2026, 11, 28, 12, 58, 58);
+    state({ data: [{ ...activity(1), datetime: datetime.toISOString() }] });
+    renderView();
+    const table = screen.getByTestId('recent-activity-table');
+    const width = within(table).getByRole('columnheader', { name: 'Time' }).style.width;
+    expect(width).toMatch(/^[\d.]+rem$/);
+    expect(parseFloat(width)).toBeGreaterThanOrEqual(13.5);
+    expect(getComputedStyle(table).minWidth).toBe('41.5rem');
+    expect(within(table).getByText(datetime.toLocaleString())).toBeInTheDocument();
+  });
+
   it('falls back to Unknown when metadata is missing', () => {
     state({ data: [{ ...activity(0), metadata: undefined }] });
     renderView();

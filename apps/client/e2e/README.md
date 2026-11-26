@@ -182,6 +182,11 @@ An access token lasts 30 minutes and the `admin` project starts last, so `admin.
 (project `setup-admin`) signs the setup admin in again through OTC right before it and saves the
 new tokens over the old ones.
 
+Every other authenticated project renews on demand: `fixtures.ts` calls
+`helpers/token-renewal.ts` when a worker starts and before each test, and it signs in again (OTC)
+any of the project's users, plus the setup admin and manager, whose saved token has under 12
+minutes left. Specs must import `test` from `./fixtures` to get this.
+
 For mid-test user switching, `seedAuthOnPage` swaps the same cookie on a live
 page's context and navigates to `/` to bootstrap the authenticated app. An agent
 (Claude Code + Playwright MCP) authenticates the same way — by cookie-seeding, not

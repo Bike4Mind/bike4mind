@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { IScopedSetting, SettingScopeLevel } from '@bike4mind/common';
+import { CALLABLE_FUNCTION_DATA_LIMITS, IScopedSetting, SettingScopeLevel } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { resolveScopedSetting } from './resolveScopedSetting';
 import { assertScopedOverrideWritable, clearScopedOverride, writeScopedOverride } from './writeScopedOverride';
@@ -128,6 +128,13 @@ describe('assertScopedOverrideWritable', () => {
   ])('refuses %s with the service prefix', (_label, key, ref, value, message) => {
     expect(() => assertScopedOverrideWritable(key as typeof KEY, ref, value)).toThrow(message);
     expect(() => assertScopedOverrideWritable(key as typeof KEY, ref, value)).toThrow(/^\[scopedSettings\]/);
+  });
+
+  it("refuses an organization's data-per-function limit above the runtime's data cache", () => {
+    const key = 'CallableFunctionDataTotalMaxMb';
+    const cacheMb = CALLABLE_FUNCTION_DATA_LIMITS.cacheMb;
+    expect(() => assertScopedOverrideWritable(key, orgRef, String(cacheMb))).not.toThrow();
+    expect(() => assertScopedOverrideWritable(key, orgRef, String(cacheMb + 1))).toThrow(/failed validation/);
   });
 });
 

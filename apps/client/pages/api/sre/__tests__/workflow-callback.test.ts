@@ -52,6 +52,9 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl:
 vi.mock('@bike4mind/server-utils/services/githubService', () => ({ GitHubService: { forSystem: vi.fn() } }));
 
 import handler from '../workflow-callback';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 function makeRes() {
   const res = { status: vi.fn(), json: vi.fn() };

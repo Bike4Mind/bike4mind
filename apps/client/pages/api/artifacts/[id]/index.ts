@@ -1,3 +1,4 @@
+import { ARTIFACT_DB } from '@bike4mind/server-utils/artifacts/artifactAccess';
 import { artifactService } from '@bike4mind/services';
 import { artifactRepository, artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -104,17 +105,7 @@ const handler = baseApi()
 
       const validatedData = UpdateArtifactSchema.parse(req.body);
 
-      const result = await artifactService.update(
-        userId,
-        { id: artifactId, ...validatedData },
-        {
-          db: {
-            artifacts: artifactRepository,
-            artifactContents: artifactContentRepository,
-            artifactVersions: artifactVersionRepository,
-          },
-        }
-      );
+      const result = await artifactService.update(userId, { id: artifactId, ...validatedData }, { db: ARTIFACT_DB });
 
       return res.json(result);
     })

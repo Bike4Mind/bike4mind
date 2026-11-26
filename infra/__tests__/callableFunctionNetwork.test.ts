@@ -3,12 +3,17 @@
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
+  callableFunctionDataBrowserReaderPolicy,
+  callableFunctionDataBrowserReaderTrustPolicy,
   callableFunctionDataBucketPolicy,
   callableFunctionDataEndpointPolicy,
   callableFunctionRolePolicy,
   DEDICATED_SUBNET_CIDRS,
   distinctZones,
+  FUNCTION_DATA_BROWSER_LINK_WINDOW_MS,
+  FUNCTION_DATA_BROWSER_READER_ACTIONS,
   FUNCTION_DATA_DISPATCHER_ACTIONS,
+  FUNCTION_DATA_ERASER_ACTIONS,
   FUNCTION_DATA_KEY_PREFIX,
   isGetObjectOnlyPolicy,
   LAMBDA_NETWORK_INTERFACE_ACTIONS,
@@ -390,8 +395,40 @@ describe('callableFunctionDataEndpointPolicy', () => {
   });
 });
 
+describe('the browser-link reader role', () => {
+  it("may only read the data bucket's data/ objects", () => {
+    expect(FUNCTION_DATA_BROWSER_READER_ACTIONS).toEqual(['s3:GetObject']);
+    expect(callableFunctionDataBrowserReaderPolicy(BUCKET_ARN)).toEqual({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Sid: 'FunctionDataBrowserReads',
+          Effect: 'Allow',
+          Action: ['s3:GetObject'],
+          Resource: `${BUCKET_ARN}/data/*`,
+        },
+      ],
+    });
+  });
+
+  it("is trusted by the web API function's role alone", () => {
+    expect(callableFunctionDataBrowserReaderTrustPolicy('web-server-role-arn')).toEqual({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Sid: 'WebApiFunctionOnly',
+          Effect: 'Allow',
+          Principal: { AWS: 'web-server-role-arn' },
+          Action: 'sts:AssumeRole',
+        },
+      ],
+    });
+  });
+});
+
 describe('callableFunctionDataBucketPolicy', () => {
   const DISPATCHER = 'dispatcher-role-arn';
+  const READER = 'browser-reader-role-arn';
   const OTHER = 'other-role-arn';
 
   const OBJECT = `${BUCKET_ARN}/data/t1/${'a'.repeat(64)}`;
@@ -405,6 +442,8 @@ describe('callableFunctionDataBucketPolicy', () => {
     secure?: boolean;
     /** `REST-QUERY-STRING` for a signed link; a request signed in its header otherwise. */
     authType?: string;
+    /** Milliseconds since the request or link was signed; past the browser window unless given. */
+    signatureAge?: number;
   }
 
   const wildcard = (patterns: string | string[], value: string) =>
@@ -413,7 +452,8 @@ describe('callableFunctionDataBucketPolicy', () => {
       .some(pattern => new RegExp(`^${pattern.replace(/[.]/g, '\\.').replace(/\*/g, '.*')}$`).test(value));
 
   // Each condition key compares one value; a missing key fails the equality and passes the negated test.
-  const conditionHolds = (condition: Record<string, Record<string, string>> | undefined, request: Request) =>
+  // A negated test over several values holds when the key matches none of them.
+  const conditionHolds = (condition: Record<string, Record<string, string | string[]>> | undefined, request: Request) =>
     Object.entries(condition ?? {}).every(([test, pair]) =>
       Object.entries(pair).every(([key, value]) => {
         const actual = {
@@ -421,9 +461,12 @@ describe('callableFunctionDataBucketPolicy', () => {
           'aws:SourceVpce': request.sourceVpce,
           'aws:SecureTransport': String(request.secure ?? true),
           's3:authType': request.authType ?? 'REST-HEADER',
+          's3:signatureAge': String(request.signatureAge ?? FUNCTION_DATA_BROWSER_LINK_WINDOW_MS + 1),
         }[key];
-        if (test === 'Bool' || test === 'StringEquals') return actual === value;
-        if (test === 'ArnNotEquals' || test === 'StringNotEquals') return actual !== value;
+        const values = [value].flat();
+        if (['Bool', 'StringEquals', 'ArnEquals'].includes(test)) return values.some(one => actual === one);
+        if (test === 'NumericGreaterThan') return values.some(one => Number(actual) > Number(one));
+        if (test === 'ArnNotEquals' || test === 'StringNotEquals') return values.every(one => actual !== one);
         throw new Error(`untested condition ${test}`);
       })
     );
@@ -434,15 +477,20 @@ describe('callableFunctionDataBucketPolicy', () => {
         statement.Effect === 'Deny' &&
         wildcard(statement.Action, request.action) &&
         wildcard(statement.Resource, request.resource) &&
-        conditionHolds(statement.Condition as Record<string, Record<string, string>>, request)
+        conditionHolds(statement.Condition as Record<string, Record<string, string | string[]>>, request)
     );
 
   const withEndpoint = callableFunctionDataBucketPolicy({
     bucketArn: BUCKET_ARN,
     dispatcherRoleArn: DISPATCHER,
+    browserReaderRoleArn: READER,
     endpointId: 'vpce-0data',
   });
-  const withoutEndpoint = callableFunctionDataBucketPolicy({ bucketArn: BUCKET_ARN, dispatcherRoleArn: DISPATCHER });
+  const withoutEndpoint = callableFunctionDataBucketPolicy({
+    bucketArn: BUCKET_ARN,
+    dispatcherRoleArn: DISPATCHER,
+    browserReaderRoleArn: READER,
+  });
 
   const readsOn = (action: string) => (action.startsWith('s3:ListBucket') ? BUCKET_ARN : OBJECT);
 
@@ -486,6 +534,62 @@ describe('callableFunctionDataBucketPolicy', () => {
     expect(denied(withEndpoint, { ...link, principalArn: DISPATCHER, sourceVpce: 'vpce-0data' })).toBe(false);
   });
 
+  const AGES = [0, 1, FUNCTION_DATA_BROWSER_LINK_WINDOW_MS, FUNCTION_DATA_BROWSER_LINK_WINDOW_MS + 1, 3_600_000];
+
+  it("refuses the dispatcher's signed link from outside the endpoint at any age, a fresh one included", () => {
+    const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING' };
+    for (const signatureAge of AGES) {
+      for (const principalArn of [DISPATCHER, OTHER, undefined]) {
+        for (const sourceVpce of [undefined, 'vpce-0other']) {
+          expect(denied(withEndpoint, { ...link, principalArn, sourceVpce, signatureAge })).toBe(true);
+          expect(denied(withoutEndpoint, { ...link, principalArn, sourceVpce, signatureAge })).toBe(true);
+        }
+      }
+      expect(denied(withEndpoint, { ...link, principalArn: DISPATCHER, sourceVpce: 'vpce-0data', signatureAge })).toBe(
+        false
+      );
+    }
+  });
+
+  it("allows the browser reader's signed link from anywhere for its first minute and refuses it after", () => {
+    const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING', principalArn: READER };
+    for (const policy of [withEndpoint, withoutEndpoint]) {
+      for (const sourceVpce of [undefined, 'vpce-0other', 'vpce-0data']) {
+        expect(denied(policy, { ...link, sourceVpce, signatureAge: 1 })).toBe(false);
+        expect(denied(policy, { ...link, sourceVpce, signatureAge: FUNCTION_DATA_BROWSER_LINK_WINDOW_MS })).toBe(false);
+        expect(denied(policy, { ...link, sourceVpce, signatureAge: FUNCTION_DATA_BROWSER_LINK_WINDOW_MS + 1 })).toBe(
+          true
+        );
+        expect(denied(policy, { ...link, action: 's3:GetObjectVersion', sourceVpce, signatureAge: 3_600_000 })).toBe(
+          true
+        );
+      }
+    }
+    expect(FUNCTION_DATA_BROWSER_LINK_WINDOW_MS).toBe(60_000);
+  });
+
+  it('refuses the browser reader every write, list, and delete, wherever it comes from and however it signs', () => {
+    const actions = [
+      's3:PutObject',
+      's3:PutObjectAcl',
+      's3:ReplicateObject',
+      's3:DeleteObject',
+      's3:DeleteObjectVersion',
+      's3:ListBucket',
+      's3:ListBucketVersions',
+    ];
+    for (const policy of [withEndpoint, withoutEndpoint]) {
+      for (const action of actions) {
+        for (const authType of ['REST-HEADER', 'REST-QUERY-STRING']) {
+          for (const sourceVpce of [undefined, 'vpce-0data']) {
+            const request = { action, resource: readsOn(action), principalArn: READER, authType, sourceVpce };
+            expect(denied(policy, { ...request, signatureAge: 1 })).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
   it('keeps header-signed reads, writes, and deletes by the dispatcher from outside the endpoint', () => {
     for (const policy of [withEndpoint, withoutEndpoint]) {
       for (const action of FUNCTION_DATA_DISPATCHER_ACTIONS) {
@@ -505,6 +609,50 @@ describe('callableFunctionDataBucketPolicy', () => {
         expect(denied(policy, { action, resource: OBJECT, principalArn: OTHER })).toBe(true);
       }
     }
+  });
+
+  it("exempts the account-erasure worker's and the deletion sweep's roles from the list and delete refusals only, and no one else", () => {
+    const ERASER = 'eraser-role-arn';
+    const SWEEP = 'deletion-sweep-role-arn';
+    const withEraser = callableFunctionDataBucketPolicy({
+      bucketArn: BUCKET_ARN,
+      dispatcherRoleArn: DISPATCHER,
+      browserReaderRoleArn: READER,
+      eraserRoleArns: [ERASER, SWEEP],
+      endpointId: 'vpce-0data',
+    });
+    expect(FUNCTION_DATA_ERASER_ACTIONS).toEqual(['s3:DeleteObject']);
+    for (const principalArn of [DISPATCHER, ERASER, SWEEP]) {
+      expect(denied(withEraser, { action: 's3:DeleteObject', resource: OBJECT, principalArn })).toBe(false);
+      expect(denied(withEraser, { action: 's3:ListBucket', resource: BUCKET_ARN, principalArn })).toBe(false);
+    }
+    expect(denied(withEraser, { action: 's3:DeleteObject', resource: OBJECT, principalArn: OTHER })).toBe(true);
+    for (const principalArn of [ERASER, SWEEP]) {
+      for (const action of [
+        's3:GetObject',
+        's3:GetObjectVersion',
+        's3:PutObject',
+        's3:PutObjectAcl',
+        's3:ReplicateObject',
+      ]) {
+        expect(denied(withEraser, { action, resource: OBJECT, principalArn })).toBe(true);
+      }
+      expect(denied(withEndpoint, { action: 's3:DeleteObject', resource: OBJECT, principalArn })).toBe(true);
+      const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING', principalArn };
+      expect(denied(withEraser, link)).toBe(true);
+    }
+  });
+
+  it('exempts no eraser for an empty role name, as on a stage without the deletion sweep', () => {
+    const noSweep = callableFunctionDataBucketPolicy({
+      bucketArn: BUCKET_ARN,
+      dispatcherRoleArn: DISPATCHER,
+      browserReaderRoleArn: READER,
+      eraserRoleArns: ['eraser-role-arn', ''],
+      endpointId: 'vpce-0data',
+    });
+    expect(denied(noSweep, { action: 's3:DeleteObject', resource: OBJECT, principalArn: '' })).toBe(true);
+    expect(JSON.stringify(noSweep)).not.toMatch(/""/);
   });
 
   it('refuses every request without TLS, the dispatcher included', () => {

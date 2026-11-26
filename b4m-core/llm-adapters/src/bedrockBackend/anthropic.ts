@@ -1,5 +1,5 @@
 import {
-  BadRequestError,
+  EmptyConversationError,
   BEDROCK_NO_PROMPT_CACHING_MODELS,
   ChatModels,
   createThinkMarkerEscaper,
@@ -1013,7 +1013,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     ) as unknown as typeof sanitizedMessages;
 
     if (filteredMessages.length === 0) {
-      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
+      throw new EmptyConversationError();
     }
 
     // Kept as discrete blocks, not joined immediately, because a mid-stack cache breakpoint

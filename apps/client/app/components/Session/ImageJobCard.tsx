@@ -14,7 +14,8 @@ import {
 import type { GenerationJobState } from '@bike4mind/common';
 import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
 import { isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
-import { useImageJob, type ChatImageJob } from '@client/app/hooks/data/imageJobs';
+import { useGenerationJob } from '@client/app/hooks/data/generationJobs';
+import type { ChatImageJob } from '@client/app/hooks/data/imageJobs';
 import { useOpenStudioImageEdit } from '@client/app/components/ImageStudio/useOpenStudioImageEdit';
 import { useStudioFeature } from '@client/app/components/Studio/useStudioFeature';
 import { useSessionReadOnly } from './SessionReadOnlyContext';
@@ -106,7 +107,7 @@ const JobBody = ({ job, player }: { job: ChatImageJob; player: Player }) => {
 
 /** One image a chat tool call asked for: progress while it renders, the image once saved, the public error if it failed. */
 const ImageJobCard = ({ jobId }: { jobId: string }) => {
-  const { data: job, isPending, refetch } = useImageJob(jobId);
+  const { data: job, isPending, refetch } = useGenerationJob('image', jobId);
   const refresh = useCallback(() => void refetch(), [refetch]);
   // Kept across re-signs so a fresh URL does not reload a shown image; the newest one is taken only after an error.
   const readyUrl = job?.state === 'succeeded' && job.output?.availability === 'ready' ? job.output.url : null;

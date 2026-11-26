@@ -42,3 +42,17 @@ export function descendantsOf(
   }
   return found;
 }
+
+/**
+ * Agents archived straight out of `rootId`'s live tree, newest first: what an orchestrator's empty
+ * stage offers to reopen. An agent under an archived one is shelved with it and not listed.
+ */
+export function archivedAgentsOf(sessions: readonly ChatSessionSummary[], rootId: string): SpawnedSession[] {
+  const live = new Set([rootId, ...descendantsOf(sessions, rootId).map(({ session }) => session.id)]);
+  return sessions
+    .filter(
+      (session): session is SpawnedSession =>
+        session.archived === true && isSpawned(session) && live.has(session.origin.parentSessionId)
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}

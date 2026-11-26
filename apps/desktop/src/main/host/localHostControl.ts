@@ -1,8 +1,7 @@
-import { hostname } from 'node:os';
 import type { AuthState } from '@shared/auth';
 import { KNOWN_HOST_CAPABILITIES } from '@shared/hostProtocol';
-import { loadHostId } from '../../host/headless/hostIdentity';
-import { accountOf, type HostControl } from '../../host/server';
+import { loadHostId } from '../../host/hostIdentity';
+import { accountOf, createHostControl, type HostControl } from '../../host/server';
 
 export type LocalHostControlOptions = {
   auth: { getState(): AuthState };
@@ -18,22 +17,18 @@ export type LocalHostControlOptions = {
  */
 export function localHostControl(options: LocalHostControlOptions): HostControl {
   let hostId: Promise<string> | null = null;
-  return {
-    facts: async () => {
+  return createHostControl({
+    hostId: () => {
       hostId ??= loadHostId(options.dataDirectory).catch((error: unknown) => {
         hostId = null;
         throw error;
       });
-      return {
-        hostId: await hostId,
-        hostName: hostname(),
-        hostVersion: options.version,
-        capabilities: [...KNOWN_HOST_CAPABILITIES],
-        platform: process.platform,
-        homeDirectory: options.homeDirectory,
-      };
+      return hostId;
     },
+    version: options.version,
+    homeDirectory: options.homeDirectory,
+    capabilities: KNOWN_HOST_CAPABILITIES,
     account: () => accountOf(options.auth.getState()),
-    onAccountChanged: listener => options.onAuthStateChanged(state => listener(accountOf(state))),
-  };
+    onAuthStateChanged: options.onAuthStateChanged,
+  });
 }

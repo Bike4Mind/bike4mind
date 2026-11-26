@@ -1,5 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { scanProviderSources, validateProviderCatalog, type ProviderEntry } from './providerCallInventory';
+import {
+  parseProviderCatalog,
+  scanProviderSources,
+  validateProviderCatalog,
+  type ProviderEntry,
+} from './providerCallInventory';
 
 const file = 'apps/workers/src/task.ts';
 const raw = `import { getLlmByModel as build } from '@bike4mind/llm-adapters';
@@ -11,6 +17,94 @@ const debt = (source = raw): ProviderEntry[] =>
     classification: 'debt',
     reason: 'No usage observer at this boundary.',
   }));
+
+const SRE_INDEX = 'b4m-core/services/src/sreAgentService/index.ts';
+const SRE_METER = 'b4m-core/services/src/sreAgentService/accounting.ts';
+const repositoryRoot = new URL('../../../../', import.meta.url);
+const sreSources = () =>
+  Object.fromEntries([SRE_INDEX, SRE_METER].map(file => [file, readFileSync(new URL(file, repositoryRoot), 'utf8')]));
+const sreEntries = () =>
+  parseProviderCatalog(
+    readFileSync(new URL('scripts/unmetered-provider-call-allowlist.txt', repositoryRoot), 'utf8')
+  ).filter(entry => [SRE_INDEX, SRE_METER].some(file => entry.id.startsWith(`${file}#`)));
+
+describe('reviewed SRE provider boundaries', () => {
+  it('recognizes the actual constructor and local settlement boundary without retaining SRE debt', () => {
+    const sources = sreSources();
+    const entries = sreEntries();
+    const scan = scanProviderSources(sources);
+    expect(scan.sites.map(site => site.kind).sort()).toEqual(['completion', 'factory']);
+    expect(entries).toHaveLength(2);
+    expect(entries.every(entry => entry.classification === 'metered')).toBe(true);
+    expect(validateProviderCatalog(scan, entries, [])).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: 'removing the constructor',
+      file: SRE_INDEX,
+      before: 'new SreCompletionMeter(this.accounting)',
+      after: 'undefined',
+      error: 'Missing boundary call',
+    },
+    {
+      name: 'calling the constructor as an ordinary function',
+      file: SRE_INDEX,
+      before: 'new SreCompletionMeter',
+      after: 'SreCompletionMeter',
+      error: 'Missing boundary call',
+    },
+    {
+      name: 'bypassing the wrapper',
+      file: SRE_INDEX,
+      before: 'await meter.complete(',
+      after: 'await llm.complete(',
+      error: 'Unclassified provider site',
+    },
+    {
+      name: 'disconnecting settlement',
+      file: SRE_METER,
+      before: 'context.accounting.settle',
+      after: 'context.other.settle',
+      error: 'Missing boundary call',
+    },
+  ])('rejects $name', ({ file, before, after, error }) => {
+    const sources = sreSources();
+    expect(sources[file]).toContain(before);
+    sources[file] = sources[file].replaceAll(before, after);
+    expect(validateProviderCatalog(scanProviderSources(sources), sreEntries(), [])).toEqual(
+      expect.arrayContaining([expect.stringContaining(error)])
+    );
+  });
+
+  it.each([
+    { file: SRE_INDEX, before: 'SreAgentService', after: 'OtherService' },
+    { file: SRE_METER, before: 'SreCompletionMeter', after: 'OtherMeter' },
+  ])('does not authorize another owner through the $before witness', ({ file, before, after }) => {
+    const sources = sreSources();
+    sources[file] = sources[file].replaceAll(before, after);
+    const entries = sreEntries().map(entry => ({
+      ...entry,
+      id: entry.id.replaceAll(`${before}/`, `${after}/`),
+      witness: entry.witness?.replaceAll(`${before}/`, `${after}/`),
+    }));
+    expect(validateProviderCatalog(scanProviderSources(sources), entries, [])).toEqual(
+      expect.arrayContaining([expect.stringContaining('Unknown metering boundary')])
+    );
+  });
+
+  it('does not treat another context settlement method as the SRE accounting boundary', () => {
+    const sources = sreSources();
+    sources[SRE_METER] = sources[SRE_METER].replaceAll('context.accounting.settle', 'context.other.settle');
+    const entries = sreEntries().map(entry => ({
+      ...entry,
+      witness: entry.witness?.replace('this.context.accounting.settle', 'this.context.other.settle'),
+    }));
+    expect(validateProviderCatalog(scanProviderSources(sources), entries, [])).toEqual(
+      expect.arrayContaining([expect.stringContaining('Unknown metering boundary')])
+    );
+  });
+});
 
 describe('provider inventory backstop', () => {
   it.each([

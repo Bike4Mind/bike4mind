@@ -169,6 +169,25 @@ describe('host/* methods', () => {
     expect(listeners.size).toBe(0);
   });
 
+  it('sends host/stateChanged when the user or the environment changes', async () => {
+    const { control, change } = fakeControl();
+    const { received } = serve(control);
+    const other = { userId: 'u2', environmentUrl: signedIn!.environmentUrl };
+    const elsewhere = { userId: 'u1', environmentUrl: 'https://other.test' };
+
+    change(signedIn);
+    change(other);
+    change({ ...other, environmentUrl: elsewhere.environmentUrl });
+    change(elsewhere);
+
+    expect(received.map(message => (message as { params: unknown }).params)).toEqual([
+      { account: signedIn },
+      { account: other },
+      { account: { userId: 'u2', environmentUrl: elsewhere.environmentUrl } },
+      { account: elsewhere },
+    ]);
+  });
+
   it('answers host/* with method not found when the server has no control port', async () => {
     const { call } = serve();
 

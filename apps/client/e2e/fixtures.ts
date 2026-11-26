@@ -21,6 +21,7 @@ import { SkillsPage } from './pages/SkillsPage';
 import { TeamsPage } from './pages/TeamsPage';
 import { StudioPage } from './pages/StudioPage';
 import { getTestUsers } from './helpers/test-users';
+import { projectNameToSpecKey, renewExpiringTokens } from './helpers/token-renewal';
 import { installWafBypass } from './helpers/waf-bypass';
 import { bypassTurnstile } from './helpers/turnstile';
 
@@ -55,14 +56,16 @@ type TestFixtures = {
   /** Mutable per-test identity the page.goto override authenticates as; loginAs* rewrites `current`
    *  so a mid-test user switch takes effect on the next navigation. Null on unauthenticated projects. */
   authState: { current: SpecAuth | null };
+  /** Auto: renews this project's saved tokens when they are close to expiry (helpers/token-renewal.ts). */
+  freshTokens: void;
 
   verifyAnswers: (answers: string | string[], options?: VerifyAnswersOptions) => Promise<void>;
 };
 
-// playwright.config project names are kebab-case (data-lake); spec-user keys are camelCase (dataLake).
-function projectNameToSpecKey(projectName: string): string {
-  return projectName.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-}
+type WorkerFixtures = {
+  /** Auto: the same renewal at worker start, ahead of any beforeAll that reads a saved token. */
+  freshTokensAtWorkerStart: void;
+};
 
 /** Access token + userId for the user backing an authenticated project, or null for projects that
  *  seed no user (unauthenticated, setup) or before core data exists. The `admin` and `warmup`
@@ -161,9 +164,25 @@ export async function openPageAs(
   return { page, close: () => context.close() };
 }
 
-export const test = base.extend<TestFixtures>({
-  // eslint-disable-next-line no-empty-pattern -- no fixture deps; identity derives from the project.
-  authState: async ({}, use, testInfo) => {
+export const test = base.extend<TestFixtures, WorkerFixtures>({
+  freshTokensAtWorkerStart: [
+    async ({ playwright }, use, workerInfo) => {
+      await renewExpiringTokens(() => playwright.request.newContext(), workerInfo.project.name);
+      await use();
+    },
+    { scope: 'worker', auto: true },
+  ],
+
+  freshTokens: [
+    async ({ playwright }, use, testInfo) => {
+      await renewExpiringTokens(() => playwright.request.newContext(), testInfo.project.name);
+      await use();
+    },
+    { auto: true },
+  ],
+
+  // Depends on freshTokens so the identity is read after any renewal.
+  authState: async ({ freshTokens: _freshTokens }, use, testInfo) => {
     // @realauth tests drive the app's real refresh-cookie bootstrap (e.g. the hard-reload guard),
     // so they must NOT be wrapped through /auth/success - null passes their gotos through untouched
     // and they plant their own never-exchanged refresh cookie (see seedAuthStorageState for why).

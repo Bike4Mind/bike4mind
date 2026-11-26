@@ -1,4 +1,3 @@
-import { hostname } from 'node:os';
 import { join } from 'node:path';
 import type { AuthState } from '@shared/auth';
 import type { HostCapability } from '@shared/hostProtocol';
@@ -10,8 +9,8 @@ import { HostRuntime } from '../HostRuntime';
 import { createHostPermissionStack } from '../permissionStack';
 import type { HostEnvironment, HostEventSink } from '../ports';
 import { hostProtectedLocations } from '../protection';
-import { accountOf, HostEventRelay, HostServer, type HostControl } from '../server';
-import { loadHostId } from './hostIdentity';
+import { createHostControl, HostEventRelay, HostServer } from '../server';
+import { loadHostId } from '../hostIdentity';
 import type { HostLogger } from './logging';
 
 /**
@@ -114,23 +113,18 @@ export async function composeHeadlessHost(options: HeadlessHostOptions): Promise
     },
   });
 
-  const control: HostControl = {
-    facts: async () => ({
-      hostId,
-      hostName: hostname(),
-      hostVersion: version,
-      capabilities: [...HEADLESS_HOST_CAPABILITIES],
-      platform: process.platform,
-      homeDirectory,
-    }),
+  const control = createHostControl({
+    hostId: async () => hostId,
+    version,
+    homeDirectory,
+    capabilities: HEADLESS_HOST_CAPABILITIES,
     account: () => auth.status().account,
     startSignIn: () => auth.startSignIn(),
-    onAccountChanged: listener => {
-      const onState = (state: AuthState) => listener(accountOf(state));
-      authListeners.add(onState);
-      return () => authListeners.delete(onState);
+    onAuthStateChanged: listener => {
+      authListeners.add(listener);
+      return () => authListeners.delete(listener);
     },
-  };
+  });
   const server = new HostServer(runtime, relay, logger, control);
 
   return {

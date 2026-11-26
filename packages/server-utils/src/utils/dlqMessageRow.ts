@@ -157,6 +157,8 @@ export type DlqMessageRow = {
   queueLabel: string;
   messageId: string;
   body: string;
+  /** body is '' because the queue's bodies are restricted to full admins. */
+  bodyWithheld?: true;
   entity: DlqMessageEntity | null;
   sentTimestamp?: string;
   approximateReceiveCount?: string;
@@ -267,7 +269,10 @@ function nextRunIn(runTimes: readonly number[], scheduledMs: number, dueMs: numb
 
 /** One admin listing row for a DLQ message; shared by the per-queue and all-queues routes. */
 export function toDlqMessageRow(
-  entry: Pick<RegisteredDlqDescriptor, 'label' | 'describe' | 'replay' | 'staleWhen' | 'staleDetailTypes'>,
+  entry: Pick<
+    RegisteredDlqDescriptor,
+    'label' | 'describe' | 'replay' | 'staleWhen' | 'staleDetailTypes' | 'restrictedBody'
+  >,
   message: Message,
   ctx: {
     recorded: DlqFailureRecord | undefined;
@@ -276,9 +281,12 @@ export function toDlqMessageRow(
     replayAttempts: number | undefined;
     schedule?: DlqScheduleFacts;
     targetLogs?: DlqFunctionLogs;
+    /** True only for a full admin; a restrictedBody queue's body is withheld otherwise. */
+    revealRestrictedBody?: boolean;
   }
 ): DlqMessageRow {
   const { recorded } = ctx;
+  const bodyWithheld = entry.restrictedBody === true && ctx.revealRestrictedBody !== true;
   const attributes = attributeFailure(message);
   const failure = rowFailure(message, recorded);
   const logsLink = messageLogsUrl({
@@ -292,7 +300,8 @@ export function toDlqMessageRow(
   return {
     queueLabel: entry.label,
     messageId: message.MessageId!,
-    body: message.Body ?? '',
+    body: bodyWithheld ? '' : (message.Body ?? ''),
+    ...(bodyWithheld ? { bodyWithheld: true as const } : {}),
     entity: describeDlqMessage(entry, message.Body),
     sentTimestamp: message.Attributes?.SentTimestamp,
     approximateReceiveCount: message.Attributes?.ApproximateReceiveCount,

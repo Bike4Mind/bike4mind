@@ -88,6 +88,19 @@ describe('/api/admin/oauth-clients', () => {
     expect(JSON.stringify(body)).not.toMatch(/clientSecret/);
   });
 
+  it('rejects a delegated settings:manage admin on create but still lets support:read list', async () => {
+    const { req, res } = makeReqRes('POST', {
+      user: { isAdmin: false, id: 'd1', adminPermissions: ['settings:manage'] },
+      body: { name: 'x', clientType: 'first-party', redirectUris: ['https://a.example.test/cb'] },
+    });
+    await expect(handlers.post(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(db.createOAuthClient).not.toHaveBeenCalled();
+
+    const list = makeReqRes('GET', { user: { isAdmin: false, id: 'd2', adminPermissions: ['support:read'] } });
+    await handlers.get(list.req, list.res);
+    expect(list.res._getStatusCode()).toBe(200);
+  });
+
   it('creates a client, returns the secret once with no-store, and audits without the secret', async () => {
     const { req, res } = makeReqRes('POST', {
       body: { name: 'My App', redirectUris: ['https://app.example.test/cb'] },

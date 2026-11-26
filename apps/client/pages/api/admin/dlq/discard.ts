@@ -25,24 +25,10 @@ const BodySchema = z
       .regex(/^[0-9a-f]{24}$/)
       .optional(),
     reason: z.unknown().optional(),
-    // Messages with receipt handles from a prior receive.
-    messages: z
-      .array(
-        z.object({
-          messageId: z.string().min(1),
-          receiptHandle: z.string().min(1),
-          body: z.string().min(1),
-        })
-      )
-      .min(1)
-      .max(MAX_BATCH_SIZE)
-      .optional(),
-    // Message IDs from a browse; the handler receives them itself to get fresh receipt handles.
-    messageIds: z.array(z.string().min(1)).min(1).max(MAX_BATCH_SIZE).optional(),
+    messageIds: z.array(z.string().min(1)).min(1).max(MAX_BATCH_SIZE),
   })
-  .refine(data => Boolean(data.messages) !== Boolean(data.messageIds), {
-    message: 'Specify exactly one of messages or messageIds',
-  });
+  // Rejects a client-supplied `messages` payload: only bodies received from the DLQ itself are discarded.
+  .strict();
 
 const handler = adminApi({
   auth: 'jwtOnly',
@@ -62,8 +48,7 @@ const handler = adminApi({
 
   const aiSuggestionId = parsed.data.aiSuggestionId;
   if (aiSuggestionId) {
-    if (parsed.data.messages || messageIds?.length !== 1)
-      throw new BadRequestError('Suggestion approval requires one message ID');
+    if (messageIds.length !== 1) throw new BadRequestError('Suggestion approval requires one message ID');
     const suggestion = await visibleDlqSuggestion(queueLabel, messageIds[0]);
     const action = triageActionSchema.safeParse(suggestion?.proposedAction);
     if (
@@ -90,25 +75,21 @@ const handler = adminApi({
     });
   }
 
-  let messages = parsed.data.messages ?? [];
-  let notFound: string[] = [];
-  if (messageIds) {
-    const acquired = await acquireDlqMessagesById(dlqUrl, queueLabel, messageIds, {
-      maxReceives: TARGETED_MAX_RECEIVES,
-      visibilityTimeout: TARGETED_VISIBILITY_SECONDS,
+  const acquired = await acquireDlqMessagesById(dlqUrl, queueLabel, messageIds, {
+    maxReceives: TARGETED_MAX_RECEIVES,
+    visibilityTimeout: TARGETED_VISIBILITY_SECONDS,
+  });
+  const messages = acquired.found.map(message => ({
+    messageId: message.MessageId!,
+    receiptHandle: message.ReceiptHandle!,
+    body: message.Body ?? '',
+  }));
+  const notFound = acquired.notFound;
+  if (notFound.length > 0) {
+    Logger.warn(`[DLQ Discard] ${notFound.length} requested messageIds not found in DLQ`, {
+      queueLabel,
+      notFoundIds: notFound,
     });
-    messages = acquired.found.map(message => ({
-      messageId: message.MessageId!,
-      receiptHandle: message.ReceiptHandle!,
-      body: message.Body ?? '',
-    }));
-    notFound = acquired.notFound;
-    if (notFound.length > 0) {
-      Logger.warn(`[DLQ Discard] ${notFound.length} requested messageIds not found in DLQ`, {
-        queueLabel,
-        notFoundIds: notFound,
-      });
-    }
   }
 
   const results = await discardDlqMessages({
@@ -120,7 +101,7 @@ const handler = adminApi({
     aiSuggestionId,
     messages,
     // A message acquired by ID is hidden; release it so it reappears for a retry right away.
-    releaseUnretained: Boolean(messageIds),
+    releaseUnretained: true,
   });
 
   const discardedIds = results.filter(result => result.status === 'discarded').map(result => result.messageId);
