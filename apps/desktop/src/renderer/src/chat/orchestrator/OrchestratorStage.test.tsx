@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { MANAGER_ART } from './office/officeArt';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
@@ -716,6 +717,8 @@ describe('OrchestratorStage', () => {
       expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('scene');
       expect(el('orchestrator-finale').getAttribute('data-look')).toBe('office');
       expect(el('orchestrator-finale').getAttribute('aria-label')).toBe('Shift ended');
+      const portrait = el('orchestrator-finale').querySelector('img')?.getAttribute('src');
+      expect([MANAGER_ART.idle, MANAGER_ART.cheering]).toContain(portrait);
 
       await renderOffice(true);
       expect(query('office-scene')).toBeNull();
