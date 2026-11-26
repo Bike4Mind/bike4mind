@@ -214,7 +214,17 @@ describe('DecisionBody', () => {
       approvalId: 'ap1',
       call: {
         ...call('ask_user'),
-        input: { questions: [{ question: 'Which branch?', options: [{ label: 'main', description: 'd' }, { label: 'dev', description: 'd' }] }] },
+        input: {
+          questions: [
+            {
+              question: 'Which branch?',
+              options: [
+                { label: 'main', description: 'd' },
+                { label: 'dev', description: 'd' },
+              ],
+            },
+          ],
+        },
       },
       collectsSecrets: false,
     });

@@ -125,7 +125,11 @@ export function DecisionBody({
           calls={[decision.call]}
           onAnswered={answer =>
             onAnswered(
-              decision.call.name === ASK_USER_TOOL_NAME ? 'answered' : answer.decision === 'deny' ? 'denied' : 'approved'
+              decision.call.name === ASK_USER_TOOL_NAME
+                ? 'answered'
+                : answer.decision === 'deny'
+                  ? 'denied'
+                  : 'approved'
             )
           }
         />

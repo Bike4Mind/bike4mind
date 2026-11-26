@@ -34,7 +34,6 @@ vi.mock('../chime', () => ({ playChime: vi.fn(), playSoundEvent: vi.fn() }));
 
 const ALL_STATES: AgentState[] = ['working', 'waiting', 'needs-you', 'done', 'failed', 'paused', 'stopped', 'idle'];
 const HUNDREDS = 300;
-// jsdom with style injection; generous so a loaded CI machine passes, tight enough to catch a quadratic walk.
 
 const parkedCall = (approvalId: string) => ({
   id: `call-${approvalId}`,
