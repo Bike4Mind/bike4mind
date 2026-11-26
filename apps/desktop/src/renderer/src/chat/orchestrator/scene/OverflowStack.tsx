@@ -8,6 +8,7 @@ import { useLayoutEffect, useRef } from 'react';
 import { AGENT_STATE_LABEL, type AgentView } from '../roster';
 import { AgentPrIndicator } from '../AgentPrIndicator';
 import { stateLampColor } from '../statePalette';
+import { hueFilter, type SceneArt } from './cast';
 import type { ScenePoint } from './sceneDefinition';
 
 /** Above seated sprites (at most 100), below a lifted one (SceneStage's LIFTED_Z). */
@@ -15,8 +16,10 @@ const STACK_Z = 101;
 /** Tokens drawn on the stack; the count pill covers the rest. */
 const STACK_TOKENS = 3;
 
+const TOKEN_ZOOM = 1.8;
+
 /** `sprite` is the agent's art in its current pose, cropped to head and shoulders on the token. */
-export type StackedAgent = { agent: AgentView; sprite: string; name: string };
+export type StackedAgent = { agent: AgentView; sprite: SceneArt; name: string };
 
 /**
  * A full zone's extra agents, stacked in place as small tokens with a count. The whole stack is one
@@ -32,6 +35,7 @@ export function OverflowStack({
   selectedId,
   onSelect,
   onOpenPr,
+  faceY,
 }: {
   /** Prefixes the test ids: `<testId>-overflow-<zone>`, its `-count` and `-list`. */
   testId: string;
@@ -43,6 +47,8 @@ export function OverflowStack({
   selectedId: string | null;
   onSelect(id: string): void;
   onOpenPr?(id: string): void;
+  /** The cast's `faceY`; without one the token shows the head and shoulders of a standing figure. */
+  faceY?: number;
 }) {
   const needing = stacked.filter(({ agent }) => agent.state === 'needs-you').length;
   const urgent = needing > 0;
@@ -113,16 +119,17 @@ export function OverflowStack({
             >
               <Box
                 component="img"
-                src={sprite}
+                src={sprite.src}
                 alt=""
                 draggable={false}
                 sx={{
+                  filter: hueFilter(sprite),
                   // The head and shoulders: the art's feet sit at the bottom of a square canvas.
                   position: 'absolute',
                   left: '-40%',
-                  top: '-8%',
-                  width: '180%',
-                  height: '180%',
+                  top: faceY === undefined ? '-8%' : `${50 - faceY * TOKEN_ZOOM}%`,
+                  width: `${TOKEN_ZOOM * 100}%`,
+                  height: `${TOKEN_ZOOM * 100}%`,
                   imageRendering: 'pixelated',
                 }}
               />

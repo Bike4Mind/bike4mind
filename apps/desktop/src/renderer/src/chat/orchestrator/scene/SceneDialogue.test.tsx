@@ -38,7 +38,7 @@ const render = (frontKey?: string, focusRequest?: number) =>
     <SceneDialogue
       agents={[agentFixture('a', 'needs-you'), agentFixture('b', 'needs-you')]}
       nameOf={id => `Agent ${id}`}
-      portraitOf={() => 'data:image/png;base64,'}
+      portraitOf={() => ({ src: 'data:image/png;base64,' })}
       frontKey={frontKey}
       onFrontChange={onFrontChange}
       onOpenDetails={onOpenDetails}

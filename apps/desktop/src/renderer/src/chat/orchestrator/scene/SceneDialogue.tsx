@@ -16,6 +16,7 @@ import {
   type CommandApproval,
   type DialogueKeyAction,
 } from './dialogue';
+import { hueFilter, type SceneArt } from './cast';
 
 /** Above sprites and answer bubbles, below the agent details panel (OrchestratorStage, z 400). */
 const DIALOGUE_Z = 300;
@@ -79,7 +80,7 @@ function errorText(error: unknown): string {
 export interface SceneDialogueProps {
   agents: readonly AgentView[];
   nameOf(sessionId: string): string;
-  portraitOf(sessionId: string): string | undefined;
+  portraitOf(sessionId: string): SceneArt | undefined;
   /** The request at the front, by decisionKey or session id (queueIndex); the queue's head when unset or gone. */
   frontKey: string | undefined;
   onFrontChange(key: string | undefined): void;
@@ -218,7 +219,7 @@ export function SceneDialogue({
         '@container (max-width: 640px)': { left: 0, right: 0, bottom: 0, top: 0, maxHeight: 'none' },
       }}
     >
-      <Portrait src={portraitOf(front.sessionId)} colors={colors} />
+      <Portrait art={portraitOf(front.sessionId)} colors={colors} />
       <Box sx={{ minWidth: 0, overflowY: 'auto', overscrollBehavior: 'contain', pr: 0.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: '0.6em', flexWrap: 'wrap' }}>
           <Box
@@ -293,7 +294,27 @@ function tabSx(look: 'wood' | 'parchment') {
   } as const;
 }
 
-function Portrait({ src, colors }: { src: string | undefined; colors: Look }) {
+/**
+ * The art as a background. A tinted sprite gets a layer of its own, since a filter on the box would tint
+ * its frame too; untinted art stays on the box, under the frame's inset edge.
+ */
+function artBackground(art: SceneArt | undefined, size: string, position: string, repeat?: 'no-repeat') {
+  if (!art) return {};
+  const image = {
+    backgroundImage: `url("${art.src}")`,
+    backgroundSize: size,
+    backgroundPosition: position,
+    backgroundRepeat: repeat,
+    imageRendering: 'pixelated',
+  } as const;
+  if (!art.hue) return image;
+  return {
+    position: 'relative',
+    '&::before': { content: '""', position: 'absolute', inset: 0, ...image, filter: hueFilter(art) },
+  } as const;
+}
+
+function Portrait({ art, colors }: { art: SceneArt | undefined; colors: Look }) {
   return (
     <Box
       aria-hidden
@@ -304,11 +325,7 @@ function Portrait({ src, colors }: { src: string | undefined; colors: Look }) {
         border: `2px solid ${colors.frame}`,
         boxShadow: `inset 0 0 0 2px ${colors.inner}`,
         backgroundColor: 'rgba(0, 0, 0, 0.18)',
-        backgroundImage: src ? `url("${src}")` : undefined,
-        backgroundSize: '125%',
-        backgroundPosition: 'center 85%',
-        backgroundRepeat: 'no-repeat',
-        imageRendering: 'pixelated',
+        ...artBackground(art, '125%', 'center 85%', 'no-repeat'),
       }}
     />
   );
@@ -325,7 +342,7 @@ function QueueNav({
 }: {
   queue: readonly PendingDecision[];
   index: number;
-  portraitOf(sessionId: string): string | undefined;
+  portraitOf(sessionId: string): SceneArt | undefined;
   nameOf(sessionId: string): string;
   colors: Look;
   onPick(key: string): void;
@@ -344,7 +361,7 @@ function QueueNav({
         {'\u2039'}
       </Box>
       {shown.map((decision, position) => {
-        const src = portraitOf(decision.sessionId);
+        const art = portraitOf(decision.sessionId);
         const current = start + position === index;
         return (
           <Box
@@ -363,10 +380,7 @@ function QueueNav({
               borderRadius: '3px',
               opacity: current ? 1 : 0.65,
               backgroundColor: 'rgba(0, 0, 0, 0.2)',
-              backgroundImage: src ? `url("${src}")` : undefined,
-              backgroundSize: '140%',
-              backgroundPosition: 'center 90%',
-              imageRendering: 'pixelated',
+              ...artBackground(art, '140%', 'center 90%'),
             }}
           />
         );

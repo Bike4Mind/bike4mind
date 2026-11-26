@@ -26,6 +26,11 @@ describe('sceneDefinitionSchema', () => {
     ['an unknown borrow zone', 'map.borrowOrder[0]', broken(scene => (scene.map.borrowOrder = ['attic']))],
     ['an unknown animated pose', 'cast.animatedPoses[0]', broken(scene => (scene.cast.animatedPoses = ['dance']))],
     [
+      'an unknown roaming pose',
+      'cast.roam.poses[0]',
+      broken(scene => (scene.cast.roam = { poses: ['dance'], reach: 5 })),
+    ],
+    [
       'a sheet missing a pose',
       'cast.sheets[0].sprites.ask',
       broken(scene => delete (scene.cast.sheets[0].sprites as Record<string, string>).ask),

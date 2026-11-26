@@ -9,6 +9,7 @@ import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
 import { SceneStage, sceneView } from './SceneStage';
 import { TEST_SCENE } from './testScene';
+import { UNFOCUSED_PAUSE_MS } from './useScenePause';
 
 const mount = createThemedMount('dark');
 const sprite = (id: string) => el(`orchestrator-test-yard-agent-${id}`);
@@ -285,6 +286,56 @@ describe('SceneStage features on any definition', () => {
     await render({ ...view, agents: [agentFixture('a', 'needs-you')] });
     await act(async () => vi.advanceTimersByTime(ANNOUNCE_DEBOUNCE_MS));
     expect(el('orchestrator-test-yard-announcer').textContent).toBe(`${view.personas.get('a')?.label} needs you.`);
+  });
+});
+
+// Optional definition fields that only some scenes set.
+describe('SceneStage definition options', () => {
+  const OPTIONED = {
+    ...TEST_SCENE,
+    map: { ...TEST_SCENE.map, lights: [{ x: 20, y: 5, size: 10, kind: 'lamp' as const }] },
+    cast: {
+      ...TEST_SCENE.cast,
+      roam: { poses: ['busy'], reach: 6 },
+      sheets: TEST_SCENE.cast.sheets.map(sheet => ({ ...sheet, hue: 90 })),
+    },
+    ambience: { ...TEST_SCENE.ambience, veil: 'rgba(0, 0, 0, 0.25)', awakeUnfocused: true },
+  };
+  const renderOptioned = (view: OrchestratorViewProps) => mount.render(<SceneStage {...view} scene={OPTIONED} />);
+
+  it('swims a roaming pose across its seat and leaves other poses still', async () => {
+    await renderOptioned(props([agentFixture('w', 'working'), agentFixture('d', 'done')]));
+    expect(sprite('w').style.getPropertyValue('--roam-reach')).toBe('6cqw');
+    expect(sprite('d').style.getPropertyValue('--roam-reach')).toBe('');
+  });
+
+  it("tints the art by its sheet's hue", async () => {
+    await renderOptioned(props([agentFixture('w', 'working')]));
+    expect(getComputedStyle(sprite('w').querySelector('img') as HTMLElement).filter).toContain('hue-rotate(90deg)');
+  });
+
+  it('veils the backdrop and draws a lamp', async () => {
+    await renderOptioned(props([agentFixture('w', 'working')]));
+    expect(query('orchestrator-test-yard-veil')).not.toBeNull();
+    expect(el('orchestrator-test-yard-light').querySelector('[data-light-glow="lamp"]')).not.toBeNull();
+    await render(props([agentFixture('w', 'working')]));
+    expect(query('orchestrator-test-yard-veil')).toBeNull();
+  });
+
+  it('stays awake while unfocused when the definition asks, and pauses otherwise', async () => {
+    vi.useFakeTimers();
+    const blurLong = () =>
+      act(async () => {
+        window.dispatchEvent(new Event('blur'));
+        vi.advanceTimersByTime(UNFOCUSED_PAUSE_MS + 1);
+      });
+    await renderOptioned(props([agentFixture('w', 'working')]));
+    await blurLong();
+    expect(el('orchestrator-test-yard-frame').dataset.paused).toBeUndefined();
+    mount.unmount();
+    await render(props([agentFixture('w', 'working')]));
+    await blurLong();
+    expect(el('orchestrator-test-yard-frame').dataset.paused).toBe('unfocused');
   });
 });
 

@@ -12,7 +12,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import type { AgentPersona } from '@shared/agentPersona';
+import { hashOf, type AgentPersona } from '@shared/agentPersona';
 import { toolKind, type ToolKind } from '../activity';
 import { AgentPrIndicator } from '../AgentPrIndicator';
 import { prefersReducedMotion } from '../motion';
@@ -30,7 +30,7 @@ import { stateLampColor } from '../statePalette';
 import { VISUALLY_HIDDEN } from '../../../visuallyHidden';
 import { useAgentAnnouncements } from './announcements';
 import { bubbleText, hostBubbleText, truncate } from './bubbleText';
-import { assignSheets } from './cast';
+import { assignSheets, hueFilter, type SceneArt } from './cast';
 import { hostAct, hostBubble } from './host';
 import { ReplyBubble } from './HostReply';
 import { NeedsYouBubble } from './NeedsYouBubble';
@@ -95,6 +95,28 @@ const drift = keyframes`
   0%, 100% { transform: none; }
   50% { transform: scale(1.035) translate(-0.8%, 0.5%); }
 `;
+
+// There and back along the seat's reach (--roam-reach, cqw), easing at each end. `translate` composes
+// with the sprite's own centring transform.
+const roam = keyframes`
+  0%, 100% { translate: calc(-1 * var(--roam-reach)) 0; }
+  50% { translate: var(--roam-reach) 0; }
+`;
+
+// The art faces right, the way it swims out; it turns at the far end and swims back.
+const faceTheWay = keyframes`
+  0%, 49.9% { scale: 1 1; }
+  50%, 100% { scale: -1 1; }
+`;
+
+type Roam = { reach: number; durationS: number; delayS: number };
+
+/** One length per agent, out of step with the others, fixed by its id so a re-render never restarts it. */
+function roamOf(id: string, reach: number): Roam {
+  const hash = hashOf(id);
+  const durationS = 22 + (hash % 13);
+  return { reach, durationS, delayS: -((hash >>> 8) % durationS) };
+}
 
 const twinkle = keyframes`
   0%, 100% { opacity: 1; }
@@ -357,8 +379,9 @@ function Sprite({
   label,
   needsYou,
   persona,
-  src,
+  art,
   animated,
+  roam: swim,
   plate,
   via,
   walkFrom,
@@ -376,9 +399,11 @@ function Sprite({
   needsYou: number;
   persona: AgentPersona | undefined;
   /** The agent's art in its current pose. */
-  src: string;
+  art: SceneArt;
   /** The pose bobs while held. */
   animated: boolean;
+  /** The pose swims back and forth across its seat. */
+  roam: Roam | undefined;
   plate: SceneDefinition['look']['plate'];
   /** The agent that spawned this one, below the first level; kept off the nameplate to keep it short. */
   via?: string;
@@ -416,7 +441,14 @@ function Sprite({
       data-cheering={cheering || undefined}
       title={tooltip}
       onClick={() => onSelect(agent.id)}
-      style={{ left: `${at.x}%`, top: `${at.y}%`, '--sprite-z': Math.round(at.y) } as CssVars}
+      style={
+        {
+          left: `${at.x}%`,
+          top: `${at.y}%`,
+          '--sprite-z': Math.round(at.y),
+          ...(swim && { '--roam-reach': `${swim.reach}cqw` }),
+        } as CssVars
+      }
       sx={{
         position: 'absolute',
         zIndex: 'var(--sprite-z)',
@@ -428,7 +460,9 @@ function Sprite({
         bgcolor: 'transparent',
         cursor: 'pointer',
         transition: `left ${WALK}, top ${WALK}`,
-        [NO_MOTION]: { transition: 'none' },
+        // The whole button swims, so the click target, plate and bubble go with the art.
+        animation: swim ? `${roam} ${swim.durationS}s ease-in-out ${swim.delayS}s infinite` : undefined,
+        [NO_MOTION]: { transition: 'none', animation: 'none' },
         '&:focus-visible': FOCUS_RING,
         [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
       }}
@@ -436,7 +470,7 @@ function Sprite({
       <ContactShadow />
       <Box
         component="img"
-        src={src}
+        src={art.src}
         alt=""
         draggable={false}
         sx={{
@@ -446,12 +480,19 @@ function Sprite({
           width: '100%',
           height: '100%',
           imageRendering: 'pixelated',
-          filter: selected || visited ? 'drop-shadow(0 0 3px #f5c542) drop-shadow(0 0 1px #f5c542)' : undefined,
-          animation: cheering
-            ? `${cheer} 0.9s ease-in-out infinite`
-            : animated
-              ? `${bob} 0.8s steps(1, end) infinite`
-              : 'none',
+          filter:
+            [
+              hueFilter(art),
+              selected || visited ? 'drop-shadow(0 0 3px #f5c542) drop-shadow(0 0 1px #f5c542)' : undefined,
+            ]
+              .filter(Boolean)
+              .join(' ') || undefined,
+          animation: [
+            cheering ? `${cheer} 0.9s ease-in-out infinite` : animated ? `${bob} 0.8s steps(1, end) infinite` : 'none',
+            swim && `${faceTheWay} ${swim.durationS}s linear ${swim.delayS}s infinite`,
+          ]
+            .filter(Boolean)
+            .join(', '),
           [NO_MOTION]: { animation: 'none' },
         }}
       />
@@ -676,8 +717,12 @@ export function SceneStage({
   const { placements, previous } = usePlacements(agents, scene);
   const sheets = useSheets(agents, personas, scene);
   const animatedPoses = useMemo(() => new Set(cast.animatedPoses), [cast]);
-  const spriteOf = useCallback(
-    (id: string, state: AgentState) => cast.sheets[sheets.get(id) ?? 0].sprites[states.pose[state]],
+  const roamingPoses = useMemo(() => new Set(cast.roam?.poses), [cast]);
+  const artOf = useCallback(
+    (id: string, state: AgentState): SceneArt => {
+      const sheet = cast.sheets[sheets.get(id) ?? 0];
+      return { src: sheet.sprites[states.pose[state]], hue: sheet.hue };
+    },
     [cast, sheets, states]
   );
   const arrived = useArrived(introPlaying);
@@ -703,12 +748,12 @@ export function SceneStage({
     const stack = stacks.get(placement.zone) ?? { point: placement.point, stacked: [] };
     stack.stacked[placement.index] = {
       agent,
-      sprite: spriteOf(agent.id, agent.state),
+      sprite: artOf(agent.id, agent.state),
       name: withPersona(personas.get(agent.id), agent.title),
     };
     stacks.set(placement.zone, stack);
   }
-  const paused = useScenePause(pause);
+  const paused = useScenePause({ ...pause, awake: pause?.awake || ambience.awakeUnfocused === true });
   const quests = useQuestNotes(agents);
   const announcement = useAgentAnnouncements(agents, shortName);
   const summaryId = useId();
@@ -859,6 +904,13 @@ export function SceneStage({
             transition: 'opacity 0.6s ease-in',
           }}
         />
+        {ambience.veil && (
+          <Box
+            aria-hidden
+            data-testid={`${testId}-veil`}
+            sx={{ position: 'absolute', inset: 0, bgcolor: ambience.veil, pointerEvents: 'none' }}
+          />
+        )}
         <QuestBoard
           testId={`${testId}-quest`}
           board={map.board}
@@ -880,8 +932,11 @@ export function SceneStage({
             label={labels.get(agent.id) ?? HIDDEN_LABEL}
             needsYou={answerBubbles.has(agent.id) ? 0 : (needsYou.get(agent.id) ?? 0)}
             persona={personas.get(agent.id)}
-            src={spriteOf(agent.id, agent.state)}
+            art={artOf(agent.id, agent.state)}
             animated={animatedPoses.has(states.pose[agent.state])}
+            roam={
+              cast.roam && roamingPoses.has(states.pose[agent.state]) ? roamOf(agent.id, cast.roam.reach) : undefined
+            }
             plate={look.plate}
             via={spawnerName(agent, agents, spawner => personas.get(spawner.id)?.label ?? spawner.title)}
             walkFrom={mounted.current && !prefersReducedMotion() ? walkStart(previous.get(agent.id)) : undefined}
@@ -937,6 +992,7 @@ export function SceneStage({
             testId={testId}
             zone={zone}
             place={map.zones[zone].place}
+            faceY={cast.faceY}
             point={stack.point}
             stacked={stack.stacked}
             selectedId={selectedId}
@@ -951,7 +1007,7 @@ export function SceneStage({
               const agent = agentsById.get(id);
               return agent ? shortName(agent) : id;
             }}
-            portraitOf={id => spriteOf(id, 'needs-you')}
+            portraitOf={id => artOf(id, 'needs-you')}
             frontKey={dialogueFront}
             onFrontChange={setDialogueFront}
             onOpenDetails={onSelect}

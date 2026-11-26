@@ -33,7 +33,7 @@ export type HostPose = (typeof HOST_POSES)[number];
 const EPITHETS = ['Warden', 'Scribe', 'Tinkerer', 'Cartographer', 'Seeker', 'Wanderer'] as const;
 
 /** The framework's light looks; SceneLight.tsx draws each. */
-export const LIGHT_KINDS = ['fire', 'candle'] as const;
+export const LIGHT_KINDS = ['fire', 'candle', 'lamp'] as const;
 export type LightKind = (typeof LIGHT_KINDS)[number];
 
 const SKIN_BACKDROPS = ['tavernBackdrop', 'aquariumBackdrop'] as const;
@@ -94,10 +94,16 @@ const castSchema = z.object({
         look: z.string().min(1),
         /** The kind of work this character looks the part for; such agents get it first. */
         craft: z.enum(EPITHETS).optional(),
+        /** Degrees of hue rotation over the art, so one drawing can make several looks. */
+        hue: z.number().min(0).max(360).optional(),
         sprites: z.record(name, asset),
       })
     )
     .min(1),
+  /** Where a sprite's face sits on its canvas, percent from the top; the overflow token centres on it. */
+  faceY: percent.optional(),
+  /** Poses that swim back and forth `reach` percent of the scene width either side of the seat, facing the way they go. */
+  roam: z.object({ poses: z.array(name).min(1), reach: z.number().positive().max(50) }).optional(),
   host: z.object({
     sprites: z.object({ idle: asset, writing: asset, reading: asset, walking: asset, cheering: asset }),
   }),
@@ -119,6 +125,10 @@ export const sceneDefinitionSchema = z
       settledDrift: z.boolean(),
       /** The glow the settled picture throws into the letterbox around it. */
       settledShadow: z.string().min(1),
+      /** A wash over the backdrop, under the light and sprites, for a scene kept low in contrast. */
+      veil: z.string().min(1).optional(),
+      /** Keeps animating while the window is unfocused (never while hidden): a scene meant for a second monitor. */
+      awakeUnfocused: z.boolean().optional(),
     }),
     look: z.object({
       /** Name plates and the board's frame. */
@@ -171,6 +181,9 @@ export const sceneDefinitionSchema = z
     });
     scene.cast.animatedPoses.forEach((pose, index) => {
       if (!poses.has(pose)) issue(['cast', 'animatedPoses', index], `unknown pose "${pose}"`);
+    });
+    scene.cast.roam?.poses.forEach((pose, index) => {
+      if (!poses.has(pose)) issue(['cast', 'roam', 'poses', index], `unknown pose "${pose}"`);
     });
     scene.cast.sheets.forEach((sheet, index) => {
       for (const pose of poses) {
