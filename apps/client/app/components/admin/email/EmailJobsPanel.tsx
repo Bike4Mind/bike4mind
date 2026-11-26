@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Sheet,
@@ -19,6 +20,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 import { todayUtc } from '@client/app/utils/dateUtils';
+import { getErrorMessage } from '@client/app/utils/error';
 import { useEmailJobs, useCancelEmailJob, useCloneEmailJob } from '@client/app/hooks/data/emailMarketing';
 import { EmailJobStatus, EmailJobOverallStatus, IEmailJobDocument } from '@bike4mind/common';
 import { DataTable, type DataColumn, EmptyState, ErrorState, LoadingState } from '../shared';
@@ -36,6 +38,7 @@ export default function EmailJobsPanel() {
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const {
     data: jobs,
@@ -56,6 +59,7 @@ export default function EmailJobsPanel() {
   const hasFilters = excludeTest || Boolean(dateRange.start) || Boolean(dateRange.end);
 
   const handleOpenCreate = () => {
+    setActionError(null);
     setIsCreating(true);
     setSelectedJobId(null);
   };
@@ -67,6 +71,7 @@ export default function EmailJobsPanel() {
   };
 
   const handleOpenEdit = (job: IEmailJobDocument) => {
+    setActionError(null);
     setSelectedJobId(job.id);
     setIsCreating(false);
   };
@@ -76,13 +81,18 @@ export default function EmailJobsPanel() {
     setIsCreating(false);
   };
 
-  const handleCancel = async (id: string) => {
-    await cancelMutation.mutateAsync(id);
+  const runRowAction = async (action: () => Promise<unknown>) => {
+    setActionError(null);
+    try {
+      await action();
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
-  const handleClone = async (id: string) => {
-    await cloneMutation.mutateAsync(id);
-  };
+  const handleCancel = (id: string) => runRowAction(() => cancelMutation.mutateAsync(id));
+
+  const handleClone = (id: string) => runRowAction(() => cloneMutation.mutateAsync(id));
 
   const getProgress = (job: IEmailJobDocument) => {
     if (job.recipientCount === 0) return 0;
@@ -288,6 +298,12 @@ export default function EmailJobsPanel() {
           New campaign
         </Button>
       </Stack>
+
+      {actionError && (
+        <Alert color="danger" variant="soft" data-testid="email-campaigns-action-error">
+          {actionError}
+        </Alert>
+      )}
 
       {/* Filter Controls */}
       {showFilters && (
