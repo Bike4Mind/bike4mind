@@ -71,8 +71,15 @@ const detachFromProjectsWithoutGrantor = async (
     const participants = projectParticipants(project).filter(id => id !== userIdToRevoke);
     if (participants.includes(document.userId)) continue;
     const outsideProject = { ...document, users: document.users.filter(u => u.projectId !== project.id) };
-    // Group rows are not consulted: participants' groups are not loaded here, so this fails closed.
-    if (participants.some(id => heldPermissions(outsideProject, id).has(Permission.share))) continue;
+    // Same rule as grantCap on attach (projectService/addFiles.ts), group shares included. Users are
+    // loaded only when no direct row settles it.
+    const holdsShare = (id: string, groups: string[] = []) =>
+      heldPermissions(outsideProject, id, groups).has(Permission.share);
+    if (participants.some(id => holdsShare(id))) continue;
+    if ((outsideProject.groups ?? []).length > 0) {
+      const participantUsers = await Promise.all(participants.map(id => db.users.findById(id)));
+      if (participantUsers.some(user => user && holdsShare(user.id, user.groups ?? []))) continue;
+    }
 
     if (type === 'files') {
       await db.projects.pullFileReferences([document.id], { projectId: project.id });

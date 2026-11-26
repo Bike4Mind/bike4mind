@@ -2,7 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { revoke, revokeFromProject } from './revoke';
 
 type Row = { userId: string; permissions: string[]; projectId?: string; sessionId?: string };
-type Doc = { id: string; userId: string; users: Row[]; groups?: []; knowledgeIds?: string[] };
+type Doc = {
+  id: string;
+  userId: string;
+  users: Row[];
+  groups?: { groupId: string; permissions: string[] }[];
+  knowledgeIds?: string[];
+};
 type Project = {
   id: string;
   userId: string;
@@ -63,7 +69,12 @@ const projectStore = (projects: Project[]) => {
   };
 };
 
-const adaptersFor = (files: Doc[], sessions: Doc[] = [], projects: Project[] = []) => {
+const adaptersFor = (
+  files: Doc[],
+  sessions: Doc[] = [],
+  projects: Project[] = [],
+  groupsOf: Record<string, string[]> = {}
+) => {
   const f = store(files);
   const s = store(sessions);
   const p = projectStore(projects);
@@ -78,7 +89,9 @@ const adaptersFor = (files: Doc[], sessions: Doc[] = [], projects: Project[] = [
         fabFiles: f.repo,
         sessions: s.repo,
         projects: p.repo,
-        users: { findById: vi.fn(async (id: string) => ({ id, groups: [] })) },
+        users: {
+          findById: vi.fn(async (id: string) => ({ id, groups: groupsOf[id] ?? [] })),
+        },
       },
       onAccessRemoved,
     } as never,
@@ -202,6 +215,20 @@ describe('revoke - residual grants', () => {
         [sharedFile([{ userId: 'member', permissions: ['read', 'share'] }])],
         [],
         [project({ users: [memberRow], fileIds: ['file-1'] })]
+      );
+
+      await revoke('owner', { id: 'file-1', type: 'files', userId: 'sharee' }, env.adapters);
+
+      expect(env.projects.get('project-1')!.fileIds).toEqual(['file-1']);
+    });
+
+    it('keeps the item when another participant holds share on it through a group', async () => {
+      const file = { ...sharedFile(), groups: [{ groupId: 'g1', permissions: ['read', 'share'] }] };
+      const env = adaptersFor(
+        [file],
+        [],
+        [project({ userId: 'carol', users: [{ userId: 'sharee', permissions: ['read'] }], fileIds: ['file-1'] })],
+        { carol: ['g1'] }
       );
 
       await revoke('owner', { id: 'file-1', type: 'files', userId: 'sharee' }, env.adapters);

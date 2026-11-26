@@ -98,7 +98,7 @@ const revokeAndCleanUp = async (ownerId: string, fileId: string, recipientId: st
     sharingService.revoke(
       ownerId,
       { id: fileId, type: 'files', userId: recipientId },
-      { db: { ...db, projects: {} as never } }
+      { db: { ...db, projects: projectRepository } as never }
     )
   );
   await cleanUpRevokedFileReferences([{ userId: recipientId, fileIds: [fileId] }], logger);
@@ -122,7 +122,7 @@ describe('revoking a file share cleans up the recipient references', () => {
       sharingService.revoke(
         ownerId,
         { id: String(fileId), type: 'files', userId: recipientId },
-        { db: { ...db, projects: {} as never } }
+        { db: { ...db, projects: projectRepository } as never }
       )
     );
     // What the turn reports for a pinned file it could not load.
@@ -210,7 +210,7 @@ describe('session revoke and project delete clean up the references they strand'
       sharingService.revoke(
         ownerId,
         { id: String(sessionId), type: 'sessions', userId: recipientId },
-        { db: { ...db, projects: {} as never } }
+        { db: { ...db, projects: projectRepository } as never }
       )
     );
     await cleanUpRevokedFileReferences(

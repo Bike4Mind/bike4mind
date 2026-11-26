@@ -13,7 +13,10 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/websocket/closeConnection', () => ({ closeConnection }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToConnection }));
-vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'https://ws.example.com/dev' } } }));
+const resource = vi.hoisted(() => ({
+  websocket: { managementEndpoint: 'https://ws.example.com/dev' } as { managementEndpoint: string } | undefined,
+}));
+vi.mock('sst', () => ({ Resource: resource }));
 
 import { rescopeUserSubscriptions } from './rescopeUserSubscriptions';
 
@@ -62,5 +65,16 @@ describe('rescopeUserSubscriptions', () => {
 
     dropUserSubscriptions.mockRejectedValue(new Error('db down'));
     await expect(rescopeUserSubscriptions(['u1'], logger)).resolves.toBeUndefined();
+  });
+
+  it('does not throw when the websocket resource is not linked', async () => {
+    const linked = resource.websocket;
+    resource.websocket = undefined;
+    try {
+      await expect(rescopeUserSubscriptions(['u1'], logger)).resolves.toBeUndefined();
+      expect(dropUserSubscriptions).not.toHaveBeenCalled();
+    } finally {
+      resource.websocket = linked;
+    }
   });
 });

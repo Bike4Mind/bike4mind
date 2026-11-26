@@ -161,7 +161,8 @@ describe('Project invite accept: grants on attached files, prompts and notebooks
     expect(await projectRows(projectId, accepter.id)).toEqual([{ permissions: memberGrant, projectId: undefined }]);
     expect(await fileRows(files.shared, accepter.id)).toEqual(full);
     expect(await fileRows(files.ownedByMember, accepter.id)).toEqual(full);
-    expect(await fileRows(files.readOnly, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
+    // An outsider's file the inviter holds without share is not passed on.
+    expect(await fileRows(files.readOnly, accepter.id)).toEqual([]);
     expect(await fileRows(files.unheld, accepter.id)).toEqual([]);
     expect(await fileRows(prompts.shared, accepter.id)).toEqual(full);
     expect(await fileRows(prompts.unheld, accepter.id)).toEqual([]);
@@ -178,7 +179,8 @@ describe('Project invite accept: grants on attached files, prompts and notebooks
     expect(await projectRows(projectId, accepter.id)).toEqual([{ permissions: memberGrant, projectId: undefined }]);
     expect(await fileRows(files.shared, accepter.id)).toEqual(full);
     expect(await fileRows(files.ownedByMember, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
-    expect(await fileRows(files.readOnly, accepter.id)).toEqual([{ permissions: readOnly, projectId }]);
+    // An outsider's file the inviter holds without share is not passed on.
+    expect(await fileRows(files.readOnly, accepter.id)).toEqual([]);
     expect(await fileRows(files.unheld, accepter.id)).toEqual([]);
     expect(await fileRows(prompts.shared, accepter.id)).toEqual(full);
     expect(await fileRows(prompts.unheld, accepter.id)).toEqual([]);
