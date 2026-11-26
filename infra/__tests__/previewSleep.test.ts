@@ -78,6 +78,12 @@ describe('preview sleep wiring', () => {
     );
     const ecs = web.slice(web.indexOf("'ecs:UpdateService'"));
     expect(ecs.slice(0, ecs.indexOf('\n          },'))).toContain('ecsServiceArn(target.resourceId)');
+    const wildcard = [...web.matchAll(/\{ actions: \[([^\]]*)\], resources: \['\*'\] \}/g)].map(m => m[1]);
+    expect(wildcard).toEqual([
+      "'application-autoscaling:DescribeScalableTargets'",
+      "'elasticloadbalancing:DescribeTargetHealth'",
+    ]);
+    expect(web.match(/'\*'/g)).toHaveLength(2);
     const webTs = readInfra('web.ts');
     expect(webTs).toContain('...previewSleepForWeb.permissions,');
     expect(webTs).toContain('...previewSleepForWeb.environment,');

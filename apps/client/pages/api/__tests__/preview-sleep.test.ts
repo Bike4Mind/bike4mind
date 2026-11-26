@@ -212,6 +212,27 @@ describe('/api/preview-sleep', () => {
       expect(commandsOf('DescribeTargetHealthCommand')).toContainEqual({ TargetGroupArn: 'target-group-placeholder' });
     });
 
+    it('needs as many healthy targets as desired tasks, counting only the healthy state', async () => {
+      const service = { runningCount: 2, desiredCount: 2, deployments: deployments('COMPLETED'), loadBalancers };
+      respond(service, ['healthy', 'initial']);
+      expect((await call('GET'))._getJSONData()).toMatchObject({ asleep: false, waking: true });
+      respond(service, ['healthy', 'healthy']);
+      expect((await call('GET'))._getJSONData()).toMatchObject({ asleep: false, waking: false });
+    });
+
+    it('hides the AWS error text when only the target health lookup fails', async () => {
+      respond({ deployments: deployments('COMPLETED'), loadBalancers }, ['healthy']);
+      const describe = send.getMockImplementation()!;
+      send.mockImplementation(async (c: { constructor: { name: string } }) => {
+        if (c.constructor.name === 'DescribeTargetHealthCommand')
+          throw new Error('AccessDenied: arn:partition:iam::account-id:role/example');
+        return describe(c);
+      });
+      const res = await call('GET');
+      expect(res.statusCode).toBe(502);
+      expect(JSON.stringify(res._getJSONData())).not.toContain('arn:');
+    });
+
     it('reads awake with no deployments array and no load balancer', async () => {
       respond({}, []);
       expect((await call('GET'))._getJSONData()).toMatchObject({ asleep: false, waking: false });
