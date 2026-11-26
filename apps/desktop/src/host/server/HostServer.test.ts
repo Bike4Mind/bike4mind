@@ -303,7 +303,19 @@ describe('HostServer', () => {
       const { client, runtime } = serve();
       const result = await client().call('session/deleteTree', { sessionId: 'p', nestedIds: ['c1', 'c2'] });
       expect(resultOf(result)).toEqual({ deleted: ['c1', 'c2', 'p'], error: null });
-      expect(runtime.deleteSessionTree).toHaveBeenCalledWith('p', ['c1', 'c2'], false, []);
+      expect(runtime.deleteSessionTree).toHaveBeenCalledWith('p', ['c1', 'c2'], false, [], false);
+    });
+
+    it('passes the discard opt-in and worktree removal through to the runtime', async () => {
+      const { client, runtime } = serve();
+      await client().call('session/deleteTree', {
+        sessionId: 'p',
+        nestedIds: ['c1'],
+        removeWorktree: true,
+        nestedWorktreeIds: ['c1'],
+        allowDiscard: true,
+      });
+      expect(runtime.deleteSessionTree).toHaveBeenCalledWith('p', ['c1'], true, ['c1'], true);
     });
 
     it('relays a partial failure with what was deleted before it', async () => {

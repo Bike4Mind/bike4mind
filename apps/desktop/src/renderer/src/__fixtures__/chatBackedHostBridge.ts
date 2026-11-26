@@ -78,7 +78,7 @@ const routeFor = (method: string, params: Record<string, unknown>): Route | unde
     case 'session/deleteTree':
       return route(
         'deleteSessionTree',
-        p => [p.sessionId, p.nestedIds, p.removeWorktree, p.nestedWorktreeIds],
+        p => [p.sessionId, p.nestedIds, p.removeWorktree, p.nestedWorktreeIds, { allowDiscard: p.allowDiscard }],
         r => r
       );
     case 'turn/send':

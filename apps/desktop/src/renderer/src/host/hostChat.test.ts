@@ -90,12 +90,16 @@ describe('hostChat', () => {
 
   it('deletes a session tree and passes the host report through', async () => {
     const { chat, request } = setup({ 'session/deleteTree': () => ({ deleted: ['c1'], error: 'busy' }) });
-    expect(await chat.deleteSessionTree('p', ['c1', 'c2'], true, ['c1'])).toEqual({ deleted: ['c1'], error: 'busy' });
+    expect(await chat.deleteSessionTree('p', ['c1', 'c2'], true, ['c1'], true)).toEqual({
+      deleted: ['c1'],
+      error: 'busy',
+    });
     expect(request).toHaveBeenCalledWith(LOCAL_HOST_ID, 'session/deleteTree', {
       sessionId: 'p',
       nestedIds: ['c1', 'c2'],
       removeWorktree: true,
       nestedWorktreeIds: ['c1'],
+      allowDiscard: true,
     });
   });
 

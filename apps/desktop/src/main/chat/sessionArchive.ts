@@ -119,7 +119,10 @@ export async function confirmArchiveFromIpc(
   showMessageBox: (options: ArchiveConfirmation) => Promise<ArchiveConfirmationAnswer>
 ): Promise<ArchiveAnswer | null> {
   const question = archiveConfirmationSchema.safeParse(raw);
-  if (!question.success) return null;
+  if (!question.success) {
+    console.warn('Ignoring an invalid archive confirmation question', question.error);
+    return null;
+  }
   return archiveDecisionFrom(question.data, await showMessageBox(archiveConfirmationDialog(question.data)));
 }
 

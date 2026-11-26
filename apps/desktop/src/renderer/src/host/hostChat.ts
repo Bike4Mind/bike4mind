@@ -45,10 +45,7 @@ export function createHostChat(client: HostClient, local: () => LocalDesktop) {
     },
 
     /** Sidebar placement is Desktop's own, so a requested section is applied here after the host creates the session. */
-    async createCodeSession({
-      sectionId,
-      ...request
-    }: PlacedCodeSessionRequest): Promise<PlacedCodeSessionResult> {
+    async createCodeSession({ sectionId, ...request }: PlacedCodeSessionRequest): Promise<PlacedCodeSessionResult> {
       const result = await client.request(hostForSession(), 'session/create', request);
       if (!result.ok || !sectionId) return result;
       try {
@@ -87,13 +84,15 @@ export function createHostChat(client: HostClient, local: () => LocalDesktop) {
       sessionId: string,
       nestedIds: readonly string[],
       removeWorktree: boolean,
-      nestedWorktreeIds: readonly string[]
+      nestedWorktreeIds: readonly string[],
+      allowDiscard?: boolean
     ): Promise<SessionTreeDeletion> {
       return client.request(hostForSession(sessionId), 'session/deleteTree', {
         sessionId,
         nestedIds: [...nestedIds],
         removeWorktree,
         nestedWorktreeIds: [...nestedWorktreeIds],
+        allowDiscard,
       });
     },
 

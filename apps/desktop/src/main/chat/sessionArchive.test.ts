@@ -181,8 +181,11 @@ describe('confirmArchiveFromIpc', () => {
 
   it('returns null without showing the dialog when the question is malformed', async () => {
     const show = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     expect(await confirmArchiveFromIpc({ parentTitle: 1 }, show)).toBeNull();
     expect(show).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith('Ignoring an invalid archive confirmation question', expect.anything());
+    warn.mockRestore();
   });
 
   it('maps a confirmed answer with the checkbox ticked to the finished sub-session ids', async () => {

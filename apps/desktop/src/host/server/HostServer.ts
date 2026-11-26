@@ -196,8 +196,14 @@ export class HostServer {
         await runtime.deleteSession(sessionId, removeWorktree === true, allowDiscard === true);
         return {};
       },
-      'session/deleteTree': ({ sessionId, nestedIds, removeWorktree, nestedWorktreeIds }) =>
-        runtime.deleteSessionTree(sessionId, nestedIds, removeWorktree === true, nestedWorktreeIds ?? []),
+      'session/deleteTree': ({ sessionId, nestedIds, removeWorktree, nestedWorktreeIds, allowDiscard }) =>
+        runtime.deleteSessionTree(
+          sessionId,
+          nestedIds,
+          removeWorktree === true,
+          nestedWorktreeIds ?? [],
+          allowDiscard === true
+        ),
       'session/subscribe': ({ sessionId, after }, connection) => this.subscribe(connection, sessionId, after),
       'session/unsubscribe': ({ sessionId }, connection) => {
         connection.subscriptions.delete(sessionId);

@@ -148,6 +148,7 @@ export const hostMethods = {
       nestedIds: z.array(z.string()),
       removeWorktree: z.boolean().optional(),
       nestedWorktreeIds: z.array(z.string()).optional(),
+      allowDiscard: z.boolean().optional(),
     }),
     result: z.object({ deleted: z.array(z.string()), error: z.string().nullable() }),
   },

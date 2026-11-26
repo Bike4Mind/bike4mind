@@ -348,9 +348,13 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
         forget([sessionId]);
         return [sessionId];
       }
-      const { deleted, error } = await hostChat.deleteSessionTree(sessionId, [...nestedIds], removeWorktree, [
-        ...nestedWorktreeIds,
-      ]);
+      const { deleted, error } = await hostChat.deleteSessionTree(
+        sessionId,
+        [...nestedIds],
+        removeWorktree,
+        [...nestedWorktreeIds],
+        true
+      );
       forget(deleted);
       if (error) throw Object.assign(new Error(error), { deleted });
       return deleted;
@@ -1789,7 +1793,13 @@ export function useConversation(
 
   const respondToApproval = useCallback(
     (approvalId: string, answer: ChatApprovalAnswer) => {
-      if (sessionId) void hostChat.respondToApproval(sessionId, approvalId, answer);
+      if (!sessionId) {
+        console.warn('Dropped an approval answer because no session is open');
+        return;
+      }
+      hostChat
+        .respondToApproval(sessionId, approvalId, answer)
+        .catch(cause => console.warn('Could not answer the approval', cause));
     },
     [sessionId]
   );
