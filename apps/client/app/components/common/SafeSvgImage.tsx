@@ -10,7 +10,11 @@ interface SafeSvgImageProps {
   sx?: SxProps;
 }
 
-/** Renders untrusted SVG markup as an image, never inline in the app document. */
+/**
+ * Renders untrusted SVG markup as an image, never inline in the app document. As an image the SVG
+ * is its own document: currentColor resolves to black, and page fonts, link clicks and text
+ * selection do not apply.
+ */
 const SafeSvgImage: React.FC<SafeSvgImageProps> = ({ svg, alt, testId, sx }) => {
   const source = useMemo(() => toSvgImageSource(svg), [svg]);
   if (!source) return null;
