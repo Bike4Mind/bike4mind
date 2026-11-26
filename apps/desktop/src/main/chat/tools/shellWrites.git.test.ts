@@ -223,6 +223,15 @@ describe('signing config queries', () => {
     expect(existsSync(traced)).toBe(false);
   });
 
+  it('keeps each --config-env value apart when one variable is named twice', async () => {
+    const settings = ['--config-env=format.pretty=ONE', '--config-env=pretty.a=ONE', '--config-env=pretty.b=TWO'];
+    expect(await gitPrettyConfig(repo, call(settings, { ONE: 'one', TWO: 'two' }))).toEqual([
+      { key: 'format.pretty', value: 'one' },
+      { key: 'pretty.a', value: 'one' },
+      { key: 'pretty.b', value: 'two' },
+    ]);
+  });
+
   it('runs no query for a script variable outside the config locations', async () => {
     expect(await gitSigningConfig(repo, call([], { LD_PRELOAD: join(base, 'lib.so') }))).toBeNull();
     expect(await gitSigningConfig(repo, call([], { B4M_CONFIG_ENV_0: 'true' }))).toBeNull();

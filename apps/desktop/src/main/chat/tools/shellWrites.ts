@@ -1410,7 +1410,7 @@ function placeConfigEnv(call: GitSigningCall): { settings: string[]; env: Record
     const name = spec.slice(split + 1);
     const value = Object.hasOwn(call.env, name) ? call.env[name] : undefined;
     if (!/^[A-Za-z_]\w*$/.test(name) || value === undefined) return null;
-    const placed = `${CONFIG_ENV_PREFIX}${moved.size}`;
+    const placed = `${CONFIG_ENV_PREFIX}${Object.keys(env).length}`;
     moved.add(name);
     env[placed] = value;
     settings.push('--config-env', `${spec.slice(0, split)}=${placed}`);
