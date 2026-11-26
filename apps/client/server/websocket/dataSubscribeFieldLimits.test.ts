@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
+  OWNER_ONLY_CHAT_MESSAGE_FIELDS,
   ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
   SERVER_OWNED_SESSION_FIELDS,
@@ -36,6 +37,7 @@ describe('resolveFieldLimits', () => {
       'promptMeta.functionCalls.returnValue': false,
       'promptMeta.functionCalls.error': false,
       'promptMeta.citables.metadata.fullContext': false,
+      pendingAction: false,
       callback: false,
       embedding: false,
       slackNotification: false,
@@ -59,7 +61,11 @@ describe('resolveFieldLimits', () => {
     // The policy lives in @bike4mind/common; this branch must not grow a hand-maintained copy that
     // can drift from what the REST redaction enforces.
     expect(Object.keys(resolveFieldLimits('quests', opts()) ?? {}).sort()).toEqual(
-      [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, ...CHAT_MESSAGE_WITHHELD_FIELDS].sort()
+      [
+        ...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+        ...OWNER_ONLY_CHAT_MESSAGE_FIELDS,
+        ...CHAT_MESSAGE_WITHHELD_FIELDS,
+      ].sort()
     );
   });
 
@@ -177,12 +183,18 @@ describe('resolveFieldLimits', () => {
     expect(Object.keys(limits).filter(path => path.startsWith('promptMeta'))).toEqual([]);
   });
 
+  it('keeps pendingAction on the quests projection for the session owner and withholds it from a sharee', () => {
+    expect(resolveFieldLimits('quests', opts({ isQuestOwner: true }))).not.toHaveProperty('pendingAction');
+    expect(resolveFieldLimits('quests', opts({ isQuestOwner: false }))).toMatchObject({ pendingAction: false });
+  });
+
   it('still excludes the owner-only promptMeta paths for the quests collection when the caller is a sharee', () => {
     const limits = resolveFieldLimits('quests', opts({ isQuestOwner: false }));
     expect(limits).toEqual({
       'promptMeta.functionCalls.returnValue': false,
       'promptMeta.functionCalls.error': false,
       'promptMeta.citables.metadata.fullContext': false,
+      pendingAction: false,
       callback: false,
       embedding: false,
       slackNotification: false,
