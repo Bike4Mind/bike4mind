@@ -4,13 +4,21 @@ import type { ChatSession } from '@shared/chat';
 import type { ClaudeImportCounts } from '@shared/claudeImport';
 import { deriveTitle, isForkedImport, type SessionStore } from '../chat/SessionStore';
 import type { WebNotebookCursor } from './ImportStateStore';
-import { mapQuests, readNotebook, sourceIdOf, type WebNotebook } from './webSessionMapper';
+import { mapQuests, readNotebook, sourceIdOf, WEB_VERSION_PREFIX, type WebNotebook } from './webSessionMapper';
 
 const LIST_PATH = '/api/sessions';
+/** Keyset-paged by `_id`, newest created first: a deep page costs the same as the first. */
+const NOTEBOOK_LIST_PATH = '/api/v1/sessions';
 const COUNT_PATH = '/api/sessions/count';
+/** The v1 list's maximum `limit`. */
 const LIST_PAGE_SIZE = 100;
-/** Past this the list is treated as partial, and nothing is pruned for having gone missing. */
-const MAX_LIST_PAGES = 50;
+/**
+ * A runaway guard, not a product limit: 50,000 notebooks. Past it the list is partial, so nothing is
+ * pruned for having gone missing, and the run says how far it got.
+ */
+const MAX_LIST_PAGES = 500;
+/** Waits before retrying a list page that failed in a way a retry can fix (ms). */
+const LIST_RETRY_DELAYS_MS = [1_000, 4_000];
 const CHAT_PAGE_SIZE = 100;
 const MAX_CHAT_PAGES = 100;
 
@@ -38,7 +46,30 @@ function pageOf(result: unknown): z.infer<typeof pageSchema> {
   return pageSchema.parse(result);
 }
 
-/** Offset pages can omit a live notebook when rows move between requests. */
+const notebookPageSchema = z.object({ data: z.array(z.unknown()), next_cursor: z.string().min(1).nullable() });
+
+/** A failed list page worth retrying within the run: the network, a timeout, throttling or a server fault. */
+function isTransient(error: unknown): boolean {
+  if (!isAxiosError(error)) return false;
+  const status = error.response?.status;
+  return status === undefined || status === 429 || status >= 500;
+}
+
+/** A short, log-safe reason for a failed read: the HTTP status or the client's error code. */
+export function describeWebError(error: unknown): string {
+  if (isAxiosError(error)) {
+    if (error.response) return `HTTP ${error.response.status}`;
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return 'timed out';
+    if (error.code) return error.code;
+  }
+  // A ZodError's message is a multi-line JSON dump; the full text stays in the log.
+  if (error instanceof z.ZodError) return 'unexpected response';
+  const message = error instanceof Error ? error.message : String(error);
+  const firstLine = message.split('\n', 1)[0].trim();
+  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine || 'unknown error';
+}
+
+/** A listed id the list did not return; kept as a safety net before deleting a local copy. */
 export async function webNotebookWasDeleted(api: WebApi, notebookId: string): Promise<boolean> {
   try {
     await api.get(`${LIST_PATH}/${encodeURIComponent(notebookId)}`);
@@ -67,21 +98,80 @@ export function webSessionId(notebookId: string, scopeTag: string): string {
   return `bw-${scopeTag}-${notebookId}`;
 }
 
-/** Every notebook the account owns on the web; `complete` is false when the list was cut short. */
-export async function listWebNotebooks(api: WebApi): Promise<{ notebooks: WebNotebook[]; complete: boolean }> {
+export interface WebNotebookList {
+  /** Newest created first (the list pages by `_id`), so a partial list keeps the recent notebooks. */
+  notebooks: WebNotebook[];
+  /** False when the list stopped early; a partial list must never drive pruning. */
+  complete: boolean;
+  /** Why a partial list stopped: a page that kept failing, or the page guard. */
+  stopReason?: string;
+}
+
+export interface ListOptions {
+  sleep?: (ms: number) => Promise<void>;
+  retryDelaysMs?: readonly number[];
+}
+
+const realSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+async function readListPage(
+  api: WebApi,
+  url: string,
+  options: ListOptions
+): Promise<z.infer<typeof notebookPageSchema>> {
+  const delays = options.retryDelaysMs ?? LIST_RETRY_DELAYS_MS;
+  const sleep = options.sleep ?? realSleep;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return notebookPageSchema.parse(await api.get(url));
+    } catch (error) {
+      if (attempt >= delays.length || !isTransient(error)) throw error;
+      await sleep(delays[attempt]);
+    }
+  }
+}
+
+/**
+ * Every notebook the account owns on the web, newest created first. A failed first page throws; a page
+ * that fails later ends the list early with what was read, so one bad page late in a large account
+ * does not cost the user every notebook before it.
+ */
+export async function listWebNotebooks(api: WebApi, options: ListOptions = {}): Promise<WebNotebookList> {
   const notebooks = new Map<string, WebNotebook>();
+  const partial = (stopReason: string): WebNotebookList => ({
+    notebooks: [...notebooks.values()],
+    complete: false,
+    stopReason,
+  });
+  let cursor: string | null = null;
+  let skippedRows = 0;
   for (let page = 1; page <= MAX_LIST_PAGES; page++) {
-    const result = pageOf(
-      await api.get(pagedUrl(LIST_PATH, page, LIST_PAGE_SIZE, { 'orderBy[field]': '_id', 'orderBy[direction]': 'asc' }))
-    );
+    const query = new URLSearchParams({ limit: String(LIST_PAGE_SIZE) });
+    if (cursor) query.set('cursor', cursor);
+    let result: z.infer<typeof notebookPageSchema>;
+    try {
+      result = await readListPage(api, `${NOTEBOOK_LIST_PATH}?${query.toString()}`, options);
+    } catch (error) {
+      if (page === 1) throw error;
+      return partial(`stopped after ${notebooks.size} notebooks: ${describeWebError(error)}`);
+    }
     for (const row of result.data) {
       const notebook = readNotebook(row);
-      if (!notebook) throw new Error('Invalid notebook in web sync response');
+      if (!notebook) {
+        skippedRows++;
+        continue;
+      }
       if (!notebooks.has(notebook.id)) notebooks.set(notebook.id, notebook);
     }
-    if (!result.hasMore) return { notebooks: [...notebooks.values()], complete: true };
+    cursor = result.next_cursor;
+    if (!cursor) {
+      // An unreadable row is one notebook we cannot vouch for, so its local copy must not be pruned.
+      return skippedRows > 0
+        ? partial(`${skippedRows} unreadable notebook${skippedRows === 1 ? '' : 's'} in the list`)
+        : { notebooks: [...notebooks.values()], complete: true };
+    }
   }
-  return { notebooks: [...notebooks.values()], complete: false };
+  return partial(`stopped at the ${notebooks.size}-notebook limit`);
 }
 
 /** `truncated` is true when the page cap was hit with more still to read. */
@@ -103,7 +193,25 @@ export async function fetchQuests(api: WebApi, notebookId: string): Promise<{ qu
 export function needsWebImport(notebook: WebNotebook, cursor: WebNotebookCursor | undefined): boolean {
   if (!cursor || cursor.status === 'failed') return true;
   if (cursor.status === 'forked' || cursor.status === 'removed') return false;
-  return cursor.version !== notebook.version;
+  // An empty version means the last read was unsettled or truncated: it never matches.
+  if (!cursor.version || cursor.version.startsWith(WEB_VERSION_PREFIX)) return cursor.version !== notebook.version;
+  return legacyLastUpdated(cursor.version) !== lastUpdatedOf(notebook.version);
+}
+
+/**
+ * Cursors written before the v1 list stored `updatedAt|lastUpdated`, and the v1 list carries no
+ * `updatedAt`. Comparing on `lastUpdated` keeps existing imports from all re-reading at once after
+ * the switch; the old marker already caught any rename that landed before it was written.
+ */
+function legacyLastUpdated(version: string): string {
+  const bar = version.indexOf('|');
+  if (bar < 0) return version;
+  return version.slice(bar + 1) || version.slice(0, bar);
+}
+
+/** The `lastUpdated` half of a current-form version (`v2|<lastUpdated>|<nameTag>`). */
+function lastUpdatedOf(version: string): string {
+  return version.slice(WEB_VERSION_PREFIX.length, version.lastIndexOf('|'));
 }
 
 /** Re-reads the whole notebook and replaces the desktop copy; quest ids keep message ids stable. */

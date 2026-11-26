@@ -24,6 +24,7 @@ import {
   EMPTY_CONVERSATION_REPLY,
   MODEL_UNAVAILABLE_ERROR_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_REPLY,
+  HIDDEN_REASONING_ONLY_EMPTY_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
 } from './ChatCompletionProcess';
 import { outOfCreditsNotice } from './chatCreditCap';
@@ -61,6 +62,7 @@ import {
   createAnthropicStreamTimeoutError,
   OutputBudgetExhaustedError,
   StreamEndedWithoutFinishError,
+  HiddenReasoningOnlyEmptyError,
   bedrockEmptyResponseMessage,
   type ICompletionBackend,
   type ICompletionOptions,
@@ -14532,6 +14534,96 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({ replies: ['Recovered'], status: 'done', type: 'message' })
       );
+    });
+
+    describe('a turn that finished after hidden reasoning only', () => {
+      const hiddenOnly = () => new HiddenReasoningOnlyEmptyError('Bedrock', 'test-model', 'empty after thinking');
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      it('retries once on the same model and succeeds when the second attempt answers', async () => {
+        setupStreamIdleTimeoutMocks();
+        let callCount = 0;
+        const complete = vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              callCount++;
+              if (callCount === 1) throw hiddenOnly();
+              await cb(['Recovered']);
+            }
+          );
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(complete).toHaveBeenCalledTimes(2);
+        expect(complete.mock.calls[1][0]).toBe(complete.mock.calls[0][0]);
+        expect(mockLogger.error).not.toHaveBeenCalledWith(expect.any(HiddenReasoningOnlyEmptyError));
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ replies: ['Recovered'], status: 'done', type: 'message' })
+        );
+      });
+
+      it('moves to the fallback model after the same-model retry fails too', async () => {
+        setupStreamIdleTimeoutMocks();
+        mockQuest.promptMeta.model = { name: modelInfo.id, backend: modelInfo.backend };
+        const primaryComplete = vi.fn().mockRejectedValue(hiddenOnly());
+        const fallbackComplete = vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['From fallback']);
+            }
+          );
+        const fallbackModel = { ...modelInfo, id: 'fallback-model', name: 'Fallback Model' };
+        mockedGetLlmByModel.mockReturnValue({
+          complete: primaryComplete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetLlmWithFallback
+          .mockResolvedValueOnce({
+            model: fallbackModel,
+            backend: {
+              complete: fallbackComplete,
+              getModelInfo: vi.fn().mockResolvedValue([]),
+              currentModel: fallbackModel.id,
+            },
+            attempt: 1,
+          })
+          .mockResolvedValue(null);
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(primaryComplete).toHaveBeenCalledTimes(2);
+        expect(fallbackComplete).toHaveBeenCalledTimes(1);
+        expect(fallbackComplete.mock.calls[0][0]).toBe('fallback-model');
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ replies: ['From fallback'], status: 'done', type: 'message' })
+        );
+      });
+
+      it('settles with the dedicated reply when every attempt returns only hidden reasoning', async () => {
+        setupStreamIdleTimeoutMocks();
+        const complete = vi.fn().mockRejectedValue(hiddenOnly());
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(complete).toHaveBeenCalledTimes(2);
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ reply: HIDDEN_REASONING_ONLY_EMPTY_REPLY, type: 'error', status: 'done' })
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('[Hidden Reasoning Only]'));
+      });
     });
 
     it('should succeed on stream idle timeout retry if second attempt works', async () => {

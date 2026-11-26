@@ -3,6 +3,7 @@ import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
 import type { LibraryApi } from './library';
+import type { ProductionsApi } from './productions';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
 import type { AppWorktree, SessionTreeDeletion, SessionWorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
@@ -191,6 +192,13 @@ export const IPC_CHANNELS = {
   libraryPage: 'library:page',
   libraryMedia: 'library:media',
   libraryLocate: 'library:locate',
+  productionsList: 'productions:list',
+  productionsGet: 'productions:get',
+  productionsRename: 'productions:rename',
+  productionsReorder: 'productions:reorder',
+  productionsRenders: 'productions:renders',
+  productionsRender: 'productions:render',
+  productionsMedia: 'productions:media',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -856,6 +864,7 @@ export interface DesktopApi {
   studio: StudioApi;
   host: HostBridgeApi;
   library: LibraryApi;
+  productions: ProductionsApi;
   getAppInfo(): Promise<AppInfo>;
   /** App-menu items (Cmd+N, Cmd+,) that act on the renderer's views. */
   appMenu: {

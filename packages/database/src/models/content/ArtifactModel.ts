@@ -59,6 +59,13 @@ const ArtifactSchema = new Schema(
       type: String,
       maxlength: 100,
     },
+    // Last allocated version number; unset on artifacts that predate it. Written only by
+    // claimNextVersionNumber/seedVersionCounter; select:false keeps it out of reads.
+    lastVersionNumber: {
+      type: Number,
+      min: 1,
+      select: false,
+    },
     currentVersionId: {
       type: Schema.Types.ObjectId,
       ref: 'ArtifactVersion',
@@ -317,20 +324,51 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
   }
 
   /**
-   * Partial update that matches only while `userId` still owns the artifact or is in
-   * permissions.canWrite, and it is not deleted; null otherwise. `deletedAt: null` is explicit because
-   * Artifact is not a softDeletePlugin model. Must stay in sync with canUserWriteArtifact in
-   * b4m-core/services/src/artifactService/update.ts.
+   * Matches the artifact only while `userId` owns it or is in permissions.canWrite, and it is not deleted
+   * (`deletedAt: null` is explicit because Artifact is not a softDeletePlugin model).
+   * Must stay in sync with canUserWriteArtifact in b4m-core/services/src/artifactService/update.ts.
    */
+  private writeAccessFilter(userId: string, id: string) {
+    return { id, deletedAt: null, $or: [{ userId }, { 'permissions.canWrite': userId }] };
+  }
+
+  /** Partial update under the write-access filter; null when refused. `extraFilter` narrows the match but cannot widen it. */
   async updateWithWriteAccess(
     userId: string,
-    data: Partial<IArtifactDocument> & { id: string }
+    data: Partial<IArtifactDocument> & { id: string },
+    extraFilter?: Record<string, unknown>
   ): Promise<IArtifactDocument | null> {
     const { id, ...updateData } = data;
     return this._plainUpdate<IArtifactDocument>(
-      { id, deletedAt: null, $or: [{ userId }, { 'permissions.canWrite': userId }] },
+      { ...extraFilter, ...this.writeAccessFilter(userId, id) },
       updateData as Record<string, unknown>
     );
+  }
+
+  /** Atomically allocates the next version number under the write-access filter; null when refused or not yet seeded. */
+  async claimNextVersionNumber(userId: string, id: string): Promise<number | null> {
+    const query = this.model
+      .findOneAndUpdate(
+        { ...this.writeAccessFilter(userId, id), lastVersionNumber: { $exists: true } },
+        { $inc: { lastVersionNumber: 1 }, $set: { updatedAt: new Date() } },
+        { new: true, runValidators: true }
+      )
+      .select('+lastVersionNumber');
+    if (this._txn) query.session(this._txn);
+    const doc = await query;
+    // The counter is schema-only, deliberately absent from IArtifactDocument.
+    return (doc as { lastVersionNumber?: number } | null)?.lastVersionNumber ?? null;
+  }
+
+  /** Seeds the counter (seed = highest existing version) under the write-access filter; no-op when set or access is refused. */
+  async seedVersionCounter(userId: string, id: string, seed: number): Promise<void> {
+    const query = this.model.updateOne(
+      { ...this.writeAccessFilter(userId, id), lastVersionNumber: { $exists: false } },
+      { $set: { lastVersionNumber: seed } },
+      { runValidators: true }
+    );
+    if (this._txn) query.session(this._txn);
+    await query;
   }
 
   /** Keep collaborator grants and flags while replacing the scoped owner's access in one write. */

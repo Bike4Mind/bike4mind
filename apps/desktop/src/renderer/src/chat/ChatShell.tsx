@@ -63,7 +63,7 @@ import {
 } from './rail/places';
 import { STUDIO_STARTING, useStudioSession } from './rail/studioSession';
 import { usePlaceShortcuts } from './rail/shortcuts';
-import { StudioMain, StudioSidebar } from './rail/StudioPlace';
+import { StudioMain } from './rail/StudioPlace';
 import { LibraryMain, LibrarySidebar } from './rail/LibraryPlace';
 import type { LibraryFilter } from './library/libraryFeed';
 import { readSidebarWidth } from './sidebarWidth';
@@ -78,6 +78,7 @@ import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
 import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
 import { StudioPane } from './studio/StudioPane';
+import { StudioProductions } from './studio/productions/StudioProductions';
 import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
@@ -1896,27 +1897,8 @@ export function ChatShell({
           })}
         />
 
-        {inStudio ? (
-          !collapsed && (
-            <StudioSidebar
-              width={readSidebarWidth()}
-              area={studioArea}
-              kind={studioKind}
-              controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
-              unavailableReason={studioPlaceReason}
-              onSelectKind={kind => {
-                setScreen('conversation');
-                setStudioArea('create');
-                setStudioKind(kind);
-              }}
-              onSelectArea={area => {
-                setScreen('conversation');
-                setStudioArea(area);
-              }}
-              onToggleCollapsed={() => setCollapsed(current => !current)}
-            />
-          )
-        ) : inLibrary ? (
+        {/* Studio, like web's, carries its own areas and medium rail in the main pane: it has no sidebar. */}
+        {inStudio ? null : inLibrary ? (
           !collapsed && (
             <LibrarySidebar
               width={readSidebarWidth()}
@@ -2018,6 +2000,16 @@ export function ChatShell({
           controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
           ready={!!studioSession.sessionId}
           unavailableReason={studioPlaceReason}
+          productions={<StudioProductions />}
+          library={
+            <LibraryMain
+              filter="all"
+              accountKey={studioAccountKey}
+              api={window.b4m.library}
+              onOpenSession={selectSession}
+              onOpenStudio={() => setStudioArea('create')}
+            />
+          }
         />
       ) : inAgents ? (
         <AgentsPlace groups={board} onOpen={selectSession} onOpenMissionControl={() => setScreen('mission-control')} />

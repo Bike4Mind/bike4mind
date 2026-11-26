@@ -74,7 +74,7 @@ interface CreateArtifactAdapters {
 // payload -- the datastore-generated _id and timestamps, plus the caller-owned
 // id (supplied separately). Cast to the repo's create() param at the call site,
 // since IBaseRepository.create still lists _id as required.
-type CreateInput<T> = Omit<T, '_id' | 'id' | 'createdAt' | 'updatedAt'>;
+export type CreateInput<T> = Omit<T, '_id' | 'id' | 'createdAt' | 'updatedAt'>;
 
 /**
  * Creates a new artifact with content and initial version

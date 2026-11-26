@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { update } from './update';
+import { Logger } from '@bike4mind/observability';
 import { UnauthorizedError } from '@bike4mind/utils';
 
 /**
@@ -34,16 +35,18 @@ describe('artifactService - update (permission/visibility escalation guard)', ()
             ...artifact,
             ...data,
           })),
+          claimNextVersionNumber: vi.fn().mockResolvedValue(2),
+          seedVersionCounter: vi.fn(),
         },
         artifactContents: {
-          createOrUpdate: vi.fn().mockResolvedValue({ _id: 'content-new' }),
+          create: vi.fn().mockResolvedValue({ _id: 'content-new' }),
           delete: vi.fn(),
           findLatestContent: vi.fn().mockResolvedValue(null),
         },
         artifactVersions: {
           findByArtifactId: vi.fn().mockResolvedValue([]),
-          findOne: vi.fn().mockResolvedValue(null),
-          createOrUpdate: vi.fn().mockResolvedValue({ _id: 'version-new' }),
+          create: vi.fn().mockResolvedValue({ _id: 'version-new', isActive: false }),
+          activatePointerVersion: vi.fn(),
           update: vi.fn(),
           delete: vi.fn(),
         },
@@ -73,7 +76,8 @@ describe('artifactService - update (permission/visibility escalation guard)', ()
     await update(sharedWriterId, { id: 'artifact-1', content: 'new body' }, adapters);
     expect(adapters.db.artifacts.updateWithWriteAccess).toHaveBeenLastCalledWith(
       sharedWriterId,
-      expect.objectContaining({ id: 'artifact-1', version: 2, currentVersionId: 'version-new' })
+      expect.objectContaining({ id: 'artifact-1', version: 2, currentVersionId: 'version-new' }),
+      { version: { $lt: 2 } }
     );
   });
 
@@ -84,7 +88,8 @@ describe('artifactService - update (permission/visibility escalation guard)', ()
       expect.objectContaining({
         visibility: 'public',
         permissions: expect.objectContaining({ isPublic: true }),
-      })
+      }),
+      undefined
     );
   });
 });
@@ -93,6 +98,10 @@ describe('artifactService - update (write-time re-check)', () => {
   const writerId = 'writer-id';
   let adapters: any;
   let artifact: any;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   beforeEach(() => {
     artifact = {
@@ -108,20 +117,26 @@ describe('artifactService - update (write-time re-check)', () => {
     adapters = {
       db: {
         artifacts: {
-          findOne: vi.fn().mockResolvedValue(artifact),
+          // first read loads the artifact; later reads see the pointer the gated write set
+          findOne: vi
+            .fn()
+            .mockResolvedValueOnce(artifact)
+            .mockResolvedValue({ ...artifact, currentVersionId: 'version-new', version: 2 }),
           updateWithWriteAccess: vi
             .fn()
             .mockImplementation(async (_u: string, data: any) => ({ ...artifact, ...data })),
+          claimNextVersionNumber: vi.fn().mockResolvedValue(2),
+          seedVersionCounter: vi.fn(),
         },
         artifactContents: {
-          createOrUpdate: vi.fn().mockResolvedValue({ _id: 'content-new' }),
+          create: vi.fn().mockResolvedValue({ _id: 'content-new' }),
           delete: vi.fn(),
           findLatestContent: vi.fn().mockResolvedValue(null),
         },
         artifactVersions: {
           findByArtifactId: vi.fn().mockResolvedValue([]),
-          findOne: vi.fn().mockResolvedValue({ _id: 'version-prev' }),
-          createOrUpdate: vi.fn().mockResolvedValue({ _id: 'version-new' }),
+          create: vi.fn().mockResolvedValue({ _id: 'version-new', isActive: false }),
+          activatePointerVersion: vi.fn(),
           update: vi.fn(),
           delete: vi.fn(),
         },
@@ -131,37 +146,118 @@ describe('artifactService - update (write-time re-check)', () => {
 
   const gate = () => adapters.db.artifacts.updateWithWriteAccess;
 
-  it('writes no version or content row when the gated claim matches nothing', async () => {
-    gate().mockResolvedValueOnce(null);
+  it('writes no version or content row when the claim matches nothing', async () => {
+    adapters.db.artifacts.claimNextVersionNumber.mockResolvedValue(null);
 
     await expect(
       update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters)
     ).rejects.toThrow(UnauthorizedError);
 
-    // The claim carries no metadata: only the id and updatedAt.
-    expect(gate()).toHaveBeenCalledTimes(1);
-    expect(gate()).toHaveBeenCalledWith(writerId, { id: 'artifact-1', updatedAt: expect.any(Date) });
-    expect(adapters.db.artifactContents.createOrUpdate).not.toHaveBeenCalled();
-    expect(adapters.db.artifactVersions.createOrUpdate).not.toHaveBeenCalled();
+    expect(adapters.db.artifacts.seedVersionCounter).toHaveBeenCalledTimes(1);
+    expect(gate()).not.toHaveBeenCalled();
+    expect(adapters.db.artifactContents.create).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.create).not.toHaveBeenCalled();
     expect(adapters.db.artifactVersions.update).not.toHaveBeenCalled();
   });
 
+  it('seeds the counter from the highest existing version, then claims again', async () => {
+    artifact.version = 5;
+    adapters.db.artifacts.claimNextVersionNumber.mockResolvedValueOnce(null).mockResolvedValueOnce(8);
+    adapters.db.artifactVersions.findByArtifactId.mockResolvedValue([{ version: 7 }, { version: 3 }]);
+
+    await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    expect(adapters.db.artifacts.seedVersionCounter).toHaveBeenCalledWith(writerId, 'artifact-1', 7);
+    expect(adapters.db.artifactVersions.create).toHaveBeenCalledWith(expect.objectContaining({ version: 8 }));
+    expect(adapters.db.artifactContents.create).toHaveBeenCalledWith(expect.objectContaining({ version: 8 }));
+  });
+
   it('writes no metadata when creating the content row fails', async () => {
-    adapters.db.artifactContents.createOrUpdate.mockRejectedValueOnce(new Error('write failed'));
+    adapters.db.artifactContents.create.mockRejectedValueOnce(new Error('write failed'));
 
     await expect(
       update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters)
     ).rejects.toThrow('write failed');
 
-    expect(gate()).toHaveBeenCalledTimes(1);
-    expect(gate()).toHaveBeenCalledWith(writerId, { id: 'artifact-1', updatedAt: expect.any(Date) });
+    expect(gate()).not.toHaveBeenCalled();
+  });
+
+  it('inserts the version row inactive, then activates the row the pointer names', async () => {
+    const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    expect(adapters.db.artifactVersions.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: false }));
+    expect(adapters.db.artifactVersions.activatePointerVersion).toHaveBeenCalledWith('artifact-1', {
+      id: 'version-new',
+      version: 2,
+    });
+    expect(result.version?.isActive).toBe(true);
+  });
+
+  it('reconciles again on the new pointer when a higher save moved it meanwhile', async () => {
+    adapters.db.artifacts.findOne.mockReset();
+    adapters.db.artifacts.findOne
+      .mockResolvedValueOnce(artifact)
+      .mockResolvedValueOnce({ ...artifact, currentVersionId: 'version-9', version: 9 })
+      .mockResolvedValue({ ...artifact, currentVersionId: 'version-9', version: 9 });
+
+    const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    const { activatePointerVersion } = adapters.db.artifactVersions;
+    expect(activatePointerVersion).toHaveBeenCalledTimes(2);
+    expect(activatePointerVersion).toHaveBeenLastCalledWith('artifact-1', { id: 'version-9', version: 9 });
+    expect(result.version?.isActive).toBe(false);
+  });
+
+  it('stops reconciling after a bounded number of attempts and still returns', async () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+    let moves = 0;
+    adapters.db.artifacts.findOne.mockReset();
+    adapters.db.artifacts.findOne.mockResolvedValueOnce(artifact).mockImplementation(async () => {
+      moves++;
+      return { ...artifact, currentVersionId: `version-moved-${moves}`, version: moves + 2 };
+    });
+
+    const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    expect(adapters.db.artifactVersions.activatePointerVersion).toHaveBeenCalledTimes(5);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(result.version?.isActive).toBe(false);
+  });
+
+  it('logs, rather than throws, when reconciling fails after the pointer write committed', async () => {
+    const error = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => {});
+    adapters.db.artifactVersions.activatePointerVersion.mockRejectedValueOnce(new Error('reconcile failed'));
+
+    const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(result.version?._id).toBe('version-new');
+    expect(result.version?.isActive).toBe(false);
+    expect(adapters.db.artifactVersions.delete).not.toHaveBeenCalled();
+  });
+
+  it('keeps its row but leaves the pointer alone when a higher version already moved it', async () => {
+    gate().mockResolvedValueOnce(null);
+
+    const result = await update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters);
+
+    expect(result.version?._id).toBe('version-new');
+    expect(result.version?.isActive).toBe(false);
+    expect(adapters.db.artifactVersions.activatePointerVersion).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.update).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.delete).not.toHaveBeenCalled();
+    expect(adapters.db.artifactContents.delete).not.toHaveBeenCalled();
+    expect(gate()).toHaveBeenCalledTimes(2);
+    const retry = gate().mock.calls[1];
+    expect(retry).toHaveLength(2);
+    expect(retry[1]).toEqual({ id: 'artifact-1', updatedAt: expect.any(Date), title: 'Renamed' });
   });
 
   it('writes metadata and the version pointer together in one gated write', async () => {
     await update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters);
 
-    expect(gate()).toHaveBeenCalledTimes(2);
-    expect(gate()).toHaveBeenLastCalledWith(
+    expect(gate()).toHaveBeenCalledTimes(1);
+    expect(gate()).toHaveBeenCalledWith(
       writerId,
       expect.objectContaining({
         id: 'artifact-1',
@@ -170,7 +266,8 @@ describe('artifactService - update (write-time re-check)', () => {
         currentVersionId: 'version-new',
         contentHash: expect.any(String),
         contentSize: expect.any(Number),
-      })
+      }),
+      { version: { $lt: 2 } }
     );
   });
 
@@ -187,7 +284,7 @@ describe('artifactService - update (write-time re-check)', () => {
     await update(writerId, { id: 'artifact-1', createNewVersion: true, changeDescription: 'marker only' }, adapters);
 
     expect(adapters.db.artifactContents.findLatestContent).toHaveBeenCalledWith('artifact-1');
-    expect(adapters.db.artifactContents.createOrUpdate).toHaveBeenCalledWith(
+    expect(adapters.db.artifactContents.create).toHaveBeenCalledWith(
       expect.objectContaining({ content: 'v3 body', contentHash: 'h3' })
     );
   });
@@ -195,7 +292,7 @@ describe('artifactService - update (write-time re-check)', () => {
   it('stamps the version tag on the new version row when content changes', async () => {
     await update(writerId, { id: 'artifact-1', content: 'new body', versionTag: 'v2' }, adapters);
 
-    expect(adapters.db.artifactVersions.createOrUpdate).toHaveBeenCalledWith(
+    expect(adapters.db.artifactVersions.create).toHaveBeenCalledWith(
       expect.objectContaining({ version: 2, versionTag: 'v2' })
     );
   });
@@ -207,7 +304,7 @@ describe('artifactService - update (write-time re-check)', () => {
       adapters
     );
 
-    expect(adapters.db.artifactVersions.createOrUpdate).toHaveBeenCalledWith(
+    expect(adapters.db.artifactVersions.create).toHaveBeenCalledWith(
       expect.objectContaining({ version: 2, versionTag: 'v2' })
     );
   });
@@ -215,13 +312,15 @@ describe('artifactService - update (write-time re-check)', () => {
   it('leaves versionTag off the version row when none is given', async () => {
     await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
 
-    expect(adapters.db.artifactVersions.createOrUpdate.mock.calls[0][0]).not.toHaveProperty('versionTag');
+    expect(adapters.db.artifactVersions.create.mock.calls[0][0]).not.toHaveProperty('versionTag');
   });
 
   it('clears the artifact version tag on a forced version created without one', async () => {
     await update(writerId, { id: 'artifact-1', content: 'new body', createNewVersion: true }, adapters);
 
-    expect(gate()).toHaveBeenCalledWith(writerId, expect.objectContaining({ version: 2, versionTag: null }));
+    expect(gate()).toHaveBeenCalledWith(writerId, expect.objectContaining({ version: 2, versionTag: null }), {
+      version: { $lt: 2 },
+    });
   });
 
   it('keeps the artifact version tag on a plain content edit without one', async () => {
@@ -234,14 +333,16 @@ describe('artifactService - update (write-time re-check)', () => {
     await update(writerId, { id: 'artifact-1', title: 'Renamed' }, adapters);
 
     expect(gate()).toHaveBeenCalledTimes(1);
-    expect(gate()).toHaveBeenCalledWith(writerId, expect.objectContaining({ id: 'artifact-1', title: 'Renamed' }));
-    expect(adapters.db.artifactVersions.createOrUpdate).not.toHaveBeenCalled();
+    expect(gate()).toHaveBeenCalledWith(
+      writerId,
+      expect.objectContaining({ id: 'artifact-1', title: 'Renamed' }),
+      undefined
+    );
+    expect(adapters.db.artifactVersions.create).not.toHaveBeenCalled();
   });
 
-  it('rolls the new rows back and reactivates the previous version when the final write is refused', async () => {
-    gate()
-      .mockImplementationOnce(async (_u: string, data: any) => data)
-      .mockResolvedValueOnce(null);
+  it('deletes only the refused save rows when both final writes are refused', async () => {
+    gate().mockResolvedValue(null);
 
     await expect(
       update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters)
@@ -249,30 +350,12 @@ describe('artifactService - update (write-time re-check)', () => {
 
     expect(adapters.db.artifactVersions.delete).toHaveBeenCalledWith('version-new');
     expect(adapters.db.artifactContents.delete).toHaveBeenCalledWith('content-new');
-    expect(adapters.db.artifactVersions.update).toHaveBeenLastCalledWith({ id: 'version-prev', isActive: true });
-  });
-
-  it('leaves the rows alone when a concurrent saver already points the artifact at them', async () => {
-    gate()
-      .mockImplementationOnce(async (_u: string, data: any) => data)
-      .mockResolvedValueOnce(null);
-    adapters.db.artifacts.findOne
-      .mockResolvedValueOnce(artifact)
-      .mockResolvedValueOnce({ ...artifact, version: 2, currentVersionId: 'version-new' });
-
-    await expect(update(writerId, { id: 'artifact-1', content: 'new body' }, adapters)).rejects.toThrow(
-      UnauthorizedError
-    );
-
-    expect(adapters.db.artifactVersions.delete).not.toHaveBeenCalled();
-    expect(adapters.db.artifactContents.delete).not.toHaveBeenCalled();
-    expect(adapters.db.artifactVersions.update).not.toHaveBeenCalledWith({ id: 'version-prev', isActive: true });
+    expect(adapters.db.artifactVersions.update).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.activatePointerVersion).not.toHaveBeenCalled();
   });
 
   it('still refuses, and runs the remaining steps, when a rollback step throws', async () => {
-    gate()
-      .mockImplementationOnce(async (_u: string, data: any) => data)
-      .mockResolvedValueOnce(null);
+    gate().mockResolvedValue(null);
     adapters.db.artifactVersions.delete.mockRejectedValueOnce(new Error('delete failed'));
 
     await expect(update(writerId, { id: 'artifact-1', content: 'new body' }, adapters)).rejects.toThrow(
@@ -280,6 +363,5 @@ describe('artifactService - update (write-time re-check)', () => {
     );
 
     expect(adapters.db.artifactContents.delete).toHaveBeenCalledWith('content-new');
-    expect(adapters.db.artifactVersions.update).toHaveBeenLastCalledWith({ id: 'version-prev', isActive: true });
   });
 });

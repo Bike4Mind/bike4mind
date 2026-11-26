@@ -14,6 +14,7 @@ import { HelpPanel, HelpSuggestionBanner } from '../../help';
 import DataLakeUploadIndicator from '../../DataLakeWizard/DataLakeUploadIndicator';
 import GearsDiscovery from '@client/app/components/gears/GearsDiscoveryModal';
 import { CoreTutorialHost } from '@client/app/components/tutorial/core/CoreTutorialHost';
+import PreviewSleepBanner from '@client/app/components/PreviewSleepBanner';
 import { useHelpKeyboardShortcut } from '@client/app/hooks/useHelpKeyboardShortcut';
 import { useCommandPaletteShortcut } from '@client/app/hooks/useCommandPaletteShortcut';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -199,6 +200,7 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
       <DataLakeUploadIndicator />
       <GearsDiscovery />
       <CoreTutorialHost />
+      <PreviewSleepBanner placement="floating" />
     </Grid>
   );
 };

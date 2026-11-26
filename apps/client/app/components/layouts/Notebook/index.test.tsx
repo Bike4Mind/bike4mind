@@ -14,6 +14,7 @@ vi.mock('../../Knowledge/KnowledgeModal', () => ({ default: () => null }));
 vi.mock('../../help', () => ({ HelpPanel: () => null, HelpSuggestionBanner: () => null }));
 vi.mock('../../DataLakeWizard/DataLakeUploadIndicator', () => ({ default: () => null }));
 vi.mock('@client/app/components/gears/GearsDiscoveryModal', () => ({ default: () => null }));
+vi.mock('@client/app/components/PreviewSleepBanner', () => ({ default: () => null }));
 vi.mock('../../Session/CollapseButton', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useHelpKeyboardShortcut', () => ({ useHelpKeyboardShortcut: () => undefined }));
 vi.mock('@client/app/hooks/useCommandPaletteShortcut', () => ({ useCommandPaletteShortcut: () => undefined }));
