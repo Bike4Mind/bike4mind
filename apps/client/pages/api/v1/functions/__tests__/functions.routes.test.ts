@@ -456,11 +456,15 @@ describe('not found', () => {
     await invoke('not-an-id', { input: { load: 1, span: 2 } });
     expect(h.calls).toHaveLength(3);
     for (const row of h.calls) {
-      expect(row).toMatchObject({ callerUserId: 'u1', surface: 'rest', outcome: 'refused', reason: 'not_found' });
+      expect(row).toMatchObject({ callerUserId: 'u1', surface: 'rest', apiKeyId: 'k1', outcome: 'refused' });
       expect(row).not.toHaveProperty('inputs');
       expect(row).not.toHaveProperty('outputs');
     }
-    expect(h.calls.map(row => row.functionId)).toEqual([OTHERS_ID, DRAFT_ID, 'not-an-id']);
+    expect(h.calls.map(row => [row.functionId, row.reason, row.ownerUserId])).toEqual([
+      ['unknown', 'not_found', undefined],
+      [DRAFT_ID, 'not_live', 'u1'],
+      ['unknown', 'not_found', undefined],
+    ]);
   });
 
   it('writes no row for a read of a function the caller cannot see', async () => {
