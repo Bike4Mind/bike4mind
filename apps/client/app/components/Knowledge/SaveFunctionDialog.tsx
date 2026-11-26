@@ -199,7 +199,8 @@ const SaveFunctionDialog: React.FC<SaveFunctionDialogProps> = ({ open, onClose, 
               </Table>
             </Box>
             <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-              Only you can call it, and it runs in your browser. Nothing runs on the server.
+              Only you can call it, and your browser runs it here. Server tests, promotion, and every call to a promoted
+              tool from the API, chat, or an agent run it on the server.
             </Typography>
             {saved && (
               <Alert color="success" variant="soft" data-testid="save-function-dialog-saved">

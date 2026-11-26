@@ -59,11 +59,6 @@ export interface CallableFunctionPinInput {
   contract: unknown;
 }
 
-export interface CallableFunctionRepinInput extends CallableFunctionPinInput {
-  /** Confirms an update that breaks the promoted contract; ignored before the first promotion. */
-  acceptBreaking?: boolean;
-}
-
 const userOwner = (actor: CallableFunctionActor): CallableFunctionOwner => ({ ownerType: 'user', ownerKey: actor.id });
 
 const notFound = () => new NotFoundError('Tool not found');
@@ -223,7 +218,7 @@ export async function getCallableFunction(actor: CallableFunctionActor, id: stri
 export async function repinCallableFunction(
   actor: CallableFunctionActor,
   id: string,
-  input: CallableFunctionRepinInput
+  input: CallableFunctionPinInput
 ): Promise<ICallableFunctionPublic> {
   const owner = userOwner(actor);
   const current = await callableFunctionRepository.findByIdForOwner(id, owner);
@@ -240,14 +235,11 @@ export async function repinCallableFunction(
       { code: 'name_changed' }
     );
   }
-  // Once promoted, callers rely on the promoted contract. Breaking it is allowed only when confirmed, since the
-  // tool returns to draft and promotion will refuse this version.
-  if (!current.promoted || !input.acceptBreaking) {
-    const diff = diffFunctionContracts(current.promoted?.contract ?? current.contract, contract);
-    if (!diff) throw new CallableFunctionContractUnreadableError();
-    if (diff.breaking.length > 0) {
-      throw new CallableFunctionBreakingChangeError(diff.breaking, current.promoted?.seq);
-    }
+  // Promotion refuses a contract that breaks the promoted one, so such a pin could never be promoted again.
+  const diff = diffFunctionContracts(current.promoted?.contract ?? current.contract, contract);
+  if (!diff) throw new CallableFunctionContractUnreadableError();
+  if (diff.breaking.length > 0) {
+    throw new CallableFunctionBreakingChangeError(diff.breaking, current.promoted?.seq);
   }
   const repinned = await callableFunctionRepository.repin(id, owner, current.pin.version, {
     pin,

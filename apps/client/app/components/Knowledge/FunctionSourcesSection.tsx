@@ -26,7 +26,7 @@ export default function FunctionSourcesSection({ tool }: { tool: ICallableFuncti
     url: sourceUrl,
     mode: sourceMode,
   }));
-  const full = tool.dataPins.length + sources.length >= CALLABLE_FUNCTION_DATA_LIMITS.maxPins;
+  const full = sources.length >= CALLABLE_FUNCTION_DATA_LIMITS.maxSources;
   const onError = (error: unknown) => toast.error(callableFunctionErrorMessage(error, 'Could not change the sources.'));
 
   return (

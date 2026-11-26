@@ -1088,19 +1088,6 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
           changes={refused.changes}
           unreadable={refused.unreadable}
           promotedSeq={refused.promotedSeq}
-          accepting={repin.isPending}
-          onAccept={() =>
-            repin.mutate(
-              { id: saved.id, expectedVersion: refused.version, contract, acceptBreaking: true },
-              {
-                onSuccess: () => {
-                  setRefused(null);
-                  setFocusWhen('repinned');
-                },
-                onError: failureToast('Could not update the tool.'),
-              }
-            )
-          }
         />
       )}
     </>

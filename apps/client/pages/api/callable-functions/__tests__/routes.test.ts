@@ -425,4 +425,10 @@ describe('forwarding to the registry', () => {
       changes,
     });
   });
+
+  it('refuses a repin body that asks to accept a breaking change', async () => {
+    const res = await fire({ ...PIN, body: { ...PIN_BODY, acceptBreaking: true } });
+    expect(res._getStatusCode()).toBe(400);
+    expect(h.registry.repinCallableFunction).not.toHaveBeenCalled();
+  });
 });

@@ -178,6 +178,22 @@ describe('pinCallableFunctionData', () => {
     expect(storage.uploadStream).not.toHaveBeenCalled();
   });
 
+  it('pins a file beside ten sources, which have their own count', async () => {
+    (h.fn as { sources?: unknown[] }).sources = Array.from({ length: 10 }, (_, i) => ({
+      name: `s${i}.csv`,
+      url: `https://data.example.com/s${i}.csv`,
+      mode: 'live',
+    }));
+    const { storage } = memoryStorage();
+    const result = await pinCallableFunctionData(
+      OWNER,
+      FN_ID,
+      { fileId: 'file1', name: 'points.csv' },
+      { storage, limits: LIMITS }
+    );
+    expect(result.dataPins).toEqual([expect.objectContaining({ name: 'points.csv' })]);
+  });
+
   it('refuses a file over the per-file limit, by its recorded size before reading it', async () => {
     h.access.mockResolvedValue({
       id: 'file1',

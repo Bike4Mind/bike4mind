@@ -26,10 +26,8 @@ interface BreakingChangeDialogProps {
   changes: FunctionContractChange[];
   /** The saved contract no longer parses, so the two could not be compared and `changes` is empty. */
   unreadable?: boolean;
-  /** Set when the changes break the promoted contract: the update can then be confirmed, returning it to draft. */
+  /** Set when the changes break the contract the tool was promoted with. */
   promotedSeq?: number | null;
-  onAccept?: () => void;
-  accepting?: boolean;
 }
 
 const ChangeLine = ({ change }: { change: FunctionContractChange }) => {
@@ -43,7 +41,7 @@ const ChangeLine = ({ change }: { change: FunctionContractChange }) => {
 
 /**
  * Explains a refused Update: what in the new contract could break the tool's callers, and how to keep the tool and
- * save the new version beside it. Only a promoted tool's update can be confirmed anyway.
+ * save the new version beside it.
  */
 const BreakingChangeDialog: React.FC<BreakingChangeDialogProps> = ({
   onClose,
@@ -53,8 +51,6 @@ const BreakingChangeDialog: React.FC<BreakingChangeDialogProps> = ({
   changes,
   unreadable = false,
   promotedSeq = null,
-  onAccept,
-  accepting = false,
 }) => (
   <Modal open onClose={onClose}>
     <ModalDialog size="lg" data-testid="breaking-change-dialog" sx={{ width: '90%', maxWidth: 600 }}>
@@ -71,8 +67,8 @@ const BreakingChangeDialog: React.FC<BreakingChangeDialogProps> = ({
               {promotedSeq !== null ? (
                 <Typography level="body-sm" data-testid="breaking-change-dialog-promoted">
                   Version {version} changes the contract of <code>{slug}</code> since promotion {promotedSeq} in ways
-                  that could break its callers. Updating anyway returns the tool to a draft, and promotion will refuse
-                  this version.
+                  that could break its callers. A promoted tool cannot be moved to a version promotion would refuse, so
+                  the tool stays pinned to version {pinnedVersion}.
                 </Typography>
               ) : (
                 <Typography level="body-sm">
@@ -101,17 +97,6 @@ const BreakingChangeDialog: React.FC<BreakingChangeDialogProps> = ({
         <Button variant="solid" color="primary" onClick={onClose} data-testid="breaking-change-dialog-close-btn">
           Close
         </Button>
-        {promotedSeq !== null && !unreadable && onAccept && (
-          <Button
-            variant="plain"
-            color="danger"
-            loading={accepting}
-            onClick={onAccept}
-            data-testid="breaking-change-dialog-accept-btn"
-          >
-            Update anyway
-          </Button>
-        )}
       </DialogActions>
     </ModalDialog>
   </Modal>

@@ -186,9 +186,9 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
       validate: {
         validator: (sources?: { name: string }[]) =>
           !sources ||
-          (sources.length <= CALLABLE_FUNCTION_DATA_LIMITS.maxPins &&
+          (sources.length <= CALLABLE_FUNCTION_DATA_LIMITS.maxSources &&
             new Set(sources.map(source => source.name)).size === sources.length),
-        message: `At most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} sources, each under its own name`,
+        message: `At most ${CALLABLE_FUNCTION_DATA_LIMITS.maxSources} sources, each under its own name`,
       },
     },
     trustLabel: { type: String, enum: CALLABLE_FUNCTION_TRUST_LABELS },

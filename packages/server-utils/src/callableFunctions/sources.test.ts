@@ -109,18 +109,24 @@ describe('setCallableFunctionSources', () => {
     expect(h.setSources).not.toHaveBeenCalled();
   });
 
-  it('refuses a name a data file holds, a plain http URL, and more than the data files leave room for', async () => {
+  it('refuses a name a data file holds, a plain http URL, and more sources than the source limit', async () => {
     await expect(setCallableFunctionSources(OWNER, FN_ID, [live('taken.csv')], deps)).rejects.toMatchObject({
       additionalInfo: { code: 'data_name_taken' },
     });
     await expect(
       setCallableFunctionSources(OWNER, FN_ID, [live('r.csv', 'http://data.example.com/r.csv')], deps)
     ).rejects.toMatchObject({ additionalInfo: { code: 'source_url_invalid' } });
-    const ten = Array.from({ length: 10 }, (_, i) => live(`s${i}.csv`));
-    await expect(setCallableFunctionSources(OWNER, FN_ID, ten, deps)).rejects.toMatchObject({
-      additionalInfo: { code: 'data_pin_limit' },
+    const eleven = Array.from({ length: 11 }, (_, i) => live(`s${i}.csv`));
+    await expect(setCallableFunctionSources(OWNER, FN_ID, eleven, deps)).rejects.toMatchObject({
+      additionalInfo: { code: 'source_limit', limit: 10 },
     });
     expect(h.setSources).not.toHaveBeenCalled();
+  });
+
+  it('gives the sources their own count: ten sources fit beside a data file', async () => {
+    const ten = Array.from({ length: 10 }, (_, i) => live(`s${i}.csv`));
+    await setCallableFunctionSources(OWNER, FN_ID, ten, deps);
+    expect(h.setSources).toHaveBeenCalledTimes(1);
   });
 
   it('counts each source at the most one fetch can return against the total, with the data files', async () => {

@@ -25,7 +25,15 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   useStopSharingCallableFunction: () => h.stopSharing,
 }));
 vi.mock('../ShareFunctionDialog', () => ({
-  default: ({ tool }: { tool: { slug: string } }) => <div data-testid="python-function-share-dialog">{tool.slug}</div>,
+  default: ({ tool, dataPins, sources }: { tool: { slug: string }; dataPins: string[]; sources: string[] }) => (
+    <div
+      data-testid="python-function-share-dialog"
+      data-data-pins={dataPins.join(',')}
+      data-sources={sources.join(',')}
+    >
+      {tool.slug}
+    </div>
+  ),
 }));
 
 import PromoteFunctionSection from '../PromoteFunctionSection';
@@ -121,6 +129,21 @@ describe('sharing', () => {
     expect(screen.queryByTestId('python-function-share-stop-btn')).toBeNull();
     fireEvent.click(screen.getByTestId('python-function-share-btn'));
     expect(screen.getByTestId('python-function-share-dialog').textContent).toBe(CONTRACT.name);
+  });
+
+  it('hands the share dialog the names of the data files and the live and pinned sources', () => {
+    renderSection({
+      ...live('verified'),
+      dataPins: [{ name: 'factors.csv', sha256: 'b'.repeat(64), bytes: 46, pinnedAt: new Date() }],
+      sources: [
+        { name: 'rates.csv', url: 'https://data.example.com/rates.csv', mode: 'live' },
+        { name: 'base.csv', url: 'https://data.example.com/base.csv', mode: 'pinned' },
+      ],
+    });
+    fireEvent.click(screen.getByTestId('python-function-share-btn'));
+    const dialog = screen.getByTestId('python-function-share-dialog');
+    expect(dialog.getAttribute('data-data-pins')).toBe('factors.csv');
+    expect(dialog.getAttribute('data-sources')).toBe('rates.csv,base.csv');
   });
 
   it('a shared tool says with whom and stops sharing', () => {

@@ -25,13 +25,7 @@ export const callableFunctionCreateBodySchema = z
   .object({ artifactId: z.string().trim().min(1).max(200), ...pinFields })
   .strict();
 
-export const callableFunctionPinBodySchema = z
-  .object({
-    ...pinFields,
-    /** Update a promoted tool even though the new contract breaks its promoted one; it returns to draft. */
-    acceptBreaking: z.literal(true).optional(),
-  })
-  .strict();
+export const callableFunctionPinBodySchema = z.object(pinFields).strict();
 
 /** One setting per request: turn the tool on or off, or set when chat asks before a call. */
 export const callableFunctionPatchBodySchema = z.union([
@@ -44,7 +38,7 @@ export const callableFunctionDataPinBodySchema = z
   .object({ fileId: z.string().trim().min(1).max(200), name: z.string().min(1).max(64) })
   .strict();
 
-/** Shape only: the registry checks names, the count beside the data files, and each URL's origin. */
+/** Shape only: the registry checks names, and each URL's origin. */
 export const callableFunctionSourcesBodySchema = z
   .object({
     sources: z
@@ -57,7 +51,7 @@ export const callableFunctionSourcesBodySchema = z
           })
           .strict()
       )
-      .max(CALLABLE_FUNCTION_DATA_LIMITS.maxPins),
+      .max(CALLABLE_FUNCTION_DATA_LIMITS.maxSources),
   })
   .strict();
 

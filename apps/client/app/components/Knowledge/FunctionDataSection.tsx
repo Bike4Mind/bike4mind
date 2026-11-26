@@ -18,7 +18,7 @@ export default function FunctionDataSection({ tool }: { tool: ICallableFunctionP
   const unpin = useUnpinCallableFunctionData();
   const [fileId, setFileId] = useState('');
   const [name, setName] = useState('');
-  const used = tool.dataPins.length + (tool.sources?.length ?? 0);
+  const used = tool.dataPins.length;
   const full = used >= CALLABLE_FUNCTION_DATA_LIMITS.maxPins;
   const onError = (error: unknown) =>
     toast.error(callableFunctionErrorMessage(error, 'Could not change the data files.'));
@@ -28,7 +28,7 @@ export default function FunctionDataSection({ tool }: { tool: ICallableFunctionP
       <Typography level="title-sm">Data files</Typography>
       <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
         Copied when pinned, so later changes to the file do not reach the tool. Changing them returns the tool to draft.{' '}
-        {used} of {CALLABLE_FUNCTION_DATA_LIMITS.maxPins} with the sources.
+        {used} of {CALLABLE_FUNCTION_DATA_LIMITS.maxPins} used.
       </Typography>
       {tool.dataPins.map(entry => (
         <Stack key={entry.name} direction="row" spacing={1} alignItems="center" data-testid="python-function-data-pin">

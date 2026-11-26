@@ -237,11 +237,16 @@ describe('CALLABLE_FUNCTION_DATA_CACHE_BYTES', () => {
 });
 
 describe('validRunData', () => {
-  it('accepts the dispatcher shape and refuses an unsafe name, a repeated name, an extra key, or an eleventh file', () => {
+  it('accepts the dispatcher shape and refuses an unsafe name, a repeated name, or an extra key', () => {
     expect(validRunData([entry()])).toBe(true);
     expect(validRunData([entry({ name: '../etc/passwd' })])).toBe(false);
     expect(validRunData([entry(), entry()])).toBe(false);
     expect(validRunData([{ ...entry(), bytesBase64: 'eA==' }])).toBe(false);
-    expect(validRunData(Array.from({ length: 11 }, (_, i) => entry({ name: `f${i}.csv` })))).toBe(false);
+  });
+
+  it('holds ten data files and ten sources together, and refuses one more', () => {
+    const files = (count: number) => Array.from({ length: count }, (_, i) => entry({ name: `f${i}.csv` }));
+    expect(validRunData(files(20))).toBe(true);
+    expect(validRunData(files(21))).toBe(false);
   });
 });

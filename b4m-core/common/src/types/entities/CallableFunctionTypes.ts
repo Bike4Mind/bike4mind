@@ -169,7 +169,7 @@ export type CallableFunctionSourceMode = (typeof CALLABLE_FUNCTION_SOURCE_MODES)
 
 /**
  * A URL on a listed data origin, read at `/data/<name>`: `live` is fetched on every call, `pinned` once at promotion
- * (and on every call before the first). Names share the data pins' pattern, namespace, and count.
+ * (and on every call before the first). Names share the data pins' pattern and namespace, not their count.
  */
 export interface ICallableFunctionSource {
   name: string;
@@ -200,7 +200,9 @@ export interface ICallableFunctionDataPin {
 export const CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export const CALLABLE_FUNCTION_DATA_LIMITS = {
+  /** Data files per function; sources have their own count in `maxSources`, and both share one name space. */
   maxPins: 10,
+  maxSources: 10,
   /** Defaults of the `CallableFunctionDataFileMaxMb` and `CallableFunctionDataTotalMaxMb` settings. */
   defaultFileMb: 100,
   defaultTotalMb: 1024,
@@ -411,7 +413,7 @@ export function toCallableFunctionShared(
         }
       : null,
     dataPins: (doc.pin.dataPins ?? []).map(({ name }) => name),
-    sources: [],
+    sources: (doc.sources ?? []).map(({ name }) => name),
     pin: {
       version: doc.pin.version,
       pinnedAt: doc.pin.pinnedAt,
