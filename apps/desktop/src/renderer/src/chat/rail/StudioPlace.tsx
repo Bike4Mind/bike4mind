@@ -96,7 +96,7 @@ function MediumRail({
         px: 2,
         py: '10px',
         overflowX: 'auto',
-        scrollbarWidth: 'none',
+        ...thinScrollbarSx,
         flexShrink: 0,
         borderBottom: `1px solid ${studioColor('hairline')}`,
         [WIDE]: {
