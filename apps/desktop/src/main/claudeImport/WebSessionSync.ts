@@ -120,7 +120,9 @@ export interface WebNotebookList {
   stopReason?: string;
   /**
    * The latest `updatedAt` in a complete list: the mark the next change listing starts from. Null
-   * when the list is partial or the server sends no `updatedAt` (it has no change feed either).
+   * when the list is partial or no row has an `updatedAt` (the server has no change feed either).
+   * Rows without one are skipped: a session not written since the field existed cannot match
+   * `updated_since`, and its next write gives it one, so the feed sees it then.
    */
   latestChange: string | null;
 }
@@ -179,7 +181,6 @@ export async function listWebNotebooks(api: WebApi, options: ListOptions = {}): 
   let cursor: string | null = null;
   let skippedRows = 0;
   let latestChange: string | null = null;
-  let stampsMissing = false;
   for (let page = 1; page <= MAX_LIST_PAGES; page++) {
     const query = new URLSearchParams({ limit: String(LIST_PAGE_SIZE) });
     if (cursor) query.set('cursor', cursor);
@@ -192,8 +193,7 @@ export async function listWebNotebooks(api: WebApi, options: ListOptions = {}): 
     }
     for (const row of result.data) {
       const stamp = readChangeStamp(row);
-      if (!stamp) stampsMissing = true;
-      else if (!latestChange || stamp.changedAt > latestChange) latestChange = stamp.changedAt;
+      if (stamp && (!latestChange || stamp.changedAt > latestChange)) latestChange = stamp.changedAt;
       const notebook = readNotebook(row);
       if (!notebook) {
         skippedRows++;
@@ -206,7 +206,7 @@ export async function listWebNotebooks(api: WebApi, options: ListOptions = {}): 
       // An unreadable row is one notebook we cannot vouch for, so its local copy must not be pruned.
       return skippedRows > 0
         ? partial(`${skippedRows} unreadable notebook${skippedRows === 1 ? '' : 's'} in the list`)
-        : { notebooks: [...notebooks.values()], complete: true, latestChange: stampsMissing ? null : latestChange };
+        : { notebooks: [...notebooks.values()], complete: true, latestChange };
     }
   }
   return partial(`stopped at the ${notebooks.size}-notebook limit`);

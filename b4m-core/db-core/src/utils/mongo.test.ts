@@ -335,9 +335,9 @@ describe('MongoDB Utility Functions', () => {
     });
 
     describe('updatedAt on a timestamped schema', () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- calling statics as plain fns to inject fake `this`
+      // Calls the static as a plain function to inject a fake `this`.
       const callStatic = (target: mongoose.Schema, name: 'deleteOne' | 'deleteMany') =>
-        (target.statics[name] as any).call(fakeThis, { userId: 'u' });
+        (target.statics[name] as (this: unknown, filter: object) => Promise<unknown>).call(fakeThis, { userId: 'u' });
 
       it('deleteOne and deleteMany set updatedAt alongside deletedAt', async () => {
         const timestamped = new mongoose.Schema({}, { timestamps: true });

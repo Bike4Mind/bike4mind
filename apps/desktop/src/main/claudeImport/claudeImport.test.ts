@@ -1517,6 +1517,25 @@ describe('web session sync', () => {
       ...extra,
     });
 
+    describe('listWebNotebooks change mark', () => {
+      it('takes the latest stamp over the rows that have one, skipping sessions older than the field', async () => {
+        const get = vi.fn(async () =>
+          listPage([
+            row('nb1', '2026-03-01T00:01:00.000Z'),
+            { id: 'nb2', name: 'nb2', lastUpdated: '2026-03-01T00:05:00.000Z' },
+          ])
+        );
+        const list = await listWebNotebooks({ get } as unknown as WebApi);
+        expect(list.complete).toBe(true);
+        expect(list.latestChange).toBe('2026-03-01T00:01:00.000Z');
+      });
+
+      it('has no mark when no row carries a stamp', async () => {
+        const get = vi.fn(async () => listPage([{ id: 'nb1', name: 'nb1', lastUpdated: MARK }]));
+        expect((await listWebNotebooks({ get } as unknown as WebApi)).latestChange).toBeNull();
+      });
+    });
+
     describe('listWebNotebookChanges', () => {
       it('asks for changes since the mark minus the overlap, and splits live rows from tombstones', async () => {
         const get = vi.fn(async () =>
@@ -1609,6 +1628,28 @@ describe('web session sync', () => {
         new Date(Date.parse('2026-03-02T00:00:00.000Z') - CHANGE_OVERLAP_MS).toISOString()
       );
       expect((await service.state()).web.counts.imported).toBe(2);
+    });
+
+    it('keeps the mark when a run is cut short by an account switch', async () => {
+      const { web, service, signIn } = await synced();
+      web.notebooks.nb1.updatedAt = '2026-03-03T00:00:00.000Z';
+      web.notebooks.nb1.quests.push({ id: 'q3', prompt: 'E', reply: 'F' });
+      web.notebooks.nb2.updatedAt = '2026-03-05T00:00:00.000Z';
+      web.notebooks.nb2.quests.push({ id: 'q4', prompt: 'G', reply: 'H' });
+      const inner = web.get.getMockImplementation()!;
+      web.get.mockImplementation(async url => {
+        if (url.includes('/api/sessions/nb1/chat')) signIn(null);
+        return inner(url);
+      });
+      await service.syncWeb();
+      web.get.mockImplementation(inner);
+      web.get.mockClear();
+      signIn(ACCOUNT_A);
+      await service.syncWeb();
+      const feed = listUrls(web).find(url => url.searchParams.has('updated_since'));
+      expect(feed?.searchParams.get('updated_since')).toBe(
+        new Date(Date.parse('2026-03-02T00:00:00.000Z') - CHANGE_OVERLAP_MS).toISOString()
+      );
     });
 
     it('brings a rename and new messages in through the feed, and moves the mark past them', async () => {
