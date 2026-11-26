@@ -353,13 +353,28 @@ export function shadowDetectionPrecision(row: ShadowDetectionSummaryRow): number
   return conclusive === 0 ? null : row.confirmedAbuse / conclusive;
 }
 
+export type ShadowDetectionBar = { readonly minConclusive: number; readonly minPrecision: number };
+
 /**
  * The bar a detector version should clear before an admin moves autoContainmentConfig.mode from shadow
  * to enforce: enough conclusive verdicts to trust the ratio, and precision at or above the floor. It
  * is guidance shown on the Detections page; nothing enforces it, and the mode is one setting for every
  * detector.
  */
-export const SHADOW_DETECTION_ENFORCE_BAR = { minConclusive: 50, minPrecision: 0.95 } as const;
+export const SHADOW_DETECTION_ENFORCE_BAR = {
+  minConclusive: 50,
+  minPrecision: 0.95,
+} as const satisfies ShadowDetectionBar;
+
+/**
+ * The lower bar for moving a reversible tier (autoContainmentConfig.tiers: Limit, Hold signup grant and
+ * the rest) from shadow to enforce. Those tiers expire on their own and an admin can release them, so a
+ * false positive costs less than a full Contain. Guidance only, like SHADOW_DETECTION_ENFORCE_BAR.
+ */
+export const REVERSIBLE_TIER_ENFORCE_BAR = {
+  minConclusive: 20,
+  minPrecision: 0.9,
+} as const satisfies ShadowDetectionBar;
 
 export type ShadowDetectionReadiness = {
   /** collecting: too few conclusive verdicts yet; below_bar / ready: enough, judged by precision. */
@@ -368,14 +383,17 @@ export type ShadowDetectionReadiness = {
   precision: number | null;
 };
 
-export function shadowDetectionReadiness(row: ShadowDetectionSummaryRow): ShadowDetectionReadiness {
+export function shadowDetectionReadiness(
+  row: ShadowDetectionSummaryRow,
+  bar: ShadowDetectionBar = SHADOW_DETECTION_ENFORCE_BAR
+): ShadowDetectionReadiness {
   const conclusive = row.confirmedAbuse + row.legitimateHuman + row.legitimateAutomation;
   const precision = shadowDetectionPrecision(row);
-  if (conclusive < SHADOW_DETECTION_ENFORCE_BAR.minConclusive || precision === null) {
+  if (conclusive < bar.minConclusive || precision === null) {
     return { status: 'collecting', conclusive, precision };
   }
   return {
-    status: precision >= SHADOW_DETECTION_ENFORCE_BAR.minPrecision ? 'ready' : 'below_bar',
+    status: precision >= bar.minPrecision ? 'ready' : 'below_bar',
     conclusive,
     precision,
   };

@@ -91,7 +91,13 @@ import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel
 import { InterventionDecisionsPanel } from './InterventionHolds';
 import { WatchAccountsButton } from './CampaignWatches/WatchAccountsButton';
 import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
-import { DetectionsIntro, EnforceBarTile, TermHelp, VERDICT_GUIDES } from './shadowDetectionExplainer';
+import {
+  DetectionsIntro,
+  EnforceBarTile,
+  ReversibleTierBarTile,
+  TermHelp,
+  VERDICT_GUIDES,
+} from './shadowDetectionExplainer';
 import { VerdictEvalPanel } from './VerdictEvalPanel';
 import { DETECTOR_LABELS } from './shadowDetectorLabels';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -666,6 +672,7 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
           comparison={`${row.legitimateHuman.toLocaleString()} human, ${row.legitimateAutomation.toLocaleString()} automation`}
         />
         <EnforceBarTile row={row} testId={testId} />
+        <ReversibleTierBarTile row={row} testId={testId} />
       </StatStrip>
     </Stack>
   );
