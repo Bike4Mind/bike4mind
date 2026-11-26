@@ -14,6 +14,7 @@ import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/c
 import {
   ChatModels,
   BadRequestError,
+  EmptyConversationError,
   createThinkMarkerEscaper,
   IMessage,
   MessageContentText,
@@ -1282,7 +1283,7 @@ export class AnthropicBackend implements ICompletionBackend {
     }
 
     if (!filteredMessages.some(message => message.role === 'user' || message.role === 'assistant')) {
-      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
+      throw new EmptyConversationError();
     }
 
     // Resolved here rather than at the thinking block below, because max_tokens needs it:

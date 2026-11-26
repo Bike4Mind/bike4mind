@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
 import type { ICompletionOptions, ICompletionResponseChunk, IMessage, ModelInfo } from '@bike4mind/common';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, EmptyConversationError } from '@bike4mind/common';
 import { ChoiceEndReason, ChoiceStatus, type ICompletionOptionTools } from '../backend';
 
 /**
@@ -188,5 +188,34 @@ describe('BaseBedrockBackend error log redaction', () => {
     ).rejects.toThrow();
 
     expect(errorSpy.mock.calls[0][0]).toBe(`[BaseBedrockBackend] Error invoking model test-model: ${expectedReason}`);
+  });
+
+  // The prod shape: the first round is valid, and a tool-use continuation inside it rebuilds a
+  // payload with nothing readable left. That throw lands in the outer round's catch.
+  it('logs an empty conversation from a nested turn at warn, not error', async () => {
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    const backend = new TestBedrockBackend();
+    let payloadCalls = 0;
+    vi.spyOn(backend, 'getPayload').mockImplementation(() => {
+      if (payloadCalls++ > 0) throw new EmptyConversationError();
+      return { modelId: 'test', contentType: 'application/json', accept: 'application/json', body: BODY };
+    });
+    (backend as unknown as { _bedrockRuntime: { send: () => Promise<unknown> } })._bedrockRuntime = {
+      send: async () => ({ body: new TextEncoder().encode(JSON.stringify(toolCallChunk())) }),
+    };
+
+    await expect(
+      backend.complete(
+        'test-model' as ChatModels,
+        [{ role: 'user', content: SECRET_PROMPT }],
+        { stream: false, tools: [searchTool], executeTools: true } as Partial<ICompletionOptions>,
+        async () => {}
+      )
+    ).rejects.toBeInstanceOf(EmptyConversationError);
+
+    expect(payloadCalls).toBe(2);
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith('[BaseBedrockBackend] Refused an empty conversation for test-model');
   });
 });
