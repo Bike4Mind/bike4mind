@@ -272,6 +272,35 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(session.origin).not.toHaveProperty('apiKeyId');
   });
 
+  describe('viewer redaction of the returned quest', () => {
+    const questWithOwnerOnlyFields = {
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      type: 'message',
+      pendingAction: { tool: 'send_email', params: { to: 'x' }, ts: 1 },
+      promptMeta: { functionCalls: [{ name: 'search', parameters: {}, returnValue: 'tool output' }] },
+    };
+
+    it.each([
+      { who: 'a non-owner', sessionUserId: 'someone-else', expectOwnerFields: false },
+      { who: 'the owner', sessionUserId: 'user-1', expectOwnerFields: true },
+    ])('returns owner-only fields only to the owner ($who)', async ({ sessionUserId, expectOwnerFields }) => {
+      mockGetOrCreateSession.mockResolvedValue({
+        sessionId: 'sess-1',
+        asyncPromises: [],
+        session: { id: 'sess-1', userId: sessionUserId },
+      });
+      mockInvoke.mockResolvedValue(questWithOwnerOnlyFields);
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const { quest } = res._getJSONData();
+      expect('pendingAction' in quest).toBe(expectOwnerFields);
+      expect('returnValue' in (quest.promptMeta?.functionCalls?.[0] ?? {})).toBe(expectOwnerFields);
+    });
+  });
+
   it('sends a response the contract declares in full, session document included', async () => {
     mockGetOrCreateSession.mockResolvedValue({
       sessionId: 'sess-1',
