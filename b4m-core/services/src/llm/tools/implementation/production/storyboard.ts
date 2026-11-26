@@ -5,6 +5,7 @@ import {
   STUDIO_TIMELINE_LIMITS,
   StudioFileIdSchema,
   withDirectorProduct,
+  type StudioCharacter,
   type StudioShot,
 } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from '../../base/types';
@@ -55,6 +56,14 @@ const ShotArg = z.object({
     .max(limits.shotVoiceLineMaxLength)
     .optional()
     .describe('Voiceover line and caption for the shot, about 2 words per second of shot; a longer line is cut.'),
+  characters: z
+    .array(z.string().trim().min(1).max(limits.characterNameMaxLength))
+    .max(limits.brandCharactersMax)
+    .optional()
+    .describe(
+      "The brand kit's saved characters (names or ids) who appear in this shot, most important first; their images " +
+        "become references. Defaults to the kept shot's; [] removes them."
+    ),
 });
 
 const schema = z.object({
@@ -93,7 +102,33 @@ const description =
   'Carry over each current shot you are not re-imagining with keep. Plan the shots as the system context says; for ' +
   'an ad, about 4 for 15 seconds (hook, product, benefit, call to action). Then call production_generate_shot.';
 
-type ResolvedShot = { title: string; intent?: string; prompt?: string; durationMs: number; voiceLine?: string };
+type ResolvedShot = {
+  title: string;
+  intent?: string;
+  prompt?: string;
+  durationMs: number;
+  voiceLine?: string;
+  characterIds?: string[];
+};
+
+/** Maps the director's character names or ids to kit character ids, refusing one the kit does not have. */
+function resolveCharacterIds(names: readonly string[], kit: readonly StudioCharacter[]): string[] {
+  const ids = names.map(name => {
+    const wanted = name.toLowerCase();
+    const match = kit.find(
+      character => character.id.toLowerCase() === wanted || character.name.toLowerCase() === wanted
+    );
+    if (!match) {
+      throw new ProductionToolError(
+        `"${name}" is not a saved character of this production; its characters are ${
+          kit.map(character => `"${character.name}"`).join(', ') || 'none (the user adds them in the Brand kit)'
+        }.`
+      );
+    }
+    return match.id;
+  });
+  return [...new Set(ids)];
+}
 
 /**
  * A shot argument filled in from the current shot it keeps. The director often no longer has a shot's prompt in hand
@@ -102,7 +137,8 @@ type ResolvedShot = { title: string; intent?: string; prompt?: string; durationM
  */
 function resolveShot(
   shot: StoryboardArgs['shots'][number],
-  current: readonly StudioShot[]
+  current: readonly StudioShot[],
+  kit: readonly StudioCharacter[]
 ): { shot: ResolvedShot; source?: StudioShot } {
   const source = shot.keep ? current.find(candidate => candidate.id === shot.keep) : undefined;
   if (shot.keep && !source) {
@@ -137,8 +173,16 @@ function resolveShot(
   }
   const voiceLine = shot.voiceLine ?? source?.voiceLine;
   const intent = shot.intent ?? source?.intent;
+  const characterIds = shot.characters ? resolveCharacterIds(shot.characters, kit) : source?.characterIds;
   return {
-    shot: { title, ...(intent && { intent }), ...(prompt && { prompt }), durationMs, ...(voiceLine && { voiceLine }) },
+    shot: {
+      title,
+      ...(intent && { intent }),
+      ...(prompt && { prompt }),
+      durationMs,
+      ...(voiceLine && { voiceLine }),
+      ...(characterIds && characterIds.length > 0 && { characterIds }),
+    },
     source,
   };
 }
@@ -270,7 +314,7 @@ export const productionStoryboardTool: ToolDefinition = {
           const keeps = args.shots.flatMap(shot => (shot.keep ? [shot.keep] : []));
           const twice = keeps.find((id, index) => keeps.indexOf(id) !== index);
           if (twice) throw new ProductionToolError(`${twice} is kept twice; keep each shot once.`);
-          const resolved = args.shots.map(shot => resolveShot(shot, current.shots));
+          const resolved = args.shots.map(shot => resolveShot(shot, current.shots, current.brandKit.characters));
           const reorders = reordersKeptShots(
             current.shots,
             resolved.map(({ source }) => source)
@@ -415,6 +459,7 @@ export const productionStoryboardTool: ToolDefinition = {
                 title: shot.title,
                 durationMs: shot.durationMs,
                 ...(shot.voiceLine && { voiceLine: shot.voiceLine }),
+                ...(shot.characterIds && { characters: shot.characterIds }),
                 ...(shot.fileIds.length > 0 && { takesKept: true }),
               };
             }),

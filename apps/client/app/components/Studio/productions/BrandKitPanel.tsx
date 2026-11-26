@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { styled } from '@mui/system';
-import { Autocomplete, Button, Chip, IconButton, Option, Select, Stack, Typography } from '@mui/joy';
+import { Autocomplete, Button, Chip, IconButton, Input, Option, Select, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import {
   STUDIO_COMPOSITION_LIMITS,
@@ -11,6 +11,7 @@ import {
 import { useStudioCompositions } from '@client/app/hooks/data/studioCompositions';
 import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import { studioColor, studioRadius } from '../design/studioTokens';
+import { addCharacters, removeCharacter, renameCharacter } from './characterEdits';
 import FieldSaveStatus from './FieldSaveStatus';
 import LibraryThumb from './LibraryThumb';
 import { useFieldAutosave } from './useFieldAutosave';
@@ -43,11 +44,17 @@ const ColorInput = styled('input')({
 });
 
 const hasContent = (kit: StudioBrandKit) =>
-  Boolean(kit.logoFileId || kit.fontFamily || kit.colors.length > 0 || kit.productFileIds.length > 0);
+  Boolean(
+    kit.logoFileId ||
+    kit.fontFamily ||
+    kit.colors.length > 0 ||
+    kit.productFileIds.length > 0 ||
+    kit.characters.length > 0
+  );
 
 /**
- * The production's brand kit: logo, colors, font and product reference images, all Library files by id. A kit is
- * reused by copying it from another of the user's productions.
+ * The production's brand kit: logo, colors, font, product reference images and saved characters, all Library files by
+ * id. A kit is reused by copying it from another of the user's productions.
  */
 const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse }) => {
   const { value: kit, set, status } = useFieldAutosave(composition.id, 'brandKit', composition.brandKit);
@@ -76,6 +83,12 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
             ),
           };
         }),
+    });
+
+  const pickCharacters = () =>
+    pick({
+      filter: { mode: 'initial', type: 'image' },
+      onPicked: files => set(current => ({ ...current, characters: addCharacters(current.characters, files) })),
     });
 
   const addColor = () => {
@@ -218,8 +231,88 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
           )}
         </Stack>
       </Stack>
+      <Stack spacing={0.5}>
+        <StudioSectionLabel>Characters</StudioSectionLabel>
+        <Typography level="body-xs" data-testid="production-brand-kit-characters-hint">
+          A recurring presenter or mascot. Pick who appears in each shot on the Shots board.
+        </Typography>
+        {kit.characters.map(character => (
+          <Stack
+            key={character.id}
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            data-testid={`production-brand-kit-character-${character.id}`}
+          >
+            <LibraryThumb
+              fileId={character.fileId}
+              size={40}
+              testId={`production-brand-kit-character-${character.id}-image`}
+              onRemove={() =>
+                set(current => ({ ...current, characters: removeCharacter(current.characters, character.id) }))
+              }
+            />
+            <CharacterNameInput
+              name={character.name}
+              testId={`production-brand-kit-character-${character.id}-name-input`}
+              onCommit={name =>
+                set(current => ({ ...current, characters: renameCharacter(current.characters, character.id, name) }))
+              }
+            />
+          </Stack>
+        ))}
+        {kit.characters.length < STUDIO_COMPOSITION_LIMITS.brandCharactersMax && (
+          <Button
+            size="sm"
+            variant="outlined"
+            onClick={pickCharacters}
+            data-testid="production-brand-kit-characters-btn"
+            sx={{ alignSelf: 'flex-start' }}
+          >
+            Add character
+          </Button>
+        )}
+      </Stack>
       {picker}
     </StudioPanel>
+  );
+};
+
+// Edited locally and committed on blur, so autosave never trims the name under the caret.
+const CharacterNameInput = ({
+  name,
+  testId,
+  onCommit,
+}: {
+  name: string;
+  testId: string;
+  onCommit: (name: string) => void;
+}) => {
+  const [draft, setDraft] = useState(name);
+  const [committed, setCommitted] = useState(name);
+  if (name !== committed) {
+    setCommitted(name);
+    setDraft(name);
+  }
+  return (
+    <Input
+      size="sm"
+      value={draft}
+      onChange={event => setDraft(event.target.value)}
+      onBlur={() => {
+        if (!draft.trim()) setDraft(name);
+        else if (draft !== name) onCommit(draft);
+      }}
+      onKeyDown={event => event.key === 'Enter' && event.target instanceof HTMLElement && event.target.blur()}
+      sx={{ flex: 1 }}
+      slotProps={{
+        input: {
+          maxLength: STUDIO_COMPOSITION_LIMITS.characterNameMaxLength,
+          'aria-label': 'Character name',
+          'data-testid': testId,
+        },
+      }}
+    />
   );
 };
 
