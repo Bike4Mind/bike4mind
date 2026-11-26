@@ -202,7 +202,9 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     ref: { fileId: string } | { sessionId: string }
   ) {
     const references =
-      'fileId' in ref ? { $or: [{ fileIds: ref.fileId }, { 'systemPrompts.fileId': ref.fileId }] } : { sessionIds: ref.sessionId };
+      'fileId' in ref
+        ? { $or: [{ fileIds: ref.fileId }, { 'systemPrompts.fileId': ref.fileId }] }
+        : { sessionIds: ref.sessionId };
     const result = await this.projectModel.find({ $and: [{ $or: readAccessArms(user) }, references], deletedAt: null });
     return result.map(doc => doc.toJSON());
   }

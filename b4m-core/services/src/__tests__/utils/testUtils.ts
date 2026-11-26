@@ -61,6 +61,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   findByIdAndUserId: vi.fn(),
   searchAccessible: vi.fn(),
   listAccessibleAfterId: vi.fn(),
+  findAccessibleReferencing: vi.fn(),
   removeSession: vi.fn(),
   pullFileReferences: vi.fn(),
   findAllBySessionId: vi.fn(),

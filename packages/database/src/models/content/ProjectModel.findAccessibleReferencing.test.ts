@@ -40,7 +40,11 @@ describe('ProjectRepository.findAccessibleReferencing', () => {
     await makeProject('prompt', { systemPrompts: [{ fileId: 'file-1', enabled: true }] });
     await makeProject('other-file', { fileIds: ['file-2'] });
     await makeProject('unreadable', { fileIds: ['file-1'], users: [] });
-    await makeProject('group', { fileIds: ['file-1'], users: [], groups: [{ groupId: 'group-1', permissions: ['read'] }] });
+    await makeProject('group', {
+      fileIds: ['file-1'],
+      users: [],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
     await makeProject('own', { userId: MEMBER.id, users: [], fileIds: ['file-1'] });
     const deleted = await makeProject('deleted', { fileIds: ['file-1'] });
     await Project.updateOne({ _id: deleted._id }, { deletedAt: new Date() });
