@@ -51,9 +51,8 @@ export const roleGrantBlockedReason = (actor: AdminIdentity, role: Pick<RoleRef,
 export const UNHELD_EXPLICIT_ONLY_HINT = 'Only an admin who holds this permission can grant or revoke it.';
 
 /**
- * Why the actor cannot remove this held role, or null. Mirrors assertCanChangeExplicitOnlyPermissions: dropping the
- * role revokes its explicit-only permissions unless `remaining` (direct grants plus the other held roles'
- * permissions) still carries them, and only a holder can revoke one.
+ * Why the actor cannot remove this held role, or null; mirrors assertCanChangeExplicitOnlyPermissions: only a
+ * holder can revoke an explicit-only permission that no `remaining` source keeps.
  */
 export const roleRemovalBlockedReason = (
   actor: AdminIdentity,
