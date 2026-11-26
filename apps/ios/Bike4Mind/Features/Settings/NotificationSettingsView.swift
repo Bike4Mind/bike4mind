@@ -183,7 +183,8 @@ private struct NotificationSettingsContent: View {
     } footer: {
       Text(
         interruptions.errorMessage
-          ?? "The brief still arrives in the Briefs tab. A brief with a decision waiting on you still notifies.")
+          ?? "The brief still arrives in the Briefs tab. If no brief is composed for the block, you still get a short "
+          + "summary of the runs. A brief with a decision waiting on you still notifies.")
     }
   }
 

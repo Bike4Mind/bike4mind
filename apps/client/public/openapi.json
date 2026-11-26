@@ -50993,7 +50993,7 @@
       "get": {
         "operationId": "getInterruptionFeedback",
         "summary": "Get your interruption feedback",
-        "description": "Reads which categories stay quiet after a busy block ends. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still composed and listed. A decision or any other content always pushes.",
+        "description": "Reads which categories stay quiet after a busy block ends. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still listed. If no brief is composed for the block, the run summary push still goes out. A decision or any other content always pushes.",
         "tags": [
           "AI"
         ],
@@ -51139,7 +51139,7 @@
       "put": {
         "operationId": "setInterruptionFeedback",
         "summary": "Set your interruption feedback",
-        "description": "Updates the categories present in the body and leaves the others as they were, then returns the stored feedback. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still composed and listed. A decision or any other content always pushes.",
+        "description": "Updates the categories present in the body and leaves the others as they were, then returns the stored feedback. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still listed. If no brief is composed for the block, the run summary push still goes out. A decision or any other content always pushes.",
         "tags": [
           "AI"
         ],
@@ -51178,7 +51178,7 @@
             }
           },
           "400": {
-            "description": "Malformed body or an unknown category.",
+            "description": "Malformed JSON body.",
             "content": {
               "application/json": {
                 "schema": {
@@ -51256,7 +51256,7 @@
             }
           },
           "422": {
-            "description": "Request failed validation.",
+            "description": "Unknown category or non-boolean value.",
             "content": {
               "application/json": {
                 "schema": {

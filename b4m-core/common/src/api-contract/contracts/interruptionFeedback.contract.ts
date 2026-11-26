@@ -8,7 +8,8 @@ const InterruptionFeedbackResponseSchema = z.object({ feedback: InterruptionFeed
 const INTERRUPTION_FEEDBACK_NOTE =
   "Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a " +
   'category means the push sent when a busy block ends stays quiet when that category is all the brief ' +
-  'reports; the brief is still composed and listed. A decision or any other content always pushes.';
+  'reports; the brief is still listed. If no brief is composed for the block, the run summary push still goes ' +
+  'out. A decision or any other content always pushes.';
 
 const INTERRUPTION_FEEDBACK_EXAMPLE = { agent_completed: true };
 
@@ -47,8 +48,9 @@ export const putInterruptionFeedbackContract = /* @__PURE__ */ defineEndpoint({
   requestExample: INTERRUPTION_FEEDBACK_EXAMPLE,
   responses: {
     200: { description: 'The stored interruption feedback.', schema: InterruptionFeedbackResponseSchema },
-    400: { description: 'Malformed body or an unknown category.', schema: ApiErrorSchema },
+    400: { description: 'Malformed JSON body.', schema: ApiErrorSchema },
     401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    422: { description: 'Unknown category or non-boolean value.', schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: '<access_token>', body: INTERRUPTION_FEEDBACK_EXAMPLE, streaming: false },

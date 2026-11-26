@@ -627,12 +627,12 @@ export interface paths {
     };
     /**
      * Get your interruption feedback
-     * @description Reads which categories stay quiet after a busy block ends. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still composed and listed. A decision or any other content always pushes.
+     * @description Reads which categories stay quiet after a busy block ends. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still listed. If no brief is composed for the block, the run summary push still goes out. A decision or any other content always pushes.
      */
     get: operations['getInterruptionFeedback'];
     /**
      * Set your interruption feedback
-     * @description Updates the categories present in the body and leaves the others as they were, then returns the stored feedback. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still composed and listed. A decision or any other content always pushes.
+     * @description Updates the categories present in the body and leaves the others as they were, then returns the stored feedback. Authenticate with a JWT access token of the signed-in user. The feedback is the caller's own. `true` for a category means the push sent when a busy block ends stays quiet when that category is all the brief reports; the brief is still listed. If no brief is composed for the block, the run summary push still goes out. A decision or any other content always pushes.
      */
     put: operations['setInterruptionFeedback'];
     post?: never;
@@ -22249,7 +22249,7 @@ export interface operations {
           'application/json': components['schemas']['setInterruptionFeedbackResponse200'];
         };
       };
-      /** @description Malformed body or an unknown category. */
+      /** @description Malformed JSON body. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -22295,7 +22295,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request failed validation. */
+      /** @description Unknown category or non-boolean value. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

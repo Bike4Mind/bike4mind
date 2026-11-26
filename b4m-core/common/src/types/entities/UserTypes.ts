@@ -276,8 +276,8 @@ export interface IUserPreferences {
   busyBlockBrief?: { enabled: boolean };
   /**
    * Which block-end brief pushes to hold (see isBlockEndPushHeld). The run summary sent when the block brief
-   * does not cover the runs still goes out. Set through `PUT /api/v1/assistant/interruptions`; a general preferences write can
-   * still revert or clear it.
+   * does not cover the runs still goes out. Set through `PUT /api/v1/assistant/interruptions`; a general
+   * preferences write can still revert or clear it.
    */
   interruptionFeedback?: InterruptionFeedback;
 }
