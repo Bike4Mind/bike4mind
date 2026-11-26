@@ -28,8 +28,8 @@ const TABLE_MAX_HEIGHT = '40vh';
 const EVENT_COLUMN_WIDTH = '16rem';
 // When (13.5rem) + Event + 7.5rem for each of the three wrap columns; below this the table scrolls sideways.
 const AUTH_EVENTS_MIN_WIDTH = '52rem';
-// Fits AUTH_EVENTS_MIN_WIDTH plus the dialog padding and a vertical scrollbar.
-const DIALOG_WIDTH = 900;
+// Fits AUTH_EVENTS_MIN_WIDTH plus the dialog padding (~58px measured) and a classic 17px vertical scrollbar.
+const DIALOG_WIDTH = 920;
 
 const Mono = ({ children }: { children: string }) => (
   <Typography level="body-sm" sx={{ fontFamily: 'code', color: 'inherit' }}>
