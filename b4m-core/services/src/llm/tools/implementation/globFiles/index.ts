@@ -2,7 +2,7 @@ import { ToolDefinition } from '../../base/types';
 import { glob } from 'glob';
 import { stat } from 'fs/promises';
 import path from 'path';
-import { isPathAllowed } from '../../utils/pathValidation';
+import { createPathChecker, isPathAllowed } from '../../utils/pathValidation';
 
 interface GlobFilesParams {
   pattern: string;
@@ -67,12 +67,14 @@ async function findFiles(params: GlobFilesParams, allowedDirectories?: string[])
     nocase: !case_sensitive, // Case-insensitive if requested
     maxDepth: 20, // Reasonable depth limit
   });
-  // Brace expansion can turn a relative-looking pattern into `..` or absolute paths, so
-  // the pattern check above is not enough: every match is validated on its own.
-  const matches = expanded.filter(match => isPathAllowed(match, allowedDirectories).allowed);
+  // Brace expansion can yield `..` or absolute paths, so each match is validated on its own.
+  const checkPath = createPathChecker(allowedDirectories);
+  const matches = expanded.filter(match => checkPath(match).allowed);
+  const skipped = expanded.length - matches.length;
+  const skippedNote = skipped > 0 ? `\n${skipped} match(es) outside the allowed directories were skipped.` : '';
 
   if (matches.length === 0) {
-    return `No files found matching pattern: ${pattern}${dir_path ? ` in ${dir_path}` : ''}`;
+    return `No files found matching pattern: ${pattern}${dir_path ? ` in ${dir_path}` : ''}${skippedNote}`;
   }
 
   // Stat each match for its modification time (sorted newest-first below).
@@ -103,7 +105,7 @@ async function findFiles(params: GlobFilesParams, allowedDirectories?: string[])
 
   const filesList = results.map(file => path.relative(baseCwd, file.path)).join('\n');
 
-  return `${summary}${dirInfo}\n\n${filesList}`;
+  return `${summary}${dirInfo}${skippedNote}\n\n${filesList}`;
 }
 
 export const globFilesTool: ToolDefinition = {

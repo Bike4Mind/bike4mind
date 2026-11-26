@@ -389,54 +389,96 @@ function isOperator(token: ShellToken): token is { op: string } {
   return typeof token === 'object' && token !== null && 'op' in token;
 }
 
-function isComment(token: ShellToken): boolean {
+export function isComment(token: ShellToken): boolean {
   return typeof token === 'object' && token !== null && 'comment' in token;
 }
 
 const SHELL_METACHARACTERS = new Set([';', '&', '|', '(', ')', '<', '>']);
 const BASH_BLANKS = new Set([' ', '\t', '\n']);
+/** Stands in for a command substitution; its code is classified on its own. */
+const SUBSTITUTION_PLACEHOLDER = '__cmdsub__';
+
+/** A command rewritten for shell-quote, plus the code of every command substitution in it. */
+export type ShellScan = { text: string; substitutions: string[] };
+
+type PendingHeredoc = { delimiter: string; stripTabs: boolean; expands: boolean };
 
 /**
- * Rewrite a bash command so shell-quote tokenizes it the way bash does. shell-quote reads a
- * newline as plain whitespace and starts a comment at any unquoted `#`, while bash ends a command
- * at a newline and starts a comment only at the start of a word. Bash comments are dropped,
- * unquoted newlines become `;`, and a mid-word `#` or a character bash does not treat as a blank
- * but shell-quote does (`\v`, `\f`, `\r`, Unicode spaces) is escaped as a literal.
+ * Rewrite a bash command so shell-quote tokenizes it the way bash does. Unquoted newlines become
+ * `;`, bash comments are dropped, a mid-word `#` and whitespace bash does not split on are
+ * escaped, heredoc bodies are removed, and each `$(...)` or backquote substitution (quoted or
+ * not, including in an expanding heredoc body) is replaced by a placeholder word and returned
+ * separately for classification.
  */
-export function toShellQuoteSyntax(command: string): string {
+export function scanShellCommand(command: string): ShellScan {
+  const substitutions: string[] = [];
+  const { text } = scanCode(command, 0, null, substitutions);
+  return { text, substitutions };
+}
+
+/** Scan unquoted shell code from `start` until `stop` closes it, or to the end of input. */
+function scanCode(
+  src: string,
+  start: number,
+  stop: ')' | '`' | null,
+  substitutions: string[]
+): { text: string; end: number } {
   let out = '';
-  let quote: "'" | '"' | null = null;
   let wordStart = true;
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-    if (quote === "'") {
-      out += character;
-      if (character === "'") quote = null;
+  let parenDepth = 0;
+  let caseDepth = 0;
+  let heredocs: PendingHeredoc[] = [];
+  let index = start;
+  for (; index < src.length; index += 1) {
+    const character = src[index];
+    if (character === stop && (stop === '`' || (parenDepth === 0 && caseDepth === 0))) {
+      return { text: out, end: index };
+    }
+    if (wordStart && /^case[\s;]/.test(src.slice(index, index + 5))) caseDepth += 1;
+    if (wordStart && caseDepth > 0 && /^esac(?:[\s;)&|]|$)/.test(src.slice(index, index + 5))) caseDepth -= 1;
+
+    if (character === "'") {
+      const close = src.indexOf("'", index + 1);
+      const end = close < 0 ? src.length - 1 : close;
+      out += src.slice(index, end + 1);
+      index = end;
+      wordStart = false;
       continue;
     }
-    if (quote === '"') {
-      out += character;
-      if (character === '\\' && index + 1 < command.length) {
-        index += 1;
-        out += command[index];
-      } else if (character === '"') {
-        quote = null;
-      }
+    if (character === '$' && src[index + 1] === "'") {
+      let end = index + 2;
+      while (end < src.length && src[end] !== "'") end += src[end] === '\\' ? 2 : 1;
+      out += src.slice(index, end + 1);
+      index = end;
+      wordStart = false;
+      continue;
+    }
+    if ((character === '$' && src[index + 1] === '(') || character === '`') {
+      index = scanSubstitution(src, index, substitutions);
+      out += SUBSTITUTION_PLACEHOLDER;
+      wordStart = false;
+      continue;
+    }
+    if (character === '"') {
+      const quoted = scanDoubleQuoted(src, index + 1, substitutions);
+      out += `"${quoted.text}"`;
+      index = quoted.end;
+      wordStart = false;
       continue;
     }
     if (character === '\\') {
-      if (command[index + 1] === '\n') {
+      if (src[index + 1] === '\n') {
         index += 1;
         continue;
       }
-      out += character + (command[index + 1] ?? '');
+      out += character + (src[index + 1] ?? '');
       index += 1;
       wordStart = false;
       continue;
     }
     if (character === '#') {
       if (wordStart) {
-        while (index + 1 < command.length && command[index + 1] !== '\n') index += 1;
+        while (index + 1 < src.length && src[index + 1] !== '\n') index += 1;
         continue;
       }
       out += '\\#';
@@ -445,9 +487,29 @@ export function toShellQuoteSyntax(command: string): string {
     if (character === '\n') {
       out += ';';
       wordStart = true;
+      if (heredocs.length > 0) {
+        index = skipHeredocBodies(src, index + 1, heredocs, substitutions) - 1;
+        heredocs = [];
+      }
+      continue;
+    }
+    if (character === '<' && src[index + 1] === '<' && src[index + 2] !== '<') {
+      const heredoc = readHeredocOperator(src, index);
+      heredocs.push(heredoc.pending);
+      out += src.slice(index, heredoc.end);
+      index = heredoc.end - 1;
+      wordStart = false;
+      continue;
+    }
+    if (character === '<' && src.startsWith('<<<', index)) {
+      out += '<<<';
+      index += 2;
+      wordStart = true;
       continue;
     }
     if (BASH_BLANKS.has(character) || SHELL_METACHARACTERS.has(character)) {
+      if (character === '(') parenDepth += 1;
+      if (character === ')' && parenDepth > 0) parenDepth -= 1;
       out += character;
       wordStart = true;
       continue;
@@ -457,11 +519,98 @@ export function toShellQuoteSyntax(command: string): string {
       wordStart = false;
       continue;
     }
-    if (character === "'" || character === '"') quote = character;
     out += character;
     wordStart = false;
   }
-  return out;
+  return { text: out, end: index };
+}
+
+/** Record the code of the substitution opening at `index`; returns the index of its closer. */
+function scanSubstitution(src: string, index: number, substitutions: string[]): number {
+  const backquote = src[index] === '`';
+  const codeStart = index + (backquote ? 1 : 2);
+  // Substitutions nested in this one are found when its own code is classified.
+  const { end } = scanCode(src, codeStart, backquote ? '`' : ')', []);
+  substitutions.push(src.slice(codeStart, end));
+  return end;
+}
+
+/** Scan a double-quoted string body from `start`; returns its text and the closing quote index. */
+function scanDoubleQuoted(src: string, start: number, substitutions: string[]): { text: string; end: number } {
+  let text = '';
+  let index = start;
+  for (; index < src.length && src[index] !== '"'; index += 1) {
+    const character = src[index];
+    if (character === '\\') {
+      text += character + (src[index + 1] ?? '');
+      index += 1;
+    } else if ((character === '$' && src[index + 1] === '(') || character === '`') {
+      index = scanSubstitution(src, index, substitutions);
+      text += SUBSTITUTION_PLACEHOLDER;
+    } else {
+      text += character;
+    }
+  }
+  return { text, end: index };
+}
+
+/** Parse `<<[-]WORD` at `index`. A quoted delimiter turns off expansion in the body. */
+function readHeredocOperator(src: string, index: number): { pending: PendingHeredoc; end: number } {
+  let cursor = index + 2;
+  const stripTabs = src[cursor] === '-';
+  if (stripTabs) cursor += 1;
+  while (src[cursor] === ' ' || src[cursor] === '\t') cursor += 1;
+  let delimiter = '';
+  let expands = true;
+  let quote: string | null = null;
+  for (; cursor < src.length; cursor += 1) {
+    const character = src[cursor];
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      else delimiter += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      expands = false;
+      continue;
+    }
+    if (character === '\\') {
+      expands = false;
+      cursor += 1;
+      delimiter += src[cursor] ?? '';
+      continue;
+    }
+    if (BASH_BLANKS.has(character) || SHELL_METACHARACTERS.has(character)) break;
+    delimiter += character;
+  }
+  return { pending: { delimiter, stripTabs, expands }, end: cursor };
+}
+
+/** Skip the bodies of pending heredocs starting at `start`; returns the index after the last. */
+function skipHeredocBodies(src: string, start: number, heredocs: PendingHeredoc[], substitutions: string[]): number {
+  let cursor = start;
+  for (const heredoc of heredocs) {
+    while (cursor < src.length) {
+      const newline = src.indexOf('\n', cursor);
+      const lineEnd = newline < 0 ? src.length : newline;
+      const line = src.slice(cursor, lineEnd);
+      cursor = lineEnd + 1;
+      if ((heredoc.stripTabs ? line.replace(/^\t+/, '') : line) === heredoc.delimiter) break;
+      if (heredoc.expands) collectSubstitutions(line, substitutions);
+    }
+  }
+  return Math.min(cursor, src.length);
+}
+
+/** Record every substitution in text that expands but is not otherwise parsed (a heredoc body). */
+function collectSubstitutions(text: string, substitutions: string[]): void {
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\\') index += 1;
+    else if ((text[index] === '$' && text[index + 1] === '(') || text[index] === '`') {
+      index = scanSubstitution(text, index, substitutions);
+    }
+  }
 }
 
 function asString(token: ShellToken): string | null {
@@ -645,6 +794,17 @@ function classifySimpleCommand(args: string[], reasons: string[], depth: number)
     return maxLevel(level, 'medium');
   }
 
+  const gitDirWrite = gitDirectoryWriteTarget(prog, inner.slice(1));
+  if (gitDirWrite) {
+    reasons.push(`'${prog}' writes into a .git directory`);
+    return maxLevel(level, 'high');
+  }
+
+  if (prog === 'git' && setsProgramRunningGitConfig(inner.slice(1))) {
+    reasons.push('git config naming a program git runs');
+    return maxLevel(level, 'high');
+  }
+
   // Recursive ownership/permission changes are destructive (can brick a tree).
   if (
     (prog === 'chmod' || prog === 'chown' || prog === 'chgrp') &&
@@ -655,6 +815,72 @@ function classifySimpleCommand(args: string[], reasons: string[], depth: number)
   }
 
   return level;
+}
+
+/** Programs whose last operand is the path they write. */
+const DESTINATION_WRITERS = new Set(['cp', 'install', 'ln', 'rsync', 'scp']);
+/** Programs that may write or remove any path operand. */
+const OPERAND_WRITERS = new Set([
+  'mv',
+  'tee',
+  'touch',
+  'truncate',
+  'sed',
+  'chmod',
+  'chown',
+  'chgrp',
+  'patch',
+  'rm',
+  'unlink',
+]);
+
+function gitDirectoryWriteTarget(prog: string, args: string[]): boolean {
+  const operands = args.filter(arg => !arg.startsWith('-'));
+  if (DESTINATION_WRITERS.has(prog)) {
+    const targets = args.flatMap((arg, index) => {
+      if (arg === '-t' || arg === '--target-directory') return args[index + 1] ?? [];
+      if (arg.startsWith('--target-directory=')) return arg.slice('--target-directory='.length);
+      if (/^-t./.test(arg)) return arg.slice(2);
+      return [];
+    });
+    targets.push(operands[operands.length - 1] ?? '');
+    return targets.some(isGitDirectoryPath);
+  }
+  if (OPERAND_WRITERS.has(prog)) return operands.some(isGitDirectoryPath);
+  if (prog === 'dd') return args.some(arg => arg.startsWith('of=') && isGitDirectoryPath(arg.slice(3)));
+  return false;
+}
+
+/** Config keys whose value is a program, script or hook location git runs. */
+const PROGRAM_GIT_CONFIG_KEY =
+  /^(core\.(hookspath|fsmonitor|sshcommand|pager|editor|askpass|gitproxy)|sequence\.editor|diff\.external|gpg(\.[^.]+)?\.program|credential(\..+)?\.helper|alias\..+|(diff|merge|filter|difftool|mergetool)\..+\.(command|cmd|textconv|driver|clean|smudge|process)|.+\.sshcommand|uploadpack\.packobjectshook|include(if\..+)?\.path)$/i;
+
+const GIT_CONFIG_VALUE_OPTIONS = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']);
+
+/** `git -c <key>=<value>` or a `git config` write whose key names a program git runs. */
+function setsProgramRunningGitConfig(args: string[]): boolean {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '-c' && args[i + 1] !== undefined && PROGRAM_GIT_CONFIG_KEY.test(args[i + 1].split('=')[0]))
+      return true;
+    if (arg === '--config-env' && args[i + 1] !== undefined && PROGRAM_GIT_CONFIG_KEY.test(args[i + 1].split('=')[0]))
+      return true;
+    if (!arg.startsWith('-')) {
+      if (arg !== 'config') return false;
+      const rest = args.slice(i + 1);
+      if (
+        rest.some(word => /^--(get|get-all|get-regexp|list|show-origin|unset|unset-all)$/.test(word) || word === '-l')
+      )
+        return false;
+      const words = rest.filter(
+        (word, index) => !word.startsWith('-') && !GIT_CONFIG_VALUE_OPTIONS.has(rest[index - 1] ?? '')
+      );
+      const keyIndex = words[0] === 'set' ? 1 : 0;
+      const key = words[keyIndex];
+      return key !== undefined && words.length > keyIndex + 1 && PROGRAM_GIT_CONFIG_KEY.test(key);
+    }
+  }
+  return false;
 }
 
 /**
@@ -710,9 +936,11 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
     return { level: 'high', reasons: ['fork bomb pattern'] };
   }
 
+  let scan: ShellScan;
   let tokens: ShellToken[];
   try {
-    tokens = shellParse(toShellQuoteSyntax(trimmed));
+    scan = scanShellCommand(trimmed);
+    tokens = shellParse(scan.text);
   } catch {
     return { level: 'high', reasons: ['command could not be parsed (fail closed)'] };
   }
@@ -728,6 +956,12 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
 
   const reasons: string[] = [];
   let level: CommandRiskLevel = 'low';
+
+  for (const code of scan.substitutions) {
+    const nested = classifyAtDepth(code, depth + 1);
+    reasons.push(...nested.reasons);
+    level = maxLevel(level, maxLevel(nested.level, 'unclassified'));
+  }
 
   // Split into simple-command segments on control operators, recording each
   // segment's leading program and the operator that follows it (so a fetcher and
@@ -799,9 +1033,13 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
     level = maxLevel(level, 'high');
   }
 
-  // Redirection to a raw block device anywhere in the command.
-  if (writesToBlockDevice(tokens)) {
+  const redirected = writeRedirectTargets(tokens);
+  if (redirected.some(target => BLOCK_DEVICE_RE.test(target))) {
     reasons.push('write redirected to a raw block device');
+    level = maxLevel(level, 'high');
+  }
+  if (redirected.some(isGitDirectoryPath)) {
+    reasons.push('write redirected into a .git directory');
     level = maxLevel(level, 'high');
   }
 
@@ -856,7 +1094,8 @@ const BLOCK_DEVICE_RE =
 // split them into `>`/`>>` plus a neighbour, which the plain `>`/`>>` match caught.
 const WRITE_REDIRECT_OPS = new Set(['>', '>>', '>|', '&>', '&>>', '<>']);
 
-function writesToBlockDevice(tokens: ShellToken[]): boolean {
+function writeRedirectTargets(tokens: ShellToken[]): string[] {
+  const targets: string[] = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (isOperator(token) && WRITE_REDIRECT_OPS.has(token.op)) {
@@ -866,10 +1105,13 @@ function writesToBlockDevice(tokens: ShellToken[]): boolean {
       const following = tokens[targetIndex];
       if (isOperator(following) && following.op === '|') targetIndex += 1;
       const target = asString(tokens[targetIndex]);
-      if (target && BLOCK_DEVICE_RE.test(target)) {
-        return true;
-      }
+      if (target) targets.push(target);
     }
   }
-  return false;
+  return targets;
+}
+
+/** A path with a `.git` segment, compared the way case-insensitive filesystems and Windows do. */
+export function isGitDirectoryPath(target: string): boolean {
+  return target.split(/[\\/]/).some(segment => segment.replace(/[. ]+$/, '').toLowerCase() === '.git');
 }

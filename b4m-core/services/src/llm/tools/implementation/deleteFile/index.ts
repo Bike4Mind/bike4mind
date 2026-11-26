@@ -1,12 +1,25 @@
 import { ToolDefinition } from '../../base/types';
 import { promises as fs } from 'fs';
-import { existsSync, statSync } from 'fs';
+import { existsSync, readdirSync, statSync } from 'fs';
 import path from 'path';
-import { assertWritablePath } from '../../utils/pathValidation';
+import { assertWritablePath, isGitDirectoryName } from '../../utils/pathValidation';
 
 interface DeleteFileParams {
   path: string;
   recursive?: boolean;
+}
+
+/** Whether a `.git` entry exists anywhere under `dir`, without following symlinks. */
+function containsGitDirectory(dir: string): boolean {
+  const pending = [dir];
+  while (pending.length > 0) {
+    const current = pending.pop() as string;
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (isGitDirectoryName(entry.name)) return true;
+      if (entry.isDirectory()) pending.push(path.join(current, entry.name));
+    }
+  }
+  return false;
 }
 
 async function deleteFile(params: DeleteFileParams, allowedDirectories?: string[]): Promise<string> {
@@ -31,6 +44,9 @@ async function deleteFile(params: DeleteFileParams, allowedDirectories?: string[
 
   // Delete file or directory
   if (isDirectory) {
+    if (containsGitDirectory(resolvedPath)) {
+      throw new Error(`Access denied: Cannot delete ${filePath}: it contains a .git directory.`);
+    }
     await fs.rm(resolvedPath, { recursive: true, force: true });
     return `Directory deleted successfully: ${filePath}`;
   } else {

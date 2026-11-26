@@ -97,8 +97,10 @@ describe('classifyToolRisk', () => {
     expect(risk.level).not.toBe('low');
   });
 
-  it('rates a real MCP tool name (<server>__<tool>) high', () => {
-    expect(classifyToolRisk(new ToolCatalog().resolve('github__create_issue'), {}).level).toBe('high');
+  it('rates a tool marked as MCP high', () => {
+    const catalog = new ToolCatalog();
+    catalog.markMcpTool('github__create_issue');
+    expect(classifyToolRisk(catalog.resolve('github__create_issue'), {}).level).toBe('high');
   });
 
   it('falls back to the permission category for non-shell tools', () => {

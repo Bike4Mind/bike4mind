@@ -61,24 +61,34 @@ function resolveRealPath(filePath: string): string {
  * @returns Object with validation result, resolved path, and matched directory if allowed
  */
 export function isPathAllowed(filePath: string, allowedDirectories?: string[]): PathValidationResult {
+  return createPathChecker(allowedDirectories)(filePath);
+}
+
+/**
+ * {@link isPathAllowed} with the working directory and allowed directories resolved once, for
+ * checking many paths against the same roots.
+ */
+export function createPathChecker(allowedDirectories?: string[]): (filePath: string) => PathValidationResult {
   const cwd = resolveRealPath(process.cwd());
   const allAllowed = [cwd, ...(allowedDirectories || []).map(d => resolveRealPath(d))];
 
-  const normalizedPath = path.normalize(filePath);
+  return filePath => {
+    const normalizedPath = path.normalize(filePath);
 
-  // Handle both absolute and relative paths, then resolve symlinks
-  const logicalPath = path.isAbsolute(normalizedPath) ? normalizedPath : path.resolve(cwd, normalizedPath);
-  const resolvedPath = resolveRealPath(logicalPath);
+    // Handle both absolute and relative paths, then resolve symlinks
+    const logicalPath = path.isAbsolute(normalizedPath) ? normalizedPath : path.resolve(cwd, normalizedPath);
+    const resolvedPath = resolveRealPath(logicalPath);
 
-  // Check if resolved path is within any allowed directory
-  for (const dir of allAllowed) {
-    // Path is allowed if it equals the directory or is a child
-    if (resolvedPath === dir || resolvedPath.startsWith(dir + path.sep)) {
-      return { allowed: true, resolvedPath, matchedDirectory: dir };
+    // Check if resolved path is within any allowed directory
+    for (const dir of allAllowed) {
+      // Path is allowed if it equals the directory or is a child
+      if (resolvedPath === dir || resolvedPath.startsWith(dir + path.sep)) {
+        return { allowed: true, resolvedPath, matchedDirectory: dir };
+      }
     }
-  }
 
-  return { allowed: false, resolvedPath };
+    return { allowed: false, resolvedPath };
+  };
 }
 
 /**
@@ -105,22 +115,21 @@ export function assertPathAllowed(filePath: string, allowedDirectories?: string[
   return result.resolvedPath;
 }
 
-/**
- * Whether a path lies inside a git directory. Git runs programs named in its config and hooks,
- * so a file tool writing there could make a later git command run code nobody approved.
- */
-export function isInsideGitDirectory(resolvedPath: string): boolean {
-  // Windows ignores trailing dots and spaces in a name, and macOS/Windows compare names case-insensitively.
-  return resolvedPath.split(/[\\/]/).some(segment => segment.replace(/[. ]+$/, '').toLowerCase() === '.git');
+/** Whether a file name is `.git`, compared the way case-insensitive filesystems and Windows do. */
+export function isGitDirectoryName(name: string): boolean {
+  return name.replace(/[. ]+$/, '').toLowerCase() === '.git';
 }
 
 /**
  * {@link assertPathAllowed} for a tool that creates, edits or deletes files: also refuses any path
- * inside a git directory (see {@link isInsideGitDirectory}).
+ * with a `.git` segment below the allowed directory it falls in. Only literal `.git` segments are
+ * covered, not a hooks directory configured elsewhere through `core.hooksPath`.
  */
 export function assertWritablePath(filePath: string, allowedDirectories?: string[], operation = 'write'): string {
   const resolvedPath = assertPathAllowed(filePath, allowedDirectories, operation);
-  if (isInsideGitDirectory(resolvedPath)) {
+  const { matchedDirectory } = isPathAllowed(resolvedPath, allowedDirectories);
+  const below = matchedDirectory ? path.relative(matchedDirectory, resolvedPath) : resolvedPath;
+  if (below.split(/[\\/]/).some(isGitDirectoryName)) {
     throw new Error(`Access denied: Cannot ${operation} files inside a .git directory.`);
   }
   return resolvedPath;

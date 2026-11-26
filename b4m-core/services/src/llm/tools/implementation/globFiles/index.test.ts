@@ -72,6 +72,7 @@ describe('globFiles', () => {
       const tool = globFilesTool.implementation(mockContext);
       const result = await tool.toolFn({ pattern: `{${outsideDir},src}/*.txt` });
       expect(result).not.toContain('secret-name');
+      expect(result).toContain('1 match(es) outside the allowed directories were skipped');
     });
   });
 });

@@ -1,5 +1,5 @@
 import { parse as shellParse } from 'shell-quote';
-import { classifyCommandRisk, INTERPRETERS, NETWORK_FETCHERS } from './commandRisk.js';
+import { classifyCommandRisk, INTERPRETERS, isComment, NETWORK_FETCHERS, scanShellCommand } from './commandRisk.js';
 
 /**
  * Session approval scope for shell commands. An "allow for this session" answer on a shell tool
@@ -517,7 +517,7 @@ export function sessionCommandPrefixes(command: string): string[] | null {
   let tokens: ShellToken[];
   try {
     // Expansions were rejected above; retain the callback as a fail-closed parsing guard.
-    tokens = shellParse(text, key => `$${key}`);
+    tokens = shellParse(scanShellCommand(text).text, key => `$${key}`);
   } catch {
     return null;
   }
@@ -533,8 +533,7 @@ export function sessionCommandPrefixes(command: string): string[] | null {
     return true;
   };
 
-  // shell-quote ends parsing at an unquoted `#`; bash may still run what follows it.
-  if (tokens.some(token => typeof token === 'object' && token !== null && 'comment' in token)) return null;
+  if (tokens.some(isComment)) return null;
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];

@@ -105,6 +105,17 @@ describe('wrapToolWithPermission: host allowlist in claude form (mcp__<server>__
     await wrapped.toolFn({});
     expect(prompt).toHaveBeenCalledTimes(1);
   });
+
+  it('prompts for an MCP tool even when a trusted-tools list names it', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), ['files__write'], []);
+    const prompt = vi.fn(async () => ({ action: 'deny' }));
+    const wrapped = wrap(mcpTool('files__write'), prompt, pm);
+
+    await expect(wrapped.toolFn({})).rejects.toThrow();
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(pm.catalog.isReadOnly('files__write')).toBe(false);
+    expect(pm.getTrustedTools()).not.toContain('files__write');
+  });
 });
 
 describe('wrapToolWithPermission: _sandboxCleanup guard (criterion 3)', () => {

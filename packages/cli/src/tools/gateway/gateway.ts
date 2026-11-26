@@ -44,6 +44,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
   const isMcpTool = tool._isMcpTool === true;
+  if (isMcpTool) permissionManager.catalog.markMcpTool(toolName);
 
   return {
     ...tool,

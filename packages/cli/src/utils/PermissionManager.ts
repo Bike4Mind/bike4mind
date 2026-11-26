@@ -141,7 +141,9 @@ export class PermissionManager {
    * Get list of all trusted tools
    */
   getTrustedTools(): string[] {
-    return Array.from(this.trustedTools).sort();
+    return Array.from(this.trustedTools)
+      .filter(toolName => this.catalog.canTrust(toolName))
+      .sort();
   }
 
   /**
@@ -232,20 +234,21 @@ export class PermissionManager {
   }
 
   /**
-   * Trust, for the current session, later calls of this tool with exactly this command text.
-   * Used where the command does not come from the model (lifecycle hooks), so it is never scoped.
+   * Trust, for the current session, later calls of this tool with exactly this command text run
+   * in this directory. Used where the command does not come from the model (lifecycle hooks), so
+   * it is never scoped.
    */
-  trustExactCommandForSession(toolName: string, command: string): boolean {
+  trustExactCommandForSession(toolName: string, command: string, cwd: string): boolean {
     if (this.deniedTools.has(toolName)) return false;
     const approved = this.sessionTrustedExactCommands.get(toolName) ?? new Set<string>();
-    approved.add(command);
+    approved.add(JSON.stringify([cwd, command]));
     this.sessionTrustedExactCommands.set(toolName, approved);
     return true;
   }
 
-  isExactCommandSessionTrusted(toolName: string, command: string): boolean {
+  isExactCommandSessionTrusted(toolName: string, command: string, cwd: string): boolean {
     if (this.deniedTools.has(toolName)) return false;
-    return this.sessionTrustedExactCommands.get(toolName)?.has(command) ?? false;
+    return this.sessionTrustedExactCommands.get(toolName)?.has(JSON.stringify([cwd, command])) ?? false;
   }
 
   /**

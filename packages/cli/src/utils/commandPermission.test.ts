@@ -53,7 +53,7 @@ describe('requestShellCommandPermission', () => {
     const pm = new PermissionManager(new ToolCatalog());
     const prompt = promptReturning('allow-session');
     await requestShellCommandPermission('agent_hook:Stop', 'ls', '/proj', { permissionManager: pm, promptFn: prompt });
-    expect(pm.isExactCommandSessionTrusted('agent_hook:Stop', 'ls')).toBe(true);
+    expect(pm.isExactCommandSessionTrusted('agent_hook:Stop', 'ls', '/proj')).toBe(true);
 
     // A second call is allowed without prompting again.
     const prompt2 = promptReturning('deny');
@@ -75,6 +75,22 @@ describe('requestShellCommandPermission', () => {
 
     const prompt = promptReturning('deny');
     const res = await requestShellCommandPermission('skill_hook:pre-invoke', 'touch /tmp/pwned', '/proj', {
+      permissionManager: pm,
+      promptFn: prompt,
+    });
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(res.allowed).toBe(false);
+  });
+
+  it('allow-session covers the approved command only in the directory it was shown for', async () => {
+    const pm = new PermissionManager(new ToolCatalog());
+    await requestShellCommandPermission('agent_hook:Stop', 'make clean', '/proj-a', {
+      permissionManager: pm,
+      promptFn: promptReturning('allow-session'),
+    });
+
+    const prompt = promptReturning('deny');
+    const res = await requestShellCommandPermission('agent_hook:Stop', 'make clean', '/proj-b', {
       permissionManager: pm,
       promptFn: prompt,
     });
@@ -200,7 +216,7 @@ describe('retired hook permissions', () => {
     ended = true;
     resolve({ action: 'allow-session' });
     expect((await running).decision).toBe('deny');
-    expect(manager.isExactCommandSessionTrusted('agent_hook:Stop', 'echo old-session')).toBe(false);
+    expect(manager.isExactCommandSessionTrusted('agent_hook:Stop', 'echo old-session', '/tmp')).toBe(false);
     expect(mockRun).not.toHaveBeenCalled();
   });
 

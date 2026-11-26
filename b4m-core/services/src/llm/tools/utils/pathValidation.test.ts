@@ -255,6 +255,18 @@ describe('pathValidation', () => {
       expect(() => assertWritablePath('innocent/config')).toThrow('inside a .git directory');
     });
 
+    it('checks only the part of the path below the allowed directory', async () => {
+      const workspace = join(testDir, '.git', 'nested-workspace');
+      await mkdir(workspace, { recursive: true });
+      process.chdir(workspace);
+      try {
+        expect(assertWritablePath('notes.txt')).toBe(join(workspace, 'notes.txt'));
+        expect(() => assertWritablePath('.git/config')).toThrow('inside a .git directory');
+      } finally {
+        process.chdir(testDir);
+      }
+    });
+
     it('still refuses paths outside the allowed directories', () => {
       expect(() => assertWritablePath('/etc/passwd')).toThrow('outside allowed directories');
     });

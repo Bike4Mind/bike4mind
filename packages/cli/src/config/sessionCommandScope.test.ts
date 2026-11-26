@@ -32,6 +32,8 @@ describe('sessionCommandPrefixes', () => {
     ['date +%Y', ['date']],
     ['uniq -f 1 names.txt', ['uniq']],
     ['git status\n', ['git status']],
+    ['ls src # list', ['ls']],
+    ['ls a#b; pwd', ['ls', 'pwd']],
   ])('scopes %j to %j', (command, expected) => {
     expect(sessionCommandPrefixes(command)).toEqual(expected);
   });
@@ -79,7 +81,6 @@ describe('sessionCommandPrefixes', () => {
     ['an inherited git method', 'git toString'],
     ['a mid-word hash hiding a second command', 'ls a#b; touch pwned'],
     ['a quoted-empty hash hiding a second command', 'ls ""#; touch pwned'],
-    ['a trailing comment', 'ls # note'],
     ['a vertical tab between words', 'ls\vsrc'],
     ['a form feed between words', 'ls\fsrc'],
     ['a carriage return between commands', 'ls\rtouch pwned'],
