@@ -97,18 +97,21 @@ public final class BusyBlockSyncer {
     }
     guard session == startedIn else { throw CancellationError() }
     let save = Task { try await api.save(enabled: enabled, blocks: enabled ? currentBlocks() : []) }
-    let task = Task<BusyBlockSyncOutcome, Never> {
-      switch await save.result {
-      case .success(let state): state.enabled ? .synced : .skipped(.disabled)
-      case .failure(APIError.signedOut): .skipped(.signedOut)
-      case .failure: .failed
-      }
-    }
+    let task = Task<BusyBlockSyncOutcome, Never> { Self.outcome(of: await save.result) }
     current = task
     defer { release(task) }
     let state = try await save.value
-    if session == startedIn { lastOutcome = await task.value }
+    // No suspension between the check and the write, so a session started meanwhile never gets this outcome.
+    if session == startedIn { lastOutcome = Self.outcome(of: .success(state)) }
     return state
+  }
+
+  private static func outcome(of save: Result<BusyBlocksState, any Error>) -> BusyBlockSyncOutcome {
+    switch save {
+    case .success(let state): state.enabled ? .synced : .skipped(.disabled)
+    case .failure(APIError.signedOut): .skipped(.signedOut)
+    case .failure: .failed
+    }
   }
 
   /// Forgets the last outcome and throttle at a sign-in: a signed-out or opted-out result belongs to the

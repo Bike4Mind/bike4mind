@@ -271,7 +271,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     let sync = Task { await syncer.sync(force: true) }
     while await api.reads < 2 { await Task.yield() }
     let toggle = Task { await model.setEnabled(false) }
-    for _ in 0..<10 { await Task.yield() }
+    while model.isEnabled { await Task.yield() }
     let savesWhileHeld = await api.saves
     XCTAssertTrue(savesWhileHeld.isEmpty)
     await api.release()
