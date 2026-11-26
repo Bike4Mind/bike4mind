@@ -1,4 +1,4 @@
-import type { ChatSession } from './chat';
+import { OPTIMISTIC_ID_PREFIX, type ChatSession } from './chat';
 import { isImportedMessageId } from './claudeImport';
 
 /**
@@ -14,14 +14,17 @@ type LinkedSessionFields = Pick<
 
 /**
  * Still synced with its web notebook: a basic chat (no folders shared with its local tools, no
- * orchestration) that nothing has continued locally.
+ * orchestration) that nothing has continued locally. A prompt the renderer is still drawing
+ * optimistically is not stored yet, so it does not count as a local message.
  */
 export function isLinkedWebSession(session: LinkedSessionFields): boolean {
   const origin = session.importOrigin;
   if (origin?.kind !== 'b4m-web' || origin.forkedAt) return false;
   if (session.mode !== 'chat' || session.orchestrate) return false;
   if (session.grantedDirectories?.length) return false;
-  return session.messages.every(message => isImportedMessageId(message.id));
+  return session.messages.every(
+    message => isImportedMessageId(message.id) || message.id.startsWith(OPTIMISTIC_ID_PREFIX)
+  );
 }
 
 /** What about one send decides whether the server can run it. */

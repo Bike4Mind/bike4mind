@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatSession } from './chat';
+import { OPTIMISTIC_ID_PREFIX, type ChatSession } from './chat';
 import { isLinkedChatBusy, isLinkedWebSend, isLinkedWebSession } from './webLinkedChat';
 
 const webChat = (overrides: Partial<ChatSession> = {}): ChatSession => ({
@@ -69,6 +69,15 @@ describe('isLinkedChatBusy', () => {
     });
     expect(isLinkedChatBusy(running, false)).toBe(true);
     expect(isLinkedChatBusy(webChat(), false)).toBe(false);
+  });
+
+  it('stays busy while the window still draws the prompt it just sent', () => {
+    const sent = webChat();
+    sent.messages = [
+      ...sent.messages,
+      { id: `${OPTIMISTIC_ID_PREFIX}1`, role: 'user', content: 'next', createdAt: '2026-01-01T00:00:01.000Z' },
+    ];
+    expect(isLinkedChatBusy(sent, true)).toBe(true);
   });
 
   it('never blocks a chat that is not linked', () => {
