@@ -4,7 +4,7 @@ import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import { keyframes } from '@mui/system';
-import { memo, useEffect, useId, useMemo, useRef, type CSSProperties } from 'react';
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, type CSSProperties } from 'react';
 import type { AgentPersona } from '@shared/agentPersona';
 import { AgentPrIndicator } from '../AgentPrIndicator';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
@@ -203,9 +203,22 @@ function OverflowPile({
   const needing = stacked.filter(({ agent }) => agent.state === 'needs-you').length;
   const needsYou = needing > 0 ? `, ${needing} ${needing === 1 ? 'needs' : 'need'} you` : '';
   const holdsSelection = stacked.some(({ agent }) => agent.id === selectedId);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // The pile goes once its last agent takes a seat, open menu and all; keep focus in the scene, not on body.
+  useLayoutEffect(
+    () => () => {
+      const focused = document.activeElement;
+      const scene = buttonRef.current?.parentElement;
+      if (!focused || !scene) return;
+      if (buttonRef.current?.contains(focused) || menuRef.current?.contains(focused)) scene.focus();
+    },
+    []
+  );
   return (
     <Dropdown>
       <MenuButton
+        ref={buttonRef}
         data-testid={`scene-stage-overflow-${zone}`}
         data-agent-avatar={holdsSelection ? (selectedId ?? undefined) : undefined}
         data-urgent={needing > 0 || undefined}
@@ -225,7 +238,12 @@ function OverflowPile({
       >
         +{stacked.length}
       </MenuButton>
-      <Menu size="sm" placement="top" sx={{ maxHeight: 280, overflowY: 'auto', zIndex: 'var(--joy-zIndex-popup)' }}>
+      <Menu
+        ref={menuRef}
+        size="sm"
+        placement="top"
+        sx={{ maxHeight: 280, overflowY: 'auto', zIndex: 'var(--joy-zIndex-popup)' }}
+      >
         {stacked.map(({ agent, name }) => (
           <MenuItem
             key={agent.id}

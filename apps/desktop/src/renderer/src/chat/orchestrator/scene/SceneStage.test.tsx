@@ -110,6 +110,15 @@ describe('SceneStage', () => {
     expect(view.onSelect).toHaveBeenCalledWith('e');
   });
 
+  it('keeps focus in the scene when a focused stack goes away', async () => {
+    const agents = ['a', 'b', 'c', 'd'].map(id => agentFixture(id, 'working'));
+    await render(props(agents));
+    el('scene-stage-overflow-desk').focus();
+    await render(props(agents.slice(1)));
+    expect(query('scene-stage-overflow-desk')).toBeNull();
+    expect(document.activeElement).toBe(el('scene-stage'));
+  });
+
   it('says how many in a stack need you', async () => {
     const agents = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8', 'n9', 'n10'].map(id =>
       agentFixture(id, 'needs-you')
