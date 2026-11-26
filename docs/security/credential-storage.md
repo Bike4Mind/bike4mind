@@ -63,7 +63,8 @@ instances that cannot open each other's keys.
    The initial raw-key census stops before writes. If a raw key appears later, counts include any
    completed rewraps; those are safe to keep when repeating the procedure.
    `--dry-run` exits 1 while keys still need rewrapping. The command resolves memory-key secrets in
-   the same environment-first order as the runtime, then falls back to SST resources.
+   the same environment-first order as the runtime, then falls back to SST resources, and exits 2 when
+   an exported secret differs from the linked SST resource (unset it, or run outside `sst shell`).
    `--verify` also decrypts the newest stored fact from the current key incarnation per principal.
    After an erase and remint, facts created at or before the last erase cannot verify the new key;
    a principal with no newer encrypted fact is counted as `principals-without-facts`.

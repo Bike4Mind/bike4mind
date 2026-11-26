@@ -318,14 +318,58 @@ describe('run (CLI)', () => {
     expect(await run(['--verify'])).toBe(0);
   });
 
-  it('uses the same environment-first key precedence as the runtime', async () => {
+  it('proceeds with exported secrets when no SST resource is linked', async () => {
     captureOutput();
     const row = await seed(sha('exported-old'));
+    mocks.resources.MEMORY_KEY_SECRET = undefined;
+    mocks.resources.MEMORY_KEY_SECRET_PREVIOUS = undefined;
     vi.stubEnv('MEMORY_KEY_SECRET', 'exported-new');
     vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'exported-old');
     expect(await run([])).toBe(0);
     const stored = await keysColl.findOne({ _id: row._id });
     expect(openWrappedDek(stored!.dek, [sha('exported-new')])?.dek).toEqual(row.dek);
+  });
+
+  it('proceeds with SST resources alone', async () => {
+    captureOutput();
+    const row = await seed(oldKey);
+    expect(await run([])).toBe(0);
+    expect(openWrappedDek((await keysColl.findOne({ _id: row._id }))!.dek, [newKey])?.dek).toEqual(row.dek);
+  });
+
+  it('proceeds when the environment and the SST resource hold the same secrets', async () => {
+    captureOutput();
+    await seed(oldKey);
+    vi.stubEnv('MEMORY_KEY_SECRET', 'new-secret');
+    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'old-secret');
+    expect(await run([])).toBe(0);
+    expect(await run(['--verify'])).toBe(0);
+  });
+
+  it('refuses an environment secret that differs from the SST resource, before connecting', async () => {
+    const lines = captureOutput();
+    const row = await seed(oldKey);
+    const connect = vi.spyOn(mongoose, 'connect');
+    vi.stubEnv('MEMORY_KEY_SECRET', 'stray-secret');
+    for (const argv of [[], ['--dry-run'], ['--verify']]) {
+      expect(await run(argv)).toBe(2);
+    }
+    expect(connect).not.toHaveBeenCalled();
+    expect((await keysColl.findOne({ _id: row._id }))!.dek).toBe(row.dekValue);
+    const out = lines.join('\n');
+    expect(out).toContain('MEMORY_KEY_SECRET in the environment differs from the linked SST resource');
+    expect(out).not.toContain('stray-secret');
+    expect(out).not.toContain('new-secret');
+  });
+
+  it('refuses a previous secret in the environment that differs from the SST resource', async () => {
+    const lines = captureOutput();
+    const connect = vi.spyOn(mongoose, 'connect');
+    vi.stubEnv('MEMORY_KEY_SECRET_PREVIOUS', 'stray-previous');
+    expect(await run([])).toBe(2);
+    expect(connect).not.toHaveBeenCalled();
+    expect(lines.join('\n')).toContain('MEMORY_KEY_SECRET_PREVIOUS in the environment differs');
+    expect(await run(['--verify'])).toBe(0);
   });
 
   it('rejects previous equal to current', async () => {

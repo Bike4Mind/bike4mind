@@ -14,13 +14,14 @@
  *
  * Output: counts only. No key row id and no stored value is printed. Exit code: 0 when every key is
  * under the current key, 1 when any key is unreadable or changed while it was written (run again),
- * 2 on a usage or connection error, or when keys are stored unwrapped (run
- * migrate:protect-credentials first). A preflight raw-key census stops before writes; a raw key
+ * 2 on a usage or connection error, when an environment secret differs from the linked SST resource,
+ * or when keys are stored unwrapped (run migrate:protect-credentials first). A preflight raw-key census stops before writes; a raw key
  * discovered later reports partial progress. Destroyed principals are skipped.
  *
  * Writes go through the raw driver and are conditional on the exact value that was read.
  *
- * Config: memory keys use the runtime's process-env-first order, then SST resources. MONGODB_URI
+ * Config: memory keys use the runtime's process-env-first order, then SST resources; a process-env
+ * secret that differs from a linked SST resource is refused rather than overriding it. MONGODB_URI
  * comes from SST resources (`sst shell`), falling back to process env (self-host). Procedure:
  * docs/security/credential-storage.md.
  *
@@ -46,7 +47,7 @@ Usage: pnpm --filter @bike4mind/scripts migrate:rewrap-memory-keys [--dry-run | 
   --verify    check every key and one fact per principal with the current key alone
 
 Exit codes: 0 everything is under the current key, 1 keys unreadable or left for another run,
-2 error, or keys stored unwrapped.`;
+2 error, an environment secret that differs from the SST resource, or keys stored unwrapped.`;
 
 const MODE_TITLE: Record<SweepMode, string> = {
   rewrite: 'REWRAP',
@@ -55,6 +56,18 @@ const MODE_TITLE: Record<SweepMode, string> = {
 };
 
 const secret = (name: string): string | undefined => process.env[name] || getResource(name);
+
+const configured = (value: string | undefined): string | undefined =>
+  value && value !== 'not-configured' ? value : undefined;
+
+const envDiffersFromResource = (name: string, derive: (secret: string) => Buffer | undefined): boolean => {
+  const fromEnv = configured(process.env[name]);
+  const fromResource = configured(getResource(name));
+  if (!fromEnv || !fromResource) return false;
+  const envKey = derive(fromEnv);
+  const resourceKey = derive(fromResource);
+  return !!envKey && !!resourceKey && !envKey.equals(resourceKey);
+};
 
 export async function run(argv: string[] = process.argv.slice(2)): Promise<number> {
   if (argv.includes('--help')) {
@@ -67,6 +80,21 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<numbe
     return 2;
   }
   const mode: SweepMode = argv.includes('--verify') ? 'verify' : argv.includes('--dry-run') ? 'dry-run' : 'rewrite';
+
+  const conflicts = [
+    envDiffersFromResource('MEMORY_KEY_SECRET', resolveMasterKey) && 'MEMORY_KEY_SECRET',
+    mode !== 'verify' &&
+      envDiffersFromResource('MEMORY_KEY_SECRET_PREVIOUS', resolvePreviousMasterKey) &&
+      'MEMORY_KEY_SECRET_PREVIOUS',
+  ].filter((name): name is string => !!name);
+  if (conflicts.length > 0) {
+    for (const name of conflicts) {
+      console.error(
+        `${name} in the environment differs from the linked SST resource; unset the environment variable or run outside sst shell`
+      );
+    }
+    return 2;
+  }
 
   const current = resolveMasterKey(secret('MEMORY_KEY_SECRET') ?? '');
   if (!current) {
