@@ -69,7 +69,6 @@
     "incremental": "tsdown",
     "dev": "tsdown --watch",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
     "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run"
   },

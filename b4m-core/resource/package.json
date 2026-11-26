@@ -27,6 +27,7 @@
     "clean": "rm -rf dist",
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
+    "typecheck": "tsgo --noEmit --types node",
     "typecheck:tsc": "tsc --noEmit",
     "dev": "tsdown --watch",
     "test": "vitest run",

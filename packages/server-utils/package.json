@@ -8,7 +8,6 @@
   },
   "scripts": {
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit",
     "typecheck":"tsgo --noEmit",
     "test": "vitest run",
     "test:repo": "REPO_TEST_LANE=repo vitest run",

@@ -26,7 +26,6 @@
   "scripts": {
     "build": "tsdown",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
     "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"

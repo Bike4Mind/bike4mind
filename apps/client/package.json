@@ -23,7 +23,6 @@
     "check:bundle-size": "node scripts/check-server-bundle-size.mjs",
     "format": "prettier --write './**/*.{ts,tsx}'",
     "typecheck:tsc": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit",
     "typecheck":"tsgo --noEmit",
     "test": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true vitest run",
     "test:integration": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true CLIENT_TEST_LANE=integration vitest run",

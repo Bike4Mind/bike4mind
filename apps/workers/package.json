@@ -4,7 +4,6 @@
   "private": true,
   "scripts": {
     "typecheck:tsc": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit",
     "typecheck":"tsgo --noEmit",
     "test": "vitest run",
     "test:repo": "REPO_TEST_LANE=repo vitest run",

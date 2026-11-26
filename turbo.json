@@ -41,12 +41,6 @@
     "//#typecheck:tsc": {
       "dependsOn": ["^build"]
     },
-    "typecheck:native": {
-      "dependsOn": ["codegen", "^build"]
-    },
-    "//#typecheck:native": {
-      "dependsOn": ["^build"]
-    },
     "typecheck": {
       "dependsOn": ["codegen", "^build"]
     },
@@ -60,15 +54,6 @@
     // @bike4mind/scripts. These package-specific overrides add the missing cross-package edge;
     // package-specific config REPLACES the generic entry, so ^build is repeated here.
     "@bike4mind/scripts#typecheck:tsc": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../server-utils/**",
-        "!../server-utils/node_modules/**",
-        "!../server-utils/.turbo/**"
-      ]
-    },
-    "@bike4mind/scripts#typecheck:native": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
@@ -208,18 +193,6 @@
         "!../../packages/server-utils/.turbo/**"
       ]
     },
-    "@bike4mind/workers#typecheck:native": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../client/**/*.ts",
-        "../client/tsconfig.json",
-        "../../packages/scripts/help/**/*.ts",
-        "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**",
-        "!../../packages/server-utils/.turbo/**"
-      ]
-    },
     "@bike4mind/workers#typecheck": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
@@ -306,15 +279,6 @@
         "!../../packages/server-utils/.turbo/**"
       ]
     },
-    "@bike4mind/client#typecheck:native": {
-      "dependsOn": ["codegen", "^build"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**",
-        "!../../packages/server-utils/.turbo/**"
-      ]
-    },
     "@bike4mind/client#typecheck": {
       "dependsOn": ["codegen", "^build"],
       "inputs": [
@@ -389,10 +353,6 @@
     // server-utils reads src/premium-generated/ (written by @bike4mind/client's codegen and
     // gitignored, so outside $TURBO_DEFAULT$): same cross-package edge as @bike4mind/scripts.
     "@bike4mind/server-utils#typecheck:tsc": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
-    },
-    "@bike4mind/server-utils#typecheck:native": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
     },

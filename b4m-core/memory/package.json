@@ -28,6 +28,7 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
+    "typecheck": "tsgo --noEmit --types node",
     "typecheck:tsc": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

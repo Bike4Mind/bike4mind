@@ -299,7 +299,6 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "typecheck:tsc": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
     "typecheck":"tsgo --noEmit --types node",
     "dev": "tsdown --watch",
     "test": "vitest run",

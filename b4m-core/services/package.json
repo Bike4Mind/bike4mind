@@ -539,7 +539,6 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "typecheck:tsc": "tsc --noEmit && pnpm typecheck:scheduler",
-    "typecheck:native": "tsgo --noEmit --types node && pnpm typecheck:scheduler",
     "typecheck":"tsgo --noEmit --types node && pnpm typecheck:scheduler",
     "typecheck:scheduler": "tsc --noEmit -p tsconfig.scheduler-test.json",
     "dev": "tsdown --watch",
