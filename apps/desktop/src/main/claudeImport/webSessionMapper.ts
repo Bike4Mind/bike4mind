@@ -67,7 +67,8 @@ export function readNotebook(raw: unknown): WebNotebook | null {
     name: str(row.name)?.trim() || 'Untitled notebook',
     createdAt,
     updatedAt,
-    version: `${updated ?? ''}|${lastUpdated ?? ''}`,
+    // Must stay comparable with the legacy `updatedAt|lastUpdated` form (comparableVersion in WebSessionSync).
+    version: lastUpdated ?? updated ?? '',
   };
 }
 
