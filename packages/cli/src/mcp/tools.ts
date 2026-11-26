@@ -248,13 +248,21 @@ const KEY_SCOPES_TIMEOUT_MS = 5 * 1000;
  */
 const SCOPE_ALTERNATES: Record<string, readonly string[]> = {
   'notebooks:read': ['notebooks:write'],
-  'projects:read': ['projects:write'],
   'datalake:read': ['datalake:write', 'datalake:query'],
 };
 
-/** Per-tool alternates that override the scope's: get_file's route also admits ai:generate keys, list_files' does not. */
+/**
+ * Per-tool alternates that override the scope's: get_file's route also admits ai:generate keys, list_files' does not;
+ * send_message's chat and quest-poll routes both admit ai:generate.
+ */
 const TOOL_ALTERNATES: Record<string, readonly string[]> = {
   get_file: ['ai:generate'],
+  send_message: ['ai:generate'],
+};
+
+/** Tools whose calls reach a second route: the key must also hold one of these, beside the tool's own scope. */
+const TOOL_ALSO_NEEDS_ONE_OF: Record<string, readonly string[]> = {
+  publish_artifact: ['notebooks:read', 'notebooks:write'],
 };
 
 /** The tools registerTools put on each server, by name, so they can be taken back off the list. */
@@ -279,7 +287,10 @@ export async function restrictToolsToKeyScopes(server: McpServer, client: B4mApi
   for (const [name, handle] of toolHandles.get(server) ?? []) {
     const scope = wanted.get(name);
     const alternates = TOOL_ALTERNATES[name] ?? SCOPE_ALTERNATES[scope ?? ''] ?? [];
-    if (scope && ![scope, ...alternates].some(accepted => scopes.includes(accepted))) {
+    if (!scope) continue;
+    const alsoNeeds = TOOL_ALSO_NEEDS_ONE_OF[name];
+    const holdsScope = [scope, ...alternates].some(accepted => scopes.includes(accepted));
+    if (!holdsScope || (alsoNeeds && !alsoNeeds.some(needed => scopes.includes(needed)))) {
       handle.disable();
     }
   }

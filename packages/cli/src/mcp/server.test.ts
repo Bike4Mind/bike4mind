@@ -101,13 +101,30 @@ describe('restrictToolsToKeyScopes', () => {
   });
 
   it.each([
-    ['projects:write', ['list_projects', 'get_project']],
     ['notebooks:write', ['list_notebooks', 'get_notebook', 'search_knowledge_base']],
     ['datalake:query', ['list_lakes']],
-    ['ai:generate', ['get_file']],
+    ['ai:generate', ['get_file', 'send_message']],
   ])('keeps the read tools listed for a key that holds only %s', async (scope, tools) => {
     expect(await listedTools([scope])).toEqual(expect.arrayContaining(tools));
   });
+
+  it('hides the project read tools from a key that holds only projects:write', async () => {
+    const names = await listedTools(['projects:write']);
+    expect(names).not.toContain('list_projects');
+    expect(names).not.toContain('get_project');
+    expect(names).toContain('create_project');
+  });
+
+  it('hides publish_artifact from a key that holds only artifacts:publish', async () => {
+    expect(await listedTools(['artifacts:publish'])).not.toContain('publish_artifact');
+  });
+
+  it.each([['notebooks:read'], ['notebooks:write']])(
+    'lists publish_artifact for a key that holds artifacts:publish and %s',
+    async scope => {
+      expect(await listedTools(['artifacts:publish', scope])).toContain('publish_artifact');
+    }
+  );
 
   it.each([['files:write'], ['ai:generate']])('hides list_files from a key that holds only %s', async scope => {
     expect(await listedTools([scope])).not.toContain('list_files');
