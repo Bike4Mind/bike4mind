@@ -1,6 +1,6 @@
 import { AdminSettings } from '@bike4mind/database/infra';
-import { redactSettingSecrets, type AdminSettingDoc } from '@bike4mind/common';
-import { decryptAtRest } from '@bike4mind/utils/security';
+import { type AdminSettingDoc } from '@bike4mind/common';
+import { redactStoredSetting } from '@server/utils/redactStoredSetting';
 import { adminApi } from '@server/middlewares/adminApi';
 
 // Get Admin Settings - returns the FULL AdminSettings collection, and needs settings:manage.
@@ -18,13 +18,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 const handler = adminApi({ adminPermissions: { GET: 'settings:manage' } }).get(async (_req, res) => {
   const settings = await AdminSettings.find().lean();
 
-  const redacted: AdminSettingDoc[] = (settings ?? []).map(setting => {
-    const decrypted =
-      typeof setting.settingValue === 'string'
-        ? { ...setting, settingValue: decryptAtRest(setting.settingValue) }
-        : setting;
-    return redactSettingSecrets(decrypted as unknown as AdminSettingDoc);
-  });
+  const redacted: AdminSettingDoc[] = (settings ?? []).map(redactStoredSetting);
 
   return res.json(redacted);
 });

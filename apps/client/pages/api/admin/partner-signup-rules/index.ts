@@ -11,7 +11,6 @@ import {
 import { assertGrantPackageExists, assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
-import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -29,6 +28,7 @@ function toBadRequest(error: unknown): never {
 
 const handler = adminApi({
   adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  fullAdminMethods: ['POST'],
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(
@@ -51,8 +51,6 @@ const handler = adminApi({
       } catch (error) {
         toBadRequest(error);
       }
-      // Rule tags are stamped at signup and outlive the rule.
-      assertCanChangeManagedTags(req.user, [], data.tags);
       assertKnownEntitlements(data.entitlements);
       await assertOrganizationExists(data.organizationId);
       await assertGrantPackageExists(data.grantPackageId, { requireActive: true });

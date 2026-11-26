@@ -233,6 +233,22 @@ describe('POST /api/admin/user-api-keys/[id]/rotate - delegated admins', () => {
     expect(h.rotate).toHaveBeenCalled();
   });
 
+  it('refuses a delegate on a key with an admin-provisioned scope, which only a full admin may hold a secret for', async () => {
+    h.findKey.mockResolvedValue(activeKey({ scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE] }));
+    await expect(guarded(request({ user: delegate(['keys:revoke', 'users:impersonate']) }))).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'Only full administrators can rotate API keys with admin-provisioned scopes',
+    });
+    expect(h.rotate).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin rotate a key with an admin-provisioned scope', async () => {
+    h.findKey.mockResolvedValue(activeKey({ scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE] }));
+    await expect(guarded(request())).resolves.not.toThrow();
+    expect(h.rotate).toHaveBeenCalled();
+  });
+
   it('refuses keys:revoke alone, since the response carries a working secret', async () => {
     await expect(guarded(request({ user: delegate(['keys:revoke']) }))).rejects.toMatchObject({
       message: 'Missing permission: users:impersonate',

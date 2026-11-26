@@ -42,9 +42,9 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFr
 
 import handler from '../[id]';
 
-const call = async (method: string, body?: unknown) => {
+const call = async (method: string, body?: unknown, user: object = { id: 'a1', isAdmin: true }) => {
   const { req, res } = createMocks({ method: method as 'GET', query: { id: 'idp1' }, body: body as object });
-  (req as unknown as Record<string, unknown>).user = { id: 'a1', isAdmin: true };
+  (req as unknown as Record<string, unknown>).user = user;
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return res;
 };
@@ -87,5 +87,14 @@ describe('/api/admin/identity-providers/[id] response schema', () => {
     const res = await call('PUT', { name: 'Acme Okta' });
     expect(res._getStatusCode()).toBe(200);
     expectNoCredentials(res._getJSONData());
+  });
+
+  it('PUT refuses a delegated settings:manage admin before reading or writing the provider', async () => {
+    const delegate = { id: 'd1', isAdmin: false, adminPermissions: ['settings:manage'] };
+    await expect(call('PUT', { samlConfig: { cert: 'OTHER-CERT' } }, delegate)).rejects.toThrow(
+      /only full administrators/i
+    );
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockUpdateIDP).not.toHaveBeenCalled();
   });
 });

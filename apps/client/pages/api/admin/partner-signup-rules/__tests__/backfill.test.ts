@@ -58,10 +58,10 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFr
 
 import '@pages/api/admin/partner-signup-rules/backfill';
 
-const run = async (commit: boolean) => {
+const run = async (commit: boolean, user: object = { isAdmin: true, id: 'admin-1' }) => {
   const { req, res } = createMocks({ method: 'POST' });
   Object.assign(req, {
-    user: { isAdmin: true, id: 'admin-1' },
+    user,
     body: { id: 'r1', commit },
     logger: { error: vi.fn() },
   });
@@ -98,6 +98,14 @@ describe('POST /api/admin/partner-signup-rules/backfill - admin audit', () => {
     );
     const lastApply = h.applyMembership.mock.invocationCallOrder.at(-1) ?? 0;
     expect(lastApply).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('refuses a settings:manage delegate before any membership is written', async () => {
+    await expect(run(true, { isAdmin: false, id: 'd1', adminPermissions: ['settings:manage'] })).rejects.toThrow(
+      /only full administrators/i
+    );
+    expect(h.findRule).not.toHaveBeenCalled();
+    expect(h.applyMembership).not.toHaveBeenCalled();
   });
 
   it('does not audit a dry run', async () => {

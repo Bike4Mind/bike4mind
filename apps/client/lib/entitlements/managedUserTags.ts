@@ -33,8 +33,9 @@ export const managedTagsChanged = (
 ): boolean => managedTokens(before) !== managedTokens(after);
 
 /**
- * Tags on a grant package, partner rule or the defaultTags setting land on every account they reach,
- * so adding, removing or re-casing a managed tag there stays full-admin only, as in the tag editor.
+ * Tags on a grant package or the defaultTags setting land on every account they reach, so adding,
+ * removing or re-casing a managed tag there stays full-admin only, as in the tag editor. Partner rule
+ * writes are full-admin only as a whole (pages/api/admin/partner-signup-rules).
  */
 export function assertCanChangeManagedTags(
   user: Parameters<typeof isFullAdmin>[0],
