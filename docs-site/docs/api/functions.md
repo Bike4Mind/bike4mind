@@ -1,16 +1,16 @@
 ---
 title: Functions
-description: List, read, and call your live functions over the API, and get each result with a stamp of what it ran on.
+description: List, read, and call your live functions over the API, get each result with a stamp of what it ran on, and write, test, promote, and share your functions.
 sidebar_position: 7
 ---
 
 # Functions
 
-A function is a Python artifact you saved as a function and promoted to live after its tests passed on the server. You list your live functions with `GET /api/v1/functions`, read one with `GET /api/v1/functions/{id}`, and call one with `POST /api/v1/functions/{id}/invoke`. Use your deployment's base URL; the hosted URL is `https://app.bike4mind.com/api/v1`.
+A function is a Python artifact you saved as a function and promoted to live after its tests passed on the server. You list your live functions with `GET /api/v1/functions`, read one with `GET /api/v1/functions/{id}`, and call one with `POST /api/v1/functions/{id}/invoke`. You can also [author a function](#author-a-function) from nothing to live and shared without opening the app. Use your deployment's base URL; the hosted URL is `https://app.bike4mind.com/api/v1`.
 
 ## Create a Functions key
 
-In your profile, open the API keys tab, choose **New key**, and pick the **Functions** access level. The key holds the `functions:invoke` scope and nothing else: it reaches only these three routes and the [MCP endpoint](./functions-mcp.md), and a request to mint `functions:invoke` together with any other scope is refused. The Functions level appears only while callable functions are turned on for your account.
+In your profile, open the API keys tab, choose **New key**, and pick the **Functions** access level. The key holds the `functions:invoke` scope: it reaches only the calling routes on this page and the [MCP endpoint](./functions-mcp.md). Tick **Also write, test, promote, and share your functions** to add `functions:author`, which reaches only the [authoring routes](#author-a-function). The two may share a key, and a request to mint either together with any other scope is refused. `functions:author` calls nothing, and `functions:invoke` authors nothing. The Functions level appears only while callable functions are turned on for your account.
 
 Each call answers for the key's owner. A key reaches only the live functions its owner owns. A draft, a turned-off function, a function whose artifact was deleted, and another person's function all answer `404`, the same as an id that does not exist.
 
@@ -124,6 +124,41 @@ curl -X POST https://app.bike4mind.com/api/v1/functions/calls/<call-id>/cancel \
 
 The answer is the call as a poll reads it: `finished`, with `outcome` set to `cancelled`. A queued call never runs. A running call is left to end, but what it returns is discarded, so a later poll still reads `cancelled`. A call that already finished is returned unchanged. Only the user who made the call can cancel it; any other id answers `404`. Cancel is available only here: [MCP](./functions-mcp.md) tool calls and calls from chat wait for their result, so there is nothing to cancel.
 
+## Author a function
+
+With `functions:author` a key writes, tests, promotes, and shares its owner's own functions, with no visit to the app. Each route answers for the key's owner only: a function shared with you and another person's function both answer `404`, the same as an id that does not exist. Every route is refused with `403` while callable functions are turned off for your account.
+
+| Route                                         | What it does                                                                                    |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `POST /api/v1/functions`                      | Saves `code` and its `contract` (the `FUNCTION` object, as JSON) as a new draft.                |
+| `GET /api/v1/functions/mine`                  | Lists your functions in every state, without their code.                                        |
+| `GET /api/v1/functions/{id}/source`           | Reads one of your functions with its code, contract, examples, data, sources, and share.        |
+| `PUT /api/v1/functions/{id}/code`             | Saves new `code` and `contract` with the `pin_version` you read. The function returns to draft. |
+| `PATCH /api/v1/functions/{id}`                | Sets `enabled` (turn it off or on) or `approval`, one per request.                              |
+| `DELETE /api/v1/functions/{id}`               | Deletes the function, its data files, and its shares.                                           |
+| `PUT /api/v1/functions/{id}/examples`         | Replaces its worked examples.                                                                   |
+| `POST /api/v1/functions/{id}/test-runs`       | Runs its declared tests on the server, or the ones named in `tests`.                            |
+| `POST /api/v1/functions/{id}/data`            | Pins a file you uploaded as `/data/<name>`.                                                     |
+| `DELETE /api/v1/functions/{id}/data/{name}`   | Unpins a data file.                                                                             |
+| `PUT /api/v1/functions/{id}/sources`          | Replaces its sources. Leave one out to remove it.                                               |
+| `POST /api/v1/functions/{id}/promote`         | Makes it live once every test and worked example has passed on the server.                      |
+| `GET /api/v1/functions/{id}/share`            | Reads who it is shared with.                                                                    |
+| `PUT /api/v1/functions/{id}/share`            | Replaces the share of a live function: people, a project, or an organization.                   |
+| `DELETE /api/v1/functions/{id}/share`         | Stops sharing it.                                                                               |
+| `GET /api/v1/functions/{id}/recipient?email=` | Finds the person holding an address, to name in a share. 20 lookups a minute.                   |
+| `GET /api/v1/functions/{id}/calls`            | Summarizes its calls of the last 30 days.                                                       |
+
+A typical run from nothing to shared: create the draft, add a cited worked example, run the tests, promote, look up each person by address, and share. The same key then calls it with `functions:invoke`.
+
+```bash
+curl https://app.bike4mind.com/api/v1/functions \
+  -H 'Authorization: Bearer <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"code":"FUNCTION = {...}\n\ndef run(inputs):\n    ...\n","contract":{"name":"beam_midspan_deflection", ...}}'
+```
+
+A refused request carries `error` and, where the reason is one you can act on, `code`: for example `version_changed` when the function changed since you read it (read it again and resend with the new `pin_version`), `invalid_contract` with `problems`, `name_changed`, `not_live` when you share a draft, and `no_cases` when you promote a function with no test and no worked example. A body that does not fit the route answers `422`. A test run or promotion answers `503` while no function runtime is available.
+
 ## Limits
 
 - The input may be up to 5 MB, and so may the output. An output too large to return answers `502` with `outcome` set to `output_too_large`.
@@ -135,8 +170,8 @@ The answer is the call as a poll reads it: `finished`, with `outcome` set to `ca
 
 Errors use the shared error envelope described in [Errors](./errors.md).
 
-- `403`: the key does not hold `functions:invoke`, or callable functions are turned off for your account.
-- `404`: the function is not one of your live functions, or a polled or cancelled call is not yours or has expired.
+- `403`: the key does not hold the scope the route names (`functions:invoke` to list, read, and call; `functions:author` to author), or callable functions are turned off for your account.
+- `404`: the function is not one of your live functions (for an authoring route, not one of your functions), or a polled or cancelled call is not yours or has expired.
 - `413`: the input is larger than 5 MB.
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
 - `429`: you passed the rate limit, or you already have as many asynchronous calls queued or running as your organization's **Callable Function Pending Call Limit** allows (10 unless it sets another). In the second case `errorCode` is `concurrency_limit_exceeded` and `limit` is the cap; send the call again when one finishes.
