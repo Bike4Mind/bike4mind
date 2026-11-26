@@ -18,8 +18,8 @@ interface IQueueHandlerStartHeardPromptEvent extends IBaseEvent {
     sessionId: string;
     /** ID of the quest */
     questId: string;
-    /** The prompt that was heard */
-    promptMessage: string;
+    /** Character length of the prompt; the text itself is never recorded in analytics */
+    promptLength: number;
   };
 }
 
@@ -62,8 +62,6 @@ interface IQueueHandlerImageGenerateEvent extends IBaseEvent {
     sessionId: string;
     /** ID of the quest */
     questId: string;
-    /** The prompt that was used to generate the image */
-    promptMessage: string;
     /** The total number of images generated */
     totalImagesGenerated: number;
     /** The AI vendor used to generate the image. Eg., openai, midjourney */

@@ -168,6 +168,13 @@ describe('sessionSummarization summary-file lookup', () => {
     h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
   });
 
+  it('keeps the generated summary text out of the logs', async () => {
+    await run();
+
+    const logged = JSON.stringify([logger.info, logger.warn, logger.error, logger.debug].map(fn => fn.mock.calls));
+    expect(logged).not.toContain('A summary of the session.');
+  });
+
   it('looks the summary file up by session id AND the session owner', async () => {
     await run();
 

@@ -113,6 +113,16 @@ async function fetchEventMetrics(filters: EventMetricsFilters): Promise<EventMet
   return metrics;
 }
 
+/**
+ * Analytics events no longer record prompt text (see LLMEvents.QUEUE_HANDLER_START_HEARD_PROMPT),
+ * but older rows and cached responses may still hold it. Prompt text is a support read, never a metric.
+ */
+function withoutPromptText(metric: EventMetricResponse): EventMetricResponse {
+  if (!metric.metadata || !('promptMessage' in metric.metadata)) return metric;
+  const { promptMessage: _promptMessage, ...metadata } = metric.metadata;
+  return { ...metric, metadata };
+}
+
 const ONE_MINUTE_MS = 60 * 1000;
 // Measured off the two dashboards that call this (app/components/admin/EventMetrics and
 // SlackMetrics, both through useEventMetrics): one request per distinct applied filter set behind
@@ -139,7 +149,7 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
         logger: req.logger,
       });
 
-      return res.json(metrics);
+      return res.json(metrics.map(withoutPromptText));
     } catch (error) {
       req.logger.error('Error fetching event metrics', { error });
       return res.status(500).json({

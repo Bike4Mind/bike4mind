@@ -39,3 +39,16 @@ describe('Logger.initialize session-id guard', () => {
     await expect(Logger.getInstance().initialize('../../etc/evil')).rejects.toThrow(/Invalid session id/);
   });
 });
+
+describe.skipIf(process.platform === 'win32')('Logger debug file permissions', () => {
+  it('keeps the debug directory and session file owner-only', async () => {
+    const debugDir = path.join(fakeHome, '.bike4mind', 'debug');
+    await fs.mkdir(debugDir, { recursive: true, mode: 0o755 });
+    await fs.chmod(debugDir, 0o755);
+
+    await Logger.getInstance().initialize('perm-id');
+
+    expect((await fs.stat(debugDir)).mode & 0o777).toBe(0o700);
+    expect((await fs.stat(path.join(debugDir, 'perm-id.txt'))).mode & 0o777).toBe(0o600);
+  });
+});
