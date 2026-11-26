@@ -71,6 +71,29 @@ describe('classifyCommandRisk', () => {
       ['a backquote substitution', 'echo `rm -rf /`'],
       ['a backquote substitution inside double quotes', 'echo "`rm -rf /`"'],
       ['a substitution in an expanding heredoc body', 'cat <<EOF\n$(rm -rf /)\nEOF'],
+      ['a quoted script on interpreter stdin', "bash <<'EOF'\nrm -rf sentinel\nEOF"],
+      ['a quoted script piped into an interpreter', "cat <<'EOF' | bash\nrm -rf sentinel\nEOF"],
+      ['a multiline substitution in an expanding heredoc', 'cat <<EOF\n$(\nrm -rf sentinel\n)\nEOF'],
+      ['a command after an ANSI-C quoted heredoc delimiter', "cat <<$'EOF'\ntext\nEOF\nrm -rf sentinel"],
+      ['nested-escaped-backquotes', 'echo `echo \\`rm -rf sentinel\\``'],
+      ['dynamic-eval-heredoc', 'eval "$(cat <<\'EOF\'\nrm -rf sentinel\nEOF\n)"'],
+      ['dynamic-interpreter-code-heredoc', 'bash -c "$(cat <<\'EOF\'\nrm -rf sentinel\nEOF\n)"'],
+      ['dynamic-interpreter-herestring', 'bash <<< "$(cat <<\'EOF\'\nrm -rf sentinel\nEOF\n)"'],
+      ['a computed program name', '$(printf rm) -rf sentinel'],
+      ['a computed protected destination', 'cp x "$(printf .git/config)"'],
+      ['a computed protected redirect', 'printf x > "$(printf .git/config)"'],
+      ['leading heredoc redirect', "<<'EOF' bash\nrm -rf sentinel\nEOF"],
+      ['IO prefixed heredoc', "0<<'EOF' bash\nrm -rf sentinel\nEOF"],
+      ['multiple leading redirects', "< /dev/null bash <<'EOF'\nrm -rf sentinel\nEOF"],
+      ['heredoc inside conditional', "if true; then bash <<'EOF'\nrm -rf sentinel\nEOF\nfi"],
+      ['assignment before heredoc interpreter', "FOO=1 bash <<'EOF'\nrm -rf sentinel\nEOF"],
+      ['computed text piped to interpreter', "printf '%s' \"$(cat <<'EOF'\nrm -rf sentinel\nEOF\n)\" | bash"],
+      ['environment interpreter code', 'bash -c "$CODE"'],
+      ['environment writer options', 'cp "$OPTIONS" x'],
+      ['computed Git subcommand', 'git "$(printf config)" core.hooksPath inert'],
+      ['here-string data piped to interpreter', "cat <<< 'rm -rf sentinel' | bash"],
+      ['computed here-string data piped to interpreter', 'cat <<< "$CODE" | bash'],
+      ['redirected script input', 'bash < "$SCRIPT"'],
       ['a case pattern inside a substitution', 'echo "$(case x in a) rm -rf /;; esac)"'],
     ])('classifies text hidden from the tokenizer: %s', (_label, command) => {
       expectAtLeast(command, 'high');
@@ -87,11 +110,15 @@ describe('classifyCommandRisk', () => {
       expect(classifyCommandRisk('ls src # list').level).toBe('unclassified');
     });
 
-    it('drops quoted heredoc bodies as data', () => {
+    it('requires approval for heredoc syntax including literal data', () => {
       expect(classifyCommandRisk("git commit -m \"$(cat <<'EOF'\nfix: it's done\nrm -rf /\nEOF\n)\"").level).toBe(
-        'unclassified'
+        'high'
       );
-      expect(classifyCommandRisk("cat <<'EOF'\n$(rm -rf /)\nEOF").level).toBe('unclassified');
+      expect(classifyCommandRisk("cat <<'EOF'\n$(rm -rf /)\nEOF").level).toBe('high');
+    });
+
+    it('does not classify a redirection-only write as a no-op', () => {
+      expect(classifyCommandRisk('> existing.txt').level).not.toBe('low');
     });
 
     it('never rates a command with a substitution as a no-op', () => {
@@ -110,6 +137,25 @@ describe('classifyCommandRisk', () => {
       'ln -s x sub/.git/hooks/post-checkout',
       'dd if=x of=.git/config',
       'sed -i s/a/b/ .GIT/config',
+      'git -C . config core.hooksPath x',
+      'git --git-dir .git config core.fsmonitor x',
+      'git -c user.name=test config core.hooksPath x',
+      'rm .git/config',
+      'git -ccore.fsmonitor=inert status',
+      'git -c "$(printf core.fsmonitor=inert)" status',
+      'FOO=1 rm .git/config',
+      'git config --show-origin core.hooksPath x',
+      'git config -- core.hooksPath --get',
+      'git config --unset core.hooksPath',
+      'FOO=/tmp rm .git/config',
+      '! rm .git/config',
+      '{ rm .git/config; }',
+      '</dev/null rm .git/config',
+      '>/dev/null rm .git/config',
+      'exec </dev/null rm .git/config',
+      'env 2>/dev/null rm .git/config',
+      '0<<<"$CODE" bash',
+      'git config core.hooksPath 2 >/dev/null',
       'git config core.hooksPath x',
       'git config --global core.fsmonitor x',
       'git config --file .git/config core.pager x',

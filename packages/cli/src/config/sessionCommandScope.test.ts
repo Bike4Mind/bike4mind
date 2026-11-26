@@ -14,7 +14,6 @@ describe('sessionCommandPrefixes', () => {
     ['git status && git log --oneline', ['git status', 'git log']],
     ['git log | head -5', ['git log', 'head']],
     ['(ls packages); pwd', ['ls', 'pwd']],
-    ['git log 2>&1 | grep fix', ['git log', 'grep']],
     ['sort -u names.txt', ['sort']],
     ['npm test', ['npm test']],
     ['npm test -- --watch=false', ['npm test']],
@@ -36,6 +35,10 @@ describe('sessionCommandPrefixes', () => {
     ['ls a#b; pwd', ['ls', 'pwd']],
   ])('scopes %j to %j', (command, expected) => {
     expect(sessionCommandPrefixes(command)).toEqual(expected);
+  });
+
+  it('keeps ambiguous IO-number commands out of session approvals', () => {
+    expect(sessionCommandPrefixes('git log 2>&1 | grep fix')).toBeNull();
   });
 
   it.each([
