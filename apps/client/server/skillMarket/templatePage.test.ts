@@ -170,10 +170,10 @@ describe('renderTemplatePage', () => {
   describe('metrics line', () => {
     const metrics = (html: string) => /data-testid="template-page-metrics">([^<]*)</.exec(html)?.[1];
 
-    it('shows views and downloads under the byline, compactly', () => {
+    it('shows views and downloads inside the byline, compactly', () => {
       const html = renderTemplatePage({ ...view, metrics: { views: 1234, downloads: 87 } });
       expect(metrics(html)).toBe('1.2k views \u00b7 87 downloads');
-      expect(html.indexOf('template-page-byline')).toBeLessThan(html.indexOf('template-page-metrics'));
+      expect(html).toMatch(/template-page-byline">[^<]* \u00b7 <span data-testid="template-page-metrics">[^<]*<\/span><\/p>/);
     });
 
     it('leaves out a zero count', () => {

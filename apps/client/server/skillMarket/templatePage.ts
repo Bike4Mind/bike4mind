@@ -140,23 +140,23 @@ export interface TemplatePageView {
 export const templateTryPath = (slug: string): string => `/skills/market/try/${encodeURIComponent(slug)}`;
 
 const PAGE_STYLE = `
-  :root{color-scheme:light dark;--fg:#1a1a2e;--muted:#5b5b70;--bg:#f7f7fb;--card:#fff;--line:#d6d6e2;--accent:#4f46e5;--accent-fg:#fff}
-  @media (prefers-color-scheme: dark){:root{--fg:#e6e6f0;--muted:#a0a0b8;--bg:#0f0f1a;--card:#1a1a2b;--line:#34344a;--accent:#8b85ff;--accent-fg:#0f0f1a}}
+  :root{color-scheme:light dark;--fg:#161b26;--muted:#5b6476;--bg:#ffffff;--card:#ffffff;--line:#e3e7ef;--accent:#3a50d9;--accent-soft:#eef1ff;--accent-fg:#fff;--coral:#d9542f;--coral-soft:#fdeee8;--green:#1f8a5b;--serif:"Newsreader","Iowan Old Style","Charter",Georgia,serif;--sans:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;--mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+  @media (prefers-color-scheme: dark){:root{--fg:#e6e9f0;--muted:#9aa3b5;--bg:#151922;--card:#1a1f2b;--line:#2a3142;--accent:#8c9cff;--accent-soft:#232a44;--accent-fg:#151922;--coral:#ff9a76;--coral-soft:#3a2520;--green:#5fd3a0}}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.5}
-  main{max-width:44rem;margin:0 auto;padding:3rem 1rem 4rem}
-  h1{font-size:clamp(1.6rem,4vw,2.25rem);line-height:1.2;margin:0 0 .75rem}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.55}
+  code,pre,kbd{font-family:var(--mono)}
+  main{max-width:calc(44rem + 2 * clamp(20px,6vw,88px));margin:0 auto;padding:clamp(40px,8vw,96px) clamp(20px,6vw,88px)}
+  h1{font-family:var(--serif);font-weight:400;letter-spacing:-.02em;font-size:clamp(2.2rem,4.6vw,3.6rem);line-height:1.02;margin:0 0 1rem}
   .byline{color:var(--muted);margin:0 0 1rem}
-  .metrics{color:var(--muted);font-size:.9rem;margin:-.75rem 0 1rem}
   .needs{display:flex;align-items:center;gap:.45rem;font-size:.9rem;font-weight:600;margin:0 0 .5rem}
   .needs::before{content:"";flex:none;width:.5rem;height:.5rem;border-radius:50%;background:var(--accent)}
   .lead .cta{margin-top:1rem}
   .preview{display:block;width:100%;height:auto;aspect-ratio:1200/630;object-fit:cover;border-radius:12px;border:1px solid var(--line);background:var(--card);margin:0 0 1.75rem}
-  .cta{display:inline-block;background:var(--accent);color:var(--accent-fg);text-decoration:none;font-weight:600;padding:.75rem 1.4rem;border-radius:10px}
+  .cta{display:inline-block;background:var(--accent);color:var(--accent-fg);text-decoration:none;font-weight:600;padding:.85rem 1.6rem;border-radius:10px}
   .cta:focus-visible{outline:3px solid var(--fg);outline-offset:2px}
   .credits{color:var(--muted);font-size:.9rem;margin:.75rem 0 0}
   .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-  .run{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:1.25rem;margin:0 0 1.75rem}
+  .run{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:1.5rem;margin:0 0 1.75rem}
   .run label{display:block;font-weight:600;margin:0 0 .5rem}
   .run .file{margin:.75rem 0 0}
   .run .file label{font-weight:400;color:var(--muted);font-size:.9rem;margin:0 0 .3rem}
@@ -179,15 +179,6 @@ function shareDescription(view: TemplatePageView): string {
   return `Try the /${view.skillName} skill on ${view.brandName}${author ? `, by ${author}` : ''}.`;
 }
 
-function bylineBlock(view: TemplatePageView): string {
-  const author = view.authorName?.trim() || 'a Bike4Mind user';
-  const rating = view.rating && view.rating.count > 0 ? view.rating : null;
-  const stars = rating
-    ? ` \u00b7 <span data-testid="template-page-rating">\u2605 ${(rating.sum / rating.count).toFixed(1)} (${rating.count})</span>`
-    : '';
-  return `<p class="byline" data-testid="template-page-byline">by ${escapeHtml(author)}${stars}</p>`;
-}
-
 /** 1234 -> "1.2k", 3_456_789 -> "3.4M". Rounds down, so a count never reads higher than it is. */
 export function compactCount(n: number): string {
   const units: [number, string][] = [
@@ -203,15 +194,20 @@ export function compactCount(n: number): string {
 
 const countPhrase = (n: number, noun: string): string => `${compactCount(n)} ${noun}${n === 1 ? '' : 's'}`;
 
-function metricsBlock(view: TemplatePageView): string {
+function bylineBlock(view: TemplatePageView): string {
+  const author = view.authorName?.trim() || 'A Bike4Mind user';
+  const rating = view.rating && view.rating.count > 0 ? view.rating : null;
+  const stars = rating
+    ? ` \u00b7 <span data-testid="template-page-rating">\u2605 ${(rating.sum / rating.count).toFixed(1)} (${rating.count})</span>`
+    : '';
   const views = view.metrics?.views ?? 0;
   const downloads = view.metrics?.downloads ?? 0;
   const parts = [
     views > 0 ? countPhrase(views, 'view') : '',
     downloads > 0 ? countPhrase(downloads, 'download') : '',
   ].filter(Boolean);
-  if (!parts.length) return '';
-  return `<p class="metrics" data-testid="template-page-metrics">${parts.join(' \u00b7 ')}</p>`;
+  const metrics = parts.length ? ` \u00b7 <span data-testid="template-page-metrics">${parts.join(' \u00b7 ')}</span>` : '';
+  return `<p class="byline" data-testid="template-page-byline">${escapeHtml(author)}${stars}${metrics}</p>`;
 }
 
 function connectorsBlock(connectors: readonly string[] | undefined): string {
@@ -529,7 +525,6 @@ export function renderTemplatePage(view: TemplatePageView): string {
   const lead = [
     `<h1 data-testid="template-page-headline">${headline}</h1>`,
     bylineBlock(view),
-    metricsBlock(view),
     connectorsBlock(view.connectors),
   ]
     .filter(Boolean)

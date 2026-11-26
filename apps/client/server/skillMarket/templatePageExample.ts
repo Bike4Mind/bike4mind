@@ -26,27 +26,27 @@ export interface TemplatePageExampleView {
 const PAUSE = { user: 700, tool: 550, used: 500, reply: 800, chip: 450 } as const;
 
 export const EXAMPLE_STYLE = `
-  main.wide{max-width:78rem}
-  .cols{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:2.5rem;align-items:start}
+  main.wide{max-width:calc(80rem + 2 * clamp(20px,6vw,88px));min-height:100svh;box-sizing:border-box;display:grid;align-content:center}
+  .cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:4rem;align-items:center}
   .ex-win{border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden;display:flex;flex-direction:column;box-shadow:0 12px 32px rgba(0,0,0,.08)}
-  .ex-bar{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.5rem .9rem;border-bottom:1px solid var(--line);font-size:.85rem;font-weight:600;color:var(--muted)}
+  .ex-bar{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.9rem 1.25rem;border-bottom:1px solid var(--line);font-size:.85rem;font-weight:600;color:var(--muted)}
   .ex-bar button,.ex-panel-bar button{font:inherit;font-size:.8rem;color:var(--fg);background:transparent;border:1px solid var(--line);border-radius:8px;padding:.2rem .6rem;cursor:pointer;align-items:center;gap:.3rem}
   .ex-stage{position:relative}
   .ex-live .ex-stage{height:36rem}
-  .ex-thread{height:auto;max-height:30rem;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.65rem}
+  .ex-thread{height:auto;max-height:30rem;overflow-y:auto;padding:1.25rem;display:flex;flex-direction:column;gap:.8rem}
   .ex-user{align-self:flex-end;max-width:85%;display:flex;flex-direction:column;align-items:flex-end;gap:.4rem}
   .ex-bubble{background:var(--bg);border:1px solid var(--line);border-radius:14px 14px 4px 14px;padding:.55rem .8rem;white-space:pre-wrap;word-break:break-word}
   .ex-file{display:flex;align-items:center;gap:.6rem;border:1px solid var(--line);border-radius:10px;background:var(--card);padding:.45rem .7rem;max-width:100%}
   .ex-file-icon{flex:none;font-size:.7rem;font-weight:700;color:var(--accent-fg);background:var(--accent);border-radius:6px;padding:.3rem .4rem}
   .ex-file-name{display:block;font-weight:600;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ex-file-meta{display:block;font-size:.75rem;color:var(--muted)}
-  .ex-skill-chip{display:inline-flex;align-items:center;border-radius:999px;padding:.05rem .55rem;font-size:.8rem;font-weight:600;line-height:1.5;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);margin-right:.35rem;white-space:nowrap}
+  .ex-skill-chip{display:inline-flex;align-items:center;border-radius:999px;padding:.05rem .55rem;font-size:.8rem;font-weight:600;line-height:1.5;background:var(--accent-soft);color:var(--accent);font-family:var(--mono);margin-right:.35rem;white-space:nowrap}
   .ex-tool{display:flex;align-items:center;gap:.45rem;margin:0;font-size:.8rem;color:var(--muted)}
   .ex-tool::before{content:"";flex:none;width:.4rem;height:.4rem;border-radius:50%;background:var(--accent)}
   .ex-sim{font-size:.7rem;border:1px solid var(--line);border-radius:999px;padding:0 .45rem}
   .ex-used{margin:0;font-size:.75rem;color:var(--muted)}
   .ex-used strong{font-size:.875rem;font-weight:600;color:var(--fg)}
-  .ex-reply{overflow-x:auto}
+  .ex-reply{overflow-x:auto;border-left:2px solid var(--coral);padding-left:.9rem}
   .ex-reply > :first-child{margin-top:0}
   .ex-reply table,.ex-doc table{border-collapse:collapse}
   .ex-reply th,.ex-reply td,.ex-doc th,.ex-doc td{border:1px solid var(--line);padding:.3rem .6rem;text-align:left}
@@ -57,9 +57,9 @@ export const EXAMPLE_STYLE = `
   .ex-live .ex-thread{height:100%;max-height:none}
   .ex-live .ex-panel{position:absolute;top:0;right:0;bottom:0;width:88%;max-height:none;border-top:0;border-left:1px solid var(--line);box-shadow:-12px 0 24px rgba(0,0,0,.12);transition:transform .45s ease,visibility .45s}
   .ex-live .ex-panel:not(.open){transform:translateX(102%);visibility:hidden}
-  .ex-panel-bar{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.5rem .9rem;border-bottom:1px solid var(--line);font-size:.85rem;font-weight:600}
+  .ex-panel-bar{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.75rem 1.25rem;border-bottom:1px solid var(--line);font-size:.85rem;font-weight:600}
   .ex-panel-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ex-doc{flex:1;overflow:auto;padding:1rem}
+  .ex-doc{flex:1;overflow:auto;padding:1.25rem}
   .ex-doc > :first-child{margin-top:0}
   .ex-video{display:block;width:100%;max-width:20rem;aspect-ratio:9/16;margin:0 auto;background:#000;border-radius:10px;object-fit:cover}
   .ex-image{margin:0}
@@ -67,19 +67,19 @@ export const EXAMPLE_STYLE = `
   .ex-slides{display:flex;gap:.5rem;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;margin:0}
   .ex-slide{flex:0 0 100%;scroll-snap-align:center;margin:0}
   .ex-slide img{display:block;width:100%;height:auto;border-radius:10px}
-  .ex-input{display:flex;align-items:center;gap:.5rem;border-top:1px solid var(--line);padding:.65rem .9rem}
+  .ex-input{display:flex;align-items:center;gap:.5rem;border-top:1px solid var(--line);padding:.9rem 1.25rem}
   .ex-placeholder{flex:1;min-width:0;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ex-clip{flex:none;display:inline-flex;color:var(--muted);cursor:pointer}
   .ex-run{border-top:1px solid var(--line)}
   .ex-run .ex-input{border-top:0}
   .ex-run textarea{flex:1;min-width:0;min-height:2.6rem;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.45rem .6rem;resize:vertical}
-  .ex-run-foot{padding:0 .9rem .75rem}
+  .ex-run-foot{padding:0 1.25rem 1rem}
   .ex-run-foot .widget{margin:0 0 .6rem}
   .ex-run-foot button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:.55rem 1.2rem;background:var(--accent);color:var(--accent-fg);cursor:pointer}
   .ex-run-foot button:disabled{opacity:.55;cursor:default}
   .ex-run-foot .status{color:var(--muted);font-size:.9rem;margin:.5rem 0 0;min-height:1.2em}
-  .ex-run .result{margin:0 .9rem;padding:1rem 0}
-  .ex-run .run{margin:.75rem .9rem}
+  .ex-run .result{margin:0 1.25rem;padding:1rem 0}
+  .ex-run .run{margin:.75rem 1.25rem}
   .ex-file-input{position:absolute;width:1px;height:1px;opacity:0}
   .ex-js{display:none !important}
   .ex-live .ex-js:not([hidden]){display:inline-flex !important}

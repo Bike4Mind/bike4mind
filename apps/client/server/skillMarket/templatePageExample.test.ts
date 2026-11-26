@@ -191,13 +191,13 @@ describe('template page with an example', () => {
   describe('left column', () => {
     it('shows the author and the average rating', () => {
       expect(renderTemplatePage(view)).toContain(
-        'data-testid="template-page-byline">by Ada \u00b7 <span data-testid="template-page-rating">\u2605 4.5 (2)</span></p>'
+        'data-testid="template-page-byline">Ada \u00b7 <span data-testid="template-page-rating">\u2605 4.5 (2)</span></p>'
       );
     });
 
     it('falls back to a generic author and omits a rating with no votes', () => {
       const html = renderTemplatePage({ ...view, authorName: '', rating: { sum: 0, count: 0 } });
-      expect(html).toContain('data-testid="template-page-byline">by a Bike4Mind user</p>');
+      expect(html).toContain('data-testid="template-page-byline">A Bike4Mind user</p>');
       expect(html).not.toContain('template-page-rating');
     });
 
@@ -215,7 +215,7 @@ describe('template page with an example', () => {
       expect(html).not.toContain('<script');
       expect(html).toContain('data-testid="template-page-preview-image"');
       expect(html).toContain('Needs GitHub connected');
-      expect(html).toContain('by Ada');
+      expect(html).toContain('>Ada');
     });
   });
 
