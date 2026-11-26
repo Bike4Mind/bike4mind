@@ -195,6 +195,37 @@ describe('CacheRepository.tryIncrementWithinLimitFixedWindow', () => {
   });
 });
 
+describe('CacheRepository.claimDedup', () => {
+  const ttlMs = 60_000;
+
+  it('claims a fresh key once, then reports it as taken', async () => {
+    const key = `dedup:${Date.now()}-1`;
+    expect((await cacheRepository.claimDedup(key, {}, ttlMs)).claimed).toBe(true);
+    expect((await cacheRepository.claimDedup(key, {}, ttlMs)).claimed).toBe(false);
+    expect(await Cache.countDocuments({ key })).toBe(1);
+  });
+
+  it('claims distinct keys independently', async () => {
+    const a = await cacheRepository.claimDedup(`dedup:${Date.now()}-a`, {}, ttlMs);
+    const b = await cacheRepository.claimDedup(`dedup:${Date.now()}-b`, {}, ttlMs);
+    expect([a.claimed, b.claimed]).toEqual([true, true]);
+  });
+
+  it('sets the expiry from the ttl on the claimed row', async () => {
+    const key = `dedup:${Date.now()}-3`;
+    const before = Date.now();
+    await cacheRepository.claimDedup(key, {}, ttlMs);
+    const row = await Cache.findOne({ key }).lean();
+    expect(row?.expiresAt.getTime()).toBeGreaterThanOrEqual(before + ttlMs);
+  });
+
+  it('reclaims a row that expired but awaits TTL cleanup', async () => {
+    const key = `dedup:${Date.now()}-4`;
+    await Cache.create({ key, result: {}, expiresAt: new Date(Date.now() - 1000) });
+    expect((await cacheRepository.claimDedup(key, {}, ttlMs)).claimed).toBe(true);
+  });
+});
+
 describe('CacheRepository.findByKey', () => {
   it('returns a live entry', async () => {
     const key = `cache:live:${Date.now()}`;

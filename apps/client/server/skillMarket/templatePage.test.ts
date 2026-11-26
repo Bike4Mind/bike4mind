@@ -6,16 +6,17 @@ const h = vi.hoisted(() => ({
   findOne: vi.fn(),
   updateOne: vi.fn(),
   findListing: vi.fn(),
-  marks: new Map<string, number>(),
+  marks: new Set<string>(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   SkillListingTemplate: { findOne: h.findOne, updateOne: h.updateOne },
   cacheRepository: {
-    incrementCounter: async (key: string) => {
-      const count = (h.marks.get(key) ?? 0) + 1;
-      h.marks.set(key, count);
-      return count;
+    // CacheModel.test.ts covers the real claimDedup against Mongo.
+    claimDedup: async (key: string) => {
+      const claimed = !h.marks.has(key);
+      h.marks.add(key);
+      return { claimed };
     },
   },
 }));

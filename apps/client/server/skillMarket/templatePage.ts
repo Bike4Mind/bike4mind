@@ -89,7 +89,7 @@ export async function recordTemplateView(
   now: Date = new Date()
 ): Promise<boolean> {
   const key = templateViewMarkKey(String(template._id), visitor, now);
-  if ((await cacheRepository.incrementCounter(key, VIEW_MARK_TTL_MS)) !== 1) return false;
+  if (!(await cacheRepository.claimDedup(key, {}, VIEW_MARK_TTL_MS)).claimed) return false;
   await SkillListingTemplate.updateOne({ _id: template._id }, { $inc: { viewCount: 1 } }, { runValidators: true });
   return true;
 }
