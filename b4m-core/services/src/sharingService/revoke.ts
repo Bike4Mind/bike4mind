@@ -43,11 +43,34 @@ const projectParticipants = (project: Pick<IProjectDocument, 'userId' | 'users'>
 ];
 
 /**
+ * Whether some participant of `project` can still grant `item` there: the owner takes part, or a
+ * participant holds share through `users` (the item's rows outside this project) or a group. Same
+ * rule as grantCap on attach (projectService/addFiles.ts). Users are loaded only when no direct row
+ * settles it.
+ */
+const hasGrantorInProject = async (
+  item: SharedItem,
+  users: IUserShare[],
+  participants: string[],
+  db: RevokeSharingAdapters['db']
+): Promise<boolean> => {
+  if (participants.includes(item.userId)) return true;
+  const outsideProject = { ...item, users };
+  const holdsShare = (id: string, groups: string[] = []) =>
+    heldPermissions(outsideProject, id, groups).has(Permission.share);
+  if (participants.some(id => holdsShare(id))) return true;
+  if ((outsideProject.groups ?? []).length === 0) return false;
+  const participantUsers = await Promise.all(participants.map(id => db.users.findById(id)));
+  return participantUsers.some(user => user && holdsShare(user.id, user.groups ?? []));
+};
+
+/**
  * Project grants on an item are passed on from whoever attached it. Once `userIdToRevoke` loses the
  * item, every project they take part in that holds it is left without a grantor unless the item's
  * owner takes part in that project or another participant still holds share on it outside the
- * project. Such projects lose the item and every row they minted on it. Mutates `document.users`;
- * returns the projects the item was detached from.
+ * project. Such projects lose the item and every row they minted on it. A detached session also
+ * takes along the knowledge files addSessions copied in with it, under the same rule. Mutates
+ * `document.users`; returns the projects the item was detached from.
  */
 const detachFromProjectsWithoutGrantor = async (
   parameters: {
@@ -67,27 +90,48 @@ const detachFromProjectsWithoutGrantor = async (
   const detached: IProjectDocument[] = [];
   for (const project of projects) {
     const participants = projectParticipants(project).filter(id => id !== userIdToRevoke);
-    if (participants.includes(document.userId)) continue;
-    const outsideProject = { ...document, users: document.users.filter(u => u.projectId !== project.id) };
-    // Same rule as grantCap on attach (projectService/addFiles.ts), group shares included. Users are
-    // loaded only when no direct row settles it.
-    const holdsShare = (id: string, groups: string[] = []) =>
-      heldPermissions(outsideProject, id, groups).has(Permission.share);
-    if (participants.some(id => holdsShare(id))) continue;
-    if ((outsideProject.groups ?? []).length > 0) {
-      const participantUsers = await Promise.all(participants.map(id => db.users.findById(id)));
-      if (participantUsers.some(user => user && holdsShare(user.id, user.groups ?? []))) continue;
-    }
+    const outsideProject = document.users.filter(u => u.projectId !== project.id);
+    if (await hasGrantorInProject(document, outsideProject, participants, db)) continue;
 
     if (type === 'files') {
       await db.projects.pullFileReferences([document.id], { projectId: project.id });
     } else {
       await db.projects.update({ id: project.id, sessionIds: project.sessionIds.filter(id => id !== document.id) });
+      await detachSessionKnowledgeWithoutGrantor(
+        { session: document as ISessionDocument, project, userIdToRevoke },
+        adapters
+      );
     }
-    document.users = outsideProject.users;
+    document.users = outsideProject;
     detached.push(project);
   }
   return detached;
+};
+
+const detachSessionKnowledgeWithoutGrantor = async (
+  parameters: { session: ISessionDocument; project: IProjectDocument; userIdToRevoke: string },
+  adapters: RevokeSharingAdapters
+) => {
+  const { session, project, userIdToRevoke } = parameters;
+  const { db } = adapters;
+  const knowledgeIds = new Set((session.knowledgeIds ?? []).map(String));
+  const inProject = [...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)].map(String);
+  const ids = [...new Set(inProject.filter(id => knowledgeIds.has(id)))];
+  if (ids.length === 0) return;
+  // The revokee keeps the project and still counts as a grantor of the file, but not through the
+  // rows this session minted for them: revokeSessionKnowledgeFileGrants drops those next.
+  const participants = projectParticipants(project);
+  for (const file of uniqueById(await db.fabFiles.findAllByIds(ids))) {
+    const outsideProject = file.users.filter(
+      u => u.projectId !== project.id && !(String(u.userId) === userIdToRevoke && u.sessionId === session.id)
+    );
+    if (await hasGrantorInProject(file as SharedItem, outsideProject, participants, db)) continue;
+    await db.projects.pullFileReferences([file.id], { projectId: project.id });
+    const remaining = file.users.filter(u => u.projectId !== project.id);
+    if (remaining.length === file.users.length) continue;
+    file.users = remaining;
+    await db.fabFiles.updateGuarded!(grantWrite(file), { includeDeleted: true });
+  }
 };
 
 /**

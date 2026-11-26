@@ -277,6 +277,68 @@ describe('revoke - residual grants', () => {
       expect(env.projects.get('project-1')!.sessionIds).toEqual([]);
       expect(env.sessions.get('session-1')!.users).toEqual([]);
     });
+
+    describe("a detached session's knowledge files", () => {
+      const session: Doc = {
+        id: 'session-1',
+        userId: 'owner',
+        knowledgeIds: ['knowledge-1'],
+        users: [
+          { userId: 'sharee', permissions: ['read', 'share'] },
+          { userId: 'member', permissions: ['read'], projectId: 'project-1' },
+        ],
+      };
+      const knowledgeFile = (extra: Row[] = []): Doc => ({
+        id: 'knowledge-1',
+        userId: 'owner',
+        users: [
+          { userId: 'sharee', permissions: ['read', 'share'], sessionId: 'session-1' },
+          { userId: 'member', permissions: ['read'], projectId: 'project-1' },
+          ...extra,
+        ],
+      });
+      const attached = project({ users: [memberRow], sessionIds: ['session-1'], fileIds: ['knowledge-1'] });
+
+      it('leave the project with the session when no participant backs them', async () => {
+        const env = adaptersFor([knowledgeFile()], [session], [attached]);
+
+        await revoke('owner', { id: 'session-1', type: 'sessions', userId: 'sharee' }, env.adapters);
+
+        expect(env.projects.get('project-1')!.sessionIds).toEqual([]);
+        expect(env.projects.get('project-1')!.fileIds).toEqual([]);
+        expect(env.files.get('knowledge-1')!.users).toEqual([]);
+      });
+
+      it('stay when another participant still holds share on them', async () => {
+        const env = adaptersFor(
+          [knowledgeFile([{ userId: 'member', permissions: ['read', 'share'] }])],
+          [session],
+          [attached]
+        );
+
+        await revoke('owner', { id: 'session-1', type: 'sessions', userId: 'sharee' }, env.adapters);
+
+        expect(env.projects.get('project-1')!.sessionIds).toEqual([]);
+        expect(env.projects.get('project-1')!.fileIds).toEqual(['knowledge-1']);
+        expect(env.files.get('knowledge-1')!.users).toContainEqual({
+          userId: 'member',
+          permissions: ['read'],
+          projectId: 'project-1',
+        });
+      });
+
+      it('stay when the revokee still holds share on them outside the session', async () => {
+        const env = adaptersFor(
+          [knowledgeFile([{ userId: 'sharee', permissions: ['read', 'share'] }])],
+          [session],
+          [attached]
+        );
+
+        await revoke('owner', { id: 'session-1', type: 'sessions', userId: 'sharee' }, env.adapters);
+
+        expect(env.projects.get('project-1')!.fileIds).toEqual(['knowledge-1']);
+      });
+    });
   });
 });
 
