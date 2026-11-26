@@ -42,6 +42,7 @@ export default function FunctionDataSection({ tool }: { tool: ICallableFunctionP
             variant="plain"
             color="neutral"
             aria-label={`Remove ${entry.name}`}
+            data-testid="python-function-data-unpin-btn"
             disabled={unpin.isPending}
             onClick={() => unpin.mutate({ id: tool.id, name: entry.name }, { onError })}
           >

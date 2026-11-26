@@ -1240,7 +1240,9 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
         data: (pinnedData?.dataPins ?? []).map(({ name, sha256, bytes }) => ({ name, mode: 'pinned', sha256, bytes })),
       });
       for (const test of contract.tests ?? []) {
-        const next = await runTest(contract, source, test, files);
+        // Each case gets its own copies: a call transfers its buffers to the sandbox.
+        const caseFiles = files.map(file => ({ name: file.name, bytes: file.bytes.slice(0) }));
+        const next = await runTest(contract, source, test, caseFiles);
         // A newer read of the code replaced this contract; its results would describe other code.
         if (request !== describeRequest.current) return;
         outcomes.push(next);

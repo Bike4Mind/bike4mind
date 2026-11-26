@@ -355,18 +355,29 @@ _result
           }
         }
       };
-      if (fs.analyzePath('/data').exists) {
+      const lstatOrNull = (path: string) => {
+        try {
+          return fs.lstat(path);
+        } catch {
+          return null;
+        }
+      };
+      // A guest may have replaced /data with a file or a symlink; the link itself goes, its target is never touched.
+      const existing = lstatOrNull('/data');
+      if (existing && !fs.isDir(existing.mode)) fs.unlink('/data');
+      if (existing && fs.isDir(existing.mode)) {
         fs.chmod('/data', 0o755);
         empty('/data');
       } else if (files.length > 0) {
         fs.mkdir('/data');
       }
       for (const file of files) {
+        // Must stay in sync with CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN, which this serialized body cannot import.
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(file.name)) throw new Error('Invalid data file name');
         fs.writeFile(`/data/${file.name}`, new Uint8Array(file.bytes));
         fs.chmod(`/data/${file.name}`, 0o444);
       }
-      if (fs.analyzePath('/data').exists) fs.chmod('/data', 0o555);
+      if (lstatOrNull('/data')) fs.chmod('/data', 0o555);
       post({ type: 'executing', message: 'Running...' });
 
       pyodide.globals.set('_fn_code', code);

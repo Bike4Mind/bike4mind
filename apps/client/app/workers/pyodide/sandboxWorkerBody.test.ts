@@ -126,11 +126,14 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     const posted: PyodideWorkerResponse[] = [];
     const install = vi.fn().mockResolvedValue(undefined);
     // A writable bit check on the parent directory stands in for Emscripten's permission check.
-    const fsFiles = new Map<string, { mode: number; data?: Uint8Array; dir?: boolean }>();
+    const fsFiles = new Map<string, { mode: number; data?: Uint8Array; dir?: boolean; link?: string }>();
     const writable = (path: string) => ((fsFiles.get(path.slice(0, path.lastIndexOf('/')))?.mode ?? 0) & 0o200) !== 0;
     const FS = {
       analyzePath: (path: string) => ({ exists: fsFiles.has(path) }),
-      mkdir: (path: string) => void fsFiles.set(path, { mode: 0o755, dir: true }),
+      mkdir: (path: string) => {
+        if (fsFiles.has(path)) throw new Error('EEXIST');
+        fsFiles.set(path, { mode: 0o755, dir: true });
+      },
       readdir: (path: string) => [
         '.',
         '..',
@@ -139,13 +142,21 @@ describe('pyodideSandboxWorkerBody package loading', () => {
           .map(key => key.slice(path.length + 1))
           .filter(name => !name.includes('/')),
       ],
-      lstat: (path: string) => ({ mode: fsFiles.get(path)?.dir ? 0o040000 : 0o100000 }),
+      lstat: (path: string) => {
+        const node = fsFiles.get(path);
+        if (!node) throw new Error('ENOENT');
+        return { mode: node.link !== undefined ? 0o120000 : node.dir ? 0o040000 : 0o100000 };
+      },
       isDir: (mode: number) => (mode & 0o170000) === 0o040000,
       writeFile: (path: string, data: Uint8Array) => {
         if (!writable(path)) throw new Error('EACCES');
         fsFiles.set(path, { mode: 0o644, data });
       },
-      chmod: (path: string, mode: number) => void (fsFiles.get(path)!.mode = mode),
+      // chmod follows a symlink; lchmod and unlink act on the link itself.
+      chmod: (path: string, mode: number) => {
+        const node = fsFiles.get(path)!;
+        (node.link !== undefined ? fsFiles.get(node.link)! : node).mode = mode;
+      },
       lchmod: (path: string, mode: number) => void (fsFiles.get(path)!.mode = mode),
       unlink: (path: string) => {
         if (fsFiles.get(path)?.dir) throw new Error('EISDIR');
@@ -412,6 +423,33 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     expect(posted.at(-1)).toMatchObject({ type: 'call-result', nonce: 'd2', result: { success: true } });
     expect(seen).toEqual(['other.csv']);
     expect([...fsFiles.keys()].filter(key => key.startsWith('/data/'))).toEqual(['/data/other.csv']);
+  });
+
+  it.each([
+    ['a regular file', { mode: 0o644, data: new Uint8Array(1) }],
+    ['a dangling symlink', { mode: 0o777, link: '/nowhere' }],
+    ['a symlink to another directory', { mode: 0o777, link: '/lib/site' }],
+  ])('replaces a /data that a guest turned into %s, and never follows it', async (_label, node) => {
+    const { posted, pyodide, send, fsFiles } = startWorker();
+    await send({ type: 'initialize' });
+    const call = { type: 'call' as const, code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 };
+    const bytes = new TextEncoder().encode('x,y\n1,2\n').buffer as ArrayBuffer;
+    fsFiles.set('/lib/site', { mode: 0o755, dir: true });
+    fsFiles.set('/lib/site/pkg.py', { mode: 0o644, data: new Uint8Array(1) });
+    pyodide.runPythonAsync.mockImplementationOnce(async () => {
+      fsFiles.delete('/data/points.csv');
+      fsFiles.set('/data', node);
+      return { toJs: () => ({ stdout: '', stderr: '', plots: [], error: null }) };
+    });
+
+    await send({ ...call, nonce: 'd1', files: [{ name: 'points.csv', bytes }] });
+    await send({ ...call, nonce: 'd2', files: [{ name: 'points.csv', bytes }] });
+
+    expect(posted.at(-1)).toMatchObject({ type: 'call-result', nonce: 'd2', result: { success: true } });
+    expect(fsFiles.get('/data')).toMatchObject({ dir: true, mode: 0o555 });
+    expect(fsFiles.get('/data/points.csv')?.mode).toBe(0o444);
+    expect(fsFiles.get('/lib/site')?.mode).toBe(0o755);
+    expect(fsFiles.has('/lib/site/pkg.py')).toBe(true);
   });
 
   it('reports a runtime failure during a call as a failed call-result', async () => {

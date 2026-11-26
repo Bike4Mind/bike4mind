@@ -374,9 +374,37 @@ export const useUnpinCallableFunctionData = () => {
 const hex = (buffer: ArrayBuffer) =>
   [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, '0')).join('');
 
+/** Verified pin bytes by sha256, so a repeat run fetches nothing; identical bytes are identical under any name. */
+const dataBytesByHash = new Map<string, Promise<ArrayBuffer>>();
+
+/** Test hook: forgets the cached pin bytes. */
+export function resetCallableFunctionDataCache(): void {
+  dataBytesByHash.clear();
+}
+
+async function fetchVerifiedDataBytes(id: string, pin: ICallableFunctionPublic['dataPins'][number]) {
+  const { url } = (
+    await api.get<{ url: string }>(`${COLLECTION}/${encodeURIComponent(id)}/data/${encodeURIComponent(pin.name)}`)
+  ).data;
+  let bytes: ArrayBuffer;
+  if (url.startsWith('/')) {
+    bytes = (await api.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })).data;
+  } else {
+    // A signed link to the data bucket: no credentials, and nothing for the browser to keep.
+    const response = await fetch(url, { credentials: 'omit', cache: 'no-store' });
+    if (!response.ok) throw new Error(`The data file ${pin.name} could not be read (${response.status}).`);
+    bytes = await response.arrayBuffer();
+  }
+  if (hex(await globalThis.crypto.subtle.digest('SHA-256', bytes)) !== pin.sha256) {
+    throw new Error(`The data file ${pin.name} does not match its pinned hash.`);
+  }
+  return bytes;
+}
+
 /**
  * The pinned bytes of a saved tool, each checked against its sha256 before Python sees it, for `/data/<name>` in the
- * browser. Throws when a file cannot be read or does not match.
+ * browser. Each call returns fresh copies, so the caller can transfer them to the sandbox; the cached bytes stay.
+ * Throws when a file cannot be read or does not match.
  */
 export async function fetchCallableFunctionDataFiles(
   id: string,
@@ -384,15 +412,13 @@ export async function fetchCallableFunctionDataFiles(
 ): Promise<{ name: string; bytes: ArrayBuffer }[]> {
   return Promise.all(
     pins.map(async pin => {
-      const response = await api.get<ArrayBuffer>(
-        `${COLLECTION}/${encodeURIComponent(id)}/data/${encodeURIComponent(pin.name)}`,
-        { responseType: 'arraybuffer' }
-      );
-      const bytes = response.data;
-      if (hex(await globalThis.crypto.subtle.digest('SHA-256', bytes)) !== pin.sha256) {
-        throw new Error(`The data file ${pin.name} does not match its pinned hash.`);
+      let cached = dataBytesByHash.get(pin.sha256);
+      if (!cached) {
+        cached = fetchVerifiedDataBytes(id, pin);
+        dataBytesByHash.set(pin.sha256, cached);
+        cached.catch(() => dataBytesByHash.delete(pin.sha256));
       }
-      return { name: pin.name, bytes };
+      return { name: pin.name, bytes: (await cached).slice(0) };
     })
   );
 }

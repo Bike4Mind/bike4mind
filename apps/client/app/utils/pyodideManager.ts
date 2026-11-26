@@ -373,8 +373,8 @@ class PyodideManager {
     }
   }
 
-  private postToSandbox(message: PyodideWorkerMessage): void {
-    this.frame?.contentWindow?.postMessage(message, '*');
+  private postToSandbox(message: PyodideWorkerMessage, transfer: Transferable[] = []): void {
+    this.frame?.contentWindow?.postMessage(message, '*', transfer);
   }
 
   private handleWorkerMessage(msg: PyodideWorkerResponse): void {
@@ -607,7 +607,11 @@ class PyodideManager {
       this.callNonce = nonce;
       this.runLimitMs = timeoutMs;
       this.updateState({ isExecuting: true, streamingOutput: '' });
-      this.postToSandbox({ type: 'call', code, packages, paramsJson, timeoutMs, nonce, files });
+      // Transferred, not cloned: the buffers move to the frame and are unusable here afterwards.
+      this.postToSandbox(
+        { type: 'call', code, packages, paramsJson, timeoutMs, nonce, files },
+        files.map(file => file.bytes)
+      );
     });
   }
 
