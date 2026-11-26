@@ -84,7 +84,8 @@ export function cssHasCrossOriginReference(css: string): boolean {
 const isAllowedUrl = (value: string, tagName: string): boolean => {
   const url = value.trim();
   if (url.startsWith('#')) return true;
-  // A link only navigates when clicked; everything else would load on render.
+  // The https/mailto link branch only matters if this sanitizer is reused for inline SVG:
+  // in image mode links never navigate.
   if (tagName === 'a') return /^(?:https?|mailto):/i.test(url);
   return /^data:image\/(?:png|gif|jpe?g|webp)[;,]/i.test(url);
 };
