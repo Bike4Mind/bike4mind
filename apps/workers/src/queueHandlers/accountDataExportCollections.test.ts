@@ -38,6 +38,13 @@ describe('account archive coverage', () => {
     expect(accountArchiveFilter('UserApiKey', '665f1c2e8b3a4d0012345678', ['personal-org'])).toHaveProperty('userId');
   });
 
+  it('archives the apps a user signed in to by owner alone, as the other OAuth records', () => {
+    expect(ACCOUNT_ARCHIVE_METADATA_MODELS).toContain('OAuthClientSignIn');
+    const filter = accountArchiveFilter('OAuthClientSignIn', '665f1c2e8b3a4d0012345678', ['personal-org']);
+    expect(filter).toEqual(accountArchiveFilter('OAuthGrant', '665f1c2e8b3a4d0012345678', ['personal-org']));
+    expect(filter).not.toHaveProperty('$or');
+  });
+
   it('projects credential rows without their secret values', () => {
     expect(accountArchiveMetadata({ _id: 'key-1', createdAt: '2026-01-01', token: 'secret' })).toEqual({
       id: 'key-1',
