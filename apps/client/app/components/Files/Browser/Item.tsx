@@ -536,7 +536,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
             }}
           >
             <Typography level="body-xs" sx={{ fontSize: '12px' }}>
-              {Math.round(fileSize / 1024)} KB
+              {numberToBytes(fileSize)}
             </Typography>
             <Typography level="body-xs" sx={{ fontSize: '12px' }}>
               •
@@ -668,7 +668,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
         }}
       >
         <Typography level="body-xs" sx={{ fontSize: '14px' }}>
-          {Math.round(fileSize / 1024)} KB
+          {numberToBytes(fileSize)}
         </Typography>
         <Typography level="body-xs" sx={{ fontSize: '14px' }}>
           •
@@ -1089,8 +1089,8 @@ const ToggleRename: FC<{
 };
 
 const numberToBytes = (bytes: number) => {
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
-  if (bytes === 0) return 'n/a';
+  const sizes = ['bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+  if (!bytes) return 'n/a';
   const i = parseInt(String(Math.floor(Math.log(bytes) / Math.log(1024))));
   return Math.round(bytes / Math.pow(1024, i)) + ' ' + sizes[i];
 };
