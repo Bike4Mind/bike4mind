@@ -48,6 +48,7 @@ export const contentHolders = {
     foreignKey: 'artifactId',
     parentKey: 'id',
     attribution: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
+    unrelatedPaths: ['superseded'],
   },
   AssistantBrief: {
     kind: 'holder',

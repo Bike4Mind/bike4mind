@@ -186,3 +186,110 @@ describe.each(Object.entries(saveVia))('v1 %s concurrent saves', (_label, saveFn
     expect(bodies.map(b => b.content)).toEqual([winner?.content, winner?.content]);
   });
 });
+
+const deferred = () => {
+  let resolve = () => {};
+  const promise = new Promise<void>(finish => {
+    resolve = finish;
+  });
+  return { promise, resolve };
+};
+
+describe('v1 PATCH snapshot content', () => {
+  it.each([{ content: 'seed' }, { title: 'Writer metadata' }])(
+    'keeps write-only no-row saves successful without loading owner content: %o',
+    async body => {
+      const id = await seedArtifact();
+      const writer = await User.create({
+        username: 'write-only',
+        name: 'Writer',
+        email: 'writer@example.com',
+        aupAcceptedVersion: '2026-01-01',
+      });
+      await Artifact.collection.updateOne({ id }, { $set: { 'permissions.canWrite': [writer.id] } });
+      mockValidate.mockResolvedValue({
+        isValid: true,
+        keyId: 'writer-key',
+        userId: writer.id,
+        scopes: [ApiKeyScope.WRITE_NOTEBOOKS],
+        rateLimit: { requestsPerMinute: 600, requestsPerDay: 100000 },
+      });
+      const response = await fire(byId, 'PATCH', id, body);
+      expect(response._getStatusCode()).toBe(200);
+      expect(response._getJSONData()).toMatchObject({ version: 1, content: null });
+      expect(await ArtifactContent.findOne({ artifactId: id, version: 1 }).lean()).toMatchObject({ content: 'seed' });
+    }
+  );
+
+  it('keeps a captured pointer response coherent when the parent advances during the child read', async () => {
+    const id = await seedArtifact();
+    const paused = deferred();
+    const resume = deferred();
+    const original = artifactVersionRepository.findOne.bind(artifactVersionRepository);
+    vi.spyOn(artifactVersionRepository, 'findOne').mockImplementation(async filter => {
+      if (filter.artifactId === id && filter.version === 1) {
+        paused.resolve();
+        await resume.promise;
+      }
+      return original(filter);
+    });
+    const metadata = fire(byId, 'PATCH', id, { title: 'Captured snapshot' });
+    try {
+      await paused.promise;
+      await expectResponseMatchesStore(id, await fire(byId, 'PATCH', id, { content: 'new pointer' }));
+    } finally {
+      resume.resolve();
+    }
+    const response = await metadata;
+    expect(response._getJSONData()).toMatchObject({ version: 1, content: 'seed' });
+    await expectResponseMatchesStore(id, response);
+  });
+
+  it('pairs an unchanged-content save with the returned pointer after another save wins', async () => {
+    const id = await seedArtifact();
+    const paused = deferred();
+    const resume = deferred();
+    const original = artifactRepository.updateWithWriteAccess.bind(artifactRepository);
+    vi.spyOn(artifactRepository, 'updateWithWriteAccess').mockImplementation(async (actor, data, filter) => {
+      if (!filter && data.title === 'Unchanged save') {
+        paused.resolve();
+        await resume.promise;
+      }
+      return original(actor, data, filter);
+    });
+    const unchanged = fire(byId, 'PATCH', id, { title: 'Unchanged save', content: 'seed' });
+    try {
+      await paused.promise;
+      await expectResponseMatchesStore(id, await fire(byId, 'PATCH', id, { content: 'winner' }));
+    } finally {
+      resume.resolve();
+    }
+    const response = await unchanged;
+    expect(response._getJSONData().version).toBe(2);
+    await expectResponseMatchesStore(id, response);
+  });
+
+  it('uses the pointed content for metadata-only saves while a newer row is in flight', async () => {
+    const id = await seedArtifact();
+    const paused = deferred();
+    const resume = deferred();
+    const original = artifactRepository.updateWithWriteAccess.bind(artifactRepository);
+    vi.spyOn(artifactRepository, 'updateWithWriteAccess').mockImplementation(async (actor, data, filter) => {
+      if (filter) {
+        paused.resolve();
+        await resume.promise;
+      }
+      return original(actor, data, filter);
+    });
+    const pending = fire(byId, 'PATCH', id, { content: 'not current yet' });
+    try {
+      await paused.promise;
+      const response = await fire(byId, 'PATCH', id, { title: 'Metadata only' });
+      expect(response._getJSONData().version).toBe(1);
+      await expectResponseMatchesStore(id, response);
+    } finally {
+      resume.resolve();
+      await pending;
+    }
+  });
+});

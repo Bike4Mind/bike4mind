@@ -46,7 +46,7 @@ describe('artifactService - update (permission/visibility escalation guard)', ()
         artifactVersions: {
           findByArtifactId: vi.fn().mockResolvedValue([]),
           create: vi.fn().mockResolvedValue({ _id: 'version-new', isActive: false }),
-          updateMany: vi.fn(),
+          activatePointerVersion: vi.fn(),
           update: vi.fn(),
           delete: vi.fn(),
         },
@@ -121,7 +121,7 @@ describe('artifactService - update (write-time re-check)', () => {
           findOne: vi
             .fn()
             .mockResolvedValueOnce(artifact)
-            .mockResolvedValue({ ...artifact, currentVersionId: 'version-new' }),
+            .mockResolvedValue({ ...artifact, currentVersionId: 'version-new', version: 2 }),
           updateWithWriteAccess: vi
             .fn()
             .mockImplementation(async (_u: string, data: any) => ({ ...artifact, ...data })),
@@ -136,7 +136,7 @@ describe('artifactService - update (write-time re-check)', () => {
         artifactVersions: {
           findByArtifactId: vi.fn().mockResolvedValue([]),
           create: vi.fn().mockResolvedValue({ _id: 'version-new', isActive: false }),
-          updateMany: vi.fn(),
+          activatePointerVersion: vi.fn(),
           update: vi.fn(),
           delete: vi.fn(),
         },
@@ -186,12 +186,10 @@ describe('artifactService - update (write-time re-check)', () => {
     const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
 
     expect(adapters.db.artifactVersions.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: false }));
-    expect(adapters.db.artifactVersions.updateMany).toHaveBeenCalledWith(
-      { artifactId: 'artifact-1', isActive: true, _id: { $ne: 'version-new' } },
-      { isActive: false },
-      { runValidators: true }
-    );
-    expect(adapters.db.artifactVersions.update).toHaveBeenCalledWith({ id: 'version-new', isActive: true });
+    expect(adapters.db.artifactVersions.activatePointerVersion).toHaveBeenCalledWith('artifact-1', {
+      id: 'version-new',
+      version: 2,
+    });
     expect(result.version?.isActive).toBe(true);
   });
 
@@ -199,19 +197,14 @@ describe('artifactService - update (write-time re-check)', () => {
     adapters.db.artifacts.findOne.mockReset();
     adapters.db.artifacts.findOne
       .mockResolvedValueOnce(artifact)
-      .mockResolvedValueOnce({ ...artifact, currentVersionId: 'version-9' })
-      .mockResolvedValue({ ...artifact, currentVersionId: 'version-9' });
+      .mockResolvedValueOnce({ ...artifact, currentVersionId: 'version-9', version: 9 })
+      .mockResolvedValue({ ...artifact, currentVersionId: 'version-9', version: 9 });
 
     const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
 
-    const { updateMany, update: activate } = adapters.db.artifactVersions;
-    expect(updateMany).toHaveBeenCalledTimes(2);
-    expect(updateMany.mock.calls[1][0]).toEqual({
-      artifactId: 'artifact-1',
-      isActive: true,
-      _id: { $ne: 'version-9' },
-    });
-    expect(activate).toHaveBeenLastCalledWith({ id: 'version-9', isActive: true });
+    const { activatePointerVersion } = adapters.db.artifactVersions;
+    expect(activatePointerVersion).toHaveBeenCalledTimes(2);
+    expect(activatePointerVersion).toHaveBeenLastCalledWith('artifact-1', { id: 'version-9', version: 9 });
     expect(result.version?.isActive).toBe(false);
   });
 
@@ -219,20 +212,21 @@ describe('artifactService - update (write-time re-check)', () => {
     const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
     let moves = 0;
     adapters.db.artifacts.findOne.mockReset();
-    adapters.db.artifacts.findOne
-      .mockResolvedValueOnce(artifact)
-      .mockImplementation(async () => ({ ...artifact, currentVersionId: `version-moved-${moves++}` }));
+    adapters.db.artifacts.findOne.mockResolvedValueOnce(artifact).mockImplementation(async () => {
+      moves++;
+      return { ...artifact, currentVersionId: `version-moved-${moves}`, version: moves + 2 };
+    });
 
     const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
 
-    expect(adapters.db.artifactVersions.updateMany).toHaveBeenCalledTimes(5);
+    expect(adapters.db.artifactVersions.activatePointerVersion).toHaveBeenCalledTimes(5);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(result.version?.isActive).toBe(false);
   });
 
   it('logs, rather than throws, when reconciling fails after the pointer write committed', async () => {
     const error = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => {});
-    adapters.db.artifactVersions.updateMany.mockRejectedValueOnce(new Error('reconcile failed'));
+    adapters.db.artifactVersions.activatePointerVersion.mockRejectedValueOnce(new Error('reconcile failed'));
 
     const result = await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
 
@@ -249,7 +243,7 @@ describe('artifactService - update (write-time re-check)', () => {
 
     expect(result.version?._id).toBe('version-new');
     expect(result.version?.isActive).toBe(false);
-    expect(adapters.db.artifactVersions.updateMany).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.activatePointerVersion).not.toHaveBeenCalled();
     expect(adapters.db.artifactVersions.update).not.toHaveBeenCalled();
     expect(adapters.db.artifactVersions.delete).not.toHaveBeenCalled();
     expect(adapters.db.artifactContents.delete).not.toHaveBeenCalled();
@@ -357,7 +351,7 @@ describe('artifactService - update (write-time re-check)', () => {
     expect(adapters.db.artifactVersions.delete).toHaveBeenCalledWith('version-new');
     expect(adapters.db.artifactContents.delete).toHaveBeenCalledWith('content-new');
     expect(adapters.db.artifactVersions.update).not.toHaveBeenCalled();
-    expect(adapters.db.artifactVersions.updateMany).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.activatePointerVersion).not.toHaveBeenCalled();
   });
 
   it('still refuses, and runs the remaining steps, when a rollback step throws', async () => {

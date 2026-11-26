@@ -49,7 +49,7 @@ interface UpdateArtifactAdapters {
     artifactContents: Pick<IArtifactContentRepository, 'create' | 'delete' | 'findLatestContent'>;
     artifactVersions: Pick<
       IArtifactVersionRepository,
-      'create' | 'delete' | 'findByArtifactId' | 'update' | 'updateMany'
+      'create' | 'delete' | 'findByArtifactId' | 'activatePointerVersion'
     >;
   };
 }
@@ -236,7 +236,10 @@ export const update = async (
 
   if (newVersion && pointerWrite) {
     newVersion.isActive =
-      (await reconcileActiveVersion(adapters, artifact.id, newVersion._id)) === String(newVersion._id);
+      (await reconcileActiveVersion(adapters, artifact.id, {
+        id: String(pointerWrite.currentVersionId),
+        version: pointerWrite.version,
+      })) === String(newVersion._id);
   }
 
   const result: {
@@ -278,24 +281,16 @@ const MAX_RECONCILE_ATTEMPTS = 5;
 async function reconcileActiveVersion(
   { db }: UpdateArtifactAdapters,
   artifactId: string,
-  pointerId: string
+  initialPointer: { id: string; version: number }
 ): Promise<string | undefined> {
   try {
-    // The pointer only moves forward and its final writer reconciles after writing it, so a reconciler on a
-    // stale pointer either sees the move on re-read and redoes, or finished before that write.
-    let pointer = String(pointerId);
+    let pointer = initialPointer;
     for (let attempt = 0; attempt < MAX_RECONCILE_ATTEMPTS; attempt++) {
-      await db.artifactVersions.updateMany(
-        { artifactId, isActive: true, _id: { $ne: pointer } },
-        { isActive: false },
-        { runValidators: true }
-      );
-      // any: `id` is not a known key of Partial<IArtifactVersionDocument>
-      await db.artifactVersions.update({ id: pointer, isActive: true } as any);
-
-      const latest = (await db.artifacts.findOne({ id: artifactId }))?.currentVersionId;
-      if (!latest || String(latest) === String(pointer)) return pointer;
-      pointer = String(latest);
+      await db.artifactVersions.activatePointerVersion(artifactId, pointer);
+      const latest = await db.artifacts.findOne({ id: artifactId });
+      if (!latest?.currentVersionId) return undefined;
+      if (String(latest.currentVersionId) === pointer.id && latest.version === pointer.version) return pointer.id;
+      pointer = { id: String(latest.currentVersionId), version: latest.version };
     }
     Logger.globalInstance.warn(`artifact update: active version of artifact ${artifactId} did not settle`);
   } catch (error) {

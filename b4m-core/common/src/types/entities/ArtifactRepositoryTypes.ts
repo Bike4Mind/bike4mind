@@ -117,6 +117,9 @@ export interface IArtifactVersionRepository extends IBaseRepository<IArtifactVer
   findByUser(userId: string): Promise<IArtifactVersionDocument[]>;
   getVersionHistory(artifactId: string): Promise<IArtifactVersionDocument[]>;
 
+  /** Retires older rows permanently before activating the captured forward-only parent pointer. */
+  activatePointerVersion(artifactId: string, pointer: { id: string; version: number }): Promise<void>;
+
   // Version management
   createVersion(
     artifactId: string,

@@ -223,3 +223,111 @@ describe('artifactService.update with write access revoked mid-batch', () => {
     expect(stored.map(c => c.content)).not.toContain('sharee-body');
   });
 });
+
+describe('artifact active-pointer reconciliation', () => {
+  it('keeps an inactive older row retired before a delayed activation can finish', async () => {
+    const id = await seedArtifact(true);
+    let observedAfterStaleActivation: number[] | undefined;
+    const delayedAdapters = {
+      db: {
+        ...adapters.db,
+        artifactVersions: new Proxy(artifactVersionRepository, {
+          get(target, property) {
+            if (property === 'activatePointerVersion') {
+              return async (artifactId: string, pointer: { id: string; version: number }) => {
+                if (pointer.version === 2) {
+                  await artifactService.update(OWNER, { id, content: 'higher completed' }, adapters);
+                  await target.activatePointerVersion(artifactId, pointer);
+                  observedAfterStaleActivation = (
+                    await ArtifactVersion.find({ artifactId: id, isActive: true }).lean()
+                  ).map(row => row.version);
+                  return;
+                }
+                return target.activatePointerVersion(artifactId, pointer);
+              };
+            }
+            const member = Reflect.get(target, property, target);
+            return typeof member === 'function' ? member.bind(target) : member;
+          },
+        }),
+      },
+    };
+    await artifactService.update(OWNER, { id, content: 'inactive lower row' }, delayedAdapters);
+    expect(observedAfterStaleActivation).toEqual([3]);
+    await expectSettled(id, [2, 3]);
+    const raw = await ArtifactVersion.collection.findOne({ artifactId: id, version: 2 });
+    expect(raw).toMatchObject({ superseded: true });
+    for (const version of await artifactVersionRepository.findByArtifactId(id)) {
+      expect(version).not.toHaveProperty('superseded');
+    }
+  });
+
+  it('leaves a late inserted lower row inactive after losing the forward pointer write', async () => {
+    const id = await seedArtifact(true);
+    let release = () => {};
+    let markPaused = () => {};
+    const paused = new Promise<void>(resolve => {
+      markPaused = resolve;
+    });
+    const resume = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const delayedAdapters = {
+      db: {
+        ...adapters.db,
+        artifactVersions: new Proxy(artifactVersionRepository, {
+          get(target, property) {
+            if (property === 'create') {
+              return async (data: Parameters<typeof target.create>[0]) => {
+                if (data.version === 2) {
+                  markPaused();
+                  await resume;
+                }
+                return target.create(data);
+              };
+            }
+            const member = Reflect.get(target, property, target);
+            return typeof member === 'function' ? member.bind(target) : member;
+          },
+        }),
+      },
+    };
+    const lower = artifactService.update(OWNER, { id, content: 'late lower insert' }, delayedAdapters);
+    try {
+      await paused;
+      await artifactService.update(OWNER, { id, content: 'higher completed' }, adapters);
+    } finally {
+      release();
+    }
+    const result = await lower;
+    expect(result.version?.isActive).toBe(false);
+    await expectSettled(id, [2, 3]);
+  });
+
+  it('cannot let a delayed reconciler change a newer completed writer after its retry budget', async () => {
+    const id = await seedArtifact(true);
+    let passes = 0;
+    const delayedAdapters = {
+      db: {
+        ...adapters.db,
+        artifactVersions: new Proxy(artifactVersionRepository, {
+          get(target, property) {
+            const member = Reflect.get(target, property, target);
+            if (property !== 'updateMany' && property !== 'activatePointerVersion') {
+              return typeof member === 'function' ? member.bind(target) : member;
+            }
+            return async (...args: unknown[]) => {
+              passes++;
+              if (passes > 5) throw new Error('Reconciliation exceeded its bounded budget');
+              await artifactService.update(OWNER, { id, content: `newer-${passes}` }, adapters);
+              return (member as (...values: unknown[]) => Promise<unknown>).apply(target, args);
+            };
+          },
+        }),
+      },
+    };
+    await artifactService.update(OWNER, { id, content: 'delayed version two' }, delayedAdapters);
+    expect(passes).toBe(5);
+    await expectSettled(id, [2, 3, 4, 5, 6, 7]);
+  });
+});
