@@ -121,6 +121,7 @@ export async function loadLinkRuleFacts(
       return {
         userId: account.id,
         paying: await payingOf(account.id, stamps, deps, read),
+        // An account with no email cannot be checked against partner domains and reads false, so only the device rule can still fire for it.
         partnerDomain: email ? await read('partnerDomain', () => deps.isOrganizationDomain(email), true) : false,
         // No spend read leaves every account at zero, which no spend-gated rule fires on.
         creditsSpent: account.createdAt ? spentOf(account.id) : 0,
