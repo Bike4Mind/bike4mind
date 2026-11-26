@@ -7,6 +7,10 @@ import { BasePage } from './pages/BasePage';
 // Walks the basics tutorial as a new user. The replies are recorded, so no step calls a model.
 const MODULE_ID = 'first-steps';
 const PHONE = { width: 390, height: 844 };
+// A settings write clears only the process that took it; the others keep the old value for one TTL
+// of the shared cache in b4m-core/utils/src/settings.ts. Same wait as free-tier-limits.spec.ts.
+const SETTINGS_CACHE_TTL_MS = 5 * 60_000;
+const CACHE_MARGIN_MS = 5_000;
 
 test.describe.configure({ mode: 'serial' });
 
@@ -24,6 +28,9 @@ test.describe('basics tutorial', () => {
     priorSetting = (await apiGetAdminSettings(request, adminToken)).get('EnableCoreTutorials');
     await apiUpdateAdminSetting(request, adminToken, 'EnableCoreTutorials', true);
     flipped = true;
+    if (priorSetting === true) return;
+    test.setTimeout(SETTINGS_CACHE_TTL_MS + CACHE_MARGIN_MS + 30_000);
+    await new Promise(resolve => setTimeout(resolve, SETTINGS_CACHE_TTL_MS + CACHE_MARGIN_MS));
   });
 
   test.afterAll(async ({ request }) => {
