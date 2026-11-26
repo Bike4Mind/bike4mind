@@ -133,7 +133,7 @@ describe('POST /api/image-jobs', () => {
     mocks.getOrCreateSession.mockResolvedValue({
       sessionId: SESSION_ID,
       asyncPromises: [],
-      session: { id: SESSION_ID, summary: 'a notebook about lighthouses' },
+      session: { id: SESSION_ID, userId: USER.id, summary: 'a notebook about lighthouses' },
     });
     mocks.resolveImagePrompt.mockResolvedValue({ rewrittenPrompt: 'a red lighthouse at dusk', intent: 'fresh' });
     mocks.quests.getMostRecentChatHistory.mockResolvedValue([]);
@@ -458,6 +458,60 @@ describe('POST /api/image-jobs', () => {
     mocks.createImageJobs.mockResolvedValue({ ok: false, status: 402, code: 'insufficient_credits', message: 'no' });
     await call(generateBody({ questId: 'quest-old' }));
     expect(mocks.quests.delete).not.toHaveBeenCalled();
+  });
+
+  describe('owner-only turn fields in the response', () => {
+    const ownerTurn = {
+      id: 'quest-old',
+      sessionId: SESSION_ID,
+      generationJobs: [],
+      pendingAction: { tool: 'send_email', params: { to: 'x' }, ts: 1 },
+      slackNotification: { channel: 'C1' },
+      embedding: [0.1, 0.2],
+      promptMeta: { functionCalls: [{ name: 'search', id: 'c1', parameters: {}, returnValue: 'owner tool output' }] },
+    };
+    const sharedSession = { id: SESSION_ID, userId: 'owner-1', summary: 'a notebook about lighthouses' };
+
+    beforeEach(() => {
+      mocks.quests.findById.mockResolvedValue(ownerTurn);
+      mocks.quests.update.mockResolvedValue({ ...ownerTurn, status: 'done' });
+    });
+
+    it('withholds server-only and owner-only turn fields from a non-owner', async () => {
+      mocks.getOrCreateSession.mockResolvedValue({ sessionId: SESSION_ID, asyncPromises: [], session: sharedSession });
+
+      const { body } = await call(generateBody({ questId: 'quest-old' }));
+      const quest = body.quest as Record<string, unknown>;
+
+      expect(quest.id).toBe('quest-old');
+      expect(quest).not.toHaveProperty('pendingAction');
+      expect(quest).not.toHaveProperty('slackNotification');
+      expect(quest).not.toHaveProperty('embedding');
+      expect(JSON.stringify(quest)).not.toContain('owner tool output');
+    });
+
+    it('withholds them from a non-owner when the turn update fails and the turn is built from the stored one', async () => {
+      mocks.getOrCreateSession.mockResolvedValue({ sessionId: SESSION_ID, asyncPromises: [], session: sharedSession });
+      mocks.quests.update.mockRejectedValue(new Error('write failed'));
+
+      const { body } = await call(generateBody({ questId: 'quest-old' }));
+      const quest = body.quest as Record<string, unknown>;
+
+      expect(quest.id).toBe('quest-old');
+      expect(quest).not.toHaveProperty('pendingAction');
+      expect(quest).not.toHaveProperty('embedding');
+      expect(JSON.stringify(quest)).not.toContain('owner tool output');
+    });
+
+    it('keeps the owner-only turn fields for the owner, still dropping the server-only ones', async () => {
+      const { body } = await call(generateBody({ questId: 'quest-old' }));
+      const quest = body.quest as Record<string, unknown>;
+
+      expect(quest.pendingAction).toEqual(ownerTurn.pendingAction);
+      expect(JSON.stringify(quest)).toContain('owner tool output');
+      expect(quest).not.toHaveProperty('slackNotification');
+      expect(quest).not.toHaveProperty('embedding');
+    });
   });
 
   it('refuses a retry of a quest from another session', async () => {

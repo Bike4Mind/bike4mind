@@ -10,7 +10,13 @@
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getImageGeneration } from '@bike4mind/server-utils/imageGenerations/imageGeneration';
-import { generateImageContract, GenerateImageIvokeParams, redactSessionForClient } from '@bike4mind/common';
+import {
+  chatMessageResponseSchema,
+  generateImageContract,
+  GenerateImageIvokeParams,
+  redactChatMessageForViewer,
+  redactSessionForClient,
+} from '@bike4mind/common';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
@@ -188,7 +194,8 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     await Promise.all(asyncPromises);
 
     const response = {
-      quest,
+      // A retry by questId can settle a turn owned by someone else, so the turn goes out as the chat routes send it.
+      quest: chatMessageResponseSchema.parse(redactChatMessageForViewer(quest, session.userId === req.user.id)),
       session: redactSessionForClient(session),
       originalPrompt,
       enhancedPrompt: effectivePrompt,

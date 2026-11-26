@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
+  OWNER_ONLY_CHAT_MESSAGE_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
   SERVER_OWNED_SESSION_FIELDS,
   SERVER_OWNED_SESSION_ORIGIN_FIELDS,
@@ -36,7 +37,9 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 const serverOnlyQuestExclusions = Object.fromEntries(CHAT_MESSAGE_WITHHELD_FIELDS.map(field => [field, false]));
 
 const expectedQuestExclusions = {
-  ...Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false])),
+  ...Object.fromEntries(
+    [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, ...OWNER_ONLY_CHAT_MESSAGE_FIELDS].map(path => [path, false])
+  ),
   ...serverOnlyQuestExclusions,
 };
 

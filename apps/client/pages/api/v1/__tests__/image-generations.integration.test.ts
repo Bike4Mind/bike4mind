@@ -69,6 +69,16 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
+// Spy on the redaction call itself: the contract response boundary strips owner-only quest
+// fields for every caller outside production, so the response body cannot prove the wiring.
+vi.mock('@bike4mind/common', async orig => {
+  const actual = await orig<Record<string, unknown>>();
+  return {
+    ...actual,
+    redactChatMessageForViewer: vi.fn(actual.redactChatMessageForViewer as (...a: unknown[]) => unknown),
+  };
+});
+
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
@@ -166,6 +176,7 @@ import {
   CreditHolderType,
   GenerateImageResponseSchema,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  redactChatMessageForViewer,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
 
@@ -270,6 +281,33 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(session).not.toHaveProperty('systemPromptText');
     expect(session).not.toHaveProperty('preauthorizedLakeIds');
     expect(session.origin).not.toHaveProperty('apiKeyId');
+  });
+
+  describe('viewer redaction of the returned quest', () => {
+    const questWithOwnerOnlyFields = {
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      type: 'message',
+      pendingAction: { tool: 'send_email', params: { to: 'x' }, ts: 1 },
+      promptMeta: { functionCalls: [{ name: 'search', parameters: {}, returnValue: 'tool output' }] },
+    };
+
+    it.each([
+      { who: 'a non-owner', sessionUserId: 'someone-else', isOwner: false },
+      { who: 'the owner', sessionUserId: 'user-1', isOwner: true },
+    ])('redacts the returned quest for the viewer role ($who)', async ({ sessionUserId, isOwner }) => {
+      mockGetOrCreateSession.mockResolvedValue({
+        sessionId: 'sess-1',
+        asyncPromises: [],
+        session: { id: 'sess-1', userId: sessionUserId },
+      });
+      mockInvoke.mockResolvedValue(questWithOwnerOnlyFields);
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(redactChatMessageForViewer).toHaveBeenCalledWith(questWithOwnerOnlyFields, isOwner);
+    });
   });
 
   it('sends a response the contract declares in full, session document included', async () => {

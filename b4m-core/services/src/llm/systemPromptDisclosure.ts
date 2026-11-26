@@ -29,8 +29,13 @@ import { INJECTED_BLOCK_METADATA } from './systemPromptFloorTelemetry';
  * must never reach a client: it holds proprietary server-authored prompts, and a completion
  * response is the same leak a session read would be. Presence and token cost still come back via
  * the breakdown; only the text is held back.
+ *
+ * `knowledgeRetrieval` carries the data-lake prompts in play for the turn, and a lake's prompt is
+ * editor-only (toReaderLake strips it for readers), while this response goes to whoever may chat
+ * in the session. Whether the caller manages each lake is not known here, so the text is held back
+ * for every caller.
  */
-const REDACTED_SOURCES: ReadonlySet<PromptSourceId> = new Set<PromptSourceId>(['sessionPrompt']);
+const REDACTED_SOURCES: ReadonlySet<PromptSourceId> = new Set<PromptSourceId>(['sessionPrompt', 'knowledgeRetrieval']);
 
 /**
  * Total disclosed text per completion. Bounds the response for a session carrying large

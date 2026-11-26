@@ -5,6 +5,7 @@ import {
   ORGANIZATION_MEMBER_CREDIT_FIELDS,
   ORGANIZATION_OWNER_ONLY_FIELDS,
   ORGANIZATION_SECRET_FIELDS,
+  OWNER_ONLY_CHAT_MESSAGE_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
   SERVER_OWNED_SESSION_FIELDS,
   SERVER_OWNED_SESSION_ORIGIN_FIELDS,
@@ -23,7 +24,8 @@ import {
  * next owner-only promptMeta field cannot close one transport and leave the other open.
  * This subscription's scope is broader than the sharing-based read check elsewhere (it admits
  * any isGlobalRead session via accessibleBy), so it is stripped at the query-projection level
- * here rather than trusting every future subscriber to redact it themselves. `isQuestOwner` skips
+ * here rather than trusting every future subscriber to redact it themselves. OWNER_ONLY_CHAT_MESSAGE_FIELDS
+ * (`pendingAction`) is dropped with those paths for a non-owner. `isQuestOwner` skips
  * the exclusion for the session's own owner: the client cache merges a WS quest update as a
  * top-level spread (react-query.ts), so an unconditional exclusion replaced the owner's own
  * cached returnValue with nothing the moment any live update landed, not just a sharee's.
@@ -104,7 +106,10 @@ export function resolveFieldLimits(
     return Object.fromEntries(USER_WITHHELD_PATHS.map(path => [path, false]));
   }
   if (collectionName === questCollectionName) {
-    const excluded = [...(isQuestOwner ? [] : OWNER_ONLY_PROMPT_META_PROJECTION_PATHS), ...QUEST_SERVER_ONLY_FIELDS];
+    const excluded = [
+      ...(isQuestOwner ? [] : [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, ...OWNER_ONLY_CHAT_MESSAGE_FIELDS]),
+      ...QUEST_SERVER_ONLY_FIELDS,
+    ];
     return Object.fromEntries(excluded.map(path => [path, false]));
   }
   if (collectionName === sessionCollectionName) {
