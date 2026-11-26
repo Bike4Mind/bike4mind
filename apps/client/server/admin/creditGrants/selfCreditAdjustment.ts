@@ -24,7 +24,11 @@ export const SelfCreditAdjustmentParamsSchema = z
   .strict();
 export type SelfCreditAdjustmentParams = z.infer<typeof SelfCreditAdjustmentParamsSchema>;
 
-/** Applies an approved self-grant as the approver, the `user.credits.self_grant` approval executor. */
+/**
+ * Applies an approved self-grant, the `user.credits.self_grant` approval executor. The credit change runs as the
+ * requester, who was a full admin when asking and must still be one, because the approver may be a delegate
+ * without the full admin access this credit edit needs. The audit entry records the approver and the approval.
+ */
 export async function applyApprovedSelfCreditAdjustment(
   req: Request,
   { userId, creditDelta, creditReason }: SelfCreditAdjustmentParams,
@@ -37,7 +41,7 @@ export async function applyApprovedSelfCreditAdjustment(
     const target = await userRepository.findById(userId);
     if (!target) throw new NotFoundError('User not found');
     const { creditAdjustment } = await userService.adminUpdateUser(
-      req.user!.id,
+      userId,
       { id: userId, creditDelta, creditReason },
       {
         db: {

@@ -7,6 +7,7 @@ import {
   assertCanActOnAdminTarget,
   assertCanGrantAdminAccess,
   EXPLICIT_ONLY_ADMIN_PERMISSIONS,
+  assertCanChangeExplicitOnlyPermissions,
   isExplicitOnlyAdminPermission,
   isFullAdmin,
   sortAdminPermissions,
@@ -104,6 +105,12 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       assertCanGrantAdminAccess(req.user, {
         adminPermissions: sortAdminPermissions([...after, ...nextRoles.flatMap(role => role.permissions)]),
       });
+      const rolesBefore = rolesRequested ? await adminRoleRepository.findByIds(storedRoleIds) : nextRoles;
+      assertCanChangeExplicitOnlyPermissions(
+        req.user,
+        [...before, ...rolesBefore.flatMap(role => role.permissions)],
+        [...after, ...nextRoles.flatMap(role => role.permissions)]
+      );
       // Compare the cleaned set the editor showed; the write below replaces the raw stored array.
       const stored: readonly string[] = user.adminPermissions ?? [];
       const rolesStale = rolesRequested && !sameSet(beforeRoleIds, storedRoleIds);

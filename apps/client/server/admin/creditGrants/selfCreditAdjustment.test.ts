@@ -42,12 +42,12 @@ describe('applyApprovedSelfCreditAdjustment', () => {
     });
   });
 
-  it('applies the stored delta as the approver and audits it as an approved self-grant', async () => {
+  it('applies the stored delta as the requester, not the approver, and audits it as an approved self-grant', async () => {
     const result = await applyApprovedSelfCreditAdjustment(req, params, approval);
 
     expect(result).toEqual({ userId: REQUESTER, appliedCreditDelta: 50, currentCredits: 60 });
     expect(mocks.adminUpdateUser).toHaveBeenCalledWith(
-      'approver1',
+      REQUESTER,
       { id: REQUESTER, creditDelta: 50, creditReason: 'Testing credits' },
       expect.anything()
     );

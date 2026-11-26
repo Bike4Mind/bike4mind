@@ -1189,8 +1189,8 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
           action: 'user.credits.self_grant',
           params: { userId: ADMIN.id, creditDelta: 50, creditReason: CREDIT_REASON },
           reason: CREDIT_REASON,
-          requiredPermission: 'credits:adjust',
-          requiresFullAdmin: true,
+          requiredPermission: 'credits:approve_self_grant',
+          requiresFullAdmin: false,
         })
       );
     });

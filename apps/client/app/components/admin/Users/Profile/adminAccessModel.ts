@@ -1,10 +1,4 @@
-import {
-  ADMIN_PERMISSIONS,
-  hasAdminPermission,
-  isFullAdmin,
-  sortAdminRoleIds,
-  type AdminPermissionId,
-} from '@bike4mind/common';
+import { ADMIN_PERMISSIONS, hasAdminPermission, sortAdminRoleIds, type AdminPermissionId } from '@bike4mind/common';
 import type { AdminRoleListItem } from '../useAdminRoleList';
 import { ADMIN_PERMISSION_LABELS } from './userProfileModel';
 
@@ -41,7 +35,7 @@ export const describeProvenance = ({ direct, roleNames }: Pick<PermissionProvena
  * grants its permissions, so a delegate may only assign roles whose permissions they hold.
  */
 export const roleGrantBlockedReason = (actor: AdminIdentity, role: Pick<RoleRef, 'permissions'>): string | null => {
-  if (isFullAdmin(actor)) return null;
+  // A full admin holds every permission but the explicit-only ones, which only their holders can hand out.
   const unheld = role.permissions.filter(permission => !hasAdminPermission(actor, permission));
   return unheld.length > 0
     ? `You do not hold ${unheld.map(permission => ADMIN_PERMISSION_LABELS[permission].label).join(', ')}`

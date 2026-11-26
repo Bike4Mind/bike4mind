@@ -55,7 +55,7 @@ import {
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { gradeDetectionsForStatusChange } from '@server/admin/shadowDetectionStatusVerdicts';
 import { requestApproval } from '@server/admin/approvals/service';
-import { isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import { SELF_GRANT_APPROVAL, isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
 import type { Request } from 'express';
 import { Logger } from '@bike4mind/observability';
 
@@ -330,9 +330,7 @@ const handler = baseApi().put(
           params: { userId, creditDelta: selfGrantCredits, creditReason },
           summary: `Grant ${selfGrantCredits} credits to their own account`,
           reason: creditReason,
-          requiredPermission: 'credits:adjust',
-          // Only a full admin can adjust a user's credits on this route.
-          requiresFullAdmin: true,
+          ...SELF_GRANT_APPROVAL,
         });
         return res.status(202).json(pending);
       }

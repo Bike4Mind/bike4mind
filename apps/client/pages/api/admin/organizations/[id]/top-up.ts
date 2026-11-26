@@ -5,7 +5,7 @@ import { requestApproval } from '@server/admin/approvals/service';
 import { creditGrantNeedsApproval } from '@server/admin/creditGrants/gate';
 import { TopUpSchema, topUpOrg } from '@server/admin/creditGrants/topUpOrg';
 import { assertDelegateCanCreditOrganization, belongsToOrganization } from '@server/admin/creditGrants/delegateTargets';
-import { isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import { SELF_GRANT_APPROVAL, isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
@@ -37,9 +37,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
           params,
           summary: `${kind === 'refund' ? 'Refund' : 'Top up'} ${credits} credits to org ${organization.name}`,
           reason,
-          requiredPermission: 'credits:adjust',
-          // The requester holds admin access, which only a full admin may credit (delegateTargets.ts).
-          requiresFullAdmin: heldSelfGrant,
+          ...(heldSelfGrant ? SELF_GRANT_APPROVAL : { requiredPermission: 'credits:adjust', requiresFullAdmin: false }),
         },
         gate.policy
       );

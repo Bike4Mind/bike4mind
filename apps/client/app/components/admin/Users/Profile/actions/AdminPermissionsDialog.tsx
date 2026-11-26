@@ -3,6 +3,8 @@ import { Checkbox, Stack, Typography } from '@mui/joy';
 import {
   ADMIN_PERMISSIONS,
   EXPLICIT_ONLY_ADMIN_PERMISSIONS,
+  hasAdminPermission,
+  isExplicitOnlyAdminPermission,
   sortAdminPermissions,
   sortAdminRoleIds,
   type AdminPermissionId,
@@ -172,25 +174,38 @@ export const AdminPermissionsDialog: React.FC<ProfileDialogProps> = ({ user, onC
       )}
       <Stack gap={1.25} data-testid="admin-permissions-dialog-list">
         <SectionLabel>Direct permissions</SectionLabel>
-        {listed.map(id => (
-          <Checkbox
-            key={id}
-            checked={selected.includes(id)}
-            disabled={isSelf}
-            onChange={event => toggle(id, event.target.checked)}
-            label={
-              <Stack>
-                <Typography level="body-sm" fontWeight="md">
-                  {ADMIN_PERMISSION_LABELS[id].label}
-                </Typography>
-                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                  {ADMIN_PERMISSION_LABELS[id].description}
-                </Typography>
-              </Stack>
-            }
-            data-testid={`admin-permissions-dialog-${testIdOf(id)}-checkbox`}
-          />
-        ))}
+        {listed.map(id => {
+          // Only a holder can grant or revoke an explicit-only permission (assertCanChangeExplicitOnlyPermissions).
+          const unheld = isExplicitOnlyAdminPermission(id) && !hasAdminPermission(currentUser, id);
+          return (
+            <Checkbox
+              key={id}
+              checked={selected.includes(id)}
+              disabled={isSelf || unheld}
+              onChange={event => toggle(id, event.target.checked)}
+              label={
+                <Stack>
+                  <Typography level="body-sm" fontWeight="md">
+                    {ADMIN_PERMISSION_LABELS[id].label}
+                  </Typography>
+                  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                    {ADMIN_PERMISSION_LABELS[id].description}
+                  </Typography>
+                  {unheld && (
+                    <Typography
+                      level="body-xs"
+                      sx={{ color: 'admin.inkMuted' }}
+                      data-testid={`admin-permissions-dialog-${testIdOf(id)}-unheld`}
+                    >
+                      Only an admin who holds this permission can grant or revoke it.
+                    </Typography>
+                  )}
+                </Stack>
+              }
+              data-testid={`admin-permissions-dialog-${testIdOf(id)}-checkbox`}
+            />
+          );
+        })}
       </Stack>
       <Stack gap={0.5} data-testid="admin-permissions-dialog-effective">
         <SectionLabel>Effective permissions</SectionLabel>

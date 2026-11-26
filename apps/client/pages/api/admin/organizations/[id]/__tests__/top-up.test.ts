@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type AdminApproval } from '@bike4mind/common';
 
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
@@ -370,6 +370,23 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
     expect(mockAddCredits).not.toHaveBeenCalled();
   });
 
+  it('holds a top-up to an organization the admin belongs to for credits:approve_self_grant', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'admin-1', name: 'Acme' });
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.top_up',
+        requiredPermission: 'credits:approve_self_grant',
+        requiresFullAdmin: false,
+      }),
+      POLICY
+    );
+  });
+
   it('404s an unknown organization before storing a request', async () => {
     approvalMocks.policy.mockResolvedValueOnce(POLICY);
     mockOrgFindById.mockResolvedValueOnce(null);
@@ -389,5 +406,28 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
     expect(await topUpOrg(approverReq, params)).toEqual({ organizationId: 'org-1', creditsAdded: 100 });
     mockAddCredits.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }));
     expect(await topUpOrg(approverReq, params)).toMatchObject({ idempotent: true });
+  });
+
+  it('lets a delegate approver execute an approved self-grant without the delegate target check', async () => {
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'admin-2', name: 'Acme' });
+    const params = {
+      organizationId: 'org-1',
+      credits: 100,
+      kind: 'top_up' as const,
+      idempotencyKey: 'idem-key-12345',
+      reason: 'r',
+    };
+    const approverReq = {
+      user: { id: 'admin-2', isAdmin: false, adminPermissions: ['credits:approve_self_grant'] },
+      logger: { info: vi.fn() },
+    } as unknown as Request;
+    const approval = {
+      id: 'approval-1',
+      requiredPermission: 'credits:approve_self_grant',
+      requestedBy: { id: 'admin-1', name: 'Ada' },
+    } as unknown as AdminApproval;
+
+    await expect(topUpOrg(approverReq, params)).rejects.toThrow('You cannot top up an organization you belong to');
+    expect(await topUpOrg(approverReq, params, approval)).toEqual({ organizationId: 'org-1', creditsAdded: 100 });
   });
 });

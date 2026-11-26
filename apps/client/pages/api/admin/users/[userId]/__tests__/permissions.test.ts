@@ -65,6 +65,8 @@ const ROLES: Record<string, { name: string; permissions: string[] }> = {
   [BILLING_ROLE]: { name: 'Billing', permissions: ['support:read', 'credits:adjust'] },
 };
 
+const HOLDER = { id: ADMIN, isAdmin: true, adminPermissions: ['credits:self_grant', 'credits:approve_self_grant'] };
+
 const target = (fields: Record<string, unknown>) =>
   mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ name: 'Ada', ...fields }) }) });
 
@@ -212,7 +214,7 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
 
   it('grants and revokes credits:self_grant on a full admin, with step-up and an audit entry', async () => {
     target({ isAdmin: true, adminPermissions: [] });
-    const res = await call({ before: [], adminPermissions: ['credits:self_grant'], reason: REASON });
+    const res = await call({ before: [], adminPermissions: ['credits:self_grant'], reason: REASON }, { actor: HOLDER });
     expect(res._getJSONData()).toEqual({ adminPermissions: ['credits:self_grant'], adminRoleIds: [] });
     expect(mocks.stepUp).toHaveBeenCalledOnce();
     expect(mocks.audit).toHaveBeenCalledWith(
@@ -224,8 +226,28 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
     );
 
     target({ isAdmin: true, adminPermissions: ['credits:self_grant'] });
-    const revoked = await call({ before: ['credits:self_grant'], adminPermissions: [], reason: REASON });
+    const revoked = await call(
+      { before: ['credits:self_grant'], adminPermissions: [], reason: REASON },
+      { actor: HOLDER }
+    );
     expect(revoked._getJSONData()).toEqual({ adminPermissions: [], adminRoleIds: [] });
+  });
+
+  it('refuses a full admin without credits:approve_self_grant granting it directly', async () => {
+    target({ isAdmin: true, adminPermissions: [] });
+    await expect(
+      call({ before: [], adminPermissions: ['credits:approve_self_grant'], reason: REASON })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin who holds credits:approve_self_grant grant it', async () => {
+    target({ isAdmin: true, adminPermissions: [] });
+    const res = await call(
+      { before: [], adminPermissions: ['credits:approve_self_grant'], reason: REASON },
+      { actor: HOLDER }
+    );
+    expect(res._getJSONData()).toEqual({ adminPermissions: ['credits:approve_self_grant'], adminRoleIds: [] });
   });
 
   it('still blocks an admin from granting themselves credits:self_grant', async () => {
@@ -337,6 +359,19 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
           details: { granted: [], revoked: [], rolesAdded: ['Support'], rolesRemoved: [] },
         })
       );
+    });
+
+    it('refuses a role carrying an explicit-only permission assigned by a non-holder', async () => {
+      const APPROVERS = '660000000000000000000003';
+      ROLES[APPROVERS] = { name: 'Approvers', permissions: ['credits:approve_self_grant'] };
+      try {
+        await expect(call(roles([], [APPROVERS]))).rejects.toMatchObject({ statusCode: 403 });
+        expect(mocks.update).not.toHaveBeenCalled();
+        await call(roles([], [APPROVERS]), { actor: HOLDER });
+        expect(mocks.update).toHaveBeenCalled();
+      } finally {
+        delete ROLES[APPROVERS];
+      }
     });
 
     it('removes a role, matching the stored membership', async () => {

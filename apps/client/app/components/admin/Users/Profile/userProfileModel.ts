@@ -153,4 +153,8 @@ export const ADMIN_PERMISSION_LABELS: Record<AdminPermissionId, { label: string;
     label: 'Self-grant credits',
     description: 'Add credits to their own account without a second admin approving. Never implied by Super Admin.',
   },
+  'credits:approve_self_grant': {
+    label: 'Approve self-grants',
+    description: 'Approve credits another admin adds to their own account. Never implied by Super Admin.',
+  },
 };

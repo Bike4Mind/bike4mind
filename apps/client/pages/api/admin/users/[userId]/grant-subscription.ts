@@ -12,7 +12,7 @@ import {
 import { assertDelegateCanCreditUser } from '@server/admin/creditGrants/delegateTargets';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import { SELF_GRANT_APPROVAL, isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
 import { isSelfOrImpersonator, parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
 
@@ -45,9 +45,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
           params: { ...params, creditsAtRequest: credits },
           summary: `Grant ${params.subscriptionType} subscription with ${credits} credits to ${user.email ?? user.username}`,
           reason,
-          requiredPermission: 'credits:adjust',
-          // The requester holds admin access, which only a full admin may credit (delegateTargets.ts).
-          requiresFullAdmin: heldSelfGrant,
+          ...(heldSelfGrant ? SELF_GRANT_APPROVAL : { requiredPermission: 'credits:adjust', requiresFullAdmin: false }),
         },
         gate.policy
       );

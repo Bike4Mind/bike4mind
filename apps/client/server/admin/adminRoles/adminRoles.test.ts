@@ -92,6 +92,23 @@ describe('createAdminRole', () => {
     );
   });
 
+  it('refuses a full admin without it creating a role with an explicit-only permission', async () => {
+    await expect(
+      createAdminRole(ADMIN, { name: 'Approvers', description: '', permissions: ['credits:approve_self_grant'] }, deps)
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(deps.roles.create).not.toHaveBeenCalled();
+  });
+
+  it('lets a holder create a role with an explicit-only permission', async () => {
+    const holder = { ...ADMIN, adminPermissions: ['credits:approve_self_grant'] };
+    await createAdminRole(
+      holder,
+      { name: 'Approvers', description: '', permissions: ['credits:approve_self_grant'] },
+      deps
+    );
+    expect(deps.roles.create).toHaveBeenCalled();
+  });
+
   it('answers 409 for a taken name', async () => {
     deps.roles.create.mockRejectedValue(duplicateKey());
     await expect(
@@ -116,6 +133,24 @@ describe('updateAdminRole', () => {
         details: { granted: ['credits:adjust'], revoked: [], memberCount: 3 },
       })
     );
+  });
+
+  it('refuses a full admin without it adding an explicit-only permission, before any write', async () => {
+    await expect(
+      updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read', 'credits:self_grant'], reason: REASON }, deps)
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(deps.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('lets a holder add an explicit-only permission', async () => {
+    const holder = { ...ADMIN, adminPermissions: ['credits:self_grant'] };
+    await updateAdminRole(
+      holder,
+      ROLE_ID,
+      { permissions: ['support:read', 'credits:self_grant'], reason: REASON },
+      deps
+    );
+    expect(deps.roles.update).toHaveBeenCalled();
   });
 
   it('needs no step-up to revoke or rename, and still audits', async () => {

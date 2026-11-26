@@ -9,7 +9,7 @@ tags: [admin, permissions, security]
 
 A delegated admin holds one or more named permissions instead of full admin access. API routes check the permission declared for each HTTP method. Console access is separate: a delegated admin can enter only when a tab supports one of their permissions, and sees only those tabs. See [Console tabs](#console-tabs) for the current list.
 
-Full administrators (the legacy `isAdmin` flag) have every permission implicitly except `credits:self_grant`. Account-action safeguards still apply, including the role-change rules below.
+Full administrators (the legacy `isAdmin` flag) have every permission implicitly except `credits:self_grant` and `credits:approve_self_grant`. Account-action safeguards still apply, including the role-change rules below.
 
 ## Permissions
 
@@ -27,6 +27,7 @@ The table gives examples of current route coverage. A permission does not automa
 | `settings:manage` | Edit admin settings, manage tags and modals, configure Slack workspaces and start a Slack app install, manage partner signup rules, and recalculate a user's storage usage |
 | `models:curate` | Publish curated model catalog versions |
 | `credits:self_grant` | Add credits to your own account, or an organization you belong to, without a second admin approving (see [Credit grants to your own account](#credit-grants-to-your-own-account)). Super Admin does not include it |
+| `credits:approve_self_grant` | Approve credits another admin adds to their own account, or an organization they belong to. Super Admin does not include it |
 
 Permissions are enforced per route. `users:delete`, `users:export`, `models:curate`, `support:read`, `credits:adjust`, `users:moderate`, and `settings:manage` are enforced by `adminApi` middleware on their routes. `users:impersonate` and `keys:revoke` are enforced the same way. Listing a user's API keys needs `support:read`.
 
@@ -60,11 +61,20 @@ As a credit delegate, you cannot change your own account, an account with admin 
 
 When a full administrator adds credits to their own account, or to an organization they own, administer, bill for, or have joined, the grant waits for another admin to approve it under **Approvals**. This applies to credit adjustments, subscription grants, organization grants, and top-ups, whether or not approvals are turned on and whatever the approval threshold. You see "Submitted for approval" instead of a new balance.
 
-- Another full administrator approves it, because only a full administrator can credit an account with admin access. You cannot approve your own request.
+- Only an admin who holds `credits:approve_self_grant` can approve it. They do not need to be a Super Admin, and a Super Admin without the permission cannot approve. To see the **Approvals** tab they also need `support:read`. You cannot approve your own request.
 - An adjustment held for approval must be sent on its own. Make any other profile change separately.
 - On an organization profile, editing the balance up for an organization you belong to is refused. Use **Top up** instead, so the grant can be approved.
 - Removing credits from your own account does not need approval.
 - An admin who holds `credits:self_grant` skips the approval. Super Admin does not include this permission: it must be granted to each admin who needs it.
+- Only an admin who holds `credits:self_grant` or `credits:approve_self_grant` can grant or revoke that permission, directly or through a role. A Super Admin who does not hold it cannot hand it out.
+
+To give a deployment its first holder of either permission, an operator with database access runs:
+
+```bash
+pnpm db:grant-explicit-admin-permission <email> credits:approve_self_grant
+```
+
+The script writes no audit entry, so use it only for the first holders and grant the rest from the admin console.
 
 Every grant to your own account, approved or exempt, is recorded in the audit log and flagged as a self-grant.
 
@@ -104,7 +114,8 @@ To grant or revoke delegated permissions or [admin roles](./admin-roles.md), ope
 
 - Only a full administrator can change delegated permissions. Holding `settings:manage` does not let a delegate grant permissions.
 - You cannot change your own permissions.
-- A Super Admin already holds every permission except `credits:self_grant`, so that is the only permission you can grant or revoke for one. Change their role to limit their access.
+- A Super Admin already holds every permission except `credits:self_grant` and `credits:approve_self_grant`, so those are the only permissions you can grant or revoke for one. Change their role to limit their access.
+- You can grant or revoke `credits:self_grant` or `credits:approve_self_grant`, directly or through a role, only if you hold it yourself.
 - Every grant and revocation is recorded in the audit log with the reason, and the permissions before and after.
 - If someone else changed the user's permissions while your editor was open, saving fails and asks you to reload the profile. Reload, review the current permissions, and try again.
 
@@ -114,7 +125,7 @@ To change full admin access, open the user's profile and choose **More > Change 
 
 A full administrator is a user whose `isAdmin` flag is set. This is the legacy admin model. A full admin:
 
-- Has every permission except `credits:self_grant` implicitly, without it being listed in `adminPermissions`.
+- Has every permission except `credits:self_grant` and `credits:approve_self_grant` implicitly, without it being listed in `adminPermissions`.
 - Can act on other admins, subject to each action's safeguards.
 - Can grant or revoke another user's full-admin flag, subject to role-change safeguards.
 

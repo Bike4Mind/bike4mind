@@ -121,6 +121,24 @@ describe('AdminPermissionsDialog', () => {
     );
   });
 
+  it('disables an explicit-only permission the acting admin does not hold, with a hint', () => {
+    renderDialog(buildProfile());
+
+    expect(permission('credits:approve_self_grant')).toBeDisabled();
+    expect(screen.getByTestId(`${DIALOG}-credits-approve_self_grant-unheld`)).toHaveTextContent(
+      'Only an admin who holds this permission can grant or revoke it.'
+    );
+    expect(permission('support:read')).not.toBeDisabled();
+  });
+
+  it('enables an explicit-only permission for an admin who holds it', () => {
+    mocks.currentUser = { id: 'admin-1', isAdmin: true, adminPermissions: ['credits:approve_self_grant'] };
+    renderDialog(buildProfile());
+
+    expect(permission('credits:approve_self_grant')).not.toBeDisabled();
+    expect(screen.queryByTestId(`${DIALOG}-credits-approve_self_grant-unheld`)).not.toBeInTheDocument();
+  });
+
   it('leaves roles untouched when the role list cannot load', async () => {
     mocks.roles = { isSuccess: false, isLoading: false, isError: true, data: undefined };
     const { onClose } = renderDialog(buildProfile({ adminRoleIds: [SUPPORT_AGENT.id] }));

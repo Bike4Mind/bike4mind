@@ -395,6 +395,29 @@ describe('POST /api/admin/users/[userId]/grant-subscription - approval gate', ()
     expect(mockAddCredits).not.toHaveBeenCalled();
   });
 
+  it('holds a grant to the admin own account for credits:approve_self_grant', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    mockUserFindById.mockResolvedValue({ id: 'admin-1', email: 'a@example.com' });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { userId: 'admin-1' },
+      body: { subscriptionType: 'team', organizationName: 'Acme', seats: 5, reason: REASON },
+    });
+    (req as unknown as { user: unknown }).user = { isAdmin: true, id: 'admin-1' };
+    (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.subscription.grant',
+        requiredPermission: 'credits:approve_self_grant',
+        requiresFullAdmin: false,
+      }),
+      POLICY
+    );
+  });
+
   it('refuses with 409 at execute when the per-seat credits changed since the request', async () => {
     const approverReq = { user: { id: 'admin-2', isAdmin: true }, logger: { info: vi.fn() } } as unknown as Request;
     const params = {

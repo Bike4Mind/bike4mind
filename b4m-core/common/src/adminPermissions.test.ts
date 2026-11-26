@@ -4,6 +4,7 @@ import {
   AdminPermissionsSchema,
   EXPLICIT_ONLY_ADMIN_PERMISSIONS,
   assertCanActOnAdminTarget,
+  assertCanChangeExplicitOnlyPermissions,
   assertCanGrantAdminAccess,
   canAccessAdmin,
   hasAdminPermission,
@@ -124,5 +125,45 @@ describe('admin permissions', () => {
 
   it('rejects repeated permissions at the input boundary', () => {
     expect(AdminPermissionsSchema.safeParse(['support:read', 'support:read']).success).toBe(false);
+  });
+
+  describe('assertCanChangeExplicitOnlyPermissions', () => {
+    const FULL_ADMIN = { isAdmin: true };
+    const HOLDER = { isAdmin: true, adminPermissions: ['credits:approve_self_grant'] };
+
+    it('refuses a full admin without the permission adding it', () => {
+      expect(() => assertCanChangeExplicitOnlyPermissions(FULL_ADMIN, [], ['credits:approve_self_grant'])).toThrow(
+        ForbiddenError
+      );
+    });
+
+    it('refuses a full admin without the permission removing it', () => {
+      expect(() => assertCanChangeExplicitOnlyPermissions(FULL_ADMIN, ['credits:approve_self_grant'], [])).toThrow(
+        ForbiddenError
+      );
+    });
+
+    it('lets a holder add or remove it', () => {
+      expect(() => assertCanChangeExplicitOnlyPermissions(HOLDER, [], ['credits:approve_self_grant'])).not.toThrow();
+      expect(() => assertCanChangeExplicitOnlyPermissions(HOLDER, ['credits:approve_self_grant'], [])).not.toThrow();
+    });
+
+    it('counts a permission held through a role', () => {
+      const viaRole = { isAdmin: true, roleAdminPermissions: ['credits:approve_self_grant'] };
+      expect(() => assertCanChangeExplicitOnlyPermissions(viaRole, [], ['credits:approve_self_grant'])).not.toThrow();
+    });
+
+    it('passes unrelated changes and unchanged explicit-only permissions', () => {
+      expect(() =>
+        assertCanChangeExplicitOnlyPermissions(FULL_ADMIN, ['support:read'], ['credits:adjust'])
+      ).not.toThrow();
+      expect(() =>
+        assertCanChangeExplicitOnlyPermissions(
+          FULL_ADMIN,
+          ['credits:self_grant'],
+          ['credits:self_grant', 'support:read']
+        )
+      ).not.toThrow();
+    });
   });
 });

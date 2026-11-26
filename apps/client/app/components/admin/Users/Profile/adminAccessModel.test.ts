@@ -49,8 +49,16 @@ describe('describeProvenance', () => {
 });
 
 describe('roleGrantBlockedReason', () => {
-  it('never blocks a full admin', () => {
+  it('does not block a full admin from a role of ordinary permissions', () => {
     expect(roleGrantBlockedReason({ isAdmin: true }, ROLES[1])).toBeNull();
+  });
+
+  it('blocks a full admin from a role carrying an explicit-only permission they lack', () => {
+    const approvers = { permissions: ['support:read', 'credits:approve_self_grant'] as const };
+    expect(roleGrantBlockedReason({ isAdmin: true }, approvers)).toBe('You do not hold Approve self-grants');
+    expect(
+      roleGrantBlockedReason({ isAdmin: true, adminPermissions: ['credits:approve_self_grant'] }, approvers)
+    ).toBeNull();
   });
 
   it('blocks a delegate from a role carrying a permission they lack, counting their own roles', () => {

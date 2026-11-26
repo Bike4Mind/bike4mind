@@ -260,6 +260,23 @@ describe('POST /api/admin/organizations/grant - approval gate', () => {
     expect(mockAddCredits).not.toHaveBeenCalled();
   });
 
+  it('holds a grant to the admin own account for credits:approve_self_grant', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    mockUserFindByEmail.mockResolvedValue({ id: 'admin-1', email: 'owner@example.com' });
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.grant',
+        requiredPermission: 'credits:approve_self_grant',
+        requiresFullAdmin: false,
+      }),
+      POLICY
+    );
+  });
+
   it('refuses an unknown owner before storing a request', async () => {
     approvalMocks.policy.mockResolvedValueOnce(POLICY);
     mockUserFindByEmail.mockResolvedValueOnce(null);
