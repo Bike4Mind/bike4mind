@@ -1,9 +1,11 @@
 /**
  * Deploy-time opt-in for provider workload identity federation on the chat completion path
  * (b4m-core/llm-adapters providerAuth.ts, wifTokenSource.ts). Off unless the deploy sets
- * B4M_PROVIDER_AUTH_FEDERATED=true; off yields empty env and permissions, so the functions
- * spreading it are unchanged. Spread into every function that runs ChatCompletionProcess
- * (the listed functions are checked by infra/__tests__/providerFederation.test.ts).
+ * B4M_PROVIDER_AUTH_FEDERATED=true. On or off, the functions spreading it report which
+ * credential each provider completion used (llm-adapters providerCredentialMetrics.ts), so the
+ * metric covers exactly the runtimes federation is wired into. Spread into every function that
+ * runs ChatCompletionProcess (the listed functions are checked by
+ * infra/__tests__/providerFederation.test.ts).
  */
 export interface ProviderFederationDeployEnv {
   B4M_PROVIDER_AUTH_FEDERATED?: string;
@@ -37,8 +39,20 @@ const REQUIRED = [
 
 const OPTIONAL = ['ANTHROPIC_SERVICE_ACCOUNT_ID', 'ANTHROPIC_WORKSPACE_ID'] as const;
 
+// Must match PROVIDER_CREDENTIAL_NAMESPACE in b4m-core/llm-adapters/src/providerCredentialMetrics.ts.
+const CREDENTIAL_METRICS: ProviderFederation = {
+  environment: { PROVIDER_CREDENTIAL_METRICS: 'true' },
+  permissions: [
+    {
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+      conditions: [{ test: 'StringEquals', variable: 'cloudwatch:namespace', values: ['Lumina5/ProviderCredential'] }],
+    },
+  ],
+};
+
 export function buildProviderFederation(env: ProviderFederationDeployEnv): ProviderFederation {
-  if (env.B4M_PROVIDER_AUTH_FEDERATED !== 'true') return { environment: {}, permissions: [] };
+  if (env.B4M_PROVIDER_AUTH_FEDERATED !== 'true') return CREDENTIAL_METRICS;
 
   const missing = REQUIRED.filter(key => !env[key]?.trim());
   if (missing.length > 0) {
@@ -46,6 +60,7 @@ export function buildProviderFederation(env: ProviderFederationDeployEnv): Provi
   }
 
   const environment: Record<string, string> = {
+    ...CREDENTIAL_METRICS.environment,
     B4M_PROVIDER_AUTH: 'federated',
     PROVIDER_WIF_TOKEN_SOURCE: 'aws-sts',
   };
@@ -58,6 +73,7 @@ export function buildProviderFederation(env: ProviderFederationDeployEnv): Provi
     environment,
     // GetWebIdentityToken supports no resource-level scoping.
     permissions: [
+      ...CREDENTIAL_METRICS.permissions,
       {
         actions: ['sts:GetWebIdentityToken'],
         resources: ['*'],

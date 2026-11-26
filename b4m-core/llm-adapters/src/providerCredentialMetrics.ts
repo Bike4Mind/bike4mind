@@ -3,15 +3,16 @@ import type { MetricDatum } from '@aws-sdk/client-cloudwatch';
 import { Logger } from '@bike4mind/observability';
 
 /**
- * Records which credential each Anthropic/OpenAI completion request used, so a
- * workload identity federation rollout can be verified per stage and a fall back
- * to a static key is visible.
+ * Records which credential each AnthropicBackend/OpenAIBackend `complete()` call used,
+ * so a workload identity federation rollout can be verified per stage and a fall back
+ * to a static key is visible. It counts calls, not HTTP requests: SDK retries sit under
+ * one datapoint, and the max-tool-call recursion counts twice.
  *
  * `static` covers every plain key string, including a user's own key: the backend
  * cannot tell a platform key from a user key, only a key from the federated sentinel.
  *
- * Keep the names below in sync with infra/alarms.ts (`providerCredentialFallback`);
- * the tests pin the literals.
+ * Keep the names below in sync with infra/alarms.ts (`providerCredentialFallback`) and
+ * infra/providerFederation.ts (the namespace-scoped grant); the tests pin the literals.
  */
 export const PROVIDER_CREDENTIAL_NAMESPACE = 'Lumina5/ProviderCredential';
 export const PROVIDER_CREDENTIAL_USE_METRIC = 'ProviderCredentialUse';
@@ -48,8 +49,10 @@ function buildMetricData(
 
 /**
  * Fire-and-forget: never throws and never blocks the request it reports on.
- * No-ops outside deployed stages (`SEED_STAGE_NAME` comes from
- * DEFAULT_LAMBDA_ENVIRONMENT in infra/constants.ts): CLI, self-host and tests.
+ *
+ * Runs only where infra/providerFederation.ts sets PROVIDER_CREDENTIAL_METRICS, which
+ * also grants PutMetricData on this namespace. Elsewhere (other workers, CLI, self-host,
+ * tests) it no-ops, so a runtime without the grant does not log a failure per completion.
  */
 export async function recordProviderCredentialUse(
   provider: CredentialProvider,
@@ -57,7 +60,7 @@ export async function recordProviderCredentialUse(
   logger?: Logger
 ): Promise<void> {
   const stage = process.env.SEED_STAGE_NAME;
-  if (!stage) return;
+  if (!stage || process.env.PROVIDER_CREDENTIAL_METRICS !== 'true') return;
 
   try {
     // Fresh client per call: warm Lambda containers outlive their credentials.

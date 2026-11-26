@@ -841,7 +841,6 @@ export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './staleReferences';
 export * from './modelSunsetMetrics';
-export * from './providerCredentialMetrics';
 export * from './thinkingParams';
 export * from './toolPairingUtils';
 export { convertOpenAIToolHistoryToCanonical } from './messageFormatConverter';

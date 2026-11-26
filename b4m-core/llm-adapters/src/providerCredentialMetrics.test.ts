@@ -30,16 +30,21 @@ function dimensionsOf(datum: MetricDatum): Record<string, string | undefined> {
 }
 
 describe('recordProviderCredentialUse', () => {
-  const originalStage = process.env.SEED_STAGE_NAME;
+  const ENV_NAMES = ['SEED_STAGE_NAME', 'PROVIDER_CREDENTIAL_METRICS'] as const;
+  const savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
     send.mockReset().mockResolvedValue(undefined);
+    for (const name of ENV_NAMES) savedEnv[name] = process.env[name];
     process.env.SEED_STAGE_NAME = 'production';
+    process.env.PROVIDER_CREDENTIAL_METRICS = 'true';
   });
 
   afterEach(() => {
-    if (originalStage === undefined) delete process.env.SEED_STAGE_NAME;
-    else process.env.SEED_STAGE_NAME = originalStage;
+    for (const name of ENV_NAMES) {
+      if (savedEnv[name] === undefined) delete process.env[name];
+      else process.env[name] = savedEnv[name];
+    }
   });
 
   // infra/alarms.ts cannot import these constants, so the literals are pinned here.
@@ -67,14 +72,17 @@ describe('recordProviderCredentialUse', () => {
   it('adds a Stage-only fallback datapoint for the alarm on static_fallback', async () => {
     await recordProviderCredentialUse('openai', 'static_fallback');
 
-    const [usage, fallback] = sentInput().MetricData ?? [];
+    const metricData = sentInput().MetricData ?? [];
+    expect(metricData).toHaveLength(2);
+    const [usage, fallback] = metricData;
+    expect(usage.MetricName).toBe(PROVIDER_CREDENTIAL_USE_METRIC);
     expect(dimensionsOf(usage)).toEqual({ Stage: 'production', Provider: 'openai', Credential: 'static_fallback' });
-    expect(fallback.MetricName).toBe(PROVIDER_CREDENTIAL_FALLBACK_METRIC);
+    expect(fallback).toMatchObject({ MetricName: PROVIDER_CREDENTIAL_FALLBACK_METRIC, Value: 1, Unit: 'Count' });
     expect(dimensionsOf(fallback)).toEqual({ Stage: 'production' });
   });
 
-  it('does nothing outside a deployed stage', async () => {
-    delete process.env.SEED_STAGE_NAME;
+  it.each(ENV_NAMES)('does nothing when %s is unset', async name => {
+    delete process.env[name];
 
     await recordProviderCredentialUse('openai', 'federated');
 

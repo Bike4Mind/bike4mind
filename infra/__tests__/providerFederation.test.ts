@@ -20,21 +20,32 @@ const CONFIGURED: ProviderFederationDeployEnv = {
   OPENAI_WIF_AUDIENCE: 'openai-aud',
 };
 
+// Pinned literal: must match PROVIDER_CREDENTIAL_NAMESPACE in b4m-core/llm-adapters.
+const CREDENTIAL_METRIC_GRANT = {
+  actions: ['cloudwatch:PutMetricData'],
+  resources: ['*'],
+  conditions: [{ test: 'StringEquals', variable: 'cloudwatch:namespace', values: ['Lumina5/ProviderCredential'] }],
+};
+const CREDENTIAL_METRICS_ONLY = {
+  environment: { PROVIDER_CREDENTIAL_METRICS: 'true' },
+  permissions: [CREDENTIAL_METRIC_GRANT],
+};
+
 describe('buildProviderFederation', () => {
-  it.each([undefined, '', 'false', 'TRUE', '1'])('is empty when the toggle is %j', toggle => {
-    expect(buildProviderFederation({ ...CONFIGURED, B4M_PROVIDER_AUTH_FEDERATED: toggle })).toEqual({
-      environment: {},
-      permissions: [],
-    });
+  it.each([undefined, '', 'false', 'TRUE', '1'])('only reports credentials when the toggle is %j', toggle => {
+    expect(buildProviderFederation({ ...CONFIGURED, B4M_PROVIDER_AUTH_FEDERATED: toggle })).toEqual(
+      CREDENTIAL_METRICS_ONLY
+    );
   });
 
-  it('is empty with nothing configured', () => {
-    expect(buildProviderFederation({})).toEqual({ environment: {}, permissions: [] });
+  it('only reports credentials with nothing configured', () => {
+    expect(buildProviderFederation({})).toEqual(CREDENTIAL_METRICS_ONLY);
   });
 
   it('emits the runtime env and the STS grant when on', () => {
     expect(buildProviderFederation(CONFIGURED)).toEqual({
       environment: {
+        PROVIDER_CREDENTIAL_METRICS: 'true',
         B4M_PROVIDER_AUTH: 'federated',
         PROVIDER_WIF_TOKEN_SOURCE: 'aws-sts',
         ANTHROPIC_FEDERATION_RULE_ID: 'rule',
@@ -45,6 +56,7 @@ describe('buildProviderFederation', () => {
         OPENAI_WIF_AUDIENCE: 'openai-aud',
       },
       permissions: [
+        CREDENTIAL_METRIC_GRANT,
         {
           actions: ['sts:GetWebIdentityToken'],
           resources: ['*'],
