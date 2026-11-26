@@ -71,6 +71,7 @@ describe('preview sleep wiring', () => {
     const web = source.slice(source.indexOf('export const previewSleepForWeb'));
     expect(web).toMatch(/^export const previewSleepForWeb = previewSleepEnabled\n\s*\?/);
     expect(web.trimEnd()).toMatch(/: \{ environment: \{\}, permissions: \[\] \};$/);
+    expect(web.slice(0, web.indexOf(': { environment: {}'))).toContain("NEXT_PUBLIC_PREVIEW_SLEEP_ENABLED: 'true',");
     const register = web.slice(web.indexOf("'application-autoscaling:RegisterScalableTarget'"));
     expect(register.slice(0, register.indexOf('\n          },'))).toContain(
       'resources: targets.map(({ target }) => target.arn)'

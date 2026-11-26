@@ -69,6 +69,21 @@ describe('PreviewSleepBanner', () => {
     expect(screen.queryByTestId('preview-sleep-banner')).toBeNull();
   });
 
+  it('keeps polling while awake so a scheduled sleep reaches an open tab', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      get
+        .mockResolvedValueOnce({ data: { asleep: false, waking: false, services: [] } })
+        .mockResolvedValue({ data: asleep });
+      renderBanner();
+      await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(await screen.findByTestId('preview-sleep-banner')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('offers a wake when asleep, POSTs it, then shows progress', async () => {
     get.mockResolvedValueOnce({ data: asleep }).mockResolvedValue({ data: waking });
     post.mockResolvedValue({ data: { waking: true } });
