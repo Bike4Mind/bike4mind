@@ -64,6 +64,7 @@
   "devDependencies": {
     "@aws-sdk/client-lambda": "^3.1150.0",
     "@bike4mind/infra": "workspace:*",
+    "@bike4mind/tsgo": "workspace:*",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.30.0",
     "@commitlint/cli": "^21.2.1",
@@ -73,7 +74,6 @@
     "@tsconfig/node24": "^24.0.0",
     "@types/aws-lambda": "8.10.162",
     "@types/node": "^24.0.0",
-    "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "esbuild": "0.28.1",
     "eslint": "^9.39.2",
     "eslint-plugin-react": "^7.37.5",

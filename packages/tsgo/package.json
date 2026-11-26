@@ -1,0 +1,13 @@
+{
+  "name": "@bike4mind/tsgo",
+  "version": "1.0.0",
+  "description": "The TypeScript 7 compiler behind the tsgo command that every package's typecheck script runs",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "tsgo": "./bin/tsgo.mjs"
+  },
+  "dependencies": {
+    "typescript-7": "npm:typescript@7.0.2"
+  }
+}

@@ -155,6 +155,23 @@ class DesktopAffectedTest(unittest.TestCase):
         self.write_lock()
         self.assertTrue(self.changed())
 
+    def test_aliased_dependency_resolves(self):
+        self.lock['importers']['apps/desktop']['dependencies']['tool-next'] = {
+            'specifier': 'npm:tool@2.0.0', 'version': 'tool@2.0.0'}
+        self.lock['snapshots']['tool@2.0.0'] = {}
+        self.lock['packages']['tool@2.0.0'] = {}
+        self.write_lock()
+        self.git('add', '.')
+        self.git('commit', '-qm', 'build: aliased dependency')
+        base = self.git('rev-parse', 'HEAD')
+        self.commit('feat: unrelated', 'b4m-core/unrelated/src/index.ts')
+        self.assertFalse(affected(base, 'HEAD'))
+        self.lock['packages']['tool@2.0.0'] = {'resolution': {'integrity': 'changed'}}
+        self.write_lock()
+        self.git('add', '.')
+        self.git('commit', '-qm', 'chore: change aliased resolution')
+        self.assertTrue(affected(base, 'HEAD'))
+
     def test_shared_test_config_runs(self):
         self.commit('test: shared configuration', 'vitest.shared.ts')
         self.assertTrue(affected(self.base, 'HEAD'))
