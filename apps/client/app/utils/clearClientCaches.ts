@@ -3,9 +3,12 @@ import { dexie } from './dexie';
 import { tagCacheManager } from './tagCache';
 import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
 import { MFA_ENROLLMENT_HINT_KEY } from './mfaEnrollmentHint';
-import { clearStoredJupyterConfig } from './jupyterBrowserClient';
 import { isPrecacheName } from '../swRoutes';
-import { CHAT_INPUT_DRAFTS_STORAGE_KEY, useChatInput } from '../hooks/useChatInput';
+import {
+  CHAT_INPUT_DRAFTS_STORAGE_KEY,
+  JUPYTER_CONFIG_STORAGE_KEY,
+  runIdentityResetHooks,
+} from './identityScopedStorage';
 import { premiumLocalStorageKeyPrefixes } from '../premium-generated/premiumLocalStorageKeys.generated';
 
 /**
@@ -32,6 +35,7 @@ const USER_SPECIFIC_LS_KEYS = [
   // user id, so a stale one is already ignored for another account; removing it is hygiene.
   MFA_ENROLLMENT_HINT_KEY,
   CHAT_INPUT_DRAFTS_STORAGE_KEY,
+  JUPYTER_CONFIG_STORAGE_KEY,
 ];
 
 /**
@@ -43,12 +47,11 @@ const USER_SPECIFIC_LS_KEYS = [
  */
 export async function clearClientCaches(): Promise<void> {
   try {
-    // Reset the live drafts store first: zustand persist writes on every set, so a later write
-    // would otherwise put the old drafts back after the key is removed.
-    useChatInput.setState({ drafts: {}, chatInputValue: '' });
+    // Hooks first: a zustand persist store writes on every set, so resetting it after the key is
+    // removed would put the key back.
+    runIdentityResetHooks();
     USER_SPECIFIC_LS_KEYS.forEach(key => localStorage.removeItem(key));
     removePremiumLocalStorageKeys();
-    clearStoredJupyterConfig();
 
     await Promise.all([
       // React Query IndexedDB persistence (idb-keyval)

@@ -18,6 +18,7 @@ import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
 import { MFA_ENROLLMENT_HINT_KEY } from './mfaEnrollmentHint';
 import { clearClientCaches } from './clearClientCaches';
 import { useChatInput } from '../hooks/useChatInput';
+import { getStoredJupyterConfig, subscribeStoredJupyterConfig } from './jupyterBrowserClient';
 
 function setPrefixes(prefixes: string[]) {
   premiumLocalStorageKeyPrefixes.length = 0;
@@ -108,10 +109,15 @@ describe('clearClientCaches identity-scoped stores', () => {
 
   it('drops the saved Jupyter server and token', async () => {
     localStorage.setItem('b4m-jupyter-config', JSON.stringify({ serverUrl: 'http://jupyter.test', token: 't' }));
+    const onChange = vi.fn();
+    const unsubscribe = subscribeStoredJupyterConfig(onChange);
 
     await clearClientCaches();
+    unsubscribe();
 
     expect(localStorage.getItem('b4m-jupyter-config')).toBeNull();
+    expect(getStoredJupyterConfig()).toBeNull();
+    expect(onChange).toHaveBeenCalled();
   });
 
   it('deletes service worker runtime caches but keeps the precache', async () => {
