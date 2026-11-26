@@ -556,7 +556,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
         </Stack>
       </Box>
 
-      {/* Main Content - Two Column Layout */}
+      {/* Main Content - two columns from md up, stacked below so the editor never scrolls sideways */}
       <Box
         data-testid="email-job-detail-columns"
         sx={{
