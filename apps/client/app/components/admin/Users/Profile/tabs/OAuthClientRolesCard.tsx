@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Box, FormControl, FormLabel, Option, Select, Skeleton, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { UserOAuthClientRolesView } from '@bike4mind/common';
+import { SETTINGS_PAGE_READ, meetsAdminPermissionRequirement, type UserOAuthClientRolesView } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
   assignUserOAuthClientRole,
@@ -80,8 +80,8 @@ const AssignRoleDialog: React.FC<{
       open
       onClose={onClose}
       title="Assign app role"
-      description={`The app reads the role for ${displayName(user)} the next time it asks. Other apps, and other stages of the same app, do not see it.`}
-      reasonPresets={ADMIN_REASON_PRESETS.oauthClientRoleAssignment}
+      description={`The app will be able to read this role for ${displayName(user)} once role claims are enabled. Other apps, and other stages of the same app, will not see it.`}
+      reasonPresets={ADMIN_REASON_PRESETS.oauthClientRoleAssign}
       confirmLabel={roleLabel ? `Assign ${roleLabel}` : 'Assign role'}
       blockedReason={!client ? 'Pick an app.' : !roleLabel ? 'Pick a role.' : null}
       pending={mutation.isPending}
@@ -153,8 +153,8 @@ const RemoveRoleDialog: React.FC<{
       open
       onClose={onClose}
       title="Remove app role"
-      description={`${held.clientName} stops seeing ${held.label} for ${displayName(user)} the next time it asks.`}
-      reasonPresets={ADMIN_REASON_PRESETS.oauthClientRoleAssignment}
+      description={`${displayName(user)} will no longer hold ${held.label} on ${held.clientName}.`}
+      reasonPresets={ADMIN_REASON_PRESETS.oauthClientRoleUnassign}
       tone="danger"
       confirmLabel={`Remove ${held.label}`}
       pending={mutation.isPending}
@@ -171,12 +171,14 @@ const RemoveRoleDialog: React.FC<{
  */
 export const OAuthClientRolesCard: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const { currentUser } = useUser();
+  const canRead = meetsAdminPermissionRequirement(currentUser, SETTINGS_PAGE_READ);
   const canManage = adminActionBlockedReason(currentUser, user, 'settings:manage') === null;
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<{ kind: 'assign' } | { kind: 'remove'; held: HeldRole } | null>(null);
   const query = useQuery({
     queryKey: [USER_OAUTH_CLIENT_ROLES_QUERY_KEY, user.id],
     queryFn: () => fetchUserOAuthClientRoles(user.id),
+    enabled: canRead,
   });
   const clients = query.data ?? [];
   const held = heldRoles(clients);
@@ -246,6 +248,8 @@ export const OAuthClientRolesCard: React.FC<{ user: AdminUserProfile }> = ({ use
       </Box>
     );
   };
+
+  if (!canRead) return null;
 
   return (
     <>

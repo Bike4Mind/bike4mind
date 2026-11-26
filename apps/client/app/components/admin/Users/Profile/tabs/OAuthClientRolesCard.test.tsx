@@ -74,6 +74,13 @@ describe('OAuthClientRolesCard', () => {
     expect(screen.queryByTestId('user-oauth-role-b4m_a-admin-remove-btn')).not.toBeInTheDocument();
   });
 
+  it('does not fetch or render for a viewer without support:read or settings:manage', async () => {
+    mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['users:moderate'] };
+    renderCard();
+    await waitFor(() => expect(screen.queryByTestId('user-oauth-roles-card')).not.toBeInTheDocument());
+    expect(mocks.fetchUserOAuthClientRoles).not.toHaveBeenCalled();
+  });
+
   it('shows read-only rows to a delegated settings manager viewing an account with admin access', async () => {
     mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['settings:manage'] };
     render(<OAuthClientRolesCard user={buildProfile({ adminPermissions: ['support:read'] })} />, {

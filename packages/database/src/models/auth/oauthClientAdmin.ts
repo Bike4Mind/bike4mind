@@ -377,7 +377,7 @@ export async function addOAuthClientRole(
       { new: true, runValidators: true, session }
     ).exec();
     if (!doc) throw new NotFoundError('OAuth client not found');
-    await oauthClientRoleAssignmentRepository.deleteAllForClient(doc.clientId, role.key, undefined, session);
+    await oauthClientRoleAssignmentRepository.deleteAllForClient(doc.clientId, role.key, session);
     return { client: toOAuthClientView(doc), role };
   });
 }
@@ -397,12 +397,7 @@ export async function removeOAuthClientRole(
       { new: true, runValidators: true, session }
     ).exec();
     if (!doc) throw new NotFoundError('OAuth client not found');
-    const removedAssignments = await oauthClientRoleAssignmentRepository.deleteAllForClient(
-      doc.clientId,
-      key,
-      undefined,
-      session
-    );
+    const removedAssignments = await oauthClientRoleAssignmentRepository.deleteAllForClient(doc.clientId, key, session);
     return { client: toOAuthClientView(doc), role: { key: role.key, label: role.label }, removedAssignments };
   });
 }

@@ -104,14 +104,6 @@ describe('listing and bulk deletes', () => {
     expect((await repo.listByUser('u1')).map(r => `${r.clientId}:${r.role}`)).toEqual(['c0:viewer', 'c1:admin']);
   });
 
-  it('deleteAllForClient with assignedBefore keeps later assignments', async () => {
-    await repo.assign({ userId: 'u1', clientId: 'c1', role: 'admin', assignedBy: 'a' });
-    await OAuthClientRoleAssignmentModel.updateOne({ userId: 'u1' }, { assignedAt: new Date('2026-01-01') });
-    await repo.assign({ userId: 'u2', clientId: 'c1', role: 'admin', assignedBy: 'a' });
-    expect(await repo.deleteAllForClient('c1', 'admin', new Date('2026-02-01'))).toBe(1);
-    expect((await OAuthClientRoleAssignmentModel.find()).map(r => r.userId)).toEqual(['u2']);
-  });
-
   it('deleteAllForClient removes one role or every role of the client only', async () => {
     await repo.assign({ userId: 'u1', clientId: 'c1', role: 'admin', assignedBy: 'a' });
     await repo.assign({ userId: 'u2', clientId: 'c1', role: 'viewer', assignedBy: 'a' });

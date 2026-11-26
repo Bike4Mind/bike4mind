@@ -143,7 +143,7 @@ export function OAuthClientRolesSection({ client, onClose }: { client: OAuthClie
         data-testid="oauth-client-roles-section"
       >
         <Typography level="body-sm" sx={{ color: 'admin.inkMuted', px: 2, pt: 1.5 }}>
-          {`Roles ${client.name} can read for its users (client ID ${client.clientId}). Assign them from a user's profile.`}
+          {`Roles ${client.name} will be able to read for its users once role claims are enabled (client ID ${client.clientId}). Assign them from a user's profile.`}
         </Typography>
         <DataTable
           label={`Roles of ${client.name}`}
@@ -183,8 +183,8 @@ export function OAuthClientRolesSection({ client, onClose }: { client: OAuthClie
         open={adding}
         onClose={() => setAdding(false)}
         title="Add role"
-        description={`${client.name} can read the role for anyone it is assigned to. Other clients, including other stages of the same app, do not see it.`}
-        reasonPresets={ADMIN_REASON_PRESETS.oauthClientRole}
+        description={`${client.name} will be able to read the role for anyone it is assigned to once role claims are enabled. Other clients, including other stages of the same app, will not see it.`}
+        reasonPresets={ADMIN_REASON_PRESETS.oauthClientRoleAdd}
         confirmLabel="Add role"
         blockedReason={newRoleBlockedReason(draft, roles)}
         pending={addMutation.isPending}
@@ -222,7 +222,7 @@ export function OAuthClientRolesSection({ client, onClose }: { client: OAuthClie
           description={`Remove ${removeTarget.key} from ${client.name}? ${
             holderCount(removeTarget) === 1 ? '1 person loses it' : `${holderCount(removeTarget)} people lose it`
           } now, and adding the role back does not restore who held it.`}
-          reasonPresets={ADMIN_REASON_PRESETS.oauthClientRole}
+          reasonPresets={ADMIN_REASON_PRESETS.oauthClientRoleRemove}
           tone="danger"
           confirmLabel="Remove role"
           pending={removeMutation.isPending}

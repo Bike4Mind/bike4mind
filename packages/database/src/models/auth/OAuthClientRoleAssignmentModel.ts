@@ -39,13 +39,8 @@ export interface IOAuthClientRoleAssignmentRepository extends IBaseRepository<IO
     limit: number
   ): Promise<Array<{ role: string; count: number; rows: IOAuthClientRoleAssignmentDocument[] }>>;
   listByUser(userId: string): Promise<IOAuthClientRoleAssignmentDocument[]>;
-  /** Every assignment on the client, or only those of `role`; `assignedBefore` keeps later ones. */
-  deleteAllForClient(
-    clientId: string,
-    role?: string,
-    assignedBefore?: Date,
-    session?: mongoose.mongo.ClientSession
-  ): Promise<number>;
+  /** Every assignment on the client, or only those of `role`. */
+  deleteAllForClient(clientId: string, role?: string, session?: mongoose.mongo.ClientSession): Promise<number>;
   deleteAllForUser(userId: string): Promise<number>;
   /**
    * The role keys a client may read for a user: [] when the user is deleted, banned, suspended or in
@@ -125,21 +120,9 @@ class OAuthClientRoleAssignmentRepository
     return this.model.find({ userId }).sort({ clientId: 1, role: 1 }).exec();
   }
 
-  async deleteAllForClient(
-    clientId: string,
-    role?: string,
-    assignedBefore?: Date,
-    session?: mongoose.mongo.ClientSession
-  ) {
+  async deleteAllForClient(clientId: string, role?: string, session?: mongoose.mongo.ClientSession) {
     const result = await this.model
-      .deleteMany(
-        {
-          clientId,
-          ...(role === undefined ? {} : { role }),
-          ...(assignedBefore ? { assignedAt: { $lt: assignedBefore } } : {}),
-        },
-        { session }
-      )
+      .deleteMany({ clientId, ...(role === undefined ? {} : { role }) }, { session })
       .exec();
     return result.deletedCount;
   }
