@@ -94,12 +94,6 @@ public protocol UploadJobStore: Sendable {
   func removeAll() throws
 }
 
-extension UploadJobStore {
-  public func removeAll() throws {
-    for job in try loadAll() { try remove(id: job.id) }
-  }
-}
-
 /// One JSON file per job, so the app and the extension (separate processes) never rewrite each other's
 /// records. Writes are atomic.
 public struct FileUploadJobStore: UploadJobStore {

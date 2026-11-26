@@ -10,6 +10,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -23,10 +24,14 @@ class AuthSessionTest {
 
     private class MemoryStore(var tokens: Tokens? = null) : TokenStore {
         var pending: List<PendingRevocation> = emptyList()
+        var loadFailure: Exception? = null
         override suspend fun load() = tokens
         override suspend fun save(tokens: Tokens) { this.tokens = tokens }
         override suspend fun clear() { tokens = null }
-        override suspend fun loadPendingRevocations() = pending
+        override suspend fun loadPendingRevocations(): List<PendingRevocation> {
+            loadFailure?.let { throw it }
+            return pending
+        }
         override suspend fun savePendingRevocations(revocations: List<PendingRevocation>) { pending = revocations }
     }
 
@@ -123,6 +128,22 @@ class AuthSessionTest {
         val store = MemoryStore().apply { pending = listOf(PendingRevocation(environment.baseUrl, "r9", NOW)) }
         val session = AuthSession(AuthApi(environment, HttpClient(engine)), store, { NOW })
 
+        session.retryPendingRevocations()
+
+        assertEquals(emptyList(), store.pending)
+    }
+
+    @Test
+    fun aRetryThatFailsInTheStoreDoesNotBlockTheNextOne() = runTest {
+        val engine = MockEngine { respond("""{"error":"invalid"}""", HttpStatusCode.Unauthorized, json) }
+        val store = MemoryStore().apply {
+            pending = listOf(PendingRevocation(environment.baseUrl, "r9", NOW))
+            loadFailure = IllegalStateException("store unavailable")
+        }
+        val session = AuthSession(AuthApi(environment, HttpClient(engine)), store, { NOW })
+
+        assertFailsWith<IllegalStateException> { session.retryPendingRevocations() }
+        store.loadFailure = null
         session.retryPendingRevocations()
 
         assertEquals(emptyList(), store.pending)
