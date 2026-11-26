@@ -6,6 +6,8 @@ import {
   ForbiddenError,
   assertCanActOnAdminTarget,
   assertCanGrantAdminAccess,
+  EXPLICIT_ONLY_ADMIN_PERMISSIONS,
+  isExplicitOnlyAdminPermission,
   isFullAdmin,
   sortAdminPermissions,
   sortAdminRoleIds,
@@ -42,6 +44,19 @@ const describeChange = (changes: {
     .join('; ');
 
 /**
+ * A full admin can hold only the permissions their flag does not imply, granted directly: never other
+ * permissions or roles, which the flag already covers.
+ */
+const onlyExplicitOnlyChange = (
+  after: readonly string[],
+  rolesRequested: boolean,
+  beforeRoleIds: readonly string[],
+  afterRoleIds: readonly string[]
+) =>
+  after.every(isExplicitOnlyAdminPermission) &&
+  (!rolesRequested || (beforeRoleIds.length === 0 && afterRoleIds.length === 0));
+
+/**
  * Edits a user's delegated `adminPermissions` and, when the body names them, the admin roles they
  * hold (`adminRoleIds`, b4m-core/common adminRoles.ts). Holding a role grants its permissions, so
  * an assignment passes the same grant rules as a direct permission. Full admins only, and never
@@ -73,8 +88,10 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
 
     const result = await withTransaction(async () => {
       const { userId, user } = await noteSubject(req, 'settings:manage');
-      if (isFullAdmin(user)) {
-        throw new BadRequestError('Full admins hold every permission. Change their role to limit their access.');
+      if (isFullAdmin(user) && !onlyExplicitOnlyChange(after, rolesRequested, beforeRoleIds, afterRoleIds)) {
+        throw new BadRequestError(
+          `Full admins hold every permission except ${EXPLICIT_ONLY_ADMIN_PERMISSIONS.join(', ')}. Change their role to limit their access.`
+        );
       }
       assertCanActOnAdminTarget(req.user, user, 'change admin permissions of');
       const storedRoleIdsRaw = user.adminRoleIds ?? [];

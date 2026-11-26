@@ -71,6 +71,9 @@ const credits = vi.hoisted(() => ({
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {},
   NotFoundError: class NotFoundError extends Error {},
+  ForbiddenError: class ForbiddenError extends Error {
+    statusCode = 403;
+  },
 }));
 vi.mock('@bike4mind/services', () => ({
   organizationService: { get, update },
@@ -94,7 +97,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
 vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  isSelfOrImpersonator: (await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>())
+    .isSelfOrImpersonator,
   parseAdminActionReason: (value: unknown) => String(value),
   recordAdminActionFromRequest: credits.recordAdminAction,
 }));
@@ -295,6 +300,25 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
       expect(update).not.toHaveBeenCalled();
     }
   );
+
+  it('refuses to raise the balance of an organization the admin belongs to, pointing at Top up', async () => {
+    credits.findById.mockResolvedValueOnce({ id: 'org1', name: 'Acme', userId: 'admin1', currentCredits: 100 });
+    const { req, res } = putAsAdmin({ currentCredits: 150, creditReason: 'goodwill grant' });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
+    expect(credits.recordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin holding credits:self_grant raise their own organization, flagged as a self-grant', async () => {
+    credits.findById.mockResolvedValueOnce({ id: 'org1', name: 'Acme', userId: 'admin1', currentCredits: 100 });
+    const { req, res } = putAsAdmin({ currentCredits: 150, creditReason: 'goodwill grant' });
+    Object.assign((req as unknown as { user: object }).user, { adminPermissions: ['credits:self_grant'] });
+    await mockRefs.putHandler!(req, res);
+    expect(credits.recordAdminAction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ details: expect.objectContaining({ credits: 50, selfGrant: true }) })
+    );
+  });
 
   it('rejects a negative balance and writes nothing', async () => {
     const { req, res } = putAsAdmin({ currentCredits: -5, creditReason: 'goodwill grant' });

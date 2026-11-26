@@ -201,13 +201,38 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
-  it('never edits a full admin, so the last full admin cannot be demoted here', async () => {
+  it('never grants a full admin a permission their flag implies, so the last full admin cannot be demoted here', async () => {
     target({ isAdmin: true, adminPermissions: [] });
-    await expect(call({ before: [], adminPermissions: [], reason: REASON })).rejects.toMatchObject({
+    await expect(call({ before: [], adminPermissions: ['support:read'], reason: REASON })).rejects.toMatchObject({
       statusCode: 400,
     });
     expect(mocks.update).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
+  it('grants and revokes credits:self_grant on a full admin, with step-up and an audit entry', async () => {
+    target({ isAdmin: true, adminPermissions: [] });
+    const res = await call({ before: [], adminPermissions: ['credits:self_grant'], reason: REASON });
+    expect(res._getJSONData()).toEqual({ adminPermissions: ['credits:self_grant'], adminRoleIds: [] });
+    expect(mocks.stepUp).toHaveBeenCalledOnce();
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.permissions.updated',
+        details: expect.objectContaining({ granted: ['credits:self_grant'] }),
+      })
+    );
+
+    target({ isAdmin: true, adminPermissions: ['credits:self_grant'] });
+    const revoked = await call({ before: ['credits:self_grant'], adminPermissions: [], reason: REASON });
+    expect(revoked._getJSONData()).toEqual({ adminPermissions: [], adminRoleIds: [] });
+  });
+
+  it('still blocks an admin from granting themselves credits:self_grant', async () => {
+    await expect(
+      call({ before: [], adminPermissions: ['credits:self_grant'], reason: REASON }, { userId: ADMIN })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 
   it('refuses to touch the full-admin flag', async () => {

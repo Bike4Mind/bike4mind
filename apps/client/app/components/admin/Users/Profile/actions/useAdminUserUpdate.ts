@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import type { IUser, ThrottleTier, UserModerationStatus } from '@bike4mind/common';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
+import { isApprovalPending, notifyApprovalSubmitted } from '@client/app/hooks/data/adminApprovals';
 
 /**
  * Fields `PUT /api/users/[id]/update` accepts beyond the user document: audit reasons and credit moves.
@@ -37,7 +38,9 @@ export const useAdminUserUpdate = (userId: string) => {
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: (data: AdminUserUpdate) => updateUserToServer(userId, data as Partial<IUser>),
-    onSuccess: () => {
+    onSuccess: data => {
+      // A credit grant to the admin's own account is held for a second admin (PUT /api/users/[id]/update).
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       void queryClient.invalidateQueries({ queryKey: ['users'] });
       void queryClient.invalidateQueries({ queryKey: ['organizations'] });
       // Activity, credit history, ledger and entitlements all describe the account just written.

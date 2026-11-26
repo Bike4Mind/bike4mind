@@ -12,7 +12,8 @@ import {
 import { assertDelegateCanCreditUser } from '@server/admin/creditGrants/delegateTargets';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
+import { isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import { isSelfOrImpersonator, parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
 
 interface RequestQuery {
@@ -32,7 +33,8 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
     const request = req as unknown as Request;
 
     const credits = grantSubscriptionCredits(params, teamPlan);
-    const gate = await creditGrantNeedsApproval(credits, req.user.id);
+    const heldSelfGrant = isHeldSelfGrant(req.user, isSelfOrImpersonator(req.user, userId));
+    const gate = await creditGrantNeedsApproval(credits, req.user.id, { heldSelfGrant });
     if (gate.policy) {
       const user = await validateGrantSubscription(params, teamPlan);
       await assertDelegateCanCreditUser(req.user, user.id, 'grant a subscription to');
@@ -44,7 +46,8 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
           summary: `Grant ${params.subscriptionType} subscription with ${credits} credits to ${user.email ?? user.username}`,
           reason,
           requiredPermission: 'credits:adjust',
-          requiresFullAdmin: false,
+          // The requester holds admin access, which only a full admin may credit (delegateTargets.ts).
+          requiresFullAdmin: heldSelfGrant,
         },
         gate.policy
       );

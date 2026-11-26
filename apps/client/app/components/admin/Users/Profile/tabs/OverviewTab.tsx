@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Box, Chip, Stack, Typography } from '@mui/joy';
 import {
   USER_TIMELINE_CATEGORIES,
+  isExplicitOnlyAdminPermission,
   isFullAdmin,
   sortAdminRoleIds,
   resolveUserStorageLimit,
@@ -163,8 +164,9 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
   const knownRoles = roleListAvailable ? roles.data : [];
   const heldRoles = knownRoles.filter(role => roleIds.includes(role.id.toLowerCase()));
   const effective = permissionProvenance(user.adminPermissions ?? [], roleIds, knownRoles);
-  // The endpoint is full-admin only and never edits a Super Admin or the viewer's own account.
-  const canEditPermissions = isFullAdmin(currentUser) && !user.isAdmin && currentUser?.id !== user.id;
+  // The endpoint is full-admin only and never edits the viewer's own account; for a Super Admin it
+  // edits only the permissions that role does not imply.
+  const canEditPermissions = isFullAdmin(currentUser) && currentUser?.id !== user.id;
 
   return (
     <SectionCard
@@ -196,7 +198,19 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
       <Fact label="Admin permissions" data-testid="user-profile-fact-admin-permissions">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
           {user.isAdmin ? (
-            'All (Super Admin)'
+            <>
+              All (Super Admin)
+              {effective
+                .filter(entry => isExplicitOnlyAdminPermission(entry.id))
+                .map(entry => (
+                  <StatusChip
+                    key={entry.id}
+                    tone="neutral"
+                    label={`${ADMIN_PERMISSION_LABELS[entry.id].label} (${describeProvenance(entry)})`}
+                    data-testid={`user-profile-admin-permission-${entry.id.replace(':', '-')}`}
+                  />
+                ))}
+            </>
           ) : (
             <>
               {effective.map(entry => (

@@ -145,10 +145,22 @@ describe('AdminPermissionsDialog', () => {
     expect(screen.getByTestId(`${DIALOG}-hint`)).toHaveTextContent('You cannot change your own admin permissions.');
   });
 
-  it('points a Super Admin at the role instead', () => {
-    renderDialog(buildProfile({ isAdmin: true }));
+  it('offers a Super Admin only the permissions their role does not imply, and sends no roles', async () => {
+    const { onClose } = renderDialog(buildProfile({ isAdmin: true }));
 
-    expect(permission('support:read')).toBeDisabled();
-    expect(screen.getByTestId(`${DIALOG}-hint`)).toHaveTextContent(/Change their role/);
+    expect(screen.queryByTestId(`${DIALOG}-support-read-checkbox`)).not.toBeInTheDocument();
+    expect(screen.queryByTestId(`${DIALOG}-roles`)).not.toBeInTheDocument();
+    pickReason();
+    expect(screen.getByTestId(`${DIALOG}-hint`)).toHaveTextContent('Change a permission first.');
+
+    fireEvent.click(permission('credits:self_grant'));
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.update).toHaveBeenCalledWith({
+      before: [],
+      adminPermissions: ['credits:self_grant'],
+      reason: expect.any(String),
+    });
   });
 });

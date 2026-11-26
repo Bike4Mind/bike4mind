@@ -3,6 +3,10 @@ import type { Request } from 'express';
 import { GrantOrgParamsSchema, grantOrg } from '@server/admin/creditGrants/grantOrg';
 import { GrantSubscriptionParamsSchema, grantSubscription } from '@server/admin/creditGrants/grantSubscription';
 import { TopUpParamsSchema, topUpOrg } from '@server/admin/creditGrants/topUpOrg';
+import {
+  SelfCreditAdjustmentParamsSchema,
+  applyApprovedSelfCreditAdjustment,
+} from '@server/admin/creditGrants/selfCreditAdjustment';
 import { executeApprovedUsersBulk } from '@server/admin/usersBulk/approvalExecutor';
 import { ScheduleAdminDeletionParamsSchema, scheduleDeletionAsAdmin } from '@server/admin/scheduleDeletionAsAdmin';
 import { DeleteAdminParamsSchema, executeApprovedAdminDelete } from '@server/admin/deleteUserAsAdmin';
@@ -24,6 +28,8 @@ export const approvalExecutors: Record<AdminApprovalAction, ApprovalExecutor> = 
   'org.credits.top_up': (params, { req, approval }) => topUpOrg(req, TopUpParamsSchema.parse(params), approval),
   'user.subscription.grant': (params, { req, approval }) =>
     grantSubscription(req, GrantSubscriptionParamsSchema.parse(params), approval),
+  'user.credits.self_grant': (params, { req, approval }) =>
+    applyApprovedSelfCreditAdjustment(req, SelfCreditAdjustmentParamsSchema.parse(params), approval),
   // Approving only unlocks it: the requester redeems it in loginAs, so the session is never the approver's.
   'user.impersonate_admin': notExecutableOnApprove('user.impersonate_admin'),
   'user.schedule_admin_deletion': (params, { req, approval }) =>

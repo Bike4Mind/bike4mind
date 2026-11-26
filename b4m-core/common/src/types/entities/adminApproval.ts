@@ -12,6 +12,7 @@ export const ADMIN_APPROVAL_ACTIONS = [
   'org.credits.grant',
   'org.credits.top_up',
   'user.subscription.grant',
+  'user.credits.self_grant',
   'user.impersonate_admin',
   'user.delete_admin',
   'user.schedule_admin_deletion',

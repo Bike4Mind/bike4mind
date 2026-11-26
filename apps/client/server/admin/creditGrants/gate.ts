@@ -58,11 +58,18 @@ export async function reserveWithinWindow(
  * The policy when approvals are on and `credits`, plus what this admin granted or is granting over the
  * approval expiry window, is over the threshold (equal still runs). Otherwise the grant may run now and
  * its credits stay reserved until `release`, so a grant split into smaller ones, sent one after another
- * or all at once, is held to the same threshold as one large grant.
+ * or all at once, is held to the same threshold as one large grant. A `heldSelfGrant` (selfGrant.ts)
+ * always gets the policy, whatever the toggle and threshold.
  */
-export async function creditGrantNeedsApproval(credits: number, actorUserId: string): Promise<CreditGrantGate> {
+export async function creditGrantNeedsApproval(
+  credits: number,
+  actorUserId: string,
+  { heldSelfGrant = false }: { heldSelfGrant?: boolean } = {}
+): Promise<CreditGrantGate> {
+  if (credits <= 0) return RUN_NOW;
   const policy = await getApprovalPolicy();
-  if (!policy.enabled || credits <= 0) return RUN_NOW;
+  if (heldSelfGrant) return { policy };
+  if (!policy.enabled) return RUN_NOW;
   if (credits > policy.creditThreshold) return { policy };
   const windowMs = policy.expiryHours * HOUR_MS;
   const since = new Date(Date.now() - windowMs);

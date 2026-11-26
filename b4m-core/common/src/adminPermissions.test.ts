@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ADMIN_PERMISSIONS,
   AdminPermissionsSchema,
+  EXPLICIT_ONLY_ADMIN_PERMISSIONS,
   assertCanActOnAdminTarget,
   assertCanGrantAdminAccess,
   canAccessAdmin,
@@ -13,8 +14,22 @@ import {
 import { ForbiddenError } from './errors';
 
 describe('admin permissions', () => {
-  it.each(ADMIN_PERMISSIONS)('preserves legacy full-admin access to %s', permission => {
+  const IMPLIED_PERMISSIONS = ADMIN_PERMISSIONS.filter(
+    permission => !(EXPLICIT_ONLY_ADMIN_PERMISSIONS as readonly string[]).includes(permission)
+  );
+
+  it.each(IMPLIED_PERMISSIONS)('preserves legacy full-admin access to %s', permission => {
     expect(hasAdminPermission({ isAdmin: true }, permission)).toBe(true);
+  });
+
+  it.each(EXPLICIT_ONLY_ADMIN_PERMISSIONS)('does not imply %s from the full-admin flag', permission => {
+    expect(hasAdminPermission({ isAdmin: true }, permission)).toBe(false);
+    expect(hasAdminPermission({ isAdmin: true, adminPermissions: [permission] }, permission)).toBe(true);
+    expect(hasAdminPermission({ isAdmin: true, roleAdminPermissions: [permission] }, permission)).toBe(true);
+  });
+
+  it.each(EXPLICIT_ONLY_ADMIN_PERMISSIONS)('grants no admin access from %s alone', permission => {
+    expect(canAccessAdmin({ adminPermissions: [permission] })).toBe(false);
   });
 
   it.each(ADMIN_PERMISSIONS)('grants only the explicit permission %s', permission => {
@@ -22,8 +37,11 @@ describe('admin permissions', () => {
     for (const candidate of ADMIN_PERMISSIONS) {
       expect(hasAdminPermission(user, candidate)).toBe(candidate === permission);
     }
-    expect(canAccessAdmin(user)).toBe(true);
     expect(isFullAdmin(user)).toBe(false);
+  });
+
+  it.each(IMPLIED_PERMISSIONS)('opens the admin area with %s', permission => {
+    expect(canAccessAdmin({ adminPermissions: [permission] })).toBe(true);
   });
 
   it.each([null, undefined, {}, { isAdmin: false }, { adminPermissions: [] }])(

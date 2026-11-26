@@ -26,6 +26,7 @@ The table gives examples of current route coverage. A permission does not automa
 | `users:export` | Request and download a data subject export of a user's account (step-up verification required) |
 | `settings:manage` | Edit admin settings, manage tags and modals, configure Slack workspaces and start a Slack app install, manage partner signup rules, and recalculate a user's storage usage |
 | `models:curate` | Publish curated model catalog versions |
+| `credits:self_grant` | Add credits to your own account, or an organization you belong to, without a second admin approving (see [Credit grants to your own account](#credit-grants-to-your-own-account)). Super Admin does not include it |
 
 Permissions are enforced per route. `users:delete`, `users:export`, `models:curate`, `support:read`, `credits:adjust`, `users:moderate`, and `settings:manage` are enforced by `adminApi` middleware on their routes. `users:impersonate` and `keys:revoke` are enforced the same way. Listing a user's API keys needs `support:read`.
 
@@ -54,6 +55,18 @@ A page whose edits need `settings:manage` also opens to `settings:manage` alone 
 Credit, grant, and subscription reads accept either `support:read` or `credits:adjust`. Writes require `credits:adjust`. Subscription actions and the Held signup grants release button are disabled when you hold only `support:read`. Revenue trend charts and the approvals queue still require `support:read`; credit permission alone does not open them.
 
 As a credit delegate, you cannot change your own account, an account with admin access, or an organization you belong to. This includes organizations you own, administer, or have joined. Full administrators retain their existing action-specific self-target checks. Grants above the configured approval threshold require a different approver with `credits:adjust`.
+
+### Credit grants to your own account
+
+When a full administrator adds credits to their own account, or to an organization they own, administer, bill for, or have joined, the grant waits for another admin to approve it under **Approvals**. This applies to credit adjustments, subscription grants, organization grants, and top-ups, whether or not approvals are turned on and whatever the approval threshold. You see "Submitted for approval" instead of a new balance.
+
+- Another full administrator approves it, because only a full administrator can credit an account with admin access. You cannot approve your own request.
+- An adjustment held for approval must be sent on its own. Make any other profile change separately.
+- On an organization profile, editing the balance up for an organization you belong to is refused. Use **Top up** instead, so the grant can be approved.
+- Removing credits from your own account does not need approval.
+- An admin who holds `credits:self_grant` skips the approval. Super Admin does not include this permission: it must be granted to each admin who needs it.
+
+Every grant to your own account, approved or exempt, is recorded in the audit log and flagged as a self-grant.
 
 Organization and user-profile tabs still require full admin access. Their delegated credit operations are available through their permission-gated APIs, while the Subscriptions and Held signup grants tabs provide the supported console entry points.
 
@@ -91,7 +104,7 @@ To grant or revoke delegated permissions or [admin roles](./admin-roles.md), ope
 
 - Only a full administrator can change delegated permissions. Holding `settings:manage` does not let a delegate grant permissions.
 - You cannot change your own permissions.
-- A Super Admin already holds every permission, so their permissions cannot be edited. Change their role to limit their access.
+- A Super Admin already holds every permission except `credits:self_grant`, so that is the only permission you can grant or revoke for one. Change their role to limit their access.
 - Every grant and revocation is recorded in the audit log with the reason, and the permissions before and after.
 - If someone else changed the user's permissions while your editor was open, saving fails and asks you to reload the profile. Reload, review the current permissions, and try again.
 

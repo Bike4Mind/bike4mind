@@ -72,7 +72,9 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
   toSafeOrganization: (org: any) => org,
 }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  isSelfOrImpersonator: (await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>())
+    .isSelfOrImpersonator,
   parseAdminActionReason: credit.parseAdminActionReason,
   recordAdminActionFromRequest: credit.recordAdminActionFromRequest,
 }));
