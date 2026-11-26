@@ -60,14 +60,12 @@ const detachFromProjectsWithoutGrantor = async (
 ): Promise<IProjectDocument[]> => {
   const { document, type, member, userIdToRevoke } = parameters;
   const { db } = adapters;
-  const projects = await db.projects.shareable.findAllAccessible(member);
+  const projects = await db.projects.findAccessibleReferencing(
+    member,
+    type === 'files' ? { fileId: document.id } : { sessionId: document.id }
+  );
   const detached: IProjectDocument[] = [];
   for (const project of projects) {
-    const referenced =
-      type === 'files'
-        ? [...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)]
-        : project.sessionIds;
-    if (!referenced.map(String).includes(document.id)) continue;
     const participants = projectParticipants(project).filter(id => id !== userIdToRevoke);
     if (participants.includes(document.userId)) continue;
     const outsideProject = { ...document, users: document.users.filter(u => u.projectId !== project.id) };

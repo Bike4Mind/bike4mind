@@ -41,7 +41,8 @@ describe('sharingService - revoke (session knowledge-file cascade authority)', (
           updateGuarded: vi.fn(),
         },
         projects: {
-          shareable: { findAccessibleById: vi.fn(), findAllAccessible: vi.fn(async () => []) },
+          shareable: { findAccessibleById: vi.fn() },
+          findAccessibleReferencing: vi.fn(async () => []),
           update: vi.fn(),
           updateGuarded: vi.fn(),
         },

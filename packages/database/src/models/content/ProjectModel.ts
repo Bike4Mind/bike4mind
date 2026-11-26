@@ -197,6 +197,16 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     return { data: result.slice(0, limit).map(doc => doc.toJSON()), hasMore };
   }
 
+  async findAccessibleReferencing(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    ref: { fileId: string } | { sessionId: string }
+  ) {
+    const references =
+      'fileId' in ref ? { $or: [{ fileIds: ref.fileId }, { 'systemPrompts.fileId': ref.fileId }] } : { sessionIds: ref.sessionId };
+    const result = await this.projectModel.find({ $and: [{ $or: readAccessArms(user) }, references], deletedAt: null });
+    return result.map(doc => doc.toJSON());
+  }
+
   async findAllBySessionId(sessionId: string) {
     return this.projectModel.find({ sessionIds: { $in: [sessionId] } });
   }

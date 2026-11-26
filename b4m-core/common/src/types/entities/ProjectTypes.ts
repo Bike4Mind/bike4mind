@@ -51,6 +51,15 @@ export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
     options: { afterId?: string; limit: number }
   ) => Promise<{ data: IProject[]; hasMore: boolean }>;
 
+  /**
+   * Readable projects (same arms as `listAccessibleAfterId`) that reference the file, in `fileIds` or
+   * `systemPrompts`, or the session, in `sessionIds`.
+   */
+  findAccessibleReferencing: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    ref: { fileId: string } | { sessionId: string }
+  ) => Promise<IProjectDocument[]>;
+
   removeSession: (sessionId: string) => Promise<void>;
 
   /**

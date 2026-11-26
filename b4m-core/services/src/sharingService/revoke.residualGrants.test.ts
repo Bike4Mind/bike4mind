@@ -52,11 +52,16 @@ const projectStore = (projects: Project[]) => {
   return {
     byId,
     repo: {
-      shareable: {
-        findAllAccessible: vi.fn(async (user: { id: string }) =>
-          [...byId.values()].filter(p => readable(p, user.id)).map(p => structuredClone(p))
-        ),
-      },
+      findAccessibleReferencing: vi.fn(async (user: { id: string }, ref: { fileId?: string; sessionId?: string }) =>
+        [...byId.values()]
+          .filter(p => readable(p, user.id))
+          .filter(p =>
+            ref.fileId
+              ? p.fileIds.includes(ref.fileId) || p.systemPrompts.some(prompt => prompt.fileId === ref.fileId)
+              : p.sessionIds.includes(ref.sessionId!)
+          )
+          .map(p => structuredClone(p))
+      ),
       pullFileReferences: vi.fn(async (fileIds: string[], scope: { projectId: string }) => {
         const p = byId.get(scope.projectId)!;
         p.fileIds = p.fileIds.filter(id => !fileIds.includes(id));
@@ -83,6 +88,7 @@ const adaptersFor = (
     files: f.byId,
     sessions: s.byId,
     projects: p.byId,
+    findReferencing: p.repo.findAccessibleReferencing,
     onAccessRemoved,
     adapters: {
       db: {
@@ -178,6 +184,7 @@ describe('revoke - residual grants', () => {
       expect(env.files.get('file-1')!.users).toEqual([]);
       expect(env.projects.get('project-1')!.fileIds).toEqual([]);
       expect(env.onAccessRemoved).toHaveBeenCalledWith(expect.arrayContaining(['sharee', 'member']));
+      expect(env.findReferencing).toHaveBeenCalledWith(expect.objectContaining({ id: 'sharee' }), { fileId: 'file-1' });
     });
 
     it('detaches a system-prompt file the same way', async () => {

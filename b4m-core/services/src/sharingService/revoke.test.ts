@@ -14,7 +14,7 @@ describe('sharingService - revoke', () => {
     db: {
       sessions: { shareable: { findAccessibleById: Mock }; updateGuarded: Mock };
       fabFiles: { shareable: { findAccessibleById: Mock }; updateGuarded: Mock };
-      projects: { shareable: { findAccessibleById: Mock; findAllAccessible: Mock }; updateGuarded: Mock };
+      projects: { shareable: { findAccessibleById: Mock }; findAccessibleReferencing: Mock; updateGuarded: Mock };
       users: { findById: Mock };
     };
   };
@@ -26,7 +26,8 @@ describe('sharingService - revoke', () => {
         sessions: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
         fabFiles: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
         projects: {
-          shareable: { findAccessibleById: vi.fn(), findAllAccessible: vi.fn(async () => []) },
+          shareable: { findAccessibleById: vi.fn() },
+          findAccessibleReferencing: vi.fn(async () => []),
           updateGuarded: vi.fn(),
         },
         users: { findById: vi.fn() },
@@ -132,7 +133,8 @@ describe('sharingService - revoke (project-scoped grants)', () => {
         sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
         fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
         projects: {
-          shareable: { findAccessibleById: vi.fn(), findAllAccessible: vi.fn(async () => []) },
+          shareable: { findAccessibleById: vi.fn() },
+          findAccessibleReferencing: vi.fn(async () => []),
           update: vi.fn(),
           updateGuarded: vi.fn(),
         },
@@ -229,7 +231,8 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
           find: vi.fn(async () => []),
         },
         projects: {
-          shareable: { findAccessibleById: vi.fn(), findAllAccessible: vi.fn(async () => []) },
+          shareable: { findAccessibleById: vi.fn() },
+          findAccessibleReferencing: vi.fn(async () => []),
           update: vi.fn(),
           updateGuarded: vi.fn(),
         },
@@ -396,7 +399,8 @@ describe('sharingService - revoke (cross-project grants)', () => {
         sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
         fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
         projects: {
-          shareable: { findAccessibleById: vi.fn(), findAllAccessible: vi.fn(async () => []) },
+          shareable: { findAccessibleById: vi.fn() },
+          findAccessibleReferencing: vi.fn(async () => []),
           update: vi.fn(),
           updateGuarded: vi.fn(),
         },
@@ -541,7 +545,8 @@ describe('sharingService - revoke on a project', () => {
           updateGuarded: vi.fn(),
         },
         projects: {
-          shareable: { findAccessibleById: vi.fn(), findAllAccessible: vi.fn(async () => []) },
+          shareable: { findAccessibleById: vi.fn() },
+          findAccessibleReferencing: vi.fn(async () => []),
           updateGuarded: vi.fn(),
         },
         users: { findById: vi.fn(async () => ({ id: memberId })) },
