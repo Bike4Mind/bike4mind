@@ -212,6 +212,18 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
     );
   });
 
+  it("threads the calling key's expiresAt through as callerExpiresAt", async () => {
+    const expiresAt = new Date('2027-01-01T00:00:00Z');
+    const { req, res } = post('key-1');
+    Object.assign(req, { apiKeyInfo: { scopes: ['api-keys:manage'], expiresAt } });
+    await mockRefs.rotateHandler!(req, res);
+    expect(rotateUserApiKey).toHaveBeenCalledWith(
+      'admin-user',
+      { keyId: 'key-1' },
+      expect.objectContaining({ callerExpiresAt: expiresAt })
+    );
+  });
+
   it('maps an API key with absent scopes to [] (denies), not undefined (skip)', async () => {
     // Fail-open fix: apiKeyInfo present but scopes absent must not read as a browser
     // caller. [] means "holds no scope", so the service denies the escalation.

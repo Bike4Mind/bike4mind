@@ -6,6 +6,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },
+  fullAdminMethods: ['POST'],
   requiredScopes: [ApiKeyScope.ADMIN],
 }).post(async (req, res) => {
   const { id } = req.query;

@@ -95,7 +95,7 @@ function createHarness(): Harness {
     title: 'Spring ad',
     template: 'blank',
     brief: {},
-    brandKit: { colors: ['#112233'], productFileIds: [] },
+    brandKit: { colors: ['#112233'], productFileIds: [], characters: [] },
     shots: [],
     timeline: defaultStudioTimeline('blank'),
   };
@@ -424,6 +424,115 @@ describe('production director tools', () => {
 
       await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
       for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([look]);
+    });
+  });
+
+  describe('saved characters', () => {
+    const inputsOf = (request: unknown) => (request as { inputs?: { fileId: string }[] }).inputs?.map(i => i.fileId);
+    const promptOf = (request: unknown) => (request as { prompt: string }).prompt;
+    const setUp = async (model: ImageModels) => {
+      harness.config.imageModels = [model];
+      const maya = { id: 'maya', name: 'Maya', fileId: harness.addFile('image') };
+      const fox = { id: 'fox', name: 'Fox', fileId: harness.addFile('image') };
+      await run(productionStoryboardTool, harness, STORYBOARD);
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: { ...harness.composition().brandKit, characters: [maya, fox] },
+      });
+      const [hook, product, cta] = STORYBOARD.shots;
+      const result = await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ ...hook, characters: ['fox', 'MAYA'] }, product, { ...cta, characters: ['Maya'] }],
+      });
+      return { maya, fox, result };
+    };
+
+    it('maps the named characters to kit ids per shot, in the order given', async () => {
+      const { result } = await setUp(multiReferenceModel);
+      expect(result).not.toMatch(/^Error/);
+      expect(harness.composition().shots.map(shot => shot.characterIds)).toEqual([
+        ['fox', 'maya'],
+        undefined,
+        ['maya'],
+      ]);
+    });
+
+    it('refuses a character the kit does not have', async () => {
+      await setUp(multiReferenceModel);
+      const result = await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'shot-1', characters: ['Bob'] }, { keep: 'shot-2' }, { keep: 'shot-3' }],
+      });
+      expect(result).toMatch(/"Bob" is not a saved character/);
+    });
+
+    it('refuses a name that matches several characters, but an exact id wins', async () => {
+      await setUp(multiReferenceModel);
+      const kit = harness.composition().brandKit;
+      const fileId = kit.characters[0].fileId;
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: {
+          ...kit,
+          characters: [...kit.characters, { id: 'z1', name: 'Zed', fileId }, { id: 'z2', name: 'zed', fileId }],
+        },
+      });
+      const keep = [{ keep: 'shot-2' }, { keep: 'shot-3' }];
+      const ambiguous = await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'shot-1', characters: ['ZED'] }, ...keep],
+      });
+      expect(ambiguous).toMatch(/"ZED" is ambiguous.*z1, z2/);
+      const byId = await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'shot-1', characters: ['z2'] }, ...keep],
+      });
+      expect(byId).not.toMatch(/^Error/);
+      expect(harness.composition().shots[0].characterIds).toEqual(['z2']);
+    });
+
+    it("references the product, then the shot's characters, and names them in the prompt", async () => {
+      const cap = referenceCap(multiReferenceModel);
+      const { maya, fox } = await setUp(multiReferenceModel);
+      await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+
+      const [hook, product, cta] = harness.imageRequests.map(({ request }) => request);
+      expect(inputsOf(hook)).toEqual([PRODUCT_FILE_ID, fox.fileId, maya.fileId].slice(0, cap));
+      expect(promptOf(hook)).toMatch(/^Feature Fox/);
+      expect(inputsOf(product)).toEqual([PRODUCT_FILE_ID]);
+      expect(promptOf(product)).not.toMatch(/Feature Maya|Feature Fox/);
+      expect(inputsOf(cta)).toEqual([PRODUCT_FILE_ID, maya.fileId]);
+    });
+
+    it('keeps the product on a one-reference model and reports the characters it dropped', async () => {
+      await setUp(singleReferenceModel);
+      const result = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      ) as { shots: { id: string; charactersDropped?: { names: string[] } }[]; charactersNote?: string };
+
+      for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([PRODUCT_FILE_ID]);
+      expect(result.shots.map(shot => shot.charactersDropped?.names)).toEqual([['Fox', 'Maya'], undefined, ['Maya']]);
+      expect(result.charactersNote).toMatch(/Tell the user/);
+    });
+
+    it('reports a featured character whose file cannot be a reference and leaves it out of the job', async () => {
+      const { maya } = await setUp(multiReferenceModel);
+      const unusable = harness.addFile('video');
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: {
+          ...harness.composition().brandKit,
+          characters: [
+            { id: 'maya', name: 'Maya', fileId: maya.fileId },
+            { id: 'fox', name: 'Fox', fileId: unusable },
+          ],
+        },
+      });
+      const result = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      ) as { shots: { charactersDropped?: { names: string[] } }[]; charactersNote?: string };
+
+      expect(result.shots.map(shot => shot.charactersDropped?.names)).toEqual([['Fox'], undefined, undefined]);
+      expect(result.charactersNote).toMatch(/charactersDropped/);
+      const [hook] = harness.imageRequests.map(({ request }) => request);
+      expect(inputsOf(hook)).toEqual([PRODUCT_FILE_ID, maya.fileId]);
     });
   });
 

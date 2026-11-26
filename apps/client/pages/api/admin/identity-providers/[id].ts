@@ -29,6 +29,7 @@ function diffIdentityProvider(existing: IIdentityProviderDocument, updated: IIde
 
 const handler = adminApi({
   adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  fullAdminMethods: ['PUT'],
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {

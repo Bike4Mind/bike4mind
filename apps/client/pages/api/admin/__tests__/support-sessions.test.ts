@@ -180,6 +180,25 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
     expect(mockRecordAudit).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a full admin', { isAdmin: true }],
+    ['a delegated admin', { adminPermissions: ['support:read'] }],
+    ['an admin role member', { adminRoleIds: ['role-1'] }],
+  ])('refuses a support:read delegate a session owned by %s, without auditing a read', async (_label, owner) => {
+    mockFindUserById.mockResolvedValue({ id: 'owner-9', ...owner });
+    const { run } = call(sessionHandler, { isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(run()).rejects.toThrow('Only full administrators can read the content of users with admin access');
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin read a session owned by an admin', async () => {
+    mockFindUserById.mockResolvedValue({ id: 'owner-9', adminPermissions: ['support:read'] });
+    const { res, run } = call(sessionHandler, { isAdmin: true });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRecordAudit).toHaveBeenCalledOnce();
+  });
+
   it('404s an unknown session without auditing', async () => {
     mockFindSessionById.mockResolvedValue(null);
     const { run } = call(sessionHandler, { isAdmin: true });
@@ -310,6 +329,14 @@ describe('GET /api/admin/sessions/[id]/quests - conversation read', () => {
     const { run } = call(questsHandler, { isAdmin: false });
     await expect(run()).rejects.toThrow('Missing permission: support:read');
     expect(mockFindPageBySessionId).not.toHaveBeenCalled();
+  });
+
+  it('refuses a support:read delegate the conversation of an admin', async () => {
+    mockFindUserById.mockResolvedValue({ id: 'owner-9', isAdmin: true });
+    const { run } = call(questsHandler, { isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(run()).rejects.toThrow(/only full administrators/i);
+    expect(mockFindPageBySessionId).not.toHaveBeenCalled();
+    expect(mockRecordAudit).not.toHaveBeenCalled();
   });
 
   it('returns prompts and replies for the requested page and audits what was read', async () => {
