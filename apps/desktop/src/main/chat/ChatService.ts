@@ -215,6 +215,7 @@ import { canExtendTurn, TurnClock } from './turnClock';
 import { DEFAULT_TURN_EXTENSIONS, parseTurnExtensions } from '@shared/turnExtensionSetting';
 import { sideChatOpening } from './sideChat';
 import { summarizeSession } from '@shared/agentOutcome';
+import { compareSessionsForPage, pageSessions, type SessionPage, type SessionPageRequest } from '@shared/sessionPage';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
 import { buildReplyStats } from './replyStats';
@@ -459,6 +460,8 @@ const DECISION_ASKED_RESULT =
 
 const AGENT_IDLE_POLL_MS = 100;
 const AGENT_IDLE_WAIT_MS = 60_000;
+/** How long a sidebar listing serves later pages and searches before they list afresh. */
+const SESSION_PAGE_SNAPSHOT_MS = 10_000;
 
 /** The task state a worker's report sets; a decision becomes a question card with an id main mints. */
 function reportedState(report: TaskReport): WorkerTask['state'] {
@@ -1041,6 +1044,8 @@ export class ChatService {
    * mid-turn; every summary pushed, listed or returned by a setter or folder grant goes through withLivePlan, which lays this over it.
    */
   private readonly livePlans = new Map<string, PlanProgress | null>();
+  /** The sorted listing later pages are cut from; see listSessionPage. */
+  private pageSnapshot: { at: number; sessions: ChatSessionSummary[] } | null = null;
 
   /** The events of each reply in flight since its 'start'; see getSession. */
   private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
@@ -1240,6 +1245,38 @@ export class ChatService {
 
   async listSessions(): Promise<ChatSessionSummary[]> {
     return (await this.deps.store.list()).map(summary => this.withLivePlan(summary));
+  }
+
+  /**
+   * One page of the sidebar list; see shared/sessionPage. A first page always lists afresh, and
+   * later pages and searches reuse that sorted listing while it is younger than
+   * SESSION_PAGE_SNAPSHOT_MS, so scrolling through ten thousand sessions does not stat every
+   * file once per page. A row that changed since reaches the renderer by the next reload.
+   */
+  async listSessionPage(request: SessionPageRequest): Promise<SessionPage> {
+    const fresh = !request.cursor && !request.query;
+    const snapshot = this.pageSnapshot;
+    const sorted =
+      !fresh && snapshot && Date.now() - snapshot.at < SESSION_PAGE_SNAPSHOT_MS
+        ? snapshot.sessions
+        : await this.refreshPageSnapshot();
+    const liveIds = new Set(
+      this.sessionStatuses()
+        .filter(event => event.status !== 'done')
+        .map(event => event.sessionId)
+    );
+    const page = pageSessions(sorted, request, { liveIds });
+    return {
+      ...page,
+      sessions: page.sessions.map(summary => this.withLivePlan(summary)),
+      related: page.related.map(summary => this.withLivePlan(summary)),
+    };
+  }
+
+  private async refreshPageSnapshot(): Promise<ChatSessionSummary[]> {
+    const sessions = (await this.deps.store.list()).sort(compareSessionsForPage);
+    this.pageSnapshot = { at: Date.now(), sessions };
+    return sessions;
   }
 
   /** Every session that is busy right now, for a renderer that has just mounted. */

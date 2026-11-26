@@ -14,6 +14,10 @@ struct SystemBackgroundRefreshScheduler: BackgroundRefreshScheduling {
     request.earliestBeginDate = earliestBegin
     try BGTaskScheduler.shared.submit(request)
   }
+
+  func cancel(identifier: String) {
+    BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+  }
 }
 
 /// `BGAppRefreshTask` behind B4MKit's `BackgroundRefreshTask`.

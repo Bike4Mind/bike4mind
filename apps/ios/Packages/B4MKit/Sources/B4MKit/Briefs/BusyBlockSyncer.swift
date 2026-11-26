@@ -125,12 +125,14 @@ public final class BusyBlockSyncer {
 
   /// Forgets the last outcome and throttle at a sign-in: a signed-out or opted-out result belongs to the
   /// previous session and would otherwise keep the background edge from re-arming for the new one. A sync still
-  /// running for the previous session stops holding the lock, so the new session's first sync is not skipped.
+  /// running for the previous session is cancelled and stops holding the lock, so the new session's first sync is
+  /// not skipped. A user save already sent is not cancelled: `sentSave` still holds the next sync until it lands.
   public func sessionDidStart() {
     session += 1
+    current?.cancel()
+    current = nil
     lastOutcome = nil
     lastSync = nil
-    current = nil
   }
 
   private func perform(in startedIn: Int) async -> BusyBlockSyncOutcome {

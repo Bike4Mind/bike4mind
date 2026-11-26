@@ -4,6 +4,7 @@ import os
 /// Submits background app refresh requests. The `BGTaskScheduler` implementation lives in the app target.
 public protocol BackgroundRefreshScheduling: Sendable {
   func submit(identifier: String, earliestBegin: Date) throws
+  func cancel(identifier: String)
 }
 
 /// One system-granted background run. The `BGAppRefreshTask` implementation lives in the app target.
@@ -53,6 +54,11 @@ public final class BusyBlockBackgroundRefresh {
     } catch {
       logger.notice("Busy-block refresh not scheduled: \(String(describing: error), privacy: .public)")
     }
+  }
+
+  /// Drops the pending request at sign-out, so no run fires for an account that is gone.
+  public func cancelPending() {
+    scheduler.cancel(identifier: identifier)
   }
 
   /// Runs one sync for the task and completes it exactly once: unsuccessfully when the sync failed or the system

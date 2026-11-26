@@ -2,7 +2,7 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { ReadyState, useBaseWebsocket } from 'react-use-websocket';
-import { HeartbeatAction, IMessageDataToClient, IMessageDataToServer } from '@bike4mind/common';
+import { HeartbeatAction, IMessageDataToClient, IMessageDataToServer, randomUuid } from '@bike4mind/common';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { api, isPublicPath } from '@client/app/contexts/ApiContext';
@@ -181,7 +181,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // The token the current connect ticket was minted with; a refresh that lands while the socket
   // is still CONNECTING is reconciled on open (see onOpen).
   const ticketTokenRef = useRef<string | null>(null);
-  const [clientId] = useState(() => crypto.randomUUID().slice(0, 8));
+  const [clientId] = useState(() => randomUuid().slice(0, 8));
 
   // Pulsed true-then-false to force react-use-websocket to tear down and reconnect with a
   // fresh backoff budget (see the visibilitychange effect below). react-use-websocket only

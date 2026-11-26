@@ -20,6 +20,8 @@ actor FakeBusyBlocksAPI: BusyBlocksAPI {
   func failSave(with error: (any Error)?) { saveError = error }
   func holdState() { holdsState = true }
   func holdSave() { holdsSave = true }
+  func stopHolding() { holdsState = false }
+  func setEnabled(_ enabled: Bool) { stored = BusyBlocksState(enabled: enabled, blocks: stored.blocks) }
   func release() {
     holdsState = false
     holdsSave = false
@@ -475,6 +477,44 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(outcome, .skipped(.disabled))
     let saves = await api.saves.map(\.enabled)
     XCTAssertEqual(saves, [false])
+  }
+
+  func testSyncFromThePreviousSessionDoesNotOverwriteTheReset() async {
+    let api = FakeBusyBlocksAPI(enabled: false)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+    await api.holdState()
+    let stale = Task { await syncer.sync(force: true) }
+    while await api.reads == 0 { await Task.yield() }
+
+    syncer.sessionDidStart()
+    await api.release()
+    let staleOutcome = await stale.value
+
+    XCTAssertEqual(staleOutcome, .skipped(.signedOut))
+    XCTAssertNil(syncer.lastOutcome)
+    await api.setEnabled(true)
+    let outcome = await syncer.sync()
+    XCTAssertEqual(outcome, .synced)
+  }
+
+  func testNewSessionSyncsWhileThePreviousSessionsSyncIsStillRunning() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
+    await api.holdState()
+    let stale = Task { await syncer.sync(force: true) }
+    while await api.reads == 0 { await Task.yield() }
+
+    syncer.sessionDidStart()
+    await api.stopHolding()
+    let outcome = await syncer.sync()
+    await api.release()
+    let staleOutcome = await stale.value
+
+    XCTAssertEqual(outcome, .synced)
+    XCTAssertEqual(staleOutcome, .skipped(.signedOut))
+    XCTAssertEqual(syncer.lastOutcome, .synced)
+    let saves = await api.saves.count
+    XCTAssertEqual(saves, 1)
   }
 
   func testEnablingWithDeniedAccessRevertsTheToggleAndWritesNothing() async {

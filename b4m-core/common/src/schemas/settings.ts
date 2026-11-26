@@ -426,6 +426,7 @@ export const SettingKeySchema = z.enum([
   'EnableUserDeletionEmailNotification',
   'EnableUserDeletionSlackNotification',
   'AdminEmail',
+  'mailFrom',
   'MaxFileSize',
   'AiEditVersionRetention',
   'DefaultContext',
@@ -1528,6 +1529,8 @@ function makeBooleanSetting({
 // A SHA-256 certificate fingerprint as Digital Asset Links expects it: 32 colon-separated uppercase hex bytes.
 const ANDROID_CERT_FINGERPRINT_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){31}$/;
 const APPLE_TEAM_ID_RE = /^[A-Z0-9]{10}$/;
+/** Longest accepted `mailFrom` value; the server parses the rest (packages/server-utils/src/utils/mailer/sender.ts). */
+export const MAIL_FROM_SETTING_MAX_LENGTH = 320;
 const AndroidCertFingerprintsSchema = z
   .array(z.string().regex(ANDROID_CERT_FINGERPRINT_RE, 'Expected 32 colon-separated uppercase hex bytes'))
   .max(10);
@@ -2914,6 +2917,7 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'serverStatus', order: 1 },
       { key: 'AdminEmail', order: 2 },
+      { key: 'mailFrom', order: 3 },
     ],
   },
   REGISTRATION: {
@@ -5073,6 +5077,24 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.ADMIN.id,
     order: 2,
   }),
+  // Read by the email-send worker for every send (packages/server-utils/src/utils/mailer/sender.ts).
+  mailFrom: {
+    ...makeStringSetting({
+      key: 'mailFrom',
+      name: 'System Email Sender',
+      defaultValue: '',
+      description:
+        'The sender of every system email: an address such as noreply@example.com, or a name and address such as Example <noreply@example.com>. Empty (default) uses the MAIL_FROM secret. On Amazon SES the address must be on the domain the stage sends from, the same domain as the MAIL_FROM secret. Changes apply to the next email.',
+      category: 'Admin',
+      group: API_SERVICE_GROUPS.ADMIN.id,
+      order: 3,
+    }),
+    schema: z
+      .string()
+      .refine(value => value.trim() === '' || (value.length <= MAIL_FROM_SETTING_MAX_LENGTH && !/[\r\n]/.test(value)), {
+        message: `Use one line of at most ${MAIL_FROM_SETTING_MAX_LENGTH} characters, or leave it empty.`,
+      }),
+  },
   MaxFileSize: makeNumberSetting({
     key: 'MaxFileSize',
     userReadable: true,
