@@ -13,18 +13,28 @@ import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 
 export const getSessionsFromServer = async (
   search: string = '',
-  options: { pagination: { page: number; limit: number }; surface?: string; filters?: SessionListFilters } = {
+  options: {
+    pagination: { page: number; limit: number };
+    /** A previous page's `nextCursor`; the server then ignores `pagination.page`. */
+    cursor?: string;
+    surface?: string;
+    filters?: SessionListFilters;
+  } = {
     pagination: { page: 1, limit: 10 },
   }
 ) => {
-  const response = await api.get<{ data: ISessionDocument[]; hasMore: boolean }>(`/api/sessions`, {
-    params: {
-      search,
-      pagination: options.pagination,
-      ...(options.surface ? { surface: options.surface } : {}),
-      ...options.filters,
-    },
-  });
+  const response = await api.get<{ data: ISessionDocument[]; hasMore: boolean; nextCursor?: string | null }>(
+    `/api/sessions`,
+    {
+      params: {
+        search,
+        pagination: options.pagination,
+        ...(options.cursor ? { cursor: options.cursor } : {}),
+        ...(options.surface ? { surface: options.surface } : {}),
+        ...options.filters,
+      },
+    }
+  );
 
   return response.data;
 };

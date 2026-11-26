@@ -213,6 +213,42 @@ describe('useGetOwnSessions refetchOnMount trim', () => {
   });
 });
 
+describe('useGetOwnSessions paging', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('asks for the next page by the keyset cursor the server minted', async () => {
+    vi.mocked(getSessionsFromServer)
+      .mockResolvedValueOnce({ data: [{ id: 's1' } as ISessionDocument], hasMore: true, nextCursor: 'cursor-1' })
+      .mockResolvedValueOnce({ data: [{ id: 's2' } as ISessionDocument], hasMore: false, nextCursor: null });
+    const { result } = renderOwnWith();
+    await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+
+    await result.current.fetchNextPage();
+
+    await waitFor(() => expect(getSessionsFromServer).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(getSessionsFromServer).mock.calls[0][1]).toMatchObject({ pagination: { page: 1 } });
+    expect(vi.mocked(getSessionsFromServer).mock.calls[0][1]?.cursor).toBeUndefined();
+    expect(vi.mocked(getSessionsFromServer).mock.calls[1][1]).toMatchObject({
+      pagination: { page: 2 },
+      cursor: 'cursor-1',
+    });
+  });
+
+  it('falls back to the page number when the server mints no cursor', async () => {
+    vi.mocked(getSessionsFromServer)
+      .mockResolvedValueOnce({ data: [{ id: 's1' } as ISessionDocument], hasMore: true })
+      .mockResolvedValueOnce({ data: [], hasMore: false });
+    const { result } = renderOwnWith();
+    await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+
+    await result.current.fetchNextPage();
+
+    await waitFor(() => expect(getSessionsFromServer).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(getSessionsFromServer).mock.calls[1][1]).toMatchObject({ pagination: { page: 2 } });
+    expect(vi.mocked(getSessionsFromServer).mock.calls[1][1]?.cursor).toBeUndefined();
+  });
+});
+
 // Regression test. After sending the first message on /new, a race
 // between context propagation and the navigation to /notebooks/<tmpId> could
 // cause SessionContainer to invoke `changeSession` (-> getOrFetchSession) with

@@ -749,6 +749,28 @@ export interface SessionListFilters {
   hasImages?: boolean;
 }
 
+/** Largest page GET /api/sessions serves; a larger `pagination[limit]` is clamped, not rejected. */
+export const MAX_SESSION_LIST_LIMIT = 100;
+
+/** Orders searchByUserId can resume by keyset. Any other `orderBy.field` pages by offset only. */
+export const SESSION_LIST_KEYSET_FIELDS = ['lastUpdated', '_id'] as const;
+export type SessionListKeysetField = (typeof SESSION_LIST_KEYSET_FIELDS)[number];
+
+export function isSessionListKeysetField(field: string): field is SessionListKeysetField {
+  return (SESSION_LIST_KEYSET_FIELDS as readonly string[]).includes(field);
+}
+
+/** The last row a searchByUserId page served. `at` is its sort value when ordered by lastUpdated. */
+export type SessionListKeyset = { id: string; at?: Date };
+
+export interface SessionListPageOptions {
+  /** Resume after this row (keyset) instead of skipping to `pagination.page`. */
+  after?: SessionListKeyset;
+}
+
+/** `last` is set when another page exists and the order supports keyset paging. */
+export type SessionListPage = { data: ISessionDocument[]; hasMore: boolean; last?: SessionListKeyset };
+
 /** Keyset page of a user's own sessions, newest first by id (GET /api/v1/sessions). */
 export type ListSessionsByUserQuery = {
   userId: string;
@@ -1223,8 +1245,9 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     userId: string,
     options: SearchOptions<ISessionDocument>,
     surface?: string,
-    filters?: SessionListFilters
-  ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+    filters?: SessionListFilters,
+    page?: SessionListPageOptions
+  ) => Promise<SessionListPage>;
 
   /**
    * Cursor-paginated twin of searchByUserId: ordered by `_id` descending and bounded by `limit`,
