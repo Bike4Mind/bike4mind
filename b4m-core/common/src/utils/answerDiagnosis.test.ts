@@ -431,6 +431,23 @@ describe('tools check', () => {
       expect(detailOf(meta, 'tools')).toBe('No tools ran this turn.');
     });
 
+    it('reports the tool as ran while the retrieval row carries the failure', () => {
+      const meta: PromptMeta = {
+        retrieval: { ...kbRetrieval(['knowledgeBaseRetrieve']), outcome: 'failed' },
+      };
+      expect(statusOf(meta, 'tools')).toBe('ok');
+      expect(detailOf(meta, 'tools')).toContain('ran this turn');
+      expect(statusOf(meta, 'retrieval')).toBe('fail');
+    });
+
+    it('uses recorded calls when they succeeded, ignoring the retrieval surfaces', () => {
+      const meta: PromptMeta = {
+        functionCalls: [{ name: 'search_knowledge_base', success: true }],
+        retrieval: kbRetrieval(['knowledgeBaseSearch']),
+      };
+      expect(detailOf(meta, 'tools')).toBe('1 tool call, all succeeded.');
+    });
+
     it('prefers recorded calls over the retrieval surfaces', () => {
       const meta: PromptMeta = {
         functionCalls: [{ name: 'search_knowledge_base', success: false }],

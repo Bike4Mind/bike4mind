@@ -558,7 +558,7 @@ function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
         status: allFailed ? 'fail' : 'warn',
         detail: allFailed
           ? `${failed.length === 1 ? 'The only tool call' : `All ${failed.length} tool calls`} failed${named}: ${sentence}`
-          : `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} failed${named}: ${sentence} ${successPhrase[0].toUpperCase()}${successPhrase.slice(1)} and the model replied with what it got.`,
+          : `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} failed${named}: ${sentence} ${capitalize(successPhrase)} and the model replied with what it got.`,
         remedy: allFailed
           ? 'The service behind the tool did not respond in time; this is usually transient, so retry the question.'
           : 'Retry if the answer seems incomplete; a timeout is usually transient.',
