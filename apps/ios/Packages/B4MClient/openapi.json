@@ -41059,7 +41059,7 @@
       "get": {
         "operationId": "listBriefs",
         "summary": "List briefs",
-        "description": "Lists your most recent briefs (up to 20), newest first. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
+        "description": "Lists your most recent briefs (up to 20), newest first. A brief composed from a dictated memo is not listed; read it by id. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call. ",
         "tags": [
           "AI"
         ],

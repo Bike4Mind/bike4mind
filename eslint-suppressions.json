@@ -873,11 +873,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/AdminModalTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
   "apps/client/app/components/admin/AdminModalTabNew.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4

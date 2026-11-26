@@ -24,6 +24,7 @@ const token = (sessionId: string, text: string): ChatStreamEvent => ({
 function fakeRuntime(eventLog = new SessionEventLog({ epoch: 'epoch-1' })) {
   const runtime = {
     listSessions: vi.fn(async () => [summary('s1'), summary('s2')]),
+    listSessionPage: vi.fn(async () => ({ sessions: [summary('s1')], related: [], nextCursor: 'c1', total: 2 })),
     getSession: vi.fn(async (sessionId: string) =>
       sessionId === 'missing'
         ? null
@@ -128,6 +129,7 @@ describe('HostServer', () => {
     ['queue/sendNow', { queuedId: 'q1' }],
     ['model/list', { force: 'remote' }],
     ['session/list', 'all'],
+    ['session/page', { limit: 'ten' }],
     ['session/statuses', 3],
     ['draft/defaults', []],
     ['project/forgetRecent', {}],
@@ -151,6 +153,18 @@ describe('HostServer', () => {
     const { call } = client();
     expect(resultOf(await call('session/list'))).toEqual({ sessions: [summary('s1'), summary('s2')] });
     expect(resultOf(await call('session/statuses', {}))).toEqual({ statuses: [status('s1')] });
+  });
+
+  it('serves session/page from the runtime with the validated request', async () => {
+    const { client, runtime } = serve();
+    const { call } = client();
+    expect(resultOf(await call('session/page', { limit: 1, cursor: null }))).toEqual({
+      sessions: [summary('s1')],
+      related: [],
+      nextCursor: 'c1',
+      total: 2,
+    });
+    expect(runtime.listSessionPage).toHaveBeenCalledWith({ limit: 1, cursor: null });
   });
 
   it('serves the project methods from the runtime in the protocol shapes', async () => {

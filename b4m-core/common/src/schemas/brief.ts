@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { isValidIanaTimeZone } from '../utils/ianaTimeZone';
-import { BRIEF_QUESTION_CLOSED_ERROR_CODE, type ApiErrorCode } from '../apiErrorCodes';
+import {
+  BRIEF_DECISION_CLOSED_ERROR_CODE,
+  BRIEF_QUESTION_CLOSED_ERROR_CODE,
+  type ApiErrorCode,
+} from '../apiErrorCodes';
 
 /**
  * Wire schemas for assistant briefs (`/api/v1/briefs`). A brief is server-composed and platform
@@ -21,7 +25,11 @@ export const BRIEF_LIMITS = {
   draftTo: 320,
   draftSubject: 200,
   draftBody: 4000,
+  followUpTranscript: 6000,
 } as const;
+
+/** How far ahead a follow-up reminder may be set (ms); the worker and the edit route share this bound. */
+export const BRIEF_REMIND_AHEAD_MAX_MS = 366 * 24 * 60 * 60 * 1000;
 
 export const BriefSourceRefSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -55,7 +63,14 @@ export type BriefApprovalState = z.infer<typeof BriefApprovalStateSchema>;
 
 export const BriefDraftReplySchema = z
   .object({
-    to: z.string().min(1).max(BRIEF_LIMITS.draftTo).describe("The source email's sender as received, unverified."),
+    to: z
+      .string()
+      .min(1)
+      .max(BRIEF_LIMITS.draftTo)
+      .describe(
+        "The source email's sender as received, unverified. On a follow-up email it is the recipient the user " +
+          'dictated, which may be a name rather than an address until the user edits it.'
+      ),
     subject: z.string().min(1).max(BRIEF_LIMITS.draftSubject),
     body: z.string().min(1).max(BRIEF_LIMITS.draftBody),
   })
@@ -100,13 +115,45 @@ export const BriefQuestionRefSchema = z.object({
   ),
 });
 
+/**
+ * A follow-up the user dictated (`POST /api/v1/briefs/follow-ups`), proposed for review. Nothing runs until
+ * the user approves it: an approved email is handed to the device mail app, an approved reminder is
+ * listed in the first brief composed at or after `remindAt`.
+ */
+export const BRIEF_FOLLOW_UP_KINDS = ['actionItem', 'followUpEmail', 'reminder'] as const;
+export const BriefFollowUpKindSchema = z.enum(BRIEF_FOLLOW_UP_KINDS);
+export type BriefFollowUpKind = z.infer<typeof BriefFollowUpKindSchema>;
+
+export const BRIEF_FOLLOW_UP_STATES = ['pending', 'approved', 'dismissed'] as const;
+export const BriefFollowUpStateSchema = z.enum(BRIEF_FOLLOW_UP_STATES);
+export type BriefFollowUpState = z.infer<typeof BriefFollowUpStateSchema>;
+
+export const BriefFollowUpRefSchema = z.object({
+  kind: BriefFollowUpKindSchema.describe(
+    'What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client ' +
+      'should treat an unknown value as not actionable.'
+  ),
+  state: BriefFollowUpStateSchema.describe(
+    'Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable.'
+  ),
+  remindAt: z
+    .string()
+    .nullable()
+    .describe('ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds.'),
+});
+
 export const BriefDecisionSchema = BriefItemSchema.extend({
   approval: BriefApprovalRefSchema.optional().describe(
     'Present when the decision is an agent approval. `state` reflects the approval at fetch time; the ' +
       'pending-actions endpoints stay authoritative for a decision racing this read.'
   ),
   question: BriefQuestionRefSchema.optional().describe(
-    'Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both.'
+    'Present when the decision is a question an agent asked. A decision carries at most one of `approval`, ' +
+      '`question` and `followUp`.'
+  ),
+  followUp: BriefFollowUpRefSchema.optional().describe(
+    'Present when the decision is a follow-up proposed from a dictated memo; act on it through ' +
+      '`/api/v1/briefs/{id}/decisions/{decisionId}`.'
   ),
   draftReply: BriefDraftReplySchema.optional(),
 });
@@ -148,6 +195,52 @@ export const BriefReplyRequestSchema = z.object({
     .optional()
     .describe('Index into the question `options` when the reply picks one of them; recorded on the question.'),
 });
+
+export const BriefFollowUpRequestSchema = z.object({
+  transcript: z
+    .string()
+    .min(1)
+    .max(BRIEF_LIMITS.followUpTranscript)
+    .regex(/\S/, 'Transcript must not be blank')
+    .describe('The dictated memo, as transcribed on the device.'),
+  timeZone: z
+    .string()
+    .min(1)
+    .max(64)
+    .refine(isValidIanaTimeZone, 'Unknown IANA time zone')
+    .optional()
+    .describe('IANA zone used to read times like "tomorrow at 9" in the memo; defaults to the brief schedule zone.'),
+});
+
+export const BriefDecisionEditSchema = z
+  .object({
+    text: z.string().min(1).max(BRIEF_LIMITS.itemText).regex(/\S/, 'Text must not be blank').optional(),
+    draftReply: z
+      .object({
+        to: z.string().trim().min(1).max(BRIEF_LIMITS.draftTo),
+        subject: z.string().min(1).max(BRIEF_LIMITS.draftSubject),
+        body: z.string().min(1).max(BRIEF_LIMITS.draftBody),
+      })
+      .partial()
+      .optional()
+      .describe('Fields of a `followUpEmail` draft to replace.'),
+    remindAt: z.string().datetime({ offset: true }).optional().describe('New ISO 8601 due instant of a `reminder`.'),
+  })
+  .refine(
+    edit =>
+      edit.text !== undefined ||
+      edit.remindAt !== undefined ||
+      (edit.draftReply !== undefined && Object.keys(edit.draftReply).length > 0),
+    'Send at least one field to change'
+  );
+
+export const BRIEF_DECISION_OUTCOMES = ['approve', 'dismiss'] as const;
+export const BriefDecisionResolveSchema = z.object({
+  outcome: z.enum(BRIEF_DECISION_OUTCOMES),
+});
+
+/** `errorCode` values the follow-up decision routes send on top of the shared auth/billing codes. */
+export const BRIEF_DECISION_ERROR_CODES = [BRIEF_DECISION_CLOSED_ERROR_CODE] as const satisfies readonly ApiErrorCode[];
 
 export const BriefReplyResponseSchema = z.object({
   executionId: z.string().describe('The agent run continuing the conversation with your reply.'),
@@ -286,10 +379,21 @@ export type BusyBlocksResponse = z.infer<typeof BusyBlocksResponseSchema>;
 export type BriefApprovalRef = z.infer<typeof BriefApprovalRefSchema>;
 export type BriefQuestionRef = z.infer<typeof BriefQuestionRefSchema>;
 export type BriefReplyRequest = z.infer<typeof BriefReplyRequestSchema>;
+export type BriefFollowUpRef = z.infer<typeof BriefFollowUpRefSchema>;
+export type BriefFollowUpRequest = z.infer<typeof BriefFollowUpRequestSchema>;
+export type BriefDecisionEdit = z.infer<typeof BriefDecisionEditSchema>;
+export type BriefDecisionResolve = z.infer<typeof BriefDecisionResolveSchema>;
 /** A decision as composed and stored; each ref's `state` is derived on every read, never stored. */
-export type StoredBriefDecision = Omit<BriefDecision, 'approval' | 'question'> & {
+export type StoredBriefDecision = Omit<BriefDecision, 'approval' | 'question' | 'followUp'> & {
   approval?: Omit<BriefApprovalRef, 'state'>;
   question?: Omit<BriefQuestionRef, 'state'>;
+  /** Unlike the other refs, a follow-up's `state` is stored: only the decision routes change it. */
+  followUp?: Omit<BriefFollowUpRef, 'remindAt'> & {
+    remindAt: Date | null;
+    decidedAt?: Date;
+    /** Set once the reminder was listed in a composed brief, so it surfaces exactly once. */
+    surfacedAt?: Date;
+  };
   /** Set once by the reply route's claim, so a question is answered from the brief at most once. */
   repliedAt?: Date;
 };

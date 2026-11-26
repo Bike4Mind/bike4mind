@@ -471,7 +471,7 @@ export interface paths {
     };
     /**
      * List briefs
-     * @description Lists your most recent briefs (up to 20), newest first. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
+     * @description Lists your most recent briefs (up to 20), newest first. A brief composed from a dictated memo is not listed; read it by id. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
      */
     get: operations['listBriefs'];
     put?: never;
@@ -480,6 +480,26 @@ export interface paths {
      * @description Asks the assistant to compose a brief of what happened since the last one, what it handled and what needs a decision. Composition is asynchronous: the response is the brief in `composing` status, and a `brief_ready` push (or polling `GET /api/v1/briefs/{id}`) signals `ready` or `failed`. Idempotent while a brief is composing: the same brief is returned instead of starting another. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
      */
     post: operations['composeBrief'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/briefs/follow-ups': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Compose follow-ups from a dictated memo
+     * @description Turns a dictated memo (the transcript of a voice note after a meeting or call) into a brief whose decisions propose follow-ups: action items, a follow-up email draft and reminders, each carrying `followUp` in `pending` state. Nothing is sent or scheduled until you approve a decision. Composition is asynchronous like `POST /api/v1/briefs`: the response is the brief in `composing` status, then a `brief_ready` push (or polling `GET /api/v1/briefs/{id}`) signals `ready` or `failed`. Every call starts a new brief, and a follow-up brief does not change the window the next activity brief covers. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
+     */
+    post: operations['composeFollowUpBrief'];
     delete?: never;
     options?: never;
     head?: never;
@@ -612,6 +632,46 @@ export interface paths {
      * @description Answers a decision item that carries a `question`: the reply is sent to the agent as your next message in that notebook, starting an agent run. A question can be answered from the brief once; a second reply, or one after the conversation moved on (`state` other than `open`), is `409` with `errorCode: "question_closed"`. A decision that is an approval is `404` here; answer it through the pending-actions endpoints. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
      */
     post: operations['replyToBriefDecision'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/briefs/{id}/decisions/{decisionId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Edit a proposed follow-up
+     * @description Changes a follow-up decision (one carrying `followUp`) while it is still `pending`: `text` on any kind, `draftReply` fields only on a `followUpEmail`, `remindAt` only on a `reminder`. The response is the updated decision. Once the follow-up is approved or dismissed it cannot change; that is `409` with `errorCode: "decision_closed"`. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
+     */
+    patch: operations['editBriefDecision'];
+    trace?: never;
+  };
+  '/api/v1/briefs/{id}/decisions/{decisionId}/resolve': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Approve or dismiss a proposed follow-up
+     * @description Approves or dismisses a `pending` follow-up decision, once; the response is the updated decision. Approving records your approval and nothing more: the server never sends a `followUpEmail` (hand the approved `draftReply` to the device mail app) and needs `draftReply.to` to be an email address first. An approved `reminder` needs a `remindAt` and is listed in the first brief composed at or after it; with a brief schedule on, the next scheduled brief is moved earlier to that time. A second approve or dismiss is `409` with `errorCode: "decision_closed"`. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
+     */
+    post: operations['resolveBriefDecision'];
     delete?: never;
     options?: never;
     head?: never;
@@ -3581,6 +3641,11 @@ export interface components {
         tool_name?: string;
       }[];
       total_iterations: number | null;
+      /** @description Progress through a known number of steps, for a determinate progress display. `completed` and `total` count the same steps, which are not ReAct iterations, so do not pair `total` with `total_iterations`. The whole object is null when the executor cannot predict a total for this run, which is the common case: show indeterminate progress then. A run that has finished its last step can still be `running` while it writes its answer, so treat `status` as the source of truth for whether it is done. */
+      step_progress: {
+        completed: number;
+        total: number;
+      } | null;
       created_at: string;
       updated_at: string;
     };
@@ -6505,7 +6570,7 @@ export interface components {
            */
           state: 'pending' | 'approved' | 'denied' | 'replaced' | 'lapsed' | 'resolved';
         };
-        /** @description Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both. */
+        /** @description Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`. */
         question?: {
           /** @description The agent turn that asked the question. */
           questId: string;
@@ -6519,14 +6584,172 @@ export interface components {
            */
           state: 'open' | 'answered' | 'superseded';
         };
+        /** @description Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`. */
+        followUp?: {
+          /**
+           * @description What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          kind: 'actionItem' | 'followUpEmail' | 'reminder';
+          /**
+           * @description Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          state: 'pending' | 'approved' | 'dismissed';
+          /** @description ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds. */
+          remindAt: string | null;
+        };
         /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
         draftReply?: {
-          /** @description The source email's sender as received, unverified. */
+          /** @description The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it. */
           to: string;
           subject: string;
           body: string;
         };
       }[];
+    };
+    composeFollowUpBriefResponse202: {
+      id: string;
+      /** @enum {string} */
+      status: 'composing' | 'ready' | 'failed';
+      /** @description ISO 8601 timestamp. */
+      createdAt: string;
+      /** @description ISO 8601 timestamp; null until the brief is ready. */
+      composedAt: string | null;
+      /** @description ISO 8601 start of the activity window the brief covers. */
+      periodStart: string;
+      /** @description ISO 8601 end of the activity window the brief covers. */
+      periodEnd: string;
+      headline: string | null;
+      happened: {
+        /** @description Stable within the brief. */
+        id: string;
+        text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'obligation';
+              /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+              obligationId: string;
+            };
+      }[];
+      handled: {
+        /** @description Stable within the brief. */
+        id: string;
+        text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'obligation';
+              /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+              obligationId: string;
+            };
+      }[];
+      decisions: {
+        /** @description Stable within the brief. */
+        id: string;
+        text: string;
+        /** @description The record the item came from, when it was not agent activity. */
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'obligation';
+              /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+              obligationId: string;
+            };
+        /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
+        approval?: {
+          questId: string;
+          /** @description The notebook holding the quest, where a client shows the approval card. */
+          sessionId: string;
+          pendingActionTs: number;
+          /**
+           * @description Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          state: 'pending' | 'approved' | 'denied' | 'replaced' | 'lapsed' | 'resolved';
+        };
+        /** @description Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`. */
+        question?: {
+          /** @description The agent turn that asked the question. */
+          questId: string;
+          /** @description The notebook the reply continues. */
+          sessionId: string;
+          /** @description Suggested answers, in order; `choiceIndex` on a reply refers to this list. */
+          options: string[];
+          /**
+           * @description Live state of the question at fetch time. Only `open` can be replied to; a client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          state: 'open' | 'answered' | 'superseded';
+        };
+        /** @description Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`. */
+        followUp?: {
+          /**
+           * @description What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          kind: 'actionItem' | 'followUpEmail' | 'reminder';
+          /**
+           * @description Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          state: 'pending' | 'approved' | 'dismissed';
+          /** @description ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds. */
+          remindAt: string | null;
+        };
+        /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
+        draftReply?: {
+          /** @description The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it. */
+          to: string;
+          subject: string;
+          body: string;
+        };
+      }[];
+    };
+    composeFollowUpBriefRequest: {
+      /** @description The dictated memo, as transcribed on the device. */
+      transcript: string;
+      /** @description IANA zone used to read times like "tomorrow at 9" in the memo; defaults to the brief schedule zone. */
+      timeZone?: string;
     };
     listBriefsResponse200: {
       /** @description Most recent first. */
@@ -6629,7 +6852,7 @@ export interface components {
              */
             state: 'pending' | 'approved' | 'denied' | 'replaced' | 'lapsed' | 'resolved';
           };
-          /** @description Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both. */
+          /** @description Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`. */
           question?: {
             /** @description The agent turn that asked the question. */
             questId: string;
@@ -6643,9 +6866,24 @@ export interface components {
              */
             state: 'open' | 'answered' | 'superseded';
           };
+          /** @description Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`. */
+          followUp?: {
+            /**
+             * @description What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable.
+             * @enum {string}
+             */
+            kind: 'actionItem' | 'followUpEmail' | 'reminder';
+            /**
+             * @description Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable.
+             * @enum {string}
+             */
+            state: 'pending' | 'approved' | 'dismissed';
+            /** @description ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds. */
+            remindAt: string | null;
+          };
           /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
           draftReply?: {
-            /** @description The source email's sender as received, unverified. */
+            /** @description The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it. */
             to: string;
             subject: string;
             body: string;
@@ -6752,7 +6990,7 @@ export interface components {
            */
           state: 'pending' | 'approved' | 'denied' | 'replaced' | 'lapsed' | 'resolved';
         };
-        /** @description Present when the decision is a question an agent asked. A decision carries `approval` or `question`, never both. */
+        /** @description Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`. */
         question?: {
           /** @description The agent turn that asked the question. */
           questId: string;
@@ -6766,9 +7004,24 @@ export interface components {
            */
           state: 'open' | 'answered' | 'superseded';
         };
+        /** @description Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`. */
+        followUp?: {
+          /**
+           * @description What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          kind: 'actionItem' | 'followUpEmail' | 'reminder';
+          /**
+           * @description Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable.
+           * @enum {string}
+           */
+          state: 'pending' | 'approved' | 'dismissed';
+          /** @description ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds. */
+          remindAt: string | null;
+        };
         /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
         draftReply?: {
-          /** @description The source email's sender as received, unverified. */
+          /** @description The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it. */
           to: string;
           subject: string;
           body: string;
@@ -6939,6 +7192,170 @@ export interface components {
       text: string;
       /** @description Index into the question `options` when the reply picks one of them; recorded on the question. */
       choiceIndex?: number;
+    };
+    editBriefDecisionResponse200: {
+      /** @description Stable within the brief. */
+      id: string;
+      text: string;
+      /** @description The record the item came from, when it was not agent activity. */
+      source?:
+        | {
+            /** @enum {string} */
+            kind: 'email';
+            /** @description The ingested email the item was triaged from. */
+            emailId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'delegation';
+            /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+            delegationId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'obligation';
+            /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+            obligationId: string;
+          };
+      /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
+      approval?: {
+        questId: string;
+        /** @description The notebook holding the quest, where a client shows the approval card. */
+        sessionId: string;
+        pendingActionTs: number;
+        /**
+         * @description Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should treat an unknown value as not actionable.
+         * @enum {string}
+         */
+        state: 'pending' | 'approved' | 'denied' | 'replaced' | 'lapsed' | 'resolved';
+      };
+      /** @description Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`. */
+      question?: {
+        /** @description The agent turn that asked the question. */
+        questId: string;
+        /** @description The notebook the reply continues. */
+        sessionId: string;
+        /** @description Suggested answers, in order; `choiceIndex` on a reply refers to this list. */
+        options: string[];
+        /**
+         * @description Live state of the question at fetch time. Only `open` can be replied to; a client should treat an unknown value as not actionable.
+         * @enum {string}
+         */
+        state: 'open' | 'answered' | 'superseded';
+      };
+      /** @description Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`. */
+      followUp?: {
+        /**
+         * @description What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable.
+         * @enum {string}
+         */
+        kind: 'actionItem' | 'followUpEmail' | 'reminder';
+        /**
+         * @description Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable.
+         * @enum {string}
+         */
+        state: 'pending' | 'approved' | 'dismissed';
+        /** @description ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds. */
+        remindAt: string | null;
+      };
+      /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
+      draftReply?: {
+        /** @description The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it. */
+        to: string;
+        subject: string;
+        body: string;
+      };
+    };
+    editBriefDecisionRequest: {
+      text?: string;
+      /** @description Fields of a `followUpEmail` draft to replace. */
+      draftReply?: {
+        to?: string;
+        subject?: string;
+        body?: string;
+      };
+      /**
+       * Format: date-time
+       * @description New ISO 8601 due instant of a `reminder`.
+       */
+      remindAt?: string;
+    };
+    resolveBriefDecisionResponse200: {
+      /** @description Stable within the brief. */
+      id: string;
+      text: string;
+      /** @description The record the item came from, when it was not agent activity. */
+      source?:
+        | {
+            /** @enum {string} */
+            kind: 'email';
+            /** @description The ingested email the item was triaged from. */
+            emailId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'delegation';
+            /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+            delegationId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'obligation';
+            /** @description A confirmed obligation; read it with `GET /api/v1/obligations/{id}`. */
+            obligationId: string;
+          };
+      /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
+      approval?: {
+        questId: string;
+        /** @description The notebook holding the quest, where a client shows the approval card. */
+        sessionId: string;
+        pendingActionTs: number;
+        /**
+         * @description Live state of the approval at fetch time. Only `pending` can be approved or denied; a client should treat an unknown value as not actionable.
+         * @enum {string}
+         */
+        state: 'pending' | 'approved' | 'denied' | 'replaced' | 'lapsed' | 'resolved';
+      };
+      /** @description Present when the decision is a question an agent asked. A decision carries at most one of `approval`, `question` and `followUp`. */
+      question?: {
+        /** @description The agent turn that asked the question. */
+        questId: string;
+        /** @description The notebook the reply continues. */
+        sessionId: string;
+        /** @description Suggested answers, in order; `choiceIndex` on a reply refers to this list. */
+        options: string[];
+        /**
+         * @description Live state of the question at fetch time. Only `open` can be replied to; a client should treat an unknown value as not actionable.
+         * @enum {string}
+         */
+        state: 'open' | 'answered' | 'superseded';
+      };
+      /** @description Present when the decision is a follow-up proposed from a dictated memo; act on it through `/api/v1/briefs/{id}/decisions/{decisionId}`. */
+      followUp?: {
+        /**
+         * @description What the follow-up proposes. A `followUpEmail` carries its draft in the decision `draftReply`. A client should treat an unknown value as not actionable.
+         * @enum {string}
+         */
+        kind: 'actionItem' | 'followUpEmail' | 'reminder';
+        /**
+         * @description Only `pending` can be edited, approved or dismissed; a client should treat an unknown value as not actionable.
+         * @enum {string}
+         */
+        state: 'pending' | 'approved' | 'dismissed';
+        /** @description ISO 8601 instant a `reminder` is due; null when none was understood, and always null on other kinds. */
+        remindAt: string | null;
+      };
+      /** @description Proposed reply for the user to review; nothing sends it. Model-written from third-party email content, so treat every field as untrusted text. */
+      draftReply?: {
+        /** @description The source email's sender as received, unverified. On a follow-up email it is the recipient the user dictated, which may be a name rather than an address until the user edits it. */
+        to: string;
+        subject: string;
+        body: string;
+      };
+    };
+    resolveBriefDecisionRequest: {
+      /** @enum {string} */
+      outcome: 'approve' | 'dismiss';
     };
     getPendingDecisionCountResponse200: {
       /** @description Decisions waiting on you: `approvals` plus `briefDecisions`. Nothing is counted twice. */
@@ -20821,6 +21238,111 @@ export interface operations {
       };
     };
   };
+  composeFollowUpBrief: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['composeFollowUpBriefRequest'];
+      };
+    };
+    responses: {
+      /** @description The follow-ups are being composed. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['composeFollowUpBriefResponse202'];
+        };
+      };
+      /** @description The transcript is empty, blank or too long, or the time zone is unknown. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   getBrief: {
     parameters: {
       query?: never;
@@ -21711,6 +22233,270 @@ export interface operations {
       };
       /** @description The agent run could not be started. When the dispatch could not be confirmed either way the question stays answered so the reply can never run twice; open the conversation to see whether it went through. Otherwise nothing was sent and the question stays open for another reply. */
       502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  editBriefDecision: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The brief id. */
+        id: string;
+        /** @description The decision item id within the brief. */
+        decisionId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['editBriefDecisionRequest'];
+      };
+    };
+    responses: {
+      /** @description The updated decision. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['editBriefDecisionResponse200'];
+        };
+      };
+      /** @description No field to change, or a field that does not apply to this kind of follow-up. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No such brief or decision, it is not yours, or the decision is not a follow-up. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The follow-up was already approved or dismissed (`errorCode: "decision_closed"`). */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  resolveBriefDecision: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The brief id. */
+        id: string;
+        /** @description The decision item id within the brief. */
+        decisionId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['resolveBriefDecisionRequest'];
+      };
+    };
+    responses: {
+      /** @description The updated decision. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['resolveBriefDecisionResponse200'];
+        };
+      };
+      /** @description Approving an email whose recipient is not an email address, or a reminder with no time. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No such brief or decision, it is not yours, or the decision is not a follow-up. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The follow-up was already approved or dismissed (`errorCode: "decision_closed"`). */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;

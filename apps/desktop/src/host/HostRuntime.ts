@@ -40,6 +40,7 @@ import { BackgroundProcessRegistry } from '../main/chat/tools/BackgroundProcessR
 import { ForegroundCommandRegistry } from '../main/chat/tools/ForegroundCommandRegistry';
 import { keepSessionWritesIn } from '../main/chat/tools/sessionScripts';
 import { browseDirectory, type BrowseDirectoryResult } from './fs/browseDirectory';
+import type { SessionPageRequest } from '@shared/sessionPage';
 import type {
   HostAuth,
   HostCollaborators,
@@ -273,6 +274,10 @@ export class HostRuntime {
 
   listSessions() {
     return this.service.listSessions();
+  }
+
+  listSessionPage(request: SessionPageRequest) {
+    return this.service.listSessionPage(request);
   }
 
   getSession(sessionId: string, viewed: boolean) {

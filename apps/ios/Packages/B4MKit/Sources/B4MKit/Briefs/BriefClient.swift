@@ -56,7 +56,7 @@ public enum BriefReplyFailure: Error, Equatable, Sendable {
 /// Hand-written client for `/api/v1/briefs` (JWT bearer). The push that announces a brief carries only its
 /// id: the content is always fetched here, with the user's own credentials.
 public struct BriefClient: BriefAPI {
-  private let requester: AuthorizedRequester
+  let requester: AuthorizedRequester
 
   public init(baseURL: URL, tokens: any AccessTokenProviding, transport: any HTTPTransport = URLSessionTransport()) {
     requester = AuthorizedRequester(baseURL: baseURL, tokens: tokens, transport: transport)
@@ -118,12 +118,12 @@ public struct BriefClient: BriefAPI {
   static let fallbackDispatchFailure =
     "Reply delivery could not be confirmed. Check the conversation before sending another reply."
 
-  private struct ErrorEnvelope: Decodable {
+  struct ErrorEnvelope: Decodable {
     let errorCode: String?
     let error: String?
   }
 
-  private static func errorEnvelope(_ body: Data) -> ErrorEnvelope? {
+  static func errorEnvelope(_ body: Data) -> ErrorEnvelope? {
     try? JSONDecoder().decode(ErrorEnvelope.self, from: body)
   }
 

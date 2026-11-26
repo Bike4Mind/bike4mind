@@ -113,3 +113,39 @@ describe('loadAgentExecutionTrace authorization', () => {
     expect(mockFindSession).not.toHaveBeenCalled();
   });
 });
+
+describe('loadAgentExecutionTrace step progress', () => {
+  it('is null for a run without a captured plan, so clients fall back to indeterminate progress', async () => {
+    mockFindExecution.mockResolvedValue({ ...baseExecution, status: 'running' as const });
+
+    expect((await loadAgentExecutionTrace('exec1', 'u1'))?.stepProgress).toBeNull();
+  });
+
+  it('reports solved plan steps against the plan length', async () => {
+    mockFindExecution.mockResolvedValue({
+      ...baseExecution,
+      status: 'running' as const,
+      optiPlanState: {
+        decomposeUsed: true,
+        steps: [
+          { family: 'scheduling', title: 'Shifts' },
+          { family: 'routing', title: 'Routes' },
+        ],
+        solved: { scheduling: 1 },
+        results: {},
+      },
+    });
+
+    expect((await loadAgentExecutionTrace('exec1', 'u1'))?.stepProgress).toEqual({ completed: 1, total: 2 });
+  });
+
+  it('is null after a decompose that captured no steps', async () => {
+    mockFindExecution.mockResolvedValue({
+      ...baseExecution,
+      status: 'running' as const,
+      optiPlanState: { decomposeUsed: true, steps: [] },
+    });
+
+    expect((await loadAgentExecutionTrace('exec1', 'u1'))?.stepProgress).toBeNull();
+  });
+});
