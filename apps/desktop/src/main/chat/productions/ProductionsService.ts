@@ -59,12 +59,14 @@ export function toDetail(composition: StudioCompositionResponse): ProductionDeta
       continue;
     }
     const sorted = [...track.clips].sort((a, b) => a.startMs - b.startMs);
+    // Numbered by id, not position, so a fallback label stays with its clip when the order changes.
+    const ordinal = new Map([...track.clips].sort((a, b) => (a.id < b.id ? -1 : 1)).map((clip, i) => [clip.id, i + 1]));
     videoTracks.push({
       id: track.id,
       enabled: track.enabled,
-      clips: sorted.map((clip, index) => ({
+      clips: sorted.map(clip => ({
         id: clip.id,
-        label: shotTitleByFile.get(clip.fileId) ?? `Clip ${index + 1}`,
+        label: shotTitleByFile.get(clip.fileId) ?? `Clip ${ordinal.get(clip.id)}`,
         startMs: clip.startMs,
         durationMs: clip.durationMs,
       })),
