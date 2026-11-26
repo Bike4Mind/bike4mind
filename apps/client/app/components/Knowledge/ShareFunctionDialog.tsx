@@ -59,10 +59,13 @@ const listed = (names: string[]) =>
 /** The sentence the owner confirms: what recipients can run, and against which data. */
 export function shareDataSentence(dataPins: string[], sources: string[]): string {
   const parts = [
-    dataPins.length > 0 ? `the data files ${listed(dataPins)}` : 'no pinned data files',
-    sources.length > 0 ? `the sources ${listed(sources)}` : 'no sources',
+    dataPins.length > 0
+      ? `the data ${dataPins.length === 1 ? 'file' : 'files'} ${listed(dataPins)}`
+      : 'no pinned data files',
+    sources.length > 0 ? `the ${sources.length === 1 ? 'source' : 'sources'} ${listed(sources)}` : 'no sources',
   ];
-  return `Recipients can run this function's live version, which reads ${parts.join(' and ')}. They cannot see its code or open the artifact.`;
+  const joiner = dataPins.length > 0 && sources.length > 0 ? ', and ' : ' and ';
+  return `Recipients can run this function's live version, which reads ${parts.join(joiner)}. They cannot see its code or open the artifact.`;
 }
 
 // The server accepts a project the owner owns or is named on with read or write, not one reached only through a group.

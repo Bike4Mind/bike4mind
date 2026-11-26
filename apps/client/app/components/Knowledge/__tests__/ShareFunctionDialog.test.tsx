@@ -64,7 +64,23 @@ describe('shareDataSentence', () => {
   it('names each data file and source, or says there are none', () => {
     expect(shareDataSentence([], [])).toContain('reads no pinned data files and no sources');
     expect(shareDataSentence(['loads.csv', 'spans.csv', 'steel.csv'], ['https://data.example.com/beams'])).toContain(
-      'the data files loads.csv, spans.csv, and steel.csv and the sources https://data.example.com/beams'
+      'the data files loads.csv, spans.csv, and steel.csv, and the source https://data.example.com/beams'
+    );
+  });
+
+  it('uses the singular for one data file or one source', () => {
+    expect(shareDataSentence(['loads.csv'], [])).toContain('reads the data file loads.csv and no sources.');
+    expect(shareDataSentence([], ['https://data.example.com/beams'])).toContain(
+      'reads no pinned data files and the source https://data.example.com/beams.'
+    );
+  });
+
+  it('joins a list of files and a list of sources with a comma before and', () => {
+    expect(shareDataSentence(['factors.csv', 'limits.csv'], ['rates.csv'])).toContain(
+      'which reads the data files factors.csv and limits.csv, and the source rates.csv.'
+    );
+    expect(shareDataSentence(['factors.csv'], ['rates.csv'])).toContain(
+      'which reads the data file factors.csv, and the source rates.csv.'
     );
   });
 });
