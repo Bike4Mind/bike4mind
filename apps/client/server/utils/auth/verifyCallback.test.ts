@@ -25,8 +25,14 @@ const mockClaimInvite = vi.fn();
 const mockReleaseInviteClaim = vi.fn();
 const mockInviteCodeFor = vi.fn();
 const mockFindSetting = vi.fn();
+const mockRedirectToFor = vi.fn();
 vi.mock('@server/auth/passportOAuthStateStore', () => ({
   readOAuthInviteCode: (req: object) => mockInviteCodeFor(req),
+  readOAuthRedirectTo: (req: object) => mockRedirectToFor(req),
+}));
+const mockResolveSignupClientId = vi.fn();
+vi.mock('./signupClientId', () => ({
+  resolveSignupClientId: (redirectTo: unknown) => mockResolveSignupClientId(redirectTo),
 }));
 
 // Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
@@ -204,6 +210,10 @@ beforeEach(() => {
   mockReleaseInviteClaim.mockResolvedValue(undefined);
   mockInviteCodeFor.mockReset();
   mockInviteCodeFor.mockReturnValue(null);
+  mockRedirectToFor.mockReset();
+  mockRedirectToFor.mockReturnValue(null);
+  mockResolveSignupClientId.mockReset();
+  mockResolveSignupClientId.mockResolvedValue(null);
 });
 
 // Failure-safe restore of any vi.spyOn() (e.g. console.error) so a throwing
@@ -1772,6 +1782,24 @@ describe('OAuth signup with an invite code carried through state', () => {
     );
   });
 
+  it('signs up uninvited when the carried code is blank', async () => {
+    mockInviteCodeFor.mockReturnValue('   ');
+
+    const { err } = await runSelfServe();
+
+    expect(err).toBeNull();
+    expect(mockFindInviteByCode).not.toHaveBeenCalled();
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signupInvite');
+  });
+
+  it('names no inviter for a referral invite without a sender', async () => {
+    mockFindInviteByCode.mockResolvedValue(referral({ userId: undefined }));
+
+    await runSelfServe();
+
+    expect(mockCreate.mock.calls[0][0]).toMatchObject({ referredByUserId: null });
+  });
+
   it.each([0, 28])('enrolls the same OAuth grant with or without a referral under drip cap %s', async dripCap => {
     const settings: Record<string, string> = {
       signupGrantInitialCredits: '12',
@@ -1948,5 +1976,122 @@ describe('OAuth signup with an invite code carried through state', () => {
 
     expect(err).toBeNull();
     expect(mockFindInviteByCode).not.toHaveBeenCalled();
+  });
+});
+
+describe('verifyCallback - signup client attribution', () => {
+  const CLIENT_ID = 'b4m_acme_0a1b2c3d';
+  const AUTHORIZE = `/oauth/authorize?client_id=${CLIENT_ID}`;
+  const req = { headers: {} };
+  const profile = {
+    id: 'sub-attr',
+    displayName: 'Attr Person',
+    emails: [{ value: 'attr@example.com', verified: true }],
+  };
+  const runSelfServe = (): Promise<{ err: unknown; user: unknown; info: unknown }> =>
+    new Promise(resolve => {
+      const done = (err: unknown, user?: unknown, info?: unknown) => resolve({ err, user, info });
+      void selfServeVerifyCallback(AuthStrategy.Google)(req, 'access-tok', 'refresh-tok', profile, done);
+    });
+
+  beforeEach(() => {
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
+    mockRedirectToFor.mockImplementation((r: object) => (r === req ? AUTHORIZE : null));
+  });
+
+  it('records the resolved client on a new self-serve account', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockResolveSignupClientId.mockResolvedValue(CLIENT_ID);
+
+    const { user } = await runSelfServe();
+
+    expect(mockResolveSignupClientId).toHaveBeenCalledWith(AUTHORIZE);
+    expect(mockCreate.mock.calls[0][0]).toEqual(expect.objectContaining({ signupClientId: CLIENT_ID }));
+    expect(user.isNewUser).toBe(true);
+  });
+
+  it('records nothing when the redirect names no active client', async () => {
+    mockFindOne.mockResolvedValue(null);
+
+    await runSelfServe();
+
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signupClientId');
+  });
+
+  it('never touches an existing account', async () => {
+    mockFindOne.mockResolvedValueOnce({
+      _id: 'existing',
+      email: 'attr@example.com',
+      emailVerified: true,
+      authProviders: [{ strategy: AuthStrategy.Google, id: 'sub-attr' }],
+    });
+    mockResolveSignupClientId.mockResolvedValue(CLIENT_ID);
+
+    await runSelfServe();
+
+    expect(mockResolveSignupClientId).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(JSON.stringify(mockUpdateOne.mock.calls)).not.toContain('signupClientId');
+  });
+
+  it('records the client a SAML signup passes after its auth provider', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockResolveSignupClientId.mockResolvedValue(CLIENT_ID);
+
+    await new Promise(resolve => {
+      verifyCallback(AuthStrategy.SAML)(
+        'null',
+        'null',
+        { id: 'name-id', emails: [{ value: 'attr@acme.com', verified: true }] },
+        resolve,
+        { strategy: AuthStrategy.SAML, samlIdentityProviderId: 'idp-acme' },
+        AUTHORIZE
+      );
+    });
+
+    expect(mockResolveSignupClientId).toHaveBeenCalledWith(AUTHORIZE);
+    expect(mockCreate.mock.calls[0][0]).toEqual(expect.objectContaining({ signupClientId: CLIENT_ID }));
+  });
+});
+
+describe('verifyCallback - remaining create and link edges', () => {
+  it('links a new provider to an account that has no provider list yet', async () => {
+    stage2Hit({ _id: 'u-none', email: 'none@example.com', emailVerified: true });
+
+    const { err } = await runStandard(AuthStrategy.Github, {
+      id: 'gh-none',
+      emails: [{ value: 'none@example.com', verified: true }],
+    });
+
+    expect(err).toBeNull();
+    expect(JSON.stringify(mockUpdateOne.mock.calls[0][1])).toContain('gh-none');
+  });
+
+  it('creates a non-self-serve account without an unverified provider email', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
+
+    const { err, user } = await runStandard('facebook' as AuthStrategy, {
+      id: 'fb-1',
+      username: 'fbuser',
+      emails: [{ value: 'fb@example.com', verified: false }],
+    });
+
+    expect(err).toBeNull();
+    expect((user as { isNewUser?: boolean }).isNewUser).toBe(true);
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('email');
+  });
+
+  it('reports a generic message when a non-Error is thrown', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockRejectedValueOnce('boom');
+    vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+
+    const { info } = await runStandard(AuthStrategy.Google, {
+      id: 'g-throw',
+      emails: [{ value: 'throw@example.com', verified: true }],
+    });
+
+    expect(info).toEqual({ code: 'internal', message: 'Internal error during authentication' });
   });
 });

@@ -85,6 +85,8 @@ export async function createUniqueOAuthUser(params: {
    * referral. The caller redeems the invite once the create succeeds.
    */
   referralInvite?: { inviteId: string; inviterId: string | null };
+  /** The active OAuth client this signup's authorize flow named (resolveSignupClientId). */
+  signupClientId?: string | null;
 }) {
   const { name, baseUsername, email, oauthCredentials, pendingFreeCredits = false } = params;
   // `name` is a required field. Providers that send neither a displayName/name
@@ -108,6 +110,7 @@ export async function createUniqueOAuthUser(params: {
     ...(pendingFreeCredits ? { tags: [PENDING_FREE_CREDITS_TAG] } : {}),
     ...(signupGrant ? { signupGrant } : {}),
     ...(params.signupMeta ? { signupMeta: params.signupMeta } : {}),
+    ...(params.signupClientId ? { signupClientId: params.signupClientId } : {}),
     ...(referralInvite
       ? {
           referredByUserId: referralInvite.inviterId,

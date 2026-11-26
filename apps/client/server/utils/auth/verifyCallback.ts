@@ -17,7 +17,7 @@ import { isSignupNetworkOverLimit } from '@bike4mind/server-utils/auth/signupNet
 import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { wasTurnstileVerified } from '@server/auth/signupChallenge';
-import { readOAuthInviteCode } from '@server/auth/passportOAuthStateStore';
+import { readOAuthInviteCode, readOAuthRedirectTo } from '@server/auth/passportOAuthStateStore';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -28,6 +28,7 @@ import { isOpenRegistrationAllowed } from './openRegistration';
 import { isPartnerDomainSignupAllowed } from './partnerSignupBypass';
 import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
 import { sealProviderTokens } from './providerTokensAtRest';
+import { resolveSignupClientId } from './signupClientId';
 
 /**
  * Strategies where anyone on the internet can present an identity, so a first login
@@ -98,7 +99,9 @@ const authenticateUser = async (
   authProvider?: Partial<IAuthProviders>,
   signupNetwork?: INetworkMeta,
   challengeVerified?: true | null,
-  inviteCode?: string | null
+  inviteCode?: string | null,
+  // The flow's post-login redirectTo; a new account records the OAuth client it names.
+  signupRedirectTo?: unknown
 ) => {
   const selectedEmail = selectProviderEmail(profile)?.value;
   const email = typeof selectedEmail === 'string' ? selectedEmail : null;
@@ -331,6 +334,7 @@ const authenticateUser = async (
             inviterId: referral.resolved.invite.userId ?? null,
           }
         : undefined;
+      const signupClientId = await resolveSignupClientId(signupRedirectTo);
       try {
         user = await createUniqueOAuthUser({
           name,
@@ -340,6 +344,7 @@ const authenticateUser = async (
           pendingFreeCredits,
           ...(signupNetwork ? { signupMeta: { ...signupNetwork, capturedAt: new Date(), challengeVerified } } : {}),
           ...(referralInvite ? { referralInvite } : {}),
+          signupClientId,
         });
       } catch (e) {
         await referral?.claim.release().catch(() => {
@@ -409,7 +414,7 @@ export const verifyCallback = (strategy: AuthStrategy) => {
     // Different OAuth providers call with different signatures:
     // - Standard (GitHub): (accessToken, refreshToken, profile, done)
     // - With params (Google): (accessToken, refreshToken, params, profile, done)
-    // - With custom data (SAML): (accessToken, refreshToken, profile, done, authProvider)
+    // - With custom data (SAML): (accessToken, refreshToken, profile, done, authProvider, signupRedirectTo)
 
     if (rest.length === 2) {
       // Standard: (profile, done)
@@ -418,8 +423,19 @@ export const verifyCallback = (strategy: AuthStrategy) => {
       // With params: (params, profile, done)
       return authenticateUser(strategy, accessToken, refreshToken, rest[1], rest[2]);
     } else {
-      // With custom data: (profile, done, authProvider)
-      return authenticateUser(strategy, accessToken, refreshToken, rest[0], rest[1], rest[2]);
+      // With custom data: (profile, done, authProvider, signupRedirectTo)
+      return authenticateUser(
+        strategy,
+        accessToken,
+        refreshToken,
+        rest[0],
+        rest[1],
+        rest[2],
+        undefined,
+        undefined,
+        undefined,
+        rest[3]
+      );
     }
   };
 };
@@ -442,7 +458,8 @@ export const selfServeVerifyCallback =
       undefined,
       readNetworkMeta(req),
       wasTurnstileVerified(req),
-      readOAuthInviteCode(req)
+      readOAuthInviteCode(req),
+      readOAuthRedirectTo(req)
     );
 
 /**
@@ -468,5 +485,6 @@ export const authenticateSelfServeProfile = (
     authProvider,
     readNetworkMeta(req),
     wasTurnstileVerified(req),
-    readOAuthInviteCode(req)
+    readOAuthInviteCode(req),
+    readOAuthRedirectTo(req)
   );

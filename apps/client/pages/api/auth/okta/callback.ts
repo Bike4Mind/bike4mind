@@ -49,6 +49,7 @@ import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/
 import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { resolveSignupClientId } from '@server/utils/auth/signupClientId';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import {
   emitEmailVerifiedFunnelEvents,
@@ -485,7 +486,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // non-empty username even when the provider sends only a display name.
       const emailForNewAccount = userInfo.email_verified === true ? email : null;
       const baseUsername = deriveOAuthUsername(username ?? null, name, emailForNewAccount);
-      user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
+      user = await createUniqueOAuthUser({
+        name,
+        baseUsername,
+        email: emailForNewAccount,
+        oauthCredentials,
+        signupClientId: await resolveSignupClientId(redirectTo),
+      });
       isNewUser = true;
       Logger.debug('[Okta Callback] Created new user:', user.id);
       // Never reaches /api/email/verify, so the verified domain's grant runs here (no flat grant for Okta).

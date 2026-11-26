@@ -2441,6 +2441,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
       ),
       default: undefined,
     },
+    // Immutable so no update path can rewrite it; see IUser.signupClientId.
+    signupClientId: { type: String, default: null, immutable: true },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
     loginRecords: [LoginRecordSchema],
     // reset password

@@ -217,6 +217,7 @@ export const SELF_VIEW_PASSTHROUGH_FIELDS = {
   referredViaLinkAt: true,
   referralCode: true,
   signupInvite: true,
+  signupClientId: true,
   organizationId: true,
   lastActiveAt: true,
   isOnline: true,
