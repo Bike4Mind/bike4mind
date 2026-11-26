@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeHead, makeSummary, isoSeconds, NOW, minutesAgo } from './__fixtures__/statusFixtures';
+import { parseMarkdown, renderMarkdownHtml } from './markdown';
 import type { PublicIncidentHead, PublicIncidentIndexRow } from './schemas.public';
 import {
   STATUS_FILE_SIZE_CAPS,
@@ -196,5 +197,25 @@ describe('file caps', () => {
     expect(utf8ByteLength('\u00e9')).toBe(2);
     expect(utf8ByteLength('\u{1F600}')).toBe(4);
     expect(checkFileSize('external', '\u00e9'.repeat(513)).withinCap).toBe(false);
+  });
+});
+
+describe('summary ladder truncation', () => {
+  it('step 3 never leaves a cut markdown token in a body', () => {
+    const body = `${'a'.repeat(250)} **bold text** and [status page](https://app.example.com/x) tail`;
+    const heads = Array.from({ length: 30 }, (_, n) =>
+      bigHead(n, {
+        latestUpdates: [
+          { id: `u_${n}`, at: isoSeconds(minutesAgo(n)), status: 'identified', body, edited: false, truncated: false },
+        ],
+      })
+    );
+    const result = applySummarySizeLadder(makeSummary({ activeIncidents: heads }), 1);
+    for (const head of result.summary.activeIncidents) {
+      const out = head.latestUpdates[0].body;
+      expect(Array.from(out).length).toBeLessThanOrEqual(280);
+      expect(out.endsWith('\u2026')).toBe(true);
+      expect(renderMarkdownHtml(parseMarkdown(out, { linkHosts: ['app.example.com'] }))).not.toMatch(/\*|\[|\]\(/);
+    }
   });
 });

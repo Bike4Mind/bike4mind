@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { truncateToSchemaCap } from './bounds';
 import {
   MAX_MARKDOWN_PARSE_CHARS,
   normalizePublicText,
@@ -206,4 +207,84 @@ describe('sanitizing is a fixed point that renders the same page', () => {
     expect(sanitizeMarkdown('_a **b** c_', options)).toBe('_a **b** c_');
     expect(html('_a **b** c_')).toBe('<p><em>a <strong>b</strong> c</em></p>');
   });
+});
+
+describe('truncation never cuts inside a markdown token', () => {
+  const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  const visibleText = (value: string) => html(value).replace(/<[^>]*>/g, '');
+  const constructs = [
+    ['link label', '[status page](https://app.example.com/x)', 4],
+    ['link url', '[status page](https://app.example.com/x)', 22],
+    ['link bracket', '[status page](https://app.example.com/x)', 12],
+    ['strong', '**bold text**', 6],
+    ['em with underscores', '_em text_', 4],
+    ['em with asterisks', '*em text*', 4],
+    ['code span', '`code span`', 5],
+    ['after a backslash escape', '\\*star and more', 1],
+    ['emoji', '\u{1F600}\u{1F600}\u{1F600}', 1],
+  ] as const;
+  const cases = constructs.flatMap(([name, construct, offset]) =>
+    ([1_000, 4_000] as const).map(max => [name, construct, offset, max] as const)
+  );
+
+  it.each(cases)('%s at the %i cap', (_name, construct, offset, max) => {
+    const body = sanitizeMarkdown(`${'a'.repeat(max - 2 - offset)} ${construct} and a tail`, options);
+    const { text, truncated } = truncateToSchemaCap(body, max);
+    expect(truncated).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(max);
+    expect(Array.from(text).length).toBeLessThanOrEqual(max);
+    expect(text.endsWith('\u2026')).toBe(true);
+    expect(text).not.toMatch(LONE_SURROGATE);
+    expect(sanitizeMarkdown(text, options)).toBe(text);
+    expect(visibleText(text)).not.toMatch(/\[|\]\(|\*|_|`/);
+  });
+
+  it('cuts inside a token that holds escapes by UTF-16 units too', () => {
+    const body = sanitizeMarkdown(`${'a'.repeat(995)} **${'\u{1F600}'.repeat(10)}** tail`, options);
+    const { text } = truncateToSchemaCap(body, 1_000);
+    expect(text.length).toBeLessThanOrEqual(1_000);
+    expect(text).not.toMatch(LONE_SURROGATE);
+    expect(visibleText(text)).not.toMatch(/\*/);
+  });
+
+  it.each([
+    ['strong', '**', '**'],
+    ['em', '_', '_'],
+    ['code', '`', '`'],
+    ['a list item in strong', '- first\n- **', '**'],
+    ['strong inside em', '_lead **', '**_'],
+  ])('keeps the text of a long %s that is cut, and closes it', (_name, opener, closer) => {
+    const body = sanitizeMarkdown(`${opener}${'word '.repeat(400).trim()}${closer}`, options);
+    const { text, truncated } = truncateToSchemaCap(body, 1_000);
+    expect(truncated).toBe(true);
+    expect(text.length).toBeGreaterThan(900);
+    expect(text.length).toBeLessThanOrEqual(1_000);
+    expect(text.endsWith(`${body.slice(-closer.length)}\u2026`)).toBe(true);
+    expect(visibleText(body).startsWith(visibleText(text).slice(0, -1))).toBe(true);
+    expect(sanitizeMarkdown(text, options)).toBe(text);
+    expect(visibleText(text)).not.toMatch(/\[|\]\(|\*|_|`/);
+  });
+
+  it('drops an emphasis opener that has no text before the cut', () => {
+    const body = sanitizeMarkdown(`${'a'.repeat(997)} **bold tail**`, options);
+    const { text } = truncateToSchemaCap(body, 1_000);
+    expect(text).toBe(`${'a'.repeat(997)}\u2026`);
+  });
+
+  it('keeps closed tokens before the cut', () => {
+    const body = sanitizeMarkdown(`**kept** [link](https://app.example.com/x) ${'a'.repeat(50)} **cut here`, options);
+    const { text } = truncateMarkdown(body, 80);
+    expect(text.startsWith('**kept** [link](https://app.example.com/x) aaa')).toBe(true);
+    expect(text.endsWith('a\u2026')).toBe(true);
+  });
+
+  it.each(['[a]('.repeat(5_000), '**a'.repeat(6_000), '`a'.repeat(10_000), '\\'.repeat(20_000)])(
+    'stays fast on adversarial input %#',
+    input => {
+      const started = performance.now();
+      const result = truncateToSchemaCap(input, 1_000);
+      expect(performance.now() - started).toBeLessThan(250);
+      expect(result.text.length).toBeLessThanOrEqual(1_000);
+    }
+  );
 });

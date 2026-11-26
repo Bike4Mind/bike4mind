@@ -152,14 +152,23 @@ function cleanLinkHosts(raw: unknown, warnings: string[]): string[] {
   return hosts.slice(0, MAX_LINK_HOSTS);
 }
 
-/** An Invalid Date throws RangeError in toISOString; the record is dropped instead of the whole publish. */
+/** Fixed codes only: error text can carry internal values. Top-level projection errors keep propagating. */
+function dropReason(error: unknown): string {
+  if (error instanceof StatusProjectionError) throw error;
+  return error instanceof RangeError ? 'invalid_date' : 'malformed_record';
+}
+
+/** A record that throws (an Invalid Date, a null field) is dropped instead of the whole publish. */
 function guarded<T>(build: () => T | { reason: string }): T | { reason: string } {
   try {
     return build();
   } catch (error) {
-    if (error instanceof RangeError) return { reason: 'invalid_date' };
-    throw error;
+    return { reason: dropReason(error) };
   }
+}
+
+function refOf(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }
 
 function lengthOnly(result: { ok: boolean; errors: { code: string }[] }): boolean {
@@ -190,15 +199,21 @@ export function projectPublicSnapshot(input: ProjectionInput): ProjectedSnapshot
   const pageTitle = validatePublicText('label', input.page.title, linkOptions);
   if (!pageTitle.ok) throw new StatusProjectionError('page title failed the text policy');
 
-  const visible = input.components.filter(({ component }) => component.visibility === 'public' && !component.retiredAt);
+  const visible = input.components.filter(
+    runtime => runtime?.component?.visibility === 'public' && !runtime.component.retiredAt
+  );
 
   const groupBySlug = new Map<string, StatusGroupDef>();
   for (const group of input.groups) {
-    const name = typeof group.name === 'string' ? validatePublicText('label', group.name, linkOptions) : null;
-    if (!name || !PUBLIC_SLUG_PATTERN.test(group.slug) || !Number.isInteger(group.order)) {
-      dropped.push({ file: 'summary', ref: String(group.slug), reason: 'group_schema' });
-    } else if (name.ok) groupBySlug.set(group.slug, { ...group, name: name.normalized.trim() });
-    else dropped.push({ file: 'summary', ref: group.slug, reason: 'group_text_policy' });
+    try {
+      const name = typeof group.name === 'string' ? validatePublicText('label', group.name, linkOptions) : null;
+      if (!name || !PUBLIC_SLUG_PATTERN.test(group.slug) || !Number.isInteger(group.order)) {
+        dropped.push({ file: 'summary', ref: String(group.slug), reason: 'group_schema' });
+      } else if (name.ok) groupBySlug.set(group.slug, { ...group, name: name.normalized.trim() });
+      else dropped.push({ file: 'summary', ref: group.slug, reason: 'group_text_policy' });
+    } catch (error) {
+      dropped.push({ file: 'summary', ref: refOf(group?.slug), reason: dropReason(error) });
+    }
   }
 
   // The public set is settled once, before anything refers to a slug: a row that is dropped here
@@ -603,25 +618,32 @@ function projectUptime(
   let from: string | null = null;
   let to: string | null = null;
 
-  for (const row of input.uptime ?? []) {
-    const slug = slugByKey.get(row.componentKey);
-    if (!slug || !eligibleKeys.has(row.componentKey)) continue;
+  const acceptRow = (row: UptimeComponentInput, slug: string): void => {
     const validDays =
       Array.isArray(row.days) && row.days.every(day => PublicUptimeSchema.shape.from.safeParse(day.day).success);
     const uniqueDays = validDays && new Set(row.days.map(day => day.day)).size === row.days.length;
     if (!validDays || !uniqueDays || (row.uptime !== null && !Number.isFinite(row.uptime))) {
       dropped.push({ file: 'uptime', ref: row.componentKey, reason: 'schema' });
-      continue;
+      return;
     }
-    const observations = row.days
+    const observations: UptimeComponentInput['days'][number][] = [];
+    const tuples: unknown[][] = [];
+    const inWindow = row.days
       .filter(day => day.day >= windowFirst && day.day <= windowLast)
       .sort((a, b) => cmpStr(a.day, b.day));
-    const tuples = observations.map(day => [
-      day.barCode,
-      day.uptimeBp,
-      Math.round(day.downtimeMinutes),
-      new Set(day.incidentIds.filter(id => publishedIds.has(id))).size,
-    ]);
+    for (const day of inWindow) {
+      try {
+        tuples.push([
+          day.barCode,
+          day.uptimeBp,
+          Math.round(day.downtimeMinutes),
+          new Set(day.incidentIds.filter(id => publishedIds.has(id))).size,
+        ]);
+        observations.push(day);
+      } catch (error) {
+        dropped.push({ file: 'uptime', ref: row.componentKey, reason: dropReason(error) });
+      }
+    }
     const parsed = PublicUptimeSchema.shape.components.element.safeParse({
       slug,
       uptime: floorUptimeFraction(row.uptime),
@@ -629,7 +651,7 @@ function projectUptime(
     });
     if (!parsed.success) {
       dropped.push({ file: 'uptime', ref: row.componentKey, reason: 'schema' });
-      continue;
+      return;
     }
     const days = new Map<string, Tuple>();
     observations.forEach((day, index) => {
@@ -638,6 +660,16 @@ function projectUptime(
       if (to === null || day.day > to) to = day.day;
     });
     accepted.push({ component: parsed.data, days });
+  };
+
+  for (const row of input.uptime ?? []) {
+    try {
+      const slug = slugByKey.get(row.componentKey);
+      if (!slug || !eligibleKeys.has(row.componentKey)) continue;
+      acceptRow(row, slug);
+    } catch (error) {
+      dropped.push({ file: 'uptime', ref: refOf(row?.componentKey), reason: dropReason(error) });
+    }
   }
   const first = from ?? windowFirst;
   const last = to ?? windowLast;

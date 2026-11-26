@@ -476,16 +476,95 @@ export function renderMarkdownText(blocks: MarkdownBlock[]): string {
     .join('\n\n');
 }
 
-/** Cuts to at most `max` code points, marking the cut with an ellipsis. */
+type OpenToken = { kind: 'link' | 'strong' | 'em' | 'code'; mark: string; at: number };
+
+const MAX_CLOSED_TOKENS = 8;
+
+// Tokens still open at the end of a serialized prefix. Serialized text escapes every literal delimiter,
+// so each bare one is a token edge. `end` stops short of a split escape.
+function scanOpenTokens(prefix: string): { end: number; open: OpenToken[] } {
+  let open: OpenToken[] = [];
+  let inUrl = false;
+  for (let i = 0; i < prefix.length; i++) {
+    const ch = prefix[i];
+    const top = open[open.length - 1];
+    if (ch === '\n') {
+      open = [];
+      inUrl = false;
+    } else if (top?.kind === 'code') {
+      if (ch === '`') open.pop();
+    } else if (top?.kind === 'link' && inUrl) {
+      if (ch === ')') {
+        open.pop();
+        inUrl = false;
+      }
+    } else if (ch === '\\') {
+      if (i + 1 >= prefix.length) return { end: i, open };
+      if (ESCAPABLE.has(prefix[i + 1])) i++;
+    } else if (ch === '`') {
+      open.push({ kind: 'code', mark: ch, at: i });
+    } else if (ch === '[') {
+      if (!open.some(node => node.kind === 'link')) open.push({ kind: 'link', mark: ch, at: i });
+    } else if (ch === ']' && top?.kind === 'link' && prefix[i + 1] === '(') {
+      inUrl = true;
+      i++;
+    } else if (prefix.startsWith('**', i)) {
+      if (top?.kind === 'strong') open.pop();
+      else open.push({ kind: 'strong', mark: '**', at: i });
+      i++;
+    } else if (ch === '*' || ch === '_') {
+      if (top?.kind === 'em' && top.mark === ch) open.pop();
+      else open.push({ kind: 'em', mark: ch, at: i });
+    }
+  }
+  return { end: prefix.length, open };
+}
+
+const codePoints = (value: string) => Array.from(value).length;
+
+/**
+ * Ends a cut prefix at a token boundary and marks the cut with an ellipsis. Open emphasis and code
+ * are closed so the text before the cut survives; a link cut short is dropped whole.
+ */
+export function closeTruncatedMarkdown(prefix: string): string {
+  let room = prefix;
+  for (;;) {
+    const { end, open } = scanOpenTokens(room);
+    let body = room.slice(0, end);
+    let kept = open;
+    const link = open.findIndex(node => node.kind === 'link');
+    if (link !== -1) {
+      body = body.slice(0, open[link].at);
+      kept = open.slice(0, link);
+    }
+    if (kept.length > MAX_CLOSED_TOKENS) {
+      body = body.slice(0, kept[0].at);
+      kept = [];
+    }
+    body = body.trimEnd();
+    while (kept.length > 0) {
+      const top = kept[kept.length - 1];
+      if (body.length > top.at + top.mark.length) break;
+      body = body.slice(0, top.at).trimEnd();
+      kept = kept.slice(0, -1);
+    }
+    const closers = kept
+      .map(node => node.mark)
+      .reverse()
+      .join('');
+    const over = Math.max(
+      body.length + closers.length - prefix.length,
+      codePoints(body) + closers.length - codePoints(prefix)
+    );
+    if (over <= 0) return `${body}${closers}…`;
+    room = Array.from(body).slice(0, -over).join('');
+  }
+}
+
+/** Cuts to at most `max` code points, never inside a markdown token, marking the cut with an ellipsis. */
 export function truncateMarkdown(source: string, max: number): { text: string; truncated: boolean } {
   const chars = Array.from(source);
   if (chars.length <= max) return { text: source, truncated: false };
   if (max <= 1) return { text: '\u2026'.slice(0, max), truncated: true };
-  return {
-    text: `${chars
-      .slice(0, max - 1)
-      .join('')
-      .trimEnd()}\u2026`,
-    truncated: true,
-  };
+  return { text: closeTruncatedMarkdown(chars.slice(0, max - 1).join('')), truncated: true };
 }

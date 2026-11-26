@@ -1268,3 +1268,109 @@ describe('value-level sentinel over the rich input', () => {
     expect(serialized).not.toContain('hidden-row');
   });
 });
+
+describe('a record that throws is dropped with a fixed reason, the rest publishes', () => {
+  const healthyRuntime = makeRuntime({ component: { key: 'api', publicSlug: 'api', name: 'API', order: 3 } });
+  const malformed = (component: Record<string, unknown>) =>
+    makeRuntime({ component: { key: 'chat', ...component } as never });
+
+  it('drops a component with a null description', () => {
+    const snapshot = projectPublicSnapshot(
+      makeProjectionInput({ components: [malformed({ description: null }), healthyRuntime] })
+    );
+    expect(snapshot.summary.components.map(c => c.slug)).toEqual(['api']);
+    expect(snapshot.dropped).toEqual([{ file: 'summary', ref: 'chat', reason: 'malformed_record' }]);
+  });
+
+  it('drops a component with no name', () => {
+    const snapshot = projectPublicSnapshot(
+      makeProjectionInput({ components: [malformed({ name: undefined }), healthyRuntime] })
+    );
+    expect(snapshot.summary.components.map(c => c.slug)).toEqual(['api']);
+    expect(snapshot.dropped).toEqual([{ file: 'summary', ref: 'chat', reason: 'malformed_record' }]);
+  });
+
+  it('drops an incident whose updates are null', () => {
+    const snapshot = projectPublicSnapshot(
+      makeProjectionInput({
+        incidents: [makeIncident({ publicId: 'bad0000001', updates: null as never }), makeIncident()],
+      })
+    );
+    expect(snapshot.summary.activeIncidents.map(h => h.id)).toEqual(['k3v9q2m7xa']);
+    expect(snapshot.dropped).toEqual([{ file: 'incident', ref: 'bad0000001', reason: 'malformed_record' }]);
+  });
+
+  it('drops one uptime day whose incidentIds are null and keeps the other rows', () => {
+    const day = (date: string, incidentIds: string[]) => ({
+      day: date,
+      barCode: 'o' as const,
+      uptimeBp: 9_999,
+      downtimeMinutes: 0,
+      incidentIds,
+    });
+    const snapshot = projectPublicSnapshot(
+      makeProjectionInput({
+        components: [makeRuntime(), healthyRuntime],
+        uptime: [
+          {
+            componentKey: 'chat',
+            uptime: 0.99,
+            days: [day('2026-11-22', []), day('2026-11-23', null as unknown as string[])],
+          },
+          { componentKey: 'api', uptime: 0.99, days: [day('2026-11-23', [])] },
+        ],
+      })
+    );
+    expect(snapshot.dropped).toEqual([{ file: 'uptime', ref: 'chat', reason: 'malformed_record' }]);
+    expect(snapshot.uptime.components.map(c => c.slug)).toEqual(['api', 'chat']);
+    const chat = snapshot.uptime.components.find(c => c.slug === 'chat');
+    expect(chat?.days).toEqual([
+      ['o', 9_999, 0, 0],
+      ['n', null, 0, 0],
+    ]);
+  });
+
+  it('drops an uptime row that is not an object and keeps the others', () => {
+    const snapshot = projectPublicSnapshot(
+      makeProjectionInput({
+        uptime: [null as never, { componentKey: 'chat', uptime: null, days: [] }],
+      })
+    );
+    expect(snapshot.dropped).toEqual([{ file: 'uptime', ref: '', reason: 'malformed_record' }]);
+    expect(snapshot.uptime.components.map(c => c.slug)).toEqual(['chat']);
+  });
+
+  it('leaves out a component row that has no component object', () => {
+    const snapshot = projectPublicSnapshot(
+      makeProjectionInput({ components: [null as never, { state: 'operational' } as never, healthyRuntime] })
+    );
+    expect(snapshot.summary.components.map(c => c.slug)).toEqual(['api']);
+  });
+
+  it('keeps raising for an invalid top-level input', () => {
+    expect(() => projectPublicSnapshot(makeProjectionInput({ now: new Date('nope') }))).toThrow(StatusProjectionError);
+  });
+});
+
+describe('summary update bodies are cut at a token boundary', () => {
+  it('does not leave half a link in the latest update', () => {
+    const body = `${'a'.repeat(985)} [status page](https://app.example.com/x) and more`;
+    const snapshot = projectPublicSnapshot(
+      makeProjectionInput({
+        incidents: [
+          makeIncident({
+            updates: [
+              { updateId: 'u_cut', at: minutesAgo(5), status: 'investigating', body, authorId: 'a', editHistory: [] },
+            ],
+          }),
+        ],
+      })
+    );
+    const head = snapshot.summary.activeIncidents[0].latestUpdates[0];
+    expect(head.truncated).toBe(true);
+    expect(head.body.length).toBeLessThanOrEqual(1_000);
+    expect(head.body.endsWith('\u2026')).toBe(true);
+    expect(head.body).not.toMatch(/\[|\]\(/);
+    expect(snapshot.incidentFiles.k3v9q2m7xa.incident.updates[0].body).toContain('[status page](');
+  });
+});
