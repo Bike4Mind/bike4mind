@@ -291,8 +291,8 @@ describe('sessionTagging', () => {
     expect(written.taggedAt).toBeInstanceOf(Date);
   });
 
-  // The four inputs below all land in the same failure branch. The completion is already billed by
-  // the time it runs, so it stamps the retry backoff - but it must stamp ONLY that: none of these
+  // The four inputs below all land in the same failure branch. The completion is billed after the
+  // write, parse failure included, so it stamps the retry backoff - but it must stamp ONLY that: none of these
   // is a verdict that the notebook has no tags, so none may clear tags or close the spider gate.
   // Asserting on the payload rather than on `h.session.tags`: the fixture object is what the
   // mocked `findById` handed back, so asserting it still holds its tags cannot fail.

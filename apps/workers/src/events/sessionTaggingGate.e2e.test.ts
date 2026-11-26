@@ -150,7 +150,7 @@ describe('tagging handler -> persisted taggedAt -> spider gate', () => {
     expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(0);
   });
 
-  // The completion was billed before the parse failed, so the notebook earns a backoff stamp -
+  // The completion is billed after the write even when the parse failed, so the notebook earns a backoff stamp -
   // but NOT a `taggedAt`, which would close the gate forever on a notebook that was never tagged.
   // Gate and counter are asserted together on the same real rows: they are two statements of one
   // rule, and this file exists because a comment is not enough to keep them in step.
