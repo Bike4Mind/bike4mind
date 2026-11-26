@@ -73,7 +73,7 @@ describe('apiKeyAuth subscription trust', () => {
       method: 'GET',
       originalUrl: '/api/v1/sessions',
     } as unknown as Request;
-    const response = { once: vi.fn(), statusCode: 200 } as unknown as Response;
+    const response = { once: vi.fn(), setHeader: vi.fn(), statusCode: 200 } as unknown as Response;
     const next = vi.fn();
 
     await apiKeyAuth()(request, response, next);
@@ -98,7 +98,7 @@ describe('apiKeyAuth subscription trust', () => {
       method: 'GET',
       originalUrl: '/api/v1/sessions',
     } as unknown as Request;
-    const response = { once: vi.fn(), statusCode: 200 } as unknown as Response;
+    const response = { once: vi.fn(), setHeader: vi.fn(), statusCode: 200 } as unknown as Response;
     const next = vi.fn();
 
     await apiKeyAuth()(request, response, next);
