@@ -51,6 +51,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       else waiting.push(socket);
     });
     await listen(server, paths.socket);
+    server.on('error', err => logger.error('HOST: socket server error', err));
     const host = await options.compose();
     ready = host;
     for (const socket of waiting.splice(0)) {

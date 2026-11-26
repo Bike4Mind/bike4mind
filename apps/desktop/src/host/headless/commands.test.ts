@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import type { HostNotification, HostRequest } from '@shared/hostProtocol';
+import { hostResult, type HostNotification, type HostRequest } from '@shared/hostProtocol';
 import { readHostStatus, stopDaemon } from './commands';
 import type { HeadlessHost } from './composeHeadlessHost';
 import { startDaemon, type RunningDaemon } from './daemon';
@@ -83,6 +83,37 @@ function interceptSigterm(onSigterm: () => void) {
   });
 }
 
+/** A daemon whose host broadcasts a notification just before it answers host/info with a signed-in account. */
+async function chattyDaemon(directory: string) {
+  const account = { userId: 'user-1', environmentUrl: 'https://app.example.com' };
+  const host = {
+    hostId: 'host-1',
+    server: {
+      connect: (notify: (notification: HostNotification) => void) => ({
+        handle: async (request: HostRequest) => {
+          notify({ jsonrpc: '2.0', method: 'host/stateChanged', params: { account } });
+          return hostResult(request.id, {
+            hostId: 'host-1',
+            hostName: 'host',
+            hostVersion: '1.2.3',
+            protocol: { major: 1, minor: 0 },
+            capabilities: [],
+            platform: 'linux',
+            homeDirectory: '/home/user',
+            account,
+          });
+        },
+        close: () => undefined,
+      }),
+    },
+    dispose: () => undefined,
+  } as unknown as HeadlessHost;
+  daemons.push(
+    await startDaemon({ dataDirectory: directory, version: '1.2.3', logger: logger(), compose: async () => host })
+  );
+  return account;
+}
+
 describePosix('readHostStatus', () => {
   it('reports not running without a lock', async () => {
     expect(await readHostStatus(await dataDirectory())).toEqual({ running: false });
@@ -119,6 +150,19 @@ describePosix('readHostStatus', () => {
 
     expect(await status).toEqual({ running: true, pid: process.pid, version: '1.2.3', starting: false, account: null });
   });
+
+  it('reads the host/info answer when a notification arrives ahead of it', async () => {
+    const directory = await dataDirectory();
+    const account = await chattyDaemon(directory);
+
+    expect(await readHostStatus(directory)).toEqual({
+      running: true,
+      pid: process.pid,
+      version: '1.2.3',
+      starting: false,
+      account,
+    });
+  });
 });
 
 describePosix('stopDaemon', () => {
@@ -154,7 +198,8 @@ describePosix('stopDaemon', () => {
   it('fails when the daemon is still alive after the stop timeout', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const directory = await dataDirectory();
-    await writeLock(directory, { pid: process.pid, version: '1.0.0', startedAt: Date.now() });
+    // Dated ahead so the startup grace cannot lapse while the first inspection does real I/O.
+    await writeLock(directory, { pid: process.pid, version: '1.0.0', startedAt: Date.now() + 60 * 60_000 });
     const sigterm = vi.fn();
     interceptSigterm(sigterm);
     const log = logger();

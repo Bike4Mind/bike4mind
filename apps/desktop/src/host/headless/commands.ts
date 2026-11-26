@@ -4,6 +4,7 @@ import {
   encodeHostFrame,
   hostMethods,
   hostRequest,
+  isHostResponse,
   type HostResult,
 } from '@shared/hostProtocol';
 import { daemonPaths, inspectDaemon, isProcessAlive, type DaemonPaths } from './daemonFiles';
@@ -39,7 +40,10 @@ function requestInfo(paths: DaemonPaths): Promise<HostResult<'host/info'> | null
     socket.once('connect', () => socket.write(encodeHostFrame(hostRequest(1, 'host/info'))));
     socket.on('data', (chunk: string) => {
       for (const frame of decoder.push(chunk)) {
-        if (!frame.ok || !('result' in frame.message)) return finish(null);
+        if (!frame.ok) return finish(null);
+        // Notifications the daemon broadcasts can arrive ahead of the answer.
+        if (!isHostResponse(frame.message) || frame.message.id !== 1) continue;
+        if (!('result' in frame.message)) return finish(null);
         const parsed = hostMethods['host/info'].result.safeParse(frame.message.result);
         return finish(parsed.success ? parsed.data : null);
       }

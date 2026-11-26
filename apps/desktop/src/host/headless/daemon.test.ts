@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { connect, type Socket } from 'node:net';
+import { connect, createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -16,6 +16,11 @@ import {
 import type { HeadlessHost } from './composeHeadlessHost';
 import { startDaemon, type RunningDaemon } from './daemon';
 import { DaemonAlreadyRunningError, daemonPaths, inspectDaemon, type LockRecord } from './daemonFiles';
+
+vi.mock('node:net', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:net')>();
+  return { ...actual, createServer: vi.fn(actual.createServer) };
+});
 
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
 
@@ -82,6 +87,21 @@ async function start(directory: string, fake = fakeHost(), version = '1.0.0') {
   });
   daemons.push(daemon);
   return daemon;
+}
+
+/** A daemon whose host is still composing: `compose` stays pending until `finish` hands it a host. */
+function startComposing(directory: string, version = '1.0.0') {
+  let finish!: (host: HeadlessHost) => void;
+  const composed = new Promise<HeadlessHost>(resolve => {
+    finish = resolve;
+  });
+  const starting = startDaemon({ dataDirectory: directory, version, logger: logger(), compose: () => composed }).then(
+    daemon => {
+      daemons.push(daemon);
+      return daemon;
+    }
+  );
+  return { starting, finish, paths: daemonPaths(directory) };
 }
 
 /** A raw client on the daemon's socket that collects every frame it receives. */
@@ -249,6 +269,69 @@ describePosix('startDaemon', () => {
     fake.releaseSlow();
     await asker.closed;
     expect(asker.received).toEqual([hostResult(1, { method: 'slow' })]);
+  });
+
+  it('serves a client that connected while the host was still composing', async () => {
+    const fake = fakeHost();
+    const composing = startComposing(await dataDirectory());
+    const early = await vi.waitFor(() => client(composing.paths.socket));
+
+    early.send('host/initialize');
+    expect(early.received).toEqual([]);
+    composing.finish(fake.host);
+    await composing.starting;
+
+    await vi.waitFor(() => expect(early.received).toEqual([hostResult(1, { method: 'host/initialize' })]));
+  });
+
+  it('answers a client that half-closed while the host was still composing, then ends it', async () => {
+    const fake = fakeHost();
+    const composing = startComposing(await dataDirectory());
+    const early = await vi.waitFor(() => client(composing.paths.socket));
+
+    early.send('host/initialize');
+    early.socket.end();
+    composing.finish(fake.host);
+    await composing.starting;
+
+    await early.closed;
+    expect(early.received).toEqual([hostResult(1, { method: 'host/initialize' })]);
+  });
+
+  it('keeps serving later clients when one that was waiting for the host went away', async () => {
+    const fake = fakeHost();
+    const composing = startComposing(await dataDirectory());
+    const early = await vi.waitFor(() => client(composing.paths.socket));
+
+    early.socket.destroy();
+    await early.closed;
+    composing.finish(fake.host);
+    const daemon = await composing.starting;
+
+    const later = await client(daemon.paths.socket);
+    later.send('session/list');
+    await vi.waitFor(() => expect(later.received).toEqual([hostResult(1, { method: 'session/list' })]));
+  });
+
+  it('logs an error on the socket server and keeps serving', async () => {
+    const log = logger();
+    const fake = fakeHost();
+    const daemon = await startDaemon({
+      dataDirectory: await dataDirectory(),
+      version: '1.0.0',
+      logger: log,
+      compose: async () => fake.host,
+    });
+    daemons.push(daemon);
+    const server = vi.mocked(createServer).mock.results.at(-1)?.value as Server;
+    const failure = new Error('accept failed');
+
+    server.emit('error', failure);
+
+    expect(log.error).toHaveBeenCalledWith('HOST: socket server error', failure);
+    const next = await client(daemon.paths.socket);
+    next.send('session/list');
+    await vi.waitFor(() => expect(next.received).toEqual([hostResult(1, { method: 'session/list' })]));
   });
 
   it('shuts down cleanly: drops clients, disposes the host and removes the socket and lock', async () => {

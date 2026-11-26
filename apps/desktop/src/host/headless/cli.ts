@@ -54,6 +54,30 @@ function spawnDetachedDaemon(dataDirectory: string, verbose: boolean): void {
   }
 }
 
+function parseCli(argv: readonly string[]) {
+  return parseArgs({
+    args: [...argv],
+    allowPositionals: true,
+    strict: true,
+    options: {
+      'data-dir': { type: 'string' },
+      json: { type: 'boolean', default: false },
+      verbose: { type: 'boolean', default: false },
+      help: { type: 'boolean', default: false },
+    },
+  });
+}
+
+/** The command `argv` names wherever the options sit, or null when it names none this CLI runs. */
+export function parseCommand(argv: readonly string[]): Command | null {
+  try {
+    const [command] = parseCli(argv).positionals;
+    return isCommand(command) ? command : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function main(argv: readonly string[], io: CliIo = process): Promise<HostExitCode> {
   const fail = (code: HostExitCode, message: string): HostExitCode => {
     io.stderr.write(`b4m-host: ${message}\n`);
@@ -72,17 +96,7 @@ export async function main(argv: readonly string[], io: CliIo = process): Promis
 
   let parsed;
   try {
-    parsed = parseArgs({
-      args: [...argv],
-      allowPositionals: true,
-      strict: true,
-      options: {
-        'data-dir': { type: 'string' },
-        json: { type: 'boolean', default: false },
-        verbose: { type: 'boolean', default: false },
-        help: { type: 'boolean', default: false },
-      },
-    });
+    parsed = parseCli(argv);
   } catch (err) {
     return fail(HOST_EXIT_CODES.usage, `${err instanceof Error ? err.message : String(err)}\n\n${USAGE}`);
   }

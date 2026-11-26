@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
-import { main } from './cli';
+import { main, parseCommand } from './cli';
 import { HOST_EXIT_CODES } from './exitCodes';
 import { HOST_BUILD_VERSION } from './hostBuild';
 
@@ -44,5 +44,19 @@ describe('b4m-host main', () => {
     const run = io();
     expect(await main(argv, run.io)).toBe(HOST_EXIT_CODES.usage);
     expect(run.stderr()).toContain('Usage: b4m-host');
+  });
+});
+
+describe('parseCommand', () => {
+  it.each([
+    [['daemon'], 'daemon'],
+    [['--data-dir', '/x', 'daemon'], 'daemon'],
+    [['--verbose', 'status', '--json'], 'status'],
+  ])('finds the command in %j', (argv, command) => {
+    expect(parseCommand(argv)).toBe(command);
+  });
+
+  it.each([[[]], [['bogus']], [['--nope', 'daemon']]])('finds no command in %j', argv => {
+    expect(parseCommand(argv)).toBeNull();
   });
 });
