@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { HOST_DEVICE_CLIENT_ID } from '@bike4mind/common';
 import type { AuthenticatedApiClient, AuthLogger } from '@bike4mind/client-auth';
 import type { AuthState, EnvironmentSelection, PendingApproval } from '@shared/auth';
 import type { HostResult } from '@shared/hostProtocol';
@@ -67,6 +68,7 @@ class HeadlessHostAuthService implements HeadlessHostAuth {
       openExternal: () => Promise.reject(new Error('a headless host opens no browser; the client shows the code')),
       devFallback: false,
       userAgent: options.userAgent,
+      clientId: HOST_DEVICE_CLIENT_ID,
       onStateChanged: state => this.publish(state),
       createDeviceFlowClient: options.createDeviceFlowClient,
       createApiClient: options.createApiClient,
