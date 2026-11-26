@@ -33,7 +33,17 @@ The response is `{ "data": [...], "next_cursor": ... }`. Each entry has `id`, `s
 | `verified`   | A cited worked example passed on the server when the function was promoted. |
 | `unverified` | No cited worked example was checked when the function was promoted.         |
 
-Only a Bike4Mind admin gives the `platform` label, and only to a `verified` function. A later promotion that leaves the function `unverified` removes it.
+Only a Bike4Mind admin gives the `platform` label, and only to a live, `verified` function. The label is never read from a function's name or description. Changing the function's code, data files, or sources returns it to draft and removes the label, and so does a promotion or examples change that leaves it `unverified`. Promoting it again, even as `verified`, does not bring the label back; only an admin can.
+
+## Find your functions in the app
+
+The **Functions** page in the app's navigation lists the functions you own under **Mine** and the functions others shared with you under **Shared with me**. Search matches a function's name and description. Each row shows its state (draft, live, or off) and its trust label, and a shared row also shows its owner and whether you reviewed it.
+
+Open one of your own functions to see its inputs and outputs, its label, the data it reads, and its calls in the last 30 days, with who called, the promotion that ran, and how long it took. A call made with one of your own API keys names the key. A call by someone you shared the function with reads "A recipient", with no name or key. **Call function** on an artifact's Function tab runs in your browser and does not appear in the call log.
+
+Open a shared function to review its inputs and outputs and turn on **Allow calls**. You never see its code or its data files. A function leaves **Shared with me** when its owner removes your share or turns it off. While its owner edits it, a shared function stays listed and callable at its last promoted version.
+
+A data file is pinned by choosing it from your files. Only a file you uploaded can be pinned. A file deleted after you chose it is refused as not found.
 
 ## Read a function
 
@@ -112,7 +122,7 @@ curl -X POST https://app.bike4mind.com/api/v1/functions/calls/<call-id>/cancel \
   -H 'Authorization: Bearer <your-api-key>'
 ```
 
-The answer is the call as a poll reads it: `finished`, with `outcome` set to `cancelled`. A queued call never runs. A running call is left to end, but what it returns is discarded, so a later poll still reads `cancelled`. A call that already finished is returned unchanged. Only the user who made the call can cancel it; any other id answers `404`.
+The answer is the call as a poll reads it: `finished`, with `outcome` set to `cancelled`. A queued call never runs. A running call is left to end, but what it returns is discarded, so a later poll still reads `cancelled`. A call that already finished is returned unchanged. Only the user who made the call can cancel it; any other id answers `404`. Cancel is available only here: [MCP](./functions-mcp.md) tool calls and calls from chat wait for their result, so there is nothing to cancel.
 
 ## Limits
 
