@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import { AdminTab } from './adminSidebarConfig';
@@ -85,7 +85,33 @@ describe('TutorialsTab', () => {
     expect(link).toHaveAttribute('href', '/alpha?mode=admin');
   });
 
-  it('shows Could not load with a retry for a failing owner and still renders the rest', () => {
+  it('shows a labelled loading state while an owner summary loads', () => {
+    owners.value = loaded([OWNER_A]);
+    summaries.byBase[OWNER_A.adminBase] = { ...loaded(undefined), isLoading: true };
+    renderTab();
+    expect(within(screen.getByTestId('tutorials-owner-alpha')).getByTestId('admin-loading-state')).toHaveTextContent(
+      'Loading Alpha tutorials'
+    );
+  });
+
+  it('shows a labelled loading state while the owners list loads', () => {
+    owners.value = { ...loaded(undefined), isLoading: true };
+    renderTab();
+    expect(screen.getByTestId('admin-loading-state')).toHaveTextContent('Loading other tutorial owners');
+  });
+
+  it('shows the shared empty state for an owner with no tutorials', () => {
+    owners.value = loaded([OWNER_A]);
+    summaries.byBase[OWNER_A.adminBase] = loaded([]);
+    renderTab();
+    expect(within(screen.getByTestId('tutorials-owner-alpha')).getByTestId('admin-empty-state')).toHaveTextContent(
+      'Alpha has no tutorials yet'
+    );
+    expect(within(screen.getByTestId('admin-empty-state')).queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tutorials-owner-row-alpha-one')).not.toBeInTheDocument();
+  });
+
+  it('shows an error with a retry for a failing owner and still renders the rest', () => {
     owners.value = loaded([OWNER_A, OWNER_B]);
     summaries.byBase[OWNER_A.adminBase] = {
       data: undefined,
@@ -96,19 +122,26 @@ describe('TutorialsTab', () => {
     };
     summaries.byBase[OWNER_B.adminBase] = loaded([{ id: 'x', title: 'Fine walk', enabled: true }]);
     renderTab();
-    expect(screen.getByTestId('tutorials-owner-error-alpha')).toHaveTextContent('Could not load');
+    const alpha = within(screen.getByTestId('tutorials-owner-alpha'));
+    expect(alpha.getByTestId('admin-error-state')).toHaveTextContent('Could not load Alpha tutorials.');
     expect(screen.getByTestId('tutorials-owner-row-beta-x')).toHaveTextContent('Fine walk');
     expect(screen.getByTestId('tutorials-core-section')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('tutorials-owner-retry-alpha'));
+    fireEvent.click(alpha.getByTestId('admin-error-retry-btn'));
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the owners retry while refetching', () => {
+    owners.value = { data: undefined, isLoading: false, isError: true, isFetching: true, refetch };
+    renderTab();
+    expect(screen.getByTestId('admin-error-retry-btn')).toBeDisabled();
   });
 
   it('keeps the Core section when the owners list itself fails', () => {
     owners.value = { data: undefined, isLoading: false, isError: true, isFetching: false, refetch };
     renderTab();
     expect(screen.getByTestId('tutorials-core-section')).toBeInTheDocument();
-    expect(screen.getByTestId('tutorials-owners-error')).toHaveTextContent('Could not load');
-    fireEvent.click(screen.getByTestId('tutorials-owners-retry'));
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Could not load the other tutorial owners.');
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 });

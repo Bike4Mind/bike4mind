@@ -1,7 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ChatModels } from '@bike4mind/common';
-import type { ChatApprovalAnswer, ChatSessionMode, SendMessageRequest } from '@shared/chat';
+import type {
+  BackgroundProcessInfo,
+  ChatApprovalAnswer,
+  ChatSessionMode,
+  CreateCodeSessionRequest,
+  CreateCodeSessionResult,
+  EventCursor,
+  RecentFolder,
+  SendMessageRequest,
+} from '@shared/chat';
+import type { TaskDecisionAnswer } from '@shared/orchestration';
 import { ApprovalModePreference } from '../main/chat/ApprovalModePreference';
 import { ChatService, type ChatServiceDeps, type ChatServiceLogger } from '../main/chat/ChatService';
 import { createCompletionRunMinter } from '../main/chat/completionRuns';
@@ -10,10 +20,13 @@ import { MessageQueue } from '../main/chat/MessageQueue';
 import { ModelPreference } from '../main/chat/ModelPreference';
 import { ApprovalLog } from '../main/chat/permissions/ApprovalLog';
 import { DependencyInstaller } from '../main/chat/project/dependencyInstall';
+import { inspectProject } from '../main/chat/project/inspectProject';
+import { RecentFolderStore } from '../main/chat/project/RecentFolderStore';
+import { folderToRemember } from '../main/chat/project/recentFolderToRecord';
 import { PromptCacheTtlPreference } from '../main/chat/PromptCacheTtlPreference';
 import { parseReasoningEffortSetting } from '../main/chat/reasoningEffort';
 import { rendererNotes } from '../main/chat/rendererNotes';
-import { archiveFromSidebar, type ConfirmArchive } from '../main/chat/sessionArchive';
+import { archiveFromSidebar, type ArchiveDecision, type SessionArchiveResult } from '../main/chat/sessionArchive';
 import { SessionActivity } from '../main/chat/SessionActivity';
 import { BackgroundJobsFeed } from '../main/chat/backgroundJobsFeed';
 import { BACKGROUND_EXIT_HOLD_MS } from '../main/chat/backgroundWake';
@@ -26,6 +39,8 @@ import { ApprovalGate } from '../main/chat/tools/ApprovalGate';
 import { BackgroundProcessRegistry } from '../main/chat/tools/BackgroundProcessRegistry';
 import { ForegroundCommandRegistry } from '../main/chat/tools/ForegroundCommandRegistry';
 import { keepSessionWritesIn } from '../main/chat/tools/sessionScripts';
+import { browseDirectory, type BrowseDirectoryResult } from './fs/browseDirectory';
+import type { SessionPageRequest } from '@shared/sessionPage';
 import type {
   HostAuth,
   HostCollaborators,
@@ -75,6 +90,8 @@ export type HostRuntimeOptions = {
   hooks?: HostHooks;
 };
 
+export type StopBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; reason: 'notFound' };
+
 /**
  * The agent runtime of one machine: the session store, the chat service and the collaborators
  * that build it, with no dependency on Electron. Desktop drives it in-process through IPC; a
@@ -94,13 +111,22 @@ export class HostRuntime {
   readonly service: ChatService;
   /** One sequence per session across the service and the emitters that bypass it. */
   readonly eventLog = new SessionEventLog();
+  /** The folders Code sessions were recently grounded in; also the allow-list for repository operations. */
+  readonly recentFolders: RecentFolderStore;
   private readonly pullRequests: HostCollaborators['pullRequests'];
+  private readonly spareWorktrees: HostCollaborators['spareWorktrees'];
+  private readonly homeDirectory: string;
+  private readonly logger: ChatServiceLogger;
 
   constructor(options: HostRuntimeOptions) {
     const { environment, events, auth, logger, protection, machine = {}, collaborators = {}, hooks = {} } = options;
     const { pullRequests, ...passedThrough } = collaborators;
     const dataDirectory = environment.dataDirectory;
     this.pullRequests = pullRequests;
+    this.spareWorktrees = passedThrough.spareWorktrees;
+    this.homeDirectory = environment.homeDirectory;
+    this.logger = logger;
+    this.recentFolders = new RecentFolderStore(join(dataDirectory, 'recent-folders.json'));
 
     // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
     this.approvalLog = new ApprovalLog(join(dataDirectory, 'approval-log.jsonl'), message => logger.warn(message));
@@ -250,6 +276,10 @@ export class HostRuntime {
     return this.service.listSessions();
   }
 
+  listSessionPage(request: SessionPageRequest) {
+    return this.service.listSessionPage(request);
+  }
+
   getSession(sessionId: string, viewed: boolean) {
     return this.service.getSession(sessionId, viewed);
   }
@@ -258,18 +288,77 @@ export class HostRuntime {
     return this.service.createSession(mode);
   }
 
+  /** A Code session, with its folder remembered for the recent list when the request chose one. */
+  async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
+    const result = await this.service.createCodeSession(request);
+    await this.rememberRecentFolder(folderToRemember(request, result));
+    return result;
+  }
+
+  inspectProject(directory: string) {
+    return inspectProject(directory);
+  }
+
+  listRecentFolders(): Promise<RecentFolder[]> {
+    return this.recentFolders.list();
+  }
+
+  /** A failure is logged, not thrown: the folder list is a convenience beside what the caller did. */
+  async rememberRecentFolder(directory: string | null): Promise<void> {
+    if (!directory) return;
+    try {
+      await this.recentFolders.record(directory);
+    } catch (error) {
+      this.logger.warn(`CHAT: could not remember recent folder: ${String(error)}`);
+    }
+  }
+
+  /** Returns the list as it now stands. The folder's spare worktrees go with it. */
+  async forgetRecentFolder(directory: string): Promise<RecentFolder[]> {
+    await this.recentFolders.remove(directory);
+    this.spareWorktrees
+      ?.forget(directory)
+      .catch(error => this.logger.warn(`CHAT: could not forget spare worktrees: ${String(error)}`));
+    return this.recentFolders.list();
+  }
+
+  /** Only a repository with a conversation or a recent folder may be listed, pruned or revealed. */
+  async isKnownRepository(directory: string): Promise<boolean> {
+    const recent = await this.recentFolders.list();
+    return this.service.isKnownRepository(
+      directory,
+      recent.map(folder => folder.path)
+    );
+  }
+
+  browseDirectory(path?: string): Promise<BrowseDirectoryResult> {
+    return browseDirectory(path, { homeDirectory: this.homeDirectory });
+  }
+
   renameSession(sessionId: string, title: string) {
     return this.service.renameSession(sessionId, title);
   }
 
-  /** Archiving a parent asks first; `confirm` is how this host puts that question to its user. */
-  setSessionArchived(sessionId: string, archived: boolean, confirm: ConfirmArchive) {
-    return archiveFromSidebar(this.service, this.store, sessionId, archived, confirm);
+  /** Archiving a parent with sub-sessions needs `decision.confirmed`; without it the result carries the question. */
+  setSessionArchived(sessionId: string, archived: boolean, decision?: ArchiveDecision): Promise<SessionArchiveResult> {
+    return archiveFromSidebar(this.service, this.store, sessionId, archived, decision);
   }
 
-  async deleteSession(sessionId: string, removeWorktree: boolean): Promise<void> {
-    await this.service.deleteSession(sessionId, removeWorktree);
+  /** `allowDiscard` only from a client that showed what cleanup discards; see ChatService.deleteSession. */
+  async deleteSession(sessionId: string, removeWorktree: boolean, allowDiscard = false): Promise<void> {
+    await this.service.deleteSession(sessionId, removeWorktree, { allowDiscard });
     await this.pullRequests?.().forget(sessionId);
+  }
+
+  async deleteSessionTree(
+    sessionId: string,
+    nestedIds: readonly string[],
+    removeWorktree: boolean,
+    nestedWorktreeIds: readonly string[]
+  ) {
+    const result = await this.service.deleteSessionTree(sessionId, nestedIds, removeWorktree, nestedWorktreeIds);
+    for (const id of result.deleted) await this.pullRequests?.().forget(id);
+    return result;
   }
 
   sendMessage(request: SendMessageRequest) {
@@ -282,9 +371,24 @@ export class HostRuntime {
     this.service.stop(sessionId);
   }
 
+  answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void> {
+    return this.service.answerTaskDecision(sessionId, decisionId, answer);
+  }
+
+  /** The events after `after` for a resubscribing client, or what it must reload when they are gone. */
+  eventsSince(sessionId: string, after: EventCursor) {
+    return this.service.eventsSince(sessionId, after);
+  }
+
   /** The one path that answers a tool approval, whichever surface the answer came from. */
   respondToApproval(approvalId: string, answer: ChatApprovalAnswer) {
     return this.approvals.resolve(approvalId, answer);
+  }
+
+  /** Resolves once the process is gone; one that had already ended is returned as it is. */
+  async stopBackgroundProcess(sessionId: string, processId: string): Promise<StopBackgroundResult> {
+    const process = await this.background.kill(processId, sessionId);
+    return process ? { ok: true, process } : { ok: false, reason: 'notFound' };
   }
 
   sessionStatuses() {

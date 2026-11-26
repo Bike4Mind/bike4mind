@@ -15,6 +15,19 @@ sealed interface Route {
     /** A Bike4Mind page with no native screen: opened in the browser rather than dropped. */
     data class Web(val url: String) : Route
 
+    /**
+     * A composer opened with [draft] in it and focused, from a launcher shortcut (AppShortcut). Nothing is sent
+     * until the user taps send.
+     */
+    data class Compose(val target: ComposeTarget, val draft: String = "") : Route
+
+    enum class ComposeTarget {
+        NEW_CONVERSATION,
+
+        /** The first notebook on the chats list (newest first); the list itself when there is none. */
+        LATEST_SESSION,
+    }
+
     companion object {
         /**
          * Same rule as apps/ios DeepLinkRouter.isValidIdentifier: Mongo ids today, any conservative slug tomorrow,

@@ -351,7 +351,6 @@ describe('ChatCompletionProcess', () => {
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: {},
-      questMasterPlans: {},
       connections: {},
       creditTransactions: {},
       agents: {},
@@ -12096,8 +12095,8 @@ describe('ChatCompletionProcess', () => {
           processError,
           modelCalled: complete.mock.calls.length > 0,
           requestedMcpServers: buildMcpToolsSpy.mock.calls[0]?.[0]?.requestedMcpServers,
-          // buildOptimizedFeatures is stubbed in beforeEach; its eighth argument is the session prompt.
-          sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[7] as string | undefined,
+          // buildOptimizedFeatures is stubbed in beforeEach; its seventh argument is the session prompt.
+          sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[6] as string | undefined,
           temperature: completeOptions?.temperature,
           maxToolCalls: completeOptions?._internal?.maxToolCalls,
           enabledTools: (buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined)?.enabledTools,
@@ -15674,7 +15673,6 @@ describe('prompt moderation', () => {
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: {},
-      questMasterPlans: {},
       connections: {},
       creditTransactions: {},
       agents: {},

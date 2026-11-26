@@ -14,7 +14,7 @@ export default baseApi({ auth: 'jwtOnly' })
     } finally {
       // After the unlock, so a tranche this call just paid makes the bonus payable in the same call.
       await retryOrgInviteBonus(req.user.id).catch(() => {
-        console.warn('[signup-grant] Organization invite bonus retry failed');
+        req.logger.warn('Organization invite bonus retry failed');
       });
     }
     res.json(result);

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,14 +31,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.R
+import com.bike4mind.app.capture.PickedFile
 import com.bike4mind.kit.approvals.PendingActionDecision
 import com.bike4mind.kit.capture.readyFileIds
 import com.bike4mind.kit.chat.ChatError
@@ -58,16 +64,28 @@ class ChatViewModel(graph: AppGraph, sessionId: String?) : ViewModel() {
     }
 }
 
+/** [composeDraft] non-null (a launcher shortcut) fills the composer and focuses it; nothing is sent until send. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
+fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit, composeDraft: String? = null) {
     // Scoped by AppRoot's ScreenScope: cleared (and the controller stopped) when this chat closes.
     val model = viewModel { ChatViewModel(graph, sessionId) }
     val state by model.controller.state.collectAsStateWithLifecycle()
     val attachments by model.attachments.state.collectAsStateWithLifecycle()
     val dictation by model.dictation.state.collectAsStateWithLifecycle()
-    var draft by rememberSaveable { mutableStateOf("") }
+    var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(caretAtEnd(composeDraft.orEmpty())) }
+    // Saved so a rotation does not pull the keyboard back up after the user dismissed it.
+    var focusComposer by rememberSaveable { mutableStateOf(composeDraft != null) }
+    val composer = remember { FocusRequester() }
+    LaunchedEffect(focusComposer) {
+        if (focusComposer) {
+            composer.requestFocus()
+            focusComposer = false
+        }
+    }
     var problem by remember { mutableStateOf<String?>(null) }
+    var offeredScan by remember { mutableStateOf<Pair<PickedFile, String>?>(null) }
+    var handoff by remember { mutableStateOf<Pair<PickedFile, String>?>(null) }
     val list = rememberLazyListState()
     val fileIds = attachments.readyFileIds()
     val attachedMessage = stringResource(R.string.capture_attached_message, attachments.joinToString(", ") { it.name })
@@ -79,7 +97,7 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
 
     DictationDialog(
         state = dictation,
-        onDone = { model.dictation.finish { text -> draft = if (draft.isBlank()) text else "$draft $text" } },
+        onDone = { model.dictation.finish { text -> draft = caretAtEnd(if (draft.text.isBlank()) text else "${draft.text} $text") } },
         onCancel = model.dictation::cancel,
         onDismissFailure = model.dictation::dismissFailure,
     )
@@ -148,6 +166,7 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                     },
                     onProblem = { problem = it },
                     enabled = !state.sending,
+                    onScanned = { picked, text -> offeredScan = picked to text },
                 )
                 // An agent run reports progress in its notification (push/AgentRunNotifications.kt), not here.
                 if (model.controller.canStartAgentRun(state)) {
@@ -161,23 +180,54 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
-                    modifier = Modifier.weight(1f).testTag("chat-composer-field"),
+                    modifier = Modifier.weight(1f).focusRequester(composer).testTag("chat-composer-field"),
                     placeholder = { Text(stringResource(if (state.sendsAsAgentRun) R.string.chat_agent_placeholder else R.string.chat_message_placeholder)) },
                 )
-                val canSend = !state.sending && !agentRunWithFiles && fileIds != null && (draft.isNotBlank() || attachments.isNotEmpty())
+                val canSend = !state.sending && !agentRunWithFiles && fileIds != null && (draft.text.isNotBlank() || attachments.isNotEmpty())
                 Button(modifier = Modifier.testTag("chat-composer-send"), enabled = canSend, onClick = {
                     // A turn needs words; files sent on their own go out named.
-                    val message = draft.ifBlank { attachedMessage }
+                    val message = draft.text.ifBlank { attachedMessage }
                     val sentFileIds = fileIds.orEmpty()
                     model.controller.send(message, sentFileIds) { model.attachments.clear(sentFileIds) }
-                    draft = ""
+                    draft = TextFieldValue()
                 }) {
                     Text(stringResource(R.string.chat_send))
                 }
             }
         }
     }
+    offeredScan?.let { (picked, text) ->
+        AlertDialog(
+            onDismissRequest = { offeredScan = null },
+            title = { Text(stringResource(R.string.capture_handoff_title)) },
+            text = { Text(stringResource(R.string.capture_handoff_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        offeredScan = null
+                        handoff = picked to text
+                    },
+                    modifier = Modifier.testTag("capture-handoff-btn"),
+                ) { Text(stringResource(R.string.capture_handoff)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        offeredScan = null
+                        model.attachments.add(picked.file, picked.name, picked.mimeType)
+                    },
+                    modifier = Modifier.testTag("capture-scan-attach-btn"),
+                ) { Text(stringResource(R.string.capture_handoff_attach)) }
+            },
+        )
+    }
+    handoff?.let { (picked, text) ->
+        val controller = remember(picked) { graph.obligationHandoff() }
+        ObligationConfirmSheet(controller, picked.file, text, onClose = { handoff = null })
+    }
 }
+
+private fun caretAtEnd(text: String) = TextFieldValue(text, TextRange(text.length))
 
 @Composable
 private fun FailedSendRow(failed: FailedSend, retryEnabled: Boolean, onRetry: () -> Unit) {

@@ -50,6 +50,11 @@ export const PushNotificationEventSchema = z.object({
    * notification category with approve/deny or reply actions. The client re-fetches the brief before acting.
    */
   briefAction: z.enum(['approval', 'question']).optional(),
+  /**
+   * `agent_completed` only: the one summary sent for runs finished during a busy block whose block brief did
+   * not land (notifyHeldBlockRuns in packages/server-utils/src/briefs). Never held itself.
+   */
+  busyBlockDigest: z.literal(true).optional(),
 });
 
 export type PushNotificationEvent = z.infer<typeof PushNotificationEventSchema>;
@@ -70,6 +75,21 @@ export const PushNotificationPreferencesSchema = z.object({
 });
 
 export type PushNotificationPreferences = z.infer<typeof PushNotificationPreferencesSchema>;
+
+/**
+ * Categories not delivered while the user is inside a synced calendar busy block: agent run results, which
+ * the block brief lists once the block ends. The rest stay live because the brief cannot surface them
+ * (agent_message writes no run), the user is waiting on them (approval_needed), or asked for them in the
+ * foreground.
+ */
+export const BUSY_BLOCK_HELD_CATEGORIES = [
+  'agent_completed',
+  'agent_failed',
+] as const satisfies readonly PushNotificationCategory[];
+
+export function isHeldDuringBusyBlock(category: PushNotificationCategory): boolean {
+  return (BUSY_BLOCK_HELD_CATEGORIES as readonly PushNotificationCategory[]).includes(category);
+}
 
 export function isPushCategoryEnabled(
   preferences: PushNotificationPreferences | null | undefined,

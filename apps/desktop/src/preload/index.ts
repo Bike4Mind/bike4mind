@@ -28,6 +28,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
+import type { HostNotificationDelivery } from '@shared/hostBridge';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
 import type { OrchestrateMiniPayload } from '@shared/orchestrateMini';
@@ -68,6 +69,21 @@ import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@sh
 // passthrough: a passthrough would let renderer code reach every handler main ever
 // registers, which defeats the point of keeping the auth handlers out of its reach.
 const api: DesktopApi = {
+  // The one bridge that names a method in an argument, and still not a passthrough: main
+  // answers only the host protocol's methods, each with its params checked by its schema.
+  host: {
+    request: (hostId, method, params) => ipcRenderer.invoke(IPC_CHANNELS.hostRequest, hostId, method, params),
+    onNotification: listener => {
+      const handler = (_event: unknown, delivery: HostNotificationDelivery) => listener(delivery);
+      ipcRenderer.on(IPC_CHANNELS.hostNotification, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.hostNotification, handler);
+    },
+  },
+  library: {
+    page: request => ipcRenderer.invoke(IPC_CHANNELS.libraryPage, request),
+    media: ref => ipcRenderer.invoke(IPC_CHANNELS.libraryMedia, ref),
+    locate: ref => ipcRenderer.invoke(IPC_CHANNELS.libraryLocate, ref),
+  },
   studio: {
     get: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioGet, sessionId),
     page: request => ipcRenderer.invoke(IPC_CHANNELS.studioPage, request),
@@ -297,6 +313,7 @@ const api: DesktopApi = {
     updateProject: (request: UpdateProjectRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatUpdateProject, request),
     pickProjectDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.chatPickProjectDirectory),
     listRecentFolders: () => ipcRenderer.invoke(IPC_CHANNELS.chatListRecentFolders),
+    launchSignals: () => ipcRenderer.invoke(IPC_CHANNELS.chatLaunchSignals),
     removeRecentFolder: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatRemoveRecentFolder, directory),
     inspectProject: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatInspectProject, directory),
     workspaceChanges: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatWorkspaceChanges, sessionId),
@@ -310,8 +327,15 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatRenameSession, sessionId, title),
     deleteSession: (sessionId: string, removeWorktree?: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId, removeWorktree),
-    inspectWorktreeRemoval: (sessionId: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.chatInspectWorktreeRemoval, sessionId),
+    deleteSessionTree: (
+      sessionId: string,
+      nestedIds: string[],
+      removeWorktree?: boolean,
+      nestedWorktreeIds?: string[]
+    ) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSessionTree, sessionId, nestedIds, removeWorktree, nestedWorktreeIds),
+    inspectWorktreeRemoval: (sessionId: string, alsoDeleting?: string[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatInspectWorktreeRemoval, sessionId, alsoDeleting),
     listWorktrees: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListWorktrees, directory),
     removeWorktrees: (directory: string, paths?: string[]) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRemoveWorktrees, directory, paths),

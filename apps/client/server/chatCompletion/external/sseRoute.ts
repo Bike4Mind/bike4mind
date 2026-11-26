@@ -1,4 +1,9 @@
-import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, isSpendFrozenError, type ApiCompletionOutcome } from '@bike4mind/common';
+import {
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  formatZodError,
+  isSpendFrozenError,
+  type ApiCompletionOutcome,
+} from '@bike4mind/common';
 import { resolveCompletionBillingOrgId } from '@server/billing/resolveCompletionBillingOrgId';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { assertEvaluationAuthorized, evaluationTransport } from '@server/completionRuns/evaluation';
@@ -66,7 +71,6 @@ import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { emitProcessingFailed } from '../processingFailedMetric';
-import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
@@ -306,7 +310,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       const parsed = CompletionRequestSchema.safeParse(req.body);
       if (!parsed.success) {
-        const errorMessage = fromZodError(parsed.error).message;
+        const errorMessage = formatZodError(parsed.error);
         const emptyMessages = parsed.error.issues.some(
           issue => issue.code === 'too_small' && issue.path.length === 1 && issue.path[0] === 'messages'
         );
@@ -391,7 +395,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         ? await verifyRunOwnership(body.run, { userId, billingOrganizationId }, Boolean(body.evaluation))
         : undefined;
       if (body.evaluation && !run) throw new BadRequestError('Evaluation requires a verified completion run.');
-      if (body.evaluation) assertEvaluationAuthorized(userId);
+      if (body.evaluation) await assertEvaluationAuthorized(userId);
       if (body.evaluation && run) evaluation = evaluationTransport(run.runId, body.evaluation.requestId, onReady);
 
       // Stream the completion, tracking usage for analytics.

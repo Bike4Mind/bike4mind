@@ -13,6 +13,7 @@ import {
   userFileCspInjection as userFileCspInjectionFor,
 } from './routerFunctionCode';
 import { AUTH_NETWORK_HEADERS, authNetworkCacheBehaviors, authNetworkJa4Injection } from './authNetworkForwarding';
+import { deleteRouterKvDataWithRouter } from './routerKvData';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -362,6 +363,16 @@ function bareOrigin(url: typeof routerInstance.url) {
  */
 export function cdnUrlForLambdaEnv() {
   return $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? LOCAL_FILE_PROXY_BASE : bareOrigin(routerInstance.url);
+}
+
+// Previews are created and torn down many times a day, and `sst remove` otherwise deletes
+// every routing key through the billed KeyValueStore API right before deleting the store
+// itself. Tie those keys to this router so a teardown skips them; see routerKvData.ts. The
+// transformation only sees resources registered after this line, which holds for every
+// route, site and function-URL key: they come from modules that import `router` below.
+// Preview-only, and never for a shared Router.get() router, whose store outlives this stage.
+if (isPreviewStage && !$dev && !shouldUseSharedRouter) {
+  $util.runtime.registerStackTransformation(args => deleteRouterKvDataWithRouter(args, routerInstance));
 }
 
 // Export router for other infrastructure to use

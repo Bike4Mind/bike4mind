@@ -57,6 +57,9 @@ import {
   type ProjectGroup,
 } from './grouping';
 import { ImportedBadge } from './ImportedBadge';
+import { SessionListFooter, type SessionListPaging } from './SessionListFooter';
+import { withRows } from './sessionPages';
+import { useSessionSearch, type SessionSearchFn } from './useSessionSearch';
 import { useImportedInline } from './importedInline';
 import { usePrAttentionSort } from './prAttentionSort';
 import { keepMenuOpen } from './keepMenuOpen';
@@ -1134,6 +1137,8 @@ export function SessionList({
   userSections,
   sectionActions,
   syncHints,
+  paging,
+  searchSessions,
 }: {
   sessions: ChatSessionSummary[];
   mode: ChatSessionMode;
@@ -1171,8 +1176,14 @@ export function SessionList({
   sectionActions: SidebarSectionActions;
   /** The sidebar's sync hint; `fallback` is the plain empty-list line, for it to replace or keep. */
   syncHints?: (empty: boolean, fallback: ReactNode) => ReactNode;
+  /** Set when `sessions` is the loaded pages of a longer list; the end of the list loads more. */
+  paging?: SessionListPaging;
+  /** Title search across the whole list, for matches no page has loaded yet. */
+  searchSessions?: SessionSearchFn;
 }) {
   const [query, setQuery] = useState('');
+  const remoteMatches = useSessionSearch(query, searchSessions);
+  const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null);
   const { results: historyResults, error: historyError } = useLocalHistory(query, sessions);
   // Declared above the collapsed early return, so collapsing and re-expanding comes back
   // to the width the user set rather than to the default.
@@ -1191,12 +1202,15 @@ export function SessionList({
     [sessions, mode, query, prSummaries]
   );
 
+  // Loaded rows first (they carry any local edit), then the host's matches from unloaded pages.
   const matching = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return sessions;
     const hitIds = new Set(refHits.map(hit => hit.session.id));
-    return sessions.filter(session => !hitIds.has(session.id) && session.title.toLowerCase().includes(needle));
-  }, [sessions, query, refHits]);
+    const matches = (session: ChatSessionSummary) =>
+      !hitIds.has(session.id) && session.title.toLowerCase().includes(needle);
+    return withRows(sessions.filter(matches), remoteMatches.sessions.filter(matches));
+  }, [sessions, query, refHits, remoteMatches]);
 
   const searchInput = useRef<HTMLInputElement>(null);
   const [focusRequest, setFocusRequest] = useState(0);
@@ -1765,6 +1779,7 @@ export function SessionList({
         }}
         data-drop-target={dropTarget?.kind === 'default' ? 'true' : undefined}
         data-testid="sidebar-session-scroll"
+        ref={setScrollRoot}
       >
         {loading ? (
           <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1 }}>
@@ -1880,6 +1895,19 @@ export function SessionList({
               </Box>
             )}
           </>
+        )}
+        {/* Outside the empty check: a mode with no row in the loaded pages may still have older ones. */}
+        {!loading && !searching && paging && <SessionListFooter paging={paging} scrollRoot={scrollRoot} />}
+        {searching && remoteMatches.total > remoteMatches.sessions.length && (
+          <Typography
+            level="body-xs"
+            textColor="text.tertiary"
+            sx={{ px: 1, py: 0.75 }}
+            data-testid="sidebar-search-capped"
+          >
+            Showing the newest {remoteMatches.sessions.length} of {remoteMatches.total} matches. Type more to narrow the
+            search.
+          </Typography>
         )}
       </Box>
 

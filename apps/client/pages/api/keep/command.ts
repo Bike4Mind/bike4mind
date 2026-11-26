@@ -86,8 +86,6 @@ const handler = baseApi({ auth: 'jwtOnly' })
       });
     }
 
-    console.log(`[Keep REST] Sent ${commandType} to ${connections.length} connections for user ${userId}`);
-
     res.json({
       requestId,
       sent: true,

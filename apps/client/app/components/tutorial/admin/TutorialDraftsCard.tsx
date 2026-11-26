@@ -4,7 +4,6 @@ import {
   Button,
   Card,
   Chip,
-  CircularProgress,
   FormControl,
   FormLabel,
   Input,
@@ -22,7 +21,13 @@ import {
   useTutorialDrafts,
   type TutorialDraftAction,
 } from '@client/app/hooks/tutorials/useTutorialDrafts';
-import { ADMIN_REASON_PRESETS, ActionDialog } from '@client/app/components/admin/shared';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+} from '@client/app/components/admin/shared';
 import { downloadModuleBundle } from './tutorialOverrideExport';
 
 const REASON_MAX = 500;
@@ -135,6 +140,7 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteSeq, setDeleteSeq] = useState<number | null>(null);
   const [changedSince, setChangedSince] = useState(false);
+  const sessionInput = useRef<HTMLInputElement>(null);
   const seeded = useRef<{ moduleId: string; contentSeq: number; buffers: Buffers } | null>(null);
   const reasonGiven = reason.trim().length > 0;
   const draft = drafts.data?.drafts.find(d => d.moduleId === openId);
@@ -292,7 +298,9 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
           placeholder="Session id"
           value={capture.sessionId}
           onChange={event => setCapture({ ...capture, sessionId: event.target.value.trim() })}
-          slotProps={{ input: { 'data-testid': 'tutorial-capture-session', 'aria-label': 'Session id' } }}
+          slotProps={{
+            input: { ref: sessionInput, 'data-testid': 'tutorial-capture-session', 'aria-label': 'Session id' },
+          }}
         />
         <Input
           size="sm"
@@ -339,11 +347,27 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
       )}
 
       {drafts.isLoading ? (
-        <CircularProgress size="sm" />
+        <LoadingState label="Loading made tutorials" />
       ) : drafts.isError ? (
-        <Typography level="body-sm" color="danger" data-testid="tutorial-drafts-error">
-          Could not read the tutorial drafts.
-        </Typography>
+        <ErrorState
+          message="Could not read the tutorial drafts."
+          onRetry={() => void drafts.refetch()}
+          retrying={drafts.isFetching}
+        />
+      ) : (drafts.data?.drafts ?? []).length === 0 ? (
+        <EmptyState
+          title="No made tutorials yet"
+          action={
+            <Button
+              size="sm"
+              variant="outlined"
+              onClick={() => sessionInput.current?.focus()}
+              data-testid="tutorial-drafts-empty-capture"
+            >
+              Capture from a session
+            </Button>
+          }
+        />
       ) : (
         <Stack direction="row" gap={1} flexWrap="wrap" data-testid="tutorial-drafts-list">
           {(drafts.data?.drafts ?? []).map(row => (

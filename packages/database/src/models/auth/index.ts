@@ -15,6 +15,7 @@ export * from './AccountDeletionNoticeModel';
 export * from './ErasureRecordModel';
 export * from './IdentityProviderModel';
 export * from './networkMetaFields';
+export * from './busyBlocks';
 export * from './signupFingerprintClusters';
 export * from './campaignScanAccounts';
 export * from './deviceLinkAccounts';

@@ -6,6 +6,7 @@ import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
 const current = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const mockMutate = vi.fn();
+const refetch = vi.fn();
 vi.mock('@client/app/hooks/tutorials/useTutorialsSwitch', () => ({
   useTutorialsSwitch: () => current.value,
   useSetTutorialsSwitch: () => ({ mutate: mockMutate, isPending: false }),
@@ -55,10 +56,19 @@ describe('TutorialsSwitchCard', () => {
     expect(mockMutate).toHaveBeenCalledWith(false);
   });
 
-  it('says so and disables the switch when the read fails', () => {
-    current.value = { data: undefined, isLoading: false, isError: true };
+  it('shows a labelled loading state with a disabled switch on first load', () => {
+    current.value = { data: undefined, isLoading: true, isError: false };
     renderCard();
-    expect(screen.getByText('Could not read the tutorials switch.')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-loading-state')).toHaveTextContent('Loading the tutorials switch');
+    expect(screen.getByTestId('tutorials-switch')).toBeDisabled();
+  });
+
+  it('shows an error with a retry and disables the switch when the read fails', () => {
+    current.value = { data: undefined, isLoading: false, isError: true, isFetching: false, refetch };
+    renderCard();
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Could not read the tutorials switch.');
     expect(switchInput().disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 });

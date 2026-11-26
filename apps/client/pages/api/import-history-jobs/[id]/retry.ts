@@ -89,7 +89,7 @@ const handler = baseApi({ auth: true }).post(
         data: { id: importJob.id },
       });
     } catch (error) {
-      console.error('Failed to invoke Lambda for retry:', error);
+      req.logger.error('Failed to invoke Lambda for retry', { error });
 
       await importHistoryJobRepository.update({
         id,

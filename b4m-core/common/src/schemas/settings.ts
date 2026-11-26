@@ -330,9 +330,9 @@ export const SettingKeySchema = z.enum([
   'UseFormatPrompt',
   'EnableDeferredToolLoading',
   'DeferredToolStartSetMaxTokens',
-  'EnableQuestMaster',
+  'evaluationUserIds',
+  'evaluationModelIds',
   'QuestMasterLegacyShutdownDate',
-  'EnableQuestMasterDefault',
   'EnableHearth',
   'EnableHearthDefault',
   'EnableMementos',
@@ -426,6 +426,7 @@ export const SettingKeySchema = z.enum([
   'EnableUserDeletionEmailNotification',
   'EnableUserDeletionSlackNotification',
   'AdminEmail',
+  'mailFrom',
   'MaxFileSize',
   'AiEditVersionRetention',
   'DefaultContext',
@@ -1528,6 +1529,8 @@ function makeBooleanSetting({
 // A SHA-256 certificate fingerprint as Digital Asset Links expects it: 32 colon-separated uppercase hex bytes.
 const ANDROID_CERT_FINGERPRINT_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){31}$/;
 const APPLE_TEAM_ID_RE = /^[A-Z0-9]{10}$/;
+/** Longest accepted `mailFrom` value; the server parses the rest (packages/server-utils/src/utils/mailer/sender.ts). */
+export const MAIL_FROM_SETTING_MAX_LENGTH = 320;
 const AndroidCertFingerprintsSchema = z
   .array(z.string().regex(ANDROID_CERT_FINGERPRINT_RE, 'Expected 32 colon-separated uppercase hex bytes'))
   .max(10);
@@ -2722,8 +2725,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'HardwareComputeMaxConcurrentRunsPerUser', order: 90 },
       { key: 'HardwareComputeMaxUsdPerUserPerDay', order: 91 },
       { key: 'SimulatorComputeCreditsPerRound', order: 91.5 },
-      { key: 'EnableQuestMaster', order: 92 },
-      { key: 'EnableQuestMasterDefault', order: 93 },
       { key: 'QuestMasterLegacyShutdownDate', order: 93.5 },
       { key: 'EnableHearth', order: 94 },
       { key: 'EnableHearthDefault', order: 95 },
@@ -2916,6 +2917,7 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'serverStatus', order: 1 },
       { key: 'AdminEmail', order: 2 },
+      { key: 'mailFrom', order: 3 },
     ],
   },
   REGISTRATION: {
@@ -3577,25 +3579,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
   }),
-  EnableQuestMaster: makeBooleanSetting({
-    key: 'EnableQuestMaster',
-    name: 'Enable Quest Master',
-    defaultValue: true,
-    description: 'Whether to enable the Quest Master feature.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 90,
-  }),
-  EnableQuestMasterDefault: makeBooleanSetting({
-    key: 'EnableQuestMasterDefault',
-    name: 'Quest Master: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, Quest Master is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 91,
-    dependsOn: 'EnableQuestMaster',
-  }),
   QuestMasterLegacyShutdownDate: {
     ...makeStringSetting({
       key: 'QuestMasterLegacyShutdownDate',
@@ -4169,6 +4152,24 @@ export const settingsMap = {
     order: 15,
     dependsOn: 'EnableDeferredToolLoading',
     userReadable: true,
+  }),
+  evaluationUserIds: makeStringSetting({
+    key: 'evaluationUserIds',
+    name: 'Controlled Evaluation: Allowed User IDs',
+    defaultValue: '',
+    description:
+      'Comma-separated user IDs allowed to create evaluation completion runs and send evaluation requests (the Desktop controlled cost evaluation). Evaluation mode disables provider retries and fallback, bounds output and returns per-request provider usage receipts. Empty (default) refuses every evaluation request. Changes apply to the next request.',
+    category: 'AI',
+    order: 16,
+  }),
+  evaluationModelIds: makeStringSetting({
+    key: 'evaluationModelIds',
+    name: 'Controlled Evaluation: Allowed Model IDs',
+    defaultValue: '',
+    description:
+      'Comma-separated exact catalog model IDs an evaluation request may dispatch to. Aliases are not matched, so confirm each ID resolves to the intended provider model before adding it. Empty (default) refuses every evaluation dispatch. Changes apply to the next request.',
+    category: 'AI',
+    order: 17,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',
@@ -5076,6 +5077,24 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.ADMIN.id,
     order: 2,
   }),
+  // Read by the email-send worker for every send (packages/server-utils/src/utils/mailer/sender.ts).
+  mailFrom: {
+    ...makeStringSetting({
+      key: 'mailFrom',
+      name: 'System Email Sender',
+      defaultValue: '',
+      description:
+        'The sender of every system email: an address such as noreply@example.com, or a name and address such as Example <noreply@example.com>. Empty (default) uses the MAIL_FROM secret. On Amazon SES the address must be on the domain the stage sends from, the same domain as the MAIL_FROM secret. Changes apply to the next email.',
+      category: 'Admin',
+      group: API_SERVICE_GROUPS.ADMIN.id,
+      order: 3,
+    }),
+    schema: z
+      .string()
+      .refine(value => value.trim() === '' || (value.length <= MAIL_FROM_SETTING_MAX_LENGTH && !/[\r\n]/.test(value)), {
+        message: `Use one line of at most ${MAIL_FROM_SETTING_MAX_LENGTH} characters, or leave it empty.`,
+      }),
+  },
   MaxFileSize: makeNumberSetting({
     key: 'MaxFileSize',
     userReadable: true,
@@ -8613,9 +8632,8 @@ export const settingsMap = {
       'only affects later submissions. Set to 0 to make simulator rounds free.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd and
-    // EnableQuestMaster, which would render this row after them instead of beside the Hardware
-    // Compute settings.
+    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd, which
+    // would render this row after it instead of beside the Hardware Compute settings.
     order: 89.5,
     dependsOn: 'EnableComputeSubmission',
   }),

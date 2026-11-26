@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -123,5 +123,69 @@ describe('ComplianceModal', () => {
     expect(screen.queryByTestId('compliance-never-accepted')).not.toBeInTheDocument();
     // ...and the stale status is shown
     expect(screen.getByText('Not current')).toBeInTheDocument();
+  });
+
+  it('shows each empty list as its own message', () => {
+    mockData.mockReturnValue({ data: NEVER_ACCEPTED, isLoading: false });
+    render(<ComplianceModal />, { wrapper: TestWrapper });
+    const [incidents, events] = screen.getAllByTestId('admin-empty-state');
+    expect(incidents).toHaveTextContent('No incidents');
+    expect(events).toHaveTextContent('No recent events');
+  });
+
+  it('formats incident labels with confidence and shows a dash for a missing actor', () => {
+    mockData.mockReturnValue({
+      data: {
+        ...NEVER_ACCEPTED,
+        moderationIncidents: [
+          {
+            labels: [
+              { name: 'Explicit', parentName: 'Explicit', confidence: 0.98 },
+              { name: 'Violence', parentName: 'Violence', confidence: 0.5 },
+            ],
+            provider: 'openai',
+            model: 'gpt-image-1',
+            createdAt: '2026-06-02T00:00:00Z',
+          },
+        ],
+        recentAuthEvents: [
+          { event: 'logout', actorIp: '1.2.3.4', userAgent: 'agent-x', createdAt: '2026-06-03T00:00:00Z' },
+          {
+            event: 'session_revoked',
+            actorUserId: 'admin-1',
+            actorIp: '5.6.7.8',
+            userAgent: 'agent-y',
+            createdAt: '2026-06-04T00:00:00Z',
+          },
+        ],
+      },
+      isLoading: false,
+    });
+    render(<ComplianceModal />, { wrapper: TestWrapper });
+    expect(screen.getByText('Explicit (98%), Violence (50%)')).toBeInTheDocument();
+    const logoutRow = screen.getByText('logout').closest('tr') as HTMLElement;
+    expect(within(logoutRow).getByLabelText('No actor')).toHaveTextContent('\u2014');
+    const revokedRow = screen.getByText('session_revoked').closest('tr') as HTMLElement;
+    expect(within(revokedRow).getByText('admin-1').closest('td')).toHaveAttribute('data-cell-wrap');
+    expect(within(revokedRow).getByText('5.6.7.8').closest('td')).toHaveAttribute('data-cell-wrap');
+  });
+
+  it('renders every returned row without a pager', () => {
+    mockData.mockReturnValue({
+      data: {
+        ...NEVER_ACCEPTED,
+        recentAuthEvents: Array.from({ length: 30 }, (_, i) => ({
+          event: `event-${i}`,
+          actorIp: '1.2.3.4',
+          userAgent: 'agent',
+          createdAt: '2026-06-03T00:00:00Z',
+        })),
+      },
+      isLoading: false,
+    });
+    render(<ComplianceModal />, { wrapper: TestWrapper });
+    expect(screen.getByText('event-0')).toBeInTheDocument();
+    expect(screen.getByText('event-29')).toBeInTheDocument();
+    expect(document.getElementById('compliance-auth-events-page-size-label')).toBeNull();
   });
 });

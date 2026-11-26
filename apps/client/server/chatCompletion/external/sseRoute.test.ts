@@ -78,6 +78,8 @@ vi.mock('@bike4mind/services/llm', async () => {
 });
 
 const mockFindCompletionRun = vi.hoisted(() => vi.fn());
+const mockRaiseRunBudget = vi.hoisted(() => vi.fn());
+const mockCreateCompletionRun = vi.hoisted(() => vi.fn());
 const mockFindActiveFreeze = vi.hoisted(() => vi.fn());
 const mockRecordPlatformEndUser = vi.hoisted(() => vi.fn());
 const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -92,7 +94,11 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: { record: vi.fn() },
   organizationRepository: {},
   cacheRepository: {},
-  completionRunRepository: { findById: mockFindCompletionRun },
+  completionRunRepository: {
+    findById: mockFindCompletionRun,
+    raiseBudget: mockRaiseRunBudget,
+    create: mockCreateCompletionRun,
+  },
   spendFreezeRepository: { findActiveForSubject: mockFindActiveFreeze },
   User: {},
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key-1', name: 'cli' }) },
@@ -1515,6 +1521,28 @@ describe('POST /api/ai/v1/completions - run attribution', () => {
     expect(res.status).toBe(200);
     expect(mockFindCompletionRun).toHaveBeenCalledWith(RUN_ID);
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: RUN }));
+  });
+
+  // Only POST /api/v1/completion-runs/{runId}/budget raises a run budget; a completion only draws on it.
+  it('never changes a run budget from a worker completion, whatever root session or budget it names', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ rootSessionId: 'root-a', budgetCredits: 500 }));
+
+    const res = await post({
+      ...COMPLETION,
+      sessionId: 'root-b',
+      rootSessionId: 'root-b',
+      budgetCredits: 1_000_000,
+      run: { ...RUN, budgetCredits: 1_000_000, rootSessionId: 'root-b' },
+    });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockRaiseRunBudget).not.toHaveBeenCalled();
+    expect(mockCreateCompletionRun).not.toHaveBeenCalled();
+    const [completion] = mockExecuteCompletion.mock.calls.at(-1) as [Record<string, unknown>];
+    expect(completion.run).toEqual(RUN);
+    expect(completion).not.toHaveProperty('budgetCredits');
+    expect(completion).not.toHaveProperty('rootSessionId');
   });
 
   it('rejects evaluation attribution without a verified run before provider execution', async () => {

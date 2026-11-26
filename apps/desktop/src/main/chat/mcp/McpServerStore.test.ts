@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { openedAs, versionedCipher } from '../../secrets/versionedCipher.testHelper';
-import { McpServerStore, type SecretCipher, type StoreFile } from './McpServerStore';
+import { McpServerStore, type StoreFile } from './McpServerStore';
+import type { SecretCipher } from '../../../host/ports';
 
 // Non-hex on purpose: the store writes random UUID ids into the same file the not.toContain checks scan.
 const SECRET = 'tok-secret-zz';

@@ -33,3 +33,26 @@
     }
   }
 #endif
+
+#if canImport(UIKit) && canImport(Vision)
+  import Vision
+
+  extension ScannedDocument {
+    /// On-device OCR. A VisionKit scan is image-only, and the server has no OCR, so this text is what lets
+    /// the assistant read a scanned bill. Pages with no text are skipped; "" when nothing was read.
+    public static func recognizeText(in pages: [CGImage]) async -> String {
+      await Task.detached(priority: .userInitiated) {
+        pages.compactMap { page -> String? in
+          let request = VNRecognizeTextRequest()
+          request.recognitionLevel = .accurate
+          request.usesLanguageCorrection = true
+          try? VNImageRequestHandler(cgImage: page).perform([request])
+          let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+          return lines.isEmpty ? nil : lines.joined(separator: "\n")
+        }
+        .joined(separator: "\n\n")
+      }
+      .value
+    }
+  }
+#endif

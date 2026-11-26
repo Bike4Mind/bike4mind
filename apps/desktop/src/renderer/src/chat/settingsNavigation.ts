@@ -44,7 +44,7 @@ export const SECTION_INTRO: Record<Exclude<SettingsSection, 'permissions'>, stri
  * SettingsPanel.test.tsx fails on one that is missing, and the screen shows a stray one on Advanced.
  */
 export const PAGE_ENTRIES = {
-  general: ['appearance', 'menu-bar', 'prompt-suggestions', 'nested-sessions', 'pr-attention-sort'],
+  general: ['launch-place', 'appearance', 'menu-bar', 'prompt-suggestions', 'nested-sessions', 'pr-attention-sort'],
   notifications: ['notify-scope', 'orchestrator-sound', 'orchestrator-sound-mix'],
   agents: ['spawn-location', 'worktree-default', 'autofix-attempts', 'turn-extensions', 'orchestration-policy'],
   models: ['reply-stats', 'local-context', 'curated-list', 'model-servers'],
@@ -70,6 +70,7 @@ export function sectionOfSetting(id: string): SettingsSection | undefined {
 
 /** Plain words a user might search for that the label and description do not say. */
 export const SETTING_KEYWORDS: Record<SettingId, string> = {
+  'launch-place': 'startup open launch start studio code chat',
   appearance: 'theme dark light mode color colour',
   'menu-bar': 'tray status bar menubar quick approvals tavern',
   'prompt-suggestions': 'suggestion next prompt autocomplete follow up',

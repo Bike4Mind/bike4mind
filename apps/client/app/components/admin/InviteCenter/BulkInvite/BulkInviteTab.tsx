@@ -23,7 +23,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import { api } from '@client/app/contexts/ApiContext';
 import { GRANT_PACKAGES_QUERY_KEY } from '@client/app/utils/grantPackageAPICalls';
-import { PREDEFINED_USER_TAGS } from '@bike4mind/common';
+import { PREDEFINED_USER_TAGS, randomUuid } from '@bike4mind/common';
 import { APP_NAME } from '@client/config/general'; // brand externalized
 import { toast } from 'sonner';
 import CopyButton from '../shared/CopyButton';
@@ -55,7 +55,7 @@ interface ImportResult {
 // --- Helpers ---
 
 const createEmptyRow = (): DraftRow => ({
-  id: crypto.randomUUID(),
+  id: randomUuid(),
   email: '',
   first: '',
   last: '',
@@ -565,7 +565,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
   const addCsvRows = useCallback((parsed: Omit<DraftRow, 'id' | 'status'>[]) => {
     const newRows: DraftRow[] = parsed.map(p => ({
       ...p,
-      id: crypto.randomUUID(),
+      id: randomUuid(),
       status: 'draft' as const,
     }));
     setRows(prev => {

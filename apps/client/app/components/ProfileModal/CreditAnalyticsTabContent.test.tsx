@@ -50,27 +50,18 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-type SliceArg = { slice: { points: Array<{ id: string; seriesId: string; data: { x: string; y: number } }> } };
 const line = vi.hoisted(() => ({
-  series: [] as Array<{ id: string; data: Array<{ x: string; y: number }> }>,
-  sliceTooltip: null as ((arg: SliceArg) => ReactNode) | null,
+  series: [] as ReadonlyArray<{ id: string; data: Array<{ x: string; y: number }> }>,
 }));
-vi.mock('@nivo/line', () => ({
-  ResponsiveLine: ({
-    data,
-    sliceTooltip,
-  }: {
-    data: typeof line.series;
-    sliceTooltip?: (arg: SliceArg) => ReactNode;
-  }) => {
-    line.series = data;
-    line.sliceTooltip = sliceTooltip ?? null;
+vi.mock('./CreditUsageChart', () => ({
+  CreditUsageChart: ({ series }: { series: typeof line.series }) => {
+    line.series = series;
     return null;
   },
 }));
-const pie = vi.hoisted(() => ({ data: [] as unknown[] }));
-vi.mock('@nivo/pie', () => ({
-  ResponsivePie: ({ data }: { data: unknown[] }) => {
+const pie = vi.hoisted(() => ({ data: [] as readonly unknown[] }));
+vi.mock('@client/app/components/Charts/DonutChart', () => ({
+  DonutChart: ({ data }: { data: readonly unknown[] }) => {
     pie.data = data;
     return null;
   },
@@ -295,27 +286,6 @@ describe('CreditAnalyticsTabContent referral rewards', () => {
     expect(line.series.map(series => series.id)).toEqual(['credits_added', 'referral_rewards']);
     expect(total('credits_added')).toBe(5200);
     expect(total('referral_rewards')).toBe(6000);
-  });
-
-  it('names each series in the hover tooltip from the chart point it is given', () => {
-    hoisted.transactions = [
-      { type: 'generic_add', credits: 6000, createdAt: new Date(Date.now() - 3_600_000), reason: 'referral_reward' },
-    ];
-    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
-    showCreditsAdded();
-
-    // Points carry `seriesId`, the field @nivo/line 0.99 uses; a lookup on any other key shows a generic label.
-    const slice: SliceArg['slice'] = {
-      points: [
-        { id: 'referral_rewards.0', seriesId: 'referral_rewards', data: { x: '2026-11-03', y: 6000 } },
-        { id: 'credits_added.0', seriesId: 'credits_added', data: { x: '2026-11-03', y: 0 } },
-      ],
-    };
-    render(<>{line.sliceTooltip?.({ slice })}</>, { wrapper: TestWrapper });
-
-    expect(screen.getByText(/Referral rewards:/)).toBeTruthy();
-    expect(screen.getByText(/Credits Added:/)).toBeTruthy();
-    expect(screen.queryByText(/referral_rewards|credits_added/)).toBeNull();
   });
 
   it('adds no referral series when there are no referral rewards', () => {

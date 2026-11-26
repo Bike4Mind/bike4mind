@@ -132,7 +132,7 @@ import { SessionEventLog, type EventsSinceResult } from './SessionEventLog';
 import { serverIdOfRuntime } from '@shared/modelServers';
 import { findSessionMentions, mentionTitle } from '@shared/sessionMention';
 import { NO_SKILLS, type SkillsScope, type SkillsState } from '@shared/skills';
-import type { AppWorktree } from '@shared/worktreeRemoval';
+import type { AppWorktree, SessionTreeDeletion } from '@shared/worktreeRemoval';
 import {
   ASK_USER_TOOL_NAME,
   describeAnswer,
@@ -215,6 +215,7 @@ import { canExtendTurn, TurnClock } from './turnClock';
 import { DEFAULT_TURN_EXTENSIONS, parseTurnExtensions } from '@shared/turnExtensionSetting';
 import { sideChatOpening } from './sideChat';
 import { summarizeSession } from '@shared/agentOutcome';
+import { compareSessionsForPage, pageSessions, type SessionPage, type SessionPageRequest } from '@shared/sessionPage';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
 import { buildReplyStats } from './replyStats';
@@ -459,6 +460,8 @@ const DECISION_ASKED_RESULT =
 
 const AGENT_IDLE_POLL_MS = 100;
 const AGENT_IDLE_WAIT_MS = 60_000;
+/** How long a sidebar listing serves later pages and searches before they list afresh. */
+const SESSION_PAGE_SNAPSHOT_MS = 10_000;
 
 /** The task state a worker's report sets; a decision becomes a question card with an id main mints. */
 function reportedState(report: TaskReport): WorkerTask['state'] {
@@ -1041,6 +1044,8 @@ export class ChatService {
    * mid-turn; every summary pushed, listed or returned by a setter or folder grant goes through withLivePlan, which lays this over it.
    */
   private readonly livePlans = new Map<string, PlanProgress | null>();
+  /** The sorted listing later pages are cut from; see listSessionPage. */
+  private pageSnapshot: { at: number; sessions: ChatSessionSummary[] } | null = null;
 
   /** The events of each reply in flight since its 'start'; see getSession. */
   private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
@@ -1240,6 +1245,38 @@ export class ChatService {
 
   async listSessions(): Promise<ChatSessionSummary[]> {
     return (await this.deps.store.list()).map(summary => this.withLivePlan(summary));
+  }
+
+  /**
+   * One page of the sidebar list; see shared/sessionPage. A first page always lists afresh, and
+   * later pages and searches reuse that sorted listing while it is younger than
+   * SESSION_PAGE_SNAPSHOT_MS, so scrolling through ten thousand sessions does not stat every
+   * file once per page. A row that changed since reaches the renderer by the next reload.
+   */
+  async listSessionPage(request: SessionPageRequest): Promise<SessionPage> {
+    const fresh = !request.cursor && !request.query;
+    const snapshot = this.pageSnapshot;
+    const sorted =
+      !fresh && snapshot && Date.now() - snapshot.at < SESSION_PAGE_SNAPSHOT_MS
+        ? snapshot.sessions
+        : await this.refreshPageSnapshot();
+    const liveIds = new Set(
+      this.sessionStatuses()
+        .filter(event => event.status !== 'done')
+        .map(event => event.sessionId)
+    );
+    const page = pageSessions(sorted, request, { liveIds });
+    return {
+      ...page,
+      sessions: page.sessions.map(summary => this.withLivePlan(summary)),
+      related: page.related.map(summary => this.withLivePlan(summary)),
+    };
+  }
+
+  private async refreshPageSnapshot(): Promise<ChatSessionSummary[]> {
+    const sessions = (await this.deps.store.list()).sort(compareSessionsForPage);
+    this.pageSnapshot = { at: Date.now(), sessions };
+    return sessions;
   }
 
   /** Every session that is busy right now, for a renderer that has just mounted. */
@@ -3233,20 +3270,27 @@ export class ChatService {
     return this.studioWithSessionDeletion ? this.studioWithSessionDeletion(sessionId, remove) : remove();
   }
 
-  async inspectSessionWorktreeRemoval(sessionId: string) {
+  /** `alsoDeleting` are nested sessions deleted with this one, so they do not count as owners. */
+  async inspectSessionWorktreeRemoval(sessionId: string, alsoDeleting: readonly string[] = []) {
     const session = await this.deps.store.get(sessionId);
     // The scan parses every stored conversation; most deletes have no app worktree to inspect.
     if (!hasAppWorkspaceBranch(session?.project)) return null;
-    const owners = await this.deps.store.workspaceOwnersExcept(sessionId);
+    const owners = await this.deps.store.workspaceOwnersExcept([sessionId, ...alsoDeleting]);
     const inspection = await inspectWorktreeRemoval(
       session.project,
       owners.map(owner => owner.project),
-      { owners }
+      { owners, hold: this.preparationHold([sessionId, ...alsoDeleting]) }
     );
     if (inspection && this.hasTurnInFlight(sessionId)) {
-      return { ...inspection, safe: false, reason: 'Conversation is still running' };
+      return { ...inspection, safe: false, removable: false, reason: 'Conversation is still running' };
     }
     return inspection;
+  }
+
+  /** Another session cutting a workspace may be about to bind this checkout; see orphanOptions. */
+  private preparationHold(deleting: readonly string[]) {
+    return () =>
+      [...this.preparing.keys()].some(id => !deleting.includes(id)) ? 'A workspace is being prepared' : null;
   }
 
   /**
@@ -3319,7 +3363,15 @@ export class ChatService {
     return true;
   }
 
-  async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {
+  /**
+   * `allowDiscard` lets cleanup force-remove a dirty or unproven checkout, keeping its branch. Only a
+   * caller that showed the user what is discarded passes it; the host protocol has no such step.
+   */
+  async deleteSession(
+    sessionId: string,
+    removeWorktree = false,
+    { allowDiscard = false }: { allowDiscard?: boolean } = {}
+  ): Promise<void> {
     const expectedScope = this.deps.store.scopeKey();
     const remove = async () => {
       if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
@@ -3327,12 +3379,67 @@ export class ChatService {
         await this.cleanupDeletedSession(sessionId, true, undefined, expectedScope);
         return;
       }
-      await this.withWorkspaceBindings(() => this.deleteSessionWithWorkspaceLease(sessionId, expectedScope));
+      await this.withWorkspaceBindings(() =>
+        this.deleteSessionWithWorkspaceLease(sessionId, expectedScope, allowDiscard)
+      );
     };
     return this.studioWithSessionDeletion ? this.studioWithSessionDeletion(sessionId, remove) : remove();
   }
 
-  private async deleteSessionWithWorkspaceLease(sessionId: string, expectedScope: string | null): Promise<void> {
+  /**
+   * Deletes the named nested sessions of `sessionId`, deepest first, then the session itself.
+   * Ids that are not its descendants are ignored. `removeWorktree` covers the parent's worktree;
+   * a nested session's goes only when its id is in `nestedWorktreeIds` - the ones the dialog showed
+   * the user - and it is still removable then. Discarding is allowed for both, since the dialog
+   * listed what each discards. Stops at the first failure and reports what was already deleted.
+   */
+  async deleteSessionTree(
+    sessionId: string,
+    nestedIds: readonly string[],
+    removeWorktree = false,
+    nestedWorktreeIds: readonly string[] = []
+  ): Promise<SessionTreeDeletion> {
+    const wanted = new Set(nestedIds);
+    const sessions = await this.listSessions();
+    const childrenOf = new Map<string, string[]>();
+    for (const session of sessions) {
+      const parentId = session.origin?.parentSessionId;
+      if (!parentId || parentId === session.id) continue;
+      childrenOf.set(parentId, [...(childrenOf.get(parentId) ?? []), session.id]);
+    }
+    const order: string[] = [];
+    const seen = new Set([sessionId]);
+    const visit = (id: string) => {
+      for (const child of childrenOf.get(id) ?? []) {
+        if (seen.has(child)) continue;
+        seen.add(child);
+        visit(child);
+        if (wanted.has(child)) order.push(child);
+      }
+    };
+    visit(sessionId);
+
+    const deleted: string[] = [];
+    try {
+      for (const id of order) {
+        const removable =
+          nestedWorktreeIds.includes(id) && (await this.inspectSessionWorktreeRemoval(id))?.removable === true;
+        await this.deleteSession(id, removable, { allowDiscard: true });
+        deleted.push(id);
+      }
+      await this.deleteSession(sessionId, removeWorktree, { allowDiscard: true });
+      deleted.push(sessionId);
+    } catch (err) {
+      return { deleted, error: err instanceof Error ? err.message : String(err) };
+    }
+    return { deleted, error: null };
+  }
+
+  private async deleteSessionWithWorkspaceLease(
+    sessionId: string,
+    expectedScope: string | null,
+    allowDiscard: boolean
+  ): Promise<void> {
     const assertScope = () => {
       if (this.deps.store.scopeKey() !== expectedScope) throw new Error('Account changed.');
     };
@@ -3347,7 +3454,10 @@ export class ChatService {
       if (!session?.project) throw new Error('This conversation has no worktree');
       const inspection = await this.inspectSessionWorktreeRemoval(sessionId);
       assertScope();
-      if (!inspection?.safe) throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+      if (!inspection?.removable) throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+      if (!inspection.safe && !allowDiscard) {
+        throw new Error(inspection.safeReason ?? 'Cannot verify the upstream or base branch');
+      }
       await this.deps.background?.killSession(sessionId);
       assertScope();
       releaseTerminals = await this.deps.releaseSessionTerminals?.(sessionId);
@@ -3360,7 +3470,7 @@ export class ChatService {
       await removeSessionWorktree(
         session.project,
         owners.map(owner => owner.project),
-        { owners }
+        { owners, allowDiscard, hold: this.preparationHold([sessionId]) }
       );
       assertScope();
       await this.cleanupDeletedSession(sessionId, true, undefined, expectedScope);

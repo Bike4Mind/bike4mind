@@ -14,37 +14,26 @@ import mongoose from 'mongoose';
 const handler = baseApi()
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string; limit?: string; offset?: string }>(async (req, res) => {
-      console.log('📧 GET /api/users/[id]/ingested-emails called');
       const userId = req.query.id;
       const requestingUserId = req.user?.id;
-      console.log('🔍 Request details:', {
-        userId,
-        requestingUserId,
-        isAdmin: req.user?.isAdmin,
-        query: req.query,
-      });
 
       // Authorization: user can only fetch their own emails
       if (userId !== requestingUserId && !req.user?.isAdmin) {
-        console.log('❌ Forbidden: User trying to access other user emails');
+        req.logger.warn('Forbidden access to another user ingested emails', { userId, requestingUserId });
         return res.status(403).json({ error: 'Forbidden: You can only view your own emails' });
       }
 
       const limit = Math.min(parseInt(req.query.limit || '50', 10), 100);
       const offset = parseInt(req.query.offset || '0', 10);
-      console.log('📄 Pagination:', { limit, offset });
 
-      console.log('🔍 Querying MongoDB for emails...');
       const emails = await IngestedEmailModel.find({ userId })
         .sort({ receivedAt: -1 }) // Most recent first
         .skip(offset)
         .limit(limit)
         .lean()
         .exec();
-      console.log('✅ Found emails:', emails.length);
 
       const total = await IngestedEmailModel.countDocuments({ userId });
-      console.log('📊 Total emails in DB for user:', total);
 
       const response = {
         emails,
@@ -55,10 +44,6 @@ const handler = baseApi()
           hasMore: offset + emails.length < total,
         },
       };
-      console.log('📤 Returning response:', {
-        emailCount: emails.length,
-        pagination: response.pagination,
-      });
 
       return res.json(response);
     })

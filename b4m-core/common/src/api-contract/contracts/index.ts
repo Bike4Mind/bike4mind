@@ -22,14 +22,25 @@ import { getClientConfigContract, getPublicClientConfigContract } from './client
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
 import {
   composeBriefContract,
+  composeFollowUpBriefContract,
   listBriefsContract,
   getBriefContract,
   getBriefScheduleContract,
   putBriefScheduleContract,
+  getBusyBlocksContract,
+  putBusyBlocksContract,
   replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './briefs.contract';
 import { createDelegationContract, getDelegationContract } from './delegations.contract';
+import {
+  getObligationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  updateObligationContract,
+} from './obligations.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
 import {
@@ -230,17 +241,26 @@ export const CONTRACTS: readonly EndpointContract[] = [
   approvePendingActionContract,
   denyPendingActionContract,
   composeBriefContract,
+  composeFollowUpBriefContract,
   listBriefsContract,
   getBriefContract,
   getBriefScheduleContract,
   putBriefScheduleContract,
+  getBusyBlocksContract,
+  putBusyBlocksContract,
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
   replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
   getPendingDecisionCountContract,
   createDelegationContract,
   getDelegationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  getObligationContract,
+  updateObligationContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   listHandoffDevicesContract,

@@ -1,4 +1,4 @@
-import type { SecretCipher } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 
 /**
  * A cipher in the shape AppSecretCipher takes in secret-key mode: it writes `new:` blobs, opens

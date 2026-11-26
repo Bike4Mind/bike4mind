@@ -1,18 +1,17 @@
 import type { SubQuestStatus } from '../types/entities/QuestTypes';
 
 /**
- * The one glyph/label vocabulary for a sub-quest status, shared by the client-side export
- * (apps/client/app/utils/questExport.ts), the queued server-side export
+ * The one glyph/label vocabulary for a sub-quest status, shared by the queued server-side export
  * (apps/workers/src/queueHandlers/questExport.ts) and the markdown serializer in questMarkdown.ts.
  * It lives in @bike4mind/common so the serializer can use it without depending on server-utils;
  * @bike4mind/server-utils/shared/subQuestStatusPresentation re-exports it for existing importers.
  *
- * Both maps used to be declared separately in those two files. Being `Record<SubQuestStatus, ...>`
+ * Both maps used to be declared separately in the client and server exports. Being `Record<SubQuestStatus, ...>`
  * meant a NEW status failed the build in both - but a changed GLYPH on one side drifted silently,
  * which is how the server copy sat missing its `deleted` arm while the client copy rendered one.
  * Keys were guarded; values were not. One module closes that.
  *
- * Deliberately dependency-free: the server handler imports this, and pulling in questExport.ts
+ * Deliberately dependency-free: the server handler imports this, and pulling in a client export module
  * would drag docx/xlsx/papaparse into a Lambda that needs none of them.
  */
 export const SUBQUEST_STATUS_ICONS: Record<SubQuestStatus, string> = {

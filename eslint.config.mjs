@@ -282,6 +282,17 @@ const noDeadPaletteTokens = [
   },
 ];
 
+const RANDOM_UUID_MESSAGE =
+  "crypto.randomUUID is undefined outside secure contexts (plain-http LAN). Use randomUuid from '@bike4mind/common'.";
+const noRandomUUIDAccess = [
+  { selector: "MemberExpression[property.name='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "MemberExpression[property.value='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "ObjectPattern > Property[key.name='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "ObjectPattern > Property[key.value='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "BinaryExpression[operator='in'][left.value='randomUUID']", message: RANDOM_UUID_MESSAGE },
+];
+const spaRestrictedSyntax = [...noWindowOpenInClientUi, ...noDeadPaletteTokens];
+
 // A regex can only recognise a token shape. It cannot know that `primary.25` or `warning.550` name
 // a shade this palette does not have, or that `neutral.outlinedHoverBorder` was a Joy key that a
 // version bump removed - those are just as dead, and only the built theme can tell. That half is
@@ -884,6 +895,13 @@ export default defineConfig([
     rules: { 'no-console': 'error' },
   },
 
+  // API routes log through req.logger (or a module Logger), same rationale as the server-utils block above.
+  {
+    files: ['apps/client/pages/api/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
   // The stdio MCP servers use stdout as the JSON-RPC channel, so log through shared/stderrLog instead.
   {
     files: ['b4m-core/mcp/src/**/*.{ts,mts,cts}'],
@@ -925,19 +943,33 @@ export default defineConfig([
     },
   },
 
-  // Ban window.open and dead Material UI palette tokens in the SPA's UI code - see
-  // noWindowOpenInClientUi and noDeadPaletteTokens above for the rationale behind each. Both sets
-  // must be spread into this one rule: flat-config last-rule-wins means a second block declaring
-  // no-restricted-syntax for these files would replace them, not add to them. The glob is disjoint
-  // from the pages-tests block above, so that rule is left intact.
+  // Ban window.open, dead Material UI palette tokens and crypto.randomUUID in the SPA's UI code - see
+  // noWindowOpenInClientUi, noDeadPaletteTokens and noRandomUUIDAccess above. Flat-config last-rule-wins
+  // means a second block declaring no-restricted-syntax for these files would replace this one, so new
+  // SPA selectors go into spaRestrictedSyntax. The glob is disjoint from the pages-tests block above.
   {
     files: ['apps/client/app/**/*.{ts,tsx}'],
     rules: {
-      'no-restricted-syntax': ['error', ...noWindowOpenInClientUi, ...noDeadPaletteTokens],
+      'no-restricted-syntax': ['error', ...spaRestrictedSyntax, ...noRandomUUIDAccess],
       // Catches the bare `open(url)` form the selectors above cannot safely match. Scope-aware,
       // so a local/parameter named `open` is untouched.
       'no-restricted-globals': ['error', { name: 'open', message: WINDOW_OPEN_MESSAGE }],
     },
+  },
+  // Tests may stub crypto.randomUUID; the serwist route runs in Node at build time.
+  {
+    files: ['apps/client/app/**/*.{test,spec}.{ts,tsx}', 'apps/client/app/**/__tests__/**', 'apps/client/app/serwist/**'],
+    rules: { 'no-restricted-syntax': ['error', ...spaRestrictedSyntax] },
+  },
+  {
+    files: ['apps/client/lib/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**'],
+    rules: { 'no-restricted-syntax': ['error', ...noRandomUUIDAccess] },
+  },
+  {
+    files: ['b4m-core/common/src/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', 'b4m-core/common/src/utils/randomUuid.ts'],
+    rules: { 'no-restricted-syntax': ['error', ...noRandomUUIDAccess] },
   },
 
   // RFC #483 Phase 2 - an API route must not send a raw entity document; see

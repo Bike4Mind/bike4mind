@@ -23,10 +23,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { isDirectInvocation } from '../utils/isDirectInvocation.js';
-import matter from 'gray-matter';
 import { glob } from 'glob';
 
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
+import { parseFrontmatter } from '@bike4mind/common/utils/frontmatter';
 import type { HelpEmbeddingChunk, HelpEmbeddingsIndex, HelpIndex, HelpAccessLevel } from './types.js';
 import {
   ADMIN_HELP_CONTENT_DIR,
@@ -172,7 +172,7 @@ async function discoverArticles(contentRoot: string, root: RootKind): Promise<Di
   const articles: DiscoveredArticle[] = [];
   for (const filePath of files) {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
-    const { data: frontmatter, content } = matter(fileContent);
+    const { data: frontmatter, content } = parseFrontmatter(fileContent);
 
     if (!frontmatter.title) {
       console.warn(`Skipping ${filePath}: No title in frontmatter`);

@@ -101,6 +101,13 @@ export async function serializeBriefs(
           state: questionStateFor(decision.repliedAt, questionByQuest.get(decision.question.questId)),
         },
       }),
+      ...(decision.followUp && {
+        followUp: {
+          kind: decision.followUp.kind,
+          state: decision.followUp.state,
+          remindAt: decision.followUp.remindAt ? decision.followUp.remindAt.toISOString() : null,
+        },
+      }),
       ...(decision.draftReply && {
         draftReply: {
           to: decision.draftReply.to,
@@ -122,7 +129,12 @@ function serializeItem({ id, text, source }: BriefItem): BriefItem {
 }
 
 function serializeSource(source: BriefSourceRef): BriefSourceRef {
-  return source.kind === 'email'
-    ? { kind: 'email', emailId: source.emailId }
-    : { kind: 'delegation', delegationId: source.delegationId };
+  switch (source.kind) {
+    case 'email':
+      return { kind: 'email', emailId: source.emailId };
+    case 'delegation':
+      return { kind: 'delegation', delegationId: source.delegationId };
+    case 'obligation':
+      return { kind: 'obligation', obligationId: source.obligationId };
+  }
 }

@@ -37,6 +37,7 @@ const call = async (body: Record<string, unknown> = {}, user: Record<string, unk
     email: 'admin@example.org',
     ...user,
   };
+  (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   await h.routes.POST(req, res);
   return res;
 };
@@ -46,7 +47,6 @@ describe('POST /api/admin/system-health/test-email', () => {
     vi.clearAllMocks();
     h.audit.mockResolvedValue(null);
     h.sendLiveTestEmail.mockResolvedValue({ success: true, messageId: 'ses-1', transport: 'ses' });
-    vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {

@@ -1,5 +1,10 @@
-import { Alert, Button, Chip, LinearProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { useMemo } from 'react';
+import { Alert, Button, Chip, LinearProgress, Stack, Typography } from '@mui/joy';
+import type { UserComplianceResponse } from '@bike4mind/common';
 import { AdminDialog } from '@client/app/components/admin/shared/AdminDialog';
+import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
+import { Dash } from '@client/app/components/admin/shared/Dash';
+import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -15,9 +20,52 @@ export const useComplianceModal = create<{
 
 const fmt = (d: string | Date | null | undefined) => (d ? new Date(d).toLocaleString() : '—');
 
+type Incident = UserComplianceResponse['moderationIncidents'][number] & { rowId: string };
+type AuthEvent = UserComplianceResponse['recentAuthEvents'][number] & { rowId: string };
+
+const TABLE_MAX_HEIGHT = '40vh';
+
+const Mono = ({ children }: { children: string }) => (
+  <Typography level="body-sm" sx={{ fontFamily: 'code', color: 'inherit' }}>
+    {children}
+  </Typography>
+);
+
+const INCIDENT_COLUMNS: DataColumn<Incident>[] = [
+  { id: 'when', label: 'When', width: '11rem', render: m => fmt(m.createdAt) },
+  {
+    id: 'labels',
+    label: 'Labels',
+    wrap: true,
+    render: m => m.labels.map(l => `${l.name} (${Math.round(l.confidence * 100)}%)`).join(', '),
+  },
+  { id: 'provider', label: 'Provider', render: m => m.provider },
+  { id: 'model', label: 'Model', render: m => m.model },
+];
+
+const AUTH_EVENT_COLUMNS: DataColumn<AuthEvent>[] = [
+  { id: 'when', label: 'When', width: '11rem', render: e => fmt(e.createdAt) },
+  { id: 'event', label: 'Event', render: e => e.event },
+  // actorUserId is only set for admin-driven events (e.g. session_revoked) - a self-initiated
+  // logout has no distinct actor to show.
+  {
+    id: 'actor',
+    label: 'Actor',
+    wrap: true,
+    render: e => (e.actorUserId ? <Mono>{e.actorUserId}</Mono> : <Dash title="No actor" />),
+  },
+  { id: 'ip', label: 'IP', wrap: true, render: e => <Mono>{e.actorIp}</Mono> },
+  { id: 'userAgent', label: 'User agent', wrap: true, render: e => e.userAgent },
+];
+
+const withRowIds = <T,>(rows: readonly T[] | undefined) => (rows ?? []).map((row, i) => ({ ...row, rowId: String(i) }));
+const getRowId = (row: { rowId: string }) => row.rowId;
+
 const ComplianceModal = () => {
   const [userId, setUserId] = useComplianceModal(useShallow(s => [s.userId, s.setUserId]));
   const { data, isLoading, isError, error, refetch } = useGetUserCompliance(userId);
+  const incidents = useMemo(() => withRowIds(data?.moderationIncidents), [data?.moderationIncidents]);
+  const authEvents = useMemo(() => withRowIds(data?.recentAuthEvents), [data?.recentAuthEvents]);
 
   return (
     <AdminDialog
@@ -66,34 +114,18 @@ const ComplianceModal = () => {
           {/* 2. Moderation incidents */}
           <Stack spacing={1}>
             <Typography level="title-md">Moderation incidents ({data.moderationIncidents.length})</Typography>
-            <Sheet variant="outlined" sx={{ borderRadius: 'sm' }}>
-              <Table size="sm" stickyHeader data-testid="compliance-incidents-table">
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Labels</th>
-                    <th>Provider</th>
-                    <th>Model</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.moderationIncidents.length === 0 ? (
-                    <tr>
-                      <td colSpan={4}>No incidents.</td>
-                    </tr>
-                  ) : (
-                    data.moderationIncidents.map((m, i) => (
-                      <tr key={i}>
-                        <td>{fmt(m.createdAt)}</td>
-                        <td>{m.labels.map(l => `${l.name} (${Math.round(l.confidence * 100)}%)`).join(', ')}</td>
-                        <td>{m.provider}</td>
-                        <td>{m.model}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </Table>
-            </Sheet>
+            <DataTable
+              testId="compliance-incidents-table"
+              label="Moderation incidents"
+              rows={incidents}
+              columns={INCIDENT_COLUMNS}
+              getRowId={getRowId}
+              // The API caps both lists (ROW_LIMIT in pages/api/admin/users/[userId]/compliance.ts), so neither pages.
+              pagination={false}
+              maxHeight={TABLE_MAX_HEIGHT}
+              onRetry={() => void refetch()}
+              empty={<EmptyState title="No incidents" action={null} />}
+            />
           </Stack>
 
           {/* 3. Flags */}
@@ -113,38 +145,17 @@ const ComplianceModal = () => {
           {/* 4. Auth trail */}
           <Stack spacing={1}>
             <Typography level="title-md">Recent auth events ({data.recentAuthEvents.length})</Typography>
-            <Sheet variant="outlined" sx={{ borderRadius: 'sm' }}>
-              <Table size="sm" stickyHeader data-testid="compliance-auth-events">
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Event</th>
-                    <th>Actor</th>
-                    <th>IP</th>
-                    <th>User agent</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.recentAuthEvents.length === 0 ? (
-                    <tr>
-                      <td colSpan={5}>No recent events.</td>
-                    </tr>
-                  ) : (
-                    data.recentAuthEvents.map((e, i) => (
-                      <tr key={i}>
-                        <td>{fmt(e.createdAt)}</td>
-                        <td>{e.event}</td>
-                        {/* actorUserId is only set for admin-driven events (e.g. session_revoked) - a
-                              self-initiated logout has no distinct actor to show. */}
-                        <td>{e.actorUserId ?? '-'}</td>
-                        <td>{e.actorIp}</td>
-                        <td>{e.userAgent}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </Table>
-            </Sheet>
+            <DataTable
+              testId="compliance-auth-events"
+              label="Recent auth events"
+              rows={authEvents}
+              columns={AUTH_EVENT_COLUMNS}
+              getRowId={getRowId}
+              pagination={false}
+              maxHeight={TABLE_MAX_HEIGHT}
+              onRetry={() => void refetch()}
+              empty={<EmptyState title="No recent events" action={null} />}
+            />
           </Stack>
         </Stack>
       )}

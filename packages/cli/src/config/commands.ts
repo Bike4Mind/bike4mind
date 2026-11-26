@@ -294,7 +294,7 @@ export function isBuiltInCommand(name: string): boolean {
  * hearth); a drift guard in commands.test.ts derives the names from those modules
  * and fails if this list drifts.
  */
-export const RESERVED_FEATURE_COMMANDS: readonly string[] = ['tavern', 'quest', 'hearth'];
+export const RESERVED_FEATURE_COMMANDS: readonly string[] = ['tavern', 'hearth'];
 
 /**
  * Checks if a command name is reserved (a built-in OR a first-party feature command).

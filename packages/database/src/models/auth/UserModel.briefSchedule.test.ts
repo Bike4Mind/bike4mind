@@ -19,8 +19,10 @@ beforeEach(async () => {
 const schedule = { enabled: true, timeOfDay: '08:00', days: [1, 2, 3, 4, 5], timeZone: 'America/New_York' };
 const DUE = new Date('2026-11-19T13:00:00.000Z');
 
+let userSeq = 0;
 const insertUser = async (preferences: Record<string, unknown> | null) => {
-  const { insertedId } = await User.collection.insertOne({ username: 'u', email: 'u@example.com', preferences });
+  const username = `u${++userSeq}`;
+  const { insertedId } = await User.collection.insertOne({ username, email: `${username}@example.com`, preferences });
   return insertedId.toString();
 };
 
@@ -50,6 +52,27 @@ describe('userRepository brief schedule', () => {
     const raw = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) });
     expect(raw).not.toHaveProperty('nextBriefAt');
     expect(raw?.preferences.briefSchedule).toEqual({ ...schedule, enabled: false });
+  });
+
+  it('pulls an enabled schedule forward to an earlier reminder, never later', async () => {
+    const userId = await insertUser(null);
+    await userRepository.setBriefSchedule(userId, schedule, DUE);
+    const later = new Date(DUE.getTime() + 60_000);
+    expect(await userRepository.pullNextBriefAtForward(userId, later)).toBe(false);
+    expect((await userRepository.getBriefSchedule(userId)).nextBriefAt).toEqual(DUE);
+    const earlier = new Date(DUE.getTime() - 60_000);
+    expect(await userRepository.pullNextBriefAtForward(userId, earlier)).toBe(true);
+    expect((await userRepository.getBriefSchedule(userId)).nextBriefAt).toEqual(earlier);
+  });
+
+  it('does not pull forward a schedule that is off or missing', async () => {
+    const off = await insertUser(null);
+    await userRepository.setBriefSchedule(off, { ...schedule, enabled: false }, null);
+    const none = await insertUser({ language: 'fr' });
+    for (const userId of [off, none]) {
+      expect(await userRepository.pullNextBriefAtForward(userId, DUE)).toBe(false);
+      expect((await userRepository.getBriefSchedule(userId)).nextBriefAt).toBeNull();
+    }
   });
 
   it('the due scan is served by the partial index', async () => {

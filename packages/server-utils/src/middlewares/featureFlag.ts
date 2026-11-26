@@ -63,7 +63,7 @@ export const requireFeature =
  * Middleware to enforce server-side feature flag checks.
  * Prevents users from bypassing client-side feature checks via direct API calls.
  *
- * @param featureName - The admin setting key to check (e.g., 'EnableQuestMaster')
+ * @param featureName - The admin setting key to check (e.g., 'EnableMementos')
  * @returns Express middleware that returns 403 if feature is disabled
  */
 export const requireFeatureEnabled = (featureName: SettingKey): RequestHandler =>

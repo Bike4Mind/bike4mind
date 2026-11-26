@@ -178,6 +178,30 @@ export const PUBLIC_AGENT_EXECUTION_STATUSES = [
 ] as const;
 
 /**
+ * How far a run is through a known number of steps. Published as `step_progress`, which is null
+ * whenever the executor cannot predict a total: a plain ReAct loop decides its next step from the
+ * last observation, so it has none, and `max_iterations` is a ceiling, not a total. Only a run
+ * working through a captured plan reports one today (`planStepProgress` in agentPlanProgress.ts).
+ *
+ * `completed` counts the same steps as `total`, NOT ReAct iterations: a step can take several
+ * iterations, so `total_iterations` must never be shown as "N of `total`".
+ */
+export const AgentExecutionStepProgressSchema = z
+  .object({
+    completed: z.number().int().nonnegative(),
+    total: z.number().int().positive(),
+  })
+  .describe(
+    'Progress through a known number of steps, for a determinate progress display. `completed` and `total` ' +
+      'count the same steps, which are not ReAct iterations, so do not pair `total` with `total_iterations`. ' +
+      'The whole object is null when the executor cannot predict a total for this run, which is the common ' +
+      'case: show indeterminate progress then. A run that has finished its last step can still be `running` ' +
+      'while it writes its answer, so treat `status` as the source of truth for whether it is done.'
+  );
+
+export type AgentExecutionStepProgress = z.infer<typeof AgentExecutionStepProgressSchema>;
+
+/**
  * Poll response for `GET /api/v1/agent-executions/{id}`.
  *
  * `steps` is the live trace: it grows while the run is in flight (read from the
@@ -203,6 +227,7 @@ export const AgentExecutionStatusResponseSchema = z.object({
   error: z.string().nullable(),
   steps: z.array(AgentExecutionStepSchema),
   total_iterations: z.number().nullable(),
+  step_progress: AgentExecutionStepProgressSchema.nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 });

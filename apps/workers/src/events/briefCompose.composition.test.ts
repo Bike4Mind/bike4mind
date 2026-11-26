@@ -6,8 +6,11 @@ import {
   briefedEmailIds,
   briefPushBody,
   buildBriefPrompt,
+  BRIEF_OBLIGATION_LIMIT,
   emptyBrief,
   hasActivity,
+  hasModelActivity,
+  reminderBrief,
   type BriefActivity,
 } from './briefCompose.composition';
 
@@ -30,6 +33,8 @@ const baseActivity = (): BriefActivity => ({
   questions: [],
   emails: [],
   delegations: [],
+  reminders: [],
+  obligations: [],
 });
 
 const question = (n: number) => ({
@@ -57,6 +62,40 @@ describe('hasActivity', () => {
     expect(hasActivity({ ...emailActivity(), runs: [], approvals: [] })).toBe(true);
     expect(hasActivity({ ...baseActivity(), runs: [] })).toBe(true);
     expect(hasActivity({ ...baseActivity(), approvals: [] })).toBe(true);
+  });
+});
+
+describe('due reminders', () => {
+  const reminder = (n: number) => ({ briefId: 'b0', decisionId: `fu-reminder-${n}`, text: `Call vendor ${n}` });
+
+  it('count as activity on their own, but not as activity for the model', () => {
+    const only = { ...baseActivity(), runs: [], approvals: [], reminders: [reminder(1)] };
+    expect(hasActivity(only)).toBe(true);
+    expect(hasModelActivity(only)).toBe(false);
+  });
+
+  it('make a reminder-only brief with no model call', () => {
+    const brief = reminderBrief({ ...baseActivity(), reminders: [reminder(1), reminder(2)] });
+    expect(brief.headline).toBe('You have 2 reminders.');
+    expect(brief.happened).toEqual([
+      { id: 'h1', text: 'Reminder: Call vendor 1' },
+      { id: 'h2', text: 'Reminder: Call vendor 2' },
+    ]);
+    expect(brief.decisions).toEqual([]);
+  });
+
+  it('do not repeat the "Remind me:" prefix the follow-up decision text carries', () => {
+    const brief = reminderBrief({
+      ...baseActivity(),
+      reminders: [{ ...reminder(1), text: 'Remind me: Call vendor 1' }],
+    });
+    expect(brief.happened).toEqual([{ id: 'h1', text: 'Reminder: Call vendor 1' }]);
+  });
+
+  it('lead the happened section of a composed brief, ahead of model text', () => {
+    const reply = JSON.stringify({ headline: 'Busy day.', happened: ['Model note'] });
+    const brief = assembleBrief(reply, { ...baseActivity(), reminders: [reminder(1)] });
+    expect(brief.happened.map(item => item.text)).toEqual(['Reminder: Call vendor 1', 'Model note']);
   });
 });
 
@@ -297,5 +336,85 @@ describe('brief edge wording', () => {
     expect(brief.headline).toBe('Your brief');
     expect(brief.handled[0].text).toHaveLength(BRIEF_LIMITS.itemText);
     expect(brief.handled[0].text.endsWith('...')).toBe(true);
+  });
+});
+
+describe('confirmed obligations in the brief', () => {
+  const obligation = (n: number, over: Partial<BriefActivity['obligations'][number]> = {}) => ({
+    obligationId: `ob${n}`,
+    payee: 'Example Utilities',
+    amount: 120.5,
+    currency: 'USD',
+    dueDate: '2026-11-20',
+    summary: 'Power bill',
+    ...over,
+  });
+  const reply = JSON.stringify({ headline: 'Quiet day', happened: ['Model note'], handled: [], decisions: [] });
+
+  it('counts as activity on its own and reaches the prompt as a count, never its text', () => {
+    const activity = { ...baseActivity(), runs: [], approvals: [], obligations: [obligation(1)] };
+    expect(hasActivity(activity)).toBe(true);
+    const prompt = buildBriefPrompt(activity);
+    expect(prompt).toContain('coming due soon (count only): 1');
+    expect(prompt).not.toContain('Example Utilities');
+  });
+
+  it('leads happened with a record-written item ahead of fyi email and model text', () => {
+    const activity = {
+      ...baseActivity(),
+      emails: [{ emailId: 'e1', kind: 'fyi' as const, summary: 'Newsletter' }],
+      obligations: [obligation(1)],
+    };
+    const brief = assembleBrief(reply, activity);
+    expect(brief.happened.map(item => item.text)).toEqual([
+      'Due Nov 20: Example Utilities $120.50',
+      'Newsletter',
+      'Model note',
+    ]);
+    expect(brief.happened[0].source).toEqual({ kind: 'obligation', obligationId: 'ob1' });
+  });
+
+  it('falls back to the summary when payee and amount are missing', () => {
+    const activity = { ...baseActivity(), obligations: [obligation(1, { payee: null, amount: null, currency: null })] };
+    expect(assembleBrief(reply, activity).happened[0].text).toBe('Due Nov 20: Power bill');
+  });
+
+  it('names a payment when payee, amount and summary are all empty', () => {
+    const bare = obligation(1, { payee: null, amount: null, currency: null, summary: '' });
+    const activity = { ...baseActivity(), obligations: [bare] };
+    expect(assembleBrief(reply, activity).happened[0].text).toBe('Due Nov 20: a payment');
+  });
+
+  it('keeps obligations when the section cap cuts the rest', () => {
+    const activity = {
+      ...baseActivity(),
+      emails: Array.from({ length: BRIEF_LIMITS.itemsPerSection }, (_, i) => ({
+        emailId: `e${i}`,
+        kind: 'fyi' as const,
+        summary: `fyi ${i}`,
+      })),
+      obligations: [obligation(1), obligation(2, { dueDate: '2026-11-22' })],
+    };
+    const happened = assembleBrief(reply, activity).happened;
+    expect(happened).toHaveLength(BRIEF_LIMITS.itemsPerSection);
+    expect(happened.slice(0, 2).map(item => item.source)).toEqual([
+      { kind: 'obligation', obligationId: 'ob1' },
+      { kind: 'obligation', obligationId: 'ob2' },
+    ]);
+  });
+
+  it('gives obligations at most half the section so emails still show', () => {
+    const activity = {
+      ...baseActivity(),
+      emails: Array.from({ length: BRIEF_LIMITS.itemsPerSection }, (_, i) => ({
+        emailId: `e${i}`,
+        kind: 'fyi' as const,
+        summary: `fyi ${i}`,
+      })),
+      obligations: Array.from({ length: BRIEF_LIMITS.itemsPerSection }, (_, i) => obligation(i + 1)),
+    };
+    const kinds = assembleBrief(reply, activity).happened.map(item => item.source?.kind);
+    expect(kinds.filter(kind => kind === 'obligation')).toHaveLength(BRIEF_OBLIGATION_LIMIT);
+    expect(kinds.filter(kind => kind === 'email')).toHaveLength(BRIEF_LIMITS.itemsPerSection - BRIEF_OBLIGATION_LIMIT);
   });
 });

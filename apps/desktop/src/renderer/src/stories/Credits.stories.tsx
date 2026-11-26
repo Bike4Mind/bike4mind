@@ -100,7 +100,7 @@ function MenuPreview({ value }: { value: CreditsGlance }) {
       ))}
       <Divider sx={{ my: 0.5 }} />
       <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1, py: 0.5 }}>
-        <CreditsOrbFace tone={creditsOrbState(value).tone} level={creditsOrbState(value).level} />
+        <CreditsOrbFace tone={creditsOrbState(value).tone} compact={creditsOrbState(value).compact} />
         <Avatar size="sm" variant="soft" color="primary">
           NO
         </Avatar>

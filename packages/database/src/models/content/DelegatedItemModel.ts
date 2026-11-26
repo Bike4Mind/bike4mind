@@ -188,9 +188,9 @@ export const delegatedItemRepository = {
     return result.modifiedCount;
   },
 
-  /** Items no ready brief has carried yet, created before `end`, oldest first. */
-  async listUnbriefed(userId: string, end: Date, limit: number): Promise<IDelegatedItem[]> {
-    return DelegatedItemModel.find({ userId, briefedAt: null, createdAt: { $lt: end } })
+  /** Items no ready brief has carried yet, created in `[since, end)` (from any time without `since`), oldest first. */
+  async listUnbriefed(userId: string, end: Date, limit: number, since?: Date): Promise<IDelegatedItem[]> {
+    return DelegatedItemModel.find({ userId, briefedAt: null, createdAt: { $lt: end, ...(since && { $gte: since }) } })
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean();

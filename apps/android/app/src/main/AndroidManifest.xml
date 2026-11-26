@@ -30,6 +30,11 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
+        <!-- Fetches the on-device text recognition model at install, so the first scan on a fresh install reads text. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr" />
+
         <!-- FCM: a notification message shown while the app is backgrounded uses this channel (created in B4MApplication). -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
@@ -59,6 +64,10 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Long-press launcher shortcuts (Ask, Capture note, Start quest), routed by kit AppShortcut. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
 
             <!-- Non-production OAuth redirect (OAuthConfiguration.nonProduction). The production App Link
                  (https, autoVerify) is added once the server registers an Android OAuth client. -->

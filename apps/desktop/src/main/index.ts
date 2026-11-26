@@ -11,6 +11,8 @@ import { registerAppMenu } from './appMenu';
 import { currentVersion, currentVersionBasis } from './appVersion';
 import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
+import { localHostControl } from './host/localHostControl';
+import { registerHostConnections } from './host/registerHostConnections';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './chat/sessionScope';
 import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
@@ -218,6 +220,7 @@ void app.whenReady().then(async () => {
     capabilityLedger,
     respondToApproval,
     store: sessions,
+    host,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
@@ -233,6 +236,16 @@ void app.whenReady().then(async () => {
     pinnedProjectors: () => models.pinnedProjectors(),
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
       models.catalogSampling(name, modelBlob, parameters, hasAdapter),
+  });
+  registerHostConnections({
+    ...host,
+    control: localHostControl({
+      auth,
+      onAuthStateChanged,
+      dataDirectory: app.getPath('userData'),
+      homeDirectory: app.getPath('home'),
+      version: currentVersion(),
+    }),
   });
   const models = registerModels(
     modelServers,

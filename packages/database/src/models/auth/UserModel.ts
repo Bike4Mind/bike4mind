@@ -64,6 +64,7 @@ import { AutoContainmentDecisionModel } from '../infra/security/AutoContainmentD
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
+import { normalizeBusyBlocks, type BusyBlockInterval, type BusyBlocksState } from './busyBlocks';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -229,6 +230,9 @@ const UserPreferencesSchema = new Schema(
         },
         { _id: false }
       ),
+    },
+    busyBlockBrief: {
+      type: new Schema({ enabled: { type: Boolean } }, { _id: false }),
     },
   },
   { _id: false }
@@ -449,19 +453,6 @@ export const overdueDeletionRequestFilter = (requestedBefore: Date) => ({
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
     super(model);
-  }
-
-  async claimFreeQuestStart(userId: string, startId: string): Promise<boolean> {
-    const result = await this.model.updateOne(
-      { _id: userId, $or: [{ freeQuestStartId: null }, { freeQuestStartId: startId }] },
-      { $set: { freeQuestStartId: startId } }
-    );
-    return result.matchedCount === 1;
-  }
-
-  /** Clears the free start only while it still holds `startId`, so a later claim is never undone. */
-  async releaseFreeQuestStart(userId: string, startId: string): Promise<void> {
-    await this.model.updateOne({ _id: userId, freeQuestStartId: startId }, { $unset: { freeQuestStartId: 1 } });
   }
 
   /** Remove the given group ids from EVERY user that has them (group-type revoke/delete). */
@@ -1942,6 +1933,65 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Replaces the synced busy blocks (normalized by normalizeBusyBlocks) and the due time of the next block
+   * brief. The write is a compare-and-set on `lastBlockBriefEnd`, so a block the reconciler claims between
+   * the read and the write is never re-armed. Disabling clears the blocks and the due time.
+   */
+  async setBusyBlocks(
+    userId: string,
+    input: { enabled: boolean; blocks: BusyBlockInterval[] },
+    now: Date
+  ): Promise<BusyBlocksState> {
+    await this.ensurePreferencesObject(userId);
+    if (!input.enabled) {
+      await this.model.updateOne(
+        { _id: userId },
+        {
+          $set: { 'preferences.busyBlockBrief': { enabled: false } },
+          $unset: { busyBlocks: 1, busyBlocksSyncedAt: 1, nextBlockBriefAt: 1 },
+        },
+        { runValidators: true }
+      );
+      return { enabled: false, blocks: [], nextBlockBriefAt: null };
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const user = await this.model
+        .findById(userId, { lastBlockBriefEnd: 1 })
+        .lean<Pick<IUserDocument, 'lastBlockBriefEnd'>>();
+      if (!user) return { enabled: false, blocks: [], nextBlockBriefAt: null };
+      const lastBlockBriefEnd = user.lastBlockBriefEnd ?? null;
+      const blocks = normalizeBusyBlocks(input.blocks, { now, lastBlockBriefEnd });
+      const nextBlockBriefAt = blocks[0]?.end ?? null;
+      const set = {
+        'preferences.busyBlockBrief': { enabled: true },
+        busyBlocks: blocks,
+        busyBlocksSyncedAt: now,
+        ...(nextBlockBriefAt ? { nextBlockBriefAt } : {}),
+      };
+      const result = await this.model.updateOne(
+        { _id: userId, lastBlockBriefEnd },
+        nextBlockBriefAt ? { $set: set } : { $set: set, $unset: { nextBlockBriefAt: 1 } },
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return { enabled: true, blocks, nextBlockBriefAt };
+    }
+    throw new Error('Busy blocks changed concurrently; retry the sync');
+  }
+
+  async getBusyBlocks(userId: string): Promise<BusyBlocksState> {
+    const user = await this.model
+      .findById(userId, { 'preferences.busyBlockBrief': 1, busyBlocks: 1, nextBlockBriefAt: 1 })
+      .lean<Pick<IUserDocument, 'preferences' | 'busyBlocks' | 'nextBlockBriefAt'>>();
+    const enabled = user?.preferences?.busyBlockBrief?.enabled === true;
+    if (!enabled) return { enabled: false, blocks: [], nextBlockBriefAt: null };
+    return {
+      enabled,
+      blocks: (user?.busyBlocks ?? []).map(({ start, end }) => ({ start, end })),
+      nextBlockBriefAt: user?.nextBlockBriefAt ?? null,
+    };
+  }
+
+  /**
    * Users whose scheduled brief is due, earliest first. The `$type` term is what lets the planner use the
    * `user_nextBriefAt` partial index; without it the scan is a COLLSCAN plus an in-memory sort.
    */
@@ -1969,6 +2019,103 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     const result = await this.model.updateOne(
       { _id: userId, nextBriefAt: expected },
       next ? { $set: { nextBriefAt: next } } : { $unset: { nextBriefAt: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Users with a busy block that has ended, earliest first. Uses the `user_nextBlockBriefAt` partial index. */
+  async findDueBlockBriefs(
+    now: Date,
+    limit: number
+  ): Promise<{ id: string; blocks: BusyBlockInterval[]; nextBlockBriefAt: Date; lastBlockBriefEnd: Date | null }[]> {
+    const users = await this.model
+      .find(
+        { nextBlockBriefAt: { $type: 'date', $lte: now } },
+        { busyBlocks: 1, nextBlockBriefAt: 1, lastBlockBriefEnd: 1 }
+      )
+      .sort({ nextBlockBriefAt: 1 })
+      .limit(limit)
+      .lean<(Pick<IUserDocument, 'busyBlocks' | 'lastBlockBriefEnd'> & { _id: unknown; nextBlockBriefAt: Date })[]>();
+    return users.map(user => ({
+      id: String(user._id),
+      blocks: (user.busyBlocks ?? []).map(({ start, end }) => ({ start, end })),
+      nextBlockBriefAt: user.nextBlockBriefAt,
+      lastBlockBriefEnd: user.lastBlockBriefEnd ?? null,
+    }));
+  }
+
+  /**
+   * Compare-and-set on the block-brief pair (`nextBlockBriefAt`, `lastBlockBriefEnd`); null means unset.
+   * Claiming a due block moves the pair forward. False means the pair changed since the caller read it
+   * (another run claimed the block, or a sync re-armed it).
+   */
+  async advanceNextBlockBriefAt(
+    userId: string,
+    expected: { nextBlockBriefAt: Date | null; lastBlockBriefEnd: Date | null },
+    next: { nextBlockBriefAt: Date | null; lastBlockBriefEnd: Date | null }
+  ): Promise<boolean> {
+    const $set: Record<string, Date> = {};
+    const $unset: Record<string, 1> = {};
+    for (const key of ['nextBlockBriefAt', 'lastBlockBriefEnd'] as const) {
+      const value = next[key];
+      if (value) $set[key] = value;
+      else $unset[key] = 1;
+    }
+    const result = await this.model.updateOne(
+      { _id: userId, nextBlockBriefAt: expected.nextBlockBriefAt, lastBlockBriefEnd: expected.lastBlockBriefEnd },
+      { ...(Object.keys($set).length ? { $set } : {}), ...(Object.keys($unset).length ? { $unset } : {}) },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Hands a claimed block back so a later run retries it: restores `lastBlockBriefEnd`, re-adds the block
+   * when a sync since the claim dropped it, and moves `nextBlockBriefAt` back to its end. False when a later
+   * claim moved past it or the opt-in was turned off.
+   */
+  async releaseBlockBriefClaim(
+    userId: string,
+    block: BusyBlockInterval,
+    previousLastBlockBriefEnd: Date | null
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const user = await this.model
+        .findById(userId, { 'preferences.busyBlockBrief': 1, busyBlocks: 1, nextBlockBriefAt: 1, lastBlockBriefEnd: 1 })
+        .lean<Pick<IUserDocument, 'preferences' | 'busyBlocks' | 'nextBlockBriefAt' | 'lastBlockBriefEnd'>>();
+      if (user?.preferences?.busyBlockBrief?.enabled !== true) return false;
+      if (user.lastBlockBriefEnd?.getTime() !== block.end.getTime()) return false;
+      const stored = (user.busyBlocks ?? []).map(({ start, end }) => ({ start, end }));
+      const blocks = stored.some(b => b.end.getTime() === block.end.getTime())
+        ? stored
+        : [...stored, block].sort((a, b) => a.start.getTime() - b.start.getTime());
+      const current = user.nextBlockBriefAt ?? null;
+      const next = current && current.getTime() < block.end.getTime() ? current : block.end;
+      const result = await this.model.updateOne(
+        { _id: userId, lastBlockBriefEnd: block.end, nextBlockBriefAt: current },
+        previousLastBlockBriefEnd
+          ? { $set: { busyBlocks: blocks, nextBlockBriefAt: next, lastBlockBriefEnd: previousLastBlockBriefEnd } }
+          : { $set: { busyBlocks: blocks, nextBlockBriefAt: next }, $unset: { lastBlockBriefEnd: 1 } },
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Moves an enabled schedule's due time earlier to `at`, never later, so an approved reminder starts a brief
+   * when it falls due. A user with no enabled schedule is left alone; false when nothing moved.
+   */
+  async pullNextBriefAtForward(userId: string, at: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: userId,
+        'preferences.briefSchedule.enabled': true,
+        $or: [{ nextBriefAt: { $exists: false } }, { nextBriefAt: null }, { nextBriefAt: { $gt: at } }],
+      },
+      { $set: { nextBriefAt: at } },
       { runValidators: true }
     );
     return result.modifiedCount === 1;
@@ -2215,6 +2362,15 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
     nextBriefAt: { type: Date },
     lastBriefStartedAt: { type: Date },
+    busyBlocks: {
+      type: [
+        new Schema({ start: { type: Date, required: true }, end: { type: Date, required: true } }, { _id: false }),
+      ],
+      default: undefined,
+    },
+    busyBlocksSyncedAt: { type: Date },
+    nextBlockBriefAt: { type: Date },
+    lastBlockBriefEnd: { type: Date },
     accountFilePurge: {
       type: new Schema(
         {
@@ -2784,6 +2940,11 @@ UserSchema.index(
 UserSchema.index(
   { nextBriefAt: 1 },
   { partialFilterExpression: { nextBriefAt: { $type: 'date' } }, name: 'user_nextBriefAt' }
+);
+// Serves the block-end brief due scan; only opted-in users with a pending block carry the field.
+UserSchema.index(
+  { nextBlockBriefAt: 1 },
+  { partialFilterExpression: { nextBlockBriefAt: { $type: 'date' } }, name: 'user_nextBlockBriefAt' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 

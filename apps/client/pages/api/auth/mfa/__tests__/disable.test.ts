@@ -48,6 +48,7 @@ async function postDisable() {
   const { req, res } = createMocks({ method: 'POST' });
   // any: node-mocks-http requests are not structurally the typed Express request.
   (req as any).user = { id: 'u1' };
+  Object.assign(req, { logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } });
   await (handler as unknown as Handler)(req, res);
   return res;
 }

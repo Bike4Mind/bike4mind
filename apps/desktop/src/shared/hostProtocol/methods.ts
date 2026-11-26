@@ -1,7 +1,9 @@
 import { z, type ZodType } from 'zod';
+import { sessionPageRequestSchema } from '../sessionPage';
 import { eventCursorSchema } from './cursor';
 import { hostProtocolVersionSchema, hostCapabilitiesSchema } from './version';
 import {
+  backgroundProcessPayloadSchema,
   chatApprovalAnswerPayloadSchema,
   chatModelCatalogPayloadSchema,
   chatQueuedMessagePayloadSchema,
@@ -14,6 +16,7 @@ import {
   createCodeSessionResultPayloadSchema,
   newSessionDefaultsPayloadSchema,
   pendingTaskDecisionPayloadSchema,
+  projectInspectionPayloadSchema,
   sendMessageRequestPayloadSchema,
   sendMessageResultPayloadSchema,
   taskDecisionAnswerPayloadSchema,
@@ -37,6 +40,24 @@ const hostInfoSchema = z.object({
 });
 
 const sessionIdParams = z.object({ sessionId: z.string() });
+
+const recentFoldersResult = z.object({ folders: z.array(z.object({ path: z.string(), name: z.string() })) });
+
+/** The facts a client shows before archiving a parent; `status` stays a string so a newer host may add one. */
+const archiveConfirmationSchema = z.object({
+  parentTitle: z.string(),
+  finished: z.array(z.object({ id: z.string(), title: z.string() })),
+  kept: z.array(z.object({ id: z.string(), title: z.string(), status: z.string() })),
+});
+
+/**
+ * The `data` of the protocol's method-specific errors (see HOST_ERROR_CODES). `reason` is a
+ * string for the same reason: a newer host may report one this client has not seen.
+ */
+export const hostErrorData = {
+  pathUnavailable: z.object({ path: z.string(), reason: z.string() }),
+  processNotFound: z.object({ sessionId: z.string(), processId: z.string() }),
+} as const satisfies Record<string, ZodType>;
 
 /** Mirrors answerTaskDecision's arguments; an approval's `requestId` is the id respondToApproval takes. */
 const requestRespondParams = z.discriminatedUnion('kind', [
@@ -66,12 +87,23 @@ export const hostMethods = {
   },
   'host/auth/status': { params: noParams, result: z.object({ account: hostAccountSchema.nullable() }) },
   'session/list': { params: noParams, result: z.object({ sessions: z.array(chatSessionSummaryPayloadSchema) }) },
+  // The sidebar's paged view of session/list; see shared/sessionPage.
+  'session/page': {
+    params: sessionPageRequestSchema,
+    result: z.object({
+      sessions: z.array(chatSessionSummaryPayloadSchema),
+      related: z.array(chatSessionSummaryPayloadSchema),
+      nextCursor: z.string().nullable(),
+      total: z.number().int().nonnegative(),
+    }),
+  },
   'session/get': {
     params: z.object({ sessionId: z.string(), viewed: z.boolean().optional() }),
     result: z.object({ session: chatSessionPayloadSchema.nullable(), cursor: eventCursorSchema }),
   },
   // Absent params start a plain chat session, like chatCreateSession; the reply is the Code
-  // session's result shape, with a plain chat session reported as ok: true.
+  // session's result shape, with a plain chat session reported as ok: true. Sidebar placement
+  // is the client's own, so the request carries no section.
   'session/create': {
     params: createCodeSessionRequestPayloadSchema.optional(),
     result: createCodeSessionResultPayloadSchema,
@@ -80,9 +112,20 @@ export const hostMethods = {
     params: z.object({ sessionId: z.string(), title: z.string() }),
     result: z.object({ summary: chatSessionSummaryPayloadSchema.nullable() }),
   },
+  // Archiving a parent with live sub-sessions changes nothing until `confirmed`; until then the
+  // result has a null summary and the question in `confirmationRequired`. `archiveChildIds` are
+  // the finished sub-sessions the user chose to archive with it, each rechecked by the host.
   'session/setArchived': {
-    params: z.object({ sessionId: z.string(), archived: z.boolean() }),
-    result: z.object({ summary: chatSessionSummaryPayloadSchema.nullable() }),
+    params: z.object({
+      sessionId: z.string(),
+      archived: z.boolean(),
+      confirmed: z.boolean().optional(),
+      archiveChildIds: z.array(z.string()).optional(),
+    }),
+    result: z.object({
+      summary: chatSessionSummaryPayloadSchema.nullable(),
+      confirmationRequired: archiveConfirmationSchema.optional(),
+    }),
   },
   'session/delete': {
     params: z.object({ sessionId: z.string(), removeWorktree: z.boolean().optional() }),
@@ -104,19 +147,38 @@ export const hostMethods = {
   'queue/list': { params: sessionIdParams, result: z.object({ queued: z.array(chatQueuedMessagePayloadSchema) }) },
   'queue/cancel': { params: z.object({ sessionId: z.string(), queuedId: z.string() }), result: emptyResult },
   'queue/sendNow': { params: z.object({ sessionId: z.string(), queuedId: z.string() }), result: emptyResult },
-  'background/stop': { params: z.object({ sessionId: z.string(), processId: z.string() }), result: emptyResult },
-  // Directories only; an absent path means the host's home directory.
+  // An unknown process fails with processNotFound; one that had already ended comes back as it is.
+  'background/stop': {
+    params: z.object({ sessionId: z.string(), processId: z.string() }),
+    result: z.object({ process: backgroundProcessPayloadSchema.optional() }),
+  },
+  // Directories only, never file contents; an absent path means the host's home directory, and
+  // `~` or a relative path is taken from it. A path that is missing, not a directory or not
+  // readable fails with pathUnavailable. `truncated` says the entry cap cut the list.
   'fs/browse': {
     params: z.object({ path: z.string().optional() }),
     result: z.object({
       path: z.string(),
       parent: z.string().nullable(),
-      entries: z.array(z.object({ name: z.string(), path: z.string(), isGitRepository: z.boolean() })),
+      entries: z.array(
+        z.object({
+          name: z.string(),
+          path: z.string(),
+          isGitRepository: z.boolean(),
+          isHidden: z.boolean().optional(),
+          isSymlink: z.boolean().optional(),
+        })
+      ),
+      truncated: z.boolean().optional(),
     }),
   },
-  'project/recent': {
-    params: noParams,
-    result: z.object({ folders: z.array(z.object({ path: z.string(), name: z.string() })) }),
+  'project/recent': { params: noParams, result: recentFoldersResult },
+  // Replies with the list as it now stands.
+  'project/forgetRecent': { params: z.object({ path: z.string() }), result: recentFoldersResult },
+  // What a folder offers a new Code session: whether it is a repository, and its branches.
+  'project/inspect': {
+    params: z.object({ directory: z.string() }),
+    result: z.object({ inspection: projectInspectionPayloadSchema }),
   },
   'model/list': {
     params: z.object({ force: z.union([z.boolean(), z.literal('local')]).optional() }),

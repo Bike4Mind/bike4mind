@@ -78,15 +78,11 @@ async function fetchEventMetrics(filters: EventMetricsFilters): Promise<EventMet
     query.counterName = eventFilter;
   }
 
-  console.log('📊 Event metrics query filters:', { dateFrom, dateTo, userFilter, eventFilter, eventCategoryFilter });
-
   // Query counter logs with filters, sorted by most recent first
   const counterLogs = await CounterLog.find(query)
     .sort({ datetime: -1 })
     .limit(1000) // Limit for performance
     .lean();
-
-  console.log(`Found ${counterLogs.length} event logs`);
 
   // Transform the data into the format expected by the frontend
   let metrics: EventMetricResponse[] = counterLogs.map(log => {
@@ -132,8 +128,6 @@ export const EVENT_METRICS_RATE_LIMIT = 30;
 const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: EVENT_METRICS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-event-metrics' }))
   .get(async (req: Request<{}, {}, {}, EventMetricsQuery>, res) => {
-    console.log('Event metrics API called');
-
     try {
       const { recache, ...filters } = req.query;
 
@@ -145,10 +139,9 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
         logger: req.logger,
       });
 
-      console.log(`Returning ${metrics.length} event metrics (cached: ${!recache})`);
       return res.json(metrics);
     } catch (error) {
-      console.error('Error fetching event metrics:', error);
+      req.logger.error('Error fetching event metrics', { error });
       return res.status(500).json({
         error: 'Failed to fetch event metrics',
         message: error instanceof Error ? error.message : 'Unknown error',
