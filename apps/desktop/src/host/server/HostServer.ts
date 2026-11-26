@@ -19,16 +19,15 @@ import { sessionForRenderer } from '../../main/chat/ChatService';
 import type { HostRuntime } from '../HostRuntime';
 import type { HostEventSink } from '../ports';
 import type { HostEventSource } from './HostEventRelay';
+import type { HostControl } from './hostControl';
+import { HostMethodError } from './HostMethodError';
+import { hostControlHandlers, watchHostAccount } from './hostMethods';
 
 /**
  * Methods the protocol defines that this host does not serve yet, each answered with "method not
  * found". Each one leaves this list in the change that gives HostRuntime a method to back it.
  */
 export const pendingHostMethods = [
-  'host/initialize',
-  'host/info',
-  'host/auth/start',
-  'host/auth/status',
   'session/create',
   'session/setArchived',
   'request/respond',
@@ -83,17 +82,6 @@ type Handler<M extends ServedHostMethod> = (
 ) => HostResult<M> | Promise<HostResult<M>>;
 type Handlers = { [M in ServedHostMethod]: Handler<M> };
 
-/** A failure a handler means to send as-is, rather than as an internal error. */
-class HostMethodError extends Error {
-  constructor(
-    readonly code: number,
-    message: string,
-    readonly data?: unknown
-  ) {
-    super(message);
-  }
-}
-
 const pendingMethods: ReadonlySet<string> = new Set(pendingHostMethods);
 
 const isServed = (method: HostMethod): method is ServedHostMethod => !pendingMethods.has(method);
@@ -114,14 +102,20 @@ export class HostServer {
   private readonly connections = new Set<Connection>();
   private readonly handlers: Handlers;
   private readonly unsubscribe: () => void;
+  private readonly unwatchAccount: () => void;
 
+  /** Without `control` the `host/*` methods answer "method not found". */
   constructor(
     private readonly runtime: HostServerRuntime,
     events: HostEventSource,
-    private readonly logger: HostServerLogger
+    private readonly logger: HostServerLogger,
+    private readonly control?: HostControl
   ) {
     this.handlers = this.createHandlers();
     this.unsubscribe = events.subscribe(this.eventSink());
+    this.unwatchAccount = control
+      ? watchHostAccount(control, account => this.broadcast(notification('host/stateChanged', { account })))
+      : () => undefined;
   }
 
   connect(notify: (notification: HostNotification) => void): HostServerConnection {
@@ -139,6 +133,7 @@ export class HostServer {
   /** Stops watching the runtime and drops every connection. */
   dispose(): void {
     this.unsubscribe();
+    this.unwatchAccount();
     this.connections.clear();
   }
 
@@ -176,6 +171,7 @@ export class HostServer {
   private createHandlers(): Handlers {
     const runtime = this.runtime;
     return {
+      ...hostControlHandlers(this.control),
       'session/list': async () => ({ sessions: await runtime.listSessions() }),
       'session/page': request => runtime.listSessionPage(request),
       'session/get': async ({ sessionId, viewed }) => {
