@@ -23,6 +23,7 @@ import type {
   ChatSpawnSuggestion,
   ChatToolNotice,
   ChatUsage,
+  OrchestratorLabel,
   RelayRefusal,
   SpawnRefusal,
 } from '@shared/chat';
@@ -373,6 +374,11 @@ export interface ModelContext {
  * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
  * which get exactly {@link WebContext}.
  */
+/** Sets the calling session's orchestrator label override; false when the session is gone. */
+export interface OrchestratorLabelContext {
+  set(label: OrchestratorLabel): Promise<boolean>;
+}
+
 export interface ToolContext {
   /** Granted roots. Empty means the user has allowed nothing, and every path tool denies. */
   roots: readonly string[];
@@ -454,6 +460,11 @@ export interface ToolContext {
   mcp?: McpToolContext;
   /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
   pullRequests?: PullRequestContext;
+  /**
+   * The calling session's sidebar orchestrator label, bound to that session alone. Absent in tests;
+   * session_orchestrator_label then refuses.
+   */
+  orchestratorLabel?: OrchestratorLabelContext;
   /** The calling session's /loop. Absent when no user is present; the `loop` tool then refuses. */
   loop?: LoopContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
@@ -550,8 +561,7 @@ export interface HostSessionView {
  * one in it that is neither the caller nor a child of it, so the model cannot probe either.
  */
 export type HostRenameOutcome =
-  | { ok: true; session: HostSessionView }
-  | { ok: false; reason: 'out-of-scope' | 'user-title' };
+  { ok: true; session: HostSessionView } | { ok: false; reason: 'out-of-scope' | 'user-title' };
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
 export interface SpawnRejected {

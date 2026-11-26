@@ -57,6 +57,8 @@ let host: HTMLElement | null = null;
 let onSelect = vi.fn<(id: string) => void>();
 let statuses = new Map<string, ChatSessionStatus>();
 let renameSession = vi.fn<(id: string, title: string) => Promise<ChatSessionSummary | null>>();
+/** The sessions owner's live summary listener, so a test can push what main would. */
+let pushSummary: ((summary: ChatSessionSummary) => void) | null = null;
 let setSessionOrchestratorLabel = vi.fn<(id: string, label: OrchestratorLabel) => Promise<ChatSessionSummary | null>>();
 
 /** The real sessions owner under the list, so a rename travels the same path it does in the app. */
@@ -111,7 +113,10 @@ async function mount(
     host: chatBackedHostBridge(),
     chat: {
       listSessions: async () => sessions,
-      onSessionSummary: () => () => undefined,
+      onSessionSummary: (listener: (summary: ChatSessionSummary) => void) => {
+        pushSummary = listener;
+        return () => undefined;
+      },
       onStreamEvent: () => () => undefined,
       renameSession,
       setSessionOrchestratorLabel,
@@ -550,6 +555,14 @@ describe('sub-sessions an agent spawned', () => {
     await settle();
     expect(setSessionOrchestratorLabel).toHaveBeenLastCalledWith('root', 'auto');
     expect(glyphOn('Root')).not.toBeNull();
+  });
+
+  it('redraws the glyph when main pushes a label the agent set', async () => {
+    await mount([summary('plain', 'Plain')]);
+    expect(glyphOn('Plain')).toBeNull();
+    act(() => pushSummary?.(summary('plain', 'Plain', { orchestratorLabel: 'on' })));
+    await settle();
+    expect(glyphOn('Plain')).not.toBeNull();
   });
 
   it('pins the label on for a session the automatic rule leaves unmarked', async () => {

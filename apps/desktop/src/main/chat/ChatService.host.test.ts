@@ -34,6 +34,8 @@ describe('ChatService app-control tools', () => {
   let projectB: string;
   /** Every approval the gate raised, so a test can count the asks rather than infer them. */
   let asked: { approvalId: string; toolName: string }[];
+  /** Every summary the service pushed to the renderer, which is what redraws the sidebar row. */
+  let pushed: ChatSessionSummary[];
 
   beforeEach(async () => {
     projectA = await realpath(await mkdtemp(join(tmpdir(), 'b4m-host-a-')));
@@ -45,6 +47,8 @@ describe('ChatService app-control tools', () => {
     const opened: PassThrough[] = [];
     streams = opened;
     asked = [];
+    const summaries: ChatSessionSummary[] = [];
+    pushed = summaries;
     const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
       opened.push(stream);
@@ -64,6 +68,7 @@ describe('ChatService app-control tools', () => {
           getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
+      summaryChanged: summary => summaries.push(summary),
       emit: event => {
         emitted.push(event);
         // Stand in for the user, answering every ask the moment it is raised. 'always' is
@@ -154,7 +159,8 @@ describe('ChatService app-control tools', () => {
     const chatTools = (post.mock.calls[0][1].options.tools as { toolSchema: { name: string } }[]).map(
       entry => entry.toolSchema.name
     );
-    expect(chatTools.filter(name => name.startsWith('session_'))).toEqual([]);
+    // The orchestrator label needs no project: it labels the caller's own row.
+    expect(chatTools.filter(name => name.startsWith('session_'))).toEqual(['session_orchestrator_label']);
 
     const code = await codeSession(projectA);
     await service.send(code.id, 'hello');
@@ -163,6 +169,7 @@ describe('ChatService app-control tools', () => {
       entry => entry.toolSchema.name
     );
     expect(codeTools.filter(name => name.startsWith('session_'))).toEqual([
+      'session_orchestrator_label',
       'session_list',
       'session_read',
       'session_send',
@@ -408,6 +415,69 @@ describe('ChatService app-control tools', () => {
     callTool(await awaitStreamOf('tidy up'), 'c2', 'session_archive', { session_id: other.id, archived: false });
     await vi.waitUntil(() => settled('session_archive').length === 2, { timeout: 5000, interval: 5 });
     expect((await store.get(other.id))?.archived).toBeUndefined();
+  });
+
+  describe('session_orchestrator_label', () => {
+    const outcomeOf = (index: number): string => JSON.stringify(settled('session_orchestrator_label')[index] ?? null);
+    const labelCall = async (prompt: string, id: string, args: Record<string, unknown>, count: number) => {
+      callTool(await awaitStreamOf(prompt), id, 'session_orchestrator_label', args);
+      await vi.waitUntil(() => settled('session_orchestrator_label').length === count, { timeout: 5000, interval: 5 });
+    };
+
+    it('sets and clears the label on the calling conversation, with no card, and pushes it to the sidebar', async () => {
+      const mine = await codeSession(projectA);
+
+      await service.send(mine.id, 'mark yourself');
+      await labelCall('mark yourself', 'c1', { label: 'on' }, 1);
+      expect(await store.get(mine.id)).toMatchObject({ orchestratorLabel: 'on' });
+      expect(pushed.findLast(summary => summary.id === mine.id)).toMatchObject({ orchestratorLabel: 'on' });
+
+      await labelCall('mark yourself', 'c2', { label: 'off' }, 2);
+      expect(await store.get(mine.id)).toMatchObject({ orchestratorLabel: 'off' });
+
+      await labelCall('mark yourself', 'c3', { label: 'auto' }, 3);
+      expect(await store.get(mine.id)).not.toHaveProperty('orchestratorLabel');
+      expect(pushed.findLast(summary => summary.id === mine.id)).not.toHaveProperty('orchestratorLabel');
+      expect(asked.filter(entry => entry.toolName === 'session_orchestrator_label')).toEqual([]);
+    });
+
+    it('works in a Chat session with no project', async () => {
+      const chat = await service.createSession();
+      await service.send(chat.id, 'mark the chat');
+      await labelCall('mark the chat', 'c1', { label: 'on' }, 1);
+      expect(await store.get(chat.id)).toMatchObject({ orchestratorLabel: 'on' });
+    });
+
+    it('never touches another conversation, even when one is named', async () => {
+      const mine = await codeSession(projectA);
+      const sibling = await codeSession(projectA);
+
+      await service.send(mine.id, 'mark the sibling');
+      await labelCall('mark the sibling', 'c1', { label: 'on', session_id: sibling.id }, 1);
+      expect(await store.get(sibling.id)).not.toHaveProperty('orchestratorLabel');
+      expect(await store.get(mine.id)).toMatchObject({ orchestratorLabel: 'on' });
+    });
+
+    it('leaves Orchestrate and the spawn gate alone', async () => {
+      const mine = await codeSession(projectA);
+      const approvalMode = (await store.get(mine.id))?.approvalMode;
+
+      await service.send(mine.id, 'mark only');
+      await labelCall('mark only', 'c1', { label: 'on' }, 1);
+      const stored = await store.get(mine.id);
+      expect(stored).not.toHaveProperty('orchestrate');
+      expect(stored).not.toHaveProperty('orchestrator');
+      expect(stored?.approvalMode).toBe(approvalMode);
+      expect(outcomeOf(0)).toMatch(/Orchestrate mode and spawn approvals are unchanged/);
+    });
+
+    it('refuses an unknown label', async () => {
+      const mine = await codeSession(projectA);
+      await service.send(mine.id, 'bad label');
+      await labelCall('bad label', 'c1', { label: 'maybe' }, 1);
+      expect(outcomeOf(0)).toMatch(/argument must be .*on.*off.*auto/);
+      expect(await store.get(mine.id)).not.toHaveProperty('orchestratorLabel');
+    });
   });
 
   describe('session_rename', () => {
