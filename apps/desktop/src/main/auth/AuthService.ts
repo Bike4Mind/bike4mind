@@ -66,6 +66,8 @@ export interface AuthServiceDeps {
   devFallback: boolean;
   userAgent: string;
   onStateChanged(state: AuthState): void;
+  /** The RFC 8628 client id to sign in with; defaults to {@link DESKTOP_OAUTH_CLIENT_ID}. */
+  clientId?: OAuthDeviceClientId;
   /**
    * Where the signed-in user's picture is kept. Optional: without it the panel draws initials,
    * which is also what every failure along the way falls back to.
@@ -716,7 +718,7 @@ export class AuthService {
   private buildDeviceFlowClient(baseUrl: string): DeviceFlowClient {
     return (
       this.deps.createDeviceFlowClient?.(baseUrl) ??
-      new DeviceFlowClient({ baseUrl, clientId: DESKTOP_OAUTH_CLIENT_ID })
+      new DeviceFlowClient({ baseUrl, clientId: this.deps.clientId ?? DESKTOP_OAUTH_CLIENT_ID })
     );
   }
 
