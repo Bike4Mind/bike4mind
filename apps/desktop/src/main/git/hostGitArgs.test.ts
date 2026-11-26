@@ -3,7 +3,15 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { gitArgumentPath, gitCommand, hostGitArgs, hostNetworkGitArgs, type ScopedConfigReader } from './hostGitArgs';
+import {
+  gitArgumentPath,
+  gitCommand,
+  hostGitArgs,
+  hostNetworkGitArgs,
+  hostWorkTreeGitArgs,
+  RepositoryFilterError,
+  type ScopedConfigReader,
+} from './hostGitArgs';
 
 vi.mock('../chat/tools/userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('../chat/tools/userPath')>()),
@@ -35,6 +43,96 @@ describe('hostGitArgs', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it.skipIf(process.platform === 'win32')('runs no filter or diff program the repository config sets', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'host-git-'));
+    try {
+      const marker = join(dir, 'marker');
+      const script = join(dir, 'filter.sh');
+      writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\ncat\n`);
+      chmodSync(script, 0o755);
+      const run = (args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+      run(['init', '--quiet']);
+      writeFileSync(join(dir, 'file.txt'), 'one\n');
+      run(['add', 'file.txt']);
+      run(['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', 'first']);
+      run(['config', 'filter.evil.clean', script]);
+      run(['config', 'filter.evil.process', script]);
+      run(['config', 'filter.evil.required', 'true']);
+      run(['config', 'diff.evil.textconv', script]);
+      writeFileSync(join(dir, '.git', 'info', 'attributes'), '* filter=evil diff=evil\n');
+      writeFileSync(join(dir, 'file.txt'), 'two\n');
+      run(await hostWorkTreeGitArgs(['status', '--porcelain'], dir));
+      run(await hostWorkTreeGitArgs(['diff', '--numstat', 'HEAD', '--'], dir));
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  describe('hostWorkTreeGitArgs', () => {
+    const read = (entries: Array<[string, string, string]>) => async () =>
+      entries.map(([scope, key, value]) => ({ scope, key, value }));
+
+    it('pins a driver the repository redefines to the global value, and empties one only it defines', async () => {
+      const args = await hostWorkTreeGitArgs(
+        ['status'],
+        '/repo',
+        read([
+          ['global', 'filter.lfs.process', 'git-lfs filter-process'],
+          ['local', 'filter.lfs.process', 'touch marker'],
+          ['local', 'filter.evil.clean', 'touch marker'],
+          ['local', 'filter.evil.required', 'true'],
+        ])
+      );
+      expect(args).toContain('filter.lfs.process=git-lfs filter-process');
+      expect(args).toContain('filter.evil.clean=');
+      expect(args).toContain('filter.evil.required=false');
+      expect(args.at(-1)).toBe('status');
+    });
+
+    it('adds nothing for drivers only the user config sets', async () => {
+      const args = await hostWorkTreeGitArgs(
+        ['status'],
+        '/repo',
+        read([['global', 'filter.lfs.clean', 'git-lfs clean']])
+      );
+      expect(args).toEqual(hostGitArgs(['status'], '/repo'));
+    });
+
+    it('refuses a call that writes work-tree files while a filter only the repository sets is emptied', async () => {
+      const repoOnly = read([['local', 'filter.crypt.smudge', 'git-crypt smudge']]);
+      for (const args of [
+        ['switch', 'main'],
+        ['checkout', 'main'],
+        ['worktree', 'add', '../wt', 'main'],
+        ['stash', 'pop'],
+      ]) {
+        await expect(hostWorkTreeGitArgs(args, '/repo', repoOnly)).rejects.toThrow(RepositoryFilterError);
+      }
+      // Reads, a worktree removal, and a filter the user's own config also sets still run.
+      await expect(hostWorkTreeGitArgs(['status'], '/repo', repoOnly)).resolves.toContain('filter.crypt.smudge=');
+      await expect(hostWorkTreeGitArgs(['worktree', 'remove', '../wt'], '/repo', repoOnly)).resolves.toBeDefined();
+      await expect(
+        hostWorkTreeGitArgs(
+          ['switch', 'main'],
+          '/repo',
+          read([
+            ['global', 'filter.lfs.smudge', 'git-lfs smudge -- %f'],
+            ['local', 'filter.lfs.smudge', 'touch marker'],
+            ['local', 'diff.x.textconv', 'touch marker'],
+          ])
+        )
+      ).resolves.toContain('filter.lfs.smudge=git-lfs smudge -- %f');
+    });
+
+    it('refuses when the settings cannot be read or a name cannot be pinned', async () => {
+      await expect(hostWorkTreeGitArgs(['status'], '/repo', async () => null)).rejects.toThrow();
+      await expect(
+        hostWorkTreeGitArgs(['status'], '/repo', read([['local', 'filter.a=b.clean', 'touch marker']]))
+      ).rejects.toThrow();
+    });
   });
 
   describe('hostNetworkGitArgs', () => {
@@ -74,6 +172,23 @@ describe('hostGitArgs', () => {
         'credential.https://github.com.helper=',
         'credential.https://github.com.helper=!gh auth git-credential',
       ]);
+    });
+
+    it('refuses the transports that would run an upload-pack or proxy program the repo sets', async () => {
+      const plain = await hostNetworkGitArgs(['fetch'], '/repo', config([]), {});
+      expect(plain).toContain('protocol.ext.allow=never');
+      expect(plain).not.toContain('protocol.file.allow=never');
+      const set = await hostNetworkGitArgs(
+        ['fetch'],
+        '/repo',
+        config([
+          ['local', 'remote.origin.uploadpack', 'touch marker'],
+          ['local', 'core.gitproxy', 'touch marker'],
+        ]),
+        {}
+      );
+      expect(set).toContain('protocol.file.allow=never');
+      expect(set).toContain('protocol.git.allow=never');
     });
 
     it('leaves sshCommand and askPass alone when the repo does not set them', async () => {
