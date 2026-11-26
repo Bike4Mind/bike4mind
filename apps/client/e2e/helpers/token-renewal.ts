@@ -41,7 +41,7 @@ function expiresSoon(accessToken: string): boolean {
 /**
  * Run `fn` holding a lock file that every worker process sees. Returns false if the wait ran out.
  * The file holds the owner's id so a slow holder never deletes a lock another worker has since
- * taken, and a stale lock is renamed away (one winner) rather than deleted in place.
+ * taken, and a stale lock is renamed away and, if it turns out to be a live one, put back.
  */
 export async function withLock(name: string, fn: () => Promise<void>): Promise<boolean> {
   const lockPath = path.resolve(AUTH_DIR, `${name}.renew.lock`);
@@ -57,7 +57,10 @@ export async function withLock(name: string, fn: () => Promise<void>): Promise<b
       if (heldSince !== undefined && Date.now() - heldSince > LOCK_STALE_MS) {
         const aside = `${lockPath}.${owner}.stale`;
         try {
+          const staleOwner = fs.readFileSync(lockPath, 'utf-8');
           fs.renameSync(lockPath, aside);
+          // The lock may have been replaced between the stat and the rename: put a live one back.
+          if (fs.readFileSync(aside, 'utf-8') !== staleOwner) fs.linkSync(aside, lockPath);
           fs.rmSync(aside, { force: true });
         } catch {
           // Another worker broke or released it first; loop and try to take it.
