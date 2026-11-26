@@ -73,7 +73,7 @@ type ShotReport = {
   clipFileId?: string;
   pending?: string[];
   problem?: string;
-  /** Characters the shot features whose image did not fit the model's reference cap. */
+  /** Characters the shot features left out of the references: image over the model's cap, or not usable as one. */
   charactersDropped?: { names: string[]; model?: string };
 };
 
@@ -161,9 +161,10 @@ async function makeTakes(
   const dropped = new Map<string, NonNullable<ShotReport['charactersDropped']>>();
   for (const shot of toShoot) {
     const prompt = buildShotImagePrompt(shot.prompt as string, composition.brandKit.colors, references.length > 0);
-    const characters = shotCharacters(shot, composition.brandKit.characters).filter(character =>
-      states.has(character.fileId)
-    );
+    const featured = shotCharacters(shot, composition.brandKit.characters);
+    const characters = featured.filter(character => states.has(character.fileId));
+    const unusable = featured.filter(character => !states.has(character.fileId)).map(character => character.name);
+    if (unusable.length > 0) dropped.set(shot.id, { names: unusable });
     const submitted = await submitShotImages(
       context,
       config,
@@ -178,8 +179,12 @@ async function makeTakes(
       },
       takes
     );
-    if (submitted.ok && submitted.charactersDropped)
-      dropped.set(shot.id, { names: submitted.charactersDropped, model: submitted.model });
+    if (submitted.ok && submitted.charactersDropped) {
+      dropped.set(shot.id, {
+        names: [...(dropped.get(shot.id)?.names ?? []), ...submitted.charactersDropped],
+        model: submitted.model,
+      });
+    }
     if (submitted.ok) started.set(shot.id, submitted.jobIds);
     else if (submitted.notReady) reports.set(shot.id, { id: shot.id, pending: [`takes: ${submitted.message}`] });
     else reports.set(shot.id, { id: shot.id, problem: submitted.message });
@@ -331,8 +336,9 @@ export const productionGenerateShotTool: ToolDefinition = {
               : 'Call production_add_audio, then production_assemble.',
             ...(anyDropped && {
               charactersNote:
-                'Some shots name charactersDropped: the image model takes too few reference images, so the product ' +
-                'came first and those characters were drawn from the prompt alone. Tell the user which shots.',
+                'Some shots name charactersDropped: the image model has too few reference slots, or the character image ' +
+                'cannot be used as a reference (format or ownership), so they were drawn from the prompt alone. ' +
+                'Tell the user which shots.',
             }),
           });
         } catch (error) {

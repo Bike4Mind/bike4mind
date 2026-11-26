@@ -42,12 +42,18 @@ export const removeCharacter = (characters: readonly StudioCharacter[], characte
 
 /**
  * Adds the character to the shot, or takes it off. A new one goes last, since the order decides which characters
- * keep a reference slot on a model with a small cap.
+ * keep a reference slot on a model with a small cap. Ids no longer in the kit are dropped first so they cannot
+ * take up a slot.
  */
-export const toggleShotCharacter = (shots: StudioShot[], shotId: string, characterId: string): StudioShot[] =>
+export const toggleShotCharacter = (
+  shots: StudioShot[],
+  shotId: string,
+  characterId: string,
+  kit: readonly StudioCharacter[]
+): StudioShot[] =>
   shots.map(shot => {
     if (shot.id !== shotId) return shot;
-    const current = shot.characterIds ?? [];
+    const current = (shot.characterIds ?? []).filter(id => kit.some(character => character.id === id));
     const next = current.includes(characterId)
       ? current.filter(id => id !== characterId)
       : [...current, characterId].slice(0, brandCharactersMax);

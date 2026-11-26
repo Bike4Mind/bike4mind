@@ -6,6 +6,7 @@ const FILE_A = 'a'.repeat(24);
 const FILE_B = 'b'.repeat(24);
 
 const maya: StudioCharacter = { id: 'maya', name: 'Maya', fileId: FILE_A };
+const fox: StudioCharacter = { id: 'fox', name: 'Fox', fileId: FILE_B };
 const shot = (id: string, overrides: Partial<StudioShot> = {}): StudioShot => ({
   id,
   title: id,
@@ -44,14 +45,21 @@ describe('renameCharacter / removeCharacter', () => {
 describe('toggleShotCharacter', () => {
   it('adds characters to one shot in the order they are picked', () => {
     const shots = [shot('s1'), shot('s2')];
-    const once = toggleShotCharacter(shots, 's1', 'fox');
-    const twice = toggleShotCharacter(once, 's1', 'maya');
+    const once = toggleShotCharacter(shots, 's1', 'fox', [fox, maya]);
+    const twice = toggleShotCharacter(once, 's1', 'maya', [fox, maya]);
     expect(twice[0]?.characterIds).toEqual(['fox', 'maya']);
     expect(twice[1]).toEqual(shot('s2'));
   });
 
   it('takes a featured character off and drops the field once empty', () => {
     const shots = [shot('s1', { characterIds: ['maya'] })];
-    expect(toggleShotCharacter(shots, 's1', 'maya')[0]).toEqual(shot('s1'));
+    expect(toggleShotCharacter(shots, 's1', 'maya', [maya])[0]).toEqual(shot('s1'));
+  });
+
+  it('drops ids that are no longer in the kit, so they cannot block adding at the cap', () => {
+    const max = STUDIO_COMPOSITION_LIMITS.brandCharactersMax;
+    const stale = Array.from({ length: max }, (_, n) => `gone-${n}`);
+    const shots = [shot('s1', { characterIds: stale })];
+    expect(toggleShotCharacter(shots, 's1', 'maya', [maya])[0]?.characterIds).toEqual(['maya']);
   });
 });

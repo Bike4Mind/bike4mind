@@ -30,8 +30,8 @@ const ShotArg = z.object({
     .max(64)
     .optional()
     .describe(
-      'A current shot id (e.g. "shot-3") to carry over with its prompt, takes, clip and voice line; omit prompt. ' +
-        'A new order moves it. Other fields default to the current ones; voiceLine "" removes it.'
+      'Current shot id (e.g. "shot-3") to carry over with its prompt, takes, clip and voice line; omit prompt. ' +
+        'Other fields default to current; voiceLine "" removes it.'
     ),
   title: z.string().trim().min(1).max(limits.shotTitleMaxLength).optional().describe('A short name, e.g. "Hook".'),
   intent: z
@@ -46,23 +46,20 @@ const ShotArg = z.object({
     .min(1)
     .max(limits.shotPromptMaxLength)
     .optional()
-    .describe(
-      'Image prompt for a new shot: subject, setting, light, camera, and any product. A new prompt makes new takes.'
-    ),
+    .describe('Image prompt for a new shot: subject, setting, light, camera, product. A new prompt makes new takes.'),
   durationSeconds: z.number().min(1).max(30).optional().describe('Length in the cut.'),
   voiceLine: z
     .string()
     .trim()
     .max(limits.shotVoiceLineMaxLength)
     .optional()
-    .describe('Voiceover line and caption for the shot, about 2 words per second of shot; a longer line is cut.'),
+    .describe('Voiceover and caption, about 2 words per second; a longer line is cut.'),
   characters: z
     .array(z.string().trim().min(1).max(limits.characterNameMaxLength))
     .max(limits.brandCharactersMax)
     .optional()
     .describe(
-      "The brand kit's saved characters (names or ids) who appear in this shot, most important first; their images " +
-        "become references for new takes. Defaults to the kept shot's; [] removes them."
+      'Brand kit character names or ids in this shot, in reference order. Omit to keep the current; [] removes.'
     ),
 });
 
@@ -74,10 +71,9 @@ const schema = z.object({
     .min(1)
     .max(limits.briefSummaryMaxLength)
     .optional()
-    .describe("The one-line brief to save on the production, when the user gave one that isn't saved yet."),
+    .describe("The one-line brief to save, when the user gave one that isn't saved yet."),
   productFileId: StudioFileIdSchema.optional().describe(
-    'The product photo (a Files id) for the shots; saved to the brand kit behind a product look already there, which ' +
-      'stays the first reference.'
+    'Product photo (a Files id); saved to the brand kit behind any product look there, which stays first reference.'
   ),
   shots: z.array(ShotArg).min(1).max(STORYBOARD_MAX_SHOTS),
   rewriteLines: z
@@ -85,22 +81,22 @@ const schema = z.object({
     .optional()
     .describe(
       'Only when the user asked to reword or remove voice lines, incl. removing a shot or rewriting the ad. ' +
-        'Without it every current line must still be said word for word, though it may be split over shots.'
+        'Without it every current line must stay word for word, though it may be split over shots.'
     ),
   replace: z
     .boolean()
     .optional()
     .describe(
       'Only when the user asked for new pictures: lets a shot with takes get a new prompt or be removed, and cuts ' +
-        'voice lines a re-time leaves without room. Never lengthens a shot past its clip.'
+        'voice lines a re-time leaves no room for.'
     ),
 });
 type StoryboardArgs = z.infer<typeof schema>;
 
 const description =
   'Write the storyboard of a Studio production: every shot in order with its image prompt, length and voice line. ' +
-  'Carry over each current shot you are not re-imagining with keep. Plan the shots as the system context says; for ' +
-  'an ad, about 4 for 15 seconds (hook, product, benefit, call to action). Then call production_generate_shot.';
+  'Carry over each current shot you are not re-imagining with keep. Plan the shots as the system context says; an ad ' +
+  'is about 4 shots for 15 seconds. Then call production_generate_shot.';
 
 type ResolvedShot = {
   title: string;
@@ -115,9 +111,14 @@ type ResolvedShot = {
 function resolveCharacterIds(names: readonly string[], kit: readonly StudioCharacter[]): string[] {
   const ids = names.map(name => {
     const wanted = name.toLowerCase();
-    const match = kit.find(
-      character => character.id.toLowerCase() === wanted || character.name.toLowerCase() === wanted
-    );
+    const byId = kit.filter(character => character.id.toLowerCase() === wanted);
+    const matches = byId.length > 0 ? byId : kit.filter(character => character.name.toLowerCase() === wanted);
+    if (matches.length > 1) {
+      throw new ProductionToolError(
+        `"${name}" is ambiguous: it matches characters ${matches.map(character => character.id).join(', ')}; pass an id.`
+      );
+    }
+    const match = matches[0];
     if (!match) {
       throw new ProductionToolError(
         `"${name}" is not a saved character of this production; its characters are ${

@@ -188,7 +188,9 @@ const ShotsBoard = ({ composition, timeline, onTimelineChange, onSendTake }: Sho
               onRemoveTake={fileId => edit(current => removeTake(current, shot.id, fileId))}
               onSend={() => void sendOne(shot)}
               characters={composition.brandKit.characters}
-              onToggleCharacter={characterId => edit(current => toggleShotCharacter(current, shot.id, characterId))}
+              onToggleCharacter={characterId =>
+                edit(current => toggleShotCharacter(current, shot.id, characterId, composition.brandKit.characters))
+              }
             />
           ))}
         </ShotList>

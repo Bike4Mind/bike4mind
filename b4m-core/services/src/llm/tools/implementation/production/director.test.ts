@@ -465,6 +465,30 @@ describe('production director tools', () => {
       expect(result).toMatch(/"Bob" is not a saved character/);
     });
 
+    it('refuses a name that matches several characters, but an exact id wins', async () => {
+      await setUp(multiReferenceModel);
+      const kit = harness.composition().brandKit;
+      const fileId = kit.characters[0].fileId;
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: {
+          ...kit,
+          characters: [...kit.characters, { id: 'z1', name: 'Zed', fileId }, { id: 'z2', name: 'zed', fileId }],
+        },
+      });
+      const keep = [{ keep: 'shot-2' }, { keep: 'shot-3' }];
+      const ambiguous = await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'shot-1', characters: ['ZED'] }, ...keep],
+      });
+      expect(ambiguous).toMatch(/"ZED" is ambiguous.*z1, z2/);
+      const byId = await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [{ keep: 'shot-1', characters: ['z2'] }, ...keep],
+      });
+      expect(byId).not.toMatch(/^Error/);
+      expect(harness.composition().shots[0].characterIds).toEqual(['z2']);
+    });
+
     it("references the product, then the shot's characters, and names them in the prompt", async () => {
       const cap = referenceCap(multiReferenceModel);
       const { maya, fox } = await setUp(multiReferenceModel);
@@ -487,6 +511,28 @@ describe('production director tools', () => {
       for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([PRODUCT_FILE_ID]);
       expect(result.shots.map(shot => shot.charactersDropped?.names)).toEqual([['Fox', 'Maya'], undefined, ['Maya']]);
       expect(result.charactersNote).toMatch(/Tell the user/);
+    });
+
+    it('reports a featured character whose file cannot be a reference and leaves it out of the job', async () => {
+      const { maya } = await setUp(multiReferenceModel);
+      const unusable = harness.addFile('video');
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: {
+          ...harness.composition().brandKit,
+          characters: [
+            { id: 'maya', name: 'Maya', fileId: maya.fileId },
+            { id: 'fox', name: 'Fox', fileId: unusable },
+          ],
+        },
+      });
+      const result = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      ) as { shots: { charactersDropped?: { names: string[] } }[]; charactersNote?: string };
+
+      expect(result.shots.map(shot => shot.charactersDropped?.names)).toEqual([['Fox'], undefined, undefined]);
+      expect(result.charactersNote).toMatch(/charactersDropped/);
+      const [hook] = harness.imageRequests.map(({ request }) => request);
+      expect(inputsOf(hook)).toEqual([PRODUCT_FILE_ID, maya.fileId]);
     });
   });
 
