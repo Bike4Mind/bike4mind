@@ -12,7 +12,9 @@ const point = z.object({ x: percent, y: percent });
 const name = z.string().regex(/^[a-z][a-z0-9-]*$/, 'lower-case kebab name');
 const asset = z.string().min(1);
 const text = z.string().min(1);
-const box = z.object({ left: percent, top: percent, width: percent, height: percent });
+const size = z.number().positive().max(100);
+// A box of no size would let a definition hide the feature it holds (the quest board).
+const box = z.object({ left: percent, top: percent, width: size, height: size });
 
 // Keyed by every AgentState; sceneDefinition.test.ts holds this list to AGENT_STATE_LABEL's keys.
 const byState = <T extends z.ZodType>(value: T) =>
