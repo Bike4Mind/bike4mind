@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { Stream } from 'openai/streaming';
 import { KimiBackend } from './kimiBackend';
 import type { CompletionInfo } from './backend';
-import { isOutputBudgetExhaustedError, isStreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
+import {
+  isHiddenReasoningOnlyEmptyError,
+  isOutputBudgetExhaustedError,
+  isStreamEndedWithoutFinishError,
+} from './llmEmptyTurnErrors';
 
 /**
  * The non-streaming reasoning path. Every case here was a real defect in the first
@@ -662,12 +666,30 @@ describe('KimiBackend streaming reasoning', () => {
     expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
   });
 
+  it('types a finished stream of reasoning only as a hidden-reasoning empty turn', async () => {
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] },
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const err = await runStream(backend, ChatModels.KIMI_K3).catch((e: unknown) => e);
+    expect(isHiddenReasoningOnlyEmptyError(err)).toBe(true);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+    expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
+  });
+
   it('does not type an aborted stream as retryable', async () => {
     const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
     const abortSignal = AbortSignal.abort();
 
     const err = await runStream(backend, ChatModels.KIMI_K3, { abortSignal }).catch((e: unknown) => e);
     expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+    expect(isHiddenReasoningOnlyEmptyError(err)).toBe(false);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/returned no content/);
   });

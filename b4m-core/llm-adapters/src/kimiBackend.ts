@@ -12,7 +12,11 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
-import { OutputBudgetExhaustedError, StreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
+import {
+  HiddenReasoningOnlyEmptyError,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
+} from './llmEmptyTurnErrors';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { providerFetchOptions } from './providerDispatcher';
@@ -724,6 +728,15 @@ export class KimiBackend implements ICompletionBackend {
       // An aborted stream also ends with no finish reason; that is a stop, not a dropped stream to retry.
       if (streamFinishReason === undefined && !options.abortSignal?.aborted) {
         throw new StreamEndedWithoutFinishError('Moonshot', model);
+      }
+      // A finished turn only (an aborted one has no finish reason), and not the capped round (tools
+      // stripped at maxToolCalls), whose empty is deterministic.
+      if (streamedReasoning && streamFinishReason !== undefined && toolCallCount < maxToolCalls) {
+        throw new HiddenReasoningOnlyEmptyError(
+          'Moonshot',
+          model,
+          `Moonshot returned only reasoning for ${model}, with no displayed text and no tool call (finish_reason: ${streamFinishReason}).`
+        );
       }
       throw new Error(`Moonshot returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`);
     }

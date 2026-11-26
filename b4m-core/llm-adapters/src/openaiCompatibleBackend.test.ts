@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/local-models/testing';
 import type { ServerResponse } from 'node:http';
 import type { CompletionInfo, ICompletionOptionTools } from './backend';
-import { OutputBudgetExhaustedError } from './llmEmptyTurnErrors';
+import { isHiddenReasoningOnlyEmptyError, OutputBudgetExhaustedError } from './llmEmptyTurnErrors';
 import { OpenAICompatibleBackend } from './openaiCompatibleBackend';
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -451,6 +451,19 @@ describe('OpenAICompatibleBackend against vLLM', () => {
       const { text } = await run(backend, 'm');
       expect(text).toBe('<think>hmm ok</think>Answer.');
     }
+  });
+});
+
+describe('OpenAICompatibleBackend reasoning-only turns', () => {
+  it('types a finished stream of reasoning only as a hidden-reasoning empty turn', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => sse(res, [{ reasoning_content: 'hmm' }]),
+    });
+    const { backend } = make(server.baseUrl, null);
+    const error = await run(backend, 'm').catch((e: unknown) => e);
+
+    expect(isHiddenReasoningOnlyEmptyError(error)).toBe(true);
+    expect((error as Error).message).not.toMatch(/abort|overload|timeout/i);
   });
 });
 
