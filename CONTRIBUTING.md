@@ -152,6 +152,8 @@ If all three pass on a clean checkout, you're ready. **Most contributions can be
 
 To run the application locally (needed for UI work), see the [README](./README.md) local development setup and the self-hosting documentation. `compose.yaml` provides a local MongoDB replica set (`docker compose up db`).
 
+The MongoDB version tests run against is pinned in the root `package.json` (`config.mongodbMemoryServer.version`); the CI binary cache follows it and `compose.yaml` tags the same major.minor. Change them together, on purpose (`packages/scripts/src/mongodbVersionPin.test.ts` enforces it). `MONGOMS_VERSION=<x.y.z>` overrides the pin for a one-off local run.
+
 ### Useful commands
 
 | Task | Command | Notes |
