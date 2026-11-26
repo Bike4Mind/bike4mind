@@ -841,10 +841,11 @@ function signInErrorMessage(err: unknown): string {
   const status = httpStatus(err);
 
   // `client_id` is validated against a server-side allowlist, so a schema rejection at initiate
-  // means that backend does not know this client - in practice one older than desktop support,
-  // not anything the user did. The raw axios "status code 422" gives them nothing to act on.
+  // means that backend does not know this client - in practice one older than this client id
+  // (Desktop or the headless host), not anything the user did. The raw axios "status code 422"
+  // gives them nothing to act on.
   if (status === 400 || status === 422) {
-    return 'This server did not accept the desktop client. It may be running a version that predates desktop support.';
+    return 'This server did not accept this client. It may be running a version that predates it.';
   }
 
   if (status === 429) return 'Too many sign-in attempts. Wait a few minutes and try again.';
