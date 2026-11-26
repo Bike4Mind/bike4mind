@@ -9,14 +9,24 @@ import { singlePaneLayout } from '../orchestratorLayout';
 import { describeAgentStates, type AgentState, type AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { ORCHESTRATOR_VIEW_COMPONENTS, renderOrchestratorView } from '../viewRegistry';
+import { sampleSkinSummary } from '../sampleSkin';
+import { resetSkinsForTests } from '../skins';
+import { mergeSkinTheme } from '../statePalette';
 import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
 import { SCENE_VIEW_IDS, registeredScene } from './registeredScenes';
+import { skinScene } from './sceneSkin';
 import { UNFOCUSED_PAUSE_MS } from './useScenePause';
 
 /**
- * One feature suite run against every registered scene (registeredScenes.ts). A scene differs only by its
- * definition's skin, map, sprites and copy, so each check reads its expectations off the definition.
+ * One feature suite run against every registered scene (registeredScenes.ts), bare and under the sample
+ * skin, since a skin may change a scene's sprites, map and copy but never take a feature away. Each check
+ * reads its expectations off the definition as the skin draws it.
  */
+const SKINS = [
+  { skin: 'no skin', summary: undefined },
+  { skin: 'the nightglass skin', summary: sampleSkinSummary() },
+];
+const CASES = SCENE_VIEW_IDS.flatMap(view => SKINS.map(skin => ({ view, ...skin })));
 
 vi.mock('../chime', () => ({ playChime: vi.fn(), playSoundEvent: vi.fn() }));
 
@@ -98,18 +108,21 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   window.localStorage.clear();
+  resetSkinsForTests();
 });
 
 it('finds at least one registered scene', () => {
   expect(SCENE_VIEW_IDS.length).toBeGreaterThan(0);
 });
 
-describe.each(SCENE_VIEW_IDS)('the %s scene', view => {
-  const scene = registeredScene(view);
-  if (!scene) {
+describe.each(CASES)('the $view scene with $skin', ({ view, summary }) => {
+  const shipped = registeredScene(view);
+  if (!shipped) {
     it('is a framework scene', () => expect.fail(`"${view}" is not registered through sceneView`));
     return;
   }
+  const block = summary && mergeSkinTheme(summary).scenes[shipped.id];
+  const scene = skinScene(shipped, block, summary?.id ?? null);
   const View = ORCHESTRATOR_VIEW_COMPONENTS[view];
   const { map, copy, states } = scene;
   const id = `orchestrator-${scene.id}`;
@@ -143,6 +156,18 @@ describe.each(SCENE_VIEW_IDS)('the %s scene', view => {
         {...extra}
       />
     );
+
+  beforeEach(() => resetSkinsForTests(summary ? [summary] : [], summary?.id ?? null));
+
+  if (summary) {
+    it("draws the skin's version of the scene", async () => {
+      expect(block, `the skin has no ${shipped.id} block`).toBeDefined();
+      // skinScene hands back the shipped scene when the merged block fails the schema.
+      expect(scene).not.toBe(shipped);
+      await render(props([agentFixture('a', 'working')]));
+      expect(el(id).querySelector(':scope > img')?.getAttribute('src')).toBe(scene.map.backdrop);
+    });
+  }
 
   describe('needs-you bubble', () => {
     it('approves a parked call inline from the bubble', async () => {
