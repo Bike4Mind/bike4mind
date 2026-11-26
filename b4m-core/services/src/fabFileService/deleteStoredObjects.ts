@@ -62,13 +62,13 @@ export async function deleteStoredObjectsAfterCommit(
   opts: { session?: mongoose.mongo.ClientSession; key: string; logger?: PartialLogger }
 ): Promise<void> {
   const { session, key } = opts;
+  // Arrow-wrapped: Logger methods read `this`, so they cannot be detached from the instance.
+  const base = opts.logger;
   const logger = {
-    warn:
-      opts.logger?.warn ??
-      ((...args: Parameters<typeof Logger.globalInstance.warn>) => Logger.globalInstance.warn(...args)),
-    error:
-      opts.logger?.error ??
-      ((...args: Parameters<typeof Logger.globalInstance.error>) => Logger.globalInstance.error(...args)),
+    warn: (message: string, ...rest: unknown[]) =>
+      base?.warn ? base.warn(message, ...rest) : Logger.globalInstance.warn(message, ...(rest as [])),
+    error: (message: string, meta?: Record<string, unknown>) =>
+      base?.error ? base.error(message, meta) : Logger.globalInstance.error(message, meta),
   };
   if (!session) return deleteStoredObjects(files, buckets, logger);
   const work = async () => {

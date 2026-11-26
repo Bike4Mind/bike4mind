@@ -40,7 +40,7 @@ const handler = baseApi().post(
       const retired = organization.logo?.path;
       if (organization.logo && retired) {
         // After commit, so a rolled-back or retried transaction keeps the logo's bytes.
-        runAfterCommit(session, 'orgLogo|retired', async () => {
+        const deleteRetired = async () => {
           try {
             await storage.delete(retired);
             const cdnPath = appFileCdnPath(retired);
@@ -52,7 +52,11 @@ const handler = baseApi().post(
               error: error instanceof Error ? error.message : String(error),
             });
           }
-        });
+        };
+        if (!runAfterCommit(session, 'orgLogo|retired', deleteRetired)) {
+          req.logger.warn('[org-logo] delete could not be queued after commit; running it inline', { orgId });
+          void deleteRetired();
+        }
         await AppFile.findByIdAndDelete(organization.logo.id).session(session);
         await Organization.updateOne({ _id: orgId }, { $unset: { logoFileId: 1 } }).session(session);
       }

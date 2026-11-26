@@ -162,6 +162,15 @@ describe('upload-logo admin audit', () => {
     expect(h.deleteObject).not.toHaveBeenCalled();
   });
 
+  it('POST deletes the replaced logo object once the transaction commits', async () => {
+    h.stored = { settingValue: { customLogoUrl: 'old.png', customDarkLogoUrl: '', useBothLogos: false } };
+
+    const { error } = await run('POST', { fileName: 'logo.png', mimeType: 'image/png', fileSize: 321 });
+
+    expect(error).toBeUndefined();
+    expect(h.deleteObject).toHaveBeenCalledWith('admin/logos/old.png');
+  });
+
   it('POST keeps the old object when the audit write rejects', async () => {
     h.stored = { settingValue: { customLogoUrl: 'old.png', customDarkLogoUrl: '', useBothLogos: false } };
     h.audit.mockRejectedValue(new Error('audit down'));

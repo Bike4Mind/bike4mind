@@ -229,4 +229,56 @@ describe('deleteStoredObjectsAfterCommit', () => {
       expect.objectContaining({ files: [{ fileId: 'f1', filePath: 'uploads/a.pdf' }], error: 's3 down' })
     );
   });
+
+  describe('with a logger whose methods read `this`', () => {
+    class ThisLogger {
+      calls: string[] = [];
+      warn(message: string) {
+        this.calls.push(`warn:${message}`);
+      }
+      error(message: string) {
+        this.calls.push(`error:${message}`);
+      }
+    }
+
+    it('still attempts the file object and logs the orphan after a retained-version failure', async () => {
+      queued.owned = true;
+      queued.work.clear();
+      const storage = buckets();
+      storage.files.delete.mockImplementation(async (key: string) => {
+        if (key === 'uploads/v1.pdf') throw new Error('s3 down');
+      });
+      const lg = new ThisLogger();
+      const withVersion = { id: 'f1', filePath: 'uploads/a.pdf', versions: [version('uploads/v1.pdf')] };
+
+      await deleteStoredObjectsAfterCommit([withVersion], storage, { session, key: 'k', logger: lg });
+      await queued.work.get('k')!();
+
+      expect(storage.files.delete).toHaveBeenCalledWith('uploads/a.pdf');
+      expect(lg.calls.some(c => c.startsWith('warn:'))).toBe(true);
+    });
+
+    it('logs the orphan through the instance when the file object delete fails', async () => {
+      queued.owned = true;
+      queued.work.clear();
+      const storage = buckets();
+      storage.files.delete.mockRejectedValue(new Error('s3 down'));
+      const lg = new ThisLogger();
+
+      await deleteStoredObjectsAfterCommit([file], storage, { session, key: 'k', logger: lg });
+      await expect(queued.work.get('k')!()).resolves.toBeUndefined();
+
+      expect(lg.calls).toEqual([expect.stringContaining('error:[deleteStoredObjects] post-commit delete failed')]);
+    });
+
+    it('does not throw inline for a moderation-held file', async () => {
+      const storage = buckets();
+      const lg = new ThisLogger();
+      const held = { id: 'f1', filePath: 'uploads/a.pdf', moderationStatus: 'blocked', blockReason: 'csam' } as never;
+
+      await expect(deleteStoredObjectsAfterCommit([held], storage, { key: 'k', logger: lg })).resolves.toBeUndefined();
+      expect(storage.files.delete).not.toHaveBeenCalled();
+      expect(lg.calls[0]).toContain('legal hold');
+    });
+  });
 });

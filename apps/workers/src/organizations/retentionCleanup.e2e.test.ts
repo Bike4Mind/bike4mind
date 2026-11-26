@@ -365,16 +365,35 @@ describe('explicit organization retention on disposable data', () => {
 
       expect(effects.files).not.toHaveBeenCalled();
       expect((await FabFile.collection.findOne({ _id: id }))?.deletedAt).toBeNull();
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Retention delete failed; continuing with the next item',
+        expect.objectContaining({ kind: 'files', id: String(id) })
+      );
     });
 
-    it('keeps a media object and its audit untouched when storage rejects, and retries next run', async () => {
+    it('logs an orphan and keeps the deletion when media storage rejects after commit', async () => {
       await generatedObject(await notebook(orgId));
       effects.media.mockRejectedValueOnce(new Error('storage down'));
-      expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 0 });
-      expect(await OrganizationGeneratedObject.countDocuments({ deletedAt: null })).toBe(1);
-      expect(await OrganizationAuditEventModel.countDocuments({ action: 'retention.deleted' })).toBe(0);
       expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 1 });
       expect(await OrganizationGeneratedObject.countDocuments({ deletedAt: null })).toBe(0);
+      expect(logger.error).toHaveBeenCalledWith(
+        '[retention] post-commit media delete failed; object left orphaned',
+        expect.objectContaining({ key, error: 'storage down' })
+      );
+    });
+
+    it('keeps the media object and its ledger row live when a later write in the media transaction aborts it', async () => {
+      await generatedObject(await notebook(orgId));
+      const create = OrganizationAuditEventModel.create.bind(OrganizationAuditEventModel);
+      vi.spyOn(OrganizationAuditEventModel, 'create').mockImplementation((async (...args: unknown[]) => {
+        if (String((args[0] as { targetId?: string })?.targetId).startsWith('media:')) throw new Error('audit down');
+        return (create as (...a: unknown[]) => unknown)(...args);
+      }) as never);
+
+      expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 0 });
+
+      expect(effects.media).not.toHaveBeenCalled();
+      expect(await OrganizationGeneratedObject.countDocuments({ deletedAt: null })).toBe(1);
     });
 
     it('stops the whole sweep when the policy fence is no longer current', async () => {
@@ -588,7 +607,7 @@ describe('explicit organization retention on disposable data', () => {
     await Session.collection.updateOne({ _id: new mongoose.Types.ObjectId(held) }, { $unset: { legalHold: 1 } });
     expect((await cleanupOrganizationRetention(orgId, options())).media).toBe(1);
   });
-  it('keeps the ledger locator after storage failure and retries the same owned object', async () => {
+  it('marks the ledger row deleted even when storage rejects after commit', async () => {
     await OrganizationGeneratedObject.create({
       key,
       organizationId: orgId,
@@ -597,8 +616,7 @@ describe('explicit organization retention on disposable data', () => {
       createdAt: old,
     });
     effects.media.mockRejectedValueOnce(new Error('storage unavailable'));
-    expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 0 });
-    expect((await OrganizationGeneratedObject.findOne({ key }).lean())?.deletedAt).toBeUndefined();
     expect((await cleanupOrganizationRetention(orgId, options())).media).toBe(1);
+    expect((await OrganizationGeneratedObject.findOne({ key }).lean())?.deletedAt).toBeInstanceOf(Date);
   });
 });

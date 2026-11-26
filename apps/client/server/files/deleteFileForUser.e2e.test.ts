@@ -103,7 +103,7 @@ describe('bulkDeleteFilesForUser', () => {
 
     const result = await bulkDeleteFilesForUser(req, [fileId]);
 
-    expect(result.failed).toHaveLength(1);
+    expect(result.failed).toEqual([expect.objectContaining({ id: fileId })]);
     expect(await isLive(fileId)).toBe(true);
     expect(h.stored.has('uploads/a.txt')).toBe(true);
   });
@@ -114,6 +114,7 @@ describe('bulkDeleteFilesForUser', () => {
     const result = await bulkDeleteFilesForUser(req, [fileId]);
 
     expect(result.deleted).toEqual([fileId]);
+    expect(await isLive(fileId)).toBe(false);
     expect(h.stored.has('uploads/a.txt')).toBe(false);
   });
 });

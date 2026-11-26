@@ -158,7 +158,7 @@ async function createSheet(
   id: string
 ): Promise<void> {
   const userId = req.user!.id;
-  await withTransaction(session =>
+  await withTransaction(() =>
     fabFilesService.createFabFile(
       userId,
       {
