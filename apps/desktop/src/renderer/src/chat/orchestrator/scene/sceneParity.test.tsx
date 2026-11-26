@@ -15,6 +15,7 @@ import { mergeSkinTheme } from '../statePalette';
 import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
 import { SCENE_VIEW_IDS, registeredScene } from './registeredScenes';
 import { skinScene } from './sceneSkin';
+import { ASK_OUTCOME_MS } from './useAskStates';
 import { UNFOCUSED_PAUSE_MS } from './useScenePause';
 
 /**
@@ -218,6 +219,101 @@ describe.each(CASES)('the $view scene with $skin', ({ view, summary }) => {
       await renderStage([agentFixture('n1', 'needs-you'), agentFixture('n2', 'needs-you')]);
       await act(async () => sprite('n2').click());
       expect(el('scene-dialogue-position').textContent).toBe('2 of 2');
+    });
+
+    it('opens a waiting agent from its "Needs you!" marker when the box has nothing to ask', async () => {
+      await renderStage([agentFixture('n1', 'needs-you'), agentFixture('w', 'working')]);
+      await act(async () => undefined);
+      const marker = el(`${id}-bubble-n1`);
+      expect(marker.textContent).toBe('Needs you!');
+      expect(getComputedStyle(marker).pointerEvents).toBe('auto');
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      await act(async () => marker.click());
+      expect(el(id).contains(el('orchestrator-peek-drawer'))).toBe(true);
+      expect(sprite('n1').getAttribute('aria-pressed')).toBe('true');
+    });
+  });
+
+  describe('ask bubble', () => {
+    const bubble = () => el(`${id}-bubble-n1`);
+    const session = (sessionId: string, call: Record<string, unknown>) =>
+      ({
+        id: sessionId,
+        messages: [
+          {
+            id: 'm1',
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              { id: `call-${sessionId}`, status: 'awaiting-approval', approvalId: `ap-${sessionId}`, ...call },
+            ],
+          },
+        ],
+      }) as unknown as ChatSession;
+    const bash = (sessionId: string) =>
+      session(sessionId, { name: 'bash_execute', input: { command: 'pnpm test --filter api' } });
+    const renderAsking = async (agents = [agentFixture('n1', 'needs-you')]) => {
+      const view = props(agents, { inSceneDecisions: true });
+      await render(view);
+      await act(async () => undefined);
+      return view;
+    };
+
+    it('names the tool and its command, waiting', async () => {
+      chat.getSession.mockImplementation(async (sessionId: string) => bash(sessionId));
+      await renderAsking();
+      expect(bubble().dataset.askState).toBe('waiting');
+      expect(el(`${id}-bubble-n1-ask`).textContent).toBe('bash_execute pnpm test --filter api');
+      expect(el(`${id}-bubble-n1-state`).textContent).toBe('Waiting');
+    });
+
+    it.each([
+      ['scene-dialogue-allow-once', 'approved', 'Approved', 'once'],
+      ['scene-dialogue-deny', 'denied', 'Denied', 'deny'],
+    ])('opens the ask from the bubble; %s shows it %s, then clears', async (control, state, label, answer) => {
+      chat.getSession.mockImplementation(async (sessionId: string) => bash(sessionId));
+      const view = await renderAsking();
+      await act(async () => bubble().click());
+      expect(view.onSelect).not.toHaveBeenCalled();
+      expect(el('scene-dialogue-command').textContent).toContain('pnpm test --filter api');
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      await act(async () => el(control).click());
+      expect(chat.respondToApproval).toHaveBeenCalledWith('ap-n1', { decision: answer });
+      expect(bubble().dataset.askState).toBe(state);
+      expect(bubble().textContent).toContain(label);
+      await act(async () => vi.advanceTimersByTime(ASK_OUTCOME_MS + 1));
+      expect(query(`${id}-bubble-n1`)?.dataset.askState).toBeUndefined();
+    });
+
+    it("shows a question's own text and options", async () => {
+      const questions = [
+        {
+          question: 'Which database?',
+          header: 'DB',
+          options: [
+            { label: 'Postgres (Recommended)', description: 'a' },
+            { label: 'SQLite', description: 'b' },
+          ],
+        },
+      ];
+      chat.getSession.mockImplementation(async (sessionId: string) =>
+        session(sessionId, { name: 'ask_user', input: { questions } })
+      );
+      await renderAsking();
+      expect(el(`${id}-bubble-n1-ask`).textContent).toBe('Which database?');
+      expect(el(`${id}-bubble-n1-option-0`).textContent).toBe('Postgres');
+      expect(el(`${id}-bubble-n1-option-1`).textContent).toBe('SQLite');
+    });
+
+    // The renderer holds no expiry for an ask, so one that lapses or is answered in another window ends here.
+    it('says so when the ask ended without an answer from this scene', async () => {
+      chat.getSession.mockImplementation(async (sessionId: string) => bash(sessionId));
+      const view = await renderAsking();
+      chat.getSession.mockResolvedValue(null);
+      await render({ ...view, agents: [agentFixture('n1', 'working')] });
+      await act(async () => undefined);
+      expect(bubble().dataset.askState).toBe('elsewhere');
+      expect(bubble().textContent).toContain('Answered elsewhere');
     });
   });
 
