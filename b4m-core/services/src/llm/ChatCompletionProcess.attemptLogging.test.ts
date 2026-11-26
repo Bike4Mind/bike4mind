@@ -7,7 +7,7 @@ import {
   fetchAndConvertFabFiles,
 } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels, LlmTimeoutError } from '@bike4mind/llm-adapters';
-import { ChatModels, ModelBackend, type IMessage } from '@bike4mind/common';
+import { ChatModels, LLMEvents, ModelBackend, type IMessage } from '@bike4mind/common';
 import { ChatCompletionProcess } from './ChatCompletionProcess';
 import { userKeyProviders } from '../apiKeyService';
 
@@ -190,6 +190,7 @@ describe('ChatCompletionProcess failed attempt logging', () => {
       projects: { findById: vi.fn() },
       spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
     };
+    const logEvent = vi.fn();
     const tokenizer = {
       countTokens: vi.fn().mockResolvedValue(100),
       encodeTokens: vi.fn().mockResolvedValue([1, 2, 3]),
@@ -209,7 +210,7 @@ describe('ChatCompletionProcess failed attempt logging', () => {
       autoNameSession: vi.fn(),
       summarizeSession: vi.fn(),
       getMcpClient: vi.fn(),
-      logEvent: vi.fn(),
+      logEvent,
       logger,
       getScopeFilter: vi.fn(),
       user: { id: 'user1', currentCredits: 10000, isAdmin: false },
@@ -251,11 +252,19 @@ describe('ChatCompletionProcess failed attempt logging', () => {
       () => undefined,
       (thrown: unknown) => thrown
     );
-    return { rethrown, questUpdates: db.quests.update.mock.calls.map(([saved]) => saved) };
+    return { rethrown, logEvent, questUpdates: db.quests.update.mock.calls.map(([saved]) => saved) };
   };
 
   const summaryCalls = (fn: ReturnType<typeof vi.fn>) =>
     fn.mock.calls.filter(([message]) => typeof message === 'string' && message.includes(FAILED_SUMMARY));
+
+  it('records the prompt length, never the prompt text, in the heard-prompt analytics event', async () => {
+    const { logEvent } = await runFailingTurn(new Error('boom'));
+
+    const heard = logEvent.mock.calls.find(([event]) => event.type === LLMEvents.QUEUE_HANDLER_START_HEARD_PROMPT);
+    expect(heard?.[0].metadata).toEqual({ sessionId: 'session1', questId: 'quest1', promptLength: 'Hello'.length });
+    expect(JSON.stringify(logEvent.mock.calls)).not.toContain('Hello');
+  });
 
   it('a safety refusal is not logged as an error or raw warn, and its summary goes to debug', async () => {
     const refusal = new Error('Anthropic safety classifier refusal for model-x - falling back to an alternative model');

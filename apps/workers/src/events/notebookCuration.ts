@@ -29,7 +29,7 @@ export const handler = withEventContext(async (event, logger) => {
     curationType: curationType || 'transcript',
     artifactTypes: artifactTypes || 'all',
     exportFormat: exportFormat || 'markdown',
-    customNotebookName: customNotebookName || 'default',
+    hasCustomNotebookName: Boolean(customNotebookName),
   });
 
   const batchInfo = batchJobId ? ` [Batch ${batchIndex! + 1}/${batchTotal}]` : '';

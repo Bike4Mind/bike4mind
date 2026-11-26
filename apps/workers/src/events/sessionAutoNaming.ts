@@ -111,5 +111,5 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  logger.info(`Successfully auto-named session ${sessionId} to "${updatedSession?.name}"`);
+  logger.info(`Successfully auto-named session ${sessionId}`, { renamed: Boolean(updatedSession?.name) });
 });

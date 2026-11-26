@@ -2889,7 +2889,7 @@ export class ChatCompletionProcess {
         {
           userId: this.user.id,
           type: LLMEvents.QUEUE_HANDLER_START_HEARD_PROMPT,
-          metadata: { sessionId, questId, promptMessage: message },
+          metadata: { sessionId, questId, promptLength: message.length },
         },
         { ability: this.userAbility }
       );

@@ -28,8 +28,11 @@ const QuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
+// The prompt is user content; this operational list never carries it.
+export type StuckExecutionItem = Omit<SerializedAgentExecutionListItem, 'query'>;
+
 export type StuckExecutionsResponse = {
-  items: SerializedAgentExecutionListItem[];
+  items: StuckExecutionItem[];
   olderThanMinutes: number;
 };
 
@@ -59,7 +62,7 @@ const handler = adminApi({
   });
 
   const body: StuckExecutionsResponse = {
-    items: items.map(item => ({
+    items: items.map(({ query: _query, ...item }) => ({
       ...item,
       startedAt: item.startedAt?.toISOString(),
       completedAt: item.completedAt?.toISOString(),
