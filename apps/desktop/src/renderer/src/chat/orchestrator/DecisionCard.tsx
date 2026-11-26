@@ -6,6 +6,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { SESSION_EXPIRED_STOP, type SendMessageResult } from '@shared/chat';
 import type { ErrorPendingDecision, PendingDecision, StoppedPendingDecision } from '@shared/pendingDecisions';
+import { ASK_USER_TOOL_NAME } from '@shared/questions';
 import { HeldRelayRow } from '../HeldRelayCard';
 import { TaskDecisionCard } from '../TaskDecisionCards';
 import { PendingRequests } from './AgentPeekDrawer';
@@ -122,7 +123,11 @@ export function DecisionBody({
         <PendingRequests
           sessionId={sessionId}
           calls={[decision.call]}
-          onAnswered={answer => onAnswered(answer.decision === 'deny' ? 'denied' : 'approved')}
+          onAnswered={answer =>
+            onAnswered(
+              decision.call.name === ASK_USER_TOOL_NAME ? 'answered' : answer.decision === 'deny' ? 'denied' : 'approved'
+            )
+          }
         />
       );
     case 'question':

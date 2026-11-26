@@ -193,6 +193,36 @@ describe('DecisionBody', () => {
     expect(onAnswered).toHaveBeenCalledWith('denied');
   });
 
+  it('says an approved tool was approved', async () => {
+    await renderBody({
+      kind: 'approval',
+      sessionId: 'g',
+      decisionId: 'approval:ap1',
+      approvalId: 'ap1',
+      call: call('file_write'),
+      collectsSecrets: false,
+    });
+    await act(async () => el('chat-tool-approve-once').click());
+    expect(onAnswered).toHaveBeenCalledWith('approved');
+  });
+
+  it('says a skipped ask-the-user card was answered, not denied', async () => {
+    await renderBody({
+      kind: 'approval',
+      sessionId: 'g',
+      decisionId: 'approval:ap1',
+      approvalId: 'ap1',
+      call: {
+        ...call('ask_user'),
+        input: { questions: [{ question: 'Which branch?', options: [{ label: 'main', description: 'd' }, { label: 'dev', description: 'd' }] }] },
+      },
+      collectsSecrets: false,
+    });
+    await act(async () => el('chat-question-skip').click());
+    expect(chat.respondToApproval).toHaveBeenCalledWith('ap1', { decision: 'deny' });
+    expect(onAnswered).toHaveBeenCalledWith('answered');
+  });
+
   it('says a question answered here was answered', async () => {
     await renderBody({
       kind: 'question',
