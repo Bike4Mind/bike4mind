@@ -16,6 +16,17 @@ public struct BusyBlocksClient: BusyBlocksAPI {
     requester = AuthorizedRequester(baseURL: baseURL, tokens: tokens, transport: transport)
   }
 
+  /// Captures the server and credential owner once for an admitted operation.
+  @MainActor
+  public static func session(
+    for auth: AuthController, transport: any HTTPTransport = URLSessionTransport()
+  ) -> BusyBlockSession {
+    let ticket = auth.captureSession()
+    let client = BusyBlocksClient(
+      baseURL: ticket.environment.baseURL, tokens: auth.scopedTokens(for: ticket), transport: transport)
+    return BusyBlockSession(id: ticket.id, api: client, isCurrent: { auth.isCurrent(ticket) })
+  }
+
   public func state() async throws -> BusyBlocksState {
     try decode(try await requester.send(method: "GET", path: Self.path))
   }

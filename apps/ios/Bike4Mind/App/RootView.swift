@@ -74,7 +74,7 @@ struct RootView: View {
     .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
       guard auth.state == .signedIn else { return }
       let syncer = services.busyBlockSyncer
-      Task { await syncer.sync(force: true) }
+      syncer.scheduleSync(force: true)
     }
   }
 
@@ -124,7 +124,7 @@ struct RootView: View {
       services.refreshWidgetCredits()
       services.refreshWidgetPendingDecisions()
       let syncer = services.busyBlockSyncer
-      Task { await syncer.sync() }
+      syncer.scheduleSync()
     }
   }
 

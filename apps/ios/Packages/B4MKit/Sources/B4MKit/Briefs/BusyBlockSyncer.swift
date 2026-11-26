@@ -25,54 +25,91 @@ public enum BusyBlockSyncOutcome: Equatable, Sendable {
   }
 }
 
-/// Pushes the device's upcoming busy blocks to the server while the user has busy-block briefs on.
-/// The server's opt-in is read first, so an account that never enabled the feature is never written; a device never
-/// asked for calendar access skips the request entirely, since enabling always asks.
+/// One bound API and validity check captured synchronously before scheduling or requesting permission.
+public struct BusyBlockSession: Sendable {
+  let id: UUID
+  public let api: any BusyBlocksAPI
+  let isCurrent: @MainActor @Sendable () -> Bool
+
+  public init(id: UUID, api: any BusyBlocksAPI, isCurrent: @escaping @MainActor @Sendable () -> Bool) {
+    self.id = id
+    self.api = api
+    self.isCurrent = isCurrent
+  }
+}
+
+/// Serializes calendar syncs and user saves within their originating account and server.
 @MainActor
 public final class BusyBlockSyncer {
-  /// Foreground and calendar-change syncs closer together than this are skipped.
   public static let minInterval: TimeInterval = 60
 
-  private let api: any BusyBlocksAPI
-  private let reader: any BusyBlockReader
-  private let now: @Sendable () -> Date
-  private var lastSync: Date?
-  /// The sync or user save holding the lock; every `sync` caller and `save` take it, so a sync that read the opt-in
-  /// before a toggle-off cannot write it back on afterwards.
-  private var current: Task<BusyBlockSyncOutcome, Never>?
-  /// A user save already sent; outlives `sessionDidStart` so the next session's sync cannot read before it lands.
-  private var sentSave: Task<BusyBlockSyncOutcome, Never>?
-  /// Bumped by `sessionDidStart`: work begun under an earlier session must not write to or throttle the new one.
-  private var session = 0
-  /// The latest outcome that says something about the account or device; `inFlight` and `throttled` leave it alone.
-  public private(set) var lastOutcome: BusyBlockSyncOutcome?
-
-  public init(api: any BusyBlocksAPI, reader: any BusyBlockReader, now: @escaping @Sendable () -> Date = { Date() }) {
-    self.api = api
-    self.reader = reader
-    self.now = now
+  public struct Admission: Sendable {
+    let session: BusyBlockSession
+    let epoch: Int
   }
 
-  /// Blocks from the device calendar for the sync horizon; empty when access is off.
+  private let reader: any BusyBlockReader
+  private let now: @Sendable () -> Date
+  private let sessionFactory: @MainActor @Sendable () -> BusyBlockSession
+  private let hasSessionFactory: Bool
+  private var activeSessionID: UUID?
+  private var epoch = 0
+  private var lastSync: Date?
+  private var current: Task<BusyBlockSyncOutcome, Never>?
+  /// Retains an already-sent save until settlement, including across account changes.
+  private var sentSave: Task<BusyBlockSyncOutcome, Never>?
+  public private(set) var lastOutcome: BusyBlockSyncOutcome?
+
+  public init(
+    api: any BusyBlocksAPI, reader: any BusyBlockReader, now: @escaping @Sendable () -> Date = { Date() },
+    sessionFactory: (@MainActor @Sendable () -> BusyBlockSession)? = nil
+  ) {
+    self.reader = reader
+    self.now = now
+    self.hasSessionFactory = sessionFactory != nil
+    let fixed = BusyBlockSession(id: UUID(), api: api, isCurrent: { true })
+    self.sessionFactory = sessionFactory ?? { fixed }
+  }
+
+  public func captureAdmission() -> Admission {
+    let captured = sessionFactory()
+    if captured.isCurrent(), activeSessionID != captured.id { adopt(captured.id) }
+    return Admission(session: captured, epoch: epoch)
+  }
+
+  func isCurrent(_ admission: Admission) -> Bool {
+    admission.session.isCurrent() && admission.session.id == activeSessionID && admission.epoch == epoch
+  }
+
+  @discardableResult
+  public func scheduleSync(force: Bool = false) -> Task<BusyBlockSyncOutcome, Never> {
+    let admission = captureAdmission()
+    return Task { await sync(force: force, admission: admission) }
+  }
+
   public func currentBlocks() -> [BusyBlock] {
     guard reader.access() == .authorized else { return [] }
     let at = now()
-    let events = reader.events(
-      from: at.addingTimeInterval(-BusyBlockFilter.lookBehind), to: at.addingTimeInterval(BusyBlockFilter.lookAhead))
-    return BusyBlockFilter.blocks(from: events)
+    return BusyBlockFilter.blocks(
+      from: reader.events(
+        from: at.addingTimeInterval(-BusyBlockFilter.lookBehind), to: at.addingTimeInterval(BusyBlockFilter.lookAhead)))
   }
 
-  /// A revoked calendar permission syncs an empty list, so stale blocks stop holding pushes. A failed sync leaves
-  /// the throttle untouched, so the next foreground or background run retries at once.
   @discardableResult
   public func sync(force: Bool = false) async -> BusyBlockSyncOutcome {
+    await sync(force: force, admission: captureAdmission())
+  }
+
+  @discardableResult
+  public func sync(force: Bool = false, admission: Admission) async -> BusyBlockSyncOutcome {
+    guard isCurrent(admission) else { return .skipped(.signedOut) }
+    guard !Task.isCancelled else { return .failed }
     guard current == nil else { return .skipped(.inFlight) }
     guard reader.access() != .notDetermined else { return record(.skipped(.neverAsked)) }
     if !force, let lastSync, now().timeIntervalSince(lastSync) < Self.minInterval { return .skipped(.throttled) }
-    let startedIn = session
     let task = Task { [sentSave] in
       _ = await sentSave?.value
-      return await perform(in: startedIn)
+      return await perform(admission)
     }
     current = task
     defer { release(task) }
@@ -81,29 +118,35 @@ public final class BusyBlockSyncer {
     } onCancel: {
       task.cancel()
     }
-    return session == startedIn ? record(outcome) : outcome
+    return isCurrent(admission) ? record(outcome) : outcome
   }
 
-  /// A forced sync, or the outcome of the one already running, so a caller that must report success waits for it.
-  /// Cancelling the caller does not cancel a sync it joined.
   public func syncJoiningInFlight() async -> BusyBlockSyncOutcome {
-    if let current { return await current.value }
-    return await sync(force: true)
+    await syncJoiningInFlight(admission: captureAdmission())
   }
 
-  /// Saves the user's opt-in once any sync or save in flight has finished: turning it on pushes the current blocks,
-  /// turning it off clears them. A save queued under an earlier session throws `CancellationError` unsent.
+  public func syncJoiningInFlight(admission: Admission) async -> BusyBlockSyncOutcome {
+    guard isCurrent(admission) else { return .skipped(.signedOut) }
+    if let current { return await current.value }
+    return await sync(force: true, admission: admission)
+  }
+
   public func save(enabled: Bool) async throws -> BusyBlocksState {
-    let startedIn = session
-    // A finished task is released here too: its owner may not have resumed yet, and re-awaiting it would spin.
-    // A save still in flight from an earlier session is awaited as well, so two writes never race.
+    try await save(enabled: enabled, admission: captureAdmission())
+  }
+
+  public func save(enabled: Bool, admission: Admission) async throws -> BusyBlocksState {
+    guard isCurrent(admission) else { throw CancellationError() }
     while let pending = current ?? sentSave {
       _ = await pending.value
       release(pending)
       if sentSave == pending { sentSave = nil }
+      guard isCurrent(admission) else { throw CancellationError() }
     }
-    guard session == startedIn else { throw CancellationError() }
-    let save = Task { try await api.save(enabled: enabled, blocks: enabled ? currentBlocks() : []) }
+    try Task.checkCancellation()
+    let api = admission.session.api
+    let blocks = enabled ? currentBlocks() : []
+    let save = Task { try await api.save(enabled: enabled, blocks: blocks) }
     let task = Task<BusyBlockSyncOutcome, Never> { Self.outcome(of: await save.result) }
     current = task
     sentSave = task
@@ -112,8 +155,7 @@ public final class BusyBlockSyncer {
       if sentSave == task { sentSave = nil }
     }
     let state = try await save.value
-    // No suspension between the check and the write, so a session started meanwhile never gets this outcome.
-    if session == startedIn { lastOutcome = Self.outcome(of: .success(state)) }
+    if isCurrent(admission) { lastOutcome = Self.outcome(of: .success(state)) }
     return state
   }
 
@@ -125,35 +167,35 @@ public final class BusyBlockSyncer {
     }
   }
 
-  /// Forgets the last outcome and throttle at a sign-in: a signed-out or opted-out result belongs to the
-  /// previous session and would otherwise keep the background edge from re-arming for the new one. A sync still
-  /// running for the previous session is cancelled and stops holding the lock, so the new session's first sync is
-  /// not skipped. A user save already sent is not cancelled: `sentSave` still holds the next sync until it lands.
+  /// A late UI observation must not invalidate work already admitted under that same new session.
   public func sessionDidStart() {
-    session += 1
+    if hasSessionFactory { _ = captureAdmission() } else { adopt(sessionFactory().id) }
+  }
+
+  private func adopt(_ id: UUID) {
+    activeSessionID = id
+    epoch += 1
     current?.cancel()
     current = nil
     lastOutcome = nil
     lastSync = nil
   }
 
-  private func perform(in startedIn: Int) async -> BusyBlockSyncOutcome {
+  private func perform(_ admission: Admission) async -> BusyBlockSyncOutcome {
+    guard isCurrent(admission) else { return .skipped(.signedOut) }
+    guard !Task.isCancelled else { return .failed }
     do {
-      let enabled = try await api.state().enabled
-      // The API resolves the token per request, so a write now would land on whoever signed in since.
-      guard session == startedIn else { return .skipped(.signedOut) }
+      let enabled = try await admission.session.api.state().enabled
+      guard isCurrent(admission) else { return .skipped(.signedOut) }
+      try Task.checkCancellation()
       guard enabled else {
         lastSync = now()
         return .skipped(.disabled)
       }
-      _ = try await api.save(enabled: true, blocks: currentBlocks())
-      if session == startedIn { lastSync = now() }
+      _ = try await admission.session.api.save(enabled: true, blocks: currentBlocks())
+      if isCurrent(admission) { lastSync = now() }
       return .synced
-    } catch APIError.signedOut {
-      return .skipped(.signedOut)
-    } catch {
-      return .failed
-    }
+    } catch APIError.signedOut { return .skipped(.signedOut) } catch { return .failed }
   }
 
   private func release(_ task: Task<BusyBlockSyncOutcome, Never>) {
