@@ -208,7 +208,12 @@ beforeEach(() => {
               id === PARENT.id ? parentMessages : id === CODE.id ? codeMessages : id === CHILD.id ? childMessages : [],
           }) as unknown as ChatSession,
         setSessionOrchestrate,
-        inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
+        inspectProject: async (directory: string) => ({
+          directory,
+          isRepository: false,
+          currentBranch: 'main',
+          branches: [],
+        }),
         workspaceChanges: async () => null,
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => statusSnapshot,

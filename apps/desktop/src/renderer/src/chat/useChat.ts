@@ -24,6 +24,7 @@ import type {
 import { carriedNotes, regenerableReply } from '@shared/threadRewind';
 import { summarizeSession } from '@shared/agentOutcome';
 import { normalizeSessionTitle } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import { isUntouchedImport } from './grouping';
 import type { GenerationSettings } from '@shared/generation';
 import type { CreatedSession } from '@shared/ipc';
@@ -310,7 +311,7 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
       setCreatingCode(true);
       setCodeError(null);
       try {
-        const result = await window.b4m.chat.createCodeSession(
+        const result = await hostChat.createCodeSession(
           placement ? { ...request, sectionId: placement.sectionId } : request
         );
         if (!result.ok) {
@@ -343,13 +344,17 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
         editSessions(current => current.filter(session => !gone.has(session.id)));
       };
       if (nestedIds.length === 0) {
-        await window.b4m.chat.deleteSession(sessionId, removeWorktree);
+        await hostChat.deleteSession(sessionId, { removeWorktree, allowDiscard: true });
         forget([sessionId]);
         return [sessionId];
       }
-      const { deleted, error } = await window.b4m.chat.deleteSessionTree(sessionId, [...nestedIds], removeWorktree, [
-        ...nestedWorktreeIds,
-      ]);
+      const { deleted, error } = await hostChat.deleteSessionTree(
+        sessionId,
+        [...nestedIds],
+        removeWorktree,
+        [...nestedWorktreeIds],
+        true
+      );
       forget(deleted);
       if (error) throw Object.assign(new Error(error), { deleted });
       return deleted;
@@ -372,7 +377,7 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
   // Patched in place rather than moved, for the same reason pinning is: archiving does not
   // touch `updatedAt`, and the row is about to change section anyway.
   const toggleArchived = useCallback(async (session: ChatSessionSummary) => {
-    const updated = await window.b4m.chat.setSessionArchived(session.id, !session.archived);
+    const updated = await hostChat.setSessionArchived(session.id, !session.archived);
     if (!updated) return;
     editSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
@@ -389,7 +394,7 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
       retitle(session.title, next);
       let updated: ChatSessionSummary | null = null;
       try {
-        updated = await window.b4m.chat.renameSession(session.id, next);
+        updated = await hostChat.renameSession(session.id, next);
       } catch {
         updated = null;
       }
@@ -576,7 +581,7 @@ export function useModelCatalog(local = false): ModelCatalogController {
       if (!quiet) setLoading(true);
       try {
         const [catalog, status] = await Promise.all([
-          window.b4m.chat.listModels(force),
+          hostChat.listModels(force),
           local ? window.b4m.models.getStatus().catch(() => null) : null,
         ]);
         // A slower, older response must not overwrite a newer one.
@@ -898,7 +903,7 @@ export function useConversation(
         setTurn(null);
         setOpenFailedFor(sessionId);
       };
-      void window.b4m.chat
+      void hostChat
         .getSession(sessionId)
         .then(loaded => {
           if (!current) return;
@@ -937,7 +942,7 @@ export function useConversation(
     load();
     // Read rather than derived: main owns the queue, and a window opening onto a session that
     // was queued into from another one has witnessed no push for it.
-    void window.b4m.chat.getQueuedMessages(sessionId).then(pending => {
+    void hostChat.getQueuedMessages(sessionId).then(pending => {
       if (current) setQueued(pending);
     });
     return () => {
@@ -958,7 +963,7 @@ export function useConversation(
       const ticket = ++latestRead;
       const version = transcriptVersion.current;
       try {
-        const loaded = await window.b4m.chat.getSession(sessionId);
+        const loaded = await hostChat.getSession(sessionId);
         if (!current || ticket !== latestRead || version !== transcriptVersion.current) return;
         if (sendingFor.current === sessionId || !loaded || loaded.replyInFlight || !isUntouchedImport(loaded)) return;
         setMessages(loaded.messages);
@@ -1087,7 +1092,7 @@ export function useConversation(
           parseDirectoryOutcome(event.call.input.outcome)?.status === 'granted'
         ) {
           const granted = event.sessionId;
-          void window.b4m.chat.getSession(granted).then(loaded => {
+          void hostChat.getSession(granted).then(loaded => {
             if (!loaded || activeSessionId.current !== granted) return;
             onSharedRef.current?.(granted);
             setSession(current =>
@@ -1323,7 +1328,7 @@ export function useConversation(
       };
 
       if (goingOut) sendingFor.current = sessionId;
-      const result = await window.b4m.chat
+      const result = await hostChat
         .sendMessage({
           sessionId,
           text: prompt,
@@ -1377,7 +1382,7 @@ export function useConversation(
         ]);
       }
 
-      const summary = await window.b4m.chat.getSession(sessionId);
+      const summary = await hostChat.getSession(sessionId);
       if (summary) {
         // A late read for the chat we left must not put the selected thread back behind its opening gate.
         if (activeSessionId.current === sessionId) {
@@ -1391,7 +1396,7 @@ export function useConversation(
   );
 
   const stop = useCallback(() => {
-    if (sessionId) void window.b4m.chat.stopReply(sessionId);
+    if (sessionId) void hostChat.stopReply(sessionId);
   }, [sessionId]);
 
   // No optimistic update: the reply's own 'start' event clears the stop-reason chip, and doing
@@ -1434,7 +1439,7 @@ export function useConversation(
         return false;
       }
       if (!result.queued && result.notice) setNotice(result.notice);
-      const updated = await window.b4m.chat.getSession(sessionId);
+      const updated = await hostChat.getSession(sessionId);
       if (updated) {
         if (activeSessionId.current === sessionId)
           setSession(current => (current?.id === sessionId ? updated : current));
@@ -1591,7 +1596,7 @@ export function useConversation(
 
   const cancelQueued = useCallback(
     (queuedId: string) => {
-      if (sessionId) void window.b4m.chat.cancelQueuedMessage(sessionId, queuedId);
+      if (sessionId) void hostChat.cancelQueuedMessage(sessionId, queuedId);
     },
     [sessionId]
   );
@@ -1600,7 +1605,7 @@ export function useConversation(
   // have finished on its own by the time this lands, which makes it a no-op there.
   const sendQueuedNow = useCallback(
     (queuedId: string) => {
-      if (sessionId) void window.b4m.chat.sendQueuedMessageNow(sessionId, queuedId);
+      if (sessionId) void hostChat.sendQueuedMessageNow(sessionId, queuedId);
     },
     [sessionId]
   );
@@ -1637,7 +1642,7 @@ export function useConversation(
     (title: string) =>
       saveSetting(
         'the title',
-        id => window.b4m.chat.renameSession(id, title),
+        id => hostChat.renameSession(id, title),
         updated => ({ title: updated.title })
       ),
     [sessionId, saveSetting]
@@ -1736,7 +1741,7 @@ export function useConversation(
           setNotice(`Could not save this chat's params. ${error instanceof Error ? error.message : String(error)}`);
         }
         // An older save skipped as stale may still have landed, so show what main holds now.
-        const stored = await window.b4m.chat.getSession(sessionId).catch(() => null);
+        const stored = await hostChat.getSession(sessionId).catch(() => null);
         if (stored && latest()) {
           setSession(current => (current?.id === sessionId ? { ...current, generation: stored.generation } : current));
         }
@@ -1786,9 +1791,18 @@ export function useConversation(
     [sessionId, onSummaryChanged, outdateOpenRead]
   );
 
-  const respondToApproval = useCallback((approvalId: string, answer: ChatApprovalAnswer) => {
-    void window.b4m.chat.respondToApproval(approvalId, answer);
-  }, []);
+  const respondToApproval = useCallback(
+    (approvalId: string, answer: ChatApprovalAnswer) => {
+      if (!sessionId) {
+        console.warn('Dropped an approval answer because no session is open');
+        return;
+      }
+      hostChat
+        .respondToApproval(sessionId, approvalId, answer)
+        .catch(cause => console.warn('Could not answer the approval', cause));
+    },
+    [sessionId]
+  );
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
@@ -1820,7 +1834,7 @@ export function useConversation(
   const chooseDirectory = useCallback(
     async (directory: string) => {
       setProjectError(null);
-      const inspected = await window.b4m.chat.inspectProject(directory);
+      const inspected = await hostChat.inspectProject(directory);
       // A folder nothing could run in is reported instead of being bound. Main refuses it too,
       // so this only spares the user a move that would come back as the same sentence.
       if (inspected.refusal) {

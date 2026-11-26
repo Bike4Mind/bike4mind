@@ -3365,7 +3365,8 @@ export class ChatService {
 
   /**
    * `allowDiscard` lets cleanup force-remove a dirty or unproven checkout, keeping its branch. Only a
-   * caller that showed the user what is discarded passes it; the host protocol has no such step.
+   * caller that showed the user what is discarded passes it; session/delete carries it as
+   * `allowDiscard` from a client that did.
    */
   async deleteSession(
     sessionId: string,
@@ -3390,14 +3391,15 @@ export class ChatService {
    * Deletes the named nested sessions of `sessionId`, deepest first, then the session itself.
    * Ids that are not its descendants are ignored. `removeWorktree` covers the parent's worktree;
    * a nested session's goes only when its id is in `nestedWorktreeIds` - the ones the dialog showed
-   * the user - and it is still removable then. Discarding is allowed for both, since the dialog
-   * listed what each discards. Stops at the first failure and reports what was already deleted.
+   * the user - and it is still removable then. `allowDiscard` covers both and is sent only after the
+   * dialog listed what each discards. Stops at the first failure and reports what was already deleted.
    */
   async deleteSessionTree(
     sessionId: string,
     nestedIds: readonly string[],
     removeWorktree = false,
-    nestedWorktreeIds: readonly string[] = []
+    nestedWorktreeIds: readonly string[] = [],
+    { allowDiscard = false }: { allowDiscard?: boolean } = {}
   ): Promise<SessionTreeDeletion> {
     const wanted = new Set(nestedIds);
     const sessions = await this.listSessions();
@@ -3424,10 +3426,10 @@ export class ChatService {
       for (const id of order) {
         const removable =
           nestedWorktreeIds.includes(id) && (await this.inspectSessionWorktreeRemoval(id))?.removable === true;
-        await this.deleteSession(id, removable, { allowDiscard: true });
+        await this.deleteSession(id, removable, { allowDiscard });
         deleted.push(id);
       }
-      await this.deleteSession(sessionId, removeWorktree, { allowDiscard: true });
+      await this.deleteSession(sessionId, removeWorktree, { allowDiscard });
       deleted.push(sessionId);
     } catch (err) {
       return { deleted, error: err instanceof Error ? err.message : String(err) };

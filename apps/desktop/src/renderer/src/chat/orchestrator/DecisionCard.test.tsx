@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatToolCall } from '@shared/chat';
@@ -34,7 +35,7 @@ beforeEach(() => {
   chat.respondToApproval.mockResolvedValue(undefined);
   chat.answerTaskDecision.mockResolvedValue(undefined);
   chat.resolveHeldRelay.mockResolvedValue(undefined);
-  (window as unknown as { b4m: unknown }).b4m = { chat };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
 });
 
 afterEach(() => themed.unmount());

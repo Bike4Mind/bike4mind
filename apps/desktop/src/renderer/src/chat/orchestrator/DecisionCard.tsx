@@ -115,7 +115,7 @@ export function DecisionBody({
           </Sheet>
         );
       }
-      return <PendingRequests calls={[decision.call]} onAnswered={onAnswered} />;
+      return <PendingRequests sessionId={sessionId} calls={[decision.call]} onAnswered={onAnswered} />;
     case 'question':
       return <TaskDecisionCard sessionId={sessionId} title={asker.name} decision={decision.decision} />;
     case 'held-relay':

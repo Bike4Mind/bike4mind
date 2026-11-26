@@ -24,6 +24,7 @@ import {
   modelSupportsTools,
   SESSION_TITLE_MAX_LENGTH,
 } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
@@ -1198,7 +1199,7 @@ export function ChatShell({
   const agentActions = useMemo<AgentActions>(
     () => ({
       open: selectSession,
-      stop: sessionId => window.b4m.chat.stopReply(sessionId),
+      stop: sessionId => hostChat.stopReply(sessionId),
       archive: sessionId => {
         const session = sessions.find(candidate => candidate.id === sessionId);
         if (session) void toggleArchived(session);
@@ -1628,8 +1629,7 @@ export function ChatShell({
       markSessionStart('project');
       // Before the screen switches, so the git calls never leave the previous session's
       // composer live under the new one's id.
-      const inWorktree =
-        worktreeByDefault() && canHoldWorktree(await window.b4m.chat.inspectProject(sibling.directory));
+      const inWorktree = worktreeByDefault() && canHoldWorktree(await hostChat.inspectProject(sibling.directory));
       setScreen('conversation');
       setMode('code');
       setActiveId(sessionDraft.start('code', newSessionInProject(sibling, inWorktree)));
@@ -2327,7 +2327,7 @@ export function ChatShell({
                     processes: background.processes,
                     spawned,
                     onStopProcess: background.stop,
-                    onStopSession: sessionId => void window.b4m.chat.stopReply(sessionId),
+                    onStopSession: sessionId => void hostChat.stopReply(sessionId),
                     onOpenSession: selectSession,
                     onShowOutput: () => setTasksPanelOpen(true),
                   }}
