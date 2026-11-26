@@ -20,6 +20,8 @@
  * private blob inside `parameters`) would NOT be caught by adding its name here; that shape needs
  * its own per-field handling, not just a new entry in this array.
  *
+ * The agent run trace is a separate shape with its own redaction, see redactAgentStepsForViewer.
+ *
  * Adjacent unredacted shape, not yet a leak: `promptMeta.executionTracking.steps[].result`/
  * `.error` (PromptMetaZodSchema) are the same class of owner-only content but nothing writes them
  * today, so there is nothing to redact yet. A future writer landing there bypasses this list
