@@ -5,6 +5,8 @@ import {
   postLogoutRedirectUrisSchema,
   resolveOAuthFederatedIdp,
   updateOAuthClientSchema,
+  oauthClientRoleSchema,
+  oauthClientRoleAssignmentInputSchema,
 } from './oauthClient';
 import { FEDERATED_ADMIN_STATUS_SCOPE, OAUTH_CLIENT_SCOPES } from '../constants/oauthClients';
 
@@ -224,5 +226,71 @@ describe('postLogoutRedirectUris', () => {
     expect(postLogoutRedirectUrisSchema.safeParse(uris).success).toBe(false);
     expect(createOAuthClientSchema.safeParse({ ...base, postLogoutRedirectUris: uris }).success).toBe(false);
     expect(updateOAuthClientSchema.safeParse({ postLogoutRedirectUris: uris }).success).toBe(false);
+  });
+});
+
+describe('oauthClientRoleSchema', () => {
+  it('accepts a slug key with a label, trimmed', () => {
+    expect(oauthClientRoleSchema.parse({ key: ' admin_1-x ', label: ' Admin ' })).toEqual({
+      key: 'admin_1-x',
+      label: 'Admin',
+    });
+  });
+
+  it.each([
+    { key: '', label: 'A' },
+    { key: 'Admin', label: 'A' },
+    { key: '9lives', label: 'A' },
+    { key: 'has space', label: 'A' },
+    { key: 'a'.repeat(33), label: 'A' },
+    { key: 'admin', label: ' ' },
+    { key: 'admin', label: 'x'.repeat(65) },
+    { key: 'admin', label: 'A', extra: true },
+  ])('rejects %j', input => {
+    expect(oauthClientRoleSchema.safeParse(input).success).toBe(false);
+  });
+
+  it('validates an assignment input', () => {
+    expect(oauthClientRoleAssignmentInputSchema.safeParse({ clientId: 'b4m_x', role: 'admin' }).success).toBe(true);
+    expect(oauthClientRoleAssignmentInputSchema.safeParse({ clientId: '', role: 'admin' }).success).toBe(false);
+    expect(oauthClientRoleAssignmentInputSchema.safeParse({ clientId: 'b4m_x', role: 'Admin' }).success).toBe(false);
+  });
+});
+
+describe('federated https URL fields', () => {
+  it.each(['not a url', 'http://idp.example.test'])('rejects issuer %s', issuer => {
+    const input = { name: 'A', redirectUris: ['https://app.example.test/cb'], federatedIdp: { issuer } };
+    expect(createOAuthClientSchema.safeParse(input).success).toBe(false);
+  });
+});
+
+describe('resolveOAuthFederatedIdp remaining shapes', () => {
+  it('requires an issuer for the sub source', () => {
+    expect(() => resolveOAuthFederatedIdp({ subjectSource: 'sub' }, 'cid')).toThrow(/requires an issuer/);
+  });
+
+  it('keeps an explicit audience for the sub source and a jwksUri for the identities source', () => {
+    expect(
+      resolveOAuthFederatedIdp(
+        {
+          subjectSource: 'sub',
+          issuer: 'https://b4m.example.test',
+          jwksUri: 'https://b4m.example.test/jwks',
+          audience: 'aud',
+        },
+        'cid'
+      )
+    ).toMatchObject({ audience: 'aud' });
+    expect(
+      resolveOAuthFederatedIdp(
+        { issuer: 'https://idp.example.test', audience: 'a', providerName: 'p', jwksUri: 'https://idp.example.test/j' },
+        'cid'
+      )
+    ).toEqual({
+      issuer: 'https://idp.example.test',
+      audience: 'a',
+      providerName: 'p',
+      jwksUri: 'https://idp.example.test/j',
+    });
   });
 });

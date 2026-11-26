@@ -27,6 +27,7 @@ import { InterventionHoldsCard } from '../../../InterventionHolds';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
 import { ClientsCard } from './ClientsCard';
+import { OAuthClientRolesCard } from './OAuthClientRolesCard';
 import { HeaderAction, RowAction } from './cardActions';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
 import { timelineItems } from './timelineItems';
@@ -353,6 +354,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
         <OrganizationsCard user={user} onAudit={onAudit} />
         <AccessCard user={user} onAction={onAction} />
         <ClientsCard user={user} />
+        <OAuthClientRolesCard user={user} />
         <SignupClassificationCard key={user.id} userId={user.id} />
         <RiskEvidenceCard userId={user.id} />
         <SectionCard

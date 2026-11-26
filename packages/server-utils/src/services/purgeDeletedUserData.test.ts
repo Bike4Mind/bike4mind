@@ -15,6 +15,8 @@ const {
   removeFromWatchesMock,
   removeFromEvalSetsMock,
   deleteLimitEventsMock,
+  deleteRoleAssignmentsMock,
+  findUserByIdMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
@@ -30,10 +32,12 @@ const {
   removeFromWatchesMock: vi.fn(),
   removeFromEvalSetsMock: vi.fn(),
   deleteLimitEventsMock: vi.fn(),
+  deleteRoleAssignmentsMock: vi.fn(),
+  findUserByIdMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  User: {},
+  User: { findById: findUserByIdMock },
   authEventRepository: { deleteAllForUser: deleteAuthEventsMock },
   embedConversationRepository: { deleteAllForUser: deleteEmbedMock },
   integrationRequestRepository: { deleteAllForUser: deleteRequestsMock },
@@ -42,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   campaignWatchRepository: { removeUser: removeFromWatchesMock },
   abuseEvalSetRepository: { removeUser: removeFromEvalSetsMock },
   userLimitEventRepository: { deleteAllForUser: deleteLimitEventsMock },
+  oauthClientRoleAssignmentRepository: { deleteAllForUser: deleteRoleAssignmentsMock },
 }));
 vi.mock('../auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
 vi.mock('./publish/purgeUserPublishedArtifacts', () => ({
@@ -59,7 +64,7 @@ vi.mock('../integrations/jira/revokeAtlassianGrant', () => ({
   revokeAtlassianGrant: revokeAtlassianMock,
 }));
 
-import { purgeDeletedUserData } from './purgeDeletedUserData';
+import { purgeDeletedUserData, readUserIntegrationGrants } from './purgeDeletedUserData';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -70,6 +75,7 @@ beforeEach(() => {
   hideAnnotationsMock.mockReset().mockResolvedValue(0);
   withdrawListingsMock.mockReset().mockResolvedValue(0);
   deleteAuthEventsMock.mockReset().mockResolvedValue(0);
+  deleteRoleAssignmentsMock.mockReset().mockResolvedValue(0);
   removeFromDetectionsMock.mockReset().mockResolvedValue(0);
   removeFromWatchesMock.mockReset().mockResolvedValue(undefined);
   removeFromEvalSetsMock.mockReset().mockResolvedValue(0);
@@ -94,7 +100,38 @@ describe('purgeDeletedUserData', () => {
     expect(removeFromWatchesMock).toHaveBeenCalledWith('u1');
     expect(removeFromEvalSetsMock).toHaveBeenCalledWith('u1');
     expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
+    expect(deleteRoleAssignmentsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['limit events', () => deleteLimitEventsMock.mockRejectedValue(new Error('down'))],
+    ['campaign watches', () => removeFromWatchesMock.mockRejectedValue(new Error('down'))],
+  ])('logs instead of throwing when the %s step fails', async (label, fail) => {
+    fail();
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(label));
+  });
+
+  it('reads the integration grants straight from the user row', async () => {
+    const grants = { googleDrive: null, atlassianConnect: null };
+    const lean = vi.fn().mockResolvedValue(grants);
+    findUserByIdMock.mockReturnValue({ lean });
+    await expect(readUserIntegrationGrants('u1')).resolves.toBe(grants);
+    expect(findUserByIdMock).toHaveBeenCalledWith('u1', 'googleDrive atlassianConnect');
+  });
+
+  it('logs instead of throwing when deleting OAuth client role assignments fails', async () => {
+    deleteRoleAssignmentsMock.mockRejectedValue(new Error('roles down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('OAuth client role assignments'));
+    expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
   });
 
   it('logs instead of throwing when removing the user from shadow detections fails', async () => {

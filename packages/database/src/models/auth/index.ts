@@ -23,6 +23,7 @@ export * from './SignupTraceModel';
 export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
 export * from './oauthClientAdmin';
+export * from './OAuthClientRoleAssignmentModel';
 export * from './OAuthGrantModel';
 export * from './OAuthRefreshTokenModel';
 export * from './PartnerSignupRuleModel';

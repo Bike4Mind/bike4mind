@@ -134,6 +134,12 @@ export const ADMIN_REASON_PRESETS = {
     'Suspicious usage',
     'Requested by the app owner',
   ],
+  oauthClientRole: ['App launched a new feature', 'Role no longer used by the app', 'Requested by the app owner'],
+  oauthClientRoleAssignment: [
+    'Requested by the app owner',
+    'Staff or support access for the app',
+    'Access no longer needed',
+  ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
   platformMcpConnectorRemove: ['No longer needed', 'Server retired', 'Replaced by another connector', 'Added in error'],
   partnerSignupRule: ['Partner agreement ended', 'Created in error', 'Replaced by another rule', 'Account cleanup'],

@@ -9,6 +9,7 @@ import {
   oauthClientRateLimitSchema,
   oauthClientUnpaidAccountLimitsSchema,
   type OAuthClientUnpaidAccountLimits,
+  type OAuthClientRole,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Schema, model, Model } from 'mongoose';
@@ -94,6 +95,8 @@ export interface IOAuthClientDocument extends IMongoDocument {
    * later payments (apps/client server/analytics/oauthSignupCredit.ts). Absent: no credit.
    */
   overwatchProductId?: string;
+  /** The roles this app offers its users; who holds each is OAuthClientRoleAssignmentModel. */
+  roles: OAuthClientRole[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -158,6 +161,15 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
       required: false,
     },
     overwatchProductId: { type: String, required: false },
+    roles: {
+      type: [
+        new Schema<OAuthClientRole>(
+          { key: { type: String, required: true }, label: { type: String, required: true } },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
     unpaidAccountsAllowed: { type: Boolean, required: false },
     rateLimit: {
       type: new Schema<IUserApiKeyRateLimit>(
