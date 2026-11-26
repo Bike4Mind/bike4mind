@@ -58,6 +58,7 @@ vi.mock('@client/app/hooks/useGearCta', () => ({
 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: h.logEvent }) }));
 
+import { useTutorialPicker } from '@client/app/components/tutorial/core/tutorialPickerStore';
 import { useGearsDiscovery } from './useGearsDiscovery';
 
 const gear = (key: string, overrides: Partial<GearStatus> = {}): GearStatus =>
@@ -89,6 +90,7 @@ beforeEach(() => {
   h.streaming = false;
   h.pathname = '/';
   h.dialogOpen = false;
+  useTutorialPicker.setState({ walkOnScreen: false, offerWaiting: false });
   h.refetch.mockReset();
   h.onStamped = undefined;
   h.navigate.mockReset();
@@ -181,6 +183,16 @@ describe('useGearsDiscovery', () => {
     settle();
     expect(result.current.open).toBe(false);
     h.dialogOpen = false;
+    act(() => vi.advanceTimersByTime(DISCOVERY_RECHECK_MS));
+    expect(result.current.open).toBe(true);
+  });
+
+  it('waits while the tour offer is waiting for an answer, then opens', () => {
+    useTutorialPicker.setState({ offerWaiting: true });
+    const { result } = renderHook(() => useGearsDiscovery());
+    settle();
+    expect(result.current.open).toBe(false);
+    useTutorialPicker.setState({ offerWaiting: false });
     act(() => vi.advanceTimersByTime(DISCOVERY_RECHECK_MS));
     expect(result.current.open).toBe(true);
   });

@@ -44,7 +44,7 @@ beforeEach(() => {
   input.chatInputValue = '';
   enabled.current = true;
   modules.current = [basics];
-  useTutorialPicker.setState({ open: false, requestedTrack: null });
+  useTutorialPicker.setState({ open: false, requestedTrack: null, offerWaiting: false, offerAnswered: false });
 });
 afterEach(() => vi.useRealTimers());
 
@@ -96,5 +96,38 @@ describe('TutorialOffer', () => {
     renderOffer();
     act(() => vi.advanceTimersByTime(CALM_SETTLE_MS * 2));
     expect(screen.queryByTestId('tutorial-offer')).toBeNull();
+  });
+  it('marks the offer as waiting while it is enabled with modules', () => {
+    renderOffer();
+    expect(useTutorialPicker.getState().offerWaiting).toBe(true);
+  });
+
+  it('answers the offer when a track is taken up', () => {
+    renderOffer();
+    act(() => vi.advanceTimersByTime(CALM_SETTLE_MS));
+    fireEvent.click(screen.getByTestId('tutorial-offer-basics'));
+    expect(useTutorialPicker.getState().offerAnswered).toBe(true);
+    expect(useTutorialPicker.getState().offerWaiting).toBe(false);
+  });
+
+  it('answers the offer when See all tutorials is clicked', () => {
+    renderOffer();
+    act(() => vi.advanceTimersByTime(CALM_SETTLE_MS));
+    fireEvent.click(screen.getByTestId('tutorial-offer-all'));
+    expect(useTutorialPicker.getState().offerAnswered).toBe(true);
+    expect(useTutorialPicker.getState().offerWaiting).toBe(false);
+  });
+
+  it('stops waiting when it unmounts', () => {
+    const { unmount } = renderOffer();
+    expect(useTutorialPicker.getState().offerWaiting).toBe(true);
+    unmount();
+    expect(useTutorialPicker.getState().offerWaiting).toBe(false);
+  });
+
+  it('does not wait while core tutorials are switched off', () => {
+    enabled.current = false;
+    renderOffer();
+    expect(useTutorialPicker.getState().offerWaiting).toBe(false);
   });
 });
