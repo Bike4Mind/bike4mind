@@ -51,7 +51,9 @@ When the model abstains on a graduated decision (unknown, stale, not abuse, or b
 `minConfidence`), deterministic rules in `linkRules.ts` may decide Limit or Hold signup grant instead,
 under the same mode, tier, review-only, verdict, account-count and rollout gates. Facts are loaded
 by `packages/server-utils/src/security/autoContainment/linkRuleFacts.ts`, failing closed per fact.
-Paying and partner-domain accounts are never touched, and a rule never decides Contain.
+Paying and partner-domain accounts are never touched, and a rule never decides Contain. A rule's tier is
+independent of the tier the detector's action maps to, so a rule may decide Limit on a detection whose own
+mapping is a lighter tier (holdGrant, review, verify).
 
 | Rule                | Fires when                                                                                    | Tier                              |
 | ------------------- | --------------------------------------------------------------------------------------------- | --------------------------------- |
