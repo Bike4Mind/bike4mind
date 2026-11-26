@@ -23,6 +23,7 @@ describe('getLoginErrorMessage (surface SSO failures)', () => {
     expect(getLoginErrorMessage('saml_auth_failed')).toMatch(/saml/i);
     expect(getLoginErrorMessage('email_required')).toMatch(/email/i);
     expect(getLoginErrorMessage('missing_state')).toMatch(/session expired/i);
+    expect(getLoginErrorMessage('saml_session_mismatch')).toMatch(/session expired/i);
   });
 
   it('maps the account-linking gate codes to dedicated, distinct guidance', () => {
