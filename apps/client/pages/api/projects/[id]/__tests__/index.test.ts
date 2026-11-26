@@ -85,6 +85,9 @@ vi.mock('@server/sharing/revokedFileReferences', () => ({
   cleanUpRevokedFileReferences: (...a: unknown[]) => refCleanup.cleanUp(...a),
 }));
 
+const mockRescope = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/websocket/rescopeUserSubscriptions', () => ({ rescopeUserSubscriptions: mockRescope }));
+
 import '@pages/api/projects/[id]/index';
 import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
@@ -158,6 +161,13 @@ describe('GET and DELETE /api/projects/[id] scope asserts', () => {
     expect(refCleanup.cleanUp).toHaveBeenCalledWith([{ userId: 'planned', fileIds: ['f1'] }], expect.anything());
     expect(refCleanup.targets.mock.invocationCallOrder[0]).toBeLessThan(mockDeleteProject.mock.invocationCallOrder[0]);
     expect(mockDeleteProject.mock.invocationCallOrder[0]).toBeLessThan(refCleanup.cleanUp.mock.invocationCallOrder[0]);
+  });
+
+  it('DELETE rescopes the subscriptions of every cleanup target after the delete', async () => {
+    const { req, res } = request('DELETE', { id: 'p1' });
+    await mockRefs.deleteHandler!(req, res);
+    expect(mockRescope).toHaveBeenCalledExactlyOnceWith(['planned'], req.logger);
+    expect(mockDeleteProject.mock.invocationCallOrder[0]).toBeLessThan(mockRescope.mock.invocationCallOrder[0]);
   });
 });
 
