@@ -30,7 +30,7 @@ import {
   signCallableFunctionDataLinks,
   type CallableFunctionDataLink,
 } from './dataPins';
-import { CallableFunctionSourceError } from './fetchSource';
+import { CALLABLE_FUNCTION_SOURCE_TIMEOUT_MS, CallableFunctionSourceError } from './fetchSource';
 import { resolveCallableFunctionSources, type CallableFunctionSourceDeps } from './sources';
 import type { CallableFunctionRunData } from './runtimeData';
 import {
@@ -535,16 +535,25 @@ export async function dispatchFunctionCall(
     let sources: CallableFunctionStampData[] = [];
     let sourceKeys: string[] = [];
     const fetchStarted = Date.now();
+    const fetchMs = Math.min(requestedMs, budgetMs);
     if (fn.sources?.length) {
       try {
-        const reads = await resolveCallableFunctionSources(fn, options.sources, {
-          timeoutMs: Math.min(requestedMs, budgetMs),
-        });
+        const reads = await resolveCallableFunctionSources(fn, options.sources, { timeoutMs: fetchMs });
         sources = reads.map(read => read.entry);
         sourceKeys = reads.map(read => read.key);
       } catch (error) {
-        // The call's own time ran out while fetching: a timeout, as a stalled data download is.
-        if (Date.now() - fetchStarted >= requestedMs) return finish({ outcome: 'timeout' });
+        // A stall that spent the call's own time, or the caller's wait, ends as the run would have: a timeout. The
+        // code covers a timer that fires a millisecond early; under the fetch's own ceiling, `fetchMs` is its limit.
+        const stalled =
+          Date.now() - fetchStarted >= fetchMs ||
+          (error instanceof CallableFunctionSourceError &&
+            error.code === 'source_timeout' &&
+            fetchMs <= CALLABLE_FUNCTION_SOURCE_TIMEOUT_MS);
+        if (stalled) {
+          return finish(
+            fetchMs < requestedMs ? { outcome: 'timeout', reason: 'wait_exceeded' } : { outcome: 'timeout' }
+          );
+        }
         Logger.error('[CALLABLE_FUNCTION_SOURCE_FAILED]', describeRunnerError(error));
         const errorClass = error instanceof CallableFunctionSourceError ? error.code : undefined;
         return finish({ outcome: 'error', reason: 'source_unavailable', ...(errorClass ? { errorClass } : {}) });

@@ -472,6 +472,39 @@ describe('dispatchFunctionCall outcomes', () => {
       expect(onlyRow()).toMatchObject({ outcome: 'timeout' });
     });
 
+    it("ends a stall that outlasts the caller's wait as wait_exceeded, and one at the fetch's own ceiling as an error", async () => {
+      withSources();
+      vi.useFakeTimers();
+      const stalled = vi.fn(async (request: { timeoutMs: number }) => {
+        await new Promise(resolve => setTimeout(resolve, request.timeoutMs));
+        throw new CallableFunctionSourceError('source_timeout', 'stalled');
+      });
+      const runner = runnerOf(ok());
+      const short = dispatchFunctionCall(call(), {
+        runner,
+        waitMs: 4_000,
+        sources: { ...deps(), fetcher: stalled },
+        dataReachable: true,
+      });
+      await vi.advanceTimersByTimeAsync(4_000);
+      await expect(short).resolves.toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
+      expect(stalled).toHaveBeenLastCalledWith(expect.objectContaining({ timeoutMs: 4_000 }));
+
+      const ceiling = dispatchFunctionCall(call(), {
+        runner,
+        waitMs: 40_000,
+        sources: { ...deps(), fetcher: stalled },
+        dataReachable: true,
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(ceiling).resolves.toMatchObject({
+        outcome: 'error',
+        reason: 'source_unavailable',
+        errorClass: 'source_timeout',
+      });
+      expect(runner).not.toHaveBeenCalled();
+    });
+
     it('refuses a call with sources where this process was not given the data bucket, before fetching', async () => {
       withSources();
       const runner = runnerOf(ok());
