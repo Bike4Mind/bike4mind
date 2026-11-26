@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Alert, Button, Chip, LinearProgress, Stack, Typography } from '@mui/joy';
 import type { UserComplianceResponse } from '@bike4mind/common';
 import { AdminDialog } from '@client/app/components/admin/shared/AdminDialog';
-import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
+import { DATETIME_COLUMN_WIDTH, DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
 import { Dash } from '@client/app/components/admin/shared/Dash';
 import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
 import { create } from 'zustand';
@@ -24,6 +24,10 @@ type Incident = UserComplianceResponse['moderationIncidents'][number] & { rowId:
 type AuthEvent = UserComplianceResponse['recentAuthEvents'][number] & { rowId: string };
 
 const TABLE_MAX_HEIGHT = '40vh';
+// Fits the longest UserAuthAuditEvent (`account_data_export_requested`) at ~7.5 px a character, plus cell padding.
+const EVENT_COLUMN_WIDTH = '16rem';
+// When (13.5rem) + Event + 7.5rem for each of the three wrap columns; below this the table scrolls sideways.
+const AUTH_EVENTS_MIN_WIDTH = '52rem';
 
 const Mono = ({ children }: { children: string }) => (
   <Typography level="body-sm" sx={{ fontFamily: 'code', color: 'inherit' }}>
@@ -32,7 +36,7 @@ const Mono = ({ children }: { children: string }) => (
 );
 
 const INCIDENT_COLUMNS: DataColumn<Incident>[] = [
-  { id: 'when', label: 'When', width: '11rem', render: m => fmt(m.createdAt) },
+  { id: 'when', label: 'When', width: DATETIME_COLUMN_WIDTH, render: m => fmt(m.createdAt) },
   {
     id: 'labels',
     label: 'Labels',
@@ -44,8 +48,8 @@ const INCIDENT_COLUMNS: DataColumn<Incident>[] = [
 ];
 
 const AUTH_EVENT_COLUMNS: DataColumn<AuthEvent>[] = [
-  { id: 'when', label: 'When', width: '11rem', render: e => fmt(e.createdAt) },
-  { id: 'event', label: 'Event', render: e => e.event },
+  { id: 'when', label: 'When', width: DATETIME_COLUMN_WIDTH, render: e => fmt(e.createdAt) },
+  { id: 'event', label: 'Event', width: EVENT_COLUMN_WIDTH, render: e => e.event },
   // actorUserId is only set for admin-driven events (e.g. session_revoked) - a self-initiated
   // logout has no distinct actor to show.
   {
@@ -151,6 +155,7 @@ const ComplianceModal = () => {
               rows={authEvents}
               columns={AUTH_EVENT_COLUMNS}
               getRowId={getRowId}
+              minWidth={AUTH_EVENTS_MIN_WIDTH}
               pagination={false}
               maxHeight={TABLE_MAX_HEIGHT}
               onRetry={() => void refetch()}

@@ -112,6 +112,17 @@ describe('EmailActivityHistory table', () => {
     expect(mocks.lastParams).toMatchObject({ page: 2, limit: 25 });
   });
 
+  it('sizes the Time column for the full locale timestamp', () => {
+    mocks.result = pageOf(1, 1);
+    renderHistory();
+    const table = screen.getByTestId('email-activity-table');
+    const width = within(table).getByRole('columnheader', { name: 'Time' }).style.width;
+    expect(width).toMatch(/^[\d.]+rem$/);
+    expect(parseFloat(width)).toBeGreaterThanOrEqual(13.5);
+    expect(getComputedStyle(table).minWidth).toBe('74.5rem');
+    expect(within(table).getByText(new Date('2026-06-15T12:00:00Z').toLocaleString())).toBeInTheDocument();
+  });
+
   it('goes back to page 1 when the status filter changes', () => {
     mocks.result = pageOf(25, 30);
     renderHistory();
