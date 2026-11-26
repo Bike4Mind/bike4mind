@@ -6,6 +6,7 @@ import {
   type HostNotificationDelivery,
 } from '@shared/hostBridge';
 import { HOST_ERROR_CODES, hostNotification } from '@shared/hostProtocol';
+import { pageSessions, sessionPageRequestSchema } from '@shared/sessionPage';
 
 type ChatStubs = Partial<{
   listSessions(): Promise<ChatSessionSummary[]>;
@@ -173,6 +174,12 @@ export function chatBackedHostBridge(): HostBridgeApi {
       const chat = chatStubs();
       if (hostId === LOCAL_HOST_ID && method === 'session/list') {
         return { ok: true, result: { sessions: (await chat.listSessions?.()) ?? [] } };
+      }
+      // Paged the way the host pages it, over whatever the test's listSessions stub returns. Ties
+      // keep the stub's order, as SessionStore.list's stable sort does.
+      if (hostId === LOCAL_HOST_ID && method === 'session/page') {
+        const all = [...((await chat.listSessions?.()) ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        return { ok: true, result: pageSessions(all, sessionPageRequestSchema.parse(params)) };
       }
       if (hostId === LOCAL_HOST_ID && method === 'session/statuses') {
         return { ok: true, result: { statuses: (await chat.getSessionStatuses?.()) ?? [] } };

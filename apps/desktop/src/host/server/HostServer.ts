@@ -39,6 +39,7 @@ export type ServedHostMethod = Exclude<HostMethod, PendingHostMethod>;
 export type HostServerRuntime = Pick<
   HostRuntime,
   | 'listSessions'
+  | 'listSessionPage'
   | 'getSession'
   | 'createSession'
   | 'createCodeSession'
@@ -181,6 +182,7 @@ export class HostServer {
     const runtime = this.runtime;
     return {
       'session/list': async () => ({ sessions: await runtime.listSessions() }),
+      'session/page': request => runtime.listSessionPage(request),
       'session/get': async ({ sessionId, viewed }) => {
         const session = await runtime.getSession(sessionId, viewed === true);
         return {

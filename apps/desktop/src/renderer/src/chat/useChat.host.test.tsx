@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatSessionStatusEvent, ChatSessionSummary } from '@shared/chat';
 import { LOCAL_HOST_ID, type HostBridgeApi, type HostNotificationDelivery } from '@shared/hostBridge';
 import { hostNotification } from '@shared/hostProtocol';
+import { SESSION_PAGE_SIZE } from '@shared/sessionPage';
 import { useSessionStatusFeed, useSessions, type SessionStatusFeed, type SessionsController } from './useChat';
 
 const summary = (id: string, title = id) =>
@@ -16,6 +17,7 @@ const summary = (id: string, title = id) =>
     createdAt: '2026-10-01',
     updatedAt: '2026-10-01',
   }) as ChatSessionSummary;
+const page = (sessions: ChatSessionSummary[]) => ({ sessions, related: [], nextCursor: null, total: sessions.length });
 const status = (sessionId: string, value: ChatSessionStatusEvent['status']): ChatSessionStatusEvent => ({
   sessionId,
   status: value,
@@ -78,18 +80,22 @@ afterEach(() => {
 });
 
 describe('the session list through the local host', () => {
-  it('lists sessions with session/list on the local host', async () => {
-    const { host } = stubHost({ 'session/list': { sessions: [summary('s1'), summary('s2')] } });
+  it('lists the first page of sessions with session/page on the local host', async () => {
+    const { host } = stubHost({ 'session/page': page([summary('s1'), summary('s2')]) });
 
     const sessions = await render<SessionsController>(useSessions);
 
-    expect(host.request).toHaveBeenCalledWith(LOCAL_HOST_ID, 'session/list', undefined);
+    expect(host.request).toHaveBeenCalledWith(LOCAL_HOST_ID, 'session/page', {
+      limit: SESSION_PAGE_SIZE,
+      cursor: null,
+      include: [],
+    });
     expect(sessions().sessions.map(entry => entry.id)).toEqual(['s1', 's2']);
     expect(sessions().loading).toBe(false);
   });
 
   it('patches a row from a local session/summaryChanged and ignores another host', async () => {
-    const { push } = stubHost({ 'session/list': { sessions: [summary('s1'), summary('s2')] } });
+    const { push } = stubHost({ 'session/page': page([summary('s1'), summary('s2')]) });
     const sessions = await render<SessionsController>(useSessions);
 
     push('devbox', 'session/summaryChanged', { summary: summary('s1', 'From elsewhere') });
@@ -99,7 +105,7 @@ describe('the session list through the local host', () => {
   });
 
   it('patches the list in every window that holds it', async () => {
-    const { push, listeners } = stubHost({ 'session/list': { sessions: [summary('s1')] } });
+    const { push, listeners } = stubHost({ 'session/page': page([summary('s1')]) });
     const first = await render<SessionsController>(useSessions);
     const second = await render<SessionsController>(useSessions);
 
@@ -111,7 +117,7 @@ describe('the session list through the local host', () => {
   });
 
   it('drops its notification listener on unmount', async () => {
-    const { listeners } = stubHost({ 'session/list': { sessions: [] } });
+    const { listeners } = stubHost({ 'session/page': page([]) });
     await render<SessionsController>(useSessions);
     expect(listeners.size).toBe(1);
 
