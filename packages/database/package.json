@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/database",
-  "version": "0.4.34",
+  "version": "0.4.35",
   "private": true,
   "type": "module",
   "main": "dist/index.mjs",
