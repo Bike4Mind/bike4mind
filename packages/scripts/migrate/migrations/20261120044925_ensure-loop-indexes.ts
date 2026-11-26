@@ -1,5 +1,5 @@
 import type { Model } from 'mongoose';
-import { AgentExecutionModel, Inbox, Loop, LoopEvent, WorkItem } from '@bike4mind/database';
+import { AgentExecutionModel, Inbox, Loop, LoopDirective, LoopEvent, WorkItem } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 type IndexKey = Record<string, 1 | -1>;
@@ -26,7 +26,10 @@ export const ensureIndexes = async <T>(model: Model<T>, keys: IndexKey[]): Promi
  * The indexes the loop scheduler, loop tickets and loop notices read through. Loop and LoopEvent are new and small;
  * they are listed so every loop index exists before the scheduler runs, not only once autoIndex gets to it.
  */
-export const LOOP_INDEXES: Record<'agentExecution' | 'workItem' | 'inbox' | 'loop' | 'loopEvent', IndexKey[]> = {
+export const LOOP_INDEXES: Record<
+  'agentExecution' | 'workItem' | 'inbox' | 'loop' | 'loopEvent' | 'loopDirective',
+  IndexKey[]
+> = {
   agentExecution: [
     { runnerLeaseUntil: 1 },
     { loopId: 1, ticketPriority: 1, createdAt: 1 },
@@ -55,6 +58,12 @@ export const LOOP_INDEXES: Record<'agentExecution' | 'workItem' | 'inbox' | 'loo
     { 'resolution.outcome': 1, foldedAt: 1 },
     { workItemId: 1, createdAt: -1 },
   ],
+  loopDirective: [
+    { loopId: 1, createdAt: -1 },
+    { fromLoopId: 1, createdAt: -1 },
+    { loopId: 1, state: 1, createdAt: 1 },
+    { executionId: 1 },
+  ],
 };
 
 const migration: MigrationFile = {
@@ -67,6 +76,7 @@ const migration: MigrationFile = {
     await ensureIndexes(Inbox, LOOP_INDEXES.inbox);
     await ensureIndexes(Loop, LOOP_INDEXES.loop);
     await ensureIndexes(LoopEvent, LOOP_INDEXES.loopEvent);
+    await ensureIndexes(LoopDirective, LOOP_INDEXES.loopDirective);
   },
 
   down: async () => {
