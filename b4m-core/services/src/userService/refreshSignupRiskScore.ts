@@ -1,4 +1,5 @@
 import {
+  emailDomainOf,
   SignupRiskScoringSchema,
   type IAdminSettingsRepository,
   type IUsageEventRepository,
@@ -10,15 +11,25 @@ import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isAdminBlockedEmailDomain, isDisposableEmail } from './disposableEmail';
 import { isInSignupBurst, signupDomain } from './signupBurstDetector';
+import { normalizeRegistrableDomain } from './signupClusterKeys';
 import { isSignupGrantHeldForReview } from './signupRisk';
 import { scoreSignupRisk } from './signupRiskScore';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+/** The email host when it sits below its registrable domain (`a.example.com`, not `example.com`), else null. */
+export function emailSubdomainHost(email: string): string | null {
+  const host = emailDomainOf(email)?.trim().toLowerCase().replace(/\.+$/, '');
+  if (!host) return null;
+  const registrable = normalizeRegistrableDomain(host);
+  return registrable && host !== registrable && host.endsWith(`.${registrable}`) ? host : null;
+}
 
 export interface RefreshSignupRiskScoreAdapters {
   db: {
-    users: Pick<IUserRepository, 'findById' | 'setRiskScore'>;
+    users: Pick<IUserRepository, 'findById' | 'setRiskScore' | 'countSignupsOnEmailHost'>;
     userApiKeys: Pick<IUserApiKeyRepository, 'findFirstCreatedAtByUserId'>;
     usageEvents: Pick<IUsageEventRepository, 'creditsSpentByUser'>;
     adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames' | 'findBySettingName'>;
@@ -44,6 +55,7 @@ export async function refreshSignupRiskScore(
     const signedUpAt = new Date(user.createdAt);
     const email = user.email ?? '';
     const domain = email ? signupDomain(email) : null;
+    const subdomainHost = email ? emailSubdomainHost(email) : null;
 
     const [settings, firstKeyAt, creditsSpentFirst24h, adminBlocked, domainReview] = await Promise.all([
       getSettingsMap({ adminSettings: db.adminSettings }),
@@ -53,6 +65,14 @@ export async function refreshSignupRiskScore(
       domain ? db.signupDomainReviews.findReview(domain) : null,
     ]);
     const scoring = getSettingsValue('signupRiskScoring', settings, SignupRiskScoringSchema.parse({}));
+    const windowMs = scoring.emailSubdomainWindowHours * HOUR_MS;
+    const subdomainSignups = subdomainHost
+      ? await db.users.countSignupsOnEmailHost(
+          subdomainHost,
+          new Date(signedUpAt.getTime() - windowMs),
+          new Date(signedUpAt.getTime() + windowMs)
+        )
+      : null;
 
     const { score, signals, needsReview } = scoreSignupRisk(
       {
@@ -68,6 +88,8 @@ export async function refreshSignupRiskScore(
         wafBotSignal: user.signupMeta?.wafBotSignal ?? null,
         minutesToFirstApiKey: firstKeyAt ? (firstKeyAt.getTime() - signedUpAt.getTime()) / MINUTE_MS : null,
         creditsSpentFirst24h,
+        emailSubdomainSignups: subdomainSignups?.total ?? null,
+        bannedEmailSubdomainSignups: subdomainSignups?.banned ?? null,
       },
       scoring
     );

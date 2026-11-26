@@ -1350,6 +1350,11 @@ export interface IUserRepository
    * in id order; pass the last id back as `afterId` for the next page.
    */
   findRiskScoringCandidateIds: (since: Date, options: { afterId?: string; limit: number }) => Promise<string[]>;
+  /**
+   * Non-system users created within [from, to] whose email host is exactly `host` (case-insensitive,
+   * soft-deleted rows included), and how many of them are banned. Feeds the signup risk score.
+   */
+  countSignupsOnEmailHost: (host: string, from: Date, to: Date) => Promise<{ total: number; banned: number }>;
   /** Unbanned users whose risk review is pending, highest score first, at most `limit`. */
   findPendingRiskReviews: (limit: number) => Promise<IUserDocument[]>;
   /** Count of the users findPendingRiskReviews would return; `options.limit` stops counting there. */

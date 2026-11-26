@@ -2050,6 +2050,9 @@ export const SIGNUP_RISK_SIGNALS = [
   'generatedLocalPart',
   'wafAnonIp',
   'wafBotSignal',
+  'emailSubdomainBurst',
+  'bannedEmailSubdomainSibling',
+  'instantApiKey',
 ] as const;
 export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
 
@@ -2073,11 +2076,23 @@ export const SignupRiskScoringSchema = z
         // Edge labels on signupMeta, recorded only where label forwarding is on. Off until a weight is set.
         wafAnonIp: signupRiskWeight(0),
         wafBotSignal: signupRiskWeight(0),
+        emailSubdomainBurst: signupRiskWeight(30),
+        bannedEmailSubdomainSibling: signupRiskWeight(30),
+        instantApiKey: signupRiskWeight(20),
       })
       .strict()
       .prefault({}),
     /** A first API key minted within this many minutes of signup counts as quick. */
     quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(60),
+    /** A first API key minted within this many seconds of signup counts as instant; it also counts as quick. */
+    instantApiKeySeconds: z.number().int().min(1).max(3600).prefault(120),
+    /**
+     * Accounts (this one included) on the same email subdomain within `emailSubdomainWindowHours` either
+     * side of signup at which emailSubdomainBurst applies. Only a subdomain host counts, never a bare
+     * registrable domain, so a shared mail provider cannot trip it.
+     */
+    emailSubdomainBurstAccounts: z.number().int().min(2).max(1000).prefault(3),
+    emailSubdomainWindowHours: z.number().int().min(1).max(720).prefault(24),
     /** Credits spent in the first 24h at which fastSpend reaches its full weight; less scales linearly. */
     fastSpendCredits: z.number().positive().prefault(1000),
     /** A score at or above this needs review. */
