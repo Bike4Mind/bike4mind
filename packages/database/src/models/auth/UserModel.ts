@@ -1592,6 +1592,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     ]);
   }
 
+  // The createdAt range rides the createdAt index, so the unindexed email regex only scans that window.
+  async countSignupsOnEmailHost(host: string, from: Date, to: Date): Promise<{ total: number; banned: number }> {
+    const normalized = host.trim().toLowerCase();
+    if (!normalized) return { total: 0, banned: 0 };
+    const filter = {
+      createdAt: { $gte: from, $lte: to },
+      email: { $regex: `@${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
+      isSystem: { $ne: true },
+    };
+    const [total, banned] = await Promise.all([
+      this.model.countDocuments(filter),
+      this.model.countDocuments({ ...filter, isBanned: true }),
+    ]);
+    return { total, banned };
+  }
+
   async findRiskScoringCandidateIds(since: Date, options: { afterId?: string; limit: number }): Promise<string[]> {
     const rows = await this.model
       .find(
