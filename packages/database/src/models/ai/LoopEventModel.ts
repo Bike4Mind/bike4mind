@@ -28,7 +28,7 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     await this.loopEventModel.updateOne(
       { executionId: fields.executionId, requestedAt: fields.requestedAt },
       { $setOnInsert: { ...fields, kind: 'unsure' } },
-      { upsert: true }
+      { upsert: true, runValidators: true }
     );
   }
 
@@ -97,7 +97,8 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     if (!mongoose.isValidObjectId(id)) return false;
     const result = await this.loopEventModel.updateOne(
       { _id: id, kind: 'config_changed', config: { $exists: true }, 'config.undoneBy': { $exists: false } },
-      { $set: { 'config.undoneBy': undoneBy } }
+      { $set: { 'config.undoneBy': undoneBy } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   }
@@ -132,7 +133,8 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     // Not an upsert: with `resolution` in the filter, an already-resolved event would insert a duplicate.
     await this.loopEventModel.updateOne(
       { executionId: fields.executionId, requestedAt: fields.requestedAt, resolution: { $exists: false } },
-      { $set: { resolution } }
+      { $set: { resolution } },
+      { runValidators: true }
     );
   }
 
@@ -158,7 +160,11 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
   }
 
   async markFolded(id: string, now: Date): Promise<void> {
-    await this.loopEventModel.updateOne({ _id: id, foldedAt: { $exists: false } }, { $set: { foldedAt: now } });
+    await this.loopEventModel.updateOne(
+      { _id: id, foldedAt: { $exists: false } },
+      { $set: { foldedAt: now } },
+      { runValidators: true }
+    );
   }
 
   async resolveAsked(
@@ -171,7 +177,7 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     const doc = await this.loopEventModel.findOneAndUpdate(
       { _id: id, userId, loopId, kind: 'unsure', source: 'asked', resolution: { $exists: false } },
       { $set: { resolution, foldedAt: resolution.at } },
-      { new: true }
+      { new: true, runValidators: true }
     );
     return doc ? doc.toJSON() : null;
   }
@@ -180,7 +186,8 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     if (!mongoose.isValidObjectId(id)) return;
     await this.loopEventModel.updateOne(
       { _id: id, source: 'asked', 'resolution.at': at },
-      { $unset: { resolution: 1, foldedAt: 1 } }
+      { $unset: { resolution: 1, foldedAt: 1 } },
+      { runValidators: true }
     );
   }
 
@@ -188,7 +195,8 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     // foldedAt too, like resolveAsked, so the resumed-run fold never looks at it.
     const result = await this.loopEventModel.updateMany(
       { userId, loopId, workItemId, kind: 'unsure', source: 'asked', resolution: { $exists: false } },
-      { $set: { resolution: { outcome: 'handed_off', at }, foldedAt: at } }
+      { $set: { resolution: { outcome: 'handed_off', at }, foldedAt: at } },
+      { runValidators: true }
     );
     return result.modifiedCount;
   }

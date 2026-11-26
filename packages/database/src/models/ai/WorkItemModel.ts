@@ -172,7 +172,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     if (ids.length === 0) return 0;
     const result = await this.workItemModel.updateMany(
       { _id: { $in: ids }, deletedAt: null, status: 'open', priority: { $exists: false }, epic: { $ne: true } },
-      { $set: { priority: 'p2', prioritySetAt: now, prioritySetBy: 'agent' } }
+      { $set: { priority: 'p2', prioritySetAt: now, prioritySetBy: 'agent' } },
+      { runValidators: true }
     );
     return result.modifiedCount;
   }
@@ -180,7 +181,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   async demoteIfAgentSet(id: string, now: Date): Promise<boolean> {
     const result = await this.workItemModel.updateOne(
       { _id: id, priority: 'p2', prioritySetBy: { $ne: 'owner' }, deletedAt: null },
-      { $set: { priority: 'p3', prioritySetAt: now, prioritySetBy: 'demote' } }
+      { $set: { priority: 'p3', prioritySetAt: now, prioritySetBy: 'demote' } },
+      { runValidators: true }
     );
     return result.modifiedCount > 0;
   }
@@ -243,7 +245,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     const result = await this.workItemModel.findOneAndUpdate(
       { _id: id, loopId, deletedAt: null, status: 'open' },
       { $set: { status: 'in_progress' }, $inc: { runCount: 1 } },
-      { new: true }
+      { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
   }
@@ -258,7 +260,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     const result = await this.workItemModel.findOneAndUpdate(
       { _id: id, userId, loopId, deletedAt: null, status: 'open', stage: { $in: inStages } },
       { $set: { status: 'in_progress', executionId }, $inc: { runCount: 1 } },
-      { new: true }
+      { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
   }
@@ -269,13 +271,14 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   }
 
   async setExecution(id: string, executionId: string): Promise<void> {
-    await this.workItemModel.updateOne({ _id: id }, { $set: { executionId } });
+    await this.workItemModel.updateOne({ _id: id }, { $set: { executionId } }, { runValidators: true });
   }
 
   async releaseClaim(id: string): Promise<void> {
     await this.workItemModel.updateOne(
       { _id: id, status: 'in_progress' },
-      { $set: { status: 'open' }, $unset: { executionId: '' }, $inc: { runCount: -1 } }
+      { $set: { status: 'open' }, $unset: { executionId: '' }, $inc: { runCount: -1 } },
+      { runValidators: true }
     );
   }
 
@@ -290,7 +293,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   async releaseStranded(id: string, executionId?: string): Promise<boolean> {
     const result = await this.workItemModel.updateOne(
       { _id: id, status: 'in_progress', executionId: executionId ?? { $exists: false } },
-      { $set: { status: 'open' }, $unset: { executionId: '' }, $inc: { runCount: -1 } }
+      { $set: { status: 'open' }, $unset: { executionId: '' }, $inc: { runCount: -1 } },
+      { runValidators: true }
     );
     return result.modifiedCount > 0;
   }
@@ -306,7 +310,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
       {
         ...patchUpdate(patch),
         ...(uncount && { $inc: { runCount: -1 } }),
-      }
+      },
+      { runValidators: true }
     );
     return result.modifiedCount > 0;
   }
@@ -315,7 +320,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     const result = await this.workItemModel.updateOne(
       // A ticket its run parked on dependencies stays parked; the sweep reopens it.
       { _id: id, executionId, status: 'blocked', blockedOn: { $exists: false }, deletedAt: null },
-      { $set: { status: 'in_progress' }, $unset: { statusReason: '' } }
+      { $set: { status: 'in_progress' }, $unset: { statusReason: '' } },
+      { runValidators: true }
     );
     return result.modifiedCount > 0;
   }
@@ -338,7 +344,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   async softDeleteByLoop(userId: string, loopId: string): Promise<number> {
     const result = await this.workItemModel.updateMany(
       { userId, loopId, deletedAt: null },
-      { $set: { deletedAt: new Date() } }
+      { $set: { deletedAt: new Date() } },
+      { runValidators: true }
     );
     return result.modifiedCount;
   }
@@ -395,7 +402,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
             $unset: { statusReason: '', blockedOn: '' },
             ...(last && last !== item.stage && stageHistoryPush({ stage: last, at: new Date(), by: 'scheduler' })),
           },
-          { new: true }
+          { new: true, runValidators: true }
         );
         if (result) reopened.push(result.toJSON());
       }
@@ -478,14 +485,19 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   }
 
   async pushHandedTo(id: string, entry: IWorkItemHandedTo): Promise<void> {
-    await this.workItemModel.updateOne({ _id: id }, { $push: { handedTo: { $each: [entry], $slice: -20 } } });
+    await this.workItemModel.updateOne(
+      { _id: id },
+      { $push: { handedTo: { $each: [entry], $slice: -20 } } },
+      { runValidators: true }
+    );
   }
 
   async softDeleteForUser(id: string, userId: string): Promise<boolean> {
     if (!mongoose.isValidObjectId(id)) return false;
     const result = await this.workItemModel.updateOne(
       { _id: id, userId, deletedAt: null },
-      { $set: { deletedAt: new Date() } }
+      { $set: { deletedAt: new Date() } },
+      { runValidators: true }
     );
     return result.modifiedCount > 0;
   }

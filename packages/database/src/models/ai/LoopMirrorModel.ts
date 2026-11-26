@@ -20,7 +20,7 @@ export class LoopMirrorRepository {
     await this.mirrorModel.updateOne(
       { userId, localLoopId },
       { $set: { snapshot, lastSeenAt: now } },
-      { upsert: true }
+      { upsert: true, runValidators: true }
     );
   }
 

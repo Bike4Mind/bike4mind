@@ -211,14 +211,14 @@ The table below remains the literal-update inventory, not proof that all databas
 | Loop | `status` | enum | `ai/LoopModel.ts#LoopRepository.markErroredIfFailing` | repository-check | `literal` | writes "error" |
 | Loop | `status` | enum | `ai/LoopModel.ts#LoopRepository.pauseAllLiveForUser` | repository-check | `literal` | writes "paused" |
 | Loop | `status` | enum | `ai/LoopModel.ts#LoopRepository.resumeAutoPaused` | repository-check | `literal` | writes "live" |
-| LoopDirective | `replies.by` | enum | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | route-schema | `apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.ts#WORKER_OUTCOMES` | Worker tool checks outcome against WORKER_OUTCOMES and slices note to LOOP_DIRECTIVE_NOTE_MAX; owner override route passes literals and rejects a longer note |
-| LoopDirective | `replies.note` | maxlength | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | route-schema | `apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.ts#WORKER_OUTCOMES` | Worker tool checks outcome against WORKER_OUTCOMES and slices note to LOOP_DIRECTIVE_NOTE_MAX; owner override route passes literals and rejects a longer note |
-| LoopDirective | `replies.outcome` | enum | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | route-schema | `apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.ts#WORKER_OUTCOMES` | Worker tool checks outcome against WORKER_OUTCOMES and slices note to LOOP_DIRECTIVE_NOTE_MAX; owner override route passes literals and rejects a longer note |
-| LoopDirective | `state` | enum | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | route-schema | `apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.ts#WORKER_OUTCOMES` | Worker tool checks outcome against WORKER_OUTCOMES and slices note to LOOP_DIRECTIVE_NOTE_MAX; owner override route passes literals and rejects a longer note |
-| LoopEvent | `kind` | enum | `ai/LoopEventModel.ts#LoopEventRepository.recordUnsure` | repository-check | `literal` | writes "unsure" |
-| LoopEvent | `resolution.outcome` | enum | `ai/LoopEventModel.ts#LoopEventRepository.closeAskedForHandoff` | repository-check | `packages/database/src/models/ai/LoopEventModel.ts#LoopEventRepository.closeAskedForHandoff` | Writes the object literal { outcome: "handed_off", at } |
-| LoopEvent | `resolution.outcome` | enum | `ai/LoopEventModel.ts#LoopEventRepository.resolveAsked` | route-schema | `apps/client/pages/api/loops/[id]/events/[eventId]/resolve.ts#handler` | Sole caller rejects any outcome other than "resumed" or "rejected" |
-| LoopEvent | `resolution.outcome` | enum | `ai/LoopEventModel.ts#LoopEventRepository.resolveUnsure` | route-schema | `apps/client/server/websocket/agentExecute.ts#recordLoopGateResolution` | Gate route passes literals; the scheduler passes gateHistory.resolution, itself written only from literals by clearPendingGate |
+| LoopDirective | `replies.by` | enum | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | schema | `runValidators` | update call passes runValidators |
+| LoopDirective | `replies.note` | maxlength | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | schema | `runValidators` | update call passes runValidators |
+| LoopDirective | `replies.outcome` | enum | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | schema | `runValidators` | update call passes runValidators |
+| LoopDirective | `state` | enum | `ai/LoopDirectiveModel.ts#LoopDirectiveRepository.transition` | schema | `runValidators` | update call passes runValidators |
+| LoopEvent | `kind` | enum | `ai/LoopEventModel.ts#LoopEventRepository.recordUnsure` | schema | `runValidators` | update call passes runValidators |
+| LoopEvent | `resolution.outcome` | enum | `ai/LoopEventModel.ts#LoopEventRepository.closeAskedForHandoff` | schema | `runValidators` | update call passes runValidators |
+| LoopEvent | `resolution.outcome` | enum | `ai/LoopEventModel.ts#LoopEventRepository.resolveAsked` | schema | `runValidators` | update call passes runValidators |
+| LoopEvent | `resolution.outcome` | enum | `ai/LoopEventModel.ts#LoopEventRepository.resolveUnsure` | schema | `runValidators` | update call passes runValidators |
 | McpConnection | `auth.apiKey.scheme` | enum | `ai/McpConnectionModel.ts#McpConnectionRepository.setApiKey` | schema | `runValidators` | update call passes runValidators |
 | McpConnection | `authChallenge.resourceMetadataUrl` | maxlength | `ai/McpConnectionModel.ts#McpConnectionRepository.setPendingAuth` | schema | `runValidators` | update call passes runValidators |
 | McpConnection | `authChallenge.scope` | maxlength | `ai/McpConnectionModel.ts#McpConnectionRepository.setPendingAuth` | schema | `runValidators` | update call passes runValidators |
@@ -392,12 +392,12 @@ The table below remains the literal-update inventory, not proof that all databas
 | UserUsagePatternSignals | `signals.id` | enum | `auth/UserUsagePatternSignalsModel.ts#UserUsagePatternSignalsRepository.markSkipped` | repository-check | `packages/database/src/models/auth/UserUsagePatternSignalsModel.ts#markSkipped` | Writer always sets signals to empty array literal |
 | UserUsagePatternSignals | `signals.id` | enum | `auth/UserUsagePatternSignalsModel.ts#UserUsagePatternSignalsRepository.upsertLatest` | route-schema | `b4m-core/services/src/userService/usagePatternSignals.ts#computeUsagePatternSignals` | Signals built by fixed signal functions with literal ids |
 | UserUsagePatternSignals | `skipped` | enum | `auth/UserUsagePatternSignalsModel.ts#UserUsagePatternSignalsRepository.markSkipped` | route-schema | `apps/workers/src/cron/usagePatternSignals.ts#markSkipped` | Sole caller passes literal paid |
-| WorkItem | `prioritySetBy` | enum | `ai/WorkItemModel.ts#WorkItemRepository.defaultUntriaged` | repository-check | `literal` | writes "agent" |
-| WorkItem | `prioritySetBy` | enum | `ai/WorkItemModel.ts#WorkItemRepository.demoteIfAgentSet` | repository-check | `literal` | writes "demote" |
-| WorkItem | `priority` | enum | `ai/WorkItemModel.ts#WorkItemRepository.defaultUntriaged` | repository-check | `literal` | writes "p2" |
-| WorkItem | `priority` | enum | `ai/WorkItemModel.ts#WorkItemRepository.demoteIfAgentSet` | repository-check | `literal` | writes "p3" |
-| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.claimForRun` | repository-check | `literal` | writes "in_progress" |
-| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.claimForRunner` | repository-check | `literal` | writes "in_progress" |
-| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.releaseClaim` | repository-check | `literal` | writes "open" |
-| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.releaseStranded` | repository-check | `literal` | writes "open" |
-| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.resumeBlockedRun` | repository-check | `literal` | writes "in_progress" |
+| WorkItem | `prioritySetBy` | enum | `ai/WorkItemModel.ts#WorkItemRepository.defaultUntriaged` | schema | `runValidators` | update call passes runValidators |
+| WorkItem | `prioritySetBy` | enum | `ai/WorkItemModel.ts#WorkItemRepository.demoteIfAgentSet` | schema | `runValidators` | update call passes runValidators |
+| WorkItem | `priority` | enum | `ai/WorkItemModel.ts#WorkItemRepository.defaultUntriaged` | schema | `runValidators` | update call passes runValidators |
+| WorkItem | `priority` | enum | `ai/WorkItemModel.ts#WorkItemRepository.demoteIfAgentSet` | schema | `runValidators` | update call passes runValidators |
+| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.claimForRun` | schema | `runValidators` | update call passes runValidators |
+| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.claimForRunner` | schema | `runValidators` | update call passes runValidators |
+| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.releaseClaim` | schema | `runValidators` | update call passes runValidators |
+| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.releaseStranded` | schema | `runValidators` | update call passes runValidators |
+| WorkItem | `status` | enum | `ai/WorkItemModel.ts#WorkItemRepository.resumeBlockedRun` | schema | `runValidators` | update call passes runValidators |

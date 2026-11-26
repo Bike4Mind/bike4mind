@@ -70,7 +70,7 @@ export class LoopDirectiveRepository extends BaseRepository<ILoopDirective> impl
     const result = await this.loopDirectiveModel.findOneAndUpdate(
       { _id: id, userId, state: { $in: from } },
       { $set: { state: to }, $push: { replies: reply } },
-      { new: true }
+      { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
   }

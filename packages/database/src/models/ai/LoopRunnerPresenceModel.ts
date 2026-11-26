@@ -17,7 +17,7 @@ export class LoopRunnerPresenceRepository implements ILoopRunnerPresenceReposito
         $set: { ...rest, ...(waitingReason && { waitingReason }) },
         ...(!waitingReason && { $unset: { waitingReason: '' } }),
       },
-      { upsert: true }
+      { upsert: true, runValidators: true }
     );
   }
 
