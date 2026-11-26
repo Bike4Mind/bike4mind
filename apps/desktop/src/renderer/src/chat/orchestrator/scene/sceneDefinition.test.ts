@@ -38,6 +38,7 @@ describe('sceneDefinitionSchema', () => {
     ['a point off the map', 'map.door.x', broken(scene => (scene.map.door.x = 140))],
     ['an empty zone', 'map.zones.desk.slots', broken(scene => (scene.map.zones.desk.slots = []))],
     ['an unknown preparing zone', 'states.preparing', broken(scene => (scene.states.preparing = 'attic'))],
+    ['a board of no size', 'map.board.width', broken(scene => (scene.map.board.width = 0))],
   ])('rejects %s, naming the field', (_, field, scene) => {
     expect(() => parseSceneDefinition(scene)).toThrow(field);
   });
