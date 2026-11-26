@@ -215,7 +215,8 @@ export type ShadowDetectionItem = z.infer<typeof shadowDetectionItemSchema>;
 /**
  * Verdict counts for one detector and policy version. Precision is derived on the client. Verdict
  * counts cover only records that would have acted; `noAction` counts the `wouldAction: 'none'`
- * records, which are listed and gradable but never counted in precision.
+ * records, which are listed and gradable but never counted in precision. A review-only detector
+ * (isReviewOnlyCompletionDetector) never acts, so its verdicts are counted and `noAction` stays 0.
  */
 export const shadowDetectionSummaryRowSchema = z.object({
   detector: z.enum(SHADOW_DETECTORS),
@@ -343,7 +344,8 @@ export function isAbuseSuspensionReason(reason: string): boolean {
  * both sides: it says the reviewer could not tell, not that the detector was wrong. Null with no
  * conclusive verdicts, so the UI never shows a ratio over zero. `noAction` records never enter it:
  * the row's verdict counts already exclude them (shadowDetectionRepository.summarize), and a verdict
- * on a record that would not have acted says nothing about a would-act decision.
+ * on a record that would not have acted says nothing about a would-act decision. For a review-only
+ * detector (every record is wouldAction 'none') it is the share of its flags confirmed as abuse.
  */
 export function shadowDetectionPrecision(row: ShadowDetectionSummaryRow): number | null {
   const falsePositives = row.legitimateHuman + row.legitimateAutomation;

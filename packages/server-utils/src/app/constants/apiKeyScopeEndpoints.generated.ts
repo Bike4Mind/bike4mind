@@ -8,7 +8,9 @@ import { ApiKeyScope } from '@bike4mind/common';
 export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScope, readonly string[]>>> = {
   [ApiKeyScope.READ_NOTEBOOKS]: [
     'GET /api/artifacts',
+    'GET /api/artifacts/:id',
     'GET /api/artifacts/:id/versions',
+    'GET /api/artifacts/:id/versions/:version',
     'GET /api/artifacts/search',
     'GET /api/artifacts/types',
     'GET /api/quests/:id/files',
@@ -32,14 +34,16 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
   ],
   [ApiKeyScope.WRITE_NOTEBOOKS]: [
     'GET|POST /api/artifacts',
+    'GET|PUT|DELETE /api/artifacts/:id',
     'GET|POST /api/artifacts/:id/versions',
+    'GET /api/artifacts/:id/versions/:version',
     'GET /api/artifacts/search',
     'GET /api/artifacts/types',
     'GET|DELETE /api/sessions',
     'GET|PUT|DELETE /api/sessions/:id',
     'GET|POST /api/sessions/:id/chat',
     'PATCH /api/sessions/:id/surface',
-    'POST /api/sessions/bulk',
+    'POST|DELETE /api/sessions/bulk',
     'GET|POST /api/v1/artifacts',
     'GET|PATCH|DELETE /api/v1/artifacts/:id',
     'GET|POST /api/v1/artifacts/:id/versions',

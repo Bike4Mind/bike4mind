@@ -14,7 +14,11 @@ last_reviewed: 2025-06-30
 
 # Database Documentation
 
-Bike4Mind supports multiple database backends to accommodate different deployment scenarios and enterprise requirements.
+Bike4Mind runs on MongoDB: MongoDB Atlas for hosted deployments, or MongoDB Community 7 or later for self-host.
+
+:::warning Deprecated
+AWS DocumentDB support is deprecated and will be removed in a future release. Use MongoDB Atlas or MongoDB Community 7 or later instead. While you still connect to DocumentDB, Bike4Mind logs a deprecation warning at startup.
+:::
 
 ## Supported Databases
 
@@ -23,7 +27,8 @@ Bike4Mind supports multiple database backends to accommodate different deploymen
 - **Features**: Fully managed, automatic backups, global clusters
 - **Best For**: Most standard deployments
 
-### AWS DocumentDB
+### AWS DocumentDB (Deprecated)
+- **Status**: Deprecated. Support will be removed in a future release.
 - **Use Case**: Enterprise deployments requiring AWS-native solutions
 - **Features**: MongoDB-compatible, VPC isolation, AWS integration
 - **Best For**: Enterprises with AWS-centric infrastructure
@@ -35,7 +40,7 @@ Bike4Mind supports multiple database backends to accommodate different deploymen
 
 ## Choosing a Database
 
-| Feature | MongoDB Atlas | AWS DocumentDB |
+| Feature | MongoDB Atlas | AWS DocumentDB (deprecated) |
 |---------|--------------|----------------|
 | Hosting | Multi-cloud | AWS only |
 | Management | Fully managed | AWS managed |

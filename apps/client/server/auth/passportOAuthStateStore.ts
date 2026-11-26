@@ -31,6 +31,12 @@ const verifiedInviteCodes = new WeakMap<object, string>();
 /** The invite code carried by this callback's verified OAuth state, if any (verifyCallback.ts). */
 export const readOAuthInviteCode = (req: object): string | null => verifiedInviteCodes.get(req) ?? null;
 
+// Same provenance as verifiedInviteCodes: only a valid state token sets it.
+const verifiedRedirectTos = new WeakMap<object, string>();
+
+/** The post-login redirectTo carried by this callback's verified OAuth state, if any (verifyCallback.ts). */
+export const readOAuthRedirectTo = (req: object): string | null => verifiedRedirectTos.get(req) ?? null;
+
 type Metadata = OAuth2Strategy.Metadata;
 type StoreCallback = OAuth2Strategy.StateStoreStoreCallback;
 type VerifyCallback = OAuth2Strategy.StateStoreVerifyCallback;
@@ -98,6 +104,7 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
     const cb = (typeof metaOrCallback === 'function' ? metaOrCallback : callback) as VerifyCallback;
     recordTurnstileVerification(req, false);
     verifiedInviteCodes.delete(req);
+    verifiedRedirectTos.delete(req);
     try {
       // Enforce browser-binding: the token's nonce hash must match this browser's
       // cookie (readStateNonceHash returns null when absent -> fails closed).
@@ -116,6 +123,9 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
             ? sanitizeOAuthInviteCode(payload.inviteCode)
             : undefined;
         if (inviteCode) verifiedInviteCodes.set(req, inviteCode);
+        const redirectTo =
+          typeof payload === 'object' && payload !== null && 'redirectTo' in payload ? payload.redirectTo : undefined;
+        if (typeof redirectTo === 'string') verifiedRedirectTos.set(req, redirectTo);
         cb(null, true, result.payload);
       } else {
         cb(null, false, { code: STATE_REASON_TO_CODE[result.reason], message: result.message });

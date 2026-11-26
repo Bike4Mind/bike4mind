@@ -18,14 +18,14 @@ export type VideoJobLiveUpdate = GenerationJobLiveUpdate & { progress?: number }
 
 export const isTerminalVideoState = isTerminalGenerationState;
 
-const videoCache = createGenerationJobCache<VideoGeneration, VideoJobLiveUpdate>(
+export const videoGenerationCache = createGenerationJobCache<VideoGeneration, VideoJobLiveUpdate>(
   videoGenerationKeys,
   (cached, update) => ({ ...cached, state: update.state, progress: update.progress ?? cached.progress })
 );
 
-export const seedVideoGeneration = videoCache.seed;
-export const prependVideoGeneration = videoCache.prepend;
-export const upsertVideoGeneration = videoCache.upsert;
-export const reconcileFetchedVideoGeneration = videoCache.reconcileFetched;
-export const reconcileFetchedVideoGenerationPage = videoCache.reconcileFetchedPage;
-export const patchVideoGeneration = videoCache.patch;
+export const seedVideoGeneration = videoGenerationCache.seed;
+export const prependVideoGeneration = videoGenerationCache.prepend;
+export const upsertVideoGeneration = videoGenerationCache.upsert;
+export const reconcileFetchedVideoGeneration = videoGenerationCache.reconcileFetched;
+export const reconcileFetchedVideoGenerationPage = videoGenerationCache.reconcileFetchedPage;
+export const patchVideoGeneration = videoGenerationCache.patch;

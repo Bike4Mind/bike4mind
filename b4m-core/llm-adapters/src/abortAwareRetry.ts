@@ -14,15 +14,13 @@ import type { CompletionInfo, ICompletionOptions } from './backend';
 const DEFAULT_MAX_ATTEMPTS = 3;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-export function getAbortAwareRetrySignal({
-  retryMode,
-  abortSignal,
-  stream,
-  tools,
-  responseFormat,
-  _internal,
-}: Partial<ICompletionOptions>): AbortSignal | undefined {
-  if (retryMode !== 'abort-aware') return undefined;
+export function getAbortAwareRetrySignal(
+  { retryMode, abortSignal, stream, tools, responseFormat, _internal }: Partial<ICompletionOptions>,
+  singleAttemptSupported = false
+): AbortSignal | undefined {
+  if (retryMode !== 'abort-aware' && retryMode !== 'single-attempt') return undefined;
+  if (retryMode === 'single-attempt' && !singleAttemptSupported)
+    throw new Error('Single-attempt completion is unsupported by this adapter');
   if (!abortSignal) throw new Error('Abort-aware completion retries require an abort signal');
   abortSignal.throwIfAborted();
   const hasTools = Array.isArray(tools) ? tools.length > 0 : tools !== undefined;
@@ -147,4 +145,21 @@ export async function reportUsageOnAbort(
   } finally {
     signal.throwIfAborted();
   }
+}
+
+export function assertMeasuredProviderUsage(usage: {
+  inputTokens: unknown;
+  outputTokens: unknown;
+  cacheReadInputTokens?: unknown;
+  cacheCreationInputTokens?: unknown;
+  cacheWrite1hInputTokens?: unknown;
+}): void {
+  if (usage.inputTokens === undefined || usage.outputTokens === undefined)
+    throw new Error('Provider response omitted measured usage');
+  for (const quantity of Object.values(usage)) {
+    if (quantity !== undefined && (!Number.isSafeInteger(quantity) || (quantity as number) < 0))
+      throw new Error('Provider response contained invalid measured usage');
+  }
+  if (((usage.cacheWrite1hInputTokens as number) ?? 0) > ((usage.cacheCreationInputTokens as number) ?? 0))
+    throw new Error('Provider response contained invalid measured cache usage');
 }

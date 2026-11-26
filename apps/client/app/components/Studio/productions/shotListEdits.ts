@@ -4,6 +4,7 @@ import {
   type StudioTimeline,
   type StudioTimelineTrack,
   type StudioVideoClip,
+  randomUuid,
 } from '@bike4mind/common';
 import { MIN_CLIP_MS, mintTimelineId } from './timelineEdits';
 
@@ -19,7 +20,7 @@ export const shotTimelineFileId = (shot: StudioShot): string | undefined => shot
 
 const NEW_SHOT_TITLE = 'New shot';
 
-export const mintShotId = (): string => `shot-${crypto.randomUUID()}`;
+export const mintShotId = (): string => `shot-${randomUuid()}`;
 
 export const addShot = (shots: StudioShot[]): StudioShot[] => {
   if (shots.length >= STUDIO_COMPOSITION_LIMITS.shotsMax) {

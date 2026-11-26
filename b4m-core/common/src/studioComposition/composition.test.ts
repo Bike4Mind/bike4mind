@@ -113,7 +113,7 @@ describe('StudioCompositionCreateInputSchema', () => {
       title: 'Spring ad',
       template: 'ad_campaign',
       brief: {},
-      brandKit: { colors: [], productFileIds: [] },
+      brandKit: { colors: [], productFileIds: [], characters: [] },
     });
   });
 

@@ -38,6 +38,7 @@ import {
 } from './ImportStateStore';
 import {
   countWebNotebooks,
+  describeWebError,
   importNotebook,
   listWebNotebooks,
   needsWebImport,
@@ -96,7 +97,8 @@ export class ClaudeImportService {
   private webRun: Promise<void> | null = null;
   private webRerun = false;
   private webError: string | undefined;
-  private webStartedAt = 0;
+  /** When a web run last started or ended: the focus and poll throttles count from the later. */
+  private webRanAt = 0;
   private codeWatcher: FSWatcher | null = null;
   private codePoll: NodeJS.Timeout | null = null;
   private chatWatcher: FSWatcher | null = null;
@@ -166,7 +168,7 @@ export class ClaudeImportService {
     this.windowFocused = true;
     this.scheduleWebPoll();
     this.runBackground(() => this.detectHints());
-    if (this.startTimer || this.webRun || Date.now() - this.webStartedAt < WEB_FOCUS_INTERVAL_MS) return;
+    if (this.startTimer || this.webRun || Date.now() - this.webRanAt < WEB_FOCUS_INTERVAL_MS) return;
     this.runBackground(() => this.autoSyncWeb());
   }
 
@@ -191,7 +193,7 @@ export class ClaudeImportService {
   private async pollWeb(): Promise<void> {
     try {
       // A run in flight, or one a focus just started, already covers this tick.
-      if (!this.windowFocused || this.webRun || Date.now() - this.webStartedAt < WEB_FOCUS_INTERVAL_MS) return;
+      if (!this.windowFocused || this.webRun || Date.now() - this.webRanAt < WEB_FOCUS_INTERVAL_MS) return;
       await this.autoSyncWeb();
       this.webPollFailures = this.webError ? Math.min(this.webPollFailures + 1, WEB_POLL_MAX_BACKOFF_STEPS) : 0;
     } finally {
@@ -424,7 +426,7 @@ export class ClaudeImportService {
     this.webRun = (async () => {
       do {
         this.webRerun = false;
-        this.webStartedAt = Date.now();
+        this.webRanAt = Date.now();
         try {
           await this.runWebSync();
         } catch (error) {
@@ -434,6 +436,7 @@ export class ClaudeImportService {
       } while (this.webRerun && !this.disposed);
     })().finally(() => {
       this.webRun = null;
+      this.webRanAt = Date.now();
       this.webProgress = null;
       this.pushState();
     });
@@ -451,12 +454,16 @@ export class ClaudeImportService {
     let listed: Awaited<ReturnType<typeof listWebNotebooks>>;
     try {
       listed = await listWebNotebooks(api);
-      this.webError = undefined;
     } catch (error) {
-      this.webError = 'Could not read your notebooks from Bike4Mind web.';
+      this.webError = `Could not read your notebooks from Bike4Mind web (${describeWebError(error)}).`;
       this.deps.logger.warn(`WEB IMPORT: could not list notebooks: ${String(error)}`);
       return;
     }
+    // A partial list still imports, newest first; the error says why some notebooks are missing.
+    this.webError = listed.stopReason
+      ? `Synced ${listed.notebooks.length} of your Bike4Mind web notebooks; the list ${listed.stopReason}.`
+      : undefined;
+    if (listed.stopReason) this.deps.logger.warn(`WEB IMPORT: partial notebook list: ${listed.stopReason}`);
     if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
     if (!(await this.states.readSettings()).web.enabled) return;
     if (listed.complete) await this.pruneWebNotebooks(scope, scopeKey, new Set(listed.notebooks.map(n => n.id)), api);

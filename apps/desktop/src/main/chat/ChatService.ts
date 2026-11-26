@@ -3365,7 +3365,8 @@ export class ChatService {
 
   /**
    * `allowDiscard` lets cleanup force-remove a dirty or unproven checkout, keeping its branch. Only a
-   * caller that showed the user what is discarded passes it; the host protocol has no such step.
+   * caller that showed the user what is discarded passes it; session/delete carries it as
+   * `allowDiscard` from a client that did.
    */
   async deleteSession(
     sessionId: string,
@@ -3390,14 +3391,15 @@ export class ChatService {
    * Deletes the named nested sessions of `sessionId`, deepest first, then the session itself.
    * Ids that are not its descendants are ignored. `removeWorktree` covers the parent's worktree;
    * a nested session's goes only when its id is in `nestedWorktreeIds` - the ones the dialog showed
-   * the user - and it is still removable then. Discarding is allowed for both, since the dialog
-   * listed what each discards. Stops at the first failure and reports what was already deleted.
+   * the user - and it is still removable then. `allowDiscard` covers both and is sent only after the
+   * dialog listed what each discards. Stops at the first failure and reports what was already deleted.
    */
   async deleteSessionTree(
     sessionId: string,
     nestedIds: readonly string[],
     removeWorktree = false,
-    nestedWorktreeIds: readonly string[] = []
+    nestedWorktreeIds: readonly string[] = [],
+    { allowDiscard = false }: { allowDiscard?: boolean } = {}
   ): Promise<SessionTreeDeletion> {
     const wanted = new Set(nestedIds);
     const sessions = await this.listSessions();
@@ -3424,10 +3426,10 @@ export class ChatService {
       for (const id of order) {
         const removable =
           nestedWorktreeIds.includes(id) && (await this.inspectSessionWorktreeRemoval(id))?.removable === true;
-        await this.deleteSession(id, removable, { allowDiscard: true });
+        await this.deleteSession(id, removable, { allowDiscard });
         deleted.push(id);
       }
-      await this.deleteSession(sessionId, removeWorktree, { allowDiscard: true });
+      await this.deleteSession(sessionId, removeWorktree, { allowDiscard });
       deleted.push(sessionId);
     } catch (err) {
       return { deleted, error: err instanceof Error ? err.message : String(err) };
@@ -6583,15 +6585,23 @@ export class ChatService {
 
       listSessions: async ({ includeArchived, scope, childrenOnly }) => {
         const all = await this.deps.store.list();
-        return all
+        const rows = all
           .filter(entry => entry.mode !== 'studio')
           .filter(entry =>
             childrenOnly
               ? entry.origin?.parentSessionId === session.id
               : scope === 'all' || entry.project?.directory === project.directory
           )
-          .filter(entry => includeArchived || !entry.archived)
-          .map(entry => ({ ...this.toHostView(entry), title: visibleTitle(entry) }));
+          .filter(entry => includeArchived || !entry.archived);
+        // A reply excerpt is transcript content, so it follows readSession's rule for other projects.
+        const known = rows.some(entry => entry.project?.directory !== project.directory)
+          ? await this.knownSessionIds(session.id)
+          : new Set<string>();
+        return rows.map(entry => {
+          const { lastSnippet, ...view } = this.toHostView(entry);
+          const readable = entry.project?.directory === project.directory || known.has(entry.id);
+          return { ...view, ...(readable && lastSnippet ? { lastSnippet } : {}), title: visibleTitle(entry) };
+        });
       },
 
       readSession: async ref => {
@@ -7496,18 +7506,27 @@ export class ChatService {
    * turn asking about it.
    */
   private async knownTo(callerId: string, targetId: string): Promise<boolean> {
+    return (await this.knownSessionIds(callerId)).has(targetId);
+  }
+
+  /** Every session knownTo would admit for `callerId`, read from one load of its transcript. */
+  private async knownSessionIds(callerId: string): Promise<Set<string>> {
     const caller = await this.deps.store.get(callerId);
-    return (caller?.messages ?? []).some(
-      message =>
-        message.relay?.fromSessionId === targetId ||
-        (message.role === 'user' &&
-          !message.system &&
-          !message.seed &&
-          !message.skill &&
-          // Content, not a flag: a run-here task can merge into a queued typed message on its way in.
-          !message.content.includes(RUN_HERE_PREAMBLE) &&
-          findSessionMentions(message.content).some(mention => mention.sessionId === targetId))
-    );
+    const known = new Set<string>();
+    for (const message of caller?.messages ?? []) {
+      if (message.relay?.fromSessionId) known.add(message.relay.fromSessionId);
+      if (
+        message.role === 'user' &&
+        !message.system &&
+        !message.seed &&
+        !message.skill &&
+        // Content, not a flag: a run-here task can merge into a queued typed message on its way in.
+        !message.content.includes(RUN_HERE_PREAMBLE)
+      ) {
+        for (const mention of findSessionMentions(message.content)) known.add(mention.sessionId);
+      }
+    }
+    return known;
   }
 
   /**

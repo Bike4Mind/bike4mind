@@ -24,6 +24,91 @@ describe('SreErrorTrackingModel — recurrence queries', () => {
     }
   });
 
+  it('persists technical accounting execution ownership on an analysis claim', async () => {
+    await SreErrorTrackingModel.createIndexes();
+    const claimed = await sreErrorTrackingRepository.claimForAnalysis('accounting-owner', 'acme/widgets', {
+      source: 'CLOUDWATCH',
+      sourceRef: 'test-source',
+      accountingExecutionId: 'sre-execution-test',
+    });
+    expect(claimed?.accountingExecutionId).toBe('sre-execution-test');
+    const stored = await sreErrorTrackingRepository.findByFingerprint('accounting-owner', 'acme/widgets');
+    expect(stored?.accountingExecutionId).toBe('sre-execution-test');
+    expect(
+      await sreErrorTrackingRepository.claimForAnalysis('accounting-owner', 'acme/widgets', {
+        source: 'CLOUDWATCH',
+        sourceRef: 'test-source',
+        accountingExecutionId: 'foreign-execution',
+      })
+    ).toBeNull();
+    expect(
+      (await sreErrorTrackingRepository.findByFingerprint('accounting-owner', 'acme/widgets'))?.accountingExecutionId
+    ).toBe('sre-execution-test');
+  });
+
+  it('keeps revision completion scoped to the original tracking document and execution', async () => {
+    const tracking = await SreErrorTrackingModel.create({
+      errorFingerprint: 'revision-accounting',
+      repoSlug: 'acme/widgets',
+      source: 'CLOUDWATCH',
+      sourceRef: 'test-source',
+    });
+    await sreErrorTrackingRepository.completeRevisionAccounting(String(tracking._id), 'acme/widgets', 'revision-one');
+    expect(
+      await sreErrorTrackingRepository.hasCompletedRevisionAccounting(
+        String(tracking._id),
+        'acme/widgets',
+        'revision-one'
+      )
+    ).toBe(true);
+    expect(
+      await sreErrorTrackingRepository.hasCompletedRevisionAccounting(
+        String(tracking._id),
+        'other/repository',
+        'revision-one'
+      )
+    ).toBe(false);
+    expect(
+      await sreErrorTrackingRepository.hasCompletedRevisionAccounting(
+        String(tracking._id),
+        'acme/widgets',
+        'revision-two'
+      )
+    ).toBe(false);
+    await sreErrorTrackingRepository.completeRevisionAccounting(String(tracking._id), 'acme/widgets', 'revision-two');
+    expect(
+      await sreErrorTrackingRepository.hasCompletedRevisionAccounting(
+        String(tracking._id),
+        'acme/widgets',
+        'revision-one'
+      )
+    ).toBe(true);
+    await sreErrorTrackingRepository.completeRevisionAccounting(String(tracking._id), 'acme/widgets', 'revision-one');
+    expect(
+      (await sreErrorTrackingRepository.findFullById(String(tracking._id)))?.completedRevisionAccountingExecutionIds
+    ).toEqual(['revision-one', 'revision-two']);
+    await expect(
+      sreErrorTrackingRepository.completeRevisionAccounting(String(tracking._id), 'other/repository', 'revision-two')
+    ).rejects.toThrow();
+  });
+
+  it('bounds revision completion history while accepting an existing replay marker', async () => {
+    const tracking = await SreErrorTrackingModel.create({
+      errorFingerprint: 'revision-history',
+      repoSlug: 'acme/widgets',
+      source: 'CLOUDWATCH',
+      sourceRef: 'test-source',
+      completedRevisionAccountingExecutionIds: Array.from({ length: 16 }, (_, index) => `revision-${index}`),
+    });
+    await expect(
+      sreErrorTrackingRepository.completeRevisionAccounting(String(tracking._id), 'acme/widgets', 'revision-16')
+    ).rejects.toThrow();
+    await sreErrorTrackingRepository.completeRevisionAccounting(String(tracking._id), 'acme/widgets', 'revision-0');
+    expect(
+      (await sreErrorTrackingRepository.findFullById(String(tracking._id)))?.completedRevisionAccountingExecutionIds
+    ).toHaveLength(16);
+  });
+
   describe('claimForAnalysis — recurrence alert-fatigue prevention', () => {
     it('returns null for a second occurrence when prior doc is already in recurrence_detected state', async () => {
       const fingerprint = 'fp-escalated';

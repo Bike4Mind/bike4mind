@@ -9,9 +9,16 @@
  * own id as OAuthDeviceClientId so a rename here fails its build; clients kept
  * outside this repo have no such check, so removing an id here locks them out.
  */
-export const OAUTH_DEVICE_CLIENT_IDS = ['b4m-cli', 'b4m-desktop'] as const;
+export const OAUTH_DEVICE_CLIENT_IDS = ['b4m-cli', 'b4m-desktop', 'b4m-host'] as const;
 
 export type OAuthDeviceClientId = (typeof OAUTH_DEVICE_CLIENT_IDS)[number];
+
+/**
+ * The headless remote host (apps/desktop/src/host). It signs in on its own machine with the
+ * device flow, under its own id so a host session can be told apart from a Desktop app and
+ * revoked separately.
+ */
+export const HOST_DEVICE_CLIENT_ID: OAuthDeviceClientId = 'b4m-host';
 
 /**
  * How a DeviceAuthorization row created before `clientId` was persisted must be
@@ -23,6 +30,7 @@ export const LEGACY_DEVICE_CLIENT_ID: OAuthDeviceClientId = 'b4m-cli';
 const DISPLAY_NAMES: Record<OAuthDeviceClientId, string> = {
   'b4m-cli': 'B4M CLI',
   'b4m-desktop': 'B4M Desktop',
+  'b4m-host': 'B4M Host',
 };
 
 /**

@@ -72,13 +72,7 @@ const REUSE_WORKERS = !INTEGRATION_LANE && !REPO_LANE && process.env.CLIENT_TEST
 // - creditPreflight.selfhost pins process state before a module node loads only once per process
 //   (the settings schema in @bike4mind/common reads B4M_SELF_HOST as it loads), so it would see, or
 //   leave behind, another file's copy.
-// - remarkPlugins times regexes that are linear only when V8 optimizes them. V8 stops optimizing
-//   new regexps once a process has compiled 1MB of regexp code and holds 16MB of executable code
-//   (TooMuchRegExpCode in V8's regexp.cc), and a reused jsdom worker passes both within a few
-//   component files. No file causes it, so there is nothing to restore. Pure string code: no DOM.
-const ISOLATED_NODE_TESTS = REUSE_WORKERS
-  ? ['server/utils/creditPreflight.selfhost.test.ts', 'app/utils/remarkPlugins.test.ts']
-  : [];
+const ISOLATED_NODE_TESTS = REUSE_WORKERS ? ['server/utils/creditPreflight.selfhost.test.ts'] : [];
 
 const LANE_EXCLUDE = [
   '**/node_modules/**',

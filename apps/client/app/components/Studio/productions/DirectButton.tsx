@@ -10,6 +10,7 @@ import {
   type IFabFileDocument,
   type IResolvedPromptDispatch,
   type StudioCompositionResponse,
+  randomUuid,
 } from '@bike4mind/common';
 import EmbeddedFileBrowser, { type EmbeddedFileBrowserHandle } from '@client/app/components/Files/EmbeddedFileBrowser';
 import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
@@ -20,9 +21,6 @@ import { generateNewSession } from '@client/app/utils/sessionsAPICalls';
 const BRIEF_MAX_LENGTH = 1000;
 const SESSION_NAME_BRIEF_LENGTH = 40;
 
-const makeNonce = (): string =>
-  globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
 const productLines = (picked: IFabFileDocument | null, brandProducts: readonly string[]): string[] => {
   if (picked) return [`Product photo (Files id): ${picked.id}`];
   const [onFile] = brandProducts;
@@ -30,6 +28,15 @@ const productLines = (picked: IFabFileDocument | null, brandProducts: readonly s
   // on a request for a photo the production already has.
   return onFile ? [`Product photo: already in the brand kit (${onFile}); every shot uses it.`] : [];
 };
+
+// Without the names the director cannot pass a shot's characters to production_storyboard.
+const characterLines = (characters: readonly { name: string }[]): string[] =>
+  characters.length > 0
+    ? [
+        `Saved characters: ${characters.map(character => character.name).join(', ')}. Name the ones who appear in ` +
+          "a shot in that shot's characters.",
+      ]
+    : [];
 
 type LaunchCopy = { piece: string; placeholder: string; productPhoto: boolean };
 
@@ -108,11 +115,12 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
         `Production id: ${composition.id}`,
         'On every turn, change it only through the production tools, and report only what their results show.',
         ...(copy.productPhoto ? productLines(product, composition.brandKit?.productFileIds ?? []) : []),
+        ...characterLines(composition.brandKit?.characters ?? []),
         ...redirectLines(composition.shots ?? [], trimmedBrief, composition.brief?.summary, copy.piece),
       ].join('\n');
       const dispatch: IResolvedPromptDispatch = {
         promptId: 'production-direct',
-        dispatchNonce: makeNonce(),
+        dispatchNonce: randomUuid(),
         promptContent,
         promptName: 'Direct production',
         isHidden: false,

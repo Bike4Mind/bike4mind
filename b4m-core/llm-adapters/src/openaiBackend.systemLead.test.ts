@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { BadRequestError, ChatModels, type ICompletionOptionTools, type IMessage } from '@bike4mind/common';
+import { ChatModels, EmptyConversationError, type ICompletionOptionTools, type IMessage } from '@bike4mind/common';
 import { OpenAIBackend } from './openaiBackend';
 import { buildIdentityReminder } from './identityReminder';
 
@@ -50,7 +50,7 @@ describe('OpenAIBackend lead system message on the wire', () => {
     const { backend, chatCreate, responsesCreate } = buildBackend();
 
     await expect(backend.complete(ChatModels.GPT5_4, messages, {}, async () => {})).rejects.toMatchObject({
-      constructor: BadRequestError,
+      constructor: EmptyConversationError,
       statusCode: 400,
       message: 'request must contain at least one non-empty user or assistant message',
     });

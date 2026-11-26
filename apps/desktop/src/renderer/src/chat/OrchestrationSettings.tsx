@@ -6,6 +6,7 @@ import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { modelSupportsTools, type ChatModelOption } from '@shared/chat';
 import { inheritancePolicy, resolveModelAlias, WORKER_ROLES, type RolePolicy } from '@shared/orchestration';
+import { hostChat } from '../host/hostChat';
 
 export function economicalWorkerPreset(models: readonly ChatModelOption[]): RolePolicy | null {
   const worker = models
@@ -46,7 +47,7 @@ export function OrchestrationSettings() {
     let current = true;
     async function load() {
       try {
-        const [saved, catalog] = await Promise.all([window.b4m.chat.getRolePolicy(), window.b4m.chat.listModels()]);
+        const [saved, catalog] = await Promise.all([window.b4m.chat.getRolePolicy(), hostChat.listModels()]);
         if (current) {
           setPolicy(saved);
           setModels(catalog.models);

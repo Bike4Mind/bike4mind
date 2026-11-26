@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
+import { encryptSecret, generateEncryptionKey, configureSecretsAtRest } from '@bike4mind/utils/security';
 
 const h = vi.hoisted(() => ({
   config: {} as { SECRET_ENCRYPTION_KEY?: string; SECRET_ENCRYPTION_KEY_PREVIOUS?: string },
@@ -24,6 +24,7 @@ describe('systemSecretsManager with a database secret stored under the previous 
     previousKey = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY_PREVIOUS = previousKey;
+    configureSecretsAtRest(h.config.SECRET_ENCRYPTION_KEY, previousKey);
   });
 
   it('getSecret returns the decrypted database value', async () => {

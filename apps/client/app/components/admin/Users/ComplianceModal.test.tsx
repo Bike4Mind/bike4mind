@@ -170,6 +170,59 @@ describe('ComplianceModal', () => {
     expect(within(revokedRow).getByText('5.6.7.8').closest('td')).toHaveAttribute('data-cell-wrap');
   });
 
+  it('sizes both When columns for the full locale timestamp', () => {
+    const incidentAt = new Date(2026, 11, 28, 12, 58, 58);
+    const authAt = new Date(2026, 10, 27, 11, 57, 57);
+    mockData.mockReturnValue({
+      data: {
+        ...NEVER_ACCEPTED,
+        moderationIncidents: [
+          { labels: [], provider: 'openai', model: 'gpt-image-1', createdAt: incidentAt.toISOString() },
+        ],
+        recentAuthEvents: [{ event: 'login', actorIp: '1.2.3.4', userAgent: 'jest', createdAt: authAt.toISOString() }],
+      },
+      isLoading: false,
+    });
+    render(<ComplianceModal />, { wrapper: TestWrapper });
+    for (const [testId, at] of [
+      ['compliance-incidents-table', incidentAt],
+      ['compliance-auth-events', authAt],
+    ] as const) {
+      const table = screen.getByTestId(testId);
+      const width = within(table).getByRole('columnheader', { name: 'When' }).style.width;
+      expect(width).toMatch(/^[\d.]+rem$/);
+      expect(parseFloat(width)).toBeGreaterThanOrEqual(13.5);
+      expect(within(table).getByText(at.toLocaleString())).toBeInTheDocument();
+    }
+  });
+
+  it('keeps the longest auth event readable next to the widened When column', () => {
+    // Longest UserAuthAuditEvent in packages/database/src/models/auth/UserAuthAuditLogModel.ts.
+    const longest = 'account_data_export_requested';
+    mockData.mockReturnValue({
+      data: {
+        ...NEVER_ACCEPTED,
+        recentAuthEvents: [
+          { event: longest, actorIp: '1.2.3.4', userAgent: 'jest', createdAt: new Date(2026, 10, 27).toISOString() },
+        ],
+      },
+      isLoading: false,
+    });
+    render(<ComplianceModal />, { wrapper: TestWrapper });
+    const table = screen.getByTestId('compliance-auth-events');
+    const remOf = (name: string) => {
+      const width = within(table).getByRole('columnheader', { name }).style.width;
+      expect(width).toMatch(/^[\d.]+rem$/);
+      return parseFloat(width);
+    };
+    // jsdom has no layout: assert the sizing instead. ~7.5 px a character in this font (measured on a
+    // preview), plus 12 px cell padding on each side.
+    const eventRem = remOf('Event');
+    expect(eventRem * 16).toBeGreaterThanOrEqual(longest.length * 7.5 + 24);
+    expect(getComputedStyle(table).minWidth).toBe('52rem');
+    expect(within(table).getByText(longest)).toBeInTheDocument();
+  });
+
   it('renders every returned row without a pager', () => {
     mockData.mockReturnValue({
       data: {

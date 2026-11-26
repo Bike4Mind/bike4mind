@@ -4,6 +4,9 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
+import com.bike4mind.app.calendar.BusyBlockPermissionStore
+import com.bike4mind.app.calendar.BusyBlockSyncWorker
+import com.bike4mind.app.calendar.CalendarBusyBlockReader
 import com.bike4mind.app.capture.MediaAudioRecorder
 import com.bike4mind.app.media.MediaImageLoader
 import com.bike4mind.app.push.AgentRunNotifications
@@ -40,6 +43,9 @@ import com.bike4mind.kit.auth.AuthorizationResult
 import com.bike4mind.kit.auth.OAuthConfiguration
 import com.bike4mind.kit.briefs.BriefController
 import com.bike4mind.kit.briefs.BriefWire
+import com.bike4mind.kit.briefs.BusyBlockBriefController
+import com.bike4mind.kit.briefs.BusyBlockSyncer
+import com.bike4mind.kit.briefs.BusyBlocksWire
 import com.bike4mind.kit.chat.ChatController
 import com.bike4mind.kit.chat.ChatSendWire
 import com.bike4mind.kit.chat.LiveChatBackend
@@ -105,6 +111,11 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
         AIApi(environment.baseUrl, engine) { transport.install(it) },
     )
     private val briefs = BriefWire(environment, http)
+    private val busyBlocks = BusyBlocksWire(environment, http)
+    val busyBlockPermissions = BusyBlockPermissionStore(appContext)
+
+    /** Pushes calendar busy times while busy-block briefs are on; run on foreground and by calendar/BusyBlockSyncWorker. */
+    val busyBlockSyncer = BusyBlockSyncer(busyBlocks, CalendarBusyBlockReader(appContext, busyBlockPermissions))
     private val media = MediaWire(environment, http)
 
     /** Page 1 of the Studio gallery per filter, kept on disk so the gallery opens stale-first. */
@@ -168,15 +179,19 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     /** [briefId] null shows the latest brief. */
     fun brief(briefId: String?, scope: CoroutineScope) = BriefController(briefs, briefId, scope)
 
+    fun busyBlockBrief(scope: CoroutineScope) =
+        BusyBlockBriefController(busyBlocks, busyBlockSyncer, scope) { enabled -> BusyBlockSyncWorker.follow(appContext, enabled) }
+
     fun mediaGallery(scope: CoroutineScope) = MediaGalleryController(media, mediaFirstPages, scope)
 
     fun mediaDetail(item: MediaItem, scope: CoroutineScope) = MediaDetailController(item, media, scope)
 
     /**
      * The session ended: queued shares belong to the account that made them, and the next account must never see
-     * this one's gallery, from memory or disk.
+     * this one's gallery, from memory or disk, and its calendar trigger must never write to the next account.
      */
     suspend fun onSessionEnded() {
+        BusyBlockSyncWorker.endSession(appContext, busyBlockSyncer::reset)
         capture.discardAll()
         mediaFirstPages.invalidate()
         mediaImages.clear()

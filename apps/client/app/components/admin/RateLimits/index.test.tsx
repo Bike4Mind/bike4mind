@@ -142,6 +142,24 @@ describe('RateLimitsTab tables', () => {
     expect(rows[1]).toHaveTextContent('Yes');
   });
 
+  it('sizes the Timestamp column of both tables for the full locale timestamp', () => {
+    const at = new Date(2026, 11, 28, 12, 58, 58);
+    mocks.data = [{ ...snapshot('hit', true), timestamp: at.toISOString() }];
+    for (const [view, testId] of [
+      [undefined, 'rate-limit-throttled-table'],
+      ['raw', 'rate-limit-raw-table'],
+    ] as const) {
+      mocks.search = view ? { rateView: view } : {};
+      const { unmount } = renderTab();
+      const table = screen.getByTestId(testId);
+      const width = within(table).getByRole('columnheader', { name: 'Timestamp' }).style.width;
+      expect(width).toMatch(/^[\d.]+rem$/);
+      expect(parseFloat(width)).toBeGreaterThanOrEqual(13.5);
+      expect(within(table).getByText(at.toLocaleString())).toBeInTheDocument();
+      unmount();
+    }
+  });
+
   it('offers to clear the filters when they match no snapshot', () => {
     mocks.data = [];
     mocks.search = { rateView: 'raw', rateIntegration: 'slack' };

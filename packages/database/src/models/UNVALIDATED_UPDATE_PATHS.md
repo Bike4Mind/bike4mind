@@ -92,6 +92,8 @@ The table below remains the literal-update inventory, not proof that all databas
 | AssistantBrief | `status` | enum | `content/AssistantBriefModel.ts#markFailed` | schema | `runValidators` | update call passes runValidators |
 | AssistantBrief | `status` | enum | `content/AssistantBriefModel.ts#markReady` | schema | `runValidators` | update call passes runValidators |
 | AssistantBrief | `decisions.followUp.state` | enum | `content/AssistantBriefModel.ts#resolveFollowUpDecision` | schema | `runValidators` | update call passes runValidators |
+| Artifact | `lastVersionNumber` | min | `content/ArtifactModel.ts#ArtifactRepository.claimNextVersionNumber` | schema | `runValidators` | update call passes runValidators |
+| Artifact | `lastVersionNumber` | min | `content/ArtifactModel.ts#ArtifactRepository.seedVersionCounter` | schema | `runValidators` | update call passes runValidators |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#saveOnce` | repository-check | `literal` | writes "ready" |
 | Agent | `memoryJournal.content` | maxlength | `ai/AgentModel.ts#AgentRepository.appendMemory` | repository-check | `packages/database/src/models/ai/AgentModel.ts#clampMemoryContent` | Writer slices content to the schema maxlength before the $push; tavern-conversation.ts appends LLM-extracted content via String(item.content) |
 | Agent | `memoryJournal.importance` | min,max | `ai/AgentModel.ts#AgentRepository.appendMemory` | route-schema | `b4m-core/services/src/agentMemoryService/index.ts#clampImportance` | Sole caller's entries come from extractMemoriesFromConversation, clamped to 1-5 |
@@ -134,16 +136,16 @@ The table below remains the literal-update inventory, not proof that all databas
 | CallableFunction | `examples.tolerance.rel` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `grants.visibility` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setGrants` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.runtime.kind` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
-| CallableFunction | `pin.runtime.kind` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.runtime.lockHash` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
-| CallableFunction | `pin.runtime.lockHash` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.runtime.version` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
-| CallableFunction | `pin.runtime.version` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.seq` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
-| CallableFunction | `pin.seq` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `promoted.seq` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.dataPins.bytes` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setDataPins` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.dataPins.name` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setDataPins` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.dataPins.sha256` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setDataPins` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setDataPins` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `trustLabel` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |

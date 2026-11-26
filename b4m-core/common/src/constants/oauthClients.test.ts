@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { z } from 'zod';
 import {
   FEDERATED_ADMIN_STATUS_SCOPE,
+  HOST_DEVICE_CLIENT_ID,
   LEGACY_DEVICE_CLIENT_ID,
   OAUTH_DEVICE_CLIENT_IDS,
   clientIdFromAuthorizeRedirect,
@@ -15,6 +17,7 @@ describe('oauthClientDisplayName', () => {
   it('names every allowlisted client', () => {
     expect(oauthClientDisplayName('b4m-cli')).toBe('B4M CLI');
     expect(oauthClientDisplayName('b4m-desktop')).toBe('B4M Desktop');
+    expect(oauthClientDisplayName('b4m-host')).toBe('B4M Host');
   });
 
   it('falls through to the raw slug for an unknown client', () => {
@@ -32,6 +35,23 @@ describe('oauthClientDisplayName', () => {
 
   it('treats the pre-clientId row default as an allowlisted client', () => {
     expect(OAUTH_DEVICE_CLIENT_IDS).toContain(LEGACY_DEVICE_CLIENT_ID);
+  });
+});
+
+describe('device client allowlist', () => {
+  // The device routes parse client_id with exactly this schema.
+  const clientIdSchema = z.enum(OAUTH_DEVICE_CLIENT_IDS);
+
+  it('accepts the headless host alongside the CLI and Desktop', () => {
+    expect(HOST_DEVICE_CLIENT_ID).toBe('b4m-host');
+    for (const id of ['b4m-cli', 'b4m-desktop', 'b4m-host']) {
+      expect(clientIdSchema.safeParse(id).success).toBe(true);
+    }
+  });
+
+  it('still rejects an unknown id', () => {
+    expect(clientIdSchema.safeParse('b4m-rogue').success).toBe(false);
+    expect(clientIdSchema.safeParse('').success).toBe(false);
   });
 });
 

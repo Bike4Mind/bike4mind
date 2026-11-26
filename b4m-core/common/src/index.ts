@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './emptyConversation';
 export * from './concurrency';
 export * from './dlqPolicy';
 export * from './adminUserNotes';
@@ -197,6 +198,7 @@ export * from './utils/stopReasons';
 export * from './utils/retrievalRate';
 export * from './utils/answerDiagnosis';
 export * from './utils/requestId';
+export * from './utils/randomUuid';
 export * from './apiKeyRateLimitHeaders';
 export * from './utils/inviteToken';
 export * from './utils/artifactPublishSlug';
@@ -250,7 +252,7 @@ export * from './adminPermissions';
 export * from './mfaEnforcement';
 export * from './adminRoles';
 
-export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';
+export { VERIFIED_SLACK_IDENTITY_FILTER, slackIdentityFilter } from './slackIdentity';
 
 export * from './preferenceArena';
 export * from './ipBlock';

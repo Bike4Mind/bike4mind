@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
 import { initialUpdateState, reduceUpdate, type UpdateStatus } from '@shared/update';
 import type { AppUpdateController } from '../chat/useAppUpdate';
@@ -315,7 +315,18 @@ describe('the next step the update label takes', () => {
   );
 });
 
+const PINNED_NOW = new Date('2026-06-15T12:00:00Z');
+
 describe('the credits orb above the rail avatar', () => {
+  // The runway math reads the clock, so pin it: the outcome must not depend on when the suite runs.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(PINNED_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   async function mountWith(balance: number, creditsSpent: number) {
     mount(
       <SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />,

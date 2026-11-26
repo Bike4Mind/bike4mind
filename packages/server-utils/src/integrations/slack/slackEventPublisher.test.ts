@@ -26,6 +26,7 @@ const detail = { slackUserId: 'U1', b4mUserId: 'user1', question: 'test question
 const payload: ShortcutViewSubmissionPayload = {
   type: 'view_submission',
   user: { id: 'U1' },
+  team: { id: 'T1' },
   view: {
     id: 'view1',
     callback_id: 'quick_ask_modal',
@@ -40,7 +41,11 @@ beforeEach(() => {
   // Exercise the same publisher object bound by initializeSlackPackage; unrelated DI capabilities are unused.
   configureSlackPackage(
     { eventBus: slackEventPublisher } as unknown as ISlackServerDependencies,
-    {} as ISlackDatabaseDependencies
+    {
+      User: {
+        findById: async () => ({ id: 'user1', slackSettings: { slackUserId: 'U1', slackTeamId: 'T1' } }),
+      },
+    } as unknown as ISlackDatabaseDependencies
   );
 });
 afterEach(() => vi.unstubAllEnvs());

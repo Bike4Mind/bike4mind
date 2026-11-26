@@ -14,7 +14,7 @@ import { LocalContextPreference } from './LocalContextPreference';
 import { registerLocalContextIpc } from './localContextIpc';
 import { inheritancePolicy } from '@shared/orchestration';
 import { registerOrchestrationIpc } from './orchestrationIpc';
-import type { ChatSession, ChatSessionExportResult, ChatSessionSummary, CreateCodeSessionResult } from '@shared/chat';
+import type { ChatSession, ChatSessionExportResult, ChatSessionSummary } from '@shared/chat';
 import { registerSessionCreateIpc, type SessionCreation } from './sessionCreateIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
@@ -265,7 +265,6 @@ describe('orchestrationIpc', () => {
       setRolePolicy: vi.fn(async () => inheritancePolicy()),
       actOnTask: vi.fn(),
       listTaskDecisions: vi.fn(async () => []),
-      answerTaskDecision: vi.fn(async () => undefined),
     };
     registerOrchestrationIpc(
       {
@@ -293,36 +292,6 @@ describe('orchestrationIpc', () => {
     ).toThrow(/worker/);
     expect(service.actOnTask).toHaveBeenCalledTimes(1);
   });
-
-  it('bounds decision answers at the renderer boundary', async () => {
-    const handlers = new Map<string, (...args: unknown[]) => unknown>();
-    const service = {
-      getRolePolicy: vi.fn(async () => inheritancePolicy()),
-      setRolePolicy: vi.fn(async () => inheritancePolicy()),
-      actOnTask: vi.fn(),
-      listTaskDecisions: vi.fn(async () => []),
-      answerTaskDecision: vi.fn(async () => undefined),
-    };
-    registerOrchestrationIpc(
-      { handle: (channel, listener) => void handlers.set(channel, listener as (...args: unknown[]) => unknown) },
-      service
-    );
-    const call = (channel: string, ...args: unknown[]) => handlers.get(channel)?.({}, ...args);
-    const id = 'f3708bc5-9424-4d0c-8a18-41f166cb43a1';
-    await call(IPC_CHANNELS.chatAnswerTaskDecision, id, 'd1', {
-      status: 'answered',
-      answers: [{ selected: ['Stack'] }],
-    });
-    expect(service.answerTaskDecision).toHaveBeenLastCalledWith(id, 'd1', {
-      status: 'answered',
-      answers: [{ selected: ['Stack'] }],
-    });
-    await call(IPC_CHANNELS.chatAnswerTaskDecision, id, 'd1', { status: 'skipped' });
-    expect(service.answerTaskDecision).toHaveBeenLastCalledWith(id, 'd1', { status: 'skipped' });
-    expect(() => call(IPC_CHANNELS.chatAnswerTaskDecision, id, 'd1', { status: 'cancelled' })).toThrow();
-    expect(() => call(IPC_CHANNELS.chatAnswerTaskDecision, '../x', 'd1', { status: 'skipped' })).toThrow();
-    expect(service.answerTaskDecision).toHaveBeenCalledTimes(2);
-  });
 });
 
 describe('sessionCreateIpc', () => {
@@ -332,7 +301,6 @@ describe('sessionCreateIpc', () => {
   function setup(overrides: Partial<SessionCreation> = {}) {
     const creation: SessionCreation = {
       createSession: vi.fn(() => Promise.resolve(created)),
-      createCodeSession: vi.fn((): Promise<CreateCodeSessionResult> => Promise.resolve({ ok: true, session: created })),
       place: vi.fn(() => Promise.resolve({ sections: placed, failed: false })),
       ...overrides,
     };
@@ -360,33 +328,12 @@ describe('sessionCreateIpc', () => {
       expect(creation.place).toHaveBeenCalledWith('fresh', 's1');
     });
 
-    it('files a new Code session in the requested section and answers the sidebar state', async () => {
-      const { creation, call } = setup();
-
-      await expect(call(IPC_CHANNELS.chatCreateCodeSession, { sectionId: 's1' })).resolves.toEqual({
-        ok: true,
-        session: created,
-        sidebarSections: placed,
-      });
-
-      expect(creation.place).toHaveBeenCalledWith('fresh', 's1');
-    });
-
     it('creates a Chat session without a section when none is asked for', async () => {
       const { creation, call } = setup();
 
       await call(IPC_CHANNELS.chatCreateSession);
 
       expect(creation.place).toHaveBeenCalledWith('fresh', undefined);
-    });
-
-    it('passes a refused Code session through and files nothing', async () => {
-      const refusal: CreateCodeSessionResult = { ok: false, error: 'no worktree' };
-      const { creation, call } = setup({ createCodeSession: vi.fn(() => Promise.resolve(refusal)) });
-
-      await expect(call(IPC_CHANNELS.chatCreateCodeSession, { sectionId: 's1' })).resolves.toEqual(refusal);
-
-      expect(creation.place).not.toHaveBeenCalled();
     });
 
     it('still answers the session when its section could not be saved', async () => {

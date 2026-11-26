@@ -1,7 +1,8 @@
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { isPlaintextSecretsOptOutActive } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
 import mongoose from 'mongoose';
-import { getMailConfigStatus, type EmailConfigStatus } from '@bike4mind/server-utils/utils/mailer/configStatus';
+import type { EmailConfigStatus } from '@bike4mind/server-utils/utils/mailer/configStatus';
+import { loadMailConfigStatus } from '@bike4mind/server-utils/utils/mailer/sender';
 import { getOktaConfigStatus } from '@server/auth/oktaOidcClient';
 import { validateEncryptionKey, validateJwtSecret } from '@server/security/tier1SecretValidators';
 
@@ -165,7 +166,7 @@ async function getOAuthConfigStatus(): Promise<OAuthConfigStatus> {
  */
 export async function getSystemHealthStatus(): Promise<SystemHealthResponse> {
   return {
-    email: getMailConfigStatus(),
+    email: await loadMailConfigStatus(),
     database: {
       type: process.env.MAIN_DB_TYPE || 'MongoAtlas',
       connected: mongoose.connection.readyState === 1,

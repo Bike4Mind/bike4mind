@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAdminSubscriptionCancel, useAdminSubscriptionResume } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, useUndoToast } from '../../../shared';
 import { formatDate, ownerDisplayName, type SubscriptionDialogProps } from '../subscriptionDetailModel';
+import { randomUuid } from '@bike4mind/common';
 
 /**
  * Cancel at period end: the customer keeps access and credits until the period ends, and nothing is refunded.
@@ -13,7 +14,7 @@ export const CancelSubscriptionDialog: React.FC<SubscriptionDialogProps> = ({ de
   const cancel = useAdminSubscriptionCancel(subscription.id);
   const resume = useAdminSubscriptionResume(subscription.id);
   const showUndo = useUndoToast();
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey] = useState(() => randomUuid());
   const name = ownerDisplayName(subscription);
   const endDate = formatDate(subscription.periodEndsAt) ?? 'the end of the period';
 
@@ -29,7 +30,7 @@ export const CancelSubscriptionDialog: React.FC<SubscriptionDialogProps> = ({ de
       onUndo: async () => {
         await resume.mutateAsync({
           reason: undoAdminReason(reason),
-          idempotencyKey: crypto.randomUUID(),
+          idempotencyKey: randomUuid(),
           expectedState: stripe.stateToken,
         });
       },

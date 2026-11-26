@@ -3258,7 +3258,15 @@ export interface components {
        * @enum {string}
        */
       outcome?:
-        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+        | 'ok'
+        | 'input_invalid'
+        | 'output_invalid'
+        | 'error'
+        | 'timeout'
+        | 'memory'
+        | 'output_too_large'
+        | 'refused'
+        | 'data_mismatch';
       /** @description The outputs, checked against `output_schema`. */
       output?: {
         [key: string]: unknown;
@@ -16346,7 +16354,15 @@ export interface components {
        * @enum {string}
        */
       outcome:
-        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+        | 'ok'
+        | 'input_invalid'
+        | 'output_invalid'
+        | 'error'
+        | 'timeout'
+        | 'memory'
+        | 'output_too_large'
+        | 'refused'
+        | 'data_mismatch';
       /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
       stamp?: {
         function_id: string;
@@ -16464,7 +16480,15 @@ export interface components {
        * @enum {string}
        */
       outcome?:
-        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+        | 'ok'
+        | 'input_invalid'
+        | 'output_invalid'
+        | 'error'
+        | 'timeout'
+        | 'memory'
+        | 'output_too_large'
+        | 'refused'
+        | 'data_mismatch';
       /** @description The outputs, checked against `output_schema`. */
       output?: {
         [key: string]: unknown;
@@ -16837,7 +16861,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`, or an API-key caller named built-in `tools` the billed organization does not allow (`errorCode: org_tool_not_allowed`). */
+      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or it sent `file_ids` or `session_file_ids` without the `files:read` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`, or an API-key caller named built-in `tools` the billed organization does not allow (`errorCode: org_tool_not_allowed`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -24922,7 +24946,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a malformed body (`invalid_request`), something the model does not honour (`errorCode` names the first, e.g. `unsupported_size` or `missing_input`; `message` lists them all), an unknown or unavailable model (`model_unavailable`), an input file that is not yours or not found (`input_image_not_found`) or not a usable image (`unsupported_input_image`), too few credits (`insufficient_credits`), a `run` budget with too little left for every job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a malformed body (`invalid_request`), something the model does not honour (`errorCode` names the first, e.g. `unsupported_size` or `missing_input`; `message` lists them all), an unknown or unavailable model (`model_unavailable`), an input file that is not yours or not found (`input_image_not_found`) or not a usable image (`unsupported_input_image`), too few credits (`insufficient_credits`), a `run` budget with too little left for every job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). An API key without `files:read` may only name generated images and images staged by an `ai:generate` key without `files:write`; any other file is `input_image_not_found`. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -34102,7 +34126,7 @@ export interface operations {
           'application/json': components['schemas']['createVideoGenerationResponse403'];
         };
       };
-      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`), or the `run` does not exist or another user or billing owner minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
+      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`), or the `run` does not exist or another user or billing owner minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. An API key without `files:read` may only name generated images and images staged by an `ai:generate` key without `files:write`; any other file is `input_image_not_found`. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -35812,7 +35836,7 @@ export interface operations {
           'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
-      /** @description An input file id is not one of your files, is deleted, or is still being scanned (`errorCode: input_file_not_found`). */
+      /** @description An input file id is not one of your files, is deleted, or is still being scanned (`errorCode: input_file_not_found`). An API key without `files:read` may only name generated files and images staged by an `ai:generate` key without `files:write`; any other file is reported the same way. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

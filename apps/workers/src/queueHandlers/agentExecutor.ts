@@ -200,6 +200,7 @@ import {
   delegationOffer,
   DELEGATION_TOOLS,
   runHasAttachments,
+  runSessionKnowledgeIds,
   sessionDeniedTools,
 } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from '@bike4mind/server-utils/utils/agentFailureMessage';
@@ -2164,7 +2165,7 @@ async function runExecution(
       // passthrough. Until then an agent delegated from a personal-corpus session searches the
       // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       inlinedAttachmentIds,
-      attachedFileIds: attachedFileIdsForRun(execution, session.knowledgeIds),
+      attachedFileIds: attachedFileIdsForRun(execution, runSessionKnowledgeIds(execution, session.knowledgeIds)),
       fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       // The `decide` tool's seam: same runner, hold and retry as the public route, attributed to
@@ -2604,7 +2605,7 @@ async function runExecution(
       toolNames: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
       session,
       profileDeniedTools: orchestrationProfile?.deniedTools ?? execution.profileDeniedTools,
-      hasAttachments: runHasAttachments(execution, session.knowledgeIds),
+      hasAttachments: runHasAttachments(execution, runSessionKnowledgeIds(execution, session.knowledgeIds)),
       scopeDeniedTools: execution.scopeDeniedTools,
       logger,
     });
@@ -3423,7 +3424,7 @@ async function runExecution(
         isNewExecution && iterationIndex === 0
           ? await materializeAttachmentsForRun({
               execution,
-              sessionKnowledgeIds: session.knowledgeIds ?? [],
+              sessionKnowledgeIds: runSessionKnowledgeIds(execution, session.knowledgeIds),
               // Keeps the first-iteration preamble below from listing a file just detached.
               onKnowledgeIdsScrubbed: removed => {
                 const dropped = new Set(removed);
@@ -3465,7 +3466,7 @@ async function runExecution(
           iterationIndex,
           baseQuery: execution.query,
           execution,
-          sessionKnowledgeIds: session.knowledgeIds ?? [],
+          sessionKnowledgeIds: runSessionKnowledgeIds(execution, session.knowledgeIds),
           scope: fabFileReadScope,
           lakeAccess: attachmentLakeAccess,
           availableToolNames: resolvedToolNames,
@@ -4801,7 +4802,10 @@ async function processSubagentDispatch(
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
       sessionIncludeLibraryFiles: libraryFlagForScope(session),
       // Without it a library-off session's delegated agent cannot open the files attached to it.
-      attachedFileIds: attachedFileIdsForRun(parentRun ?? undefined, session.knowledgeIds),
+      attachedFileIds: attachedFileIdsForRun(
+        parentRun ?? undefined,
+        runSessionKnowledgeIds(child, session.knowledgeIds)
+      ),
       // Same seam as the parent run: a subagent's decision bills through the shared runner.
       decide: params => runDecisionTool({ ...params, source: 'agent' }),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already

@@ -349,6 +349,80 @@ export function useSharedCallableFunctions() {
   });
 }
 
+export const usePinCallableFunctionData = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async ({ id, fileId, name }: { id: string; fileId: string; name: string }) =>
+      (await api.post<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/data`, { fileId, name })).data,
+    onSettled: invalidate,
+  });
+};
+
+export const useUnpinCallableFunctionData = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) =>
+      (
+        await api.delete<ICallableFunctionPublic>(
+          `${COLLECTION}/${encodeURIComponent(id)}/data/${encodeURIComponent(name)}`
+        )
+      ).data,
+    onSettled: invalidate,
+  });
+};
+
+const hex = (buffer: ArrayBuffer) =>
+  [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+
+/** Verified pin bytes by sha256, so a repeat run fetches nothing; identical bytes are identical under any name. */
+const dataBytesByHash = new Map<string, Promise<ArrayBuffer>>();
+
+/** Test hook: forgets the cached pin bytes. */
+export function resetCallableFunctionDataCache(): void {
+  dataBytesByHash.clear();
+}
+
+async function fetchVerifiedDataBytes(id: string, pin: ICallableFunctionPublic['dataPins'][number]) {
+  const { url } = (
+    await api.get<{ url: string }>(`${COLLECTION}/${encodeURIComponent(id)}/data/${encodeURIComponent(pin.name)}`)
+  ).data;
+  let bytes: ArrayBuffer;
+  if (url.startsWith('/')) {
+    bytes = (await api.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })).data;
+  } else {
+    // A signed link to the data bucket: no credentials, and nothing for the browser to keep.
+    const response = await fetch(url, { credentials: 'omit', cache: 'no-store' });
+    if (!response.ok) throw new Error(`The data file ${pin.name} could not be read (${response.status}).`);
+    bytes = await response.arrayBuffer();
+  }
+  if (hex(await globalThis.crypto.subtle.digest('SHA-256', bytes)) !== pin.sha256) {
+    throw new Error(`The data file ${pin.name} does not match its pinned hash.`);
+  }
+  return bytes;
+}
+
+/**
+ * The pinned bytes of a saved tool, each checked against its sha256 before Python sees it, for `/data/<name>` in the
+ * browser. Each call returns fresh copies, so the caller can transfer them to the sandbox; the cached bytes stay.
+ * Throws when a file cannot be read or does not match.
+ */
+export async function fetchCallableFunctionDataFiles(
+  id: string,
+  pins: ICallableFunctionPublic['dataPins']
+): Promise<{ name: string; bytes: ArrayBuffer }[]> {
+  return Promise.all(
+    pins.map(async pin => {
+      let cached = dataBytesByHash.get(pin.sha256);
+      if (!cached) {
+        cached = fetchVerifiedDataBytes(id, pin);
+        dataBytesByHash.set(pin.sha256, cached);
+        cached.catch(() => dataBytesByHash.delete(pin.sha256));
+      }
+      return { name: pin.name, bytes: (await cached).slice(0) };
+    })
+  );
+}
+
 export const useDeleteCallableFunction = () => {
   const invalidate = useInvalidateCallableFunctions();
   return useMutation({

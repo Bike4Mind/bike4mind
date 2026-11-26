@@ -23,6 +23,7 @@ import {
   type VoiceClientBootstrap,
 } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
+import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import {
   billedOrganizationIdForFreeze,
@@ -209,6 +210,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       sessionId: String(resolvedSessionId),
       reasoningModelId,
       ...requestTurnAuth(req),
+      fileInputsAllowed: fileInputsAllowedFor(req),
       ...(req.apiKeyInfo?.billingOwnerType ? { apiKeyBillingOwnerType: req.apiKeyInfo.billingOwnerType } : {}),
       ...(adminRoleWithheldFor(req.apiKeyInfo) ? { adminRoleWithheld: true } : {}),
       voiceHoldStartedAt: holdStartedAt.toISOString(),

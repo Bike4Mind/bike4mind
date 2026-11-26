@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, isFullAdmin } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
@@ -100,6 +100,7 @@ const handler = adminApi({
       replayAttempts: attempts?.get(message.MessageId!),
       schedule: schedules.get(message.MessageId!),
       targetLogs: targetLogs.get(message.MessageId!),
+      revealRestrictedBody: isFullAdmin(req.user),
     })
   );
 
