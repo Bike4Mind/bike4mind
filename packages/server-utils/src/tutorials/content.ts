@@ -5,6 +5,9 @@ import firstStepsTranscript from './modules/first-steps/transcript.json';
 import { switchingModelsModule } from './modules/switching-models/module';
 import { SWITCHING_MODELS_STEPS } from './modules/switching-models/steps';
 import switchingModelsTranscript from './modules/switching-models/transcript.json';
+import { artifactsModule } from './modules/artifacts/module';
+import { ARTIFACTS_STEPS } from './modules/artifacts/steps';
+import artifactsTranscript from './modules/artifacts/transcript.json';
 
 // Server-only, like the registry: the page gets a tutorial's content only from the run route, overrides applied.
 export const CORE_TUTORIAL_CONTENT: readonly RepoTutorial[] = [
@@ -16,4 +19,5 @@ export const CORE_TUTORIAL_CONTENT: readonly RepoTutorial[] = [
     steps: SWITCHING_MODELS_STEPS,
     transcript: switchingModelsTranscript,
   },
+  { intro: artifactsModule, version: 1, enabled: true, steps: ARTIFACTS_STEPS, transcript: artifactsTranscript },
 ];
