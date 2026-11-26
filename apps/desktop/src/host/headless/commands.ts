@@ -87,7 +87,13 @@ export async function stopDaemon(dataDirectory: string, logger: HostLogger): Pro
     logger.error(`b4m-host: ${paths.lock} names no process to stop`);
     return HOST_EXIT_CODES.failure;
   }
-  process.kill(pid, 'SIGTERM');
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (err) {
+    // It exited between the inspection and the signal: already stopped.
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return HOST_EXIT_CODES.ok;
+    throw err;
+  }
   const deadline = Date.now() + STOP_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (!isProcessAlive(pid) || (await inspectDaemon(paths)).state === 'stopped') return HOST_EXIT_CODES.ok;
