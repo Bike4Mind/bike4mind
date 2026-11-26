@@ -9,6 +9,10 @@ import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
 import { SceneStage, sceneView } from './SceneStage';
 import { TEST_SCENE } from './testScene';
+import { TAVERN_SCENE } from '../tavern/tavernScene';
+import { OFFICE_SCENE } from '../office/officeScene';
+import { AQUARIUM_SCENE } from '../aquarium/aquariumScene';
+import type { SceneDefinition } from './sceneDefinition';
 import { UNFOCUSED_PAUSE_MS } from './useScenePause';
 
 const mount = createThemedMount('dark');
@@ -225,6 +229,52 @@ describe('SceneStage features on any definition', () => {
     await render(props([agentFixture('n1', 'needs-you')], { inSceneDecisions: true }));
     expect(query('orchestrator-test-yard-bubble-n1-open')).toBeNull();
     expect(el('orchestrator-test-yard-bubble-n1').textContent).toBe('Needs you!');
+  });
+
+  // A session parked on a bash approval, which the dialogue box can answer.
+  const parked = (id: string) => ({
+    id,
+    messages: [
+      {
+        id: 'm1',
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            id: `call-${id}`,
+            name: 'bash_execute',
+            input: { command: 'pnpm test' },
+            status: 'awaiting-approval',
+            approvalId: `ap-${id}`,
+          },
+        ],
+      },
+    ],
+  });
+  const getSession = () =>
+    (window as unknown as { b4m: { chat: { getSession: ReturnType<typeof vi.fn> } } }).b4m.chat.getSession;
+
+  it.each([TEST_SCENE, TAVERN_SCENE, OFFICE_SCENE, AQUARIUM_SCENE] as SceneDefinition[])(
+    'opens a waiting agent from its "Needs you!" marker when the box has nothing to ask ($id)',
+    async scene => {
+      const view = props([agentFixture('n1', 'needs-you')], { inSceneDecisions: true });
+      await mount.render(<SceneStage {...view} scene={scene} />);
+      const marker = el(`orchestrator-${scene.id}-bubble-n1`);
+      expect(marker.textContent).toBe('Needs you!');
+      expect(getComputedStyle(marker).pointerEvents).toBe('auto');
+      await act(async () => marker.click());
+      expect(view.onSelect).toHaveBeenCalledWith('n1');
+    }
+  );
+
+  it("brings a waiting agent's request to the front of the box instead of opening it", async () => {
+    getSession().mockImplementation(async (id: string) => parked(id));
+    const view = props([agentFixture('n1', 'needs-you')], { inSceneDecisions: true });
+    await render(view);
+    await act(async () => undefined);
+    expect(query('scene-dialogue')).not.toBeNull();
+    await act(async () => el('orchestrator-test-yard-bubble-n1').click());
+    expect(view.onSelect).not.toHaveBeenCalled();
   });
 
   it('keeps answers out of the bubbles where another card answers', async () => {

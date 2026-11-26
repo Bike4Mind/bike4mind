@@ -84,6 +84,8 @@ export interface SceneDialogueProps {
   /** The request at the front, by decisionKey or session id (queueIndex); the queue's head when unset or gone. */
   frontKey: string | undefined;
   onFrontChange(key: string | undefined): void;
+  /** The sessions the box holds a request for, so a click on any other waiting agent can go elsewhere. */
+  onHeldChange?(sessionIds: ReadonlySet<string>): void;
   onOpenDetails(sessionId: string): void;
   /** Bumped to bring the box forward and focus it (the stage's "N need you" pill). */
   focusRequest?: number;
@@ -106,6 +108,7 @@ export function SceneDialogue({
   portraitOf,
   frontKey,
   onFrontChange,
+  onHeldChange,
   onOpenDetails,
   focusRequest,
   look,
@@ -120,6 +123,10 @@ export function SceneDialogue({
   const queue = dialogueQueue(byId).filter(decision => !answered.has(decisionKey(decision)));
   const index = queueIndex(queue, frontKey);
   const front = queue[index] as PendingDecision | undefined;
+  const heldKey = [...new Set(queue.map(decision => decision.sessionId))].sort().join('\n');
+  useEffect(() => {
+    onHeldChange?.(new Set(heldKey ? heldKey.split('\n') : []));
+  }, [heldKey, onHeldChange]);
 
   // A focus request un-minimizes the box, then focuses it once it is back on screen.
   const focusPending = useRef(false);

@@ -181,12 +181,15 @@ function Bubble({
   text,
   urgent,
   onHover = false,
+  clickable = false,
 }: {
   testId: string;
   text: string;
   urgent: boolean;
   /** Shown only while its sprite is hovered or focused. */
   onHover?: boolean;
+  /** Takes the pointer, so a click on it reaches the sprite it hangs over. */
+  clickable?: boolean;
 }) {
   return (
     <Box
@@ -207,7 +210,8 @@ function Bubble({
         fontSize: urgent ? 'clamp(11px, 2.8cqh, 18px)' : 'clamp(9px, 2.1cqh, 13px)',
         fontWeight: urgent ? 700 : 500,
         lineHeight: 1.2,
-        pointerEvents: 'none',
+        pointerEvents: clickable ? 'auto' : 'none',
+        cursor: clickable ? 'pointer' : undefined,
         ...(onHover && { opacity: 0, transition: 'opacity 120ms ease-out' }),
       }}
     >
@@ -497,7 +501,14 @@ function Sprite({
         }}
       />
       {agent.state === 'working' && !agent.preparing && <Spark kind={sparkKind(agent)} />}
-      {bubble && <Bubble testId={`${testId}-bubble-${agent.id}`} text={bubble} urgent={agent.state === 'needs-you'} />}
+      {bubble && (
+        <Bubble
+          testId={`${testId}-bubble-${agent.id}`}
+          text={bubble}
+          urgent={agent.state === 'needs-you'}
+          clickable={agent.state === 'needs-you'}
+        />
+      )}
       <NamePlate
         testId={`${testId}-name-${agent.id}`}
         label={label}
@@ -785,9 +796,11 @@ export function SceneStage({
   const agentsById = new Map(agents.map(agent => [agent.id, agent]));
   const [dialogueFront, setDialogueFront] = useState<string | undefined>(undefined);
   const [dialogueFocus, setDialogueFocus] = useState(0);
+  const [dialogueHeld, setDialogueHeld] = useState<ReadonlySet<string>>(() => new Set());
   // A waiting character, clicked, brings its request to the front of the box instead of opening its details.
+  // Needs-you with nothing the box can answer (no parked call) opens the details, so the click is never dead.
   const selectSprite = (id: string) => {
-    if (dialogue && agentsById.get(id)?.state === 'needs-you') {
+    if (dialogue && agentsById.get(id)?.state === 'needs-you' && dialogueHeld.has(id)) {
       setDialogueFront(id);
       setDialogueFocus(value => value + 1);
     } else onSelect(id);
@@ -1010,6 +1023,7 @@ export function SceneStage({
             portraitOf={id => artOf(id, 'needs-you')}
             frontKey={dialogueFront}
             onFrontChange={setDialogueFront}
+            onHeldChange={setDialogueHeld}
             onOpenDetails={onSelect}
             focusRequest={dialogueFocus + (needsYouFocusRequest ?? 0)}
             look={mode === 'dark' ? 'wood' : 'parchment'}
