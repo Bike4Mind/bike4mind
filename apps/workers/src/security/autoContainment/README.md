@@ -47,8 +47,8 @@ it already contained. A Contain with no eligible account (admins, deleted users)
 
 ## Link rules
 
-When the model abstains on a graduated decision (unknown, stale, not abuse, or below the tier's
-`minConfidence`), deterministic rules in `linkRules.ts` may decide Limit or Hold signup grant instead,
+When the model does not act (unknown, stale, not abuse, or below `minConfidence`), on a graduated or a
+Contain detection, deterministic rules in `linkRules.ts` may decide Limit or Hold signup grant instead,
 under the same mode, tier, review-only, verdict, account-count and rollout gates. Facts are loaded
 by `packages/server-utils/src/security/autoContainment/linkRuleFacts.ts`, failing closed per fact.
 Paying and partner-domain accounts are never touched, and a rule never decides Contain. A rule's tier is
