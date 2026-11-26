@@ -50,6 +50,7 @@ function callDuration(call: RecentCall): string {
 
 function callCaller(call: RecentCall): string {
   if (call.byRecipient) return 'A recipient';
+  if (call.surface === 'test') return 'You, a test on the server';
   if (!call.apiKey) return 'You';
   return call.apiKey.name === null ? 'You, with a deleted API key' : `You, with API key "${call.apiKey.name}"`;
 }
@@ -342,6 +343,9 @@ export function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
   return (
     <Stack spacing={0.5} data-testid="python-function-calls">
       <Typography level="title-sm">Calls in the last 30 days</Typography>
+      <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-calls-note">
+        Call function on the Function tab runs in your browser and is not listed here.
+      </Typography>
       {isError && (
         <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
           The calls could not be loaded.
@@ -353,7 +357,7 @@ export function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
             {data.total === 0 ? 'No calls.' : `${data.total} ${data.total === 1 ? 'call' : 'calls'}: ${counts}.`}
           </Typography>
           {data.recent.length > 0 && (
-            <Table size="sm" data-testid="python-function-calls-recent">
+            <Table size="sm" sx={{ tableLayout: 'auto' }} data-testid="python-function-calls-recent">
               <thead>
                 <tr>
                   <th>Time</th>

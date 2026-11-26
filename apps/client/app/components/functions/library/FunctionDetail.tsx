@@ -81,14 +81,19 @@ function OwnFunctionDetail({ fn }: { fn: ICallableFunctionPublic }) {
         )}
       </Section>
       <CallsBlock tool={fn} />
-      <Link
-        component={RouterLink}
-        to={`/artifacts/${fn.pin.artifactId}`}
-        level="body-sm"
-        data-testid="function-detail-artifact-link"
-      >
-        Open its artifact to edit, test, promote, or share it
-      </Link>
+      <Stack spacing={0.25} alignItems="flex-start">
+        <Link
+          component={RouterLink}
+          to={`/artifacts/${fn.pin.artifactId}`}
+          level="body-sm"
+          data-testid="function-detail-artifact-link"
+        >
+          Open its artifact
+        </Link>
+        <Typography level="body-xs" textColor="text.secondary" data-testid="function-detail-artifact-note">
+          To edit, promote, or share it, open the artifact in the chat it was made in.
+        </Typography>
+      </Stack>
     </Stack>
   );
 }

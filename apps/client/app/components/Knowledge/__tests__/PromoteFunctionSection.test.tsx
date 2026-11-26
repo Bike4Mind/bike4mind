@@ -255,8 +255,14 @@ describe('PromoteFunctionSection', () => {
     expect(screen.getByTestId('python-function-calls-total').textContent).toBe('3 calls: Returned 2, Timed out 1.');
     const rows = screen.getAllByTestId('python-function-call-row');
     expect(rows.map(row => within(row).getAllByRole('cell')[1]!.textContent)).toEqual(['Returned', 'Timed out']);
-    expect(rows.map(row => within(row).getAllByRole('cell')[2]!.textContent)).toEqual(['A recipient', 'You']);
+    expect(rows.map(row => within(row).getAllByRole('cell')[2]!.textContent)).toEqual([
+      'A recipient',
+      'You, a test on the server',
+    ]);
     expect(rows[0]!.textContent).toContain('2026');
+    expect(screen.getByTestId('python-function-calls-note').textContent).toBe(
+      'Call function on the Function tab runs in your browser and is not listed here.'
+    );
   });
 
   it('shows the promotion that ran, how long it took, and the API key the owner called with, never a recipient', () => {

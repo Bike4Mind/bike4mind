@@ -129,6 +129,9 @@ describe('FunctionDetail', () => {
     expect(screen.getByTestId('python-function-calls')).toBeTruthy();
     expect(h.callsFor).toHaveBeenCalledWith('fn-own');
     expect(screen.getByTestId('function-detail-artifact-link').getAttribute('href')).toBe('/artifacts/artifact-1');
+    expect(screen.getByTestId('function-detail-artifact-note').textContent).toBe(
+      'To edit, promote, or share it, open the artifact in the chat it was made in.'
+    );
   });
 
   it('shows a recipient the review, never the source, the artifact, or a data or source link', () => {
