@@ -68,6 +68,9 @@ OverwatchRawEventSchema.index(
   { productId: 1, timestamp: -1 },
   { name: OVERWATCH_RAW_EVENT_CREDITED_INDEX, partialFilterExpression: { 'metadata.attribution': 'self-reported' } }
 );
+// Account erasure deletes a person's events by pseudonym (server-utils eraseProductAnalyticsEvents).
+// Pre-built by 20261124180550_ensure-overwatch-user-id-indexes.
+OverwatchRawEventSchema.index({ userId: 1 });
 // TTL: auto-delete raw events after 90 days
 OverwatchRawEventSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 });
 

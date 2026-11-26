@@ -16,6 +16,7 @@ import { withdrawAuthorListings } from '../skillMarket/market';
 import { decryptStoredToken, revokeDriveGrant } from '../integrations/google/drive/common';
 import { flagConnectionsStoppedByDisconnect } from '../integrations/google/drive/flagConnectionsStoppedByDisconnect';
 import { revokeAtlassianGrant } from '../integrations/jira/revokeAtlassianGrant';
+import { eraseProductAnalyticsEvents } from '../analytics/eraseProductAnalyticsEvents';
 
 interface MinimalLogger {
   info: (msg: string) => void;
@@ -47,6 +48,7 @@ export const PURGED_USER_DATA: readonly string[] = [
   'Published pages',
   'Embedded chat conversations',
   'Integration requests',
+  'Product usage analytics recorded for your account',
   'Skill Market listings (copies others already imported stay with them)',
 ];
 
@@ -150,6 +152,18 @@ export async function purgeDeletedUserData(
     logger.info(`Removed deleted user ${userId} from ${changed} evaluation set(s)`);
   } catch (err) {
     logger.error(`Failed to remove deleted user ${userId} from evaluation sets: ${String(err)}`);
+  }
+
+  // The account_deleted event hardDeleteUser sends after this purge is kept: it is the account's churn record.
+  try {
+    const erased = await eraseProductAnalyticsEvents(userId);
+    if (erased) {
+      logger.info(
+        `Deleted ${erased.events} analytics event(s), ${erased.userDays} active day(s) and ${erased.firstSeen} first-seen marker(s) of deleted user ${userId}`
+      );
+    }
+  } catch (err) {
+    logger.error(`Failed to delete analytics events for deleted user ${userId}: ${String(err)}`);
   }
 
   // Last: the revokes call out to the providers, and a slow provider must not cost the local steps above.

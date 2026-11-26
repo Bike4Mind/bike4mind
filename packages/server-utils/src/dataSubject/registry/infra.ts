@@ -519,19 +519,19 @@ export const infraHolders = {
   // The event `userId` is an HMAC of the Bike4Mind user id under a server-side salt (`pseudonymizeUserId`), not the id.
   OverwatchRawEvent: {
     kind: 'pseudonymous',
-    note: 'Product analytics event keyed by a salted HMAC of the user id; kept for retention and funnel history.',
+    note: 'Product analytics event keyed by a salted HMAC of the user id; account erasure deletes it (eraseProductAnalyticsEvents).',
     unrelatedPaths: ['userId'],
   },
   OverwatchRollup: { kind: 'noUserData', note: 'Daily active-user counts per product.' },
   OverwatchSeenEvent: { kind: 'noUserData', note: 'Event-id dedupe marker.' },
   OverwatchUserDay: {
     kind: 'pseudonymous',
-    note: 'Daily active marker keyed by a salted HMAC of the user id; kept for retention history.',
+    note: 'Daily active marker keyed by a salted HMAC of the user id; account erasure deletes it (eraseProductAnalyticsEvents).',
     unrelatedPaths: ['userId'],
   },
   OverwatchUserFirstSeen: {
     kind: 'pseudonymous',
-    note: 'First-seen marker keyed by a salted HMAC of the user id; kept for retention history.',
+    note: 'First-seen marker keyed by a salted HMAC of the user id; account erasure deletes it (eraseProductAnalyticsEvents).',
     unrelatedPaths: ['userId'],
   },
   QaRun: { kind: 'noUserData', note: 'CI test run summary.' },

@@ -15,6 +15,7 @@ const {
   removeFromWatchesMock,
   removeFromEvalSetsMock,
   deleteLimitEventsMock,
+  eraseAnalyticsMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
@@ -30,6 +31,7 @@ const {
   removeFromWatchesMock: vi.fn(),
   removeFromEvalSetsMock: vi.fn(),
   deleteLimitEventsMock: vi.fn(),
+  eraseAnalyticsMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -47,6 +49,7 @@ vi.mock('../auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retai
 vi.mock('./publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: purgePublishedMock,
 }));
+vi.mock('../analytics/eraseProductAnalyticsEvents', () => ({ eraseProductAnalyticsEvents: eraseAnalyticsMock }));
 vi.mock('../skillMarket/market', () => ({ withdrawAuthorListings: withdrawListingsMock }));
 vi.mock('../integrations/google/drive/common', () => ({
   revokeDriveGrant: revokeDriveMock,
@@ -74,6 +77,7 @@ beforeEach(() => {
   removeFromWatchesMock.mockReset().mockResolvedValue(undefined);
   removeFromEvalSetsMock.mockReset().mockResolvedValue(0);
   retainTracesMock.mockReset().mockResolvedValue(0);
+  eraseAnalyticsMock.mockReset().mockResolvedValue({ events: 0, userDays: 0, firstSeen: 0 });
   revokeDriveMock.mockReset().mockResolvedValue('revoked');
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
   flagConnectionsMock.mockReset().mockResolvedValue({ affectedOrgConnections: 0, affectedPersonalConnections: 0 });
@@ -94,7 +98,26 @@ describe('purgeDeletedUserData', () => {
     expect(removeFromWatchesMock).toHaveBeenCalledWith('u1');
     expect(removeFromEvalSetsMock).toHaveBeenCalledWith('u1');
     expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
+    expect(eraseAnalyticsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs instead of throwing when deleting the analytics events fails, and still revokes the grants', async () => {
+    eraseAnalyticsMock.mockRejectedValue(new Error('analytics down'));
+
+    await expect(
+      purgeDeletedUserData('u1', {
+        deletedBy: 'admin1',
+        logger,
+        integrationGrants: {
+          googleDrive: { accessToken: 'a', refreshToken: 'r', expiresAt: new Date() },
+          atlassianConnect: null,
+        },
+      })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('analytics events'));
+    expect(revokeDriveMock).toHaveBeenCalledWith('r', 'deleted user u1');
   });
 
   it('logs instead of throwing when removing the user from shadow detections fails', async () => {
