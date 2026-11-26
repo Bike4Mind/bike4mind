@@ -1,6 +1,7 @@
 import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
 import {
   BadRequestError,
+  EmptyConversationError,
   ChatModels,
   IMessage,
   ImageModels,
@@ -2239,7 +2240,7 @@ export class OpenAIBackend implements ICompletionBackend {
             message.content.some(block => block.type !== 'text' || Boolean(block.text?.trim()))
     );
     if (!hasEffectiveMessage) {
-      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
+      throw new EmptyConversationError();
     }
     const convertedMessages = convertMessagesToOpenAIFormat(nonSystemMessages);
     const formattedMessages = convertedMessages as OpenAI.ChatCompletionMessageParam[];
