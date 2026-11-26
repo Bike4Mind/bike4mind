@@ -380,7 +380,6 @@ describe('the credits orb above the rail avatar', () => {
 
   it('adds no credit reads while idle: only the mount read, however long the window sits open', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(PINNED_NOW);
     try {
       const bridge = creditsBridge(4000, 1000);
       const getProfile = vi.fn(bridge.account.getProfile);
