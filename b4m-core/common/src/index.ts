@@ -30,6 +30,7 @@ export * from './claudeModelId';
 export * from './claudeToolCapabilities';
 export * from './deferredTools';
 export * from './promptCache';
+export * from './openAiCacheWrite';
 export * from './successorCostDelta';
 export * from './pricing';
 export * from './realtimeVoicePricing';
