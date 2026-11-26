@@ -48,22 +48,22 @@ import { ARTIFACT_MODULE_RUNTIME_FACTORY_SRC } from '@client/app/utils/reactArti
 function buildReactSandboxCsp(req: NextApiRequest): string {
   const assets = buildSandboxAssetOrigins(req.headers ?? {});
   return [
-  "default-src 'none'",
-  // 'unsafe-eval' lives HERE and only here - never on the app origin (proxy.ts).
-  `script-src 'unsafe-inline' 'unsafe-eval' ${SANDBOX_SCRIPT_HOSTS.join(' ')} blob:`,
-  // Images and media load from the app host and CDN only; stylesheets from Google Fonts only.
-  "style-src 'unsafe-inline' https://fonts.googleapis.com",
-  `img-src data: blob: ${assets}`,
-  'font-src data: https://fonts.gstatic.com https://fonts.googleapis.com',
-  "connect-src 'none'",
-  `media-src blob: data: ${assets}`,
-  'worker-src blob:',
-  "object-src 'none'",
-  "frame-src 'none'",
-  "frame-ancestors 'self'",
-  "base-uri 'none'",
-  "form-action 'none'",
-].join('; ');
+    "default-src 'none'",
+    // 'unsafe-eval' lives HERE and only here - never on the app origin (proxy.ts).
+    `script-src 'unsafe-inline' 'unsafe-eval' ${SANDBOX_SCRIPT_HOSTS.join(' ')} blob:`,
+    // Images and media load from the app host and CDN only; stylesheets from Google Fonts only.
+    "style-src 'unsafe-inline' https://fonts.googleapis.com",
+    `img-src data: blob: ${assets}`,
+    'font-src data: https://fonts.gstatic.com https://fonts.googleapis.com',
+    "connect-src 'none'",
+    `media-src blob: data: ${assets}`,
+    'worker-src blob:',
+    "object-src 'none'",
+    "frame-src 'none'",
+    "frame-ancestors 'self'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join('; ');
 }
 
 const BASE_SCRIPT_TAGS = BASE_SANDBOX_SCRIPTS.map(src => `<script src="${src}"></script>`).join('\n  ');
