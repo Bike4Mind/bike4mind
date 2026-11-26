@@ -62,7 +62,12 @@ struct RootView: View {
     }
     .onChange(of: scenePhase, initial: true) { _, phase in
       // Lock on the way out so the app-switcher snapshot never shows content.
-      if phase == .background { auth.lockIfNeeded() }
+      if phase == .background {
+        if auth.state == .signedIn || auth.state == .locked {
+          services.busyBlockRefresh.scheduleNext(after: services.busyBlockSyncer.lastOutcome)
+        }
+        auth.lockIfNeeded()
+      }
       guard phase == .active else { return }
       appDidBecomeActive()
     }
@@ -133,6 +138,7 @@ struct RootView: View {
       // First sign-in (or a restored launch) is the moment to ask for quiet push authorization.
       Task { await services.push.sessionDidStart() }
       services.questActivities.sessionDidStart()
+      services.busyBlockSyncer.sessionDidStart()
     }
     if plan.releasesPendingRoute {
       services.navigator.releasePendingRoute()
@@ -149,6 +155,7 @@ struct RootView: View {
   private func endSession() {
     hasShownShell = false
     services.accountStatus.reset()
+    services.busyBlockRefresh.cancelPending()
     services.credits.invalidate()
     // The profile belongs to the account that fetched it; the next sign-in must not see it.
     services.accountProfiles.invalidate()

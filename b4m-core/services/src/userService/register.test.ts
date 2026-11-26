@@ -11,6 +11,17 @@ import {
 import * as creditService from '../creditService';
 import { callerTransactionSession } from './callerTransaction';
 
+// Lets a test pin the release outcome; every other test runs the real release.
+const releaseOverride = vi.hoisted(() => ({ result: null as null | Record<string, unknown> }));
+vi.mock('./freeCredits', async importOriginal => {
+  const actual = await importOriginal<typeof import('./freeCredits')>();
+  return {
+    ...actual,
+    releasePendingFreeCredits: (...args: Parameters<typeof actual.releasePendingFreeCredits>) =>
+      releaseOverride.result ? Promise.resolve(releaseOverride.result) : actual.releasePendingFreeCredits(...args),
+  };
+});
+
 vi.mock('./callerTransaction', async importOriginal => ({
   ...(await importOriginal<typeof import('./callerTransaction')>()),
   callerTransactionSession: vi.fn(() => undefined),
@@ -111,6 +122,68 @@ describe('registerUser', () => {
     const result = await registerUser(baseParams, mockAdapters);
     expect(result.storageLimit).toBe(1000);
     expect(result.storageLimitOverride).toBeNull();
+  });
+
+  it.each([
+    ['username', { username: baseParams.username, email: 'other@example.com' }],
+    ['email', { username: 'someone-else', email: baseParams.email }],
+  ])('names the taken %s', async (field, existing) => {
+    mockAdapters.db.users.findByUsernameOrEmail.mockResolvedValue(existing);
+    await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow(`This ${field} is already registered`);
+  });
+
+  it('treats an unreadable open-registration setting as closed', async () => {
+    mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) =>
+      name === 'allowOpenRegistration' ? { settingValue: { not: 'a flag' } } : null
+    );
+    await expect(registerUser({ ...baseParams, inviteCode: undefined }, mockAdapters)).rejects.toThrow(
+      'An invite code is required to register'
+    );
+  });
+
+  it('keeps the invite allocation when no subscriber matches the invite email', async () => {
+    mockInvite.email = baseParams.email;
+    mockInvite.startingStorage = 2500;
+    mockAdapters.db.subscribers = { findByEmail: vi.fn().mockResolvedValue(null) };
+    const result = await registerUser(baseParams, mockAdapters);
+    expect(result.storageLimitOverride).toBe(2500);
+  });
+
+  it('takes the credits of a matched subscriber', async () => {
+    mockInvite.email = baseParams.email;
+    mockInvite.startingCredits = 5;
+    mockAdapters.db.subscribers = {
+      findByEmail: vi.fn().mockResolvedValue({ inviteCode: baseParams.inviteCode, startingCredits: 300 }),
+    };
+    await registerUser(baseParams, mockAdapters);
+    expect(mockAdapters.db.users.create.mock.calls[0][0].pendingCreditGrant).toBe(300);
+  });
+
+  it('stores the signup network it is given', async () => {
+    const signupMeta = { ip: '203.0.113.7', capturedAt: new Date() };
+    await registerUser(baseParams, { ...mockAdapters, signupMeta });
+    expect(mockAdapters.db.users.create.mock.calls[0][0].signupMeta).toBe(signupMeta);
+  });
+
+  it('rethrows a failed invite redemption when no package redemption needs releasing', async () => {
+    mockAdapters.db.registrationInvites.update.mockRejectedValue(new Error('write failed'));
+    await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('write failed');
+  });
+
+  it('adds the invite code tags to the default tags', async () => {
+    mockInvite.tags = ['invite-tag', 'tag1'];
+    const result = await registerUser(baseParams, mockAdapters);
+    expect(result.tags).toEqual(expect.arrayContaining(['tag1', 'tag2', 'invite-tag']));
+    expect(result.tags!.filter(t => t === 'tag1')).toHaveLength(1);
+  });
+
+  it('keeps the invite allocation when the subscriber lookup fails', async () => {
+    mockInvite.email = baseParams.email;
+    mockInvite.startingStorage = 2500;
+    mockAdapters.db.subscribers = { findByEmail: vi.fn().mockRejectedValue(new Error('db down')) };
+    const result = await registerUser(baseParams, mockAdapters);
+    expect(result.storageLimitOverride).toBe(2500);
+    expect(mockAdapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('subscriber allocations'));
   });
 
   it('registers a new user with valid data and invite, deferring credits until email is proven', async () => {
@@ -241,6 +314,22 @@ describe('registerUser', () => {
       grantPackages.findById.mockResolvedValue(null);
       await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Invalid invite code');
       expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a package invite when no package lookup is available', async () => {
+      delete mockAdapters.db.grantPackages;
+      await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Invalid invite code');
+    });
+
+    it('rejects an invite whose package has expired', async () => {
+      grantPackages.findById.mockResolvedValue({ ...pkg, expiresAt: new Date(Date.now() - 1000) });
+      await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('expired');
+    });
+
+    it('adds no tags for a package without any', async () => {
+      grantPackages.findById.mockResolvedValue({ ...pkg, tags: undefined });
+      await registerUser(baseParams, mockAdapters);
+      expect(mockAdapters.db.users.create.mock.calls[0][0].tags).not.toContain('pkg-tag');
     });
 
     it('rejects an invite whose package was deactivated', async () => {
@@ -1110,6 +1199,28 @@ describe('registerViaOTC', () => {
     expect(mockAdapters.db.registrationInvites.findByCode).not.toHaveBeenCalled();
   });
 
+  it('tags a created account that came back without tags', async () => {
+    mockAdapters.db.users.create.mockImplementation(async (user: Record<string, unknown>) => ({
+      ...user,
+      id: 'newUserId',
+      tags: null,
+    }));
+    mockAdapters.db.creditTransactions = undefined;
+    const result = await registerViaOTC(otcParams, mockAdapters);
+    expect(result.tags).toEqual(['Customer']);
+  });
+
+  it('keeps the tags when a released grant patches none', async () => {
+    releaseOverride.result = { released: true, creditsGranted: 0, currentCredits: null, patch: {} };
+    try {
+      const result = await registerViaOTC(otcParams, mockAdapters);
+      expect(result.tags).toEqual(expect.arrayContaining(['Customer']));
+      expect(result.pendingCreditGrant).toBeNull();
+    } finally {
+      releaseOverride.result = null;
+    }
+  });
+
   it('keeps the pending tag (still verifies) when the credit grant throws', async () => {
     mockAddCredits.mockRejectedValueOnce(new Error('credit service down'));
     const result = await registerViaOTC(otcParams, mockAdapters);
@@ -1191,6 +1302,7 @@ describe('registerViaOTC', () => {
     const taggedUpdate = () =>
       mockAdapters.db.users.update.mock.calls.map((call: [{ tags?: string[] }]) => call[0]).find(u => u.tags);
     const sourceTagsOf = () => (taggedUpdate().tags as string[]).filter(t => t.startsWith('source:'));
+    const createdSignupClientId = () => mockAdapters.db.users.create.mock.calls[0][0].signupClientId;
 
     it('stamps source:<slug> for an active client and keeps it through the OTC tag rewrite', async () => {
       mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(activeClient) };
@@ -1198,6 +1310,13 @@ describe('registerViaOTC', () => {
       expect(mockAdapters.db.oauthClients.findByClientId).toHaveBeenCalledWith(activeClient.clientId);
       expect(sourceTagsOf()).toEqual(['source:acme_app']);
       expect(taggedUpdate().tags).toContain('Customer');
+      expect(createdSignupClientId()).toBe(activeClient.clientId);
+    });
+
+    it('records the stored client id, not the requested one', async () => {
+      mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(activeClient) };
+      await registerViaOTC({ ...otcParams, sourceClientId: 'b4m_spoofed_0a1b2c3d' }, mockAdapters);
+      expect(createdSignupClientId()).toBe(activeClient.clientId);
     });
 
     it('stamps nothing for an inactive client', async () => {
@@ -1206,12 +1325,14 @@ describe('registerViaOTC', () => {
       };
       await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
       expect(sourceTagsOf()).toEqual([]);
+      expect(createdSignupClientId()).toBeUndefined();
     });
 
     it('stamps nothing for an unknown client', async () => {
       mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(null) };
       await registerViaOTC({ ...otcParams, sourceClientId: 'b4m_nope_0a1b2c3d' }, mockAdapters);
       expect(sourceTagsOf()).toEqual([]);
+      expect(createdSignupClientId()).toBeUndefined();
     });
 
     it('skips the lookup when no client id is supplied', async () => {
@@ -1219,6 +1340,7 @@ describe('registerViaOTC', () => {
       await registerViaOTC(otcParams, mockAdapters);
       expect(mockAdapters.db.oauthClients.findByClientId).not.toHaveBeenCalled();
       expect(sourceTagsOf()).toEqual([]);
+      expect(createdSignupClientId()).toBeUndefined();
     });
 
     it('stamps nothing when the caller passes no client lookup', async () => {
@@ -1232,6 +1354,7 @@ describe('registerViaOTC', () => {
       expect(result).toBeDefined();
       expect(mockAdapters.db.users.create).toHaveBeenCalledTimes(1);
       expect(sourceTagsOf()).toEqual([]);
+      expect(createdSignupClientId()).toBeUndefined();
       expect(mockAdapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining(activeClient.clientId));
     });
   });

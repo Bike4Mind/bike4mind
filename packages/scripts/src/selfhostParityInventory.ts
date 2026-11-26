@@ -168,6 +168,7 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   },
   { shape: 'aws.s3.Bucket', reason: 'Storage only, no compute trigger.' },
   { shape: 'aws.s3.BucketPublicAccessBlock', reason: 'Storage access setting for the aws.s3.Bucket, no compute.' },
+  { shape: 'aws.s3.BucketCorsConfiguration', reason: 'Browser access setting for the aws.s3.Bucket, no compute.' },
   { shape: 'aws.s3.BucketPolicy', reason: 'IAM grant for the aws.s3.Bucket, no compute.' },
   { shape: 'sst.aws.Vpc', reason: 'Network plumbing.' },
   { shape: 'sst.aws.Cluster', reason: 'Container host for inventoried sst.aws.Service declarations.' },

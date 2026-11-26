@@ -7,6 +7,7 @@ export default defineConfig({
     ...sharedTest,
     globals: true,
     environment: 'node',
+    setupFiles: ['./src/__test__/setupKeyring.ts'],
     include: ['**/*.test.ts'],
     ...(process.env.REPO_TEST_LANE === 'repo'
       ? { include: ['**/*.repo.test.ts'] }

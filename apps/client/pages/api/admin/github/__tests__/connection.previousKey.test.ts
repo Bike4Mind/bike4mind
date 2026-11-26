@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
+import { encryptSecret, generateEncryptionKey, configureSecretsAtRest } from '@bike4mind/utils/security';
 
 type Route = (req: unknown, res: unknown) => unknown;
 
@@ -88,6 +88,7 @@ describe.each([
     const previousKey = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY_PREVIOUS = previousKey;
+    configureSecretsAtRest(h.config.SECRET_ENCRYPTION_KEY, h.config.SECRET_ENCRYPTION_KEY_PREVIOUS);
     const credentials = { ...spec.connection, [spec.credentialField]: encryptSecret(spec.plaintext, previousKey) };
     h.findSystemDefault.mockResolvedValue({ ...spec.connection, [spec.credentialField]: 'redacted' });
     h.findSystemDefaultWithCredentials.mockResolvedValue(credentials);

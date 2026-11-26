@@ -417,8 +417,6 @@ const SERVER_UTILS_BOUNDARY = {
 const localRuleSources = [
   './eslint-rules/no-raw-entity-response.mjs',
   './eslint-rules/no-raw-admin-joy.mjs',
-  './eslint-rules/admin-joy-legacy.mjs',
-  './eslint-rules/admin-joy-legacy-imports.mjs',
   './eslint-rules/no-content-in-log-message.mjs',
   './eslint-rules/no-workers-server-bridge.mjs',
   './eslint-rules/no-direct-decrypt-secret.mjs',

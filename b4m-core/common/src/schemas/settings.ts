@@ -64,6 +64,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema } from '../types/entities/SreTypes';
 import { DEFAULT_FEATURE_SPIKE_MULTIPLE } from '../types/entities/SpendExplorerTypes';
+import { CALLABLE_FUNCTION_DATA_LIMITS } from '../types/entities/CallableFunctionTypes';
 import {
   hasNestedSecretValue,
   isValidNestedSecretGroups,
@@ -344,6 +345,8 @@ export const SettingKeySchema = z.enum([
   'EnableCallableFunctionsMcp',
   'CallableFunctionTimeLimitSeconds',
   'CallableFunctionPendingCallLimit',
+  'CallableFunctionDataFileMaxMb',
+  'CallableFunctionDataTotalMaxMb',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -2697,6 +2700,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableCallableFunctionsMcp', order: 24 },
       { key: 'CallableFunctionTimeLimitSeconds', order: 24.5 },
       { key: 'CallableFunctionPendingCallLimit', order: 24.6 },
+      { key: 'CallableFunctionDataFileMaxMb', order: 24.7 },
+      { key: 'CallableFunctionDataTotalMaxMb', order: 24.8 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -3737,6 +3742,37 @@ export const settingsMap = {
     order: 24.6,
     dependsOn: 'EnableCallableFunctions',
     // Read through resolveCallableFunctionPendingCallLimit in packages/server-utils.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionDataFileMaxMb: makeNumberSetting({
+    key: 'CallableFunctionDataFileMaxMb',
+    name: 'Callable Functions: Largest Data File (MB)',
+    defaultValue: 100,
+    min: 1,
+    // The pin streams the file through the web API function in one request, which has 60 s; 512 MB leaves room at
+    // a conservative 20 MB/s for the pass and the server-side copy (packages/server-utils dataPins.ts).
+    max: 512,
+    int: true,
+    description:
+      'The largest file a person can pin to a saved function as data, in MB (at most 512). Checked when the file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.7,
+    dependsOn: 'EnableCallableFunctions',
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  CallableFunctionDataTotalMaxMb: makeNumberSetting({
+    key: 'CallableFunctionDataTotalMaxMb',
+    name: 'Callable Functions: Data Per Function (MB)',
+    defaultValue: CALLABLE_FUNCTION_DATA_LIMITS.defaultTotalMb,
+    min: 1,
+    max: CALLABLE_FUNCTION_DATA_LIMITS.cacheMb,
+    int: true,
+    description: `The most data, in MB, all the files pinned to one saved function can add up to (at most ${CALLABLE_FUNCTION_DATA_LIMITS.cacheMb}, the runtime's data cache). Checked when a file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.`,
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 24.8,
+    dependsOn: 'EnableCallableFunctions',
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   EnableAgents: makeBooleanSetting({

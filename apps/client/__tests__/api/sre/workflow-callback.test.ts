@@ -100,6 +100,9 @@ vi.mock('@bike4mind/observability', () => {
 
 // Import after mocks
 import handler from '../../../pages/api/sre/workflow-callback';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 function createMockReqRes(body: Record<string, unknown>, token = 'valid-token') {
   const req = {

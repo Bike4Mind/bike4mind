@@ -48,5 +48,7 @@ describe('FeedbackCreatedRangeDialog', () => {
     renderDialog({ createdFrom: '2026-10-07', createdTo: '2026-10-01' });
     expect(screen.getByText('Ends before it starts.')).toBeInTheDocument();
     expect(screen.getByTestId('feedback-created-range-apply-btn')).toBeDisabled();
+    expect(screen.getByTestId('feedback-created-range-to-input-root')).toHaveClass('MuiInput-colorDanger');
+    expect(screen.getByTestId('feedback-created-range-from-input-root')).not.toHaveClass('MuiInput-colorDanger');
   });
 });

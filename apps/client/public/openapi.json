@@ -382,7 +382,8 @@
               "timeout",
               "memory",
               "output_too_large",
-              "refused"
+              "refused",
+              "data_mismatch"
             ],
             "description": "How a finished call ended: `ok` carries `output`; any other outcome carries `error`."
           },
@@ -37939,7 +37940,8 @@
               "timeout",
               "memory",
               "output_too_large",
-              "refused"
+              "refused",
+              "data_mismatch"
             ],
             "description": "How the call ended."
           },
@@ -38324,7 +38326,8 @@
               "timeout",
               "memory",
               "output_too_large",
-              "refused"
+              "refused",
+              "data_mismatch"
             ],
             "description": "How a finished call ended: `ok` carries `output`; any other outcome carries `error`."
           },

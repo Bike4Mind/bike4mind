@@ -11,6 +11,7 @@ import {
   type CallableFunctionCreateInput,
   type CallableFunctionOwner,
   type FunctionContract,
+  type ICallableFunctionDataPin,
 } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { CallableFunction, CallableFunctionOwnerError, callableFunctionRepository } from './CallableFunctionModel';
@@ -68,6 +69,14 @@ const fn = (overrides: Partial<CallableFunctionCreateInput> = {}): CallableFunct
   contract: parsedContract(),
   ...overrides,
 });
+
+const DATA_PIN: ICallableFunctionDataPin = {
+  name: 'points.csv',
+  sha256: 'a'.repeat(64),
+  bytes: 12,
+  sourceFileId: 'file-1',
+  pinnedAt: new Date(),
+};
 
 describe('CallableFunctionModel', () => {
   let mongoServer: MongoMemoryServer;
@@ -320,6 +329,59 @@ describe('CallableFunctionModel', () => {
           description: RAW_CONTRACT.description,
         })
       ).rejects.toThrow(/contentHash/);
+    });
+
+    it('keeps the data pins', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      const pinned = await callableFunctionRepository.setDataPins(created.id, OWNER, { updatedAt: created.updatedAt }, [
+        DATA_PIN,
+      ]);
+      expect(pinned?.pin.dataPins).toHaveLength(1);
+      const repinned = await callableFunctionRepository.repin(created.id, OWNER, 1, {
+        pin: nextPin(),
+        contract: parsedContract(),
+        description: RAW_CONTRACT.description,
+      });
+      expect(repinned?.pin.version).toBe(2);
+      expect(repinned?.pin.dataPins).toMatchObject([{ name: 'points.csv', sha256: DATA_PIN.sha256, bytes: 12 }]);
+    });
+  });
+
+  describe('setDataPins', () => {
+    it('returns a live function to draft and drops its promoted runtime and label', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      const live = await callableFunctionRepository.promote(
+        created.id,
+        OWNER,
+        { updatedAt: created.updatedAt },
+        {
+          seq: 1,
+          runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
+          lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+          trustLabel: 'verified',
+          contract: created.contract,
+        }
+      );
+      expect(live).toMatchObject({ state: 'live', trustLabel: 'verified', pin: { seq: 1 } });
+      const pinned = await callableFunctionRepository.setDataPins(created.id, OWNER, { updatedAt: live!.updatedAt }, [
+        DATA_PIN,
+      ]);
+      expect(pinned?.state).toBe('draft');
+      expect(pinned?.trustLabel).toBeUndefined();
+      expect(pinned?.lastServerRun).toBeUndefined();
+      expect(pinned?.pin.seq).toBeUndefined();
+      expect(pinned?.pin.runtime).toBeUndefined();
+      expect(pinned?.pin.dataPins).toHaveLength(1);
+    });
+
+    it('is null when stale or for another owner, and writes nothing', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      const expected = { updatedAt: created.updatedAt };
+      expect(await callableFunctionRepository.setDataPins(created.id, OTHER, expected, [DATA_PIN])).toBeNull();
+      expect(
+        await callableFunctionRepository.setDataPins(created.id, OWNER, { updatedAt: new Date(0) }, [DATA_PIN])
+      ).toBeNull();
+      expect((await callableFunctionRepository.findByIdForOwner(created.id, OWNER))?.pin.dataPins ?? []).toEqual([]);
     });
   });
 

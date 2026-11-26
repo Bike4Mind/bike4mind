@@ -9,6 +9,7 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   bedrockClientConfig,
   estimateStreamedOutputTokens,
+  isEmptyConversationError,
   isRetryableError,
   TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
@@ -1181,6 +1182,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // error logs reach a shared alert channel and must never include prompt text.
         if (loggedErrors.has(error)) throw error;
         loggedErrors.add(error);
+        // Thrown by getPayload before any provider call: caller input, not a provider fault, and the
+        // caller settles it (ChatCompletionProcess warns once), so it must not page here.
+        if (isEmptyConversationError(error)) {
+          Logger.globalInstance.warn(`[BaseBedrockBackend] Refused an empty conversation for ${model}`);
+          throw error;
+        }
         const { $fault, $metadata, $retryable } = error as Error & {
           $fault?: unknown;
           $metadata?: unknown;

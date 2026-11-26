@@ -20,6 +20,7 @@ export * from '@bike4mind/db-core';
 // Shadows db-core's connectDB (explicit exports beat star re-exports): every
 // app-layer connect also bootstraps the model price catalog exactly once.
 export { connectDB, whenCatalogSeeded } from './priceCatalogBootstrap';
+export { ensureKeyringLoaded, loadKeyringInBackground } from './security/loadKeyringFromResource';
 export * from './modelListRevision';
 export * from './utils/ability';
 export * from './utils/organizationSharingPolicy';

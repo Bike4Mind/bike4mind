@@ -760,6 +760,11 @@ export interface IUser extends ICreditHolder {
   referralCode?: string | null;
   /** The invite this account signed up through; absent for uninvited and pre-existing accounts. */
   signupInvite?: SignupInvite;
+  /**
+   * The active OAuth client whose /oauth/authorize flow this account was created in. Written once at
+   * creation (immutable in UserModel); null for every other signup and for pre-existing accounts.
+   */
+  signupClientId?: string | null;
 
   /**
    * This field is used to store the current selected organization ID.
