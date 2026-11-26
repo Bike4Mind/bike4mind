@@ -247,8 +247,8 @@ const toolHandles = new WeakMap<McpServer, Map<string, RegisteredTool>>();
 
 /**
  * Stops listing the tools the API key's scopes do not cover, so a functions-only key sees the function tools alone.
- * Scopes come from the key list, which only a key that may manage keys can read: when they cannot be read, or the
- * key cannot be told apart from another, every tool stays listed and each route still enforces its own scope.
+ * When the scopes cannot be read, or the key cannot be told apart from another, every tool stays listed and each
+ * route still enforces its own scope.
  */
 export async function restrictToolsToKeyScopes(server: McpServer, client: B4mApiClient): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
