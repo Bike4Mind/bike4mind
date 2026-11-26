@@ -522,7 +522,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
             flexWrap: 'wrap',
             gap: 1,
             minWidth: 0,
-            flex: { xs: '1 1 100%', sm: '1 1 auto' },
+            flex: { xs: '1 1 100%', sm: '1 1 0' },
             order: { xs: 1, sm: 0 },
             justifyContent: { xs: 'flex-start', sm: 'center' },
             '& .MuiChip-root': { flexShrink: 0 },
@@ -560,7 +560,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
           )}
         </Stack>
 
-        <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+        <Stack data-testid="email-job-detail-actions" direction="row" spacing={1} sx={{ flexShrink: 0 }}>
           {canEdit && (
             <Button
               data-testid="email-job-detail-save-btn"

@@ -323,8 +323,10 @@ describe('EmailJobDetail', () => {
 
     expect(getComputedStyle(screen.getByTestId('email-job-detail-header')).flexWrap).toBe('wrap');
     expect(declared('email-job-detail-title', '0px')).toMatchObject({ order: '1', 'flex-basis': '100%' });
-    expect(declared('email-job-detail-title', '600px')).toMatchObject({ order: '0', 'flex-basis': 'auto' });
-    expect(getComputedStyle(screen.getByTestId('email-job-detail-save-btn').parentElement!).flexShrink).toBe('0');
+    const wide = declared('email-job-detail-title', '600px');
+    expect(wide.order).toBe('0');
+    expect(wide['flex-basis']).toMatch(/^0(px|%)?$/);
+    expect(getComputedStyle(screen.getByTestId('email-job-detail-actions')).flexShrink).toBe('0');
   });
 
   it('lets the preview header wrap so the recipient select cannot force a sideways scroll', () => {
