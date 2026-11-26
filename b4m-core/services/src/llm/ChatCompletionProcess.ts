@@ -168,6 +168,7 @@ import {
   isLlmTimeoutError,
   isKeepaliveStreamTimeout,
   isOutputBudgetExhaustedError,
+  isHiddenReasoningOnlyEmptyError,
   isStreamEndedWithoutFinishError,
   type OutputBudgetExhaustedError,
   type ICompletionOptionTools,
@@ -423,6 +424,10 @@ export const MODEL_UNAVAILABLE_ERROR_REPLY =
  */
 export const OUTPUT_BUDGET_EXHAUSTED_REPLY =
   'The model used its whole output budget reasoning before it could answer. Raise the max tokens setting (max_tokens in the API), or use the model default.';
+
+/** Final reply when the model ended its turn after hidden reasoning only, through its retry and any fallback. */
+export const HIDDEN_REASONING_ONLY_EMPTY_REPLY =
+  'The model finished thinking but returned no answer. Please try sending your message again.';
 
 /** Same failure when the server chose the budget (voice, or an API call that sent no `max_tokens`): nothing for the user to raise. */
 export const OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY =
@@ -5721,6 +5726,7 @@ export class ChatCompletionProcess {
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
       let streamEndedWithoutFinishRetried = false;
+      let hiddenReasoningOnlyRetried = false;
       // A timed-out stream rejects before reporting usage and the next attempt resets
       // actualTokenUsage, so the usage the provider billed for it is recorded here as COGS only:
       // when the loop moves on, and when the timeout ends the turn (nothing else settles it then).
@@ -6243,7 +6249,8 @@ export class ChatCompletionProcess {
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
               lastError instanceof ResponsesStreamTruncatedError ||
-              isOutputBudgetExhaustedError(lastError)
+              isOutputBudgetExhaustedError(lastError) ||
+              isHiddenReasoningOnlyEmptyError(lastError)
             ) {
               logger.warn(lastError);
             } else if (isProviderSpendLimitError(lastError)) {
@@ -6442,6 +6449,32 @@ export class ChatCompletionProcess {
 
               turnTiming.recordRetry(lastError, EMPTY_STREAM_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, EMPTY_STREAM_RETRY_DELAY_MS + jitter));
+
+              resetStreamStateForRetry();
+
+              continue;
+            }
+
+            // A turn that ended normally after hidden reasoning only: usually a one-off sampling
+            // outcome, so one same-model retry, then the fallback chain. The discarded attempt is not
+            // settled, so the retry is not billed twice.
+            if (isHiddenReasoningOnlyEmptyError(lastError) && !hiddenReasoningOnlyRetried) {
+              hiddenReasoningOnlyRetried = true;
+              const HIDDEN_REASONING_RETRY_DELAY_MS = 1000;
+              const jitter = Math.floor(Math.random() * 500);
+
+              logger.info(
+                `[Hidden Reasoning Retry] ${currentModel.id} returned only hidden reasoning, retrying once in ${HIDDEN_REASONING_RETRY_DELAY_MS + jitter}ms`
+              );
+
+              this.sendStatusUpdate(quest, 'The model returned no answer, retrying...', { statusAt: new Date() });
+
+              turnTiming.recordRetry(
+                lastError,
+                HIDDEN_REASONING_RETRY_DELAY_MS + jitter,
+                this.ledgerModel(currentModel).id
+              );
+              await new Promise(resolve => setTimeout(resolve, HIDDEN_REASONING_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
 
@@ -8084,6 +8117,15 @@ export class ChatCompletionProcess {
         setErrorReply(
           (params.max_tokens ?? 0) > 0 ? OUTPUT_BUDGET_EXHAUSTED_REPLY : OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY
         );
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (isHiddenReasoningOnlyEmptyError(err)) {
+        // Error, not warn: this survived a same-model retry and the fallback chain. Each earlier
+        // occurrence was warned in the attempt loop.
+        logger.error(`[Hidden Reasoning Only] Quest ${questId}: ${err.message}`);
+        setErrorReply(HIDDEN_REASONING_ONLY_EMPTY_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

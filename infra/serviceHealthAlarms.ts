@@ -35,7 +35,12 @@ import {
 } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
-const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
+export const isServiceHealthMonitoredStage = _isMonitoredStage(
+  $app.stage,
+  MONITORED_STAGES,
+  process.env.ENABLE_MONITORING
+);
+const isMonitoredStage = isServiceHealthMonitoredStage;
 
 /**
  * Shared SNS topic for every long-running-service health signal. Subscribe once to
@@ -58,6 +63,9 @@ export const serviceHealthAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('
  * ignore the one that matters. Both entries below satisfy it: subscriberFanout takes SST's
  * default min=max=1, and chatCompletion is min 2 in production and min 1 elsewhere. A service
  * that can reach zero needs a different signal, not this one.
+ *
+ * Preview stages scale both services to zero on a schedule (infra/previewSleep.ts). That module
+ * stands down on any stage this file monitors, so keep both gates on isServiceHealthMonitoredStage.
  */
 const MONITORED_SERVICES: (EcsServiceHealthAlarmDescriptor & { service: sst.aws.Service })[] = [
   {
