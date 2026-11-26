@@ -1,6 +1,7 @@
 import { Button, Stack, Typography } from '@mui/joy';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
 import { useTutorialsEnabled } from '@client/app/hooks/data/tutorials';
+import { closeHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { useTutorialPicker } from './tutorialPickerStore';
 
 /** The Help Center's way into the tutorials picker, to take a tour again or pick up one left part way. */
@@ -19,7 +20,11 @@ export function HelpTutorialsEntry() {
         size="sm"
         variant="soft"
         startDecorator={<SchoolOutlinedIcon fontSize="small" />}
-        onClick={() => openPicker(true)}
+        onClick={() => {
+          // The Help panel sits above every modal, so it makes way for the picker.
+          closeHelpPanel();
+          openPicker(true);
+        }}
         data-testid="help-open-tutorials"
       >
         Tutorials

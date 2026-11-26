@@ -25,6 +25,7 @@ vi.mock('@client/app/hooks/useChatInput', () => ({
 
 import { CORE_TUTORIALS_API_BASE } from '../hostBase';
 import { resetTutorialStores, tutorialStoreFor } from '../useTutorialStore';
+import { useTutorialPicker } from './tutorialPickerStore';
 import {
   RESUME_FAILED_NOTICE,
   RESUME_FELL_BACK_NOTICE,
@@ -82,6 +83,25 @@ describe('useCoreTutorialLauncher', () => {
     });
     expect(transport.start).toHaveBeenCalledTimes(1);
     expect(navigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: 'new' } });
+  });
+
+  it('marks a walk as launching from the click until the notebook opens', async () => {
+    let launchingDuringStart: boolean | undefined;
+    transport.start.mockImplementation(async () => {
+      launchingDuringStart = useTutorialPicker.getState().launching;
+      return started;
+    });
+    const launcher = renderLauncher();
+    await act(() => launcher.current.start('first-steps'));
+    expect(launchingDuringStart).toBe(true);
+    expect(useTutorialPicker.getState().launching).toBe(false);
+  });
+
+  it('clears launching when the start fails', async () => {
+    transport.start.mockRejectedValue(new Error('Network Error'));
+    const launcher = renderLauncher();
+    await act(() => launcher.current.start('first-steps'));
+    expect(useTutorialPicker.getState().launching).toBe(false);
   });
 
   it('tells the user when the tutorial cannot be started, and goes nowhere', async () => {

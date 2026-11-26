@@ -39,6 +39,7 @@ export function useCoreTutorialLauncher(modules: readonly TutorialRunModule[]) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const closePicker = useTutorialPicker(s => s.setOpen);
+  const setLaunching = useTutorialPicker(s => s.setLaunching);
 
   const goToSession = (sessionId: string) => navigate({ to: '/notebooks/$id', params: { id: sessionId } });
 
@@ -49,10 +50,12 @@ export function useCoreTutorialLauncher(modules: readonly TutorialRunModule[]) {
     async (moduleId: string): Promise<void> => {
       if (launching.current) return;
       launching.current = true;
+      setLaunching(true);
       try {
         await launch(moduleId);
       } finally {
         launching.current = false;
+        setLaunching(false);
       }
     };
 
