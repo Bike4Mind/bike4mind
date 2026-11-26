@@ -7,9 +7,9 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit",
-    "typecheck:fast": "tsgo --noEmit",
+    "typecheck":"tsgo --noEmit",
     "test": "vitest run",
     "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:integration": "SERVER_UTILS_TEST_LANE=integration vitest run"

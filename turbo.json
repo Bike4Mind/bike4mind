@@ -35,10 +35,10 @@
       "outputs": ["dist/**"],
       "inputs": ["src/**", "tsconfig.json", "tsdown.config.ts", "package.json"]
     },
-    "typecheck": {
+    "typecheck:tsc": {
       "dependsOn": ["codegen", "^build"]
     },
-    "//#typecheck": {
+    "//#typecheck:tsc": {
       "dependsOn": ["^build"]
     },
     "typecheck:native": {
@@ -47,10 +47,10 @@
     "//#typecheck:native": {
       "dependsOn": ["^build"]
     },
-    "typecheck:fast": {
+    "typecheck": {
       "dependsOn": ["codegen", "^build"]
     },
-    "//#typecheck:fast": {
+    "//#typecheck": {
       "dependsOn": ["^build"]
     },
     // @bike4mind/scripts consumes packages/scripts/migrate/migrations/premium.generated.ts
@@ -59,7 +59,7 @@
     // only depends on EACH package's own (same-package) "codegen" task, which is a no-op for
     // @bike4mind/scripts. These package-specific overrides add the missing cross-package edge;
     // package-specific config REPLACES the generic entry, so ^build is repeated here.
-    "@bike4mind/scripts#typecheck": {
+    "@bike4mind/scripts#typecheck:tsc": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
@@ -77,7 +77,7 @@
         "!../server-utils/.turbo/**"
       ]
     },
-    "@bike4mind/scripts#typecheck:fast": {
+    "@bike4mind/scripts#typecheck": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
@@ -196,7 +196,7 @@
     // The extra inputs keep a client-only edit from replaying a cached workers result.
     // packages/scripts/help is imported from source (cron/helpDatalakeIngest.ts) and has no build
     // task, so ^build never hashes it - list it here for the same reason.
-    "@bike4mind/workers#typecheck": {
+    "@bike4mind/workers#typecheck:tsc": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
@@ -220,7 +220,7 @@
         "!../../packages/server-utils/.turbo/**"
       ]
     },
-    "@bike4mind/workers#typecheck:fast": {
+    "@bike4mind/workers#typecheck": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
@@ -297,7 +297,7 @@
     // its source: an edit there must not replay a cached client result. The package is listed as an
     // input explicitly instead - the workers entries above carry the same glob. Package-specific
     // config REPLACES the generic entry, so dependsOn is repeated here.
-    "@bike4mind/client#typecheck": {
+    "@bike4mind/client#typecheck:tsc": {
       "dependsOn": ["codegen", "^build"],
       "inputs": [
         "$TURBO_DEFAULT$",
@@ -315,7 +315,7 @@
         "!../../packages/server-utils/.turbo/**"
       ]
     },
-    "@bike4mind/client#typecheck:fast": {
+    "@bike4mind/client#typecheck": {
       "dependsOn": ["codegen", "^build"],
       "inputs": [
         "$TURBO_DEFAULT$",
@@ -388,7 +388,7 @@
     },
     // server-utils reads src/premium-generated/ (written by @bike4mind/client's codegen and
     // gitignored, so outside $TURBO_DEFAULT$): same cross-package edge as @bike4mind/scripts.
-    "@bike4mind/server-utils#typecheck": {
+    "@bike4mind/server-utils#typecheck:tsc": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
     },
@@ -396,7 +396,7 @@
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
     },
-    "@bike4mind/server-utils#typecheck:fast": {
+    "@bike4mind/server-utils#typecheck": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
     },
