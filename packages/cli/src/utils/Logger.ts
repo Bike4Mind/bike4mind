@@ -36,8 +36,9 @@ export class Logger {
     const debugDir = path.join(os.homedir(), '.bike4mind', 'debug');
 
     await fs.mkdir(debugDir, { recursive: true, mode: DEBUG_DIR_MODE });
-    // mkdir's mode is ignored for a directory an older CLI already created.
-    await fs.chmod(debugDir, DEBUG_DIR_MODE);
+    // mkdir's mode is ignored for a directory an older CLI already created. Best-effort:
+    // chmod fails on a directory another user owns, and that must not stop the CLI.
+    await fs.chmod(debugDir, DEBUG_DIR_MODE).catch(() => {});
 
     this.logFilePath = path.join(debugDir, `${sessionId}.txt`);
 
