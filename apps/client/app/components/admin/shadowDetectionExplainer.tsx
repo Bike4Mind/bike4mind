@@ -129,7 +129,7 @@ const TERM_HELP = {
   graded: {
     term: 'Graded',
     description:
-      'Detections that would have acted, or any detection of a review-only detector, that have a verdict. Unreviewed ones still need one.',
+      'Detections with a verdict that would have acted, or that come from a review-only detector. Unreviewed ones still need one.',
   },
   precision: {
     term: 'Precision',

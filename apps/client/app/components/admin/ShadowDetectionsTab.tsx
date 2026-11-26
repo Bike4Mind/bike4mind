@@ -605,9 +605,9 @@ export const formatPrecision = (row: ShadowDetectionSummaryRow): { value: string
 };
 
 /**
- * Graded and precision count only admin verdicts on records that would have acted (every record of a
- * review-only detector, see shadowDetectionRepository.summarize); `noAction` rows are listed only, and
- * automation verdicts are counted apart.
+ * Graded and precision count only admin verdicts on records that would have acted, with every record
+ * of a review-only detector counted as if it would have (see shadowDetectionRepository.summarize);
+ * `noAction` rows are listed only, and automation verdicts are counted apart.
  */
 const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => {
   const graded = row.confirmedAbuse + row.legitimateHuman + row.legitimateAutomation + row.insufficientEvidence;

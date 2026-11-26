@@ -344,7 +344,8 @@ export function isAbuseSuspensionReason(reason: string): boolean {
  * both sides: it says the reviewer could not tell, not that the detector was wrong. Null with no
  * conclusive verdicts, so the UI never shows a ratio over zero. `noAction` records never enter it:
  * the row's verdict counts already exclude them (shadowDetectionRepository.summarize), and a verdict
- * on a record that would not have acted says nothing about a would-act decision.
+ * on a record that would not have acted says nothing about a would-act decision. For a review-only
+ * detector (every record is wouldAction 'none') it is the share of its flags confirmed as abuse.
  */
 export function shadowDetectionPrecision(row: ShadowDetectionSummaryRow): number | null {
   const falsePositives = row.legitimateHuman + row.legitimateAutomation;
