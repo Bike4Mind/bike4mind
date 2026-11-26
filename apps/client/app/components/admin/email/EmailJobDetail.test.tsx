@@ -273,7 +273,10 @@ describe('EmailJobDetail', () => {
     const found: Record<string, string> = {};
     for (const sheet of Array.from(document.styleSheets)) {
       for (const rule of Array.from(sheet.cssRules)) {
-        if (!(rule instanceof CSSMediaRule) || !rule.conditionText.replace(/\s/g, '').includes(`(min-width:${minWidth})`)) {
+        if (
+          !(rule instanceof CSSMediaRule) ||
+          !rule.conditionText.replace(/\s/g, '').includes(`(min-width:${minWidth})`)
+        ) {
           continue;
         }
         for (const inner of Array.from(rule.cssRules)) {
@@ -312,6 +315,16 @@ describe('EmailJobDetail', () => {
 
     expect(declared('email-job-detail-form-column', '0px')['border-bottom']).toBe('1px solid');
     expect(declared('email-job-detail-form-column', '900px')['border-right']).toBe('1px solid');
+  });
+
+  it('moves the campaign title to its own row below sm so Save and the chips keep their full size', () => {
+    m.job = { ...draftJob(EmailJobOverallStatus.COMPLETE), isTestMode: true };
+    renderDetail('job1');
+
+    expect(getComputedStyle(screen.getByTestId('email-job-detail-header')).flexWrap).toBe('wrap');
+    expect(declared('email-job-detail-title', '0px')).toMatchObject({ order: '1', 'flex-basis': '100%' });
+    expect(declared('email-job-detail-title', '600px')).toMatchObject({ order: '0', 'flex-basis': 'auto' });
+    expect(getComputedStyle(screen.getByTestId('email-job-detail-save-btn').parentElement!).flexShrink).toBe('0');
   });
 
   it('lets the preview header wrap so the recipient select cannot force a sideways scroll', () => {
