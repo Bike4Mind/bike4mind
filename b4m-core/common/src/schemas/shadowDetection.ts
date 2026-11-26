@@ -215,7 +215,8 @@ export type ShadowDetectionItem = z.infer<typeof shadowDetectionItemSchema>;
 /**
  * Verdict counts for one detector and policy version. Precision is derived on the client. Verdict
  * counts cover only records that would have acted; `noAction` counts the `wouldAction: 'none'`
- * records, which are listed and gradable but never counted in precision.
+ * records, which are listed and gradable but never counted in precision. A review-only detector
+ * (isReviewOnlyCompletionDetector) never acts, so its verdicts are counted and `noAction` stays 0.
  */
 export const shadowDetectionSummaryRowSchema = z.object({
   detector: z.enum(SHADOW_DETECTORS),

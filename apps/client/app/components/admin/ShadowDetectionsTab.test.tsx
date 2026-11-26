@@ -1478,6 +1478,37 @@ describe('ShadowDetectionsTab explanations', () => {
   });
 
   it.each(['completionSequence', 'completionSynchrony'] as const)(
+    'counts verdicts on %s records in Graded and Precision',
+    detector => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult(
+          list({
+            data: [],
+            summary: [
+              summaryRow({
+                detector,
+                recorded: 3,
+                confirmedAbuse: 2,
+                legitimateHuman: 0,
+                legitimateAutomation: 0,
+                insufficientEvidence: 0,
+              }),
+            ],
+          })
+        )
+      );
+      renderTab();
+      const summary = screen.getByTestId(`shadow-detection-summary-${detector}-v1`);
+      expect(within(summary).getByTestId(`shadow-detection-summary-${detector}-v1-graded`)).toHaveTextContent('2');
+      expect(summary).toHaveTextContent('1 unreviewed');
+      expect(summary).not.toHaveTextContent('would not act');
+      expect(within(summary).getByTestId(`shadow-detection-summary-${detector}-v1-precision`)).toHaveTextContent(
+        '100%'
+      );
+    }
+  );
+
+  it.each(['completionSequence', 'completionSynchrony'] as const)(
     'shows %s as review only instead of progress toward enforcement',
     detector => {
       m.useShadowDetections.mockReturnValue(
@@ -1488,10 +1519,10 @@ describe('ShadowDetectionsTab explanations', () => {
               summaryRow({
                 detector,
                 recorded: 2,
-                noAction: 2,
                 confirmedAbuse: 0,
                 legitimateHuman: 0,
                 legitimateAutomation: 0,
+                insufficientEvidence: 0,
               }),
             ],
           })
