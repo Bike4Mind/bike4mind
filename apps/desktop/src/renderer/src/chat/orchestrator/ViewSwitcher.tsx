@@ -54,7 +54,7 @@ export interface SceneStageInfo {
   finale: FinaleLook;
   /** The host's portrait on the finale banner; the Innkeeper if unset. */
   hostArt?: FinaleHostArt;
-  /** The scene's lines for the settled Needs-you card, the quiet header, the talk button and the empty stage. */
+  /** The scene's lines for the settled Needs-you card, quiet header, talk button, empty stage and finale. */
   copy: SceneDefinition['copy']['stage'];
 }
 
