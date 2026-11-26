@@ -460,7 +460,7 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
   });
 
   it('lets a delegate approver execute an approved self-grant without the delegate target check', async () => {
-    mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'admin-2', name: 'Acme' });
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'admin-2', users: [{ userId: 'admin-1' }], name: 'Acme' });
     const params = {
       organizationId: 'org-1',
       credits: 100,
@@ -475,7 +475,7 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
     const approval = {
       id: 'approval-1',
       requiredPermission: 'credits:approve_self_grant',
-      requestedBy: { id: 'admin-1', name: 'Ada' },
+      requestedBy: { id: 'admin-1', name: 'Ada', selfIds: ['admin-1'] },
     } as unknown as AdminApproval;
 
     await expect(topUpOrg(approverReq, params)).rejects.toThrow('You cannot top up an organization you belong to');
