@@ -69,6 +69,16 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
+// Spy on the redaction call itself: the contract response boundary strips owner-only quest
+// fields for every caller outside production, so the response body cannot prove the wiring.
+vi.mock('@bike4mind/common', async orig => {
+  const actual = await orig<Record<string, unknown>>();
+  return {
+    ...actual,
+    redactChatMessageForViewer: vi.fn(actual.redactChatMessageForViewer as (...a: unknown[]) => unknown),
+  };
+});
+
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
@@ -166,6 +176,7 @@ import {
   CreditHolderType,
   GenerateImageResponseSchema,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  redactChatMessageForViewer,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
 
@@ -282,9 +293,9 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     };
 
     it.each([
-      { who: 'a non-owner', sessionUserId: 'someone-else', expectOwnerFields: false },
-      { who: 'the owner', sessionUserId: 'user-1', expectOwnerFields: true },
-    ])('returns owner-only fields only to the owner ($who)', async ({ sessionUserId, expectOwnerFields }) => {
+      { who: 'a non-owner', sessionUserId: 'someone-else', isOwner: false },
+      { who: 'the owner', sessionUserId: 'user-1', isOwner: true },
+    ])('redacts the returned quest for the viewer role ($who)', async ({ sessionUserId, isOwner }) => {
       mockGetOrCreateSession.mockResolvedValue({
         sessionId: 'sess-1',
         asyncPromises: [],
@@ -295,9 +306,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       const { req, res } = fire();
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      const { quest } = res._getJSONData();
-      expect('pendingAction' in quest).toBe(expectOwnerFields);
-      expect('returnValue' in (quest.promptMeta?.functionCalls?.[0] ?? {})).toBe(expectOwnerFields);
+      expect(redactChatMessageForViewer).toHaveBeenCalledWith(questWithOwnerOnlyFields, isOwner);
     });
   });
 
