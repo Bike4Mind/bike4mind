@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type { APIRequestContext } from '@playwright/test';
@@ -37,19 +38,30 @@ function expiresSoon(accessToken: string): boolean {
   }
 }
 
-/** Run `fn` holding a lock file that every worker process sees. Returns false if the wait ran out. */
-async function withLock(name: string, fn: () => Promise<void>): Promise<boolean> {
+/**
+ * Run `fn` holding a lock file that every worker process sees. Returns false if the wait ran out.
+ * The file holds the owner's id so a slow holder never deletes a lock another worker has since
+ * taken, and a stale lock is renamed away (one winner) rather than deleted in place.
+ */
+export async function withLock(name: string, fn: () => Promise<void>): Promise<boolean> {
   const lockPath = path.resolve(AUTH_DIR, `${name}.renew.lock`);
+  const owner = crypto.randomUUID();
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     try {
-      fs.closeSync(fs.openSync(lockPath, 'wx'));
+      fs.writeFileSync(lockPath, owner, { flag: 'wx' });
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       const heldSince = fs.statSync(lockPath, { throwIfNoEntry: false })?.mtimeMs;
       if (heldSince !== undefined && Date.now() - heldSince > LOCK_STALE_MS) {
-        fs.rmSync(lockPath, { force: true });
+        const aside = `${lockPath}.${owner}.stale`;
+        try {
+          fs.renameSync(lockPath, aside);
+          fs.rmSync(aside, { force: true });
+        } catch {
+          // Another worker broke or released it first; loop and try to take it.
+        }
       } else if (Date.now() > deadline) {
         return false;
       } else {
@@ -60,7 +72,11 @@ async function withLock(name: string, fn: () => Promise<void>): Promise<boolean>
   try {
     await fn();
   } finally {
-    fs.rmSync(lockPath, { force: true });
+    try {
+      if (fs.readFileSync(lockPath, 'utf-8') === owner) fs.rmSync(lockPath, { force: true });
+    } catch {
+      // Already gone: a worker broke it as stale.
+    }
   }
   return true;
 }
