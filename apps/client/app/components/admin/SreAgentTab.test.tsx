@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SreAgentConfigSchema, SreSourceType } from '@bike4mind/common';
+import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import SreAgentTab, {
   AutoDispatchSourcesField,
@@ -254,6 +255,54 @@ describe('PatternLibraryPanel', () => {
     await waitFor(() => expect(toggleButton()).not.toBeDisabled());
     expect(screen.getByText('Null config on boot')).toBeInTheDocument();
     expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  it('shows the saved state when the refetch after a toggle fails', async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ data: [pattern] })
+      .mockRejectedValue(new Error('down'));
+    vi.mocked(api.patch).mockResolvedValue({ data: { ...pattern, isActive: false } });
+    renderWithClient(<PatternLibraryPanel repoSlugs={[]} />);
+
+    await screen.findByText('Null config on boot');
+    fireEvent.click(toggleButton());
+
+    await waitFor(() => expect(screen.getByTestId('sre-pattern-toggle-p1')).toHaveTextContent('Inactive'));
+  });
+
+  it('toasts and re-enables the toggle when the update fails', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [pattern] });
+    vi.mocked(api.patch).mockRejectedValue(new Error('nope'));
+    renderWithClient(<PatternLibraryPanel repoSlugs={[]} />);
+
+    await screen.findByText('Null config on boot');
+    fireEvent.click(toggleButton());
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to update pattern'));
+    await waitFor(() => expect(toggleButton()).not.toBeDisabled());
+  });
+
+  it('sets and clears the root cause issue', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [{ ...pattern, rootCauseTrackingIssue: 12 }] });
+    vi.mocked(api.patch).mockResolvedValue({ data: {} });
+    renderWithClient(<PatternLibraryPanel repoSlugs={[]} />);
+
+    fireEvent.click(await screen.findByTestId('sre-pattern-issue-p1'));
+    const input = within(screen.getByTestId('sre-pattern-issue-input-p1')).getByRole('spinbutton');
+    fireEvent.change(input, { target: { value: '34' } });
+    fireEvent.click(screen.getByTestId('sre-pattern-issue-save-p1'));
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenLastCalledWith('/api/sre/patterns/p1', { rootCauseTrackingIssue: 34 })
+    );
+
+    fireEvent.click(await screen.findByTestId('sre-pattern-issue-p1'));
+    fireEvent.change(within(screen.getByTestId('sre-pattern-issue-input-p1')).getByRole('spinbutton'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByTestId('sre-pattern-issue-save-p1'));
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenLastCalledWith('/api/sre/patterns/p1', { rootCauseTrackingIssue: null })
+    );
   });
 
   // A retry with no cached rows puts the query back to pending, so the table's skeleton is the busy state.

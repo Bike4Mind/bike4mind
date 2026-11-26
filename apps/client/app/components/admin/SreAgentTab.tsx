@@ -2177,15 +2177,15 @@ interface PatternSummary {
   lastMatchedAt?: string;
 }
 
-function usePatternPatch(id: string, onPatched: () => void) {
+function usePatternPatch(id: string, onPatched: (updated: Partial<PatternSummary>) => void) {
   return useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
       const { data } = await api.patch(`/api/sre/patterns/${id}`, body);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: data => {
       toast.success('Pattern updated');
-      onPatched();
+      onPatched(data ?? {});
     },
     onError: err => {
       const msg = isAxiosError<{ message?: string }>(err) ? err.response?.data?.message : undefined;
@@ -2194,7 +2194,13 @@ function usePatternPatch(id: string, onPatched: () => void) {
   });
 }
 
-function PatternActiveCell({ p, onPatched }: { p: PatternSummary; onPatched: () => void }) {
+function PatternActiveCell({
+  p,
+  onPatched,
+}: {
+  p: PatternSummary;
+  onPatched: (updated: Partial<PatternSummary>) => void;
+}) {
   const patchMutation = usePatternPatch(p.id, onPatched);
   return (
     <Chip
@@ -2216,7 +2222,13 @@ function PatternActiveCell({ p, onPatched }: { p: PatternSummary; onPatched: () 
   );
 }
 
-function PatternRootCauseCell({ p, onPatched }: { p: PatternSummary; onPatched: () => void }) {
+function PatternRootCauseCell({
+  p,
+  onPatched,
+}: {
+  p: PatternSummary;
+  onPatched: (updated: Partial<PatternSummary>) => void;
+}) {
   const [editIssue, setEditIssue] = useState(false);
   const [issueNum, setIssueNum] = useState(String(p.rootCauseTrackingIssue ?? ''));
   const patchMutation = usePatternPatch(p.id, onPatched);
@@ -2231,11 +2243,14 @@ function PatternRootCauseCell({ p, onPatched }: { p: PatternSummary; onPatched: 
         onChange={e => setIssueNum(e.target.value)}
         sx={{ width: 80 }}
         slotProps={{ input: { min: 1 } }}
+        data-testid={`sre-pattern-issue-input-${p.id}`}
       />
       <IconButton
         size="sm"
         variant="plain"
         color="success"
+        aria-label="Save root cause issue"
+        data-testid={`sre-pattern-issue-save-${p.id}`}
         onClick={() => {
           const val = issueNum ? Number(issueNum) : null;
           patchMutation.mutate({ rootCauseTrackingIssue: val });
@@ -2246,14 +2261,16 @@ function PatternRootCauseCell({ p, onPatched }: { p: PatternSummary; onPatched: 
       </IconButton>
     </Stack>
   ) : (
-    <Typography
-      level="body-xs"
-      sx={{ cursor: 'pointer', textDecoration: 'underline dotted', color: 'admin.inkMuted' }}
+    <Button
+      size="sm"
+      variant="plain"
+      color="neutral"
+      sx={{ textDecoration: 'underline dotted', color: 'admin.inkMuted', fontWeight: 'normal', minHeight: 0, px: 0.5 }}
       onClick={() => setEditIssue(true)}
       data-testid={`sre-pattern-issue-${p.id}`}
     >
       {p.rootCauseTrackingIssue ? `#${p.rootCauseTrackingIssue}` : 'Link issue'}
-    </Typography>
+    </Button>
   );
 }
 
@@ -2269,6 +2286,7 @@ export function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
     data: patterns,
     isLoading,
     isError,
+    isRefetching,
     refetch,
   } = useQuery({
     queryKey: ['sre-patterns', selectedRepo],
@@ -2281,7 +2299,14 @@ export function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
   });
 
   const patternColumns = useMemo<DataColumn<PatternSummary>[]>(() => {
-    const onPatched = () => queryClient.invalidateQueries({ queryKey: ['sre-patterns', selectedRepo] });
+    const onPatched = (updated: Partial<PatternSummary>) => {
+      const key = ['sre-patterns', selectedRepo];
+      // Show the saved row immediately so a failed refetch cannot leave the stale value on screen.
+      queryClient.setQueryData<PatternSummary[]>(key, rows =>
+        rows?.map(row => (updated.id && row.id === updated.id ? { ...row, ...updated } : row))
+      );
+      void queryClient.invalidateQueries({ queryKey: key });
+    };
     return [
       {
         id: 'name',
@@ -2379,7 +2404,7 @@ export function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
         getRowId={p => p.id}
         label="Patterns"
         testId="sre-patterns-table"
-        loading={isLoading}
+        loading={isLoading || (isError && isRefetching)}
         error={isError && !patterns ? 'Patterns failed to load.' : undefined}
         onRetry={() => void refetch()}
         pageResetKey={selectedRepo}
