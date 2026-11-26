@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import mermaid from 'mermaid';
 import { assertNoRemoteDiagramResources, MERMAID_RESOURCE_CONFIG, mermaidOptions } from './mermaidSecurity';
 
 describe('assertNoRemoteDiagramResources', () => {
@@ -11,6 +12,8 @@ describe('assertNoRemoteDiagramResources', () => {
     'flowchart TD\n A@{ "\\x69mg": "https://example.com/p.png" }',
     'flowchart TD\n A@{ label: &k img }\n B@{ *k : "https://example.com/p.png" }',
     '%%{init: {"themeVariables": {"fontFamily": "x;background:url(https://evil.example/a.png)"}}}%%\ngraph TD\n A-->B',
+    '%%{init: {"fontFamily": "x;background:url(https://evil.example/a.png)"}}%%\ngraph TD\n A-->B',
+    '---\nconfig:\n  fontFamily: "x;background:url(https://evil.example/a.png)"\n---\ngraph TD\n A-->B',
     'flowchart TD\n A@{\n  shape: rect\n  img: https://example.com/a.png\n}',
     'flowchart TD\n A@{ "im\\\ng": "https://example.com/a.png" }',
     'kanban\n  todo[Todo]\n    t1[Task]@{ img: "https://example.com/p.png" }',
@@ -54,12 +57,41 @@ describe('mermaidOptions', () => {
       'maxEdges',
       'dompurifyConfig',
       'themeCSS',
+      'fontFamily',
+      'altFontFamily',
     ]);
   });
 
-  it('leaves themeVariables and fontFamily unlocked while themeCSS stays locked', () => {
+  it('locks the stylesheet options and leaves only themeVariables unlocked', () => {
     expect(MERMAID_RESOURCE_CONFIG.secure).not.toContain('themeVariables');
-    expect(MERMAID_RESOURCE_CONFIG.secure).not.toContain('fontFamily');
-    expect(MERMAID_RESOURCE_CONFIG.secure).toContain('themeCSS');
+    expect(MERMAID_RESOURCE_CONFIG.secure).toEqual(expect.arrayContaining(['themeCSS', 'fontFamily', 'altFontFamily']));
+  });
+});
+
+describe('mermaid directives against the resource config', () => {
+  const escaped = '\\u0075rl(https://evil.example/a.png)';
+  const directives = {
+    init: (key: string) => `%%{init: {"${key}": "${escaped}"}}%%\ngraph TD\n A-->B`,
+    frontmatter: (key: string) => `---\nconfig:\n  ${key}: "${escaped}"\n---\ngraph TD\n A-->B`,
+  };
+  const fontFamilyAfter = async (definition: string, secure: string[]) => {
+    mermaid.initialize({ ...mermaidOptions(false), secure });
+    const before = mermaid.mermaidAPI.getConfig().fontFamily;
+    await mermaid.parse(definition);
+    return { before, after: mermaid.mermaidAPI.getConfig().fontFamily };
+  };
+
+  it.each(Object.entries(directives))(
+    'ignores an escaped url() in a top-level fontFamily in %s form',
+    async (_form, build) => {
+      const { before, after } = await fontFamilyAfter(build('fontFamily'), MERMAID_RESOURCE_CONFIG.secure);
+      expect(after).toBe(before);
+    }
+  );
+
+  it('would apply the directive if fontFamily were not locked', async () => {
+    const unlocked = MERMAID_RESOURCE_CONFIG.secure.filter(key => key !== 'fontFamily');
+    const { before, after } = await fontFamilyAfter(directives.init('fontFamily'), unlocked);
+    expect(after).not.toBe(before);
   });
 });

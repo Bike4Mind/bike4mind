@@ -73,6 +73,28 @@ describe('sanitizeArtifactSvg', () => {
     expect(clean).not.toContain('@import');
   });
 
+  it('drops only the remote parts of a style block', () => {
+    const clean = sanitizeArtifactSvg(
+      svg(
+        '<style>@import url("https://fonts.googleapis.com/css2?family=Inter&display=swap");' +
+          '.a{fill:red}.b{background:url(https://example.com/x.png);stroke:blue}.c{fill:url(#g)}</style><rect class="a" />'
+      )
+    );
+    expect(clean).not.toContain('googleapis');
+    expect(clean).not.toContain('example.com');
+    expect(clean).toContain('.a{fill:red}');
+    expect(clean).toContain('stroke:blue');
+    expect(clean).toContain('.c{fill:url(#g)}');
+  });
+
+  it('removes a style block whose remote reference is escaped past the rewrite', () => {
+    const clean = sanitizeArtifactSvg(
+      svg('<style>.a{fill:red}@\\69mport "https://example.com/a.css";</style><rect />')
+    );
+    expect(clean).not.toContain('example.com');
+    expect(clean).not.toContain('fill:red');
+  });
+
   it('keeps self-contained style blocks', () => {
     expect(sanitizeArtifactSvg(svg('<style>.a { fill: red; }</style><rect class="a" />'))).toContain('fill: red');
   });

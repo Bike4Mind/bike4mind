@@ -45,6 +45,8 @@ const URL_ATTRIBUTES = new Set(['href', 'xlink:href', 'src', 'srcset', 'backgrou
 // identifiers that merely end in "url" (getUrl(), toDataUrl()) out.
 const CSS_FETCH = /(?<![\w-])(?:-webkit-image-set|image-set|url)\s*\(([^)]*)\)?|@import/gi;
 
+const CSS_IMPORT_STATEMENT = /@import\b(?:"[^"\n]*"|'[^'\n]*'|\([^)]*\)|[^;{}"'(])*;?/gi;
+
 const decodeCssEscapes = (css: string): string =>
   css.replace(/\\([0-9a-f]{1,6})\s?|\\([\s\S])/gi, (_match, hex: string | undefined, char: string | undefined) => {
     if (hex === undefined) return char ?? '';
@@ -81,6 +83,13 @@ export function cssHasCrossOriginReference(css: string): boolean {
   return false;
 }
 
+// Drops @import statements and turns remote url()/image-set() values into `none`, leaving the
+// other rules. Matches on the raw text, so an escaped spelling is left for the caller's re-scan.
+const stripRemoteCss = (css: string): string =>
+  css
+    .replace(CSS_IMPORT_STATEMENT, '')
+    .replace(CSS_FETCH, (match, target: string | undefined) => (isInDocumentOrInline(target ?? '') ? match : 'none'));
+
 const isAllowedUrl = (value: string, tagName: string): boolean => {
   const url = value.trim();
   if (url.startsWith('#')) return true;
@@ -92,15 +101,21 @@ const isAllowedUrl = (value: string, tagName: string): boolean => {
 
 /**
  * Removes every reference that would make the browser load a resource from outside the
- * document: remote image/use/link targets, url()/@import in style attributes, presentation
- * attributes and <style> blocks. Mutates `root` in place.
+ * document: remote image/use/link targets, and url()/@import in style attributes, presentation
+ * attributes and <style> blocks. A <style> block keeps its other rules, and is removed only when a
+ * remote reference survives the rewrite. Mutates `root` in place.
  */
 export function stripRemoteSvgReferences(root: Element | DocumentFragment): void {
   const elements = root instanceof Element ? [root, ...root.querySelectorAll('*')] : [...root.querySelectorAll('*')];
   for (const element of elements) {
     const tagName = element.localName.toLowerCase();
     if (tagName === 'style') {
-      if (cssHasRemoteReference(element.textContent ?? '')) element.remove();
+      const css = element.textContent ?? '';
+      if (cssHasRemoteReference(css)) {
+        const stripped = stripRemoteCss(css);
+        if (cssHasRemoteReference(stripped)) element.remove();
+        else element.textContent = stripped;
+      }
       continue;
     }
     for (const attribute of [...element.attributes]) {

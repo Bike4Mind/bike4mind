@@ -46,7 +46,7 @@ export interface SafeChartConfig {
 
 // recharts copies row fields onto SVG elements. Values are already primitives, so only names that
 // make React throw for a primitive, or that touch the prototype, are dropped.
-const RESERVED_ROW_KEYS = new Set(['__proto__', 'constructor', 'prototype', 'dangerouslysetinnerhtml', 'ref', 'style']);
+const RESERVED_ROW_KEYS = new Set(['__proto__', 'constructor', 'prototype', 'dangerouslySetInnerHTML', 'ref', 'style']);
 
 // A React event prop holding a primitive throws when the event fires. Columns that only look
 // like one (onTime, onHand) are kept.
@@ -65,6 +65,13 @@ const warnDroppedKey = (key: string) => {
   console.warn(`Chart data column "${key}" is not rendered: the name is reserved.`);
 };
 
+const warnedValues = new Set<string>();
+const warnDroppedValue = (key: string) => {
+  if (warnedValues.has(key)) return;
+  warnedValues.add(key);
+  console.warn(`Chart data values in column "${key}" are not rendered: they reference a remote resource.`);
+};
+
 const MAX_NESTING = 4;
 const COLOR =
   /^(?:#[0-9a-f]{3,8}|[a-z]+|(?:rgba?|hsla?)\((?:[\d\s.,%/+-]|deg|turn|rad|grad)+\)|var\(--[\w-]+\)|url\(#[\w-]+\))$/i;
@@ -76,7 +83,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isAllowedRowKey = (key: string): boolean => {
-  if (!RESERVED_ROW_KEYS.has(key.toLowerCase()) && !isDomEventKey(key)) return true;
+  if (!RESERVED_ROW_KEYS.has(key) && !isDomEventKey(key)) return true;
   warnDroppedKey(key);
   return false;
 };
@@ -96,7 +103,9 @@ function sanitizeRow(row: unknown, depth: number): ChartRow | null {
   for (const [key, value] of Object.entries(row)) {
     if (!isAllowedRowKey(key)) continue;
     if (typeof value === 'string') {
-      if (!cssHasRemoteReference(value)) clean[key] = value;
+      // Checked on every column: recharts can copy any row field onto filter, mask, clip-path or marker attributes.
+      if (cssHasRemoteReference(value)) warnDroppedValue(key);
+      else clean[key] = value;
     } else if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
       clean[key] = value;
     } else if (key === 'children' && Array.isArray(value) && depth < MAX_NESTING) {

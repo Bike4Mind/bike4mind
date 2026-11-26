@@ -3,6 +3,7 @@ import { Box, CircularProgress, Typography } from '@mui/joy';
 import { type ReactArtifact, type HtmlArtifact, type SvgArtifact } from '@bike4mind/common';
 import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
 import SafeSvgImage from '@client/app/components/common/SafeSvgImage';
+import SvgPlate from '@client/app/components/common/SvgPlate';
 import { sanitizeHtmlForIframe, absolutizeBlessedScripts } from '@client/app/utils/htmlSanitizer';
 import { useReactArtifactSandbox } from '@client/app/hooks/useReactArtifactSandbox';
 
@@ -208,21 +209,9 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({
   // SVG renders directly without iframe
   if (type === 'svg' && renderedContent) {
     return (
-      <Box
-        sx={{
-          maxHeight,
-          overflow: 'auto',
-          borderRadius: 'sm',
-          bgcolor: 'background.surface',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          p: 1,
-        }}
-        data-testid="inline-svg-preview"
-      >
+      <SvgPlate testId="inline-svg-preview" sx={{ maxHeight, overflow: 'auto', alignItems: 'center' }}>
         <SafeSvgImage svg={renderedContent} alt={artifact.title || 'SVG preview'} sx={{ maxHeight: '100%' }} />
-      </Box>
+      </SvgPlate>
     );
   }
 

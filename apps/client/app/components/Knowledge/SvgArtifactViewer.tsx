@@ -4,6 +4,7 @@ import { type SvgArtifact } from '@bike4mind/common';
 import { validateArtifactContent } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { sanitizeArtifactSvg } from '@client/app/utils/svgSanitizer';
 import SafeSvgImage from '@client/app/components/common/SafeSvgImage';
+import SvgPlate from '@client/app/components/common/SvgPlate';
 
 interface SvgArtifactViewerProps {
   artifact: SvgArtifact;
@@ -59,12 +60,9 @@ const SvgArtifactViewer: React.FC<SvgArtifactViewerProps> = ({ artifact, onError
         overflow: 'auto',
       }}
     >
-      <SafeSvgImage
-        svg={sanitizedSVG}
-        alt={artifact.title || 'SVG artifact'}
-        testId="svg-artifact-viewer-image"
-        sx={{ maxHeight: '100%' }}
-      />
+      <SvgPlate sx={{ width: '100%', maxHeight: '100%', overflow: 'auto' }}>
+        <SafeSvgImage svg={sanitizedSVG} alt={artifact.title || 'SVG artifact'} testId="svg-artifact-viewer-image" />
+      </SvgPlate>
     </Box>
   );
 };

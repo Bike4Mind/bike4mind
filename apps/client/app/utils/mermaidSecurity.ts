@@ -5,9 +5,10 @@ import { cssHasCrossOriginReference } from './svgSanitizer';
  * mermaid.initialize options that keep diagram labels and directives from adding resource
  * loads. mermaid mounts its output into the page to measure it before render() returns, so
  * this has to apply inside mermaid, ahead of stripRemoteSvgReferences on the result.
- * `secure` replaces mermaid's default list, so the defaults are repeated here. themeVariables and
- * fontFamily stay unlocked: assertNoRemoteDiagramResources scans the init directive for
- * cross-origin url(), and themeCSS stays locked.
+ * `secure` replaces mermaid's default list, so the defaults are repeated here. themeCSS,
+ * fontFamily and altFontFamily are locked because mermaid writes them into its stylesheet
+ * unfiltered, where an escaped url() would load. Only themeVariables stays unlocked: mermaid
+ * restricts its characters.
  */
 export const MERMAID_RESOURCE_CONFIG = {
   secure: [
@@ -19,6 +20,8 @@ export const MERMAID_RESOURCE_CONFIG = {
     'maxEdges',
     'dompurifyConfig',
     'themeCSS',
+    'fontFamily',
+    'altFontFamily',
   ],
   dompurifyConfig: {
     FORBID_TAGS: ['img', 'image', 'picture', 'source', 'video', 'audio', 'style', 'link', 'object', 'embed', 'iframe'],

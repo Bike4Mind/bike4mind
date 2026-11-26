@@ -41,6 +41,17 @@ describe('sanitizeChartConfig', () => {
     expect(sanitizeChartConfig({ chartType: 'BarChart', data: [row] }).data).toEqual([row]);
   });
 
+  it('matches reserved names exactly, so differently cased columns are kept', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const kept = { Style: 'bold', Ref: 'r1', Constructor: 'Acme', Prototype: 'v2' };
+    const { data } = sanitizeChartConfig({
+      chartType: 'BarChart',
+      data: [{ ...kept, style: 'x', ref: 'y', dangerouslySetInnerHTML: 'z' }],
+    });
+    expect(data).toEqual([kept]);
+    warn.mockRestore();
+  });
+
   it('keeps only primitive values, plus nested Treemap children', () => {
     const { data } = sanitizeChartConfig({
       chartType: 'Treemap',
@@ -73,6 +84,21 @@ describe('sanitizeChartConfig', () => {
       { name: 'a', value: 1 },
       { name: 'b', value: 2, fill: '#ff0000' },
     ]);
+  });
+
+  it('warns once per column when a string value is dropped for a remote reference', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { data } = sanitizeChartConfig({
+      chartType: 'BarChart',
+      data: [
+        { caption: '@import rules', n: 1 },
+        { caption: 'see url(https://example.com/x)', n: 2 },
+        { caption: 'plain', n: 3 },
+      ],
+    });
+    expect(data).toEqual([{ n: 1 }, { n: 2 }, { caption: 'plain', n: 3 }]);
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('"caption"'))).toHaveLength(1);
+    warn.mockRestore();
   });
 
   it('drops non-object rows and non-array data', () => {
