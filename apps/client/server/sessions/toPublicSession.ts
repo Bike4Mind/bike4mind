@@ -24,5 +24,8 @@ export function toPublicSession(session: ISessionDocument): SessionResponse {
     lastUsedModel: redacted.lastUsedModel,
     firstCreated: redacted.firstCreated,
     lastUpdated: redacted.lastUpdated,
+    updatedAt: session.updatedAt,
+    // Read off the document: a tombstone only reaches here from the change listing.
+    ...(session.deletedAt ? { deletedAt: session.deletedAt } : {}),
   };
 }

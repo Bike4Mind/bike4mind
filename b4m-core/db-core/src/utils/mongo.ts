@@ -551,6 +551,22 @@ function withAlsSession(model: mongoose.Model<any>, options: Record<string, unkn
   return options;
 }
 
+/**
+ * The `updatedAt` path a schema's `timestamps` option maintains, or null when it keeps none.
+ * The raw-driver soft deletes below bypass Mongoose's timestamp hooks, so they set it themselves:
+ * a delete is then visible to anyone paging changes by `updatedAt` (GET /api/v1/sessions
+ * `updated_since` relies on this to return tombstones).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- plugin schemas are typed against the `any` generic
+function timestampUpdatedAtPath(schema: mongoose.Schema<any>): string | null {
+  const timestamps: unknown = schema.get('timestamps');
+  if (timestamps === true) return 'updatedAt';
+  if (!timestamps || typeof timestamps !== 'object') return null;
+  const { updatedAt } = timestamps as { updatedAt?: unknown };
+  if (updatedAt === false) return null;
+  return typeof updatedAt === 'string' ? updatedAt : 'updatedAt';
+}
+
 export const softDeletePlugin = (
   // mongoose 8.24 defaults Document's _id to ObjectId; under the `any` schema
   // generic below, this.save() resolves _id to `unknown`, so the method return
@@ -567,6 +583,13 @@ export const softDeletePlugin = (
       default: null,
     },
   });
+
+  // Read lazily: the plugin may be applied before the schema's options are final.
+  const softDeleteSet = (): Record<string, Date> => {
+    const now = new Date();
+    const updatedAtPath = timestampUpdatedAtPath(schema);
+    return updatedAtPath ? { deletedAt: now, [updatedAtPath]: now } : { deletedAt: now };
+  };
 
   // Define a 'softDelete' method to mark documents as soft-deleted
   schema.methods.softDelete = async function () {
@@ -594,7 +617,7 @@ export const softDeletePlugin = (
     const softDeleteFilter = { ...castFilter, deletedAt: null };
     Logger.debug('Soft deleting one document', { filter: softDeleteFilter });
     return this.collection
-      .updateOne(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
+      .updateOne(softDeleteFilter, { $set: softDeleteSet() }, withAlsSession(this, options))
       .then((result: any) => ({
         ...result,
         deletedCount: result.modifiedCount,
@@ -611,7 +634,7 @@ export const softDeletePlugin = (
     const softDeleteFilter = { ...castFilter, deletedAt: null };
     Logger.debug('Soft deleting many documents', { filter: softDeleteFilter });
     return this.collection
-      .updateMany(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
+      .updateMany(softDeleteFilter, { $set: softDeleteSet() }, withAlsSession(this, options))
       .then((result: any) => ({
         ...result,
         deletedCount: result.modifiedCount,
@@ -693,7 +716,7 @@ export const softDeletePlugin = (
     const softDeleteFilter = { ...castFilter, deletedAt: null };
     await this.model.collection.updateOne(
       softDeleteFilter,
-      { $set: { deletedAt: new Date() } },
+      { $set: softDeleteSet() },
       queryOptions.session ? { session: queryOptions.session } : {}
     );
     // Skip the original delete operation by returning a null result
