@@ -31,7 +31,13 @@ describe('connectDB connection lifecycle', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01'));
-    for (const key of ['AWS_LAMBDA_FUNCTION_NAME', 'VERCEL', 'MONGODB_MAX_IDLE_TIME_MS', 'MONGODB_MAX_POOL_SIZE']) {
+    for (const key of [
+      'AWS_LAMBDA_FUNCTION_NAME',
+      'VERCEL',
+      'MONGODB_MAX_IDLE_TIME_MS',
+      'MONGODB_MAX_POOL_SIZE',
+      'USE_DOCUMENTDB_COMPATIBILITY',
+    ]) {
       vi.stubEnv(key, undefined);
     }
     vi.stubEnv('MONGODB_MAX_RETRIES', '0');
