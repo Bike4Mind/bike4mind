@@ -13,7 +13,7 @@ beforeAll(async () => {
 }, MONGO_TEST_TIMEOUT_MS);
 afterAll(async () => {
   await mongoose.disconnect();
-  await server.stop();
+  await server?.stop();
 });
 beforeEach(async () => {
   await mongoose.connection.collection('sreerrorpatterns').deleteMany({});
@@ -65,5 +65,18 @@ describe('SreErrorPatternRepository id shape', () => {
     const active = await sreErrorPatternRepository.findActiveByFingerprint('fp-a', 'acme/widgets', 0);
     expect(typeof active?.id).toBe('string');
     expect(active?.id).toBe(upserted.id);
+  });
+
+  it('recordMatch and update by the looked-up id affect the stored pattern', async () => {
+    await seed('fp-a');
+    const active = await sreErrorPatternRepository.findActiveByFingerprint('fp-a', 'acme/widgets', 0);
+    const before = active?.matchCount ?? 0;
+
+    await sreErrorPatternRepository.recordMatch(active!.id);
+    const [afterMatch] = await sreErrorPatternRepository.findRecent(100);
+    expect(afterMatch.matchCount).toBe(before + 1);
+
+    await sreErrorPatternRepository.update({ id: active!.id, isActive: false });
+    expect(await sreErrorPatternRepository.findActiveByFingerprint('fp-a', 'acme/widgets', 0)).toBeNull();
   });
 });
