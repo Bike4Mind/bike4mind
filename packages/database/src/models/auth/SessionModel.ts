@@ -13,6 +13,7 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
+  ListSessionChangesByUserQuery,
   ListSessionsByUserQuery,
   SearchOptions,
   SESSION_ORIGIN_CHANNELS,
@@ -580,6 +581,20 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     if (beforeId !== undefined) q._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
     return this.sessionModel.find(q).sort({ _id: -1 }).limit(limit);
   }
+  async listChangesByUserId({ userId, search, surface, filters, since, after, limit }: ListSessionChangesByUserQuery) {
+    if (after !== undefined && !mongoose.isObjectIdOrHexString(after.id)) return [];
+    const q = ownSessionListQuery(userId, search, surface, filters);
+    const changed: Record<string, unknown>[] = [{ updatedAt: { $gte: since } }];
+    if (after !== undefined) {
+      const afterId = new mongoose.Types.ObjectId(after.id);
+      changed.push({ $or: [{ updatedAt: { $gt: after.at } }, { updatedAt: after.at, _id: { $gt: afterId } }] });
+    }
+    // `search` may already have claimed the top-level $or, so the keyset joins through $and.
+    q.$and = changed;
+    // Tombstones are the point: a deleted session is how a sync learns to drop its copy. Every soft
+    // delete moves updatedAt (softDeletePlugin), so a delete always lands after the caller's mark.
+    return this.sessionModel.find(q).setOptions({ includeDeleted: true }).sort({ updatedAt: 1, _id: 1 }).limit(limit);
+  }
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
   }
@@ -1043,6 +1058,10 @@ SessionSchema.index({ deletedAt: 1, userId: 1, 'origin.channel': 1, lastUpdated:
 // Keyset pagination for GET /api/v1/sessions (listByUserId): equality on deletedAt/userId, then an
 // index-ordered walk of _id, so a page reads limit+1 rows instead of sorting every session the user has.
 SessionSchema.index({ deletedAt: 1, userId: 1, _id: -1 });
+
+// Change listing for GET /api/v1/sessions?updated_since (listChangesByUserId). No deletedAt prefix:
+// that listing returns tombstones too.
+SessionSchema.index({ userId: 1, updatedAt: 1, _id: 1 });
 
 // Optimize permission and sharing queries
 SessionSchema.index({ deletedAt: 1, 'users.permissions': 1, 'users.userId': 1 });

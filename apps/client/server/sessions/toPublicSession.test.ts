@@ -28,9 +28,31 @@ describe('toPublicSession', () => {
 
     const output = toPublicSession(session);
 
-    expect(Object.keys(output).sort()).toEqual(Object.keys(SessionResponseSchema.shape).sort());
+    // deletedAt is only emitted on a tombstone (see the next test).
+    expect(Object.keys(output).sort()).toEqual(
+      Object.keys(SessionResponseSchema.shape)
+        .filter(key => key !== 'deletedAt')
+        .sort()
+    );
     expect(output.organizationId).toBe(session.organizationId);
     expect(SessionResponseSchema.safeParse(output).success).toBe(true);
-    expect(output.organizationId).toBe(session.organizationId);
+  });
+
+  it('emits deletedAt only for a soft-deleted session', () => {
+    const deletedAt = new Date('2026-01-03T00:00:00Z');
+    const session = {
+      id: '65c000000000000000000001',
+      name: 'Notebook',
+      userId: 'u1',
+      firstCreated: new Date('2026-01-01T00:00:00Z'),
+      lastUpdated: new Date('2026-01-02T00:00:00Z'),
+      updatedAt: deletedAt,
+      deletedAt,
+    } as unknown as ISessionDocument;
+
+    const output = toPublicSession(session);
+
+    expect(output.deletedAt).toEqual(deletedAt);
+    expect(output.updatedAt).toEqual(deletedAt);
   });
 });
