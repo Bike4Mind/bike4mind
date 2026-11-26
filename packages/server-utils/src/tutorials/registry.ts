@@ -15,6 +15,14 @@ export interface CoreTutorial {
 export const CORE_TUTORIALS: readonly CoreTutorial[] = [
   { id: 'first-steps', title: 'First steps', visibility: { public: true }, enabled: true, track: 'basics', order: 10 },
   {
+    id: 'switching-models',
+    title: 'Switch models mid-conversation',
+    visibility: { public: true },
+    enabled: true,
+    track: 'different',
+    order: 20,
+  },
+  {
     id: 'grounded-answers',
     title: 'Answers from your files',
     visibility: { public: true },
