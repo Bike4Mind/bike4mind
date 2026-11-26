@@ -87,8 +87,8 @@ const ALWAYS_ONLINE: SystemSignals = {
  * control connection (its HostLink), which decides the state the rest of Desktop sees. Every
  * window is its own protocol client: it holds one WindowConnection per host it has spoken to, so
  * a session's events reach only the windows subscribed to it, and a destroyed window's
- * subscriptions end with its connections. Window connections close while their host is
- * unreachable and resume when it is connected again.
+ * subscriptions end with its connections. Window connections close whenever their host is not
+ * `connected` and resume when it is connected again.
  */
 export class ConnectionManager {
   private readonly hosts = new Map<string, RegisteredHost>();
@@ -202,7 +202,12 @@ export class ConnectionManager {
       });
     }
     try {
-      return { ok: true, result: await this.windowConnection(client, hostId, host).request(method, parsed.data) };
+      // Window connections stay closed until the host is connected, so `host/*` before then goes over the control connection.
+      const result =
+        state.status === 'connected'
+          ? await this.windowConnection(client, hostId, host).request(method, parsed.data)
+          : await host.link.request(method, parsed.data);
+      return { ok: true, result };
     } catch (error) {
       return { ok: false, error: asHostError(error) };
     }
@@ -236,7 +241,8 @@ export class ConnectionManager {
     if (host) {
       if (state.status === 'connected') {
         for (const window of host.windows.values()) void window.resume();
-      } else if (!REACHABLE_STATUSES.has(state.status)) {
+      } else {
+        // needsSignIn and accountMismatch too: a window must not get events for sessions it may not read.
         for (const window of host.windows.values()) window.suspend();
       }
     }

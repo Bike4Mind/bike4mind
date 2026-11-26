@@ -453,6 +453,36 @@ describe('ConnectionManager: requests', () => {
     });
   });
 
+  it('closes window connections while the host is on another account, and resumes them once it matches', async () => {
+    const { manager, host, state } = setUp();
+    await settle();
+    const window = fakeWindow(1);
+    await manager.request(window.endpoint, 'devbox', 'session/subscribe', { sessionId: 's1' });
+    host.emit('s1');
+    const before = window.delivered.length;
+
+    host.setAccount({ userId: 'u2', environmentUrl: ACCOUNT.environmentUrl });
+    await settle();
+    expect(state()).toMatchObject({ status: 'accountMismatch' });
+    host.emit('s1');
+    for (const connection of host.open)
+      connection.push(hostNotification('session/summaryChanged', { summary: { id: 's1' } }));
+    expect(window.delivered.slice(before).map(d => d.notification.method)).not.toContain('session/event');
+    expect(window.delivered.slice(before).map(d => d.notification.method)).not.toContain('session/summaryChanged');
+
+    // host/* still reaches the host, over the control connection rather than a new window one.
+    const open = host.open.length;
+    await expect(manager.request(window.endpoint, 'devbox', 'host/auth/status', undefined)).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(host.open).toHaveLength(open);
+
+    host.setAccount(ACCOUNT);
+    await settle();
+    expect(state()).toMatchObject({ status: 'connected' });
+    expect(window.seqs('s1')).toEqual([1, 2]);
+  });
+
   it('holds a request made while the host first connects until the handshake settles', async () => {
     const { manager } = setUp();
     const response = manager.request(fakeWindow(1).endpoint, 'devbox', 'session/list', undefined);

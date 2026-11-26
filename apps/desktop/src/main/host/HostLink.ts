@@ -161,6 +161,14 @@ export class HostLink {
     this.lose(`A connection to the host failed: ${detail}`);
   }
 
+  /** Sends a request over the control connection; rejects with HostConnectError when it is down. */
+  request(method: string, params: unknown): Promise<unknown> {
+    if (!this.control) {
+      return Promise.reject(new HostConnectError({ kind: 'lost', detail: 'Host is not reachable', stderrTail: '' }));
+    }
+    return this.control.request(method, params);
+  }
+
   /** Opens a further connection for a window and checks its protocol; rejects with HostConnectError. */
   async openClient(): Promise<HostTransport> {
     const transport = await this.openTransport();
