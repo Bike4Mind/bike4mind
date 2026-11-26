@@ -49,14 +49,16 @@ beforeEach(() => {
 });
 
 describe('ChatPanelControls layout menu', () => {
-  it('names the menu for screen readers, with a layout picked or not', () => {
-    const { unmount } = renderControls({ activeLayout: 'dockRight' });
-    expect(screen.getByRole('combobox', { name: 'Chat layout' })).toBe(trigger());
-    unmount();
-
-    // The floating window passes no activeLayout, so only the placeholder shows.
-    renderControls();
-    expect(screen.getByRole('combobox', { name: 'Chat layout' })).toBe(trigger());
+  // The name holds the words on the button, so speech control ("click Dock left") reaches it.
+  it.each([
+    { props: { activeLayout: 'dockRight' as const }, shown: 'Dock left', name: 'Chat layout: Dock left' },
+    { props: { activeLayout: 'dockBottom' as const }, shown: 'Dock bottom', name: 'Chat layout: Dock bottom' },
+    { props: {}, shown: 'Layout', name: 'Chat layout' },
+  ])('names the menu for screen readers, with the text it shows: $shown', ({ props, shown, name }) => {
+    renderControls(props);
+    expect(screen.getByRole('combobox', { name })).toBe(trigger());
+    expect(trigger()).toHaveTextContent(shown);
+    expect(name.toLowerCase()).toContain(shown.toLowerCase());
   });
 
   it('writes the picked dock direction to the session layout', () => {
