@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { link, readFile, unlink, writeFile } from 'node:fs/promises';
+import { link, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -121,6 +121,32 @@ async function removeIfUnchanged(path: string, expected: string): Promise<void> 
 }
 
 /**
+ * Moves a stale lock aside and keeps it gone only if it is still the stale one. The rename is
+ * atomic where read-then-unlink is not, so a fresh lock another starter linked in meanwhile is
+ * put back instead of deleted.
+ */
+async function discardStaleLock(paths: DaemonPaths, stale: string): Promise<void> {
+  const aside = join(paths.directory, `.${LOCK_FILE_NAME}.stale.${process.pid}.${randomUUID()}`);
+  try {
+    await rename(paths.lock, aside);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  try {
+    if ((await readText(aside)) === stale) return;
+    try {
+      await link(aside, paths.lock);
+    } catch (err) {
+      // Yet another lock took its place; that one stands.
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  } finally {
+    await unlink(aside).catch(() => undefined);
+  }
+}
+
+/**
  * Takes the single-instance lock. The record is written to a private temporary file and linked
  * into place, so the lock appears whole or not at all and two daemons can never both create it.
  * A stale lock is removed and the take retried; a live one throws DaemonAlreadyRunningError.
@@ -142,7 +168,7 @@ export async function acquireDaemonLock(paths: DaemonPaths, version: string): Pr
       if (current.state === 'running' || current.state === 'starting') {
         throw new DaemonAlreadyRunningError(current.record);
       }
-      if (current.state === 'stale') await removeIfUnchanged(paths.lock, current.raw);
+      if (current.state === 'stale') await discardStaleLock(paths, current.raw);
     }
     throw new Error(`Could not take ${paths.lock}; another daemon keeps replacing it`);
   } finally {
