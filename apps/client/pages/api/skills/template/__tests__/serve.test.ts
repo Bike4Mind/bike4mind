@@ -196,7 +196,7 @@ describe('GET /t/[slug]', () => {
       expect(html).toContain(`src="${imagePath}"`);
       expect(html).not.toContain('template-page-badge');
       expect(html).not.toContain('template-page-input-chip');
-      expect(html).toContain('data-testid="template-page-byline">by Ada</p>');
+      expect(html).toContain('data-testid="template-page-byline">Ada</p>');
       expect(html).toContain('href="/skills/market/try/article-bullets"');
       expect(html).toContain('New accounts start with 2,500 free credits.');
       expect(html).not.toContain('<script');
